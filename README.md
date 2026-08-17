@@ -34,13 +34,17 @@ what has been validated on hardware. Start there for the why.
 | `src/core/`, `src/adapters/`, `src/index.js` | the session manager — at upstream paths, on purpose |
 | `src/fleet/protocol/` | the intent protocol: built by the coordinator, enforced by the sidecar |
 | `src/fleet/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
+| `src/fleet/coordinator/` | the coordinator: host registry, scheduler, HTTP + WebSocket |
+| `src/fleet/ws.js` | a hand-rolled RFC 6455 WebSocket, because zero dependencies |
+| `sandbox/` | the container image a sandboxed session runs in |
 | `bin/agent-hub` | the session manager's CLI and SessionStart hook |
 | `bin/agent-fleet-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
-| `install/` | systemd unit and installer for the session manager |
-| `docs/` | [deployment](./docs/deployment.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
+| `bin/agent-fleet-coordinator` | the coordinator |
+| `install/` | one installer for all of it, plus the systemd unit |
+| `docs/` | [deployment](./docs/deployment.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
-Still to come: the coordinator (Cloudflare Worker + Durable Objects), the
-scheduler, the mobile API, the container image, and the iOS and Android apps.
+Still to come: deploying the coordinator to Cloudflare (it runs as a plain Node
+process today), rootless podman, host enrollment, and the iOS and Android apps.
 
 ## Running things
 
@@ -52,8 +56,9 @@ npm install
 npm test
 npm run typecheck
 
-npm start                     # the session manager (systemd runs `agent-hub serve`)
-npm run sidecar -- doctor     # check this box can drive it
+npm start                          # the session manager
+npm run sidecar -- doctor          # check this box can drive it
+node bin/agent-fleet-coordinator   # the coordinator
 ```
 
 To deploy rather than hack on it, see [`docs/deployment.md`](./docs/deployment.md) —

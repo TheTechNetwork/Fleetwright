@@ -78,7 +78,38 @@ Three parts:
 No behaviour change at 80 columns, which is the only width the existing captures
 cover. Ready to go upstream as-is.
 
-### 2. `setLogStream()` in `src/log.js`
+### 2. The ephemeral root sandbox (`AGENT_HUB_SANDBOX`)
+
+design.md §2, implemented. Config-gated and **off by default**, so a box without
+podman behaves exactly as before — which is what makes it contributable rather
+than a fork.
+
+- `src/core/podman.js` — new. Per-session volumes, credential seeding, cleanup.
+- `src/core/claude.js` — `buildCommand` produces a `podman run -it` line when
+  the sandbox is on. The claude arguments are unchanged; they just land after
+  the image name.
+- `src/core/sessions.js` — creates and seeds volumes before launch, skips host
+  trust entirely (the image bakes it), and `/forget` now deletes the volumes.
+- `src/config.js` — the `AGENT_HUB_SANDBOX*` block.
+
+Nothing in `tmux.js`, `registry.js` or the reconcile logic changed, which is the
+point: it is still one tmux session per agent, and `--rm` plus
+pane-process-is-podman means a dead container ends the tmux session that
+reconcile already knows how to handle.
+
+Validated end to end on this hardware — image built, session launched through
+tmux into a container, Claude TUI rendering, Remote Control attached, a real
+conversation uuid delivered over the per-session hook socket, and `/forget`
+deleting both volumes. One bug only a live run could find: `IS_SANDBOX=1` on the
+outer command sets it for *podman*, not for the container, so Claude refused
+`--dangerously-skip-permissions` as root and the container died instantly. It is
+now passed with `-e` and baked into the image.
+
+Contributable in principle. Realistically it wants the rootless-podman work
+finished first, since running the sandbox as root is the posture this is
+supposed to fix.
+
+### 3. `setLogStream()` in `src/log.js`
 
 Three lines, so that a process whose **stdout is a data channel rather than a
 console** can send every level to stderr. The sidecar in stdio mode writes
@@ -87,8 +118,15 @@ corrupted message.
 
 The default stdout/stderr split is unchanged, so this is inert for agent-hub
 itself. It stands on its own merits (any tool embedding the logger in a
-pipeline wants it) but it is the weaker of the two candidates, and would be
-fine to drop from a contribution.
+pipeline wants it) but it is the weakest of the candidates, and would be fine
+to drop from a contribution.
+
+### 4. `install/install.sh` is now the whole project's installer
+
+It sets up the sidecar and coordinator configs and builds the sandbox image
+alongside everything it did before. **This one is not contributable as-is** —
+it is the monorepo's installer now, and an upstream PR would exclude it. The
+systemd unit and the env example it copies are untouched.
 
 ## Not carried over
 

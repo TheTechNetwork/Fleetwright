@@ -23,14 +23,20 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * every later resume — silently promoting a session someone deliberately
  * started in safe mode would be the worst kind of surprise.
  *
+ * hookSocket accepts null the same way. The launcher overrides it to false when
+ * the socket file is not actually there, because podman would otherwise create
+ * a DIRECTORY at that path and the session would come up unable to report its
+ * conversation uuid — unresumable, silently.
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null }} opts
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
-  const argv = [cfg.claudeBin];
+  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket) : [cfg.claudeBin];
+  if (cfg.sandbox) argv.push('claude');
   if (rc) argv.push('--remote-control', name);
   if (skip) argv.push('--dangerously-skip-permissions');
   if (resumeUuid) argv.push('--resume', resumeUuid);
@@ -38,6 +44,63 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
   // spaces, and resumeUuid/name are already charset-validated upstream.
   const quoted = argv.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
   return `IS_SANDBOX=1 exec ${quoted}`;
+}
+
+/**
+ * The `podman run` prefix for a sandboxed session (design.md §2).
+ *
+ * The shape matters more than the flags. `exec` plus `--rm` plus
+ * pane-process-is-podman means a dead container ENDS THE TMUX SESSION, which
+ * reconcile already handles as "ended → resumeOnBoot". Nothing in tmux.js,
+ * sessions.js or the reconcile logic has to learn about containers: there is
+ * still exactly one tmux session per agent, and capture-pane still reads the
+ * TUI that podman is drawing.
+ *
+ * `-it` is what makes that true — the container needs the pane's TTY, or
+ * claude renders nothing and the resume dialog can never be detected. Confirmed
+ * on hardware (design.md §10: TTY=/dev/pts/0 inside a tmux pane).
+ *
+ * IS_SANDBOX=1 is set on the outer command as before, and this is the release
+ * where it stops being a lie told to bypass a safety check: run rootless and
+ * container-root maps through a user namespace to an unprivileged host user.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} name
+ * @param {boolean} hookSocket
+ */
+function sandboxArgv(cfg, name, hookSocket) {
+  const argv = [
+    cfg.podmanBin, 'run', '--rm', '-it',
+    '--name', `agent-${name}`,
+    // Inside the container, not merely on the podman process. Claude refuses
+    // --dangerously-skip-permissions when running as root unless it is told it
+    // is in a sandbox, and the container IS root — so without this the session
+    // dies the instant it starts, with "cannot be used with root/sudo
+    // privileges". The outer `IS_SANDBOX=1 exec` sets it for podman, which the
+    // container never sees. Found by running it, not by reading it.
+    '-e', 'IS_SANDBOX=1',
+    // Conversation and workspace outlive the container; everything the session
+    // does to the system does not.
+    '-v', `claude-${name}:/root/.claude`,
+    '-v', `work-${name}:/work`,
+    '-w', '/work',
+  ];
+
+  // The per-session hook socket, bind-mounted into this container and no other,
+  // so the session can report its conversation uuid without being able to name
+  // any session but its own. See src/fleet/host/hook-socket.js.
+  if (hookSocket) {
+    argv.push('-v', `${cfg.sandboxHookSocketDir}/${name}.sock:/run/hub.sock`);
+  }
+
+  // One mechanism for resource limits instead of a separate cgroup layer.
+  if (cfg.sandboxMemory) argv.push(`--memory=${cfg.sandboxMemory}`);
+  if (cfg.sandboxCpus) argv.push(`--cpus=${cfg.sandboxCpus}`);
+  if (cfg.sandboxPidsLimit) argv.push(`--pids-limit=${cfg.sandboxPidsLimit}`);
+  for (const extra of cfg.sandboxExtraArgs) argv.push(extra);
+
+  argv.push(cfg.sandboxImage);
+  return argv;
 }
 
 // --- 1. Remote Control can silently fail to attach --------------------------

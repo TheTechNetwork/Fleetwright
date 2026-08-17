@@ -1,0 +1,189 @@
+// The coordinator's view of the fleet.
+//
+// THE RULE THIS FILE EXISTS TO ENFORCE (design.md §3):
+//
+//   The coordinator's registry is a CACHE WITH PROVENANCE, never the authority.
+//   Each host stays the sole authority on its own tmux.
+//
+// agent-hub's whole simplification was collapsing a two-plane design — a queue
+// plus a heartbeat protocol plus a stale-row reaper — into one process that
+// asks tmux directly, every time. Multi-host reintroduces that split
+// unavoidably. What is avoidable is *believing* the cache: the moment this
+// registry is treated as truth, we have rebuilt the exact failure already paid
+// for, where the control plane says a session is running and the box disagrees.
+//
+// So every fact here carries when it was learned and from whom, and anything we
+// have not been told recently is `unknown` WITH A REASON — never `healthy` by
+// omission, and never a benign-looking zero. A scheduler that sees `free: 0`
+// quietly skips a host; one that sees `free: null, state: 'unknown'` can say
+// why it skipped it.
+
+/**
+ * @typedef {object} HostHealth
+ * @property {string} hostId
+ * @property {number} protocol
+ * @property {string[]} labels
+ * @property {number|null} maxSessions
+ * @property {number|null} running
+ * @property {number|null} free
+ * @property {string[]|null} resumable
+ * @property {Array<{name: string, status: string}>|null} [sessions]
+ * @property {number[]} loadavg
+ * @property {boolean|null} loggedIn
+ * @property {{reachable: boolean, reason?: string}} [hub]
+ */
+
+/**
+ * @typedef {object} HostEntry
+ * @property {string} hostId
+ * @property {'healthy'|'degraded'|'unknown'|'offline'} state
+ * @property {string} reason            why it is in that state, always populated
+ * @property {HostHealth|null} health   last report, or null if we never got one
+ * @property {number|null} healthAt     when that report arrived
+ * @property {number} connectedAt
+ * @property {boolean} connected
+ */
+
+/** How stale a health report may be before the host becomes `unknown`. */
+export const HEALTH_STALE_MS = 45_000;
+
+export class HostRegistry {
+  /** @param {{ now?: () => number }} [opts] */
+  constructor({ now = () => Date.now() } = {}) {
+    this.now = now;
+    /** @type {Map<string, HostEntry & { send: (msg: object) => void }>} */
+    this.hosts = new Map();
+    /** Round-robin cursor, used only to break ties between equally free hosts. */
+    this.cursor = 0;
+  }
+
+  /**
+   * A host has dialled in.
+   * @param {string} hostId
+   * @param {(msg: object) => void} send
+   */
+  connect(hostId, send) {
+    const existing = this.hosts.get(hostId);
+    // A reconnect from a host we already have replaces the old socket. The box
+    // is the authority on itself, so the newest connection from it wins.
+    this.hosts.set(hostId, {
+      hostId,
+      state: 'unknown',
+      reason: existing ? 'reconnected, no health report yet' : 'connected, no health report yet',
+      health: existing?.health ?? null,
+      healthAt: existing?.healthAt ?? null,
+      connectedAt: this.now(),
+      connected: true,
+      send,
+    });
+  }
+
+  /** @param {string} hostId @param {string} reason */
+  disconnect(hostId, reason = 'socket closed') {
+    const host = this.hosts.get(hostId);
+    if (!host) return;
+    // Kept rather than deleted: a host that has dropped is a fact worth
+    // reporting, and its last known sessions are still the best guess about
+    // where a `resume` would have to land once it comes back.
+    host.connected = false;
+    host.state = 'offline';
+    host.reason = reason;
+    host.send = () => {
+      throw new Error(`${hostId} is not connected`);
+    };
+  }
+
+  /** @param {string} hostId @param {HostHealth} health */
+  recordHealth(hostId, health) {
+    const host = this.hosts.get(hostId);
+    if (!host) return;
+    host.health = health;
+    host.healthAt = this.now();
+    // A host whose own agent-hub is unreachable is NOT healthy, even though its
+    // socket is fine. It cannot start anything, and saying "healthy" because we
+    // can reach the sidecar is exactly the benign-looking lie §3 warns about.
+    if (health.hub && health.hub.reachable === false) {
+      host.state = 'degraded';
+      host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
+    } else if (health.loggedIn === false) {
+      host.state = 'degraded';
+      host.reason = 'claude is not logged in on this host';
+    } else {
+      host.state = 'healthy';
+      host.reason = 'reporting normally';
+    }
+  }
+
+  /**
+   * Age out anything we have not heard from. Call before every read, so a
+   * caller can never see a stale entry that still claims to be healthy.
+   */
+  sweep() {
+    const now = this.now();
+    for (const host of this.hosts.values()) {
+      if (!host.connected) continue;
+      if (host.healthAt === null) {
+        if (now - host.connectedAt > HEALTH_STALE_MS) {
+          host.state = 'unknown';
+          host.reason = `connected ${Math.round((now - host.connectedAt) / 1000)}s ago and has never reported health`;
+        }
+        continue;
+      }
+      const age = now - host.healthAt;
+      if (age > HEALTH_STALE_MS) {
+        host.state = 'unknown';
+        host.reason = `last health report was ${Math.round(age / 1000)}s ago`;
+      }
+    }
+  }
+
+  /** @returns {HostEntry[]} */
+  list() {
+    this.sweep();
+    return [...this.hosts.values()].map(({ send, ...entry }) => entry);
+  }
+
+  /** @param {string} hostId */
+  get(hostId) {
+    this.sweep();
+    return this.hosts.get(hostId) || null;
+  }
+
+  /** Hosts that could accept work right now. */
+  schedulable() {
+    this.sweep();
+    return [...this.hosts.values()].filter((h) => h.connected && h.state === 'healthy' && h.health);
+  }
+
+  /**
+   * Which host holds a session of this name, as far as we last heard.
+   *
+   * Deliberately returns the ENTRY rather than a boolean, so a caller can see
+   * how stale the claim is and refuse to act on it if it is too old. `resume`
+   * is pinned — claude-<name> is a host-local volume, so it must land on the
+   * box holding it — and pinning to a guess is worse than refusing.
+   *
+   * @param {string} name
+   * @returns {{ host: HostEntry, status: string, ageMs: number }|null}
+   */
+  findSession(name) {
+    this.sweep();
+    for (const host of this.hosts.values()) {
+      const sessions = host.health?.sessions;
+      const found = sessions?.find((s) => s.name === name);
+      if (found) {
+        return { host, status: found.status, ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt };
+      }
+      // Older sidecars report only the resumable names.
+      if (host.health?.resumable?.includes(name)) {
+        return { host, status: 'stopped', ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt };
+      }
+    }
+    return null;
+  }
+
+  /** Next tie-break index, for the scheduler. */
+  nextCursor() {
+    return this.cursor++;
+  }
+}
