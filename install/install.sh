@@ -18,23 +18,92 @@ ENV_FILE=/etc/agent-hub.env
 SIDECAR_ENV=/etc/agent-fleet-sidecar.env
 UNIT=/etc/systemd/system/agent-hub.service
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
+# Resolved once, up here, because finding node depends on it — sudo hides
+# anything a version manager put in this directory.
+USER_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+USER_HOME="${USER_HOME:-$HOME}"
 
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
-say "agent-fleet installer"
+# --check verifies the prerequisites and changes nothing. Worth having as a
+# first step on a box you are not sure about, rather than finding out halfway
+# through that node is invisible to sudo.
+CHECK_ONLY=0
+case "${1:-}" in
+  --check|-n) CHECK_ONLY=1 ;;
+  '') ;;
+  *) die "unknown argument: $1 (only --check is accepted)" ;;
+esac
+
+say "agent-fleet installer${CHECK_ONLY:+}"
 printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
+[ "$CHECK_ONLY" = 1 ] && printf '  mode   : --check (nothing will be changed)\n'
 
 # --- 1. prerequisites -------------------------------------------------------
 say "Checking prerequisites"
 
-command -v node >/dev/null || die "node is not installed. Install Node 18 or newer, then re-run."
-NODE_BIN="$(command -v node)"
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 18 ] || die "node $NODE_MAJOR is too old — agent-hub needs 18 or newer (it uses global fetch)."
-ok "node $(node -v) at $NODE_BIN"
+# Finding node is not as simple as `command -v`, and the reason has bitten every
+# operator who installs it the normal way. `sudo` replaces PATH with sudoers'
+# secure_path — typically /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# — so a node installed by nvm, fnm, volta, asdf or into ~/.local/bin is
+# invisible to this script even though `node -v` works perfectly in the shell
+# the operator just ran `sudo` from. The old check reported "node is not
+# installed" at somebody with a working Node 24.
+#
+# This is the same trap already documented below for `claude`, so it gets the
+# same treatment: ask the run user's own login shell, then look where the
+# common installers actually put things.
+NODE_BIN="$(
+  command -v node 2>/dev/null && exit 0
+  # The login shell of whoever invoked sudo — this is what picks up nvm's and
+  # asdf's shell functions and shims.
+  sudo -u "$RUN_USER" -H bash -lc 'command -v node' 2>/dev/null && exit 0
+  for candidate in \
+      /usr/local/bin/node /usr/bin/node /snap/bin/node \
+      "$USER_HOME/.local/bin/node" "$USER_HOME/.volta/bin/node" "$USER_HOME/.asdf/shims/node" \
+      /home/linuxbrew/.linuxbrew/bin/node; do
+    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; exit 0; }
+  done
+  # nvm and fnm keep one directory per version; take the newest.
+  for root in "$USER_HOME/.nvm/versions/node" "$USER_HOME/.local/share/fnm/node-versions" "$USER_HOME/.fnm/node-versions"; do
+    [ -d "$root" ] || continue
+    newest="$(ls -1d "$root"/*/bin/node "$root"/*/installation/bin/node 2>/dev/null | sort -V | tail -1)"
+    [ -n "$newest" ] && [ -x "$newest" ] && { printf '%s\n' "$newest"; exit 0; }
+  done
+  exit 1
+)" || die "node was not found — not on this PATH, not in $RUN_USER's login shell, and not in the usual
+       install locations (nvm, fnm, volta, asdf, ~/.local/bin, /usr/local/bin).
+
+       If \`node -v\` works for you but this failed, that is sudo's secure_path
+       hiding it. Either install node system-wide, or re-run telling the script
+       where it is:
+           sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
+
+# An explicit override always wins, for the case none of the above finds it.
+NODE_BIN="${AGENT_HUB_NODE_BIN:-$NODE_BIN}"
+[ -x "$NODE_BIN" ] || die "AGENT_HUB_NODE_BIN=$NODE_BIN is not an executable file."
+
+NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+case "$NODE_MAJOR" in
+  ''|*[!0-9]*) die "could not read a version from $NODE_BIN — is it really node?" ;;
+esac
+[ "$NODE_MAJOR" -ge 18 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 18 or newer (it uses global fetch)."
+ok "node $("$NODE_BIN" -v) at $NODE_BIN"
+
+# The systemd unit hardcodes this path. A node inside the operator's home is
+# usually nvm's, and `nvm install` / `nvm uninstall` moves or removes it —
+# which takes the service down at the next restart, long after the change that
+# caused it. Worth saying out loud rather than discovering months later.
+case "$NODE_BIN" in
+  "$USER_HOME"/*)
+    warn "$NODE_BIN is inside $RUN_USER's home — the systemd unit will point at it."
+    warn "  A version-manager upgrade will move it and the service will fail to start."
+    warn "  Consider a system-wide node: apt install nodejs, or n/nodesource."
+    ;;
+esac
 
 command -v tmux >/dev/null || die "tmux is not installed. Try: apt install -y tmux"
 ok "tmux $(tmux -V | awk '{print $2}')"
@@ -42,8 +111,7 @@ ok "tmux $(tmux -V | awk '{print $2}')"
 # claude may legitimately be missing at this point — agent-hub can install
 # nothing for you, but it CAN log you in once it is running, so this is a
 # warning rather than a hard stop.
-CLAUDE_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME}"
+CLAUDE_HOME="$USER_HOME"
 
 # Look where the official installer actually puts it, not only on PATH. A login
 # shell does NOT necessarily see ~/.local/bin: Debian's stock ~/.bashrc returns
@@ -89,6 +157,11 @@ else
   HAVE_PODMAN=0
 fi
 
+if [ "$CHECK_ONLY" = 1 ]; then
+  say "Prerequisites look fine. Nothing was changed — re-run without --check to install."
+  exit 0
+fi
+
 # --- 2. state directory -----------------------------------------------------
 say "Creating state directory"
 STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
@@ -114,7 +187,7 @@ if [ -f "$SIDECAR_ENV" ]; then
   ok "$SIDECAR_ENV already exists — left untouched"
 else
   SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" \
-  TEMPLATE="$DIR/install/agent-fleet-sidecar.env.example" node <<'NODE'
+  TEMPLATE="$DIR/install/agent-fleet-sidecar.env.example" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 
 // Read the hub's env the way systemd does: KEY=value, one per line, one layer
@@ -190,7 +263,7 @@ HOOK_CMD="$DIR/bin/agent-hub hook"
 
 # Merged with node rather than sed: settings.json holds the operator's own
 # hooks, theme and permissions, and a text-level edit would eventually eat one.
-SETTINGS="$SETTINGS" HOOK_CMD="$HOOK_CMD" node <<'NODE'
+SETTINGS="$SETTINGS" HOOK_CMD="$HOOK_CMD" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 const file = process.env.SETTINGS;
 const cmd = process.env.HOOK_CMD;
