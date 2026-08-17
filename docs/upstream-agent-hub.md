@@ -1,0 +1,115 @@
+# The agent-hub lineage
+
+The session manager in this project — `src/index.js`, `src/config.js`,
+`src/log.js`, `src/core/`, `src/adapters/`, `src/web/`, `bin/agent-hub`,
+`install/` — comes from
+[`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub).
+It is **upstream code we intend to contribute back to**, not a fork we intend to
+keep.
+
+| | |
+|---|---|
+| Upstream | `https://github.com/ambersecurityinc/agent-hub` |
+| Taken from | `cac1f02` — *Fix the two things that broke the first real session on a fresh box* (upstream `main`) |
+| Taken on | 2026-08-17 |
+| Licence | MIT, © Amber Security Inc — kept verbatim as [`LICENSE-agent-hub`](../LICENSE-agent-hub) |
+
+## Why the paths are what they are
+
+Those files sit at **exactly their upstream paths**. That is deliberate and it
+is the one thing that keeps a future contribution cheap: the diff is
+file-for-file, with no renames to unpick and no import rewriting to review.
+
+Fleet code lives under `src/fleet/` and nowhere else. Keeping that separation is
+what makes it possible to say what has changed upstream-of-us and what is ours.
+
+## How to produce the contribution diff
+
+```sh
+git clone https://github.com/ambersecurityinc/agent-hub /tmp/upstream
+cd /tmp/upstream && git checkout cac1f02
+for f in src/index.js src/config.js src/log.js src/core src/adapters src/web bin/agent-hub install test/parsing.test.js; do
+  diff -ru "/tmp/upstream/$f" "/path/to/agent-fleet/$f"
+done
+```
+
+Two rules keep that diff small and reviewable:
+
+1. **No fleet code in those paths.** Everything the fleet needs from the session
+   manager, it gets over the loopback HTTP API from `src/fleet/host/` — see
+   [`sidecar.md`](./sidecar.md). If fleet concerns start leaking into `src/core/`
+   or `src/adapters/`, the upstream contribution stops being possible and this
+   becomes a fork by default rather than by decision.
+2. **Every change there stands on its own merits** to an agent-hub user who has
+   never heard of agent-fleet. If a change only makes sense because of the
+   fleet, it belongs in `src/fleet/`.
+
+## What has diverged from `cac1f02`
+
+### 1. De-wrap the pane before reading the Remote Control URL
+
+`extractRcUrl` matched raw `capture-pane` output with no de-wrapping, unlike the
+login flow, which has `dewrapPane` for exactly this failure. A pane is a
+fixed-width grid, and the RC URL is one long token. At 80 columns it lands on a
+line of its own and nothing goes wrong — which is why this was never noticed.
+Measured against the verbatim CLI 2.1.233 capture in
+[`design.md`](./design.md) §10, and confirmed on a real 70-column tmux pane:
+
+| pane width | before |
+|---|---|
+| 80 | correct |
+| 100 | `https://claude.ai/code/session_016zf` — truncated, well-formed, and dead |
+| 70 | `null` — the `https://` prefix straddles the break, so the session is reported online with no URL to reach it by |
+
+Three parts:
+
+- `dewrapPane` moved from `src/core/login.js` to `src/core/pane.js`. Importing it
+  from `login.js` into `claude.js` would be a cycle (`login.js` already imports
+  `sleep` from `claude.js`), and with `export const sleep` that is a TDZ error
+  rather than a warning.
+- `extractRcUrl` de-wraps first, and matches an explicit URL character set
+  instead of `\S+`. De-wrapping can only ever join *more* text onto the end of
+  the URL, and the pane is a TUI, so what follows is as likely to be a box
+  border as a path segment.
+- `verifyRemoteControl` tests its marker against de-wrapped text too — one of
+  the markers *is* the URL, and a pane narrow enough to wrap it splits
+  `claude.ai/code` across two rows and matches nothing.
+
+No behaviour change at 80 columns, which is the only width the existing captures
+cover. Ready to go upstream as-is.
+
+### 2. `setLogStream()` in `src/log.js`
+
+Three lines, so that a process whose **stdout is a data channel rather than a
+console** can send every level to stderr. The sidecar in stdio mode writes
+newline-delimited JSON to stdout, where an `info` line is not noise — it is a
+corrupted message.
+
+The default stdout/stderr split is unchanged, so this is inert for agent-hub
+itself. It stands on its own merits (any tool embedding the logger in a
+pipeline wants it) but it is the weaker of the two candidates, and would be
+fine to drop from a contribution.
+
+## Not carried over
+
+`src/adapters/fleet.js`, the in-process fleet adapter from an earlier iteration
+of this design. It was superseded by the sidecar; shipping both would be two
+implementations of one thing.
+
+## A latent bug found while wiring the two together, and NOT fixed here
+
+`NAME_RE` in `src/core/names.js` is `/^[A-Za-z0-9_-]{1,40}$/`, which accepts a
+**leading dash**. So `--dangerous` is a legal session name.
+
+Inside the session manager that is harmless: names travel as argv entries to
+tmux, never through a shell. It stops being harmless wherever a command *line*
+is re-parsed, because `parse()` in `src/adapters/commands.js` reads any token
+beginning with `--` as a flag — so `/new --dangerous` is a permission override
+with no name at all, and `/stop --safe` is a stop with no target.
+
+The fleet protocol closes this on its own side by anchoring the first character
+(`src/fleet/protocol/intents.js`), and `test/intents.test.js` pins both halves so
+nobody removes the anchor as redundant. Fixing `core/names.js` itself is a
+behaviour change for existing agent-hub deployments — a session someone already
+named `_build` would stop validating — so it belongs in an upstream
+conversation, not in a quiet edit here.

@@ -10,7 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating } from '../src/protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating } from '../src/fleet/protocol/intents.js';
+import { isValidName } from '../src/core/names.js';
 
 /** @param {object} patch */
 const intent = (patch) => ({
@@ -174,6 +175,38 @@ test('a session name can never become a shell fragment', () => {
   for (const name of hostile) {
     const r = validateIntent(intent({ verb: 'stop', params: { name } }));
     assert.equal(r.ok, false, `name ${JSON.stringify(name)} should be refused`);
+  }
+});
+
+// --- agreement with the session manager -------------------------------------
+
+test('every name the protocol accepts, the session manager also accepts', () => {
+  // The protocol carries its own charset because it is a wire contract that has
+  // to hold whatever the session manager does. What must never happen is the
+  // protocol being LOOSER: a name that validates here and is then rejected
+  // downstream is an intent that passes every check and fails at the far end.
+  for (const name of ['a', 'api', 'api-staging_2', 'cc-1a2b3c', 'X9', 'a'.repeat(40)]) {
+    const r = validateIntent(intent({ verb: 'stop', params: { name } }));
+    assert.equal(r.ok, true, `protocol should accept ${JSON.stringify(name)}`);
+    assert.ok(isValidName(name), `core/names.js should also accept ${JSON.stringify(name)}`);
+  }
+});
+
+test('the protocol is deliberately STRICTER about the first character', () => {
+  // core/names.js is /^[A-Za-z0-9_-]{1,40}$/, which accepts a leading dash — so
+  // "--dangerous" is a legal session name as far as the session manager is
+  // concerned. That is fine inside it, where names travel as argv entries, and
+  // not fine over a wire whose other end re-parses a command LINE: parse() in
+  // adapters/commands.js reads any token starting with "--" as a flag, so
+  // `/new --dangerous` becomes a permission override with no name at all.
+  //
+  // So the extra anchor here is not redundancy with core/names.js. It is the
+  // thing that closes a gap core/names.js leaves open, and removing it because
+  // "the session manager already validates names" would reopen it.
+  for (const name of ['--dangerous', '-x', '_leading', '-']) {
+    assert.ok(isValidName(name), `core/names.js accepts ${JSON.stringify(name)} — that is the point`);
+    const r = validateIntent(intent({ verb: 'start', params: { name } }));
+    assert.equal(r.ok, false, `the protocol must refuse ${JSON.stringify(name)}`);
   }
 });
 

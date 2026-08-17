@@ -4,18 +4,21 @@
 //   agent-fleet-sidecar            run it (systemd calls this)
 //   agent-fleet-sidecar doctor     check this box can actually drive its agent-hub
 //
-// Config comes from the environment — see src/host/config.js. Nothing here
-// touches agent-hub's installation: the sidecar is an HTTP client of it.
+// Config comes from the environment — see src/fleet/host/config.js. This process
+// does not touch the session manager's state directly: it is an HTTP client of it.
 
-import { loadSidecarConfig, validateSidecarConfig } from '../src/host/config.js';
-import { HubClient } from '../src/host/hub-client.js';
-import { Sidecar } from '../src/host/sidecar.js';
-import { HookSocketServer } from '../src/host/hook-socket.js';
-import { StdioTransport } from '../src/host/transports/stdio.js';
-import { log, setLogLevel } from '../src/host/log.js';
+import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
+import { HubClient } from '../src/fleet/host/hub-client.js';
+import { Sidecar } from '../src/fleet/host/sidecar.js';
+import { HookSocketServer } from '../src/fleet/host/hook-socket.js';
+import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
+import { log, setLogLevel, setLogStream } from '../src/log.js';
 
 const cfg = loadSidecarConfig();
 setLogLevel(cfg.logLevel);
+// stdout is the stdio transport's data channel, so every log line goes to
+// stderr — an info line landing on stdout is a corrupted message, not noise.
+setLogStream(process.stderr);
 
 const sub = process.argv[2] || 'run';
 if (sub === 'doctor') await doctor();

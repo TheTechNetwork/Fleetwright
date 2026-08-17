@@ -303,23 +303,27 @@ no multi-step handshakes on the hot path.
    different tasks in different places; conflating them is what sent the first session looking for
    a container runtime it didn't have.
 
-   Landed: `docs/intents.md` + `src/protocol/intents.js` (the protocol, built by the coordinator
-   and enforced by the host), and `src/host/` + `bin/agent-fleet-sidecar` (the host side). Eight
-   verbs, no `login`/`code`, no path parameter anywhere. 112 tests, plus an end-to-end run against
+   Landed: `docs/intents.md` + `src/fleet/protocol/intents.js` (the protocol, built by the coordinator
+   and enforced by the host), and `src/fleet/host/` + `bin/agent-fleet-sidecar` (the host side). Eight
+   verbs, no `login`/`code`, no path parameter anywhere. 130 tests, plus an end-to-end run against
    a real `agent-hub serve` — see `docs/sidecar.md`.
 
-5. **Host side is a sidecar, not an in-process adapter — settled 2026-08-17.** §6 proposes
-   `src/adapters/fleet.js` inside agent-hub, which is a clean fit for its adapter seam. We are
-   doing it as a separate process instead, driving agent-hub over its loopback HTTP API
+5. **One project; the host side is a sidecar process, not an in-process adapter — settled
+   2026-08-17.** agent-hub lives in this repo now, at its own upstream paths (`src/core/`,
+   `src/adapters/`, `bin/agent-hub`, `install/`), with fleet code under `src/fleet/`. One
+   `package.json`, one test suite, one CI job.
+
+   §6 proposes `src/adapters/fleet.js` *inside* the session manager, which is a clean fit for its
+   adapter seam. We run a separate process instead, driving it over the loopback HTTP API
    (`POST /api/command`, `GET /api/state`, `GET /api/peek`).
 
    The reason: **agent-hub is upstream code we intend to contribute back to.** Every line of
    fleet logic added to that tree is a line that has to be untangled before any of it can go
    upstream, and a tree that accumulates them becomes a fork by default rather than by decision.
-   The HTTP boundary keeps `agent-hub/UPSTREAM.md`'s diff small enough to actually contribute.
+   The HTTP boundary keeps `docs/upstream-agent-hub.md`'s diff small enough to actually contribute.
    Two smaller things it buys: the sidecar restarts without disturbing sessions, and a host can
-   run an agent-hub other than the vendored one. The cost is one loopback round trip per action,
-   which is nothing against the ~20s a start already spends on the Remote Control check.
+   run a session manager other than the one in this tree. The cost is one loopback round trip per
+   action, which is nothing against the ~20s a start already spends on the Remote Control check.
 
    Two consequences worth carrying forward:
 
@@ -449,17 +453,15 @@ truncates to `…/session_016zf` (well-formed enough that nobody suspects it), a
 reported online with no URL to reach it by. Confirmed again on a real 70-column tmux pane, not
 just a fixture.
 
-**Worked around rather than fixed**, since agent-hub is not being modified: `src/host/pane.js`
-ports `dewrapPane` and adds an explicit URL character set (de-wrapping can only ever join *more*
-text onto the end, and in a TUI that is as likely to be a box border as a path segment). The
-sidecar re-derives the URL from `GET /api/peek` and repairs what agent-hub recorded, naming which
-failure it found — `missing`, `truncated` or `mismatch`. This is the reason `peek` is in the verb
-set at all.
+**Fixed at source:** `dewrapPane` moves to `src/core/pane.js` (importing it from `login.js` into
+`claude.js` would be a cycle), and `extractRcUrl` de-wraps first and matches an explicit URL
+character set rather than `\S+` — de-wrapping can only ever join *more* text onto the end, and in
+a TUI that is as likely to be a box border as a path segment. It is the main divergence from
+upstream `cac1f02` and is ready to contribute as-is — see `docs/upstream-agent-hub.md`.
 
-**Also fixed at source.** Now that agent-hub is vendored into this repo (`agent-hub/`), the fix
-is applied there too: `dewrapPane` moves to `src/core/pane.js` (importing it from `login.js` into
-`claude.js` would be a cycle), and `extractRcUrl` de-wraps first. It is the one divergence from
-upstream `cac1f02` and is ready to contribute as-is — see `agent-hub/UPSTREAM.md`.
+**And guarded again on the fleet side.** `src/fleet/host/pane.js` re-derives the URL from
+`GET /api/peek` and repairs what the record holds, naming which failure it found — `missing`,
+`truncated` or `mismatch`. This is the reason `peek` is in the verb set at all.
 
 The sidecar's own layer stays regardless, and its role changes: with both in place
 `reconcileRcUrl` should report `repaired: false` in normal operation, so a `truncated` or

@@ -7,11 +7,11 @@
 //
 // WHY THE SIDECAR EXTRACTS THE URL RATHER THAN TRUSTING THE ONE IT IS GIVEN
 //
-// agent-hub records a Remote Control URL on each session (`rcUrl`) and serves it
-// in /api/state. It gets that URL from its own `extractRcUrl`, which matches the
-// raw capture with no de-wrapping — and measured against the verbatim CLI 2.1.233
-// capture in design.md §10, that fails two ways as soon as the pane is not
-// exactly 80 columns wide:
+// The session manager records a Remote Control URL on each session (`rcUrl`) and
+// serves it in /api/state. Its own `extractRcUrl` used to match the raw capture
+// with no de-wrapping, and measured against the verbatim CLI 2.1.233 capture in
+// design.md §10 that failed two ways as soon as the pane was not exactly 80
+// columns wide:
 //
 //     width 100 →  https://claude.ai/code/session_016zf   truncated, and
 //                  well-formed enough that nobody suspects it
@@ -19,43 +19,20 @@
 //                  straddles the break, so nothing matches at all and the
 //                  session is reported online with no URL to reach it by
 //
-// A stock agent-hub is not going to be modified to fix that, so the sidecar
-// re-derives the URL from the pane itself and repairs what it was handed. This
-// is the whole reason `peek` is in the verb set rather than just `status`.
+// That is fixed at source now (core/claude.js), so this layer is no longer
+// load-bearing for correctness. It stays for two reasons: a host may be running
+// a session manager older than this tree, and with both in place a `truncated`
+// or `missing` from reconcileRcUrl means the extraction upstream of it has
+// regressed — which is exactly the failure that went unnoticed the first time,
+// because nothing was watching for it.
 
-/**
- * Undo tmux's hard wrapping so a URL split across pane-width lines can be read
- * back as one string.
- *
- * The naive version — join any newline followed by a non-space — is wrong, and
- * wrong in a way that looks fine. In agent-hub's login flow the line right
- * after the URL is the prompt "Paste code here if prompted >", and joining it
- * appended "Paste" to the OAuth `state` parameter, producing a URL that loads
- * and then fails authorization for no visible reason.
- *
- * A genuine tmux wrap has two properties this relies on: the line being
- * continued was full width, and the continuation contains no whitespace at all
- * (it is the middle of one long token). Prose lines fail both tests.
- *
- * @param {string} text
- */
-export function dewrapPane(text) {
-  // Panes are at least 80 columns in practice; 60 leaves room for a narrower
-  // one while staying far above any width prose would wrap at naturally.
-  const MIN_WRAPPED_WIDTH = 60;
-  const lines = String(text ?? '').split('\n');
-  let out = '';
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const continues =
-      i > 0 &&
-      line.length > 0 &&
-      !/\s/.test(line) && // a fragment of one long token, not prose
-      lines[i - 1].length >= MIN_WRAPPED_WIDTH; // the previous line was full enough to wrap
-    out += continues ? line : (i === 0 ? '' : '\n') + line;
-  }
-  return out;
-}
+// De-wrapping itself belongs to the session manager, not the fleet: core/pane.js
+// is where it lives and where the login flow uses it. Imported rather than
+// re-implemented — two copies of a rule this subtle is how they drift, and it is
+// subtle (see that file for the "Paste code here" bug that shaped it).
+import { dewrapPane } from '../../core/pane.js';
+
+export { dewrapPane };
 
 // Matching an explicit URL character set rather than `\S+` is the other half of
 // the guard, and it is not optional once de-wrapping is in play. De-wrapping can
@@ -71,7 +48,10 @@ const RC_URL_RE = /https?:\/\/claude\.ai\/code\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=
  * @returns {string|null}
  */
 export function extractRcUrl(text) {
-  const m = dewrapPane(text).match(RC_URL_RE);
+  // Guarded here rather than in core/pane.js: that one is only ever handed
+  // capturePane output, which is always a string. This one is handed whatever
+  // came back as JSON over HTTP.
+  const m = dewrapPane(String(text ?? '')).match(RC_URL_RE);
   // Trailing punctuation is legal in a URL but is almost always the sentence
   // around it rather than part of the link.
   return m ? m[0].replace(/[)\].,]+$/, '') : null;
@@ -95,7 +75,7 @@ const RC_ONLINE_RE =
  * @param {string} text
  */
 export function isRemoteControlOnline(text) {
-  return RC_ONLINE_RE.test(dewrapPane(text));
+  return RC_ONLINE_RE.test(dewrapPane(String(text ?? '')));
 }
 
 /**

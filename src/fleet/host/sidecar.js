@@ -47,7 +47,14 @@ import os from 'node:os';
 import { validateIntent, isMutating, PROTOCOL_VERSION } from '../protocol/intents.js';
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
-import { silentLog } from './log.js';
+
+/** @typedef {typeof import('../../log.js').log} Logger */
+
+// The sidecar is a library as much as an entrypoint, so it says nothing unless
+// it is given somewhere to say it. bin/agent-fleet-sidecar passes the real
+// logger; tests pass one that captures.
+/** @type {Logger} */
+const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 // A replayed /stop is harmless; a replayed /new is not — it burns a slot
 // against the concurrency cap and starts work nobody asked for twice. So every
@@ -77,10 +84,10 @@ export class Sidecar {
    *   hostId?: string,
    *   labels?: string[],
    *   maxSkewMs?: number,
-   *   logger?: import('./log.js').Logger,
+   *   logger?: Logger,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = silentLog }) {
+  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
     // limit — where a replayed `start` passes the freshness check against a

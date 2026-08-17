@@ -14,24 +14,24 @@ agent-hub carries no fleet code and is not aware of any of this. From its side
 the sidecar is one more HTTP client holding its token — the same interface its
 own CLI uses.
 
-## Why out-of-process, now that both live in one repo
+## Why out-of-process, now that it is all one project
 
-The alternative was `src/adapters/fleet.js` inside agent-hub, which §6 of
-`design.md` proposes and which is a genuinely clean fit for its adapter seam.
-Vendoring agent-hub into the monorepo removes one of the original arguments for
-the sidecar — no PR has to land for either approach now — but the one that
-remains is the one that matters:
+The alternative was `src/adapters/fleet.js` inside the session manager, which §6
+of `design.md` proposes and which is a genuinely clean fit for its adapter seam.
+Bringing both into one project removes the original argument for the sidecar —
+no PR has to land for either approach now — but the one that remains is the one
+that matters:
 
-**agent-hub is upstream code we intend to contribute back to.** Every line of
-fleet logic added to that tree is a line that has to be untangled before any of
-it can go upstream, and a tree that accumulates them becomes a fork by default
-rather than by decision. The HTTP boundary is what keeps
-[`agent-hub/UPSTREAM.md`](../agent-hub/UPSTREAM.md)'s diff small enough to
+**The session manager is upstream code we intend to contribute back to.** Every
+line of fleet logic added to `src/core/` or `src/adapters/` is a line that has to
+be untangled before any of it can go upstream, and a tree that accumulates them
+becomes a fork by default rather than by decision. The HTTP boundary is what keeps
+[`upstream-agent-hub.md`](./upstream-agent-hub.md)'s diff small enough to
 actually contribute.
 
 Two smaller things it buys: the sidecar restarts without disturbing sessions
 (agent-hub's own shutdown deliberately leaves tmux alone, and this preserves
-that), and a host can run an agent-hub other than the vendored one.
+that), and a host can run a session manager other than the one in this tree.
 
 The cost is one round trip of latency per action on loopback, which is nothing
 next to the ~20s a session start spends waiting for Remote Control anyway.
@@ -70,8 +70,10 @@ The sidecar knows the real actor and puts it in its own logs and replies. It
 the coordinator, which is where §5 argues per-session ownership belongs anyway
 (one chokepoint instead of N hosts).
 
-An in-process adapter would not have this problem. It is the price of the
-no-modifications property, stated plainly rather than discovered later.
+An in-process adapter would not have this problem. It is the price of keeping
+`src/core/` and `src/adapters/` contributable, stated plainly rather than
+discovered later. Now that it is all one project this IS fixable here — it is
+just a change that has to stand on its own merits upstream, not a quiet edit.
 
 ### 2. `/api/peek` is fixed at 60 lines
 
@@ -89,7 +91,7 @@ writing that token into a world-readable hook script.
 
 The sidecar runs on that same box, so it can forward hook reports there. That is
 what lets the **per-session hook socket** ([`hook-socket.md`](./hook-socket.md))
-work against an unmodified agent-hub: the sidecar owns the socket, so it knows
+work without touching the session manager: the sidecar owns the socket, so it knows
 which session a report came from, and supplies the name the container was never
 given. The container posts `{uuid, cwd}` to `/run/hub.sock` and can name nothing.
 
@@ -110,21 +112,23 @@ confirmed on a real 70-column tmux pane:
 | 100 | `https://claude.ai/code/session_016zf` — truncated, well-formed, and dead |
 | 70 | **`null`** — the `https://` prefix straddles the break, so the session is reported online with no URL to reach it by |
 
-**The vendored agent-hub now carries the fix** (`agent-hub/src/core/pane.js` —
-see `UPSTREAM.md`), so all three widths are correct at source. The sidecar's own
+**The session manager now carries the fix** (`src/core/pane.js` — see
+[`upstream-agent-hub.md`](./upstream-agent-hub.md)), so all three widths are
+correct at source. The sidecar's own
 layer stays anyway, for two reasons:
 
-- A host may be running an agent-hub other than the vendored one, and the
-  repair costs a `peek` it would already be doing.
+- A host may be running a session manager older than this tree, and the repair
+  costs a `peek` it would already be doing.
 - It turns a silent failure into a loud one. With both layers in place
   `reconcileRcUrl()` should report `repaired: false` in normal operation, so a
   `truncated` or `missing` in the logs now means agent-hub's extraction has
   regressed — which is precisely the failure that went unnoticed the first time,
   because nothing was checking.
 
-`src/host/pane.js` ports the de-wrapping and adds an explicit URL character
-class (de-wrapping can only ever join *more* text onto the end, and in a TUI
-that is as likely to be a box border as a path segment). `reconcileRcUrl()` then
+`src/fleet/host/pane.js` reuses `core/pane.js`'s de-wrapping rather than copying
+it, and adds an explicit URL character class (de-wrapping can only ever join
+*more* text onto the end, and in a TUI that is as likely to be a box border as a
+path segment). `reconcileRcUrl()` then
 prefers the live pane over the record and names which failure it repaired —
 `missing`, `truncated` or `mismatch` — because the truncated one is the
 dangerous one: it looks fine in a log.
@@ -172,7 +176,7 @@ node bin/agent-fleet-sidecar doctor       # check this box can drive its agent-h
 node bin/agent-fleet-sidecar              # run
 ```
 
-Every setting is in `src/host/config.js`. Two are worth calling out:
+Every setting is in `src/fleet/host/config.js`. Two are worth calling out:
 
 - **`AGENT_FLEET_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same

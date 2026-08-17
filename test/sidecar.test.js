@@ -10,9 +10,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Sidecar, toCommandLine, REPLAY_TTL_MS } from '../src/host/sidecar.js';
-import { HubClient } from '../src/host/hub-client.js';
-import { PROTOCOL_VERSION } from '../src/protocol/intents.js';
+import { Sidecar, toCommandLine, REPLAY_TTL_MS } from '../src/fleet/host/sidecar.js';
+import { HubClient } from '../src/fleet/host/hub-client.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 
 const RC_URL = 'https://claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M';

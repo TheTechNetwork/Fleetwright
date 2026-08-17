@@ -1,22 +1,22 @@
 {
   "name": "agent-fleet",
-  "version": "0.0.1",
-  "description": "Multi-host control plane for Claude Code sessions — coordinator, scheduler, sandbox and mobile API.",
+  "version": "0.1.0",
+  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it — sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
   "license": "MIT",
+  "bin": {
+    "agent-hub": "./bin/agent-hub",
+    "agent-fleet-sidecar": "./bin/agent-fleet-sidecar"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   },
   "scripts": {
-    "test": "npm run test:fleet && npm run test:hub",
-    "test:fleet": "node --test test/*.test.js",
-    "test:hub": "node --test agent-hub/test/*.test.js",
-    "typecheck": "npm run typecheck:fleet && npm run typecheck:hub",
-    "typecheck:fleet": "tsc -p tsconfig.json",
-    "typecheck:hub": "tsc -p agent-hub/tsconfig.json",
+    "start": "node src/index.js",
     "sidecar": "node bin/agent-fleet-sidecar",
-    "hub": "node agent-hub/src/index.js"
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
