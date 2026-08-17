@@ -76,7 +76,7 @@ socket with a mode derived from the process umask, and there is an unavoidable
 window between `listen()` and `chmod()`. A `0700` directory makes that window
 unreachable rather than merely short. Both layers are asserted.
 
-## How this works against a stock agent-hub
+## How this works without changing agent-hub
 
 No agent-hub change is required, which was not obvious at first. The
 [sidecar](./sidecar.md) owns the sockets and forwards what arrives to agent-hub's

@@ -248,7 +248,7 @@ upstream.
 ## 6. Host-side code structure
 
 > **Superseded 2026-08-17 — see §8.5.** The host side is a **sidecar process in agent-fleet**
-> driving a stock agent-hub over its loopback HTTP API, not an adapter inside agent-hub. The
+> driving agent-hub over its loopback HTTP API, not an adapter inside agent-hub. The
 > reasoning below still holds and is why the sidecar translates intents into the same command
 > lines `dispatch()` takes; what changed is that it reaches that seam through `POST /api/command`
 > instead of by being loaded into the process. `docs/sidecar.md` has the detail, including the two
@@ -310,12 +310,15 @@ no multi-step handshakes on the hot path.
 
 5. **Host side is a sidecar, not an in-process adapter — settled 2026-08-17.** §6 proposes
    `src/adapters/fleet.js` inside agent-hub, which is a clean fit for its adapter seam. We are
-   doing it as a separate process in this repo instead, driving a **stock** agent-hub over its
-   loopback HTTP API (`POST /api/command`, `GET /api/state`, `GET /api/peek`).
+   doing it as a separate process instead, driving agent-hub over its loopback HTTP API
+   (`POST /api/command`, `GET /api/state`, `GET /api/peek`).
 
-   The reason is that it works against an agent-hub nobody has changed: no PR has to land, no
-   version has to match, and a host can keep whatever agent-hub it already runs. Upstreaming
-   becomes a separate, unblocking conversation. The cost is one loopback round trip per action,
+   The reason: **agent-hub is upstream code we intend to contribute back to.** Every line of
+   fleet logic added to that tree is a line that has to be untangled before any of it can go
+   upstream, and a tree that accumulates them becomes a fork by default rather than by decision.
+   The HTTP boundary keeps `agent-hub/UPSTREAM.md`'s diff small enough to actually contribute.
+   Two smaller things it buys: the sidecar restarts without disturbing sessions, and a host can
+   run an agent-hub other than the vendored one. The cost is one loopback round trip per action,
    which is nothing against the ~20s a start already spends on the Remote Control check.
 
    Two consequences worth carrying forward:
@@ -453,10 +456,15 @@ sidecar re-derives the URL from `GET /api/peek` and repairs what agent-hub recor
 failure it found — `missing`, `truncated` or `mismatch`. This is the reason `peek` is in the verb
 set at all.
 
-The upstream fix is written and sits unpushed on agent-hub's `claude/agent-fleet-bootstrap`:
-`dewrapPane` moves to `src/core/pane.js` (importing it from `login.js` into `claude.js` would be
-a cycle), and `extractRcUrl` de-wraps first. Worth contributing eventually; nothing here waits
-on it.
+**Also fixed at source.** Now that agent-hub is vendored into this repo (`agent-hub/`), the fix
+is applied there too: `dewrapPane` moves to `src/core/pane.js` (importing it from `login.js` into
+`claude.js` would be a cycle), and `extractRcUrl` de-wraps first. It is the one divergence from
+upstream `cac1f02` and is ready to contribute as-is — see `agent-hub/UPSTREAM.md`.
+
+The sidecar's own layer stays regardless, and its role changes: with both in place
+`reconcileRcUrl` should report `repaired: false` in normal operation, so a `truncated` or
+`missing` in the logs now means agent-hub's extraction has regressed. That is exactly the failure
+that went unnoticed the first time, because nothing was watching for it.
 
 ### Still unvalidated
 

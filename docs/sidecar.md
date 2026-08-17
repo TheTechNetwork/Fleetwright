@@ -1,8 +1,8 @@
 # The host sidecar
 
 What runs on a fleet host. It dials the coordinator, validates every intent that
-arrives against the verb allowlist, and drives a **stock agent-hub** through its
-loopback HTTP API.
+arrives against the verb allowlist, and drives **agent-hub** through its loopback
+HTTP API.
 
 ```
 coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (agent-hub) ──▶ tmux ──▶ claude
@@ -10,18 +10,28 @@ coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (agent-
                       └── validates · translates · repairs
 ```
 
-agent-hub is not modified, not forked, and not aware of any of this. From its
-side the sidecar is one more HTTP client holding its token — the same interface
-its own CLI uses.
+agent-hub carries no fleet code and is not aware of any of this. From its side
+the sidecar is one more HTTP client holding its token — the same interface its
+own CLI uses.
 
-## Why out-of-process
+## Why out-of-process, now that both live in one repo
 
 The alternative was `src/adapters/fleet.js` inside agent-hub, which §6 of
 `design.md` proposes and which is a genuinely clean fit for its adapter seam.
-The sidecar wins on one thing that outweighs the rest: **it works against an
-agent-hub you have not changed.** No PR has to land, no version has to match, and
-a host can be running whatever agent-hub it was already running. Upstreaming
-becomes a separate, unblocking conversation instead of a dependency.
+Vendoring agent-hub into the monorepo removes one of the original arguments for
+the sidecar — no PR has to land for either approach now — but the one that
+remains is the one that matters:
+
+**agent-hub is upstream code we intend to contribute back to.** Every line of
+fleet logic added to that tree is a line that has to be untangled before any of
+it can go upstream, and a tree that accumulates them becomes a fork by default
+rather than by decision. The HTTP boundary is what keeps
+[`agent-hub/UPSTREAM.md`](../agent-hub/UPSTREAM.md)'s diff small enough to
+actually contribute.
+
+Two smaller things it buys: the sidecar restarts without disturbing sessions
+(agent-hub's own shutdown deliberately leaves tmux alone, and this preserves
+that), and a host can run an agent-hub other than the vendored one.
 
 The cost is one round trip of latency per action on loopback, which is nothing
 next to the ~20s a session start spends waiting for Remote Control anyway.
@@ -88,16 +98,29 @@ given. The container posts `{uuid, cwd}` to `/run/hub.sock` and can name nothing
 The sidecar re-derives Remote Control URLs from the pane itself rather than
 trusting the ones agent-hub recorded.
 
-agent-hub's `extractRcUrl` matches the raw `capture-pane` output with no
+agent-hub's `extractRcUrl` matched the raw `capture-pane` output with no
 de-wrapping — unlike its own login flow, which has `dewrapPane` for exactly this
 failure. A pane is a fixed-width grid, and the RC URL is one long token.
-Measured against the verbatim CLI 2.1.233 capture in `design.md` §10:
+Measured against the verbatim CLI 2.1.233 capture in `design.md` §10, and
+confirmed on a real 70-column tmux pane:
 
-| pane width | agent-hub records |
+| pane width | agent-hub recorded |
 |---|---|
 | 80 | correct — which is why this was never noticed |
 | 100 | `https://claude.ai/code/session_016zf` — truncated, well-formed, and dead |
 | 70 | **`null`** — the `https://` prefix straddles the break, so the session is reported online with no URL to reach it by |
+
+**The vendored agent-hub now carries the fix** (`agent-hub/src/core/pane.js` —
+see `UPSTREAM.md`), so all three widths are correct at source. The sidecar's own
+layer stays anyway, for two reasons:
+
+- A host may be running an agent-hub other than the vendored one, and the
+  repair costs a `peek` it would already be doing.
+- It turns a silent failure into a loud one. With both layers in place
+  `reconcileRcUrl()` should report `repaired: false` in normal operation, so a
+  `truncated` or `missing` in the logs now means agent-hub's extraction has
+  regressed — which is precisely the failure that went unnoticed the first time,
+  because nothing was checking.
 
 `src/host/pane.js` ports the de-wrapping and adds an explicit URL character
 class (de-wrapping can only ever join *more* text onto the end, and in a TUI

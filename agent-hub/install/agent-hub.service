@@ -1,0 +1,38 @@
+[Unit]
+Description=agent-hub — Claude Code session manager
+Documentation=https://github.com/ambersecurityinc/agent-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __USER__ / __DIR__ / __NODE__ are substituted by install.sh.
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=/etc/agent-hub.env
+ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+
+Restart=always
+RestartSec=3
+
+# KillMode=process is LOAD-BEARING — do not remove it.
+#
+# The tmux server that holds every Claude session is started by this service,
+# so it lands in this unit's cgroup. With the default KillMode=control-group, a
+# plain `systemctl restart agent-hub` reaps the entire cgroup — including the
+# tmux server — and takes down every live session at once. That is exactly what
+# happened on the fleet this was extracted from: one routine restart, every
+# agent gone.
+#
+# With KillMode=process, systemd signals only the main process, so restarting
+# the hub leaves the sessions alone and they are re-adopted on the next
+# reconcile. Restarting agent-hub must never cost anyone their work.
+KillMode=process
+TimeoutStopSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-hub
+
+[Install]
+WantedBy=multi-user.target
