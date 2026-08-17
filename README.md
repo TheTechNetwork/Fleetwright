@@ -3,15 +3,15 @@
 A multi-host control plane for Claude Code sessions: ephemeral root-capable
 sandboxes, session wake, and a phone that can reach any of it from a cold radio.
 
-It drives [`agent-hub`](https://github.com/ambersecurityinc/agent-hub) rather
-than forking or modifying it. On each host a **sidecar** dials the coordinator
-and speaks to a stock agent-hub over its loopback HTTP API — so a host can run
-whatever agent-hub it was already running, and nothing here waits on a PR
-landing upstream.
+One monorepo. It contains both the fleet control plane and
+[`agent-hub`](https://github.com/ambersecurityinc/agent-hub), the session manager
+that actually drives tmux on each host.
 
-Everything else lives here too: the coordinator (Cloudflare Worker + Durable
-Objects), the scheduler, the mobile API, the container image, and the iOS and
-Android apps.
+On each host a **sidecar** dials the coordinator and speaks to agent-hub over
+its loopback HTTP API. They stay separate processes on purpose even though they
+now live in one repo: agent-hub is upstream code we intend to contribute back
+to, and keeping fleet concerns out of that tree is what keeps that possible.
+See [`agent-hub/UPSTREAM.md`](./agent-hub/UPSTREAM.md).
 
 `docs/design.md` is the complete design and the record of what has been
 validated on hardware. Start there.
@@ -27,16 +27,26 @@ validated on hardware. Start there.
 | `src/protocol/` | the intent protocol — built by the coordinator, enforced by the sidecar |
 | `src/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
 | `bin/agent-fleet-sidecar` | the host entrypoint (`doctor` checks a box before you trust it) |
+| `agent-hub/` | vendored upstream session manager — see `agent-hub/UPSTREAM.md` |
 
-## Running the tests
+Still to come: the coordinator (Cloudflare Worker + Durable Objects), the
+scheduler, the mobile API, the container image, and the iOS and Android apps.
 
-No runtime dependencies, no build step — the same posture as agent-hub. The only
-install is the TypeScript devDependency used to check the JSDoc annotations.
+## Running things
+
+No runtime dependencies and no build step in either package — the only install
+is the TypeScript devDependency used to check the JSDoc annotations, and Node
+resolves it up the tree for both.
 
 ```sh
 npm install
-npm test        # node --test
+npm test              # both packages
+npm run test:fleet    # or one at a time
+npm run test:hub
 npm run typecheck
+
+npm run hub           # agent-hub itself
+npm run sidecar -- doctor
 ```
 
 ## The three things worth knowing before reading the code

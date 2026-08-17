@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-hub</title>
+<style>
+  /* Light and dark are both defined up front so the page never inherits a
+     host background it did not choose. */
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2f6feb; --ok: #12855a; --warn: #b45309; --bad: #c02b2b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115; --panel: #171a20; --ink: #e8eaed; --muted: #9aa2af;
+      --line: #262b33; --accent: #6c9bff; --ok: #46c08b; --warn: #e0a75a; --bad: #f0736c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --panel: #171a20; --ink: #e8eaed; --muted: #9aa2af;
+    --line: #262b33; --accent: #6c9bff; --ok: #46c08b; --warn: #e0a75a; --bad: #f0736c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  header { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
+  .host { color: var(--muted); font-family: var(--mono); font-size: .8rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem;
+  }
+  .card h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+             color: var(--muted); margin: 0 0 .8rem; font-weight: 600; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  input[type=text] {
+    flex: 1 1 11rem; min-width: 0; padding: .5rem .7rem; font: inherit;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 7px;
+  }
+  button {
+    padding: .5rem .9rem; font: inherit; font-weight: 550; cursor: pointer;
+    background: var(--accent); color: #fff; border: 0; border-radius: 7px;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; }
+  /* Wide content scrolls inside its own box; the page body never scrolls sideways. */
+  .scroll { overflow-x: auto; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .name { font-family: var(--mono); font-weight: 600; }
+  .dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem; }
+  .running .dot { background: var(--ok); }
+  .stopped .dot { background: var(--muted); }
+  .error .dot { background: var(--bad); }
+  .meta { color: var(--muted); font-size: .8rem; }
+  .acts { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .acts button { padding: .28rem .6rem; font-size: .8rem; }
+  a { color: var(--accent); }
+  pre {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+    padding: .7rem; font-family: var(--mono); font-size: .78rem;
+    white-space: pre; overflow-x: auto; margin: .5rem 0 0; max-height: 22rem; overflow-y: auto;
+  }
+  .flash { padding: .6rem .8rem; border-radius: 7px; font-size: .87rem; margin-bottom: 1rem;
+           border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap; }
+  .flash.bad { border-color: var(--bad); }
+  .flash.good { border-color: var(--ok); }
+  .auth-bad { color: var(--warn); font-weight: 600; }
+  .empty { color: var(--muted); font-size: .88rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>agent-hub</h1>
+    <span class="host" id="host"></span>
+  </header>
+
+  <div id="flash" hidden class="flash"></div>
+
+  <div class="card">
+    <h2>Claude account</h2>
+    <div id="auth" class="meta">checking…</div>
+    <div class="row" id="auth-actions" style="margin-top:.7rem"></div>
+    <div id="login-box" hidden style="margin-top:.8rem">
+      <div class="meta" style="margin-bottom:.5rem">
+        Open the link, authorize, then paste the code back here.
+      </div>
+      <div id="login-url" style="margin-bottom:.6rem; word-break:break-all"></div>
+      <div class="row">
+        <input type="text" id="code" placeholder="authorization code" autocomplete="off" spellcheck="false">
+        <button id="send-code">Submit code</button>
+        <button class="ghost" id="cancel-login">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>New session</h2>
+    <div class="row">
+      <input type="text" id="new-name" placeholder="name (optional)" autocomplete="off" spellcheck="false">
+      <input type="text" id="new-cwd" placeholder="working directory (optional)" autocomplete="off" spellcheck="false">
+      <button id="new-go">Start</button>
+    </div>
+    <label class="meta" style="display:flex;align-items:center;gap:.4rem;margin-top:.6rem;cursor:pointer">
+      <input type="checkbox" id="new-safe">
+      Safe mode — keep permission prompts on for this one session
+    </label>
+    <div class="meta" id="cap" style="margin-top:.5rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>Sessions</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Session</th><th>Where</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="empty" class="empty" hidden>No sessions yet.</div>
+    <pre id="peek" hidden></pre>
+  </div>
+</div>
+
+<script>
+// The UI never implements a command — it posts a command line to /api/command,
+// the same entry point Telegram uses. A capability can therefore never exist in
+// one surface and be quietly missing from the other.
+const $ = (id) => document.getElementById(id);
+let peeking = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, { credentials: 'same-origin', ...opts });
+  if (res.status === 401) { flash('Session expired — reload with ?token=…', true); return null; }
+  return res.json();
+}
+
+function flash(text, bad, buttons) {
+  const el = $('flash');
+  el.className = 'flash ' + (bad ? 'bad' : 'good');
+  const body = document.createElement('div');
+  body.textContent = text;
+  el.replaceChildren(body);
+
+  // The same offered choices Telegram renders as tappable buttons — chiefly
+  // the summary-or-full resume prompt, which must not require typing a command
+  // to answer.
+  if (buttons && buttons.length) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.marginTop = '.6rem';
+    for (const b of buttons) row.append(btn(b.label, 'ghost', () => run(b.command)));
+    el.append(row);
+  }
+  el.hidden = false;
+  clearTimeout(flash.t);
+  // A prompt awaiting a decision must not vanish while it is being read.
+  if (!buttons || !buttons.length) flash.t = setTimeout(() => { el.hidden = true; }, 12000);
+}
+
+async function run(command) {
+  const r = await api('/api/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ command }),
+  });
+  if (!r) return null;
+  flash(r.text, !r.ok, r.buttons);
+  await refresh();
+  return r;
+}
+
+function fmtAge(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+
+function render(state) {
+  $('host').textContent = state.host + ' · ' + state.workdir;
+  $('cap').textContent = state.running + ' of ' + state.maxSessions + ' slots in use';
+
+  // --- auth ---
+  const auth = $('auth');
+  const acts = $('auth-actions');
+  acts.innerHTML = '';
+  if (state.auth.loggedIn) {
+    auth.className = 'meta';
+    auth.textContent = state.auth.summary;
+    if (state.loginEnabled) acts.append(btn('Log out', 'ghost', () => run('/login logout')));
+  } else {
+    auth.className = 'auth-bad';
+    auth.textContent = state.auth.summary;
+    if (state.loginEnabled) {
+      acts.append(btn('Log in with Claude subscription', '', () => startLogin('')));
+      acts.append(btn('Use Anthropic Console', 'ghost', () => startLogin('console')));
+    }
+  }
+
+  const box = $('login-box');
+  if (state.loginPending && state.loginPending.url) {
+    box.hidden = false;
+    const a = document.createElement('a');
+    a.href = state.loginPending.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = state.loginPending.url;
+    $('login-url').replaceChildren(a);
+  } else if (!box.dataset.sticky) {
+    box.hidden = true;
+  }
+
+  // --- sessions ---
+  const rows = $('rows');
+  rows.innerHTML = '';
+  $('empty').hidden = state.sessions.length > 0;
+  for (const s of state.sessions) {
+    const tr = document.createElement('tr');
+    tr.className = s.status;
+
+    const c1 = document.createElement('td');
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const nm = document.createElement('span');
+    nm.className = 'name';
+    nm.textContent = s.name;
+    c1.append(dot, nm);
+    if (s.rcUrl) {
+      const a = document.createElement('a');
+      a.href = s.rcUrl; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = 'Remote Control';
+      a.style.cssText = 'display:block;font-size:.78rem';
+      c1.append(a);
+    }
+    const det = document.createElement('div');
+    det.className = 'meta';
+    det.textContent = s.status + (s.detail ? ' · ' + s.detail : '') + ' · ' + fmtAge(s.updatedAt);
+    c1.append(det);
+
+    const c2 = document.createElement('td');
+    c2.className = 'meta';
+    c2.textContent = s.cwd;
+    if (!s.uuid) {
+      const w = document.createElement('div');
+      w.textContent = 'no saved conversation';
+      w.style.color = 'var(--warn)';
+      c2.append(w);
+    }
+
+    const c3 = document.createElement('td');
+    const box = document.createElement('div');
+    box.className = 'acts';
+    if (s.status === 'running') {
+      box.append(btn('Peek', 'ghost', () => peek(s.name)));
+      box.append(btn('Stop', 'ghost', () => run('/stop ' + s.name)));
+    } else {
+      if (s.uuid) box.append(btn('Resume', '', () => run('/resume ' + s.name)));
+      box.append(btn('Forget', 'ghost', () => {
+        if (confirm('Forget "' + s.name + '"? Its conversation can no longer be resumed from here.')) {
+          run('/forget ' + s.name);
+        }
+      }));
+    }
+    c3.append(box);
+
+    tr.append(c1, c2, c3);
+    rows.append(tr);
+  }
+}
+
+function btn(label, cls, onClick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.onclick = onClick;
+  return b;
+}
+
+async function startLogin(mode) {
+  $('login-box').dataset.sticky = '1';
+  $('login-box').hidden = false;
+  $('login-url').textContent = 'starting…';
+  await run('/login ' + mode);
+}
+
+async function peek(name) {
+  peeking = peeking === name ? null : name;
+  const pre = $('peek');
+  if (!peeking) { pre.hidden = true; return; }
+  const r = await api('/api/peek?name=' + encodeURIComponent(name));
+  pre.hidden = false;
+  pre.textContent = r && r.text ? r.text : '(nothing to show)';
+}
+
+async function refresh() {
+  const state = await api('/api/state');
+  if (state) render(state);
+  if (peeking) {
+    const r = await api('/api/peek?name=' + encodeURIComponent(peeking));
+    if (r && r.text) $('peek').textContent = r.text;
+  }
+}
+
+$('new-go').onclick = async () => {
+  const name = $('new-name').value.trim();
+  const cwd = $('new-cwd').value.trim();
+  // The command line is positional: a cwd without a name would be read as one.
+  if (cwd && !name) { flash('Give the session a name if you set a working directory.', true); return; }
+  const safe = $('new-safe').checked ? ' --safe' : '';
+  $('new-go').disabled = true;
+  await run(('/new ' + name + ' ' + cwd).trim() + safe);
+  $('new-go').disabled = false;
+  $('new-name').value = '';
+};
+
+$('send-code').onclick = async () => {
+  const code = $('code').value.trim();
+  if (!code) return;
+  $('send-code').disabled = true;
+  const r = await run('/code ' + code);
+  $('send-code').disabled = false;
+  if (r && r.ok) {
+    $('code').value = '';
+    delete $('login-box').dataset.sticky;
+    $('login-box').hidden = true;
+  }
+};
+
+$('cancel-login').onclick = async () => {
+  delete $('login-box').dataset.sticky;
+  $('login-box').hidden = true;
+  await run('/login cancel');
+};
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

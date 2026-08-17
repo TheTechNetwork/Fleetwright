@@ -10,7 +10,7 @@ One module, `src/protocol/intents.js`, imported by both ends:
 | Side | Role |
 |---|---|
 | Coordinator | builds intents and catches its own mistakes before they reach the wire |
-| [Sidecar](./sidecar.md) (`src/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives a stock agent-hub |
+| [Sidecar](./sidecar.md) (`src/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives agent-hub |
 
 ## The principle
 
@@ -96,8 +96,8 @@ and "dead host" is the one it retries.
 |---|---|---|---|
 | `list` | — | | `/list` |
 | `status` | `name?` | | `/status [name]` |
-| `peek` | `name`, `lines?` (1–500) | | adapter-local — `sessions.peek()` |
-| `health` | — | | adapter-local — host telemetry |
+| `peek` | `name`, `lines?` (1–500) | | sidecar-local — `GET /api/peek` |
+| `health` | — | | sidecar-local — `GET /api/state` + `os` |
 | `start` | `name?`, `mode?` (`safe`\|`dangerous`) | ✅ | `/new [name] [--safe\|--dangerous]` |
 | `resume` | `name`, `choice?` (`summary`\|`full`) | ✅ | `/resume <name> [summary\|full]` |
 | `stop` | `name` | ✅ | `/stop <name>` |
@@ -180,7 +180,7 @@ list is worse than a re-read.
   itself verify it — that belongs where TLS and the credential live.
 - **Authorization.** Authenticating the actor does not answer *which sessions
   this actor may touch*. The `actor` field carries an id the sidecar logs and
-  echoes, but a stock agent-hub records every HTTP caller as `web`, so it cannot
+  echoes, but agent-hub records every HTTP caller as `web`, so it cannot
   reach `createdBy` today. The policy belongs in the coordinator regardless —
   one chokepoint instead of N hosts — and that is where §5 argues per-session
   ownership should live.

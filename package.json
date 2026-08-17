@@ -9,8 +9,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "test": "npm run test:fleet && npm run test:hub",
+    "test:fleet": "node --test test/*.test.js",
+    "test:hub": "node --test agent-hub/test/*.test.js",
+    "typecheck": "npm run typecheck:fleet && npm run typecheck:hub",
+    "typecheck:fleet": "tsc -p tsconfig.json",
+    "typecheck:hub": "tsc -p agent-hub/tsconfig.json",
+    "sidecar": "node bin/agent-fleet-sidecar",
+    "hub": "node agent-hub/src/index.js"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

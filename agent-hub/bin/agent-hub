@@ -1,0 +1,256 @@
+#!/usr/bin/env node
+// agent-hub CLI.
+//
+// Everything except `serve` talks to the RUNNING hub over its loopback HTTP
+// port rather than touching the state file directly. Two writers to one JSON
+// file is a corruption bug waiting for a busy afternoon, and the hub is always
+// listening (config.js guarantees the HTTP adapter starts even in a
+// Telegram-only deployment).
+//
+//   agent-hub serve            run the service (what systemd starts)
+//   agent-hub doctor           check this box can actually run sessions
+//   agent-hub hook             SessionStart hook — reads Claude's JSON on stdin
+//   agent-hub <command...>     any chat command, e.g. `agent-hub list`
+
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { loadConfig } from '../src/config.js';
+import { Registry } from '../src/core/registry.js';
+
+/**
+ * Load /etc/agent-hub.env the way systemd's EnvironmentFile= does.
+ *
+ * Without this the CLI and the service disagree about their own configuration:
+ * systemd reads that file, a shell does not. `agent-hub doctor` reported "web
+ * only" on a box with Telegram plainly running, and — worse — with
+ * AGENT_HUB_TOKEN set every CLI command would 401 against its own hub.
+ *
+ * Real environment variables win, so `AGENT_HUB_PORT=9999 agent-hub list`
+ * still overrides the file.
+ */
+function loadEnvFile(file = process.env.AGENT_HUB_ENV_FILE || '/etc/agent-hub.env') {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return; // not installed system-wide, or not readable by this user
+  }
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 1) continue;
+    const key = line.slice(0, eq).trim();
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) continue;
+    if (process.env[key] !== undefined) continue; // the real environment wins
+    // systemd strips one layer of surrounding quotes; match that.
+    process.env[key] = line
+      .slice(eq + 1)
+      .trim()
+      .replace(/^(['"])(.*)\1$/, '$2');
+  }
+}
+
+const argv = process.argv.slice(2);
+const sub = argv[0] || 'serve';
+
+// Before loadConfig, so the CLI sees exactly what the service sees.
+loadEnvFile();
+const cfg = loadConfig();
+const base = `http://${cfg.bind === '0.0.0.0' || cfg.bind === '::' ? '127.0.0.1' : cfg.bind}:${cfg.port}`;
+
+switch (sub) {
+  case 'serve':
+    await (await import('../src/index.js')).main();
+    break;
+  case 'hook':
+    await runHook();
+    break;
+  case 'doctor':
+    await doctor();
+    break;
+  case 'help':
+  case '--help':
+  case '-h':
+    usage();
+    break;
+  default:
+    await command(argv.join(' '));
+}
+
+function usage() {
+  console.log(`agent-hub — portable Claude Code session manager
+
+  agent-hub serve              run the service (systemd calls this)
+  agent-hub doctor             check this box can run sessions
+  agent-hub hook               SessionStart hook (reads Claude's JSON on stdin)
+  agent-hub <command...>       run a command against the running hub, e.g.
+
+      agent-hub list
+      agent-hub new mysession
+      agent-hub resume mysession
+      agent-hub stop mysession
+      agent-hub login
+      agent-hub status
+
+Config comes from the environment — see install/agent-hub.env.example.`);
+}
+
+/**
+ * Send a command line to the running hub and print its reply.
+ *
+ * The timeout is generous because several commands legitimately take a while:
+ * starting a session waits out the Remote Control check (up to ~2x10s),
+ * `login` waits up to 45s for the authorization URL to appear, and a resume
+ * waits for the dialog. A short timeout here reports "could not reach
+ * agent-hub" for a hub that is working perfectly.
+ */
+async function command(line) {
+  const res = await post('/api/command', { command: line }, 300_000).catch((e) => {
+    console.error(
+      `Could not reach agent-hub at ${base} (${e.message}).\n` +
+        'Is the service running?  systemctl status agent-hub',
+    );
+    process.exit(1);
+  });
+  console.log(res.text);
+  process.exit(res.ok === false ? 1 : 0);
+}
+
+/**
+ * Claude Code SessionStart hook.
+ *
+ * Claude pipes us a JSON object containing its own session_id and transcript
+ * path, so the conversation uuid we record is authoritative — far better than
+ * scraping a command line, which is what the predecessor of this tool did and
+ * why it sometimes resumed the wrong conversation.
+ *
+ * Always exits 0. A hook that fails must never block a session from starting.
+ */
+async function runHook() {
+  try {
+    // Only tmux sessions are managed here; a headless `claude -p` run is not
+    // something anyone resumes.
+    if (!process.env.TMUX) process.exit(0);
+
+    const name = tmuxSessionName();
+    if (!name) process.exit(0);
+
+    const raw = await readStdin();
+    const payload = safeParse(raw);
+
+    // The transcript filename IS the conversation uuid, which makes it the
+    // most reliable source; session_id is the fallback.
+    const fromPath = String(payload.transcript_path || '').match(/([0-9a-f]{8}-[0-9a-f-]{27})\.jsonl$/);
+    const uuid = fromPath ? fromPath[1] : String(payload.session_id || '');
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(uuid)) process.exit(0);
+
+    const cwd = String(payload.cwd || process.cwd());
+
+    try {
+      await post('/internal/session-start', { name, cwd, uuid }, 3000);
+    } catch {
+      // The hub is restarting, moved port, or not up yet. Spool it; the hub
+      // drains this on its next reconcile. A dropped uuid means an
+      // unresumable session, which is the one outcome worth this fallback.
+      Registry.appendSpool(cfg, { name, cwd, uuid });
+    }
+  } catch {
+    /* never block a session */
+  }
+  process.exit(0);
+}
+
+async function doctor() {
+  let bad = 0;
+  const ok = (label, good, detail = '') => {
+    if (!good) bad++;
+    console.log(`${good ? ' ok ' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
+  };
+
+  const tmuxV = spawnSync('tmux', ['-V'], { encoding: 'utf8' });
+  ok('tmux installed', tmuxV.status === 0, (tmuxV.stdout || '').trim() || 'apt install tmux');
+
+  const claudeV = spawnSync(cfg.claudeBin, ['--version'], { encoding: 'utf8' });
+  ok(`claude on PATH (${cfg.claudeBin})`, claudeV.status === 0, (claudeV.stdout || '').trim());
+
+  const auth = spawnSync(cfg.claudeBin, ['auth', 'status', '--json'], { encoding: 'utf8' });
+  let authOk = false;
+  let authDetail = 'run: agent-hub login';
+  try {
+    const parsed = JSON.parse(auth.stdout || '{}');
+    authOk = parsed.loggedIn === true;
+    if (authOk) authDetail = `${parsed.email || '?'} (${parsed.subscriptionType || parsed.authMethod || '?'})`;
+  } catch { /* leave as not-logged-in */ }
+  ok('claude logged in', authOk, authDetail);
+
+  ok(`workdir ${cfg.workdir}`, true);
+  ok(`state dir ${cfg.stateDir}`, true);
+
+  let hubUp = false;
+  try {
+    const r = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(3000) });
+    hubUp = r.ok;
+  } catch { /* down */ }
+  ok(`hub reachable at ${base}`, hubUp, hubUp ? '' : 'systemctl status agent-hub');
+
+  ok(
+    'a control surface is configured',
+    Boolean(cfg.telegram.token) || cfg.webEnabled,
+    cfg.telegram.token ? 'telegram' : 'web only',
+  );
+  if (cfg.telegram.token && cfg.telegram.allowedUsers.length === 0) {
+    console.log('warn  AGENT_HUB_TELEGRAM_ALLOWED_USERS is empty — message the bot /whoami, then add the id');
+  }
+
+  process.exit(bad ? 1 : 0);
+}
+
+// --- helpers ---------------------------------------------------------------
+
+function tmuxSessionName() {
+  const args = ['display-message', '-p', '#{session_name}'];
+  if (process.env.TMUX_PANE) args.splice(1, 0, '-t', process.env.TMUX_PANE);
+  const r = spawnSync('tmux', args, { encoding: 'utf8' });
+  return r.status === 0 ? (r.stdout || '').trim() : '';
+}
+
+async function post(path, body, timeoutMs = 15_000) {
+  /** @type {Record<string,string>} */
+  const headers = { 'content-type': 'application/json' };
+  if (cfg.token) headers.authorization = `Bearer ${cfg.token}`;
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok && res.status === 401) throw new Error('unauthorised — is AGENT_HUB_TOKEN set in this shell?');
+  return res.json();
+}
+
+function readStdin() {
+  return new Promise((resolve) => {
+    let data = '';
+    // If nothing is piped in, do not hang the session waiting for EOF.
+    const timer = setTimeout(() => resolve(data), 2000);
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => (data += c));
+    process.stdin.on('end', () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+    process.stdin.on('error', () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+  });
+}
+
+function safeParse(s) {
+  try {
+    return JSON.parse(s || '{}');
+  } catch {
+    return {};
+  }
+}
