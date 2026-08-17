@@ -290,11 +290,16 @@ no multi-step handshakes on the hot path.
    uncommitted work) vs. fully ephemeral with a fresh clone every start (stronger, but `/stop`
    destroys uncommitted work).
 3. **Telegram webhook vs. long poll** on the Worker.
-4. **First milestone.** *Build* the intent protocol + fleet adapter (§6) — it's the contract both
-   the Worker and the sandbox launch path depend on, and §5 flags it as impossible to retrofit.
-   *Validate* the TvY passthrough separately, on hardware (§9). These are different tasks in
-   different places; conflating them is what sent the first session looking for a container
-   runtime it didn't have.
+4. ~~**First milestone.**~~ **Done 2026-08-17.** *Build* the intent protocol + fleet adapter (§6) —
+   it's the contract both the Worker and the sandbox launch path depend on, and §5 flags it as
+   impossible to retrofit. *Validate* the TTY passthrough separately, on hardware (§9). These are
+   different tasks in different places; conflating them is what sent the first session looking for
+   a container runtime it didn't have.
+
+   Landed: `docs/intents.md` + `src/protocol/intents.js` (coordinator side), and
+   `src/adapters/fleet.js` in agent-hub on `claude/agent-fleet-bootstrap` (host side, and the
+   enforcement copy). Eight verbs, no `login`/`code`, no path parameter anywhere. 72 tests across
+   the two repos.
 
 ---
 
@@ -401,17 +406,30 @@ Note: **the flag matters.** Launched *without* `--remote-control <name>` (RC com
 matches none of the patterns. agent-hub always passes the flag (`claude.js:33`), so this is not a
 live bug — but do not remove that flag thinking the setting covers it.
 
-### Latent risk found, not yet hit
+### Latent risk found, not yet hit — now fixed
 
-`extractRcUrl` runs on raw `capturePane` output with no de-wrapping, unlike the login flow which
+`extractRcUrl` ran on raw `capturePane` output with no de-wrapping, unlike the login flow which
 has `dewrapPane` for exactly this failure. At 80 columns the RC URL landed on its own line, but a
-narrower pane or a longer session id would wrap it mid-token and produce a truncated URL. Worth a
-guard — reuse `dewrapPane`.
+narrower pane or a longer session id would wrap it mid-token and produce a truncated URL.
+
+Confirmed worse than that once measured against the verbatim capture above: at 100 columns it
+truncates to `…/session_016zf` (well-formed enough that nobody suspects it), and at 70–80 the
+`https://` prefix straddles the break so **nothing matches at all** — the session comes up
+reported online with no URL to reach it by. Fixed in agent-hub on
+`claude/agent-fleet-bootstrap`: `dewrapPane` moves to `src/core/pane.js` (importing it from
+`login.js` into `claude.js` would be a cycle), `extractRcUrl` de-wraps first and matches an
+explicit URL character set rather than `\S+` — de-wrapping can only ever join *more* text onto
+the end, and in a TUI that is as likely to be a box border as a path segment.
 
 ### Still unvalidated
 
-- **The unix-socket hook transport** (§2). Pure Node, testable anywhere, no hardware needed.
-  This is the only piece of the sandbox design not yet proven.
+- ~~**The unix-socket hook transport** (§2).~~ **Validated 2026-08-17** — see
+  `docs/hook-socket.md`, 19 tests over real unix sockets. Two things it turned up that were not
+  obvious from the design: reclaiming a stale socket is a hijack primitive if done naively (probe
+  before unlinking), and the socket's mode has a `listen()`→`chmod()` race that a `0700` directory
+  closes. Fully proven only once rootless podman is, since the userns mapping is what makes a
+  `0600` socket reachable from inside the container — but that failure is loud (`EACCES`), not
+  silent.
 - **Rootless podman.** All tests ran as root, so container-root → unprivileged-host-user mapping is
   unproven. Needs a dedicated non-root user, which is the correct deployment posture anyway.
 - **systemd behaviour** — `KillMode=process` surviving a restart with live sessions.
