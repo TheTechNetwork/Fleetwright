@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Same posture as agent-hub: no runtime dependencies and no build step.
+      # The only install is the typescript devDependency used for checking the
+      # JSDoc annotations.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: npm run typecheck

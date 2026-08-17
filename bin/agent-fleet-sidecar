@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+// The sidecar entrypoint.
+//
+//   agent-fleet-sidecar            run it (systemd calls this)
+//   agent-fleet-sidecar doctor     check this box can actually drive its agent-hub
+//
+// Config comes from the environment — see src/host/config.js. Nothing here
+// touches agent-hub's installation: the sidecar is an HTTP client of it.
+
+import { loadSidecarConfig, validateSidecarConfig } from '../src/host/config.js';
+import { HubClient } from '../src/host/hub-client.js';
+import { Sidecar } from '../src/host/sidecar.js';
+import { HookSocketServer } from '../src/host/hook-socket.js';
+import { StdioTransport } from '../src/host/transports/stdio.js';
+import { log, setLogLevel } from '../src/host/log.js';
+
+const cfg = loadSidecarConfig();
+setLogLevel(cfg.logLevel);
+
+const sub = process.argv[2] || 'run';
+if (sub === 'doctor') await doctor();
+else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
+else await run();
+
+function usage() {
+  console.log(`agent-fleet-sidecar — drives a stock agent-hub on behalf of the fleet coordinator
+
+  agent-fleet-sidecar            run
+  agent-fleet-sidecar doctor     check this box can drive its agent-hub
+
+Environment:
+  AGENT_FLEET_COORDINATOR_URL    required — the origin this sidecar pins
+  AGENT_FLEET_HUB_URL            default http://127.0.0.1:8790
+  AGENT_FLEET_HUB_TOKEN          agent-hub's AGENT_HUB_TOKEN, if it has one
+  AGENT_FLEET_HOST_ID            default: this hostname
+  AGENT_FLEET_LABELS             comma-separated scheduler constraints
+  AGENT_FLEET_TRANSPORT          stdio (the only one implemented so far)
+  AGENT_FLEET_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip`);
+}
+
+async function run() {
+  const { errors, warnings } = validateSidecarConfig(cfg);
+  for (const w of warnings) log.warn(`config: ${w}`);
+  if (errors.length) {
+    for (const e of errors) log.error(`config: ${e}`);
+    process.exit(1);
+  }
+
+  const hub = new HubClient({
+    baseUrl: cfg.hubUrl,
+    token: cfg.hubToken,
+    commandTimeoutMs: cfg.hubCommandTimeoutMs,
+    readTimeoutMs: cfg.hubReadTimeoutMs,
+  });
+
+  // Not fatal. agent-hub may be starting alongside this, and the sidecar's job
+  // is to keep answering the coordinator either way — a host that reports
+  // "hub unreachable" is far more useful than one that exited.
+  if (!(await hub.alive())) {
+    log.warn(`agent-hub at ${cfg.hubUrl} is not answering yet — carrying on, health will report it`);
+  }
+
+  const transport = new StdioTransport({ origin: cfg.coordinatorUrl });
+  const sidecar = new Sidecar({
+    hub,
+    transport,
+    hostId: cfg.hostId,
+    labels: cfg.labels,
+    maxSkewMs: cfg.maxSkewMs,
+    logger: log,
+  });
+
+  // The per-session hook sockets. The sidecar owns them, so it knows which
+  // session a report came from and forwards it to agent-hub's loopback hook
+  // endpoint with that name attached — which is how a container gets a
+  // conversation uuid recorded without ever being able to name a session, and
+  // without agent-hub changing at all.
+  const hooks = cfg.hookSocketsEnabled
+    ? new HookSocketServer({
+        dir: cfg.hookSocketDir,
+        onSessionStart: (r) => hub.recordSessionStart(r),
+        logger: log,
+      })
+    : null;
+
+  await sidecar.start();
+
+  const shutdown = async (/** @type {string} */ signal) => {
+    // Deliberately does NOT stop anything on the hub. The sessions are the
+    // work; the sidecar is a remote control for them, and it restarting must
+    // not disturb them — the same reasoning as agent-hub's own shutdown.
+    log.info(`${signal} — shutting down (agent-hub and its sessions are left alone)`);
+    try {
+      await sidecar.stop();
+      await hooks?.closeAll();
+    } catch { /* best effort */ }
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
+
+  // stdio mode ends when its input does; a socket transport would not.
+  await transport.closed;
+  await hooks?.closeAll();
+}
+
+async function doctor() {
+  let bad = 0;
+  /** @param {string} label @param {boolean} good @param {string} [detail] */
+  const ok = (label, good, detail = '') => {
+    if (!good) bad++;
+    console.log(`${good ? ' ok ' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
+  };
+
+  const { errors, warnings } = validateSidecarConfig(cfg);
+  ok('configuration', errors.length === 0, errors.join('; '));
+  for (const w of warnings) console.log(`warn  ${w}`);
+
+  const hub = new HubClient({ baseUrl: cfg.hubUrl, token: cfg.hubToken, readTimeoutMs: cfg.hubReadTimeoutMs });
+  const alive = await hub.alive();
+  ok(`agent-hub reachable at ${cfg.hubUrl}`, alive, alive ? '' : 'systemctl status agent-hub');
+
+  if (alive) {
+    try {
+      const state = await hub.state();
+      ok('agent-hub accepts the token', true, `${state.running}/${state.maxSessions} running on ${state.host}`);
+      ok('claude is logged in on the hub', state.auth?.loggedIn === true, state.auth?.summary || '');
+    } catch (e) {
+      ok('agent-hub accepts the token', false, /** @type {Error} */ (e).message);
+    }
+  }
+
+  ok(`host id ${cfg.hostId}`, true, cfg.labels.length ? `labels: ${cfg.labels.join(', ')}` : 'no labels');
+  process.exit(bad ? 1 : 0);
+}

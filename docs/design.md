@@ -247,6 +247,13 @@ upstream.
 
 ## 6. Host-side code structure
 
+> **Superseded 2026-08-17 — see §8.5.** The host side is a **sidecar process in agent-fleet**
+> driving a stock agent-hub over its loopback HTTP API, not an adapter inside agent-hub. The
+> reasoning below still holds and is why the sidecar translates intents into the same command
+> lines `dispatch()` takes; what changed is that it reaches that seam through `POST /api/command`
+> instead of by being loaded into the process. `docs/sidecar.md` has the detail, including the two
+> things the HTTP boundary costs.
+
 **The coordinator client is just another adapter.** `dispatch()` already takes
 `{sessions, login, cfg, actor}` plus a command line, and agent-hub's README advertises exactly this
 seam: "Slack and WhatsApp are each one file; nothing in `src/core/` needs to change."
@@ -290,11 +297,35 @@ no multi-step handshakes on the hot path.
    uncommitted work) vs. fully ephemeral with a fresh clone every start (stronger, but `/stop`
    destroys uncommitted work).
 3. **Telegram webhook vs. long poll** on the Worker.
-4. **First milestone.** *Build* the intent protocol + fleet adapter (§6) — it's the contract both
-   the Worker and the sandbox launch path depend on, and §5 flags it as impossible to retrofit.
-   *Validate* the TvY passthrough separately, on hardware (§9). These are different tasks in
-   different places; conflating them is what sent the first session looking for a container
-   runtime it didn't have.
+4. ~~**First milestone.**~~ **Done 2026-08-17.** *Build* the intent protocol + the host side (§6) —
+   it's the contract both the Worker and the sandbox launch path depend on, and §5 flags it as
+   impossible to retrofit. *Validate* the TTY passthrough separately, on hardware (§9). These are
+   different tasks in different places; conflating them is what sent the first session looking for
+   a container runtime it didn't have.
+
+   Landed: `docs/intents.md` + `src/protocol/intents.js` (the protocol, built by the coordinator
+   and enforced by the host), and `src/host/` + `bin/agent-fleet-sidecar` (the host side). Eight
+   verbs, no `login`/`code`, no path parameter anywhere. 112 tests, plus an end-to-end run against
+   a real `agent-hub serve` — see `docs/sidecar.md`.
+
+5. **Host side is a sidecar, not an in-process adapter — settled 2026-08-17.** §6 proposes
+   `src/adapters/fleet.js` inside agent-hub, which is a clean fit for its adapter seam. We are
+   doing it as a separate process in this repo instead, driving a **stock** agent-hub over its
+   loopback HTTP API (`POST /api/command`, `GET /api/state`, `GET /api/peek`).
+
+   The reason is that it works against an agent-hub nobody has changed: no PR has to land, no
+   version has to match, and a host can keep whatever agent-hub it already runs. Upstreaming
+   becomes a separate, unblocking conversation. The cost is one loopback round trip per action,
+   which is nothing against the ~20s a start already spends on the Remote Control check.
+
+   Two consequences worth carrying forward:
+
+   - **`actor` cannot reach `createdBy`.** `http.js:142` hardcodes `actor: 'web'`, so a session
+     the fleet starts is recorded as started by "web". The gap §1 already lists, now load-bearing.
+     Fixable upstream or in the coordinator, not from the sidecar.
+   - **The verb allowlist is the only gate.** `/api/command` runs any line it is given, `/login`
+     included, and the sidecar holds the token. In-process there was a second allowlist to fall
+     back on; here there is not.
 
 ---
 
@@ -339,7 +370,9 @@ in there and watching a resume dialog render.
 Pure logic, testable with `node:test` and fakes:
 
 - The intent protocol / verb set.
-- `src/adapters/fleet.js` against agent-hub's `dispatch()` seam, with a fake transport.
+- The host sidecar against agent-hub's HTTP API, with a fake transport and a stub hub. (Better
+  than expected: a real `agent-hub serve` runs fine here on a scratch state dir, so the sidecar
+  was validated against the actual API rather than only a stub — see §8.5.)
 - Scheduler: constraint filter, capacity ranking, sticky-placement rules.
 - Worker + Durable Object code (unit-testable with mocks; end-to-end needs a Cloudflare account).
 - API surface and the Shortcuts definitions.
@@ -401,17 +434,39 @@ Note: **the flag matters.** Launched *without* `--remote-control <name>` (RC com
 matches none of the patterns. agent-hub always passes the flag (`claude.js:33`), so this is not a
 live bug — but do not remove that flag thinking the setting covers it.
 
-### Latent risk found, not yet hit
+### Latent risk found, not yet hit — now fixed
 
-`extractRcUrl` runs on raw `capturePane` output with no de-wrapping, unlike the login flow which
+`extractRcUrl` ran on raw `capturePane` output with no de-wrapping, unlike the login flow which
 has `dewrapPane` for exactly this failure. At 80 columns the RC URL landed on its own line, but a
-narrower pane or a longer session id would wrap it mid-token and produce a truncated URL. Worth a
-guard — reuse `dewrapPane`.
+narrower pane or a longer session id would wrap it mid-token and produce a truncated URL.
+
+Confirmed worse than that once measured against the verbatim capture above: at 100 columns it
+truncates to `…/session_016zf` (well-formed enough that nobody suspects it), and at 70–80 the
+`https://` prefix straddles the break so **nothing matches at all** — the session comes up
+reported online with no URL to reach it by. Confirmed again on a real 70-column tmux pane, not
+just a fixture.
+
+**Worked around rather than fixed**, since agent-hub is not being modified: `src/host/pane.js`
+ports `dewrapPane` and adds an explicit URL character set (de-wrapping can only ever join *more*
+text onto the end, and in a TUI that is as likely to be a box border as a path segment). The
+sidecar re-derives the URL from `GET /api/peek` and repairs what agent-hub recorded, naming which
+failure it found — `missing`, `truncated` or `mismatch`. This is the reason `peek` is in the verb
+set at all.
+
+The upstream fix is written and sits unpushed on agent-hub's `claude/agent-fleet-bootstrap`:
+`dewrapPane` moves to `src/core/pane.js` (importing it from `login.js` into `claude.js` would be
+a cycle), and `extractRcUrl` de-wraps first. Worth contributing eventually; nothing here waits
+on it.
 
 ### Still unvalidated
 
-- **The unix-socket hook transport** (§2). Pure Node, testable anywhere, no hardware needed.
-  This is the only piece of the sandbox design not yet proven.
+- ~~**The unix-socket hook transport** (§2).~~ **Validated 2026-08-17** — see
+  `docs/hook-socket.md`, 19 tests over real unix sockets. Two things it turned up that were not
+  obvious from the design: reclaiming a stale socket is a hijack primitive if done naively (probe
+  before unlinking), and the socket's mode has a `listen()`→`chmod()` race that a `0700` directory
+  closes. Fully proven only once rootless podman is, since the userns mapping is what makes a
+  `0600` socket reachable from inside the container — but that failure is loud (`EACCES`), not
+  silent.
 - **Rootless podman.** All tests ran as root, so container-root → unprivileged-host-user mapping is
   unproven. Needs a dedicated non-root user, which is the correct deployment posture anyway.
 - **systemd behaviour** — `KillMode=process` surviving a restart with live sessions.
