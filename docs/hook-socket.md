@@ -76,30 +76,47 @@ socket with a mode derived from the process umask, and there is an unavoidable
 window between `listen()` and `chmod()`. A `0700` directory makes that window
 unreachable rather than merely short. Both layers are asserted.
 
-## How this lands in agent-hub
+## How this works against a stock agent-hub
 
-`HookSocketServer` is written against `SessionManager.recordUuid()`'s existing
-signature, so upstreaming is wiring rather than a rewrite:
+No agent-hub change is required, which was not obvious at first. The
+[sidecar](./sidecar.md) owns the sockets and forwards what arrives to agent-hub's
+existing `POST /internal/session-start` — the endpoint the ordinary hook already
+posts to, which is loopback-only and deliberately untokened:
 
 ```js
 const hooks = new HookSocketServer({
   dir: cfg.hookSocketDir,
-  onSessionStart: (r) => sessions.recordUuid(r),
+  onSessionStart: (r) => hub.recordSessionStart(r),   // → POST /internal/session-start
   logger: log,
 });
 await hooks.open(name);   // before podman run, to get the path to mount
 await hooks.close(name);  // when the container exits
 ```
 
-The container-side half is `postSessionStart()`, which is what `agent-hub hook`
-runs instead of its HTTP POST when it finds itself inside a sandbox — detected
-by the socket existing at `/run/hub.sock`. The spool fallback is unchanged and
-still applies: a transport failure returns `{ok: false, error}` rather than
-throwing, so the hook can spool and exit 0.
+The sidecar knows which session a report came from, because it knows which
+socket it arrived on, so it supplies the `name` the container was never given.
+agent-hub sees an ordinary hook report and records the uuid exactly as it always
+has.
 
-Note that the loopback HTTP endpoint does **not** go away. Sessions that are not
-sandboxed keep using it, and it remains the reason the HTTP server starts even
-in a Telegram-only deployment.
+That is the whole trick: **the untokened endpoint stops being a weakness once
+the only thing that can reach it is a process that already knows who is
+calling.** A container reaches its own socket and nothing else; the sidecar
+reaches loopback; the endpoint itself is unchanged.
+
+Confirmed end to end against a real `agent-hub serve` on 2026-08-17 — a uuid
+posted on `demo.sock` with no name in the body appeared in agent-hub's own log
+as `hook: demo → a1b2c3d4-…`, and a post naming a different session was refused
+403 and never forwarded. See [`sidecar.md`](./sidecar.md).
+
+The container-side half is `postSessionStart()`. In a sandbox, `agent-hub hook`
+runs it instead of its HTTP POST — detected by the socket existing at
+`/run/hub.sock`. The spool fallback is unchanged and still applies: a transport
+failure returns `{ok: false, error}` rather than throwing, so the hook can spool
+and exit 0.
+
+The loopback HTTP endpoint does **not** go away. Sessions that are not sandboxed
+keep using it directly, and it remains the reason agent-hub's HTTP server starts
+even in a Telegram-only deployment.
 
 ## Still unvalidated from §10
 

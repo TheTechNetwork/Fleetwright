@@ -17,16 +17,25 @@
 //
 // WHERE THE AUTHORITY LIVES
 //
-// This module is the COORDINATOR side. It builds well-formed intents and
-// rejects malformed ones early, which is a convenience, not a control — a
-// compromised coordinator simply would not call it.
+// One module, two roles, and only one of them is in the trust path.
 //
-// The control is on the host: agent-hub's `src/adapters/fleet.js` carries its
-// own copy of this table and validates everything again on arrival, and behind
-// that its command registry is the real allowlist. The two copies are allowed
-// to disagree; the failure mode when they do is safe in the direction that
-// matters, because anything the host does not recognise is refused. `v` is how
-// they stay in step: change the table, bump the version.
+// The COORDINATOR imports it to build well-formed intents and catch its own
+// mistakes before they reach the wire. That is a convenience, not a control — a
+// compromised coordinator would simply not call it.
+//
+// The SIDECAR (`src/host/sidecar.js`) imports it to validate everything that
+// arrives, and THAT is the control. It runs on the host, in a different process
+// on a different machine from the coordinator, and it re-validates every field
+// rather than trusting a flag or a signature over a payload it did not itself
+// parse. Sharing a source file across that boundary is fine; sharing trust
+// across it is not.
+//
+// Behind the sidecar there is a second allowlist — agent-hub's own command
+// registry — but do not lean on it. `POST /api/command` runs whatever line it
+// is handed, `/login` included, and the sidecar holds the token. The verb set
+// below is what stands between a compromised coordinator and that endpoint.
+//
+// `v` is how the two ends stay in step: change the table, bump the version.
 //
 // See docs/intents.md for the wire format and the reasoning in full.
 

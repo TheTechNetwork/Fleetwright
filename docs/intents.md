@@ -5,12 +5,12 @@ built, ahead of anything that would use it, because §5 of `design.md` flags it 
 the one decision that cannot be retrofitted: cheap now, impossible once
 something is passing strings.
 
-Implementations:
+One module, `src/protocol/intents.js`, imported by both ends:
 
-| Side | File | Role |
-|---|---|---|
-| Coordinator | `agent-fleet/src/protocol/intents.js` | builds intents, rejects malformed ones early |
-| Host | `agent-hub/src/adapters/fleet.js` | **enforces** — validates again on arrival, then dispatches |
+| Side | Role |
+|---|---|
+| Coordinator | builds intents and catches its own mistakes before they reach the wire |
+| [Sidecar](./sidecar.md) (`src/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives a stock agent-hub |
 
 ## The principle
 
@@ -31,20 +31,26 @@ every box in the fleet.
 
 ## Where the authority lives
 
-The two implementations are separate on purpose, and the asymmetry is the point.
+One module, two roles, and only one of them is in the trust path.
 
-The coordinator's copy is a **convenience**: it builds well-formed intents and
-catches mistakes before they hit the wire. It is not a control, because a
-compromised coordinator would simply not call it.
+The **coordinator** calls it to build well-formed intents. That is a
+convenience, not a control — a compromised coordinator would simply not call it.
 
-The host's copy is the **enforcement**, and behind it agent-hub's command
-registry is a second allowlist. It must not depend on the other end being
-honest, which is why it re-validates everything rather than trusting a `checked`
-flag or a signature over a payload it did not itself parse.
+The **sidecar** calls it to validate what arrives, and that is the control. It
+runs on the host, in a different process on a different machine, and it
+re-validates every field rather than trusting a flag or a signature over a
+payload it did not itself parse. Sharing a source file across that boundary is
+fine; sharing trust across it is not.
 
-The two are allowed to drift. The failure mode when they do is safe in the
-direction that matters: anything the host does not recognise is refused. `v` is
-how they stay in step — **change the verb table, bump the version.**
+Behind the sidecar there is a second allowlist — agent-hub's own command
+registry — but **do not lean on it**:
+
+> `POST /api/command` runs whatever line it is handed, `/login` included, and
+> the sidecar holds agent-hub's token.
+
+So the verb set below is what stands between a compromised coordinator and that
+endpoint. It is not defence in depth; it is the defence. `v` is how the two ends
+stay in step — **change the verb table, bump the version.**
 
 ## Envelope
 
@@ -97,11 +103,17 @@ and "dead host" is the one it retries.
 | `stop` | `name` | ✅ | `/stop <name>` |
 | `forget` | `name` | ✅ | `/forget <name>` |
 
-`peek` and `health` are the only two that do not route through `dispatch()`, because
-they are reads of host state rather than actions on a session. Everything else
-goes through the same registry Telegram and the web UI use, so a fleet command
+`peek` and `health` are the only two that do not go through `POST /api/command`:
+they read host state rather than acting on a session, so they use `GET /api/peek`
+and `GET /api/state` instead. Everything else goes through the same command
+registry Telegram, the web UI and agent-hub's own CLI use, so a fleet command
 cannot work differently from the same command typed into chat — or exist when
 that one does not.
+
+Two limits the host imposes on this table, both covered in
+[`sidecar.md`](./sidecar.md): `lines` can only ever narrow a peek (agent-hub
+serves a fixed 60), and `actor` cannot reach agent-hub's `createdBy` at all
+(it hardcodes `web` for every HTTP caller).
 
 ### Two deliberate exclusions
 
@@ -142,10 +154,11 @@ Anchoring makes this impossible by construction instead of by careful quoting
 downstream. The same anchor is what stops `../escape` being a name.
 
 **The command line is built, never received.** `toCommandLine()` assembles it
-from literals in the host's own source plus values that have already been
+from literals in the sidecar's own source plus values that have already been
 charset-checked. There is no point at which a coordinator-supplied string
-reaches a shell, a tmux argv, or even the command parser as anything but a
-single token.
+reaches a shell, a tmux argv, or even agent-hub's command parser as anything but
+a single token. This matters more out-of-process than it would in: the endpoint
+on the other side of it will run any line at all.
 
 **The idempotency key belongs to whoever owns the retry.** `buildIntent()`
 requires one rather than generating it — a key minted per call is a new key on
@@ -166,10 +179,11 @@ list is worse than a re-read.
   coordinator origin"). The adapter refuses to start without one, but does not
   itself verify it — that belongs where TLS and the credential live.
 - **Authorization.** Authenticating the actor does not answer *which sessions
-  this actor may touch*. The `actor` field carries the id through to
-  `createdBy`, which is what makes per-session ownership buildable later; the
-  policy itself belongs in the coordinator, where it is one chokepoint instead
-  of N hosts.
+  this actor may touch*. The `actor` field carries an id the sidecar logs and
+  echoes, but a stock agent-hub records every HTTP caller as `web`, so it cannot
+  reach `createdBy` today. The policy belongs in the coordinator regardless —
+  one chokepoint instead of N hosts — and that is where §5 argues per-session
+  ownership should live.
 - **Host → coordinator events** (a session hit a prompt, finished, errored —
   §3's third meaning of "wake"). `kind` is reserved for it; nothing implements
   it yet.
