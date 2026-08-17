@@ -20,6 +20,9 @@ import {
 } from './claude.js';
 import { isValidName, nameError, generateName } from './names.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
+import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { log } from '../log.js';
 
 /**
@@ -302,13 +305,31 @@ export class SessionManager {
    * @returns {Promise<Result>}
    */
   async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null }) {
-    ensureWorkdirTrusted(this.cfg);
-    // A session in any OTHER directory needs that directory trusted too, or it
-    // stops at "Do you trust the files in this folder?" with nobody to answer.
-    if (cwd !== this.cfg.workdir) trustDirectory(cwd);
+    if (this.cfg.sandbox) {
+      // Trust does not live on the host any more: the image bakes
+      // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
+      // here again. What DOES have to happen first is the volumes existing and
+      // the conversation volume having credentials in it — without that the
+      // session comes up unauthenticated and hangs at a login prompt.
+      const volumes = ensureSandboxVolumes(this.cfg, name);
+      if (!volumes.ok) {
+        this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, createdBy: actor });
+        return { ok: false, message: `Could not prepare the sandbox for "${name}": ${volumes.message}` };
+      }
+    } else {
+      ensureWorkdirTrusted(this.cfg);
+      // A session in any OTHER directory needs that directory trusted too, or it
+      // stops at "Do you trust the files in this folder?" with nobody to answer.
+      if (cwd !== this.cfg.workdir) trustDirectory(cwd);
+    }
     this.inFlight.add(name);
     try {
-      const command = buildCommand(this.cfg, { name, resumeUuid, skipPermissions });
+      const command = buildCommand(this.cfg, {
+        name,
+        resumeUuid,
+        skipPermissions,
+        hookSocket: this.#hookSocketReady(name),
+      });
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
@@ -383,6 +404,33 @@ export class SessionManager {
     } finally {
       this.inFlight.delete(name);
     }
+  }
+
+  /**
+   * Is this session's hook socket actually there to mount?
+   *
+   * podman creates a DIRECTORY for a bind-mount source that does not exist, so
+   * mounting a missing socket does not fail — it produces a container whose
+   * /run/hub.sock is a directory, whose SessionStart hook silently cannot
+   * report, and therefore a session with no conversation uuid. That is an
+   * unresumable session, which is the single failure this whole tool exists to
+   * prevent, arriving quietly.
+   *
+   * So: check, and say so. Nothing here creates the socket — that is the fleet
+   * sidecar's job, and a box running without one is a perfectly ordinary
+   * unsandboxed-hook deployment.
+   *
+   * @param {string} name
+   */
+  #hookSocketReady(name) {
+    if (!this.cfg.sandbox || !this.cfg.sandboxHookSocket) return false;
+    const socket = path.join(this.cfg.sandboxHookSocketDir, `${name}.sock`);
+    if (existsSync(socket)) return true;
+    log.warn(
+      `${name}: no hook socket at ${socket} — starting without it. The session will not be able to ` +
+        'report its conversation uuid, so it will not be resumable. Is the fleet sidecar running?',
+    );
+    return false;
   }
 
   /**
@@ -505,10 +553,27 @@ export class SessionManager {
   forget({ name }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
     if (hasSession(name)) killSession(name);
+
+    // /forget already meant "no longer resumable". In sandbox mode that was
+    // only true of the record: the conversation and the workspace both lived on
+    // in named volumes indefinitely. Make it true on disk too (design.md §2).
+    let volumes = '';
+    if (this.cfg.sandbox) {
+      stopSandboxContainer(this.cfg, name);
+      const { removed, failed } = removeSandboxVolumes(this.cfg, name);
+      if (removed.length) volumes = `\nDeleted ${removed.join(' and ')}.`;
+      // Not fatal, and said out loud rather than swallowed: a volume left
+      // behind is disk someone has to reclaim by hand, and silently succeeding
+      // is how it goes unnoticed until the box fills up.
+      if (failed.length) {
+        volumes += `\nCould not delete ${failed.map((f) => `${f.volume} (${f.why})`).join(', ')}.`;
+      }
+    }
+
     const had = this.registry.remove(name);
     return had
-      ? { ok: true, message: `Forgot "${name}". Its conversation can no longer be resumed from here.` }
-      : { ok: false, message: `No session named "${name}".` };
+      ? { ok: true, message: `Forgot "${name}". Its conversation can no longer be resumed from here.${volumes}` }
+      : { ok: false, message: `No session named "${name}".${volumes}` };
   }
 
   /**

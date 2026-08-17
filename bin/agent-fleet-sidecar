@@ -12,6 +12,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/fleet/host/hook-socket.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
+import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 
 const cfg = loadSidecarConfig();
@@ -37,7 +38,8 @@ Environment:
   AGENT_FLEET_HUB_TOKEN          agent-hub's AGENT_HUB_TOKEN, if it has one
   AGENT_FLEET_HOST_ID            default: this hostname
   AGENT_FLEET_LABELS             comma-separated scheduler constraints
-  AGENT_FLEET_TRANSPORT          stdio (the only one implemented so far)
+  AGENT_FLEET_TRANSPORT          websocket (default) or stdio
+  AGENT_FLEET_HOST_TOKEN         this host's credential at the coordinator
   AGENT_FLEET_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip`);
 }
 
@@ -63,7 +65,15 @@ async function run() {
     log.warn(`agent-hub at ${cfg.hubUrl} is not answering yet — carrying on, health will report it`);
   }
 
-  const transport = new StdioTransport({ origin: cfg.coordinatorUrl });
+  const transport =
+    cfg.transport === 'websocket'
+      ? new WebSocketTransport({
+          origin: cfg.coordinatorUrl,
+          hostId: cfg.hostId,
+          token: cfg.hostToken,
+          logger: log,
+        })
+      : new StdioTransport({ origin: cfg.coordinatorUrl });
   const sidecar = new Sidecar({
     hub,
     transport,
@@ -103,9 +113,12 @@ async function run() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
 
-  // stdio mode ends when its input does; a socket transport would not.
-  await transport.closed;
-  await hooks?.closeAll();
+  // stdio mode ends when its input does. The websocket transport never ends on
+  // its own — that is the point of it — so the process stays up until signalled.
+  if (transport instanceof StdioTransport) {
+    await transport.closed;
+    await hooks?.closeAll();
+  }
 }
 
 async function doctor() {

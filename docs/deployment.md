@@ -7,15 +7,17 @@ standable-up yet.
 
 | | status |
 |---|---|
-| **Session manager** (`agent-hub`) — sessions from Telegram, web UI, CLI | ✅ full installer, systemd unit, hook |
-| **Sidecar** — validates intents, drives the session manager | ⚠️ runnable and configurable, but **no long-running service yet** — see [below](#why-there-is-no-sidecar-systemd-unit) |
-| **Coordinator** (Worker + Durable Objects) | ❌ not built |
-| **Sandboxes** (rootless podman, container image) | ❌ not built — §2 of `design.md` is validated, not implemented |
-| **Mobile / Shortcuts** | ❌ not built |
+| **Session manager** (`agent-hub`) — sessions from Telegram, web UI, CLI | ✅ installer, systemd unit, hook |
+| **Sidecar** — validates intents, drives the session manager | ✅ websocket transport, `doctor`, config |
+| **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ runs as a plain Node process |
+| **Sandboxes** — real root per session, discarded on stop | ✅ image builds, launch path, `/forget` deletes volumes |
+| **Cloudflare deployment** (Worker + Durable Objects) | ❌ the coordinator runs on a box for now |
+| **Mobile apps** | ❌ the HTTP API is Shortcut-ready; no app yet |
 
-So a box you set up today is a working single-host agent-hub, plus a sidecar you
-can exercise by hand. It is not yet part of a fleet, because there is nothing to
-be a fleet with.
+A box you set up today runs the whole loop: a coordinator, this box as a fleet
+host, and sandboxed sessions with real root inside a container whose filesystem
+is thrown away on every stop. All of it validated on this hardware — see
+[§10 of `design.md`](./design.md) and the notes below.
 
 ## Prerequisites
 
@@ -26,7 +28,8 @@ be a fleet with.
 - **A Linux host.** §9 of `design.md` explains why validating any of the sandbox
   work on macOS proves less than it looks like it does.
 
-`podman` is only needed once the sandbox work exists.
+**podman** is needed only for sandboxed sessions. Without it everything else
+works and sessions run directly on the box.
 
 ## 1. Install the session manager
 
@@ -35,14 +38,20 @@ git clone https://github.com/TheTechNetwork/agent-fleet /opt/agent-fleet
 sudo /opt/agent-fleet/install/install.sh
 ```
 
-The installer checks prerequisites, creates `/etc/agent-hub.env`, installs the
-systemd unit, registers the Claude Code **SessionStart hook**, and links the
-`agent-hub` CLI. It is idempotent — re-run it after `git pull` and it will never
-overwrite your config.
+One script does everything:
 
-> This installer comes from upstream agent-hub unmodified, so it still speaks in
-> terms of "agent-hub" throughout. It works unchanged from this repo's root —
-> it derives its own directory — but it does not know about the sidecar.
+- checks prerequisites (node, tmux, claude, podman)
+- creates `/etc/agent-hub.env`, `/etc/agent-fleet-sidecar.env` and
+  `/etc/agent-fleet-coordinator.env`, all `0600`
+- **copies the hub URL and token into the sidecar's config**, so there is no
+  secret to hand-copy between files — the step people get wrong
+- installs the systemd unit and registers the Claude Code **SessionStart hook**
+- builds the sandbox image (`agent-session:latest`) if podman is present
+- links `agent-hub`, `agent-fleet-sidecar` and `agent-fleet-coordinator`
+
+It is idempotent — re-run it after `git pull` and it will never overwrite a
+config that already exists. `AGENT_FLEET_REBUILD_IMAGE=1` forces an image
+rebuild; `AGENT_FLEET_BUILD_IMAGE=0` skips it.
 
 Then:
 
@@ -68,31 +77,33 @@ unit's cgroup. With the default `KillMode=control-group` a plain
 takes down every live session at once. That is not hypothetical; it is why the
 comment is there.
 
-## 2. Configure the sidecar
+## 2. Run the fleet
+
+The installer already wrote `/etc/agent-fleet-coordinator.env` and
+`/etc/agent-fleet-sidecar.env` with the hub URL and token filled in. Two things
+are left.
+
+**Start a coordinator.** On the same box for a single-machine test, or wherever
+the fleet should meet:
 
 ```sh
-sudo install -m 0600 /opt/agent-fleet/install/agent-fleet-sidecar.env.example \
-                     /etc/agent-fleet-sidecar.env
-sudoedit /etc/agent-fleet-sidecar.env
+set -a; . /etc/agent-fleet-coordinator.env; set +a
+agent-fleet-coordinator
 ```
 
-Two lines usually need changing:
+Generate tokens with `openssl rand -hex 24` and put the same
+`AGENT_FLEET_HOST_TOKEN` in both files. Loopback with no tokens is fine for a
+local test and the process says so; binding wider without them is refused.
 
-- `AGENT_FLEET_COORDINATOR_URL` — **required**. The sidecar refuses to start
-  without a pinned origin (§5: the agent pins the coordinator it will talk to).
-  With no coordinator yet, use `stdio:local`.
-- `AGENT_FLEET_HUB_TOKEN` — must match `AGENT_HUB_TOKEN` in
-  `/etc/agent-hub.env`. Leave empty if the hub is loopback-bound with no token,
-  which is its default.
+**Point the sidecar at it** in `/etc/agent-fleet-sidecar.env`:
 
-The installer links `agent-hub` into `/usr/local/bin` but knows nothing about
-the sidecar, so link that yourself if you want it on `PATH`:
-
-```sh
-sudo ln -sf /opt/agent-fleet/bin/agent-fleet-sidecar /usr/local/bin/agent-fleet-sidecar
+```
+AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791
+AGENT_FLEET_TRANSPORT=websocket
 ```
 
-Check it:
+The sidecar refuses to start without a pinned origin (§5: the agent pins the
+coordinator it will talk to). Check it:
 
 ```sh
 set -a; . /etc/agent-fleet-sidecar.env; set +a
@@ -107,7 +118,21 @@ agent-fleet-sidecar doctor
  ok   host id unabandoned  — labels: gpu, debian13
 ```
 
-Drive it by hand over the stdio transport:
+Then run it, and drive the fleet through the coordinator:
+
+```sh
+agent-fleet-sidecar &                       # dials the coordinator, holds it open
+
+curl -s localhost:8791/api/hosts            # who is in the fleet, and why not
+curl -s localhost:8791/api/list             # every session, attributed by host
+curl -s localhost:8791/api/status/bigjob
+curl -s -X POST localhost:8791/api/intent \
+  -H 'content-type: application/json' \
+  -d '{"verb":"start","params":{"name":"api"}}'
+```
+
+`AGENT_FLEET_TRANSPORT=stdio` speaks the same protocol over stdin/stdout instead,
+for driving one sidecar by hand with no coordinator:
 
 ```sh
 echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
@@ -118,15 +143,14 @@ Replies come back on **stdout** as newline-delimited JSON; logs go to
 **stderr**. That split is deliberate and enforced — an `info` line landing on
 stdout would not be noise, it would be a corrupted message.
 
-### Why there is no sidecar systemd unit
+### Why there is still no sidecar systemd unit
 
-Deliberately omitted rather than forgotten. The only transport implemented is
-stdio, which ends when its stdin does. A `Type=simple` unit with no stdin would
-exit immediately, `Restart=always` would restart it, and you would have a
-crash-loop that looks like a bug in the sidecar.
-
-The unit lands with the WebSocket transport, when there is a connection to hold
-open and something to hold it open to.
+The reason it was omitted before — the stdio transport ends when stdin does, so
+a unit would crash-loop — no longer applies now that the websocket transport
+exists and holds its connection open. What is left is the credential: a unit
+wants `AGENT_FLEET_HOST_TOKEN` to be a per-host key from an enrollment flow, not
+the one shared token every host currently presents. Writing the unit now would
+mean writing it twice.
 
 ### Hook socket directory
 
@@ -152,15 +176,70 @@ Nothing calls `HookSocketServer.open()` yet — that happens in the sandbox laun
 path, which is not built. The sockets are proven (19 tests, plus an end-to-end
 run against a real hub) and idle.
 
+## 3. Sandbox the sessions
+
+Off by default, because it needs podman and a built image and a box without
+either must keep working exactly as before. Turn it on in `/etc/agent-hub.env`:
+
+```
+AGENT_HUB_SANDBOX=1
+```
+
+and `systemctl restart agent-hub`. Every new session's pane process becomes
+`podman run -it` instead of `claude`, which is the whole of design.md §2:
+
+| state | where | lifetime |
+|---|---|---|
+| conversation (`~/.claude`) | volume `claude-<name>` | survives stop, deleted on `/forget` |
+| workspace (`/work`) | volume `work-<name>` | survives stop, deleted on `/forget` |
+| system (packages, `/etc`, anything root did) | container fs | **gone on every stop** |
+
+The session gets real root. It can `apt install` whatever it needs, and all of
+it is discarded when the container stops — which is why the image is deliberately
+minimal rather than pre-loaded with a toolchain.
+
+tmux does not move: `capture-pane` reads the TUI podman is drawing and
+`send-keys` types into it, so resume-dialog detection, the Remote Control retry
+and `peek` all keep working untouched.
+
+Two things to know:
+
+- **Credentials are seeded once per session.** A fresh `claude-<name>` volume is
+  empty, so the first launch copies `.credentials.json` in — without it the
+  session comes up unauthenticated and hangs at a login prompt nobody can
+  answer. `AGENT_HUB_SANDBOX_CREDENTIALS` points at the source; set it empty to
+  manage credentials yourself.
+- **Run the sidecar too, or sessions are not resumable.** The conversation uuid
+  arrives over the per-session hook socket, which the sidecar owns. agent-hub
+  warns loudly and starts anyway if the socket is missing, because a session you
+  can use now beats no session — but it will have no uuid, and `/resume` will
+  refuse it.
+
+Resource limits are podman flags — `AGENT_HUB_SANDBOX_MEMORY` (8g),
+`AGENT_HUB_SANDBOX_CPUS` (2), `AGENT_HUB_SANDBOX_PIDS_LIMIT` (512), and
+`AGENT_HUB_SANDBOX_ARGS` for anything else.
+
+### Still to do here
+
+Everything above ran as **root**, so podman's container-root → unprivileged-host-user
+mapping is unproven and is the correct deployment posture. Until it is done, an
+escape lands as root on the host rather than as a nobody user. Run rootless
+before trusting this with anything you care about.
+
 ## 3. Verify the whole path
 
 ```sh
 agent-hub doctor                      # can this box run sessions at all
 agent-fleet-sidecar doctor            # can the sidecar drive it
 agent-hub list                        # the session manager answers
+curl -s localhost:8791/api/hosts      # the coordinator sees this box
 systemctl status agent-hub
 journalctl -u agent-hub -f
 ```
+
+A host that has connected but not yet reported reads as `unknown` with a
+reason, never as healthy — that is deliberate (§3), and `/api/hosts` always
+tells you which it is and why.
 
 ## Upgrading
 
@@ -208,7 +287,13 @@ one.
 
 ## What this document does not cover yet
 
-Because none of it exists: coordinator deployment (Workers + Durable Objects),
-host enrollment and per-host keys, the container image and rootless podman
-setup, Wake-on-LAN, and the iOS/Android apps. `design.md` §§2–7 describes all of
-it; `design.md` §10 records what has been validated on hardware so far.
+Because none of it exists: deploying the coordinator to Cloudflare (Workers +
+Durable Objects — it runs as a plain Node process today), host enrollment and
+per-host keys (there is one shared host token for now), rootless podman,
+Wake-on-LAN, and the iOS/Android apps. `design.md` §§2–7 describes all of it;
+`design.md` §10 records what has been validated on hardware.
+
+There is also still no systemd unit for the coordinator or the sidecar. Both
+run fine in the foreground or under any supervisor; writing the units is a
+small job that is worth doing once the enrollment story replaces the shared
+token, so the unit and the credential arrive together.

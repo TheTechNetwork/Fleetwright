@@ -88,6 +88,33 @@ export function loadConfig(env = process.env) {
     // true the hub keeps it (you can still reach it over SSH); when false it
     // kills it so the slot frees and the failure is visible.
     rcRequired: bool('AGENT_HUB_RC_REQUIRED', false),
+    // --- the ephemeral root sandbox (design.md §2) --------------------------
+    // Off by default: it needs podman and a built image, and a box without
+    // either must keep working exactly as before. When on, the pane's process
+    // becomes `podman run -it` and the session gets real root inside a
+    // container whose filesystem is discarded on every stop, while its
+    // conversation and workspace live in named volumes that survive.
+    sandbox: bool('AGENT_HUB_SANDBOX', false),
+    podmanBin: str('AGENT_HUB_PODMAN_BIN', 'podman'),
+    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'agent-session:latest'),
+    // Resource limits become podman flags — one mechanism rather than a
+    // separate cgroup layer. Empty disables the flag entirely.
+    sandboxMemory: str('AGENT_HUB_SANDBOX_MEMORY', '8g'),
+    sandboxCpus: str('AGENT_HUB_SANDBOX_CPUS', '2'),
+    sandboxPidsLimit: str('AGENT_HUB_SANDBOX_PIDS_LIMIT', '512'),
+    // Anything else to hand podman, space separated. An escape hatch for the
+    // deployment-specific (extra mounts, --network, --userns) that does not
+    // belong hard-coded here.
+    sandboxExtraArgs: str('AGENT_HUB_SANDBOX_ARGS').split(/\s+/).filter(Boolean),
+    // Bind-mount the per-session hook socket, so a container can report its
+    // conversation uuid without being able to name another session.
+    sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
+    sandboxHookSocketDir: str('AGENT_HUB_SANDBOX_HOOK_SOCKET_DIR', '/run/agent-fleet'),
+    // Copied into each session's fresh conversation volume, or the session
+    // comes up unauthenticated and hangs at a login prompt nobody can answer.
+    // Set empty to disable and manage credentials yourself.
+    sandboxCredentialsFile: str('AGENT_HUB_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
+
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.
     // Turn it off on a shared box where other tmux sessions are none of the

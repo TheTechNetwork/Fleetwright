@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# agent-hub installer.
+# agent-fleet installer — the whole thing, in one script.
 #
-#   git clone https://github.com/ambersecurityinc/agent-hub /opt/agent-hub
-#   sudo /opt/agent-hub/install/install.sh
+#   git clone https://github.com/TheTechNetwork/agent-fleet /opt/agent-fleet
+#   sudo /opt/agent-fleet/install/install.sh
 #
-# Idempotent: re-run it after `git pull` to pick up changes. It never
-# overwrites /etc/agent-hub.env once that exists, so your token and allowlist
-# survive every upgrade.
+# Sets up both halves: the session manager (systemd service, SessionStart hook,
+# CLI) and the fleet sidecar (config, CLI). There is nothing else to run and
+# nothing to hand-copy between files.
+#
+# Idempotent: re-run it after `git pull` to pick up changes. It never overwrites
+# /etc/agent-hub.env or /etc/agent-fleet-sidecar.env once those exist, so your
+# tokens and allowlist survive every upgrade.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE=/etc/agent-hub.env
+SIDECAR_ENV=/etc/agent-fleet-sidecar.env
 UNIT=/etc/systemd/system/agent-hub.service
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
 
@@ -19,7 +24,7 @@ ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
-say "agent-hub installer"
+say "agent-fleet installer"
 printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
 
 # --- 1. prerequisites -------------------------------------------------------
@@ -74,6 +79,16 @@ else
   warn "  curl -fsSL https://claude.ai/install.sh | bash"
 fi
 
+# The sandbox is optional, so a missing podman is a note rather than a failure.
+if command -v podman >/dev/null; then
+  ok "podman $(podman --version | awk '{print $3}') — the sandbox is available"
+  HAVE_PODMAN=1
+else
+  warn "podman is not installed — sessions will run directly on this box, not sandboxed"
+  warn "  apt install -y podman   (then re-run to build the sandbox image)"
+  HAVE_PODMAN=0
+fi
+
 # --- 2. state directory -----------------------------------------------------
 say "Creating state directory"
 STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
@@ -88,6 +103,61 @@ else
   install -m 0600 "$DIR/install/agent-hub.env.example" "$ENV_FILE"
   ok "wrote $ENV_FILE from the template"
   warn "EDIT IT before starting: set AGENT_HUB_TELEGRAM_TOKEN and AGENT_HUB_TELEGRAM_ALLOWED_USERS"
+fi
+
+# --- 3b. sidecar configuration ----------------------------------------------
+# Pre-filled from the session manager's own config, because the hub URL and
+# token MUST agree between the two and hand-copying a secret between files is
+# exactly the step people get wrong.
+say "Configuring the fleet sidecar"
+if [ -f "$SIDECAR_ENV" ]; then
+  ok "$SIDECAR_ENV already exists — left untouched"
+else
+  SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" \
+  TEMPLATE="$DIR/install/agent-fleet-sidecar.env.example" node <<'NODE'
+const fs = require('fs');
+
+// Read the hub's env the way systemd does: KEY=value, one per line, one layer
+// of surrounding quotes stripped. Done in node rather than sed so a token
+// containing & or | cannot corrupt the substitution.
+const hub = {};
+try {
+  for (const raw of fs.readFileSync(process.env.HUB_ENV, 'utf8').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 1) continue;
+    hub[line.slice(0, eq).trim()] = line.slice(eq + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+  }
+} catch { /* no hub env yet — defaults below are right anyway */ }
+
+// 0.0.0.0 and :: are bind addresses, not addresses to dial.
+let bind = hub.AGENT_HUB_BIND || '127.0.0.1';
+if (bind === '0.0.0.0' || bind === '::' || bind === '') bind = '127.0.0.1';
+const port = hub.AGENT_HUB_PORT || '8790';
+
+const filled = {
+  AGENT_FLEET_HUB_URL: `http://${bind}:${port}`,
+  AGENT_FLEET_HUB_TOKEN: hub.AGENT_HUB_TOKEN || '',
+  // stdio is the only transport implemented, and this is a local placeholder
+  // rather than a real remote origin — but the sidecar still refuses to start
+  // without one, so filling it in keeps a fresh box working out of the box.
+  AGENT_FLEET_COORDINATOR_URL: 'stdio:local',
+};
+
+const out = fs
+  .readFileSync(process.env.TEMPLATE, 'utf8')
+  .split('\n')
+  .map((line) => {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=/);
+    return m && m[1] in filled ? `${m[1]}=${filled[m[1]]}` : line;
+  })
+  .join('\n');
+
+fs.writeFileSync(process.env.SIDECAR_ENV, out, { mode: 0o600 });
+console.log(`  ok   wrote ${process.env.SIDECAR_ENV} (hub URL and token copied from ${process.env.HUB_ENV})`);
+NODE
+  chmod 0600 "$SIDECAR_ENV"
 fi
 
 # --- 4. systemd unit --------------------------------------------------------
@@ -180,11 +250,38 @@ if (dirty) {
 NODE
 chown "$RUN_USER" "${CLAUDE_HOME:-$HOME}/.claude/settings.json" 2>/dev/null || true
 
-# --- 6. CLI on PATH ---------------------------------------------------------
-say "Linking the CLI"
-ln -sf "$DIR/bin/agent-hub" /usr/local/bin/agent-hub
-chmod +x "$DIR/bin/agent-hub"
-ok "/usr/local/bin/agent-hub -> $DIR/bin/agent-hub"
+# --- 5b. the sandbox image --------------------------------------------------
+# Built here rather than left as a documented step, because a sandbox that is
+# switched on with no image is a session that dies the instant it starts.
+if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
+  say "Building the sandbox image"
+  if podman image exists agent-session:latest && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
+    ok "agent-session:latest already built — AGENT_FLEET_REBUILD_IMAGE=1 to rebuild"
+  elif podman build -t agent-session:latest -f "$DIR/sandbox/Containerfile" "$DIR/sandbox" >/tmp/agent-session-build.log 2>&1; then
+    ok "agent-session:latest"
+  else
+    warn "image build failed — see /tmp/agent-session-build.log. The sandbox stays off until it succeeds."
+  fi
+fi
+
+# --- 5c. coordinator configuration ------------------------------------------
+say "Configuring the coordinator"
+COORD_ENV=/etc/agent-fleet-coordinator.env
+if [ -f "$COORD_ENV" ]; then
+  ok "$COORD_ENV already exists — left untouched"
+else
+  install -m 0600 "$DIR/install/agent-fleet-coordinator.env.example" "$COORD_ENV"
+  ok "wrote $COORD_ENV from the template"
+fi
+
+# --- 6. CLIs on PATH --------------------------------------------------------
+say "Linking the CLIs"
+for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+  [ -f "$DIR/bin/$cli" ] || continue
+  ln -sf "$DIR/bin/$cli" "/usr/local/bin/$cli"
+  chmod +x "$DIR/bin/$cli"
+  ok "/usr/local/bin/$cli -> $DIR/bin/$cli"
+done
 
 # --- done -------------------------------------------------------------------
 say "Installed."
@@ -195,7 +292,7 @@ Next:
   1. Create a Telegram bot — message @BotFather, /newbot — and put the token in:
        $ENV_FILE
 
-  2. Start it:
+  2. Start the session manager:
        systemctl enable --now agent-hub
        journalctl -u agent-hub -f
 
@@ -207,5 +304,25 @@ Next:
        agent-hub doctor
 
   If claude is not logged in yet, send your bot /login and follow the link.
+
+To run the fleet as well (a coordinator plus this box as a host):
+
+  5. Start a coordinator — on this box for a single-machine test, or wherever
+     the fleet should meet:
+       agent-fleet-coordinator
+
+  6. Point the sidecar at it in $SIDECAR_ENV:
+       AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791
+       AGENT_FLEET_TRANSPORT=websocket
+     then:
+       agent-fleet-sidecar doctor
+       agent-fleet-sidecar
+
+  7. Drive it:
+       curl -s localhost:8791/api/list | node -e 'process.stdin.pipe(process.stdout)'
+
+To sandbox sessions (real root inside, discarded on every stop), set in $ENV_FILE:
+       AGENT_HUB_SANDBOX=1
+  and restart agent-hub. See docs/deployment.md.
 
 EOF

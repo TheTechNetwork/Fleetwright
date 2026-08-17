@@ -310,6 +310,12 @@ export class Sidecar {
         // must land on the box holding it. This is how the coordinator knows
         // which box that is instead of round-robining onto one that does not.
         resumable: sessions.filter((s) => s?.status !== 'running' && s?.uuid).map((s) => s.name),
+        // Every session this box holds, running or not, so the coordinator can
+        // pin `stop`/`peek`/`status` too — not just `resume`. Names only: the
+        // coordinator has no business caching conversation uuids or paths.
+        sessions: sessions
+          .filter((s) => s && typeof s.name === 'string')
+          .map((s) => ({ name: s.name, status: s.status, resumable: Boolean(s.uuid) })),
         loggedIn: state.auth?.loggedIn === true,
       };
     } catch (e) {
@@ -322,6 +328,7 @@ export class Sidecar {
         running: null,
         free: null,
         resumable: null,
+        sessions: null,
         loggedIn: null,
       };
     }

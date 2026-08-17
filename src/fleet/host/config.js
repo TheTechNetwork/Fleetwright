@@ -53,7 +53,14 @@ export function loadSidecarConfig(env = process.env) {
     // to start without one — a transport that will talk to whoever answers is
     // the same shape of mistake as accepting command strings.
     coordinatorUrl: str(env, 'AGENT_FLEET_COORDINATOR_URL'),
-    transport: str(env, 'AGENT_FLEET_TRANSPORT', 'stdio'),
+    // `websocket` is the real one: a persistent outbound connection, so nothing
+    // on this box ever listens. `stdio` speaks the same protocol over
+    // stdin/stdout and exists for driving the sidecar by hand.
+    transport: str(env, 'AGENT_FLEET_TRANSPORT', 'websocket'),
+    // Long-lived, one per box, 0600 on disk. §5 wants a short-lived JWT signed
+    // per connection so the durable secret never crosses the wire; this is the
+    // bearer-token step before that, and the enrollment flow replaces it.
+    hostToken: str(env, 'AGENT_FLEET_HOST_TOKEN') || null,
 
     // --- this host ----------------------------------------------------------
     hostId: str(env, 'AGENT_FLEET_HOST_ID', os.hostname()),
@@ -126,8 +133,26 @@ export function validateSidecarConfig(cfg) {
     errors.push(`AGENT_FLEET_HUB_URL is not a valid URL: ${cfg.hubUrl}`);
   }
 
-  if (!['stdio'].includes(cfg.transport)) {
-    errors.push(`AGENT_FLEET_TRANSPORT="${cfg.transport}" is not implemented. Available: stdio.`);
+  if (!['stdio', 'websocket'].includes(cfg.transport)) {
+    errors.push(`AGENT_FLEET_TRANSPORT="${cfg.transport}" is not implemented. Available: websocket, stdio.`);
+  }
+
+  if (cfg.transport === 'websocket') {
+    try {
+      const u = new URL(cfg.coordinatorUrl);
+      if (!['http:', 'https:'].includes(u.protocol)) {
+        errors.push(`AGENT_FLEET_COORDINATOR_URL must be http(s) for the websocket transport, got ${u.protocol}`);
+      } else if (u.protocol === 'http:' && !['127.0.0.1', 'localhost', '::1'].includes(u.hostname)) {
+        // The host credential goes in an Authorization header on the upgrade.
+        // Over plain http, off-box, that is a token on the wire in clear.
+        warnings.push(
+          `AGENT_FLEET_COORDINATOR_URL is plain http to ${u.hostname} — the host token crosses the network ` +
+            'in clear. Use https for anything that is not loopback.',
+        );
+      }
+    } catch {
+      /* the empty/invalid case is already reported above */
+    }
   }
 
   return { errors, warnings };

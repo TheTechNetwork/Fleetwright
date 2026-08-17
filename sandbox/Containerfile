@@ -1,0 +1,93 @@
+# The per-session sandbox image (design.md §2).
+#
+# Deliberately minimal. §10 confirmed on hardware that `claude` runs on bare
+# debian:13-slim with no missing libraries, so this is a base, a runtime, the
+# CLI, and the two settings that stop a session hanging on a dialog nobody is
+# there to answer.
+#
+# What this image is NOT is a place to put your toolchain. The session has real
+# root inside, so it can `apt install` whatever it needs — and every bit of that
+# is discarded when the container stops, which is the entire point. Baking tools
+# in here trades that away for a faster start.
+#
+#   podman build -t agent-session:latest -f sandbox/Containerfile sandbox/
+
+FROM debian:13-slim
+
+# ca-certificates for the API, git for the work, ripgrep because Claude Code
+# shells out to it, procps/less because a root shell without them is miserable.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git ripgrep procps less tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node from nodesource: debian's is too old for the CLI, and pinning the major
+# here rather than taking whatever is current keeps image rebuilds boring.
+ARG NODE_MAJOR=22
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# The CLI. Pinned by ARG so a rebuild is reproducible and an upgrade is a
+# deliberate one-line change — design.md calls out image rot as a real cost of
+# owning this, so point Renovate at these two ARGs.
+ARG CLAUDE_VERSION=latest
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+    && npm cache clean --force
+
+# --- the two dialogs that MUST be pre-empted --------------------------------
+#
+# Both were observed hanging a container session on hardware, and both were
+# confirmed fixed by pre-seeding (design.md §10).
+#
+# 1. Folder trust. A credentials file copied from a host keys `projects` by HOST
+#    paths, so /work is untrusted and the session stops at "Is this a project
+#    you created or one you trust?". Baking the answer for /work is also what
+#    lets trust.js stop mutating the host's ~/.claude.json entirely.
+# 2. Dangerous-mode confirmation. agent-hub launches with
+#    --dangerously-skip-permissions; without this the first such session stops
+#    at a one-time confirmation prompt.
+#
+# Written to /root/.claude.json, which is NOT inside /root/.claude — that path
+# is a per-session volume, and this must be part of the image instead.
+RUN printf '%s\n' '{' \
+    '  "projects": {' \
+    '    "/work": {' \
+    '      "hasTrustDialogAccepted": true,' \
+    '      "hasCompletedProjectOnboarding": true' \
+    '    }' \
+    '  },' \
+    '  "hasCompletedOnboarding": true' \
+    '}' > /root/.claude.json
+
+# settings.json lives inside the per-session volume, which is empty on first
+# run, so this copy in the image is what a fresh session picks up. The volume
+# mount shadows it — see sandbox/README.md for why the seeding step exists.
+RUN mkdir -p /etc/agent-session
+RUN printf '%s\n' '{' \
+    '  "skipDangerousModePermissionPrompt": true,' \
+    '  "remoteControlAtStartup": true' \
+    '}' > /etc/agent-session/settings.json
+
+# The SessionStart hook, talking to the per-session unix socket rather than a
+# shared HTTP port: the socket the container can reach determines which session
+# it is, so it cannot report against anyone else's. See docs/hook-socket.md.
+COPY hook.mjs /usr/local/lib/agent-session-hook.mjs
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs\n' > /usr/local/bin/agent-session-hook \
+    && chmod +x /usr/local/bin/agent-session-hook
+
+COPY entrypoint.sh /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/entrypoint
+
+# Claude refuses --dangerously-skip-permissions as root unless it is told it is
+# in a sandbox. Inside this image that is not a lie told to bypass a safety
+# check — it is a container whose filesystem is discarded on every stop, and
+# under rootless podman its root maps to an unprivileged host user.
+ENV IS_SANDBOX=1
+
+WORKDIR /work
+
+# tini as PID 1: a session that spawns background processes (a dev server, a
+# watcher) would otherwise leave zombies, and `--pids-limit` turns a zombie
+# leak into a session that cannot fork.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint"]

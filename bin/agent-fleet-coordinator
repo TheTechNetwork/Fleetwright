@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+// The coordinator entrypoint.
+//
+//   agent-fleet-coordinator          run it
+//
+// Hosts dial in over a WebSocket and hold it open; clients speak ordinary HTTP
+// to the same origin. See docs/coordinator.md.
+//
+// This is the plain-Node coordinator, which is what makes the whole loop
+// testable on one box. The Cloudflare Worker + Durable Object version is a
+// transport swap — the registry, scheduler and intent plumbing are runtime
+// agnostic on purpose.
+
+import os from 'node:os';
+import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { log, setLogLevel } from '../src/log.js';
+
+/** @param {string} name @param {string} [fallback] */
+const str = (name, fallback = '') => {
+  const v = process.env[name];
+  return v === undefined || v === '' ? fallback : v;
+};
+
+setLogLevel(str('AGENT_FLEET_LOG_LEVEL', 'info'));
+
+const bind = str('AGENT_FLEET_COORDINATOR_BIND', '127.0.0.1');
+const port = Number(str('AGENT_FLEET_COORDINATOR_PORT', '8791'));
+const hostToken = str('AGENT_FLEET_HOST_TOKEN') || null;
+const apiToken = str('AGENT_FLEET_API_TOKEN') || null;
+
+// Same rule as agent-hub's own bind check, for the same reason: a control
+// surface reachable off-box with no credential is remote control of every host
+// in the fleet for anyone who can route to the port. Refuse rather than warn.
+const loopback = ['127.0.0.1', 'localhost', '::1'].includes(bind);
+if (!loopback && (!hostToken || !apiToken)) {
+  log.error(
+    `config: AGENT_FLEET_COORDINATOR_BIND is ${bind} (not loopback) but ` +
+      `${!hostToken ? 'AGENT_FLEET_HOST_TOKEN' : 'AGENT_FLEET_API_TOKEN'} is empty. ` +
+      'Set both, or bind 127.0.0.1 and put a tunnel in front.',
+  );
+  process.exit(1);
+}
+if (loopback && (!hostToken || !apiToken)) {
+  log.warn('no tokens set — fine on loopback for testing, not for anything reachable');
+}
+
+const coordinator = new Coordinator({ hostToken, apiToken, logger: log });
+const actualPort = await coordinator.listen(port, bind);
+
+log.info(`coordinator: ${os.hostname()} · hosts dial ws://${bind}:${actualPort}/host/connect`);
+log.info(`coordinator: clients POST http://${bind}:${actualPort}/api/intent`);
+
+/** @param {string} signal */
+const shutdown = async (signal) => {
+  // Hosts reconnect on their own with backoff, and their sessions are untouched
+  // by any of this — the coordinator holds no session state worth preserving.
+  log.info(`${signal} — shutting down (hosts will reconnect; their sessions are unaffected)`);
+  try {
+    await coordinator.close();
+  } catch { /* best effort */ }
+  process.exit(0);
+};
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
