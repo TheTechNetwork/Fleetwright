@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dewrapPane, extractRcUrl, isRemoteControlOnline, reconcileRcUrl } from '../src/host/pane.js';
+import { dewrapPane, extractRcUrl, isRemoteControlOnline, reconcileRcUrl } from '../src/fleet/host/pane.js';
 
 const RC_URL = 'https://claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M';
 
@@ -60,10 +60,14 @@ test('the prompt after a URL is not glued onto it', () => {
   assert.ok(!/lTAPaste/.test(joined));
 });
 
-test('de-wrapping tolerates empty and absent input', () => {
+test('extraction tolerates absent input, because it comes over HTTP', () => {
+  // dewrapPane itself is core's and is only ever handed capturePane output,
+  // which is always a string. These callers are handed whatever came back as
+  // JSON, so the guard lives on this side of the boundary.
+  assert.equal(extractRcUrl(/** @type {any} */ (null)), null);
+  assert.equal(extractRcUrl(/** @type {any} */ (undefined)), null);
+  assert.equal(isRemoteControlOnline(/** @type {any} */ (null)), false);
   assert.equal(dewrapPane(''), '');
-  assert.equal(dewrapPane(/** @type {any} */ (null)), '');
-  assert.equal(dewrapPane(/** @type {any} */ (undefined)), '');
 });
 
 // --- the failure this module exists for -------------------------------------

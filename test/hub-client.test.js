@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { HubClient, HubError } from '../src/host/hub-client.js';
+import { HubClient, HubError } from '../src/fleet/host/hub-client.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 
 /** @param {import('node:test').TestContext} t @param {object} [opts] */

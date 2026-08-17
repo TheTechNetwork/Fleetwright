@@ -5,12 +5,12 @@ built, ahead of anything that would use it, because §5 of `design.md` flags it 
 the one decision that cannot be retrofitted: cheap now, impossible once
 something is passing strings.
 
-One module, `src/protocol/intents.js`, imported by both ends:
+One module, `src/fleet/protocol/intents.js`, imported by both ends:
 
 | Side | Role |
 |---|---|
 | Coordinator | builds intents and catches its own mistakes before they reach the wire |
-| [Sidecar](./sidecar.md) (`src/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives agent-hub |
+| [Sidecar](./sidecar.md) (`src/fleet/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives agent-hub |
 
 ## The principle
 

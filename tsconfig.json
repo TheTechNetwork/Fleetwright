@@ -1,5 +1,5 @@
 {
-  "//": "Type-checking only, same posture as agent-hub: plain ESM JavaScript, no build step. `npm run typecheck` runs tsc with noEmit over the JSDoc annotations.",
+  "//": "Type-checking only — this project ships plain ESM JavaScript and has NO build step. `npm run typecheck` (and CI) run tsc with noEmit over the JSDoc annotations; nothing here is required to run anything.",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.js", "bin/agent-fleet-sidecar"]
+  "include": ["src/**/*.js", "bin/agent-hub", "bin/agent-fleet-sidecar"]
 }

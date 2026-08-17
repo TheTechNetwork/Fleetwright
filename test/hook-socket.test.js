@@ -21,7 +21,7 @@ import {
   isValidSessionName,
   HOOK_PATH,
   CONTAINER_SOCKET_PATH,
-} from '../src/host/hook-socket.js';
+} from '../src/fleet/host/hook-socket.js';
 
 const UUID = 'a1b2c3d4-1111-2222-3333-444455556666';
 const OTHER_UUID = 'ffffffff-9999-8888-7777-666655554444';

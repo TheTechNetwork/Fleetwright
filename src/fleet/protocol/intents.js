@@ -23,7 +23,7 @@
 // mistakes before they reach the wire. That is a convenience, not a control — a
 // compromised coordinator would simply not call it.
 //
-// The SIDECAR (`src/host/sidecar.js`) imports it to validate everything that
+// The SIDECAR (`src/fleet/host/sidecar.js`) imports it to validate everything that
 // arrives, and THAT is the control. It runs on the host, in a different process
 // on a different machine from the coordinator, and it re-validates every field
 // rather than trusting a flag or a signature over a payload it did not itself
