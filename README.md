@@ -21,8 +21,11 @@ The **fleet** is everything that makes a group of those boxes one system:
 the sidecar that speaks to a coordinator, the intent protocol between them, and
 the per-session sandbox plumbing.
 
+**Setting up a box:** [`docs/deployment.md`](./docs/deployment.md) — what is
+deployable today, what is not, and the security notes worth reading once.
+
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
-what has been validated on hardware. Start there.
+what has been validated on hardware. Start there for the why.
 
 ## Layout
 
@@ -34,7 +37,7 @@ what has been validated on hardware. Start there.
 | `bin/agent-hub` | the session manager's CLI and SessionStart hook |
 | `bin/agent-fleet-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
 | `install/` | systemd unit and installer for the session manager |
-| `docs/` | design, protocol, sidecar, hook socket, upstream lineage |
+| `docs/` | [deployment](./docs/deployment.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
 Still to come: the coordinator (Cloudflare Worker + Durable Objects), the
 scheduler, the mobile API, the container image, and the iOS and Android apps.
@@ -52,6 +55,9 @@ npm run typecheck
 npm start                     # the session manager (systemd runs `agent-hub serve`)
 npm run sidecar -- doctor     # check this box can drive it
 ```
+
+To deploy rather than hack on it, see [`docs/deployment.md`](./docs/deployment.md) —
+`sudo ./install/install.sh` sets up the session manager as a systemd service.
 
 ## The three things worth knowing before reading the code
 
