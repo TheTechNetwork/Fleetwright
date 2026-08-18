@@ -25,6 +25,12 @@ targets:
     sources:
       - path: Fleetwright
     info:
+      # WRITTEN, not read. XcodeGen creates this plist on every generation, so
+      # the file on disk is output — it is gitignored, and editing it there is
+      # editing something that is overwritten before it is ever compiled.
+      # CFBundleIdentifier, CFBundleName, CFBundleShortVersionString and
+      # CFBundleVersion are filled in by XcodeGen from the settings below; the
+      # version to bump for a TestFlight build is MARKETING_VERSION.
       path: Fleetwright/Info.plist
       properties:
         CFBundleDisplayName: Fleetwright
@@ -40,6 +46,7 @@ targets:
         SWIFT_VERSION: "5.9"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
     entitlements:
+      # Generated and gitignored for the same reason as Info.plist above.
       path: Fleetwright/Fleetwright.entitlements
       properties:
         # `development` until there is a distribution profile. Getting this

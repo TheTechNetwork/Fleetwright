@@ -14,3 +14,9 @@ apps/android/app/google-services.json
 # iOS — generated from project.yml by xcodegen
 apps/ios/*.xcodeproj/
 apps/ios/build/
+# XcodeGen writes both of these on every `xcodegen generate` — "Plists are
+# created on disk on every generation of the project". Committing one means
+# editing a file whose contents are discarded before they are ever compiled.
+# The source of truth for both is project.yml.
+apps/ios/Fleetwright/Info.plist
+apps/ios/Fleetwright/Fleetwright.entitlements
