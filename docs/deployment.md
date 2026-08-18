@@ -35,8 +35,25 @@ works and sessions run directly on the box.
 
 ```sh
 git clone https://github.com/TheTechNetwork/agent-fleet /opt/agent-fleet
+sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```
+
+> **If it says node was not found but `node -v` works for you**, that is `sudo`.
+> It replaces `PATH` with sudoers' `secure_path` — usually just `/usr/*` and
+> `/bin` — so a node installed by nvm, fnm, volta or asdf lives somewhere the
+> script cannot see. The installer now looks in all of those places and asks
+> your login shell as well, so this should resolve itself; if it still cannot
+> find it, point at it directly:
+>
+> ```sh
+> sudo AGENT_HUB_NODE_BIN=$(command -v node) /opt/agent-fleet/install/install.sh
+> ```
+>
+> Note that the systemd unit records whichever node it finds. If that is a
+> version-manager path inside your home, a later `nvm install` will move it and
+> the service will fail to start — the installer warns when this applies. A
+> system-wide node (`apt install nodejs`, nodesource, `n`) avoids it.
 
 One script does everything:
 
