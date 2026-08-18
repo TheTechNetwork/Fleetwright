@@ -8,7 +8,13 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
+
+// The checkout this process is running from — two levels up from src/config.js.
+// Derived rather than configured, so it is right by construction even when the
+// service is started from somewhere else entirely.
+const INSTALL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** @typedef {ReturnType<typeof loadConfig>} Config */
 
@@ -50,6 +56,9 @@ export function loadConfig(env = process.env) {
 
   const cfg = {
     // --- where state lives -------------------------------------------------
+    // The deployment itself, which /update pulls into. Overridable for the odd
+    // layout where the checkout is not the parent of src/.
+    installDir: str('AGENT_HUB_INSTALL_DIR', INSTALL_DIR),
     stateDir,
     stateFile: path.join(stateDir, 'state.json'),
     // The SessionStart hook appends here when it cannot reach the HTTP control

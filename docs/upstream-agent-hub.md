@@ -109,7 +109,27 @@ Contributable in principle. Realistically it wants the rootless-podman work
 finished first, since running the sandbox as root is the posture this is
 supposed to fix.
 
-### 3. `setLogStream()` in `src/log.js`
+### 3. `/update` — pull the deployment from chat
+
+`src/core/update.js` plus one entry in the command registry, so it works from
+Telegram, the web UI and the CLI alike.
+
+The same argument as `/login`: a box you can only fix by SSHing into it is a box
+that does not get fixed. What it refuses to do is the interesting part —
+`--ff-only` so a diverged deployment fails loudly rather than creating a merge
+commit nobody reviewed, and a dirty tree is left alone entirely, because
+somebody editing files on the box is mid-something and discarding that from a
+chat message is not recoverable.
+
+`--restart` applies the update by **exiting**: systemd's `Restart=always` brings
+the process back with the new code, which needs no privilege the service user
+does not already have (`systemctl restart` from an unprivileged unit would need
+polkit rules). Sessions are untouched, which is exactly what `KillMode=process`
+in the unit is for.
+
+Stands on its own merits for any agent-hub deployment. Contributable as-is.
+
+### 4. `setLogStream()` in `src/log.js`
 
 Three lines, so that a process whose **stdout is a data channel rather than a
 console** can send every level to stderr. The sidecar in stdio mode writes
@@ -121,7 +141,7 @@ itself. It stands on its own merits (any tool embedding the logger in a
 pipeline wants it) but it is the weakest of the candidates, and would be fine
 to drop from a contribution.
 
-### 4. `install/install.sh` is now the whole project's installer
+### 5. `install/install.sh` is now the whole project's installer
 
 It sets up the sidecar and coordinator configs and builds the sandbox image
 alongside everything it did before. **This one is not contributable as-is** —

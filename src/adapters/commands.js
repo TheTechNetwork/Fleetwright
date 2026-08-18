@@ -34,6 +34,7 @@
  */
 
 import { describe } from '../core/login.js';
+import { runUpdate, updateStatus, canSelfRestart } from '../core/update.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -337,6 +338,31 @@ export const COMMANDS = {
       if (!args[0]) return { ok: false, text: 'Paste the code: /code <value>' };
       const r = await ctx.login.submitCode(args.join(''));
       return { ok: r.ok, text: r.message };
+    },
+  },
+
+  update: {
+    aliases: ['upgrade', 'pull'],
+    usage: '/update [--restart]',
+    short: 'Pull the latest code',
+    help:
+      'Pull the latest code onto this box. --restart applies it immediately ' +
+      '(sessions are left running).',
+    run: (ctx, _args, flags) => {
+      const status = updateStatus(ctx.cfg);
+      if (!status.ok) return { ok: false, text: status.message ?? 'Could not read the checkout.' };
+
+      const restart = flags.has('restart') || flags.has('apply');
+      const r = runUpdate(ctx.cfg, { restart, actor: ctx.actor });
+
+      // Offer the restart as a tap rather than making someone remember a flag.
+      // Only when there is something to apply and we can actually do it.
+      const buttons =
+        r.ok && r.changed && !r.restarting && canSelfRestart()
+          ? [{ label: 'Restart to apply', command: '/update --restart' }]
+          : undefined;
+
+      return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}`, buttons };
     },
   },
 
