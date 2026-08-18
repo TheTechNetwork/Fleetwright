@@ -24,19 +24,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      # The dry-run IS the portability test, so there is no separate lint for
+      # it. wrangler resolves every import the Worker actually pulls in: if
+      # something in the shared coordinator code starts importing from `node:`
+      # and the compatibility flags do not allow it, the bundle fails right
+      # here, with the offending import named.
+      #
+      # A grep was tried first and was worse in both directions. It failed on
+      # src/fleet/coordinator/server.js, which is the NODE-ONLY transport
+      # wrapper and is supposed to import node:http — while the file that
+      # actually matters, core.js, is imported by both and was already clean.
+      # The bundler knows which files are reachable; a grep is guessing.
       - name: Bundle the Worker without deploying it
         working-directory: worker
         run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/worker-build
-
-      # The rule that keeps one implementation instead of two. If this fails,
-      # the Worker and the Node coordinator have started to diverge.
-      - name: "The shared coordinator code must not import from node:"
-        run: |
-          if grep -rn "from 'node:" src/fleet/coordinator src/fleet/protocol src/fleet/push.js; then
-            echo "::error::src/fleet/{coordinator,protocol,push} must run in both Node and Workers."
-            exit 1
-          fi
-          echo "portable"
 
   deploy:
     needs: check

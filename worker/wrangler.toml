@@ -10,9 +10,25 @@
 name = "agent-fleet-coordinator"
 main = "src/worker.js"
 compatibility_date = "2026-01-15"
-# nodejs_compat is NOT needed: src/fleet/coordinator/core.js, scheduler.js,
-# registry.js, protocol/intents.js and push.js deliberately import nothing from
-# node:, so the same files run here and under Node unmodified.
+
+# nodejs_compat is not enabled, and that is a choice rather than a limitation.
+#
+# Workers runs npm packages and, with this flag, most of the node: built-ins —
+# so nothing here is off-limits. What the flag costs is bundle size and cold
+# start, and §4 picked this platform for a requirement measured in exactly that:
+# "Hey Siri, resume bigjob" from cellular, on a cold radio, in under a second.
+#
+# The code the Worker imports — coordinator/core.js and push.js, and what they
+# import in turn — happens to need only fetch and crypto.subtle, both of which
+# are standard here and in Node. So the flag buys nothing today.
+#
+# If something genuinely needs a node: built-in or an npm package that pulls
+# one in, add:
+#
+#     compatibility_flags = ["nodejs_compat"]
+#
+# and it will work. There is no rule being enforced; `wrangler deploy --dry-run`
+# in CI simply reports the truth either way.
 
 [[durable_objects.bindings]]
 name = "FLEET"
