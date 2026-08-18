@@ -25,6 +25,8 @@ import { log } from '../log.js';
  * @property {'running'|'stopped'|'error'} status
  * @property {boolean} resumeOnBoot       ended without anyone asking → bring it back
  * @property {boolean|null} skipPermissions  per-session override; null = use the global setting
+ * @property {string|null} title          what the session is about, for people; the name is the identity
+ * @property {boolean} [titlePinned]      set by hand, so nothing derived overwrites it
  * @property {string|null} detail         last human-readable outcome
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
  * @property {string|null} createdBy      e.g. "telegram:12345", "web", "cli"
@@ -119,6 +121,7 @@ export class Registry {
           status: patch.status || 'stopped',
           resumeOnBoot: patch.resumeOnBoot ?? false,
           skipPermissions: patch.skipPermissions ?? null,
+          title: patch.title ?? null,
           detail: patch.detail ?? null,
           rcUrl: patch.rcUrl ?? null,
           createdBy: patch.createdBy ?? null,

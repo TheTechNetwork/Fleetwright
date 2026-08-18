@@ -19,6 +19,7 @@ import {
   RESUME_REQUIRES_UUID,
 } from './claude.js';
 import { isValidName, nameError, generateName } from './names.js';
+import { titleFromCwd, cleanTitle } from './titles.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -356,9 +357,13 @@ export class SessionManager {
         return { ok: false, message: `Could not start "${name}": ${detail}` };
       }
 
+      // Something readable from the moment it starts. The hook replaces this
+      // with what the person actually asked for as soon as they say it.
+      const existing = this.registry.get(name);
       const rec = this.registry.upsert(name, {
         status: 'running',
         cwd,
+        ...(existing?.title ? {} : { title: titleFromCwd(cwd) }),
         detail: `${verb}`,
         stoppedAt: null,
         ...(actor ? { createdBy: actor } : {}),
@@ -614,15 +619,21 @@ export class SessionManager {
    * Record a conversation uuid reported by the SessionStart hook. This is what
    * makes resume reliable: claude hands the hook its own session_id and
    * transcript path, so the uuid is authoritative rather than scraped.
-   * @param {{ name: string, cwd?: string|null, uuid: string }} opts
+   * @param {{ name: string, cwd?: string|null, uuid: string, title?: string|null }} opts
    */
-  recordUuid({ name, cwd = null, uuid }) {
+  recordUuid({ name, cwd = null, uuid, title = null }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
     if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(uuid)) return { ok: false, message: `Not a conversation uuid: ${uuid}` };
+    // A title from the hook is the best one available — it is what the person
+    // actually typed — so it wins over the directory-name fallback. It does not
+    // overwrite one somebody set on purpose.
+    const clean = cleanTitle(title);
+    const existing = this.registry.get(name);
     const rec = this.registry.upsert(name, {
       uuid,
       status: hasSession(name) ? 'running' : 'stopped',
       ...(cwd ? { cwd } : {}),
+      ...(clean && !existing?.titlePinned ? { title: clean } : {}),
     });
     log.info(`hook: ${name} → ${uuid}`);
     return { ok: true, message: 'recorded', session: rec };

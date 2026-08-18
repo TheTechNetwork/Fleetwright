@@ -87,6 +87,7 @@ export function isValidSessionName(name) {
  * @property {string} name  taken from the socket, never from the request
  * @property {string|null} cwd
  * @property {string} uuid
+ * @property {string|null} [title]
  */
 
 /**
@@ -226,8 +227,11 @@ export class HookSocketServer {
     // a sandbox it is always the container's /work. It never selects a record —
     // the socket already did that — so a wrong value cannot cross sessions.
     const cwd = body.cwd ? String(body.cwd).slice(0, 4096) : null;
+    // Advisory in exactly the way cwd is: it labels a record the socket has
+    // already identified, so a wrong one cannot reach another session.
+    const title = body.title ? String(body.title).slice(0, 200) : null;
 
-    const result = await this.onSessionStart({ name, cwd, uuid });
+    const result = await this.onSessionStart({ name, cwd, uuid, title });
     return json(res, result.ok ? 200 : 400, result);
   }
 }

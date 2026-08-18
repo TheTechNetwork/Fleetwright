@@ -96,15 +96,30 @@ const STEPS = [
       const before = git(dir, ['rev-parse', 'HEAD']).stdout;
       const pull = git(dir, ['pull', '--ff-only']);
       if (pull.status !== 0) {
-        const diverged = /not possible to fast-forward|diverged/i.test(pull.stderr + pull.stdout);
-        return {
-          ok: false,
-          changed: false,
-          text: diverged
-            ? `This checkout has local commits that are not upstream, so it cannot fast-forward.\n` +
-              `Sort it out on the box: git -C ${dir} status`
-            : `git pull failed: ${(pull.stderr || pull.stdout).slice(0, 400)}`,
-        };
+        const output = pull.stderr + pull.stdout;
+        if (/not possible to fast-forward|diverged/i.test(output)) {
+          return {
+            ok: false,
+            changed: false,
+            text:
+              'This checkout has local commits that are not upstream, so it cannot fast-forward.\n' +
+              `Sort it out on the box: git -C ${dir} status`,
+          };
+        }
+        // The common one on a box where the checkout was made by root and the
+        // service runs as somebody else. Giving the service sudo would be a
+        // much larger grant than the problem deserves.
+        if (/permission denied|dubious ownership|safe\.directory|read-only file system/i.test(output)) {
+          return {
+            ok: false,
+            changed: false,
+            text:
+              `Cannot write to ${dir} — it belongs to another user.\n` +
+              'Re-run the installer, which gives the checkout to the account the service runs as:\n' +
+              '  sudo ./install/install.sh',
+          };
+        }
+        return { ok: false, changed: false, text: `git pull failed: ${output.slice(0, 400)}` };
       }
       const after = git(dir, ['rev-parse', 'HEAD']).stdout;
       if (before === after) return { ok: true, changed: false, text: 'Already up to date.' };

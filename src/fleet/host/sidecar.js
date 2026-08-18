@@ -47,6 +47,7 @@ import os from 'node:os';
 import { validateIntent, isMutating, PROTOCOL_VERSION } from '../protocol/intents.js';
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
+import { SessionWatcher } from './watcher.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -85,9 +86,11 @@ export class Sidecar {
    *   labels?: string[],
    *   maxSkewMs?: number,
    *   logger?: Logger,
+   *   healthIntervalMs?: number,
+   *   watch?: boolean,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT }) {
+  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
     // limit — where a replayed `start` passes the freshness check against a
@@ -106,6 +109,14 @@ export class Sidecar {
     this.labels = labels;
     this.maxSkewMs = maxSkewMs;
     this.log = logger;
+    this.healthIntervalMs = healthIntervalMs;
+    /** @type {any} */
+    this.healthTimer = null;
+    // Watching is what turns "a session needs you" into a notification on a
+    // phone. Off in tests, which drive tick() directly.
+    this.watcher = watch
+      ? new SessionWatcher({ hub, emit: (event) => this.emitEvent(event), logger })
+      : null;
     /** @type {Map<string, { at: number, reply: Promise<object> }>} */
     this.replay = new Map();
   }
@@ -123,12 +134,52 @@ export class Sidecar {
     }
     this.transport.onMessage((msg) => this.#onMessage(msg));
     await this.transport.start();
+
+    // Health is PUSHED rather than waited for. A coordinator that has to ask
+    // needs a timer per host, and in a Worker that means a Durable Object alarm
+    // — far too coarse a tool for a 15-second heartbeat. The host knows its own
+    // state; it can say so.
+    if (this.healthIntervalMs > 0) {
+      this.healthTimer = setInterval(() => void this.#pushHealth(), this.healthIntervalMs);
+      this.healthTimer.unref?.();
+      void this.#pushHealth();
+    }
+    this.watcher?.start();
     this.log.info(`sidecar: ${this.hostId} → ${this.transport.origin} (protocol v${PROTOCOL_VERSION})`);
     return true;
   }
 
   async stop() {
+    if (this.healthTimer) clearInterval(this.healthTimer);
+    this.healthTimer = null;
+    this.watcher?.stop();
     await this.transport.stop();
+  }
+
+  /** Volunteer our health, so the coordinator never has to ask. */
+  async #pushHealth() {
+    try {
+      await this.transport.send({ v: PROTOCOL_VERSION, kind: 'health', hostId: this.hostId, health: await this.health() });
+    } catch (e) {
+      this.log.warn(`sidecar: could not send health: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /**
+   * Something happened that a person may want to know about right now.
+   *
+   * Fire and forget: an event that cannot be delivered is not worth holding a
+   * session up for, and the coordinator will see the state on the next health
+   * report anyway. What is lost is the immediacy, not the fact.
+   *
+   * @param {Record<string, any>} event
+   */
+  emitEvent(event) {
+    try {
+      this.transport.send({ v: PROTOCOL_VERSION, kind: 'event', hostId: this.hostId, ...event });
+    } catch (e) {
+      this.log.warn(`sidecar: could not send ${event.event}: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /** @param {unknown} msg */
@@ -315,7 +366,14 @@ export class Sidecar {
         // coordinator has no business caching conversation uuids or paths.
         sessions: sessions
           .filter((s) => s && typeof s.name === 'string')
-          .map((s) => ({ name: s.name, status: s.status, resumable: Boolean(s.uuid) })),
+          .map((s) => ({
+            name: s.name,
+            // What the session is about. The coordinator and the app show this;
+            // everything that identifies a session still keys on the name.
+            title: s.title ?? null,
+            status: s.status,
+            resumable: Boolean(s.uuid),
+          })),
         loggedIn: state.auth?.loggedIn === true,
       };
     } catch (e) {

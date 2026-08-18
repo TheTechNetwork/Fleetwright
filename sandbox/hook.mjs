@@ -13,6 +13,7 @@
 // Always exits 0. A hook that fails must never block a session from starting.
 
 import { request } from 'node:http';
+import { readFileSync } from 'node:fs';
 
 const SOCKET = process.env.AGENT_SESSION_HOOK_SOCKET || '/run/hub.sock';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f-]{27}$/;
@@ -29,7 +30,13 @@ const fromPath = String(payload.transcript_path || '').match(/([0-9a-f]{8}-[0-9a
 const uuid = fromPath ? fromPath[1] : String(payload.session_id || '');
 if (!UUID_RE.test(uuid)) process.exit(0);
 
-await post({ uuid, cwd: String(payload.cwd || process.cwd()) }).catch(() => {});
+await post({
+  uuid,
+  cwd: String(payload.cwd || process.cwd()),
+  // What the person asked for. Inlined rather than imported: this file is
+  // copied into the image on its own, with no repo around it.
+  ...(firstUserMessage(payload.transcript_path) ? { title: firstUserMessage(payload.transcript_path) } : {}),
+}).catch(() => {});
 process.exit(0);
 
 /** @param {{uuid: string, cwd: string}} body */
@@ -56,6 +63,44 @@ function post(body) {
     req.on('error', () => resolve(null));
     req.end(data);
   });
+}
+
+/**
+ * The first thing the person asked for, from the transcript. Mirrors
+ * src/core/titles.js — kept in step by test/titles.test.js, which runs both
+ * over the same fixture.
+ * @param {string|undefined} transcriptPath
+ */
+function firstUserMessage(transcriptPath) {
+  if (!transcriptPath) return null;
+  let text;
+  try {
+    text = readFileSync(transcriptPath, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.type !== 'user') continue;
+    const content = entry?.message?.content ?? entry?.content;
+    const raw =
+      typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? content.find((c) => c?.type === 'text')?.text
+          : null;
+    if (typeof raw !== 'string') continue;
+    const single = raw.split('\n')[0].replace(/\s+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    if (!single || /^<[a-z-]+>/i.test(single) || /^Caveat: The messages below/i.test(single)) continue;
+    return single.length > 60 ? `${single.slice(0, 59).trimEnd()}…` : single;
+  }
+  return null;
 }
 
 function readStdin() {

@@ -26,9 +26,9 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { attachWebSocketServer } from '../ws.js';
-import { HostRegistry } from './registry.js';
-import { place } from './scheduler.js';
-import { PROTOCOL_VERSION, VERBS, buildIntent } from '../protocol/intents.js';
+import { CoordinatorCore } from './core.js';
+import { pusherFromEnv } from '../push.js';
+import { PROTOCOL_VERSION } from '../protocol/intents.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -59,13 +59,26 @@ export class Coordinator {
     this.intentTimeoutMs = intentTimeoutMs;
     this.healthIntervalMs = healthIntervalMs;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
-    this.registry = new HostRegistry();
-    /** @type {Map<string, { resolve: (reply: any) => void, timer: NodeJS.Timeout }>} */
-    this.pending = new Map();
+    // Everything that carries a decision lives in the core, shared verbatim
+    // with the Cloudflare Worker. This class is transport and nothing else.
+    this.core = new CoordinatorCore({
+      logger: this.log,
+      intentTimeoutMs,
+      push: pusherFromEnv(process.env, this.log),
+    });
     /** @type {import('node:http').Server|null} */
     this.server = null;
     /** @type {NodeJS.Timeout|null} */
     this.healthTimer = null;
+  }
+
+  /** The host registry, for tests and for anything that wants to look. */
+  get registry() {
+    return this.core.registry;
+  }
+
+  get pending() {
+    return this.core.pending;
   }
 
   /** @param {number} port @param {string} host */
@@ -126,8 +139,7 @@ export class Coordinator {
       return;
     }
 
-    this.log.info(`coordinator: ${hostId} connected`);
-    this.registry.connect(hostId, (msg) => conn.send(JSON.stringify(msg)));
+    this.core.hostConnected(hostId, (msg) => conn.send(JSON.stringify(msg)));
     /** @type {any} */ (this.registry.hosts.get(hostId)).conn = conn;
 
     conn.on('message', (text) => {
@@ -138,11 +150,10 @@ export class Coordinator {
         this.log.warn(`coordinator: ${hostId} sent a non-JSON frame`);
         return;
       }
-      this.#onHostMessage(hostId, msg);
+      void this.core.onHostMessage(hostId, msg);
     });
     conn.on('close', (code, reason) => {
-      this.log.warn(`coordinator: ${hostId} disconnected (${code}${reason ? ` ${reason}` : ''})`);
-      this.registry.disconnect(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
+      this.core.hostDisconnected(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
     });
     conn.on('error', (e) => this.log.warn(`coordinator: ${hostId} socket error: ${e.message}`));
 
@@ -151,30 +162,13 @@ export class Coordinator {
     void this.#askHealth(hostId);
   }
 
-  /** @param {string} hostId @param {any} msg */
-  #onHostMessage(hostId, msg) {
-    if (msg?.kind !== 'reply' || typeof msg.id !== 'string') {
-      this.log.warn(`coordinator: ${hostId} sent something that is not a reply`);
-      return;
-    }
-    const waiter = this.pending.get(msg.id);
-    if (!waiter) {
-      // A reply to something we have already given up on. Not an error — the
-      // host was slow, not wrong — but worth seeing in a log.
-      this.log.debug(`coordinator: late reply from ${hostId} for ${msg.id}`);
-      return;
-    }
-    this.pending.delete(msg.id);
-    clearTimeout(waiter.timer);
-    waiter.resolve({ ...msg, hostId });
-  }
 
   /** @param {string} hostId */
   async #askHealth(hostId) {
     const host = this.registry.hosts.get(hostId);
     if (!host?.connected) return;
-    const reply = await this.#send(host, { verb: 'health' }, 10_000).catch(() => null);
-    if (reply?.ok && reply.health) this.registry.recordHealth(hostId, reply.health);
+    const reply = await this.core.send(host, { verb: 'health' }, 10_000).catch(() => null);
+    if (reply?.ok && reply.health) this.core.registry.recordHealth(hostId, reply.health);
   }
 
   #pollHealth() {
@@ -182,83 +176,18 @@ export class Coordinator {
   }
 
   /**
-   * Send one intent to one host and await its reply.
-   *
-   * @param {any} host
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string }} spec
-   * @param {number} [timeoutMs]
-   * @returns {Promise<any>}
-   */
-  #send(host, spec, timeoutMs = this.intentTimeoutMs) {
-    // buildIntent validates before anything reaches the wire. A coordinator bug
-    // that produces a malformed intent should fail here, loudly, rather than
-    // being refused by every host in the fleet one at a time.
-    const intent = buildIntent({
-      id: spec.id || randomUUID(),
-      verb: spec.verb,
-      params: spec.params || {},
-      ...(spec.actor ? { actor: spec.actor } : {}),
-    });
-
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(intent.id);
-        reject(new Error(`${host.hostId} did not answer ${intent.verb} within ${timeoutMs}ms`));
-      }, timeoutMs);
-      timer.unref?.();
-      this.pending.set(intent.id, { resolve, timer });
-      try {
-        host.send(intent);
-      } catch (e) {
-        clearTimeout(timer);
-        this.pending.delete(intent.id);
-        reject(e);
-      }
-    });
-  }
-
-  /**
    * Route one intent and return the reply. The public entry point — used by the
    * HTTP API and directly by tests.
+   *
+   * Delegated to the core, which is the same object the Worker uses: placement,
+   * fan-out and correlation are decisions, and a decision implemented twice is
+   * a decision that will eventually be made two different ways.
    *
    * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
-    if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
-      return { ok: false, error: { code: 'unknown_verb' }, text: `unknown verb ${JSON.stringify(spec.verb)}` };
-    }
-
-    const placement = place(this.registry, spec);
-    if (placement.kind === 'refused') {
-      return { ok: false, error: { code: placement.code }, text: placement.reason };
-    }
-
-    if (placement.kind === 'fanout') {
-      const results = await Promise.all(
-        (placement.hosts || []).map((h) =>
-          this.#send(h, spec)
-            .then((r) => ({ hostId: h.hostId, ...r }))
-            .catch((e) => ({ hostId: h.hostId, ok: false, text: e.message, error: { code: 'host_timeout' } })),
-        ),
-      );
-      return {
-        ok: results.some((r) => r.ok),
-        fanout: true,
-        // Attribution is not decoration: two hosts can hold sessions with the
-        // same name, and a merged list that loses which box each came from
-        // cannot be acted on.
-        sessions: results.flatMap((r) => (r.sessions || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId }))),
-        hosts: results.map(({ hostId, ok, text, error }) => ({ hostId, ok, text, error })),
-        text: results.map((r) => `${r.hostId}: ${r.text ?? ''}`).join('\n'),
-      };
-    }
-
-    try {
-      return await this.#send(placement.host, spec);
-    } catch (e) {
-      return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
-    }
+    return this.core.dispatch(spec);
   }
 
   // --- the client API ------------------------------------------------------

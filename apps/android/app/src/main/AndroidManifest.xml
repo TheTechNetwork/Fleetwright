@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- Android 13+ requires this to be granted at runtime before a notification
+       can be shown at all. Asked for on first launch, because a fleet app that
+       cannot notify you is missing the point of carrying it. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application
+      android:label="agent-fleet"
+      android:icon="@mipmap/ic_launcher"
+      android:supportsRtl="true"
+      android:usesCleartextTraffic="true"
+      android:theme="@style/Theme.AgentFleet">
+
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:label="agent-fleet">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

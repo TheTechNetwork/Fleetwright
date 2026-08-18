@@ -84,6 +84,8 @@ export class HttpAdapter {
         name: String(body.name || ''),
         cwd: body.cwd ? String(body.cwd) : null,
         uuid: String(body.uuid || ''),
+        // What the person asked for, read out of the transcript by the hook.
+        title: body.title ? String(body.title) : null,
       });
       return json(res, r.ok ? 200 : 400, r);
     }

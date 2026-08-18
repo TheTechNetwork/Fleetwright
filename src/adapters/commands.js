@@ -92,6 +92,18 @@ function sessionButtons(sessions, toCommand, toLabel) {
 }
 
 /**
+ * How a session should read to a person.
+ *
+ * The name is the identity — a tmux target, a volume, what you type to resume —
+ * and stays exactly as it is. The title is what the session is ABOUT, and is
+ * the useful half once a box has six of them.
+ * @param {import('../core/registry.js').SessionRecord} s
+ */
+function label(s) {
+  return s.title ? `${s.name} · ${s.title}` : s.name;
+}
+
+/**
  * Does this session actually bypass permission checks?
  * @param {Ctx} ctx
  * @param {import('../core/registry.js').SessionRecord} s
@@ -232,12 +244,12 @@ export const COMMANDS = {
       const rest = all.filter((s) => s.status !== 'running');
       const lines = [`${running.length}/${ctx.cfg.maxSessions} running on ${ctx.cfg.hostname}`, ''];
       for (const s of running) {
-        lines.push(`▶ ${s.name}${modeSuffix(ctx, s)}${s.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
+        lines.push(`▶ ${label(s)}${modeSuffix(ctx, s)}${s.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
       }
       if (rest.length) {
         lines.push('', 'Resumable:');
         for (const s of rest) {
-          lines.push(`◼ ${s.name}${s.uuid ? '' : '  (no saved conversation)'}`);
+          lines.push(`◼ ${label(s)}${s.uuid ? '' : '  (no saved conversation)'}`);
         }
       }
       // One tap per session: stop what's running, resume what isn't.
@@ -276,7 +288,7 @@ export const COMMANDS = {
       const s = ctx.sessions.get(args[0]);
       if (!s) return { ok: false, text: `No session named "${args[0]}".` };
       const lines = [
-        `${s.name} — ${s.status}`,
+        `${label(s)} — ${s.status}`,
         `cwd: ${s.cwd}`,
         `permissions: ${effectiveSkip(ctx, s) ? 'bypassed (--dangerously-skip-permissions)' : 'prompts enabled'}` +
           (s.skipPermissions === null ? ' [global default]' : ' [set for this session]'),

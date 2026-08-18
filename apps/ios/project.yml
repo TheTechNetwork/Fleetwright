@@ -1,0 +1,47 @@
+# XcodeGen spec, rather than a hand-written .xcodeproj.
+#
+#   brew install xcodegen && xcodegen generate && open AgentFleet.xcodeproj
+#
+# A project.pbxproj is a 40-kilobyte generated file with UUID cross-references;
+# hand-writing one is how you get a project that opens on the machine it was
+# written on and nowhere else. This is the source of truth, it is reviewable in
+# a diff, and Xcode's version of it is regenerated on demand.
+#
+# design.md §9 is explicit that this app cannot be built or tested in the
+# environment it was written in — no macOS, no Xcode, no signing identity. It is
+# REVIEWED BUT UNRUN until somebody opens it on a Mac. That is stated here
+# rather than discovered.
+
+name: AgentFleet
+options:
+  bundleIdPrefix: dev.agentfleet
+  deploymentTarget:
+    iOS: "17.0"
+
+targets:
+  AgentFleet:
+    type: application
+    platform: iOS
+    sources:
+      - path: AgentFleet
+    info:
+      path: AgentFleet/Info.plist
+      properties:
+        CFBundleDisplayName: agent-fleet
+        UILaunchScreen: {}
+        # Remote notifications are the entire reason for the app over a
+        # Shortcut: a Shortcut cannot tell you a session is waiting.
+        UIBackgroundModes: [remote-notification]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.agentfleet.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+    entitlements:
+      path: AgentFleet/AgentFleet.entitlements
+      properties:
+        # `development` until there is a distribution profile. Getting this
+        # wrong is the classic "notifications work in Xcode and not in TestFlight".
+        aps-environment: development

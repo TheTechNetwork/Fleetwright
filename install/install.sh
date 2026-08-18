@@ -636,6 +636,21 @@ for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
 done
 ok "config readable by $RUN_USER"
 
+# The checkout must belong to the user that runs the service, or /update cannot
+# pull: git refuses to operate on a repository owned by somebody else ("dubious
+# ownership"), and even past that, writing the objects needs the permission.
+#
+# The alternative — giving the service user passwordless sudo for git — is a far
+# larger grant to solve a file-ownership problem, so: the deployment owns its
+# own deployment.
+if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER" ]; then
+  if chown -R "$RUN_USER" "$DIR" 2>/dev/null; then
+    ok "$DIR now belongs to $RUN_USER, so /update can pull"
+  else
+    warn "could not chown $DIR to $RUN_USER — /update will fail with a permissions error"
+  fi
+fi
+
 # --- 6. CLIs on PATH --------------------------------------------------------
 say "Linking the CLIs"
 for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
