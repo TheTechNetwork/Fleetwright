@@ -28,7 +28,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # Installed explicitly rather than left to AGP's auto-download, so a
           # missing platform fails here with an obvious message instead of
@@ -60,7 +60,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # Installed explicitly rather than left to AGP's auto-download, so a
           # missing platform fails here with an obvious message instead of
