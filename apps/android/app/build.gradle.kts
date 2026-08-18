@@ -15,13 +15,36 @@ android {
     versionName = "0.1.0"
   }
 
+  // Only declared when the environment actually has a keystore. A signingConfig
+  // pointing at a file that is not there fails the whole configuration phase,
+  // which would break the debug build too — and the debug build is the one
+  // every contributor runs.
+  val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+  if (!keystoreFile.isNullOrBlank()) {
+    signingConfigs {
+      create("release") {
+        storeFile = file(keystoreFile)
+        storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+        keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+        keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+      }
+    }
+  }
+
   buildTypes {
-    // Debug only for now: a release build wants a signing key, and an unsigned
-    // release APK is not installable, which makes it worse than useless for
-    // testing.
     getByName("debug") {
       isMinifyEnabled = false
+      // So a debug build can sit next to a release one on the same phone.
       applicationIdSuffix = ".debug"
+    }
+    getByName("release") {
+      // Left off deliberately. R8 on a Compose app needs keep rules that have
+      // to be arrived at by testing what breaks, and shipping a release nobody
+      // has exercised is how you find out in the store review queue.
+      isMinifyEnabled = false
+      if (!keystoreFile.isNullOrBlank()) {
+        signingConfig = signingConfigs.getByName("release")
+      }
     }
   }
 

@@ -41,7 +41,10 @@ what has been validated on hardware. Start there for the why.
 | `bin/agent-fleet-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
 | `bin/agent-fleet-coordinator` | the coordinator |
 | `install/` | one installer for all of it, plus the systemd unit |
-| `docs/` | [deployment](./docs/deployment.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
+| `.github/workflows/` | CI: tests, the iOS build, the Android APK, the Worker deploy — see [`docs/ci.md`](./docs/ci.md) |
+| `apps/` | [Android](./apps/android/README.md) and [iOS](./apps/ios/README.md) clients |
+| `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
+| `docs/` | [deployment](./docs/deployment.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
 Still to come: deploying the coordinator to Cloudflare (it runs as a plain Node
 process today), rootless podman, host enrollment, and the iOS and Android apps.
