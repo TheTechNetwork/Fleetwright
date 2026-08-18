@@ -5,6 +5,14 @@ tunnel daemon. Hosts open an outbound WebSocket, a Durable Object pins it, and
 the phone speaks HTTPS to the same origin. This is **not a tunnel** — nothing is
 aimed at your boxes; they are ordinary clients.
 
+It answers on **https://fleet.thetech.network**, configured as a custom domain
+in `wrangler.toml`, so Cloudflare creates and manages the DNS record and the
+certificate. There is nothing to point anywhere by hand.
+
+That hostname is load-bearing in one specific way: §5 has each host PIN the
+coordinator origin it will talk to, so changing it means editing every host's
+`/etc/agent-fleet-sidecar.env`. It is not a value to churn.
+
 ## Deploy
 
 ```sh
@@ -29,7 +37,7 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
 In `/etc/agent-fleet-sidecar.env` on each box:
 
 ```
-AGENT_FLEET_COORDINATOR_URL=https://agent-fleet-coordinator.<subdomain>.workers.dev
+AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network
 AGENT_FLEET_TRANSPORT=websocket
 AGENT_FLEET_HOST_TOKEN=<the same AGENT_FLEET_HOST_TOKEN>
 ```

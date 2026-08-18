@@ -30,6 +30,18 @@ compatibility_date = "2026-01-15"
 # and it will work. There is no rule being enforced; `wrangler deploy --dry-run`
 # in CI simply reports the truth either way.
 
+# The origin a host pins and a phone talks to. custom_domain = true makes
+# Cloudflare create and manage the DNS record and the certificate for it, which
+# is the difference between this and a plain route — there is nothing to point
+# anywhere by hand.
+#
+# The hostname matters more here than it looks: §5 has the host agent PIN the
+# coordinator origin, so changing it means editing every host's
+# /etc/agent-fleet-sidecar.env. It is not a value to churn.
+routes = [
+  { pattern = "fleet.thetech.network", custom_domain = true }
+]
+
 [[durable_objects.bindings]]
 name = "FLEET"
 class_name = "Fleet"

@@ -132,7 +132,7 @@ private struct SettingsView: View {
                 // there is no initialiser taking a String title AND a footer,
                 // which the first real compile caught.
                 Section {
-                    TextField("https://…workers.dev", text: Bindable(settings).coordinatorURL)
+                    TextField("https://fleet.thetech.network", text: Bindable(settings).coordinatorURL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                     SecureField("API token", text: Bindable(settings).apiToken)
