@@ -90,7 +90,7 @@ test('a uuid posted on a session socket is recorded for THAT session', async (t)
   const r = await postSessionStart({ socketPath: sock, uuid: UUID, cwd: '/work' });
 
   assert.equal(r.ok, true, r.error);
-  assert.deepEqual(reports, [{ name: 'bigjob', cwd: '/work', uuid: UUID }]);
+  assert.deepEqual(reports, [{ name: 'bigjob', cwd: '/work', uuid: UUID, title: null }]);
 });
 
 test('the client sends no session name at all — the socket supplies it', async (t) => {
@@ -117,6 +117,19 @@ test('a container cannot report against another session by naming it', async (t)
   assert.equal(res.status, 403);
   assert.equal(reports.length, 0, 'nothing may be recorded for either session');
   assert.match(warnings.join('\n'), /neighbour/);
+});
+
+test('a title from the hook rides along, and is still not an identity', async (t) => {
+  // The hook reads what the person actually asked for out of the transcript.
+  // It labels a record the SOCKET has already identified, so a wrong or hostile
+  // title cannot reach another session — only mislabel its own.
+  const { server, reports } = harness(t);
+  const sock = await server.open('bigjob');
+
+  await rawPost(sock, JSON.stringify({ uuid: UUID, cwd: '/work', title: 'migrate the billing service' }));
+
+  assert.equal(reports[0].name, 'bigjob');
+  assert.equal(reports[0].title, 'migrate the billing service');
 });
 
 test('two sessions have independent sockets', async (t) => {

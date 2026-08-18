@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { Registry } from '../src/core/registry.js';
+import { titleFromTranscript } from '../src/core/titles.js';
 
 /**
  * Load /etc/agent-hub.env the way systemd's EnvironmentFile= does.
@@ -146,9 +147,13 @@ async function runHook() {
     if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(uuid)) process.exit(0);
 
     const cwd = String(payload.cwd || process.cwd());
+    // What the person actually asked for, read out of Claude's own transcript.
+    // Best effort: a session that has not been spoken to yet has none, and the
+    // hub falls back to the working directory.
+    const title = titleFromTranscript(payload.transcript_path);
 
     try {
-      await post('/internal/session-start', { name, cwd, uuid }, 3000);
+      await post('/internal/session-start', { name, cwd, uuid, ...(title ? { title } : {}) }, 3000);
     } catch {
       // The hub is restarting, moved port, or not up yet. Spool it; the hub
       // drains this on its next reconcile. A dropped uuid means an

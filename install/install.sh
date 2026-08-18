@@ -477,6 +477,20 @@ sed -e "s|__USER__|$RUN_USER|g" \
 chmod 0644 "$UNIT"
 ok "$UNIT"
 
+# Reading the service journal needs group membership: systemd-journald shows a
+# plain user only their own logs. Without this /logs returns "no entries" for a
+# service that is logging perfectly well — a silence that reads as a broken
+# service rather than a permissions one.
+if [ "$RUN_USER" != root ] && command -v usermod >/dev/null; then
+  if id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal; then
+    ok "$RUN_USER can already read the service journal"
+  elif getent group systemd-journal >/dev/null && usermod -aG systemd-journal "$RUN_USER" 2>/dev/null; then
+    ok "added $RUN_USER to systemd-journal, so /logs can read the journal"
+  else
+    warn "could not add $RUN_USER to systemd-journal — /logs will see no entries"
+  fi
+fi
+
 # The tmux server must outlive the login session that spawned it, or every
 # session dies when the operator logs out.
 if command -v loginctl >/dev/null; then
@@ -635,6 +649,21 @@ for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
   chmod 0600 "$f"
 done
 ok "config readable by $RUN_USER"
+
+# The checkout must belong to the user that runs the service, or /update cannot
+# pull: git refuses to operate on a repository owned by somebody else ("dubious
+# ownership"), and even past that, writing the objects needs the permission.
+#
+# The alternative — giving the service user passwordless sudo for git — is a far
+# larger grant to solve a file-ownership problem, so: the deployment owns its
+# own deployment.
+if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER" ]; then
+  if chown -R "$RUN_USER" "$DIR" 2>/dev/null; then
+    ok "$DIR now belongs to $RUN_USER, so /update can pull"
+  else
+    warn "could not chown $DIR to $RUN_USER — /update will fail with a permissions error"
+  fi
+fi
 
 # --- 6. CLIs on PATH --------------------------------------------------------
 say "Linking the CLIs"

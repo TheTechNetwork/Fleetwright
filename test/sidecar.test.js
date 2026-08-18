@@ -64,6 +64,10 @@ async function setup(t, hubOpts = {}, sidecarOpts = {}) {
     transport: /** @type {any} */ (transport),
     hostId: 'unabandoned',
     labels: ['gpu', 'debian13'],
+    // Off by default so a test sees only what it asked for. The pushed health
+    // and the watcher have their own tests below.
+    healthIntervalMs: 0,
+    watch: false,
     logger: {
       debug() {},
       info() {},
@@ -515,6 +519,38 @@ test('a message delivered by the transport is answered on the transport', async 
 
   await sidecar.stop();
   assert.equal(transport.started, false);
+});
+
+test('health is PUSHED on start, so the coordinator never has to ask', async (t) => {
+  // A coordinator that polls needs a timer per host, and in a Worker that means
+  // a Durable Object alarm — far too coarse for a heartbeat. The host knows its
+  // own state, so it volunteers it.
+  const { sidecar, transport } = await setup(t, {}, { healthIntervalMs: 50 });
+  await sidecar.start();
+
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && !transport.sent.some((m) => m.kind === 'health')) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await sidecar.stop();
+
+  const health = transport.sent.find((m) => m.kind === 'health');
+  assert.ok(health, 'health must arrive without being asked for');
+  assert.equal(health.hostId, 'unabandoned');
+  assert.equal(health.health.maxSessions, 5);
+});
+
+test('an event is sent as its own kind, not as a reply', async (t) => {
+  const { sidecar, transport } = await setup(t);
+  await sidecar.start();
+
+  sidecar.emitEvent({ event: 'session.awaiting-input', name: 'bigjob', text: 'waiting' });
+
+  const event = transport.sent.find((m) => m.kind === 'event');
+  assert.ok(event, 'events must be distinguishable from replies');
+  assert.equal(event.event, 'session.awaiting-input');
+  assert.equal(event.name, 'bigjob');
+  assert.equal(event.hostId, 'unabandoned');
 });
 
 test('a refused intent still gets a reply, correlated by id', async (t) => {
