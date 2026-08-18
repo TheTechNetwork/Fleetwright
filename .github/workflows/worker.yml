@@ -83,3 +83,45 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx wrangler deploy
+
+      # The Worker's RUNTIME secrets are a different thing from the credentials
+      # used to deploy it: they live in Cloudflare, not in GitHub, and
+      # `wrangler deploy` does not touch them. A Worker deployed without them
+      # answers 503 to everything, on purpose — a coordinator with no
+      # credentials is remote control of every box in the fleet for whoever
+      # finds the URL.
+      #
+      # Syncing them here means GitHub is the one place you manage them. Each is
+      # optional and skipped when unset, so this does not force secrets on a
+      # deployment that sets them with `wrangler secret put` directly.
+      - name: Sync the Worker's runtime secrets
+        if: steps.creds.outputs.have == 'true'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AGENT_FLEET_HOST_TOKEN: ${{ secrets.AGENT_FLEET_HOST_TOKEN }}
+          AGENT_FLEET_API_TOKEN: ${{ secrets.AGENT_FLEET_API_TOKEN }}
+          AGENT_FLEET_FCM_SERVICE_ACCOUNT: ${{ secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
+        run: |
+          set -u
+          missing=""
+          for name in AGENT_FLEET_HOST_TOKEN AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT; do
+            value="$(printenv "$name" || true)"
+            if [ -z "$value" ]; then
+              missing="$missing $name"
+              continue
+            fi
+            # printf, not echo: a service-account JSON contains backslashes that
+            # some shells' echo would interpret.
+            printf '%s' "$value" | npx wrangler secret put "$name"
+            echo "synced $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::Not set as repository secrets, so left as they are in Cloudflare:$missing"
+            echo "The coordinator answers 503 until AGENT_FLEET_HOST_TOKEN and AGENT_FLEET_API_TOKEN exist."
+          fi
+
+      - name: Where it landed
+        if: steps.creds.outputs.have == 'true'
+        run: echo "::notice::Deployed. Point a host at it with AGENT_FLEET_COORDINATOR_URL — see docs/coordinator-deploy.md."
