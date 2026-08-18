@@ -75,6 +75,56 @@ sdkmanager --install "platform-tools" "platforms;android-37.1" "build-tools;37.0
 echo "Android SDK ready at $ANDROID_HOME"
 """
 
+[tasks.keystore]
+description = "Generate the Android release signing key"
+run = """
+set -eu
+out="${KEYSTORE_OUT:-$PWD/release.jks}"
+alias_name="${KEY_ALIAS:-fleetwright}"
+
+# Refusing to overwrite is the whole safety story here. An existing release.jks
+# is the only copy of a key that Play ties to the listing forever; a second
+# `mise run keystore` that clobbers it is unrecoverable, and the command that
+# does it looks exactly like the one that worked.
+if [ -e "$out" ]; then
+  echo "$out already exists — refusing to overwrite it." >&2
+  echo "A release key cannot be regenerated: Play identifies the app by it." >&2
+  exit 1
+fi
+
+if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
+  echo "Set KEYSTORE_PASSWORD (and optionally KEY_ALIAS, KEYSTORE_OUT)." >&2
+  echo "  KEYSTORE_PASSWORD=... mise run keystore" >&2
+  exit 2
+fi
+
+# -dname supplied so this never stops to ask; the fields are not verified by
+# anyone and are visible in every APK.
+keytool -genkeypair \
+  -keystore "$out" -alias "$alias_name" \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" \
+  -dname "CN=Fleetwright, OU=Fleetwright, O=Fleetwright, C=US"
+
+chmod 600 "$out"
+
+echo
+echo "Wrote $out"
+echo
+echo "GitHub -> Settings -> Secrets and variables -> Actions:"
+echo "  ANDROID_KEYSTORE_BASE64    the line below"
+echo "  ANDROID_KEYSTORE_PASSWORD  the password you just used"
+echo "  ANDROID_KEY_ALIAS          $alias_name"
+echo "  ANDROID_KEY_PASSWORD       the same password"
+echo
+base64 -w0 "$out"
+echo
+echo
+echo "BACK UP $out SOMEWHERE ELSE. An Actions secret is write-only in the UI,"
+echo "so it is not a backup, and losing this key means no updates to the"
+echo "existing listing — only a new one."
+"""
+
 [tasks.apk]
 description = "Build the Android debug APK"
 dir = "apps/android"

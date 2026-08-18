@@ -80,14 +80,34 @@ is installable.
 | `ANDROID_KEY_ALIAS` | the alias inside the store |
 | `ANDROID_KEY_PASSWORD` | the key password |
 
-Making one, if there is not already a keystore — **keep the file, and back it
-up**. Losing it means the app can never be updated under the same identity:
+Making one, if there is not already a keystore:
+
+```sh
+mise install                                  # keytool comes with the JDK
+KEYSTORE_PASSWORD='…' mise run keystore       # writes ./release.jks
+```
+
+That prints the base64 and the exact four secrets to paste. It refuses to
+overwrite an existing `release.jks`, because that mistake cannot be undone.
+
+`keytool: command not found` means there is no JDK on your PATH — which is what
+`mise install` fixes, since `mise.toml` already pins temurin-25 for the Android
+build. The equivalent by hand:
 
 ```sh
 keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 \
-  -validity 10000 -alias agent-fleet
+  -validity 10000 -alias fleetwright
 base64 -w0 release.jks    # paste into ANDROID_KEYSTORE_BASE64
 ```
+
+**Back the file up somewhere that is not GitHub.** Play identifies an app by its
+signing key permanently: lose it and there is no update to the existing listing,
+only a new one. An Actions secret is write-only in the UI, so it is not a backup.
+
+If you use **Play App Signing**, Google holds the app signing key and this
+becomes the *upload* key, which Google can reset if lost. That is the safer
+default for a first release and changes nothing above — the workflow signs with
+whatever it is given.
 
 ## App Store Connect — TestFlight
 
