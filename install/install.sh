@@ -16,6 +16,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE=/etc/agent-hub.env
 SIDECAR_ENV=/etc/agent-fleet-sidecar.env
+COORD_ENV=/etc/agent-fleet-coordinator.env
 UNIT=/etc/systemd/system/agent-hub.service
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
 # Resolved once, up here, because finding node depends on it — sudo hides
@@ -32,11 +33,32 @@ die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 # first step on a box you are not sure about, rather than finding out halfway
 # through that node is invisible to sudo.
 CHECK_ONLY=0
-case "${1:-}" in
-  --check|-n) CHECK_ONLY=1 ;;
-  '') ;;
-  *) die "unknown argument: $1 (only --check is accepted)" ;;
-esac
+# The wizard asks the handful of questions that otherwise become a checklist at
+# the end. It runs when there is a terminal to ask on, and never otherwise — a
+# piped or scripted install must behave exactly as it always has.
+WIZARD=auto
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check|-n) CHECK_ONLY=1 ;;
+    --wizard) WIZARD=yes ;;
+    --no-wizard|--yes|-y) WIZARD=no ;;
+    -h|--help)
+      printf 'usage: install.sh [--check] [--wizard|--no-wizard]\n\n'
+      printf '  --check       verify prerequisites and change nothing\n'
+      printf '  --wizard      force the interactive setup even without a terminal\n'
+      printf '  --no-wizard   never ask; write templates and print the next steps\n'
+      exit 0 ;;
+    *) die "unknown argument: $1 (see --help)" ;;
+  esac
+  shift
+done
+[ "${AGENT_HUB_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
+if [ "$WIZARD" = auto ]; then
+  # A terminal on stdin AND stdout. `curl | bash` has neither, and asking
+  # questions nobody can answer is worse than not asking.
+  if [ -t 0 ] && [ -t 1 ]; then WIZARD=yes; else WIZARD=no; fi
+fi
+[ "$CHECK_ONLY" = 1 ] && WIZARD=no
 
 # Installing missing OS packages rather than printing a command for someone to
 # copy is the difference between "one installer" and "an installer plus a
@@ -45,6 +67,68 @@ esac
 #
 # AGENT_HUB_NO_INSTALL_DEPS=1 turns it off for a box where package management is
 # somebody else's job.
+# --- asking things ----------------------------------------------------------
+
+ask() { # ask VAR "prompt" [default]
+  __var="$1"; __prompt="$2"; __default="${3:-}"
+  if [ -n "$__default" ]; then printf '  %s [%s]: ' "$__prompt" "$__default"
+  else printf '  %s: ' "$__prompt"; fi
+  IFS= read -r __reply || __reply=""
+  [ -z "$__reply" ] && __reply="$__default"
+  printf -v "$__var" '%s' "$__reply"
+}
+
+confirm() { # confirm "prompt" [Y|N]  → 0 for yes
+  __default="${2:-Y}"
+  case "$__default" in
+    Y|y) __hint="[Y/n]" ;;
+    *)   __hint="[y/N]" ;;
+  esac
+  printf '  %s %s: ' "$1" "$__hint"
+  IFS= read -r __reply || __reply=""
+  [ -z "$__reply" ] && __reply="$__default"
+  case "$__reply" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+# A secret nobody has to think about. Every one of these is a value with no
+# decision content — leaving them blank for an operator to generate and paste
+# is pure friction, and the reason people end up running with none at all.
+gen_secret() {
+  if command -v openssl >/dev/null; then openssl rand -hex 24
+  else "$NODE_BIN" -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+  fi
+}
+
+# Set KEY=VALUE in an env file, but ONLY if it is currently empty. An operator
+# who has already put something there keeps it on every re-run — the same
+# promise the whole installer makes about /etc files.
+#
+# Done in node rather than sed because these values are secrets and may contain
+# any character at all.
+set_env() { # set_env FILE KEY VALUE
+  ENVFILE="$1" ENVKEY="$2" ENVVAL="$3" "$NODE_BIN" -e '
+    const fs = require("fs");
+    const { ENVFILE, ENVKEY, ENVVAL } = process.env;
+    const lines = fs.readFileSync(ENVFILE, "utf8").split("\n");
+    let done = false;
+    const out = lines.map((line) => {
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (!m || m[1] !== ENVKEY) return line;
+      done = true;
+      // Already set by hand — leave it exactly as it is.
+      if (m[2].trim() !== "") return line;
+      return `${ENVKEY}=${ENVVAL}`;
+    });
+    if (!done) out.push(`${ENVKEY}=${ENVVAL}`);
+    fs.writeFileSync(ENVFILE, out.join("\n"));
+  '
+}
+
+# Read a value back out of an env file.
+get_env() { # get_env FILE KEY
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1
+}
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -489,7 +573,6 @@ fi
 
 # --- 5c. coordinator configuration ------------------------------------------
 say "Configuring the coordinator"
-COORD_ENV=/etc/agent-fleet-coordinator.env
 if [ -f "$COORD_ENV" ]; then
   ok "$COORD_ENV already exists — left untouched"
 else
@@ -512,8 +595,186 @@ for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
 done
 
 # --- done -------------------------------------------------------------------
+# --- 7. the wizard ----------------------------------------------------------
+# Everything above wrote files. This turns the checklist that used to be printed
+# at the end into questions, because most of that checklist was not decisions —
+# it was secrets to generate and services to start.
+#
+# Skipped entirely without a terminal, in which case the old next-steps text is
+# printed instead and nothing changes.
+
+FLEET_LOCAL=0
+if [ "$WIZARD" = yes ]; then
+  say "Setup"
+  printf '  Answers go into the /etc files. Anything you have already edited there is\n'
+  printf '  left alone, and you can re-run this at any time.\n\n'
+
+  # --- Telegram ------------------------------------------------------------
+  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ]; then
+    printf '  Telegram is the recommended way to drive this: outbound only, no port to\n'
+    printf '  open. Create a bot by messaging @BotFather and sending /newbot.\n'
+    ask TG_TOKEN "Telegram bot token (blank to skip Telegram)"
+    if [ -n "$TG_TOKEN" ]; then
+      set_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN "$TG_TOKEN"
+      ok "Telegram bot configured"
+      printf '\n  Every id you allow gets unsupervised shell access on this box. If you do\n'
+      printf '  not know yours, leave it blank — message the bot /whoami once it is up\n'
+      printf '  and it will tell you, even before you are on the list.\n'
+      ask TG_USERS "Telegram user ids allowed to run commands (comma separated)"
+      [ -n "$TG_USERS" ] && set_env "$ENV_FILE" AGENT_HUB_TELEGRAM_ALLOWED_USERS "$TG_USERS"
+    else
+      ok "skipping Telegram — the web UI and CLI still work"
+    fi
+    printf '\n'
+  fi
+
+  # --- fleet secrets -------------------------------------------------------
+  # Generated rather than asked. There is no decision here, and a blank token is
+  # how a coordinator ends up reachable with no credential at all.
+  if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)" ]; then
+    FLEET_HOST_TOKEN="$(gen_secret)"
+    set_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
+    set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
+    ok "generated a host token, shared by the coordinator and this host"
+  fi
+  if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
+    set_env "$COORD_ENV" AGENT_FLEET_API_TOKEN "$(gen_secret)"
+    ok "generated an API token for phones and Shortcuts"
+  fi
+
+  # --- is this box the coordinator too? ------------------------------------
+  if [ -z "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] \
+     || [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "stdio:local" ]; then
+    printf '\n  A fleet needs a coordinator somewhere. For one machine, this box can be\n'
+    printf '  both — the coordinator and a host.\n'
+    if confirm "Run the coordinator on this box?" Y; then
+      set_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL "http://127.0.0.1:8791"
+      "$NODE_BIN" -e '
+        const fs = require("fs");
+        const f = process.argv[1];
+        fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+          .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, "AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791")
+          .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+      ' "$SIDECAR_ENV"
+      FLEET_LOCAL=1
+      ok "this box will run the coordinator, and join its own fleet"
+    else
+      ask COORD_URL "Coordinator URL to join (e.g. https://coord.example.com)"
+      if [ -n "$COORD_URL" ]; then
+        "$NODE_BIN" -e '
+          const fs = require("fs");
+          const [f, url] = process.argv.slice(1);
+          fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+            .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, `AGENT_FLEET_COORDINATOR_URL=${url}`)
+            .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+        ' "$SIDECAR_ENV" "$COORD_URL"
+        warn "put that coordinator's AGENT_FLEET_HOST_TOKEN into $SIDECAR_ENV"
+      fi
+    fi
+  else
+    [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
+  fi
+
+  # --- sandbox -------------------------------------------------------------
+  if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" ]; then
+    printf '\n  Sandboxed sessions get real root inside a container whose filesystem is\n'
+    printf '  thrown away on every stop. The conversation and the workspace survive.\n'
+    if confirm "Sandbox sessions?" Y; then
+      set_env "$ENV_FILE" AGENT_HUB_SANDBOX 1
+      ok "sandboxing on"
+    fi
+  fi
+
+  # --- start it ------------------------------------------------------------
+  if [ "$HAVE_SYSTEMD" = 1 ]; then
+    printf '\n'
+    if confirm "Enable and start the services now?" Y; then
+      systemctl enable --now agent-hub >/dev/null 2>&1 && ok "agent-hub running" \
+        || warn "agent-hub failed to start — journalctl -u agent-hub -n 50"
+      if [ "$FLEET_LOCAL" = 1 ]; then
+        systemctl enable --now agent-fleet-coordinator >/dev/null 2>&1 && ok "coordinator running" \
+          || warn "coordinator failed to start — journalctl -u agent-fleet-coordinator -n 50"
+      fi
+      if [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ]; then
+        systemctl enable --now agent-fleet-sidecar >/dev/null 2>&1 && ok "sidecar running" \
+          || warn "sidecar failed to start — journalctl -u agent-fleet-sidecar -n 50"
+      fi
+      STARTED=1
+    fi
+  fi
+
+  # --- log claude in -------------------------------------------------------
+  # The one remaining step that genuinely needs a human, and the one the hub was
+  # built to make possible without SSH. Doing it here means a fresh box is
+  # finished when this script is.
+  if [ "${STARTED:-0}" = 1 ] && [ -n "$CLAUDE_BIN" ] \
+     && ! "$CLAUDE_BIN" auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+    printf '\n'
+    if confirm "Log this box into a Claude account now?" Y; then
+      sleep 2 # let the hub finish binding its port
+      if LOGIN_OUT="$("$DIR/bin/agent-hub" login 2>&1)"; then
+        printf '%s\n' "$LOGIN_OUT"
+        ask AUTH_CODE "Paste the code from that page (blank to do it later)"
+        if [ -n "$AUTH_CODE" ]; then
+          "$DIR/bin/agent-hub" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+        fi
+      else
+        warn "could not start the login: $LOGIN_OUT"
+      fi
+    fi
+  fi
+fi
+
+# --- done -------------------------------------------------------------------
 say "Installed."
-cat <<EOF
+
+# What is genuinely left, which is not the same as what the checklist used to
+# say. Telling someone to create a Telegram bot they just configured, or to
+# generate tokens that were generated for them, is worse than saying nothing.
+if [ "$WIZARD" = yes ]; then
+  if [ "${STARTED:-0}" = 1 ]; then
+    printf '\n'
+    "$DIR/bin/agent-hub" doctor 2>&1 | sed 's/^/  /' || true
+  fi
+
+  printf '\n'
+  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ] && printf '  Telegram : configured\n'
+  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_ALLOWED_USERS)" ] \
+    || printf '  Telegram : no allowlist yet — message the bot /whoami, then put the id in\n             AGENT_HUB_TELEGRAM_ALLOWED_USERS in %s\n' "$ENV_FILE"
+  [ "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" = "1" ] && printf '  Sandbox  : on\n'
+  [ "$FLEET_LOCAL" = 1 ] && printf '  Fleet    : coordinator and host, both on this box\n'
+
+  if [ "$HAVE_SYSTEMD" != 1 ]; then
+    printf '\n  systemd is not running here, so nothing was started. Run them directly:\n'
+    printf '      %s %s/bin/agent-hub serve\n' "$UNIT_NODE_BIN" "$DIR"
+    [ "$FLEET_LOCAL" = 1 ] && printf '      %s %s/bin/agent-fleet-coordinator\n' "$UNIT_NODE_BIN" "$DIR"
+    printf '      %s %s/bin/agent-fleet-sidecar\n' "$UNIT_NODE_BIN" "$DIR"
+  elif [ "${STARTED:-0}" != 1 ]; then
+    printf '\n  Start them when you are ready:\n'
+    printf '      systemctl enable --now agent-hub'
+    [ "$FLEET_LOCAL" = 1 ] && printf ' agent-fleet-coordinator'
+    printf ' agent-fleet-sidecar\n'
+  fi
+
+  if [ -n "$CLAUDE_BIN" ] && ! "$CLAUDE_BIN" auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+    printf '\n  claude is not logged in yet:\n'
+    printf '      agent-hub login          (then: agent-hub code <value>)\n'
+    printf '      or send /login to your bot\n'
+  fi
+
+  cat <<EOF
+
+  Drive it:
+      agent-hub list
+      journalctl -u agent-hub -f
+
+  Config: $ENV_FILE
+          $SIDECAR_ENV
+          $COORD_ENV
+
+EOF
+else
+  cat <<EOF
 
 Next:
 
@@ -533,24 +794,11 @@ Next:
 
   If claude is not logged in yet, send your bot /login and follow the link.
 
-To run the fleet as well (a coordinator plus this box as a host):
+  For the fleet: put a token in $COORD_ENV and $SIDECAR_ENV, then
+       systemctl enable --now agent-fleet-coordinator agent-fleet-sidecar
 
-  5. Start a coordinator — on this box for a single-machine test, or wherever
-     the fleet should meet:
-       agent-fleet-coordinator
-
-  6. Point the sidecar at it in $SIDECAR_ENV:
-       AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791
-       AGENT_FLEET_TRANSPORT=websocket
-     then:
-       agent-fleet-sidecar doctor
-       agent-fleet-sidecar
-
-  7. Drive it:
-       curl -s localhost:8791/api/list | node -e 'process.stdin.pipe(process.stdout)'
-
-To sandbox sessions (real root inside, discarded on every stop), set in $ENV_FILE:
-       AGENT_HUB_SANDBOX=1
-  and restart agent-hub. See docs/deployment.md.
+  Or re-run this installer with a terminal and it will ask instead — it
+  generates the tokens and starts the services for you.
 
 EOF
+fi

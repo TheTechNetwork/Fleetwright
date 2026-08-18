@@ -1,0 +1,35 @@
+[Unit]
+Description=agent-fleet coordinator — where the fleet meets
+Documentation=https://github.com/TheTechNetwork/agent-fleet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __USER__ / __DIR__ / __NODE__ are substituted by install.sh.
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=/etc/agent-fleet-coordinator.env
+ExecStart=__NODE__ __DIR__/bin/agent-fleet-coordinator
+
+Restart=always
+RestartSec=3
+
+# Unlike agent-hub, this one holds nothing that must survive a restart. Hosts
+# reconnect on their own with backoff, and their sessions are untouched by any
+# of it — the coordinator's registry is a cache, not the authority.
+KillMode=control-group
+TimeoutStopSec=10
+
+# It talks to hosts and to clients, and touches nothing on disk.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-fleet-coordinator
+
+[Install]
+WantedBy=multi-user.target
