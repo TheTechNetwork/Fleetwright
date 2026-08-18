@@ -1,4 +1,15 @@
-# The iOS app
+# Fleetwright — the iOS app
+
+**The app is called Fleetwright; the project is still agent-fleet.** "Agent
+Fleet" is taken on the App Store, where display names are unique across the
+whole store. The CLIs, the services and the repository keep their names — only
+the thing with a listing needed a new one.
+
+Coined on purpose, like shipwright: a made-up compound is far less likely to
+collide, which matters after losing time to one collision already. If you would
+rather it were something else, it is `name:` and
+`PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` plus the sources directory — a
+two-line change plus a rename, deliberately kept that small.
 
 SwiftUI, plus the App Intents that make Siri work — which §7 puts *above* the
 app itself: "Hey Siri, resume bigjob" from a cold radio in under a second is the
@@ -15,7 +26,7 @@ build on a Mac should be expected to turn up something.
 
 ```sh
 brew install xcodegen
-cd apps/ios && xcodegen generate && open AgentFleet.xcodeproj
+cd apps/ios && xcodegen generate && open Fleetwright.xcodeproj
 ```
 
 `project.yml` is the source of truth rather than a checked-in `.xcodeproj`. A

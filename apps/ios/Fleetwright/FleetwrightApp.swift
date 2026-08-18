@@ -2,7 +2,7 @@ import SwiftUI
 import UserNotifications
 
 @main
-struct AgentFleetApp: App {
+struct FleetwrightApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var settings = Settings()
 

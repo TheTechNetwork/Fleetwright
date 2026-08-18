@@ -64,7 +64,7 @@ before there is a Firebase project would mean nobody could build the app at all.
 
 To turn it on:
 
-1. Firebase console → add an Android app with the id `dev.agentfleet.app.debug`
+1. Firebase console → add an Android app with the id `network.thetech.fleetwright.debug`
    (note the `.debug` suffix the debug build applies), download
    `google-services.json` into `apps/android/app/`.
 2. `apps/android/build.gradle.kts` → add

@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-  namespace = "dev.agentfleet.app"
+  namespace = "network.thetech.fleetwright"
   compileSdk = 37
 
   defaultConfig {
-    applicationId = "dev.agentfleet.app"
+    applicationId = "network.thetech.fleetwright"
     // One version back, deliberately. This is a first build with no installed
     // base to keep working, and every API level supported below this is a
     // compatibility path somebody has to reason about forever. The cost is

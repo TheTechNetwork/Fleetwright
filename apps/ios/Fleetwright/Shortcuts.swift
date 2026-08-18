@@ -108,7 +108,7 @@ struct StopSessionIntent: AppIntent {
 }
 
 /// The phrases Siri learns without anybody opening the Shortcuts app.
-struct AgentFleetShortcuts: AppShortcutsProvider {
+struct FleetwrightShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: ResumeSessionIntent(),

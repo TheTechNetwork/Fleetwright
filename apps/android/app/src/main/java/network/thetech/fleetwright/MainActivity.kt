@@ -1,4 +1,4 @@
-package dev.agentfleet.app
+package network.thetech.fleetwright
 
 import android.Manifest
 import android.content.Intent
