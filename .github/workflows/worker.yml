@@ -1,11 +1,15 @@
 name: Worker
 
+# No path filter, deliberately. The Worker bundles code from src/fleet/ that the
+# sidecar and the Node coordinator also use, and the "must not import from node:"
+# check below is a property of the whole repository rather than of one
+# directory — a filtered workflow would let a change somewhere else break the
+# Worker and not find out until a deploy. The check is a dry-run bundle: seconds,
+# and no account needed.
 on:
   push:
     branches: [main]
-    paths: ['worker/**', 'src/fleet/**', '.github/workflows/worker.yml']
   pull_request:
-    paths: ['worker/**', 'src/fleet/**', '.github/workflows/worker.yml']
   workflow_dispatch:
 
 jobs:
@@ -26,7 +30,7 @@ jobs:
 
       # The rule that keeps one implementation instead of two. If this fails,
       # the Worker and the Node coordinator have started to diverge.
-      - name: The shared coordinator code must not import from node:
+      - name: "The shared coordinator code must not import from node:"
         run: |
           if grep -rn "from 'node:" src/fleet/coordinator src/fleet/protocol src/fleet/push.js; then
             echo "::error::src/fleet/{coordinator,protocol,push} must run in both Node and Workers."
