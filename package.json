@@ -1,7 +1,7 @@
 {
   "name": "agent-fleet",
   "version": "0.1.0",
-  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it — sandboxes, scheduling, and a phone that can reach any of it.",
+  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it \u2014 sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -10,7 +10,7 @@
     "agent-fleet-sidecar": "./bin/agent-fleet-sidecar"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "scripts": {
     "start": "node src/index.js",

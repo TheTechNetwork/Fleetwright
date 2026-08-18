@@ -1,8 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-
-  "//": [
+  "description": [
     "Two rules, and only two.",
     "",
     "GROUP WHAT ONLY WORKS TOGETHER. A bot bumped the Compose compiler alone",
@@ -18,12 +16,13 @@
     "majors back for review would be buying safety CI already provides, and",
     "paying for it in a permanent backlog of deferred upgrades."
   ],
-
+  "extends": [
+    "config:recommended"
+  ],
   "timezone": "America/Chicago",
   "prConcurrentLimit": 10,
   "prHourlyLimit": 4,
   "rebaseWhen": "behind-base-branch",
-
   "packageRules": [
     {
       "description": "Kotlin and the Compose compiler plugin are released together and only work together. Never separately, ever.",
@@ -48,41 +47,63 @@
     {
       "description": "AGP and Gradle have a supported-version matrix. A new AGP frequently requires a newer Gradle, so they arrive together or the build fails on the first one.",
       "groupName": "android build tooling",
-      "matchPackageNames": ["com.android.application", "com.android.library", "gradle"]
+      "matchPackageNames": [
+        "com.android.application",
+        "com.android.library",
+        "gradle"
+      ]
     },
     {
       "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder — including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
-      "matchDepNames": ["compileSdk", "targetSdk", "minSdk"],
+      "matchDepNames": [
+        "compileSdk",
+        "targetSdk",
+        "minSdk"
+      ],
       "enabled": false
     },
     {
       "description": "Actions are grouped and automerged on patch/minor: they are covered by every workflow run, so a break is visible immediately and revertible in one click.",
       "groupName": "github actions",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "automerge": true
     },
     {
       "description": "package.json's engines floor is a compatibility claim about what the code needs, not a statement about what CI runs. Renovate moves the runner; a person moves the claim.",
-      "matchDepTypes": ["engines"],
+      "matchDepTypes": [
+        "engines"
+      ],
       "enabled": false
     },
     {
       "description": "Dev-only type checking. Grouped because @types/node and typescript are only meaningful against each other.",
       "groupName": "typescript",
-      "matchPackageNames": ["typescript", "@types/node"]
+      "matchPackageNames": [
+        "typescript",
+        "@types/node"
+      ]
     },
     {
       "description": "wrangler is the deploy tool for the coordinator; a major version can change wrangler.toml's schema.",
-      "matchPackageNames": ["wrangler"],
-      "matchUpdateTypes": ["major"],
+      "matchPackageNames": [
+        "wrangler"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "dependencyDashboardApproval": true
     }
   ],
-
   "vulnerabilityAlerts": {
-    "description": "A security fix does not wait for Monday.",
-    "schedule": ["at any time"],
-    "prPriority": 10
+    "description": "A security fix does not wait for anything.",
+    "schedule": [
+      "at any time"
+    ]
   }
 }

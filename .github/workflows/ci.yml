@@ -8,11 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The FLOOR and the CURRENT release. package.json says >=24, and a floor
+        # nobody runs is not a claim, it is a hope — the previous one said 18 and
+        # had not been exercised in months. 26 is what developers are on, so both
+        # ends are covered.
+        node: ['24', '26']
+    name: test (node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: ${{ matrix.node }}
 
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
@@ -45,3 +54,36 @@ jobs:
             }
             process.exit(bad ? 1 : 0);
           '
+
+  # Its own job, on its own Node. Renovate declares engines ^24.11.0, and on 26
+  # npm warns EBADENGINE and the native re2 module does not load — at which
+  # point the validator says out loud that "regex validation may be inaccurate".
+  # A checker running outside its supported runtime is a checker whose answer
+  # you cannot lean on.
+  renovate-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # NO FILE ARGUMENT, deliberately. Given a path, the validator treats the
+      # file as SELF-HOSTED GLOBAL config, which is a different schema — it
+      # accepts options a repository config must reject. Proven with
+      # binarySource, which a repo config refuses ("a global option reserved
+      # only for Renovate's global configuration") and a global config merely
+      # deprecates. With no argument it finds renovate.json itself and checks it
+      # as what it actually is.
+      #
+      # --strict so a warning or a pending config migration fails too. The
+      # failure this whole job exists for was a config Renovate REJECTED rather
+      # than one that was wrong, and that never announces itself.
+      #
+      # @latest, and the version is printed: the hosted bot runs a recent
+      # Renovate, and `npx --package renovate` without a tag will reuse whatever
+      # happens to be in the npx cache.
+      - name: Renovate config is valid
+        run: |
+          npx --yes --package renovate@latest -- renovate-config-validator --version
+          npx --yes --package renovate@latest -- renovate-config-validator --strict
