@@ -11,8 +11,10 @@
 # and they are allowed to differ.
 
 [tools]
-# What CI runs. Anything from 18 up works at runtime — package.json's engines
-# floor is a claim about the code, not about the machine building it.
+# Current, not the floor. package.json declares >=24 and CI tests BOTH ends of
+# that — 24 because it is what the floor claims, 26 because it is what anyone
+# developing is actually on. Pinning the dev environment to the floor would mean
+# nobody exercises the newer runtime until it breaks in CI.
 node = "26"
 
 # For the Android app. AGP 9 and Gradle 9.7 both run on 25, which is verified —

@@ -8,11 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The FLOOR and the CURRENT release. package.json says >=24, and a floor
+        # nobody runs is not a claim, it is a hope — the previous one said 18 and
+        # had not been exercised in months. 26 is what developers are on, so both
+        # ends are covered.
+        node: ['24', '26']
+    name: test (node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: ${{ matrix.node }}
 
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
@@ -55,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
