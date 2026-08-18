@@ -17,7 +17,7 @@ node = "22"
 
 # For the Android app. Android Gradle Plugin 8.x wants a JDK of 17 or newer,
 # and 21 is the current LTS.
-java = "temurin-21"
+java = "temurin-21.0.12+8.0.LTS"
 
 [env]
 # The Android SDK is NOT managed here. mise can install it through an asdf
