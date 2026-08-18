@@ -128,11 +128,16 @@ private struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Coordinator") {
+                // header:/footer: closures rather than Section("title") { } —
+                // there is no initialiser taking a String title AND a footer,
+                // which the first real compile caught.
+                Section {
                     TextField("https://…workers.dev", text: Bindable(settings).coordinatorURL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                     SecureField("API token", text: Bindable(settings).apiToken)
+                } header: {
+                    Text("Coordinator")
                 } footer: {
                     Text("From /etc/agent-fleet-coordinator.env. Nothing is baked into the app — "
                          + "a credential in an IPA is public the moment somebody unzips it.")

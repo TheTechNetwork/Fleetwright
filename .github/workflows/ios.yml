@@ -1,0 +1,155 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  # THE IMPORTANT ONE. design.md §9 says the iOS app cannot be built in the
+  # environment it was written in — no macOS, no Xcode — so until now it has
+  # been reviewed code rather than verified code. This compiles it.
+  #
+  # No secrets and no signing: CODE_SIGNING_ALLOWED=NO builds for the simulator,
+  # which type-checks every line without needing a team, a certificate or a
+  # provisioning profile. Signing problems are a separate class of failure and
+  # should not be able to hide a syntax error.
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        working-directory: apps/ios
+        # project.yml is the source of truth; the .xcodeproj is generated and
+        # gitignored, because a hand-written pbxproj opens on exactly one machine.
+        run: xcodegen generate
+
+      - name: Build
+        working-directory: apps/ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project AgentFleet.xcodeproj \
+            -scheme AgentFleet \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify || xcodebuild build \
+              -project AgentFleet.xcodeproj \
+              -scheme AgentFleet \
+              -sdk iphonesimulator \
+              -destination 'generic/platform=iOS Simulator' \
+              -configuration Debug \
+              CODE_SIGNING_ALLOWED=NO
+
+  # TestFlight. Runs on a published release, and skips itself rather than
+  # failing when the App Store Connect credentials are not set up yet.
+  testflight:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: macos-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check there are credentials to upload with
+        id: creds
+        env:
+          KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::warning::APPSTORE_PRIVATE_KEY is not set — skipping TestFlight. See docs/ci.md."
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install XcodeGen
+        if: steps.creds.outputs.have == 'true'
+        run: brew install xcodegen
+
+      - name: Install the App Store Connect API key
+        if: steps.creds.outputs.have == 'true'
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        # An API key rather than certificates in the repo: it is one secret,
+        # it is revocable from the web, and it lets xcodebuild create the
+        # signing assets itself with -allowProvisioningUpdates. Fastlane match
+        # solves the same problem by giving you a second repository of secrets
+        # to look after.
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s' "$APPSTORE_PRIVATE_KEY" > ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
+
+      - name: Generate the Xcode project
+        if: steps.creds.outputs.have == 'true'
+        working-directory: apps/ios
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodegen generate
+          # The team cannot live in project.yml — it is account-specific, and
+          # anybody generating the project locally has their own.
+          /usr/libexec/PlistBuddy -c "Print" AgentFleet.xcodeproj/project.pbxproj >/dev/null 2>&1 || true
+
+      - name: Archive
+        if: steps.creds.outputs.have == 'true'
+        working-directory: apps/ios
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project AgentFleet.xcodeproj \
+            -scheme AgentFleet \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/AgentFleet.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic
+
+      - name: Upload to TestFlight
+        if: steps.creds.outputs.have == 'true'
+        working-directory: apps/ios
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/AgentFleet.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"

@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '26'
 
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
@@ -23,3 +23,25 @@ jobs:
       # The installer is the thing a new operator runs first, so a syntax error
       # in it is a worse bug than one in the service.
       - run: bash -n install/install.sh
+
+      # An unparseable workflow does not fail a check — it shows up as a run
+      # named after the FILE PATH, with no jobs, which is easy to miss entirely.
+      # This one cost a round trip to notice, so it is a check now.
+      - name: Workflows parse
+        run: |
+          npm i --no-save --no-audit --no-fund js-yaml
+          node -e '
+            const yaml = require("js-yaml"), fs = require("fs");
+            let bad = 0;
+            for (const f of fs.readdirSync(".github/workflows")) {
+              try {
+                const doc = yaml.load(fs.readFileSync(".github/workflows/" + f, "utf8"));
+                if (!doc.jobs || !Object.keys(doc.jobs).length) throw new Error("no jobs");
+                console.log("ok   " + f);
+              } catch (e) {
+                bad++;
+                console.log("::error file=.github/workflows/" + f + "::" + e.message.split("\n")[0]);
+              }
+            }
+            process.exit(bad ? 1 : 0);
+          '

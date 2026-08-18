@@ -1,0 +1,76 @@
+name: Worker
+
+# No path filter, deliberately. The Worker bundles code from src/fleet/ that the
+# sidecar and the Node coordinator also use, and the "must not import from node:"
+# check below is a property of the whole repository rather than of one
+# directory — a filtered workflow would let a change somewhere else break the
+# Worker and not find out until a deploy. The check is a dry-run bundle: seconds,
+# and no account needed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Runs on every PR and needs no secrets. --dry-run does the whole bundle and
+  # the Durable Object migration check without touching the account, which is
+  # what catches the mistake that actually happens: something under src/fleet/
+  # quietly starting to import from `node:` and no longer being portable.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      # The dry-run IS the portability test, so there is no separate lint for
+      # it. wrangler resolves every import the Worker actually pulls in: if
+      # something in the shared coordinator code starts importing from `node:`
+      # and the compatibility flags do not allow it, the bundle fails right
+      # here, with the offending import named.
+      #
+      # A grep was tried first and was worse in both directions. It failed on
+      # src/fleet/coordinator/server.js, which is the NODE-ONLY transport
+      # wrapper and is supposed to import node:http — while the file that
+      # actually matters, core.js, is imported by both and was already clean.
+      # The bundler knows which files are reachable; a grep is guessing.
+      - name: Bundle the Worker without deploying it
+        working-directory: worker
+        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/worker-build
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+
+      # A step's own `env:` is not visible to that step's `if:` — the guard has
+      # to be a separate step that writes an output. Doing it the other way is
+      # what made this workflow unparseable on its first run.
+      - name: Check the account is configured
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set, so the Worker was built but not deployed. See docs/ci.md."
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Skipped rather than failed when the account is not configured yet, so a
+      # fork or a fresh clone does not show a permanently red main.
+      - name: Deploy
+        if: steps.creds.outputs.have == 'true'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 deploy

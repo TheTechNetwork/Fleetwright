@@ -4,6 +4,28 @@ A one-screen client for the fleet: what is running, and start / stop / resume.
 Every action is an intent to the coordinator, so the app never talks to a host
 and never has to know which box holds which session.
 
+## Versions
+
+Latest of everything, and every one of them was built before it was written
+down: JDK 25, Gradle 9.7, AGP 9.3.1, Kotlin 2.2, compileSdk and targetSdk 37,
+compose-bom 2026.08.
+
+**`minSdk` is 36 — one version back, and that is a real decision.** It excludes
+most phones in the field today. It is the right trade here because there is no
+installed base to keep working and every level supported below it is a
+compatibility path somebody reasons about forever, but it is not a default to
+inherit without thinking.
+
+Two notes on the toolchain, both of which cost a build to discover:
+
+- **AGP 9 has built-in Kotlin support.** Applying `org.jetbrains.kotlin.android`
+  alongside it fails with *"Cannot add extension with name 'kotlin'"*. Only the
+  Compose plugin is applied separately, because it is a compiler plugin rather
+  than language support.
+- **`android.kotlinOptions` is gone.** `jvmTarget` lives in a top-level
+  `kotlin { compilerOptions { } }` block now, and has to agree with
+  `compileOptions` or the two toolchains disagree about what they are emitting.
+
 ## Build
 
 ```sh
