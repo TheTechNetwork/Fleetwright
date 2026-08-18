@@ -477,6 +477,20 @@ sed -e "s|__USER__|$RUN_USER|g" \
 chmod 0644 "$UNIT"
 ok "$UNIT"
 
+# Reading the service journal needs group membership: systemd-journald shows a
+# plain user only their own logs. Without this /logs returns "no entries" for a
+# service that is logging perfectly well — a silence that reads as a broken
+# service rather than a permissions one.
+if [ "$RUN_USER" != root ] && command -v usermod >/dev/null; then
+  if id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal; then
+    ok "$RUN_USER can already read the service journal"
+  elif getent group systemd-journal >/dev/null && usermod -aG systemd-journal "$RUN_USER" 2>/dev/null; then
+    ok "added $RUN_USER to systemd-journal, so /logs can read the journal"
+  else
+    warn "could not add $RUN_USER to systemd-journal — /logs will see no entries"
+  fi
+fi
+
 # The tmux server must outlive the login session that spawned it, or every
 # session dies when the operator logs out.
 if command -v loginctl >/dev/null; then

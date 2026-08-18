@@ -208,6 +208,10 @@ export function loadConfig(env = process.env) {
       apiBase: str('AGENT_HUB_TELEGRAM_API', 'https://api.telegram.org'),
     },
 
+    // Overridable so a test can point them at a stub rather than the real ones.
+    journalctlBin: str('AGENT_HUB_JOURNALCTL_BIN', 'journalctl'),
+    systemctlBin: str('AGENT_HUB_SYSTEMCTL_BIN', 'systemctl'),
+
     logLevel: str('AGENT_HUB_LOG_LEVEL', 'info'),
     hostname: os.hostname(),
   };

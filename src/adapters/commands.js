@@ -35,6 +35,7 @@
 
 import { describe } from '../core/login.js';
 import { runUpdate, updateStatus, canSelfRestart } from '../core/update.js';
+import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -353,6 +354,33 @@ export const COMMANDS = {
     },
   },
 
+  logs: {
+    aliases: ['log', 'journal'],
+    usage: '/logs [hub|coordinator|sidecar] [lines]',
+    short: 'Recent service logs',
+    help: 'The last lines of a service log. Defaults to the session manager, 40 lines.',
+    run: (ctx, args) => {
+      // Either order, because nobody remembers which comes first.
+      const words = args.filter(Boolean);
+      const lines = words.map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null;
+      const source = words.find((w) => resolveSource(w)) ?? null;
+
+      const unknown = words.find((w) => !resolveSource(w) && !Number.isFinite(Number(w)));
+      if (unknown) {
+        return {
+          ok: false,
+          text: `"${unknown}" is not a service I can read. Try: ${Object.keys(LOG_SOURCES).join(', ')}.`,
+          buttons: logButtons(ctx),
+        };
+      }
+
+      const r = readLogs(ctx.cfg, { source, lines });
+      // The other services are one tap away, since "why did that fail" is
+      // rarely answered by exactly one of them.
+      return { ok: r.ok, text: r.text, buttons: logButtons(ctx, r.source) };
+    },
+  },
+
   update: {
     aliases: ['upgrade', 'pull'],
     usage: '/update [--restart]',
@@ -385,6 +413,21 @@ export const COMMANDS = {
     run: (ctx) => ({ ok: true, text: `You are: ${ctx.actor}` }),
   },
 };
+
+/**
+ * One button per service this box actually has, minus the one being shown.
+ * Offering a unit that is not installed is offering a button that answers
+ * "no log entries" — which looks like a broken service rather than an absent
+ * one.
+ * @param {Ctx} ctx
+ * @param {string} [current]
+ * @returns {Button[]}
+ */
+function logButtons(ctx, current) {
+  return Object.entries(LOG_SOURCES)
+    .filter(([key, { unit }]) => key !== current && unitInstalled(ctx.cfg, unit))
+    .map(([key, { what }]) => ({ label: `Logs: ${what}`, command: `/logs ${key}` }));
+}
 
 /** name or alias → canonical command name */
 const LOOKUP = (() => {
