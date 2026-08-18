@@ -27,19 +27,6 @@ jobs:
       # An unparseable workflow does not fail a check — it shows up as a run
       # named after the FILE PATH, with no jobs, which is easy to miss entirely.
       # This one cost a round trip to notice, so it is a check now.
-      # Renovate rejects a config with an invalid option, and the way you find
-      # out is that your rules silently do not apply — no grouping, no limits,
-      # just the defaults doing whatever they were going to do. An invalid `//`
-      # key sat on main doing exactly that.
-      - name: Renovate config is valid
-        # @latest on purpose, and printed. The hosted bot runs a recent
-        # Renovate, so validating against anything older proves the config was
-        # valid for a version nobody is using — and `npx --package renovate`
-        # without a tag will happily reuse whatever is in the npx cache.
-        run: |
-          npx --yes --package renovate@latest -- renovate-config-validator --version
-          npx --yes --package renovate@latest -- renovate-config-validator renovate.json
-
       - name: Workflows parse
         run: |
           npm i --no-save --no-audit --no-fund js-yaml
@@ -58,3 +45,36 @@ jobs:
             }
             process.exit(bad ? 1 : 0);
           '
+
+  # Its own job, on its own Node. Renovate declares engines ^24.11.0, and on 26
+  # npm warns EBADENGINE and the native re2 module does not load — at which
+  # point the validator says out loud that "regex validation may be inaccurate".
+  # A checker running outside its supported runtime is a checker whose answer
+  # you cannot lean on.
+  renovate-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # NO FILE ARGUMENT, deliberately. Given a path, the validator treats the
+      # file as SELF-HOSTED GLOBAL config, which is a different schema — it
+      # accepts options a repository config must reject. Proven with
+      # binarySource, which a repo config refuses ("a global option reserved
+      # only for Renovate's global configuration") and a global config merely
+      # deprecates. With no argument it finds renovate.json itself and checks it
+      # as what it actually is.
+      #
+      # --strict so a warning or a pending config migration fails too. The
+      # failure this whole job exists for was a config Renovate REJECTED rather
+      # than one that was wrong, and that never announces itself.
+      #
+      # @latest, and the version is printed: the hosted bot runs a recent
+      # Renovate, and `npx --package renovate` without a tag will reuse whatever
+      # happens to be in the npx cache.
+      - name: Renovate config is valid
+        run: |
+          npx --yes --package renovate@latest -- renovate-config-validator --version
+          npx --yes --package renovate@latest -- renovate-config-validator --strict
