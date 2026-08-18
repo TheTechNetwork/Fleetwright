@@ -20,6 +20,11 @@ node = "26"
 java = "temurin-25"
 
 [env]
+# JDK 25 warns that Gradle's native-platform library calls a restricted method,
+# and says it will be BLOCKED in a future release. The daemon gets this from
+# gradle.properties; the launcher process that forks it needs it here.
+GRADLE_OPTS = "--enable-native-access=ALL-UNNAMED"
+
 # The Android SDK is NOT managed here. mise can install it through an asdf
 # plugin, but the licence acceptance and the package set are the sort of thing
 # that should be visible in a script rather than implied by a version string —

@@ -10,6 +10,13 @@ on:
   release:
     types: [published]
 
+# The Gradle LAUNCHER jvm needs this, not just the daemon — it loads Gradle's
+# native-platform library before forking, and JDK 25 warns that
+# "restricted methods will be blocked in a future release". org.gradle.jvmargs
+# in gradle.properties covers the daemon; this covers the process that starts it.
+env:
+  GRADLE_OPTS: --enable-native-access=ALL-UNNAMED
+
 jobs:
   # Every PR, no secrets. The APK is uploaded as an artifact, so a review can
   # end with installing the thing rather than reading about it.
