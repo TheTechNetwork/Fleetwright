@@ -4,7 +4,7 @@ The container a sandboxed session runs in. design.md §2: give a session full
 root, and delete everything it did afterwards.
 
 ```sh
-podman build -t agent-session:latest -f sandbox/Containerfile sandbox/
+podman build -t localhost/agent-session:latest -f sandbox/Containerfile sandbox/
 ```
 
 `install/install.sh` does this for you when podman is present.

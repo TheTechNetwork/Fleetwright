@@ -96,7 +96,13 @@ export function loadConfig(env = process.env) {
     // conversation and workspace live in named volumes that survive.
     sandbox: bool('AGENT_HUB_SANDBOX', false),
     podmanBin: str('AGENT_HUB_PODMAN_BIN', 'podman'),
-    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'agent-session:latest'),
+    // Fully qualified with the `localhost/` prefix on purpose. `podman build -t
+    // agent-session:latest` stores it as localhost/agent-session:latest, and a
+    // BARE name at run time goes through short-name resolution — which fails
+    // outright on a stock Debian 13, where no unqualified-search-registries are
+    // configured. Naming it in full skips that lookup entirely. A remote image
+    // must likewise be given in full (registry/name:tag).
+    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'localhost/agent-session:latest'),
     // Resource limits become podman flags — one mechanism rather than a
     // separate cgroup layer. Empty disables the flag entirely.
     sandboxMemory: str('AGENT_HUB_SANDBOX_MEMORY', '8g'),

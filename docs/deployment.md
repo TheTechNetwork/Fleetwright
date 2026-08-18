@@ -63,7 +63,7 @@ One script does everything:
 - **copies the hub URL and token into the sidecar's config**, so there is no
   secret to hand-copy between files — the step people get wrong
 - installs the systemd unit and registers the Claude Code **SessionStart hook**
-- builds the sandbox image (`agent-session:latest`) if podman is present
+- builds the sandbox image (`localhost/agent-session:latest`) if podman is present
 - links `agent-hub`, `agent-fleet-sidecar` and `agent-fleet-coordinator`
 
 It is idempotent — re-run it after `git pull` and it will never overwrite a
