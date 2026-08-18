@@ -9,6 +9,7 @@ import { SessionManager } from './core/sessions.js';
 import { LoginFlow } from './core/login.js';
 import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
+import { HookSocketServer } from './core/hook-socket.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -34,7 +35,20 @@ export async function main() {
   ensureWorkdirTrusted(cfg);
 
   const registry = new Registry(cfg);
-  const sessions = new SessionManager(cfg, registry);
+
+  // Sandboxed sessions report their conversation uuid over a per-session unix
+  // socket rather than the shared loopback endpoint, because the socket they
+  // can reach is what proves which session they are. Serving them here means a
+  // sandboxed box is resumable on its own, with no fleet sidecar required.
+  const hooks =
+    cfg.sandbox && cfg.sandboxHookSocket
+      ? new HookSocketServer({
+          dir: cfg.sandboxHookSocketDir,
+          onSessionStart: (r) => sessions.recordUuid(r),
+          logger: log,
+        })
+      : null;
+  const sessions = new SessionManager(cfg, registry, hooks);
   const login = new LoginFlow(cfg);
 
   log.info(`agent-hub starting on ${cfg.hostname} · workdir ${cfg.workdir} · cap ${cfg.maxSessions}`);

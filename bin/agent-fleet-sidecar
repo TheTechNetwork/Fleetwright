@@ -10,7 +10,7 @@
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
-import { HookSocketServer } from '../src/fleet/host/hook-socket.js';
+import { HookSocketServer } from '../src/core/hook-socket.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
 import { log, setLogLevel, setLogStream } from '../src/log.js';

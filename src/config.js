@@ -112,6 +112,12 @@ export function loadConfig(env = process.env) {
     // configured. Naming it in full skips that lookup entirely. A remote image
     // must likewise be given in full (registry/name:tag).
     sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'localhost/agent-session:latest'),
+    // Build the image on demand if it is missing, rather than refusing to start
+    // a session over something we know how to fix. The first session on a fresh
+    // box pays a few minutes for it; every one after that is instant.
+    sandboxAutoBuild: bool('AGENT_HUB_SANDBOX_AUTO_BUILD', true),
+    // The Containerfile to build from, next to the checkout by default.
+    sandboxContainerfile: str('AGENT_HUB_SANDBOX_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'Containerfile')),
     // Resource limits become podman flags — one mechanism rather than a
     // separate cgroup layer. Empty disables the flag entirely.
     sandboxMemory: str('AGENT_HUB_SANDBOX_MEMORY', '8g'),

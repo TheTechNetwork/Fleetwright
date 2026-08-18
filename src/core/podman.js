@@ -17,7 +17,14 @@
 // reason tmux.js is: a session name must never be able to become a command.
 
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { log } from '../log.js';
+
+// A first build pulls a base image, apt-installs a toolchain and npm-installs
+// the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
+// slow network into a mystery.
+const BUILD_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * @param {import('../config.js').Config} cfg
@@ -64,6 +71,66 @@ export function sandboxImageExists(cfg) {
   return podman(cfg, ['image', 'exists', cfg.sandboxImage]).status === 0;
 }
 
+/**
+ * Get the sandbox image, building or pulling it if it is not there.
+ *
+ * Refusing to start a session over a missing image is refusing over something
+ * we know exactly how to fix. The first session on a fresh box waits a few
+ * minutes; every one after it is instant. AGENT_HUB_SANDBOX_AUTO_BUILD=0 turns
+ * this off for a deployment that manages its images elsewhere.
+ *
+ * A `localhost/` image is ours and gets built from the Containerfile. Anything
+ * else names a registry, so it gets pulled — building our Containerfile and
+ * tagging it with somebody else's name would be a lie.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ ok: boolean, built?: boolean, message?: string }}
+ */
+export function ensureSandboxImage(cfg) {
+  if (sandboxImageExists(cfg)) return { ok: true, built: false };
+
+  const manual =
+    `Build it with:\n  podman build -t ${cfg.sandboxImage} -f ${cfg.sandboxContainerfile} ` +
+    `${path.dirname(cfg.sandboxContainerfile)}\n(or re-run install/install.sh)`;
+
+  if (!cfg.sandboxAutoBuild) {
+    return { ok: false, message: `the sandbox image ${cfg.sandboxImage} is not built, and auto-build is off.\n${manual}` };
+  }
+
+  const isLocal = cfg.sandboxImage.startsWith('localhost/');
+  if (!isLocal) {
+    log.info(`sandbox: pulling ${cfg.sandboxImage}`);
+    const pulled = podman(cfg, ['pull', cfg.sandboxImage]);
+    if (pulled.status === 0) return { ok: true, built: true };
+    return { ok: false, message: `could not pull ${cfg.sandboxImage}: ${pulled.stderr.trim().slice(0, 300)}` };
+  }
+
+  if (!existsSync(cfg.sandboxContainerfile)) {
+    return {
+      ok: false,
+      message: `the sandbox image ${cfg.sandboxImage} is not built and ${cfg.sandboxContainerfile} does not exist.\n${manual}`,
+    };
+  }
+
+  // This blocks the session that asked for it, which is the point — it is the
+  // difference between waiting once and being told to go and do it yourself.
+  log.warn(`sandbox: ${cfg.sandboxImage} is not built — building it now, this takes a few minutes`);
+  const context = path.dirname(cfg.sandboxContainerfile);
+  const built = spawnSync(
+    cfg.podmanBin,
+    ['build', '-t', cfg.sandboxImage, '-f', cfg.sandboxContainerfile, context],
+    { encoding: 'utf8', timeout: BUILD_TIMEOUT_MS },
+  );
+  if (built.status === 0) {
+    log.info(`sandbox: built ${cfg.sandboxImage}`);
+    return { ok: true, built: true };
+  }
+  // The last few lines of a build log are the ones that say what failed; the
+  // rest is layers succeeding.
+  const tail = String(built.stderr || built.stdout || '').trim().split('\n').slice(-6).join('\n');
+  return { ok: false, message: `could not build ${cfg.sandboxImage}:\n${tail}\n\n${manual}` };
+}
+
 /** @param {import('../config.js').Config} cfg @param {string} volume */
 function volumeExists(cfg, volume) {
   return podman(cfg, ['volume', 'exists', volume]).status === 0;
@@ -88,15 +155,8 @@ export function ensureSandboxVolumes(cfg, name) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
-  if (!sandboxImageExists(cfg)) {
-    return {
-      ok: false,
-      message:
-        `the sandbox image ${cfg.sandboxImage} is not built. Build it with:\n` +
-        '  podman build -t localhost/agent-session:latest -f sandbox/Containerfile sandbox/\n' +
-        '(or re-run install/install.sh, which builds it)',
-    };
-  }
+  const image = ensureSandboxImage(cfg);
+  if (!image.ok) return { ok: false, message: image.message };
 
   const { claude, work } = sandboxNames(name);
 

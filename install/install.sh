@@ -570,17 +570,48 @@ chown "$RUN_USER" "${CLAUDE_HOME:-$HOME}/.claude/settings.json" 2>/dev/null || t
 # --- 5b. the sandbox image --------------------------------------------------
 # Built here rather than left as a documented step, because a sandbox that is
 # switched on with no image is a session that dies the instant it starts.
+#
+# AS THE SERVICE USER, not as root. Rootless podman gives every user their own
+# image store — root's images are invisible to anyone else — so an image built
+# here by sudo is one the service can never see. It fails later, at the first
+# sandboxed session, with "the sandbox image is not built" pointing at an image
+# that very obviously IS built if you go and look as root.
 if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
+  say "Preparing rootless podman for $RUN_USER"
+
+  # Rootless containers need a subordinate uid/gid range and the setuid helpers
+  # that map it. Debian's useradd normally allocates the range, but a user made
+  # some other way (adduser --system, cloud-init, an old account) may have none,
+  # and podman then fails with a message about newuidmap that explains nothing.
+  if [ "$RUN_USER" != root ]; then
+    command -v newuidmap >/dev/null || pkg_install uidmap || true
+    command -v newuidmap >/dev/null && ok "uidmap helpers present" \
+      || warn "newuidmap is missing ($(pkg_why)) — rootless podman will not work"
+
+    if grep -q "^$RUN_USER:" /etc/subuid 2>/dev/null && grep -q "^$RUN_USER:" /etc/subgid 2>/dev/null; then
+      ok "subuid/subgid range allocated for $RUN_USER"
+    elif command -v usermod >/dev/null \
+         && usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$RUN_USER" 2>/dev/null; then
+      ok "allocated a subuid/subgid range for $RUN_USER"
+    else
+      warn "no subuid/subgid range for $RUN_USER — rootless podman will not work."
+      warn "  Add one:  usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $RUN_USER"
+    fi
+  fi
+
   say "Building the sandbox image"
   # Tagged with the localhost/ prefix, and referenced that way everywhere else.
   # A bare name goes through short-name resolution at run time, which fails on a
   # stock Debian 13 with no unqualified-search-registries configured.
-  if podman image exists localhost/agent-session:latest && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
-    ok "localhost/agent-session:latest already built — AGENT_FLEET_REBUILD_IMAGE=1 to rebuild"
-  elif podman build -t localhost/agent-session:latest -f "$DIR/sandbox/Containerfile" "$DIR/sandbox" >/tmp/agent-session-build.log 2>&1; then
-    ok "localhost/agent-session:latest"
+  if as_user 'podman image exists localhost/agent-session:latest' 2>/dev/null \
+     && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
+    ok "localhost/agent-session:latest already built for $RUN_USER"
+  elif as_user "podman build -t localhost/agent-session:latest -f '$DIR/sandbox/Containerfile' '$DIR/sandbox'" \
+       >/tmp/agent-session-build.log 2>&1; then
+    ok "localhost/agent-session:latest (in $RUN_USER's image store)"
   else
-    warn "image build failed — see /tmp/agent-session-build.log. The sandbox stays off until it succeeds."
+    warn "image build failed — see /tmp/agent-session-build.log."
+    warn "  Sandboxed sessions will not start until it succeeds; everything else works."
   fi
 fi
 
@@ -592,6 +623,18 @@ else
   install -m 0600 "$DIR/install/agent-fleet-coordinator.env.example" "$COORD_ENV"
   ok "wrote $COORD_ENV from the template"
 fi
+
+# The three env files hold tokens, so they stay 0600 — but they are read by the
+# CLI as well as by systemd, and the CLI runs as the service user. Root-owned
+# 0600 means `agent-hub doctor` silently sees no config at all and reports
+# things like "a control surface is configured — web only" on a box with
+# Telegram plainly working.
+for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
+  [ -f "$f" ] || continue
+  chown "$RUN_USER" "$f" 2>/dev/null || true
+  chmod 0600 "$f"
+done
+ok "config readable by $RUN_USER"
 
 # --- 6. CLIs on PATH --------------------------------------------------------
 say "Linking the CLIs"
@@ -701,16 +744,21 @@ if [ "$WIZARD" = yes ]; then
   if [ "$HAVE_SYSTEMD" = 1 ]; then
     printf '\n'
     if confirm "Enable and start the services now?" Y; then
-      systemctl enable --now agent-hub >/dev/null 2>&1 && ok "agent-hub running" \
-        || warn "agent-hub failed to start — journalctl -u agent-hub -n 50"
-      if [ "$FLEET_LOCAL" = 1 ]; then
-        systemctl enable --now agent-fleet-coordinator >/dev/null 2>&1 && ok "coordinator running" \
-          || warn "coordinator failed to start — journalctl -u agent-fleet-coordinator -n 50"
-      fi
-      if [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ]; then
-        systemctl enable --now agent-fleet-sidecar >/dev/null 2>&1 && ok "sidecar running" \
-          || warn "sidecar failed to start — journalctl -u agent-fleet-sidecar -n 50"
-      fi
+      # Print the reason rather than where to look for it. "failed to start,
+      # go read the journal" is a round trip for information we already have.
+      start_service() {
+        if systemctl enable --now "$1" >/dev/null 2>&1; then
+          ok "$1 running"
+          return 0
+        fi
+        warn "$1 failed to start:"
+        journalctl -u "$1" -n 12 --no-pager 2>/dev/null | sed 's/^/       /' \
+          || warn "       journalctl -u $1 -n 50"
+        return 1
+      }
+      start_service agent-hub || true
+      [ "$FLEET_LOCAL" = 1 ] && { start_service agent-fleet-coordinator || true; }
+      [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] && { start_service agent-fleet-sidecar || true; }
       STARTED=1
     fi
   fi
@@ -771,7 +819,9 @@ if [ "$WIZARD" = yes ]; then
     printf ' agent-fleet-sidecar\n'
   fi
 
-  if [ -n "$CLAUDE_BIN" ] && ! "$CLAUDE_BIN" auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+  # As the service user: root's ~/.claude is not where the credentials live, so
+  # asking as root reports "not logged in" on a box that plainly is.
+  if [ -n "$CLAUDE_BIN" ] && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     printf '\n  claude is not logged in yet:\n'
     printf '      agent-hub login          (then: agent-hub code <value>)\n'
     printf '      or send /login to your bot\n'
