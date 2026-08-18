@@ -288,9 +288,9 @@ no multi-step handshakes on the hot path.
 
 ## 8. Open decisions
 
-1. **Session setup — settled, not open.** Repo is `TheTechNetwork/agent-fleet`. A session can hold
+1. **Session setup — settled, not open.** Repo is `TheTechNetwork/Fleetwright`. A session can hold
    repos from multiple orgs; the only restriction is *adding* an org mid-session that wasn't a
-   source at start. Open the new session with **both `TheTechNetwork/agent-fleet` and
+   source at start. Open the new session with **both `TheTechNetwork/Fleetwright` and
    `ambersecurityinc/agent-hub` as initial sources.** Having agent-hub attached matters — the fleet
    adapter is a patch against its existing seam, not code written blind.
 2. **Workspace lifetime.** Volume that survives stop (recommended — a multi-day migration keeps

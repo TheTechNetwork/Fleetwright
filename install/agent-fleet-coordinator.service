@@ -1,6 +1,6 @@
 [Unit]
 Description=agent-fleet coordinator — where the fleet meets
-Documentation=https://github.com/TheTechNetwork/agent-fleet
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 After=network-online.target
 Wants=network-online.target
 

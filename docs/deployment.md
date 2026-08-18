@@ -34,7 +34,7 @@ works and sessions run directly on the box.
 ## 1. Install the session manager
 
 ```sh
-git clone https://github.com/TheTechNetwork/agent-fleet /opt/agent-fleet
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet   # the repo is Fleetwright; the install path is not
 sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```

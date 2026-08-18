@@ -1,6 +1,6 @@
 [Unit]
 Description=agent-fleet sidecar — this box, as a fleet host
-Documentation=https://github.com/TheTechNetwork/agent-fleet
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 After=network-online.target agent-hub.service
 Wants=network-online.target
 # Not Requires=: the sidecar deliberately stays up when agent-hub is down, and

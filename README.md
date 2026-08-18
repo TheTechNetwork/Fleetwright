@@ -4,6 +4,15 @@ A self-hosted Claude Code session manager, and the multi-host control plane
 around it: ephemeral root-capable sandboxes, session wake, and a phone that can
 reach any of it from a cold radio.
 
+> **On the two names.** The repository and the phone app are called
+> **Fleetwright**; the software inside it is `agent-fleet` — the package, the
+> binaries (`agent-fleet-sidecar`, `agent-fleet-coordinator`), the systemd
+> units, the `AGENT_FLEET_*` environment variables and `/opt/agent-fleet`.
+> That is deliberate, not drift. Those names are load-bearing on machines that
+> are already running: renaming them would mean reinstalling every host and
+> re-entering every secret. The App Store needed a unique name, so it got one.
+> See [docs/naming.md](docs/naming.md).
+
 One project, two processes:
 
 ```

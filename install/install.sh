@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent-fleet installer — the whole thing, in one script.
 #
-#   git clone https://github.com/TheTechNetwork/agent-fleet /opt/agent-fleet
+#   git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 #   sudo /opt/agent-fleet/install/install.sh
 #
 # Sets up both halves: the session manager (systemd service, SessionStart hook,
