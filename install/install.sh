@@ -712,20 +712,6 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
   fi
 
-  # --- fleet secrets -------------------------------------------------------
-  # Generated rather than asked. There is no decision here, and a blank token is
-  # how a coordinator ends up reachable with no credential at all.
-  if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)" ]; then
-    FLEET_HOST_TOKEN="$(gen_secret)"
-    set_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
-    set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
-    ok "generated a host token, shared by the coordinator and this host"
-  fi
-  if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
-    set_env "$COORD_ENV" AGENT_FLEET_API_TOKEN "$(gen_secret)"
-    ok "generated an API token for phones and Shortcuts"
-  fi
-
   # --- is this box the coordinator too? ------------------------------------
   if [ -z "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] \
      || [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "stdio:local" ]; then
@@ -752,11 +738,63 @@ if [ "$WIZARD" = yes ]; then
             .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, `AGENT_FLEET_COORDINATOR_URL=${url}`)
             .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
         ' "$SIDECAR_ENV" "$COORD_URL"
-        warn "put that coordinator's AGENT_FLEET_HOST_TOKEN into $SIDECAR_ENV"
+        ok "this host will join $COORD_URL"
       fi
     fi
   else
     [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
+  fi
+
+  # --- fleet secrets -------------------------------------------------------
+  # AFTER the coordinator question, because the answer changes what these are.
+  #
+  # On the box that runs the coordinator they are generated: there is no
+  # decision in them, and a blank one is how a coordinator ends up reachable
+  # with no credential at all.
+  #
+  # On a box JOINING someone else's coordinator the host token is not a secret
+  # to invent — it has to MATCH what that coordinator was given, and a generated
+  # one produces a sidecar that connects, is rejected, and retries forever. So
+  # it is asked for. Generating it here and warning the operator to go and fix
+  # the file afterwards was the old behaviour, and it is exactly the class of
+  # thing this installer is supposed to remove.
+  if [ "$FLEET_LOCAL" = 1 ]; then
+    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)" ]; then
+      FLEET_HOST_TOKEN="$(gen_secret)"
+      set_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
+      set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
+      ok "generated a host token, shared by the coordinator and this host"
+    fi
+    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
+      set_env "$COORD_ENV" AGENT_FLEET_API_TOKEN "$(gen_secret)"
+      ok "generated an API token for phones and Shortcuts"
+    fi
+  elif [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ]; then
+    JOIN_TOKEN_NOW="$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN)"
+    printf '\n  That coordinator has an AGENT_FLEET_HOST_TOKEN. This host has to present\n'
+    printf '  the same one or it will be refused on every reconnect.\n'
+    if [ -n "$JOIN_TOKEN_NOW" ]; then
+      printf '  One is already set here; blank keeps it.\n'
+    fi
+    ask JOIN_TOKEN "Host token for that coordinator"
+    if [ -n "$JOIN_TOKEN" ]; then
+      # Overwrites, unlike set_env: the whole point is to replace a value that
+      # is present and wrong.
+      ENVFILE="$SIDECAR_ENV" ENVKEY=AGENT_FLEET_HOST_TOKEN ENVVAL="$JOIN_TOKEN" "$NODE_BIN" -e '
+        const fs = require("fs");
+        const { ENVFILE, ENVKEY, ENVVAL } = process.env;
+        const line = `${ENVKEY}=${ENVVAL}`;
+        let text = fs.existsSync(ENVFILE) ? fs.readFileSync(ENVFILE, "utf8") : "";
+        text = new RegExp(`^${ENVKEY}=.*$`, "m").test(text)
+          ? text.replace(new RegExp(`^${ENVKEY}=.*$`, "m"), line)
+          : `${text.replace(/\n?$/, "\n")}${line}\n`;
+        fs.writeFileSync(ENVFILE, text, { mode: 0o600 });
+      '
+      ok "host token set for $(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
+    elif [ -z "$JOIN_TOKEN_NOW" ]; then
+      warn "no host token — the sidecar will be refused until one is in $SIDECAR_ENV"
+    fi
+    printf '\n'
   fi
 
   # --- push notifications --------------------------------------------------
@@ -906,11 +944,26 @@ if [ "$WIZARD" = yes ]; then
     printf '      or send /login to your bot\n'
   fi
 
+  # The API token is what a phone or a Shortcut presents, and it was generated
+  # rather than chosen — so if it is not printed here, the install finishes with
+  # the operator having no idea what to type into the app, and goes looking in a
+  # 0600 file owned by root to find out.
+  if [ "$FLEET_LOCAL" = 1 ] && [ -n "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
+    printf '\n  For the phone app or a Shortcut:\n'
+    printf '      URL    http://%s:8791   (or your Worker, if you deploy one)\n' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
+    printf '      Token  %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
+    printf '\n  Hosts joining this coordinator need its host token:\n'
+    printf '      %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)"
+  fi
+
   cat <<EOF
 
   Drive it:
       agent-hub list
       journalctl -u agent-hub -f
+
+  Read a token again any time:
+      sudo grep AGENT_FLEET_API_TOKEN $COORD_ENV
 
   Config: $ENV_FILE
           $SIDECAR_ENV
@@ -938,7 +991,9 @@ Next:
 
   If claude is not logged in yet, send your bot /login and follow the link.
 
-  For the fleet: put a token in $COORD_ENV and $SIDECAR_ENV, then
+  For the fleet: put the SAME AGENT_FLEET_HOST_TOKEN in $COORD_ENV and
+     $SIDECAR_ENV — a host presenting a different one is refused — and an
+     AGENT_FLEET_API_TOKEN in $COORD_ENV for phones. Then:
        systemctl enable --now agent-fleet-coordinator agent-fleet-sidecar
 
   Or re-run this installer with a terminal and it will ask instead — it

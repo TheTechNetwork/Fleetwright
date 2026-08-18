@@ -92,6 +92,7 @@ order:
 | Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | no Telegram; web UI and CLI still work |
 | Telegram user ids | leave blank if you do not know yours | nobody allowlisted yet — see below |
 | Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
+| Host token — **only when joining** someone else's coordinator | that coordinator's `AGENT_FLEET_HOST_TOKEN` | the sidecar will be refused until one is set |
 | Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
@@ -112,10 +113,31 @@ Two of those are worth planning for before you start:
   into the coordinator's env itself — see [`push.md`](./push.md) for why pasting
   the JSON cannot work.
 
-Everything it does not ask about, it generates: `AGENT_FLEET_HOST_TOKEN` (shared
-by the coordinator and this host), `AGENT_FLEET_API_TOKEN` (what a phone or
-Shortcut presents), and the hub token. There is no decision in those, and a
-blank one is how a coordinator ends up reachable with no credential at all.
+### Tokens
+
+On the box that **runs the coordinator**, they are generated rather than asked:
+`AGENT_FLEET_HOST_TOKEN` (shared by the coordinator and this host),
+`AGENT_FLEET_API_TOKEN` (what a phone or Shortcut presents), and the hub token.
+There is no decision in any of them, and a blank one is how a coordinator ends
+up reachable with no credential at all. Both are **printed when the install
+finishes**, because the API token is what you type into the app:
+
+```
+  For the phone app or a Shortcut:
+      URL    http://10.0.0.5:8791   (or your Worker, if you deploy one)
+      Token  623ad69f979bdf7a7b5253d94fde3202ea1dd1438a06868e
+```
+
+On a box **joining a coordinator that already exists** — the Worker, or another
+machine — the host token is *asked for*, because it has to match what that
+coordinator was given. A generated one produces a sidecar that connects, is
+rejected, and retries forever.
+
+Either way, to read one back later:
+
+```sh
+sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env
+```
 
 It is idempotent. Re-run it after `git pull` and it will never overwrite a value
 that is already set — which also means the way to *change* an answer is to edit
