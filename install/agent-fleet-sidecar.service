@@ -1,0 +1,41 @@
+[Unit]
+Description=agent-fleet sidecar — this box, as a fleet host
+Documentation=https://github.com/TheTechNetwork/agent-fleet
+After=network-online.target agent-hub.service
+Wants=network-online.target
+# Not Requires=: the sidecar deliberately stays up when agent-hub is down, and
+# reports "hub unreachable" rather than disappearing from the fleet. A host that
+# can tell you it is broken is worth more than one that is silently absent.
+After=agent-hub.service
+
+[Service]
+Type=simple
+# __USER__ / __DIR__ / __NODE__ are substituted by install.sh.
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=/etc/agent-fleet-sidecar.env
+ExecStart=__NODE__ __DIR__/bin/agent-fleet-sidecar
+
+Restart=always
+RestartSec=3
+
+# The per-session hook sockets live here. systemd creates it 0700 owned by this
+# user, which is what lets an unprivileged sidecar serve them at all — /run is
+# not writable by a normal user. It is removed when the service stops, and /run
+# is tmpfs, so there is nothing to clean up.
+RuntimeDirectory=agent-fleet
+RuntimeDirectoryMode=0700
+
+# It holds no session state and stopping it must never disturb a session — the
+# same reasoning as agent-hub's own shutdown.
+KillMode=control-group
+TimeoutStopSec=10
+
+NoNewPrivileges=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-fleet-sidecar
+
+[Install]
+WantedBy=multi-user.target
