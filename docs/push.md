@@ -61,6 +61,10 @@ One environment variable, holding the Firebase service-account JSON — as JSON,
 or base64-encoded. Both are accepted; which one you want depends on where it is
 going.
 
+The installer asks for this and does the encoding — `install.sh` takes the
+*path* to the JSON and base64s it into the coordinator's env file, which is the
+whole reason it asks for a path rather than a value. By hand:
+
 ```sh
 # the coordinator on a box — BASE64, and not optionally so, see below
 base64 -w0 service-account.json      # paste into /etc/agent-fleet-coordinator.env
