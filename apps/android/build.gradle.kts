@@ -9,5 +9,5 @@ plugins {
   //      1.9.25 but you appear to be using Kotlin version 1.9.24
   //
   // Versioned together, that mismatch cannot be expressed.
-  id("org.jetbrains.kotlin.plugin.compose") version "2.2.0" apply false
+  id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
 }
