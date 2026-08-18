@@ -32,7 +32,13 @@ jobs:
       # just the defaults doing whatever they were going to do. An invalid `//`
       # key sat on main doing exactly that.
       - name: Renovate config is valid
-        run: npx --yes --package renovate renovate-config-validator renovate.json
+        # @latest on purpose, and printed. The hosted bot runs a recent
+        # Renovate, so validating against anything older proves the config was
+        # valid for a version nobody is using — and `npx --package renovate`
+        # without a tag will happily reuse whatever is in the npx cache.
+        run: |
+          npx --yes --package renovate@latest -- renovate-config-validator --version
+          npx --yes --package renovate@latest -- renovate-config-validator renovate.json
 
       - name: Workflows parse
         run: |

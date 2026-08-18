@@ -35,9 +35,16 @@ jobs:
       # wrapper and is supposed to import node:http — while the file that
       # actually matters, core.js, is imported by both and was already clean.
       # The bundler knows which files are reachable; a grep is guessing.
+      # wrangler comes from worker/package.json rather than being named again
+      # here. Two declarations of the same tool is one for Renovate to bump and
+      # one to forget, and they only disagree when it matters.
+      - name: Install the Worker toolchain
+        working-directory: worker
+        run: npm install --no-audit --no-fund
+
       - name: Bundle the Worker without deploying it
         working-directory: worker
-        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/worker-build
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
 
   deploy:
     needs: check
@@ -73,4 +80,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@4 deploy
+        run: |
+          npm install --no-audit --no-fund
+          npx wrangler deploy
