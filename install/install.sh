@@ -759,6 +759,56 @@ if [ "$WIZARD" = yes ]; then
     [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
   fi
 
+  # --- push notifications --------------------------------------------------
+  # Only worth asking on the box that actually runs the coordinator: it is the
+  # process that sends, and the credential is useless on a host that does not.
+  #
+  # A PATH is asked for rather than the JSON itself, and the encoding is done
+  # here. That is the whole point of this step. The file is multi-line, and
+  # systemd's EnvironmentFile has no multi-line values AND expands C escapes
+  # inside quoted ones — so pasting the JSON turns the \n in private_key into
+  # real newlines and JSON.parse fails. The result is a coordinator that starts
+  # cleanly and silently never notifies anybody. Base64 has nothing in it for
+  # either systemd or a shell to touch.
+  if [ "$FLEET_LOCAL" = 1 ] && [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_FCM_SERVICE_ACCOUNT)" ]; then
+    printf '\n  Push notifications are how a phone finds out a session is waiting for an\n'
+    printf '  answer. Without them the fleet works, and nothing tells you.\n'
+    printf '  Firebase console -> Project settings -> Service accounts -> Generate new\n'
+    printf '  private key. Leave blank to skip; push is logged instead of sent.\n'
+    ask FCM_PATH "Path to the Firebase service-account JSON"
+    while [ -n "$FCM_PATH" ]; do
+      # ~ is not expanded by read, and typing it is the obvious thing to do.
+      case "$FCM_PATH" in "~/"*) FCM_PATH="$HOME/${FCM_PATH#\~/}" ;; esac
+      if [ ! -r "$FCM_PATH" ]; then
+        warn "cannot read $FCM_PATH"
+      elif ! FCM_PROJECT="$("$NODE_BIN" -e '
+        const fs = require("fs");
+        try {
+          const a = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          if (!a.project_id || !a.client_email || !a.private_key) {
+            console.error("missing project_id, client_email or private_key");
+            process.exit(1);
+          }
+          process.stdout.write(a.project_id);
+        } catch (e) {
+          console.error(e.message);
+          process.exit(1);
+        }
+      ' "$FCM_PATH" 2>&1)"; then
+        warn "not a usable service account: $FCM_PROJECT"
+      else
+        set_env "$COORD_ENV" AGENT_FLEET_FCM_SERVICE_ACCOUNT "$(base64 -w0 < "$FCM_PATH")"
+        ok "push configured for Firebase project $FCM_PROJECT"
+        break
+      fi
+      # Re-asking rather than giving up: the value is a path somebody just
+      # typed, and a typo should not cost a whole re-run of the installer.
+      ask FCM_PATH "Path to the Firebase service-account JSON (blank to skip)"
+    done
+    [ -z "$FCM_PATH" ] && ok "skipping push — it will be logged instead of sent"
+    printf '\n'
+  fi
+
   # --- sandbox -------------------------------------------------------------
   if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" ]; then
     printf '\n  Sandboxed sessions get real root inside a container whose filesystem is\n'
