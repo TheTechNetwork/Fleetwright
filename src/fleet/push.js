@@ -149,17 +149,65 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
 export function pusherFromEnv(env, logger) {
   const raw = env.AGENT_FLEET_FCM_SERVICE_ACCOUNT;
   if (!raw) return logPusher(logger);
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
-      logger.warn('push: FCM service account is missing client_email, private_key or project_id — falling back to logging');
-      return logPusher(logger);
-    }
-    logger.info(`push: FCM configured for project ${parsed.project_id}`);
-    return fcmPusher(parsed, { logger });
-  } catch {
-    logger.warn('push: AGENT_FLEET_FCM_SERVICE_ACCOUNT is not valid JSON — falling back to logging');
+  const parsed = parseServiceAccount(raw);
+  if (!parsed) {
+    logger.warn(
+      'push: AGENT_FLEET_FCM_SERVICE_ACCOUNT is neither JSON nor base64-encoded JSON — falling back to logging.\n' +
+        '  base64 -w0 service-account.json',
+    );
     return logPusher(logger);
+  }
+  if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
+    logger.warn('push: FCM service account is missing client_email, private_key or project_id — falling back to logging');
+    return logPusher(logger);
+  }
+  logger.info(`push: FCM configured for project ${parsed.project_id}`);
+  return fcmPusher(parsed, { logger });
+}
+
+/**
+ * A service account from an environment variable, in either of the two forms
+ * it survives being one.
+ *
+ * BASE64 IS THE FORM THAT ALWAYS WORKS, and the reason is systemd. The
+ * coordinator on a box reads its configuration through `EnvironmentFile=`,
+ * which has no multi-line values — and a service-account JSON as Google hands
+ * it to you is pretty-printed across a dozen lines. Flattening it to one line
+ * is not enough either: systemd expands C escapes inside double-quoted values,
+ * so the `\n` sequences in `private_key` become REAL newlines, and a raw
+ * newline inside a JSON string is a parse error. The failure then looks like
+ * push quietly not working rather than like a malformed secret.
+ *
+ * Raw JSON is still accepted, because it works everywhere that is not an env
+ * file — `wrangler secret put` takes it on stdin, and a secret already set that
+ * way should not have to be re-entered to pick up this change.
+ *
+ * @param {string} raw
+ * @returns {any|null}
+ */
+export function parseServiceAccount(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // JSON first: it is unambiguous, and base64 of a JSON document never starts
+  // with a brace.
+  if (trimmed.startsWith('{')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    // Whitespace is stripped because a base64 blob that has been through a
+    // YAML block or an editor's line wrapping is still perfectly good base64.
+    const binary = atob(trimmed.replace(/\s+/g, ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
   }
 }
 

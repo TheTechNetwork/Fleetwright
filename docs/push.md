@@ -57,15 +57,36 @@ than retried on every event.
 
 ## Configuring the sender
 
-One environment variable, holding the Firebase service-account JSON:
+One environment variable, holding the Firebase service-account JSON — as JSON,
+or base64-encoded. Both are accepted; which one you want depends on where it is
+going.
 
 ```sh
-# the coordinator on a box
-AGENT_FLEET_FCM_SERVICE_ACCOUNT='{"project_id":"…","client_email":"…","private_key":"…"}'
+# the coordinator on a box — BASE64, and not optionally so, see below
+base64 -w0 service-account.json      # paste into /etc/agent-fleet-coordinator.env
+AGENT_FLEET_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
 
-# the coordinator on Cloudflare
-cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
+# the coordinator on Cloudflare — either form; wrangler reads stdin
+cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 ```
+
+### Why base64 on a box
+
+Because systemd's `EnvironmentFile=` cannot carry that JSON, in two separate
+ways:
+
+1. **It has no multi-line values,** and Google hands you the file
+   pretty-printed across a dozen lines.
+2. **It expands C escapes inside double-quoted values.** So even flattened onto
+   one line, the `\n` sequences in `private_key` arrive as *real* newlines — and
+   a raw newline inside a JSON string is a parse error, not a quirk.
+
+The second is the nasty one, because the result is a coordinator that starts
+cleanly and simply never sends a notification. Base64 has no character that
+either systemd or a shell will touch.
+
+Raw JSON keeps working everywhere it already did — a secret already set on
+Cloudflare does not need re-entering.
 
 Get it from Firebase console → Project settings → Service accounts → Generate
 new private key. Only `project_id`, `client_email` and `private_key` are used.
