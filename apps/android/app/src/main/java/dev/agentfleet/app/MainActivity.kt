@@ -222,7 +222,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             value = url,
             onValueChange = { url = it },
             label = { Text("Coordinator URL") },
-            placeholder = { Text("https://agent-fleet-coordinator.example.workers.dev") },
+            placeholder = { Text("https://fleet.thetech.network") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )

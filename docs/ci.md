@@ -36,15 +36,37 @@ syntax error, which is why the two are separate jobs.
 Use the template rather than a global key: it is scoped to Workers, and it is
 revocable on its own.
 
-The coordinator's own runtime secrets are **not** GitHub secrets — they belong
-to the Worker, and `wrangler deploy` does not touch them:
+### The Worker's runtime secrets are a different thing
+
+These live in Cloudflare, not GitHub, and `wrangler deploy` does not touch them.
+**A Worker deployed without them answers 503 to everything** — deliberately, since
+a coordinator with no credentials is remote control of every box in the fleet for
+whoever finds the URL.
+
+Two ways to set them, and you only need one.
+
+**As repository secrets**, if GitHub is where you would rather manage them. The
+deploy job pushes each one to the Worker after deploying, and skips any that are
+unset:
+
+| secret | |
+|---|---|
+| `AGENT_FLEET_HOST_TOKEN` | what a host presents. `openssl rand -hex 24` |
+| `AGENT_FLEET_API_TOKEN` | what a phone or Shortcut presents. `openssl rand -hex 24` |
+| `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON. Optional; without it push is logged rather than sent |
+
+**Or directly**, which keeps them out of GitHub entirely:
 
 ```sh
 cd worker
-npx wrangler secret put AGENT_FLEET_HOST_TOKEN            # openssl rand -hex 24
-npx wrangler secret put AGENT_FLEET_API_TOKEN             # openssl rand -hex 24
-npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT   # optional, for push
+npx wrangler secret put AGENT_FLEET_HOST_TOKEN
+npx wrangler secret put AGENT_FLEET_API_TOKEN
+npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
 ```
+
+Whichever you choose, `AGENT_FLEET_HOST_TOKEN` has to match the value in each
+host's `/etc/agent-fleet-sidecar.env`, or the host's websocket is refused at the
+upgrade.
 
 ## Android — a signed release APK
 
