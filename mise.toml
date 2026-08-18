@@ -79,7 +79,9 @@ echo "Android SDK ready at $ANDROID_HOME"
 description = "Generate the Android release signing key"
 run = """
 set -eu
-out="${KEYSTORE_OUT:-$PWD/release.jks}"
+# $HOME rather than $PWD: the deployed checkout is /opt/agent-fleet, which is
+# root-owned, and a signing key does not belong in a git tree anyway.
+out="${KEYSTORE_OUT:-$HOME/fleetwright-release.jks}"
 alias_name="${KEY_ALIAS:-fleetwright}"
 
 # Refusing to overwrite is the whole safety story here. An existing release.jks
