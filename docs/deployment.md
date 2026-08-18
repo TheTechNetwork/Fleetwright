@@ -8,25 +8,37 @@ standable-up yet.
 | | status |
 |---|---|
 | **Session manager** (`agent-hub`) — sessions from Telegram, web UI, CLI | ✅ installer, systemd unit, hook |
-| **Sidecar** — validates intents, drives the session manager | ✅ websocket transport, `doctor`, config |
-| **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ runs as a plain Node process |
-| **Sandboxes** — real root per session, discarded on stop | ✅ image builds, launch path, `/forget` deletes volumes |
-| **Cloudflare deployment** (Worker + Durable Objects) | ❌ the coordinator runs on a box for now |
-| **Mobile apps** | ❌ the HTTP API is Shortcut-ready; no app yet |
+| **Sidecar** — validates intents, drives the session manager | ✅ websocket + stdio, systemd unit, `doctor` |
+| **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ as a Node process **or** a Cloudflare Worker |
+| **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
+| **Cloudflare deployment** (Worker + Durable Objects) | ✅ deployed by CI to `fleet.thetech.network` |
+| **Push notifications** | ⚠️ server side done; needs a Firebase project, and untested against real FCM |
+| **Android app** | ⚠️ builds, signs, installs; push not wired (needs Firebase) |
+| **iOS app** | ⚠️ compiles in CI on macOS; never run on a device |
 
 A box you set up today runs the whole loop: a coordinator, this box as a fleet
 host, and sandboxed sessions with real root inside a container whose filesystem
-is thrown away on every stop. All of it validated on this hardware — see
-[§10 of `design.md`](./design.md) and the notes below.
+is thrown away on every stop. That much is validated on hardware — see
+[§10 of `design.md`](./design.md).
+
+The ⚠️ rows are the honest ones. Each is built and each is unproven in the one
+way that matters: no notification has been delivered to a real phone, and no app
+has been run by a person. Treat them as ready to *test*, not as working.
 
 ## Prerequisites
 
-- **Node 18 or newer** — global `fetch` is required.
-- **tmux** — `apt install tmux`. Not optional; it is what holds the sessions.
-- **claude** — the Claude Code CLI, on `PATH`, logged in (or log it in later
-  from chat with `/login`).
-- **A Linux host.** §9 of `design.md` explains why validating any of the sandbox
-  work on macOS proves less than it looks like it does.
+**A Linux host**, and nothing else you have to install by hand. §9 of
+`design.md` explains why validating any of the sandbox work on macOS proves less
+than it looks like it does.
+
+The installer installs what is missing — node (>= 24, which `package.json`
+requires), tmux, podman, git, curl — from the distribution's own repositories.
+It does not pipe a remote script into a shell. `AGENT_HUB_NO_INSTALL_DEPS=1`
+turns that off for a box where package management is somebody else's job, and
+then it tells you what to install instead.
+
+**claude** — the Claude Code CLI — is the one thing it will not install for you.
+Log in during the install, or later from chat with `/login`.
 
 **podman** is needed only for sandboxed sessions. Without it everything else
 works and sessions run directly on the box.
@@ -70,17 +82,44 @@ It is idempotent — re-run it after `git pull` and it will never overwrite a
 config that already exists. `AGENT_FLEET_REBUILD_IMAGE=1` forces an image
 rebuild; `AGENT_FLEET_BUILD_IMAGE=0` skips it.
 
-Then:
+### What the wizard asks
 
-1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → put the token in
-   `AGENT_HUB_TELEGRAM_TOKEN` in `/etc/agent-hub.env`.
-2. `systemctl enable --now agent-hub`
-3. Message your bot **`/whoami`** — it answers with your Telegram id even before
-   you are on the allowlist. Put that id in
-   `AGENT_HUB_TELEGRAM_ALLOWED_USERS`, then `systemctl restart agent-hub`.
-4. `agent-hub doctor` — confirms tmux, claude, login state and reachability.
+Run on a terminal, `install.sh` asks rather than leaving you a checklist. In
+order:
 
-Not logged into Claude yet? Send the bot **`/login`** and follow the link.
+| it asks | what to have ready | blank means |
+|---|---|---|
+| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | no Telegram; web UI and CLI still work |
+| Telegram user ids | leave blank if you do not know yours | nobody allowlisted yet — see below |
+| Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
+| Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
+| Sandbox sessions? | needs podman | sessions run directly on the box |
+| Enable and start the services now? | | you start them yourself |
+
+Then it offers to log Claude in, which is the one step that genuinely needs a
+person.
+
+Two of those are worth planning for before you start:
+
+- **Your Telegram id.** You do not need it up front. Leave it blank, and once
+  the bot is up message it **`/whoami`** — it answers with your id even though
+  you are not on the allowlist yet. Put that in
+  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` in `/etc/agent-hub.env` and
+  `systemctl restart agent-hub`.
+- **The Firebase JSON.** `scp` it to the box first, because the installer wants
+  a path, not a pasted value. Firebase console → Project settings → Service
+  accounts → Generate new private key. It reads the file and base64-encodes it
+  into the coordinator's env itself — see [`push.md`](./push.md) for why pasting
+  the JSON cannot work.
+
+Everything it does not ask about, it generates: `AGENT_FLEET_HOST_TOKEN` (shared
+by the coordinator and this host), `AGENT_FLEET_API_TOKEN` (what a phone or
+Shortcut presents), and the hub token. There is no decision in those, and a
+blank one is how a coordinator ends up reachable with no credential at all.
+
+It is idempotent. Re-run it after `git pull` and it will never overwrite a value
+that is already set — which also means the way to *change* an answer is to edit
+the env file, not to re-run.
 
 `docs/agent-hub.md` is the full session-manager manual: commands, permission
 modes, resume behaviour, exposing the web UI.
@@ -96,34 +135,36 @@ comment is there.
 
 ## 2. Run the fleet
 
-The installer already wrote `/etc/agent-fleet-coordinator.env` and
-`/etc/agent-fleet-sidecar.env` with the hub URL and token filled in. Two things
-are left.
-
-**Start a coordinator.** On the same box for a single-machine test, or wherever
-the fleet should meet:
+If you answered the wizard, this is already done: both env files are written,
+the tokens are generated and shared, and the services are running as
+`agent-fleet-coordinator` and `agent-fleet-sidecar`. Skip to the check below.
 
 ```sh
-set -a; . /etc/agent-fleet-coordinator.env; set +a
-agent-fleet-coordinator
+systemctl status agent-fleet-coordinator agent-fleet-sidecar
 ```
 
-Generate tokens with `openssl rand -hex 24` and put the same
-`AGENT_FLEET_HOST_TOKEN` in both files. Loopback with no tokens is fine for a
-local test and the process says so; binding wider without them is refused.
-
-**Point the sidecar at it** in `/etc/agent-fleet-sidecar.env`:
+To do it by hand, or to point this host at a coordinator somewhere else, the
+whole configuration is two lines in `/etc/agent-fleet-sidecar.env`:
 
 ```
-AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791
+AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network   # or http://127.0.0.1:8791
 AGENT_FLEET_TRANSPORT=websocket
 ```
 
-The sidecar refuses to start without a pinned origin (§5: the agent pins the
-coordinator it will talk to). Check it:
+plus the same `AGENT_FLEET_HOST_TOKEN` the coordinator has. The sidecar refuses
+to start without a pinned origin — §5: the agent pins the coordinator it will
+talk to, so a compromised coordinator cannot redirect it.
+
+**Where the coordinator runs is a real choice**, and both are supported:
+
+| | when |
+|---|---|
+| **Cloudflare Worker** | you want it reachable from a phone on mobile data. No port, no cert, no tunnel — see [`coordinator-deploy.md`](./coordinator-deploy.md) |
+| **Node process on a box** | single-machine testing, or a fleet that never leaves your network |
+
+The same code runs in both. Check the host either way:
 
 ```sh
-set -a; . /etc/agent-fleet-sidecar.env; set +a
 agent-fleet-sidecar doctor
 ```
 
@@ -135,11 +176,9 @@ agent-fleet-sidecar doctor
  ok   host id unabandoned  — labels: gpu, debian13
 ```
 
-Then run it, and drive the fleet through the coordinator:
+Then drive the fleet through the coordinator. Against a local one:
 
 ```sh
-agent-fleet-sidecar &                       # dials the coordinator, holds it open
-
 curl -s localhost:8791/api/hosts            # who is in the fleet, and why not
 curl -s localhost:8791/api/list             # every session, attributed by host
 curl -s localhost:8791/api/status/bigjob
@@ -160,14 +199,17 @@ Replies come back on **stdout** as newline-delimited JSON; logs go to
 **stderr**. That split is deliberate and enforced — an `info` line landing on
 stdout would not be noise, it would be a corrupted message.
 
-### Why there is still no sidecar systemd unit
+### The units
 
-The reason it was omitted before — the stdio transport ends when stdin does, so
-a unit would crash-loop — no longer applies now that the websocket transport
-exists and holds its connection open. What is left is the credential: a unit
-wants `AGENT_FLEET_HOST_TOKEN` to be a per-host key from an enrollment flow, not
-the one shared token every host currently presents. Writing the unit now would
-mean writing it twice.
+`install/agent-fleet-sidecar.service` and
+`install/agent-fleet-coordinator.service`, installed and started by the
+installer. The sidecar's unit only became possible with the websocket transport:
+under `stdio` the process ends when stdin does, so a unit would have
+crash-looped.
+
+The credential they carry is still the shared `AGENT_FLEET_HOST_TOKEN` — every
+host presents the same one. §5 wants a per-host key so revoking one host does
+not mean rotating all of them. That is the gap, not the unit.
 
 ### Hook socket directory
 
@@ -189,9 +231,9 @@ RuntimeDirectoryMode=0700
 which makes systemd create and own it. Until then, either run the sidecar as
 root or pre-create the directory with the right owner.
 
-Nothing calls `HookSocketServer.open()` yet — that happens in the sandbox launch
-path, which is not built. The sockets are proven (19 tests, plus an end-to-end
-run against a real hub) and idle.
+`sessions.js` opens a socket per session as it starts one and closes it on
+stop, so this is live rather than idle: it is how a sandboxed session's
+conversation uuid gets out of the container at all.
 
 ## 3. Sandbox the sessions
 
@@ -243,7 +285,27 @@ mapping is unproven and is the correct deployment posture. Until it is done, an
 escape lands as root on the host rather than as a nobody user. Run rootless
 before trusting this with anything you care about.
 
-## 3. Verify the whole path
+## 4. The phone
+
+Only worth doing once the coordinator is reachable from one — which in practice
+means the Worker, since a phone on mobile data cannot see a box on your LAN.
+
+1. **Deploy the Worker** — [`coordinator-deploy.md`](./coordinator-deploy.md).
+   CI does it on every push to `main` that touches `worker/`.
+2. **Install an app** — [Android](../apps/android/README.md) (build the APK, or
+   take it from a GitHub release) or [iOS](../apps/ios/README.md) (Xcode, or
+   TestFlight once the App Store Connect record exists).
+3. **Settings → coordinator URL and API token.** The token is
+   `AGENT_FLEET_API_TOKEN` from `/etc/agent-fleet-coordinator.env`, or whatever
+   you set as the Worker secret. Nothing is baked into the binary: §5, a
+   credential in an APK is public the moment somebody unzips it.
+4. **Push** needs a Firebase project and, on Android, `google-services.json`.
+   [`push.md`](./push.md) and the app READMEs have the steps.
+
+Siri and Shortcuts need none of this beyond step 3 — §7 designed the API so a
+Shortcut could call it directly.
+
+## 5. Verify the whole path
 
 ```sh
 agent-hub doctor                      # can this box run sessions at all
@@ -260,11 +322,24 @@ tells you which it is and why.
 
 ## Upgrading
 
+From chat or the CLI, which is what `/update` is for — it fast-forwards, refuses
+a dirty tree, and restarts by exiting under systemd:
+
+```sh
+agent-hub update
+```
+
+By hand:
+
 ```sh
 git -C /opt/agent-fleet pull
 sudo /opt/agent-fleet/install/install.sh   # idempotent; never overwrites config
 systemctl restart agent-hub
 ```
+
+Re-running the installer is worth doing after a pull rather than just
+restarting: new steps get asked about (push was added this way), and anything
+already set is left alone.
 
 Restarting is safe: the unit's `KillMode=process` leaves the tmux server alone,
 sessions survive, and the next reconcile re-adopts them. Restarting the sidecar
@@ -296,21 +371,29 @@ Telegram token and the hub token; `/etc/agent-fleet-sidecar.env` holds the hub
 token and (later) the coordinator credential. Merging them would put the
 coordinator credential in the session manager's environment for no reason.
 
-**Containers do not fix credential scope.** When the sandbox work lands, egress
-stays open — `claude` needs the API and the work needs npm and GitHub. A
+**Containers do not fix credential scope.** Egress stays open — `claude` needs the API and the work needs npm and GitHub. A
 contained agent can still push with whatever credential it holds. Containers
 remove the "trashed the box" failure mode, not the "used its credentials badly"
 one.
 
-## What this document does not cover yet
+## What is genuinely not done
 
-Because none of it exists: deploying the coordinator to Cloudflare (Workers +
-Durable Objects — it runs as a plain Node process today), host enrollment and
-per-host keys (there is one shared host token for now), rootless podman,
-Wake-on-LAN, and the iOS/Android apps. `design.md` §§2–7 describes all of it;
-`design.md` §10 records what has been validated on hardware.
+Not "undocumented" — not built, or built and never proven:
 
-There is also still no systemd unit for the coordinator or the sidecar. Both
-run fine in the foreground or under any supervisor; writing the units is a
-small job that is worth doing once the enrollment story replaces the shared
-token, so the unit and the credential arrive together.
+- **Enrollment.** One shared `AGENT_FLEET_HOST_TOKEN` for every host. §5 wants a
+  per-host key and a short-lived signed assertion, so revoking one host does not
+  mean rotating all of them.
+- **Rootless podman.** The sandbox has only ever run as root. That is the wrong
+  posture and it is stated again under §3 above, because it is the one item here
+  with a security consequence rather than a convenience one.
+- **Push against real FCM.** The sender, the encoding and the installer step are
+  all built and tested; no notification has ever been delivered to a phone.
+- **The apps on a device.** Android builds and installs, iOS compiles in CI.
+  Neither has been driven by a person.
+- **Wake-on-LAN.** §3's second meaning of "wake". A sleeping box cannot be a
+  host, and nothing sends the packet.
+- **Telegram on the Worker.** Telegram works against a box today; the webhook
+  path §5 describes does not exist.
+
+`design.md` §§2–7 describes all of it; §10 records what has been validated on
+hardware.

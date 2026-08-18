@@ -30,8 +30,16 @@ The **fleet** is everything that makes a group of those boxes one system:
 the sidecar that speaks to a coordinator, the intent protocol between them, and
 the per-session sandbox plumbing.
 
-**Setting up a box:** [`docs/deployment.md`](./docs/deployment.md) — what is
-deployable today, what is not, and the security notes worth reading once.
+**Setting up a box:** [`docs/deployment.md`](./docs/deployment.md) — one
+installer, what it asks, what is deployable today and what is not.
+
+```sh
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
+sudo /opt/agent-fleet/install/install.sh
+```
+
+It installs what is missing, generates the tokens, asks about Telegram, the
+coordinator, push and the sandbox, and starts the services.
 
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
@@ -53,10 +61,13 @@ what has been validated on hardware. Start there for the why.
 | `.github/workflows/` | CI: tests, the iOS build, the Android APK, the Worker deploy — see [`docs/ci.md`](./docs/ci.md) |
 | `apps/` | [Android](./apps/android/README.md) and [iOS](./apps/ios/README.md) clients |
 | `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
-| `docs/` | [deployment](./docs/deployment.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [upstream lineage](./docs/upstream-agent-hub.md) |
+| `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [naming](./docs/naming.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
-Still to come: deploying the coordinator to Cloudflare (it runs as a plain Node
-process today), rootless podman, host enrollment, and the iOS and Android apps.
+Still to come: host enrollment (one shared token today), rootless podman
+(the sandbox has only run as root), Wake-on-LAN, and Telegram on the Worker.
+The apps and the Cloudflare deployment exist — see
+[`docs/deployment.md`](./docs/deployment.md) for what is proven and what is
+merely built.
 
 ## Running things
 
@@ -72,6 +83,11 @@ npm start                          # the session manager
 npm run sidecar -- doctor          # check this box can drive it
 node bin/agent-fleet-coordinator   # the coordinator
 ```
+
+`mise` pins the dev environment and carries the tasks that need more than node —
+`mise trust && mise install`, then `mise run android-sdk`, `apk`, `keystore`,
+`worker-deploy`. Deployment deliberately does not use it: a service must not
+depend on a version manager in somebody's home directory.
 
 To deploy rather than hack on it, see [`docs/deployment.md`](./docs/deployment.md) —
 `sudo ./install/install.sh` sets up the session manager as a systemd service.

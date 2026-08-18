@@ -389,7 +389,7 @@ Pure logic, testable with `node:test` and fakes:
 - **iOS app.** No macOS, no Xcode, no signing identity. Swift/SwiftUI/App Intents sources and an
   Xcode project can be written, but stay reviewed-but-unrun until built on a Mac.
 - **Anything needing a container runtime.** Claude Code remote containers have no container daemon.
-  lhe `docker` CLI may be on `PATH` while `/var/run/docker.sock` does not exist, and systemd is not
+  The `docker` CLI may be on `PATH` while `/var/run/docker.sock` does not exist, and systemd is not
   running (PID 1 is `process_api`). Verified, not assumed.
 
 ---

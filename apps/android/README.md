@@ -38,9 +38,19 @@ The APK lands at `app/build/outputs/apk/debug/app-debug.apk`. Install it with
 `adb install -r app/build/outputs/apk/debug/app-debug.apk`, or just copy it to
 the phone and open it.
 
-Debug only for now. A release build needs a signing key, and an **unsigned
-release APK cannot be installed** — which makes it worse than useless for
-testing. Signing is one `signingConfigs` block once there is a keystore.
+For a **signed release** APK, which is what an unsigned one cannot be —
+unsigned APKs will not install:
+
+```sh
+KEYSTORE_PASSWORD='…' mise run keystore     # writes ~/fleetwright-release.jks
+ANDROID_KEYSTORE_FILE=~/fleetwright-release.jks ANDROID_KEYSTORE_PASSWORD='…' \
+  ANDROID_KEY_ALIAS=fleetwright ANDROID_KEY_PASSWORD='…' ./gradlew assembleRelease
+```
+
+`signingConfigs` is only declared when `ANDROID_KEYSTORE_FILE` is set, so a box
+with no keystore still builds debug. CI does the same thing from the four
+`ANDROID_*` secrets and attaches the APK to a GitHub release — see
+[`../../docs/ci.md`](../../docs/ci.md).
 
 ## First run
 

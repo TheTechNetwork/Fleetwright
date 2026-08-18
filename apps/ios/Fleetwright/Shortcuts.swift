@@ -64,7 +64,7 @@ struct ResumeSessionIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let settings = Settings()
         guard settings.configured else {
-            return .result(dialog: "Set the coordinator URL in the agent-fleet app first.")
+            return .result(dialog: "Set the coordinator URL in Fleetwright first.")
         }
         // "summary" rather than asking: nobody is going to answer a
         // resume-dialog question through Siri, and it is the cheaper option.
@@ -81,7 +81,7 @@ struct StartSessionIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let settings = Settings()
         guard settings.configured else {
-            return .result(dialog: "Set the coordinator URL in the agent-fleet app first.")
+            return .result(dialog: "Set the coordinator URL in Fleetwright first.")
         }
         let reply = try await Fleet(settings: settings).start(name: nil)
         return .result(dialog: IntentDialog(stringLiteral: reply.text ?? "Started a session"))
