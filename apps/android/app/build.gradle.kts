@@ -82,7 +82,7 @@ dependencies {
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
   implementation("androidx.compose.material:material-icons-core")
-  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
   // Firebase Cloud Messaging is deliberately NOT here yet — it needs a
   // google-services.json from your Firebase project, and the Google Services
