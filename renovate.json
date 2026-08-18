@@ -1,6 +1,91 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ]
+  "extends": ["config:recommended"],
+
+  "//": [
+    "The default configuration opens one PR per dependency, which is wrong for",
+    "this repository in a specific and demonstrable way: a bot bumped the",
+    "Compose compiler on its own and broke the Android build, because that",
+    "version is only meaningful in a pair with Kotlin.",
+    "",
+    "  e: This version (1.5.15) of the Compose Compiler requires Kotlin version",
+    "     1.9.25 but you appear to be using Kotlin version 1.9.24",
+    "",
+    "So: anything that must move together is grouped, and anything that cannot",
+    "be verified by CI is left for a person."
+  ],
+
+  "timezone": "America/Chicago",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+
+  "packageRules": [
+    {
+      "description": "Kotlin and the Compose compiler plugin are released together and only work together. Never separately, ever.",
+      "groupName": "kotlin",
+      "matchPackageNames": [
+        "org.jetbrains.kotlin.android",
+        "org.jetbrains.kotlin.plugin.compose",
+        "org.jetbrains.kotlin:{/,}**",
+        "org.jetbrains.kotlinx:kotlinx-coroutines{/,}**"
+      ]
+    },
+    {
+      "description": "The AndroidX stack moves as a set. compose-bom exists precisely to keep these in step, so bumping one at a time defeats the point of it.",
+      "groupName": "androidx",
+      "matchPackageNames": [
+        "androidx.compose{/,}**",
+        "androidx.core{/,}**",
+        "androidx.activity{/,}**",
+        "androidx.lifecycle{/,}**"
+      ]
+    },
+    {
+      "description": "AGP and Gradle have a supported-version matrix. A new AGP frequently requires a newer Gradle, so they arrive together or the build fails on the first one.",
+      "groupName": "android build tooling",
+      "matchPackageNames": ["com.android.application", "com.android.library", "gradle"]
+    },
+    {
+      "description": "A major version of the build toolchain changes behaviour rather than versions. CI can prove the app still compiles, but not that it still behaves, so these wait for a person.",
+      "matchManagers": ["gradle", "gradle-wrapper"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "compileSdk is not a dependency — raising it opts into new platform behaviour and needs the matching SDK installed on every builder. Renovate cannot know when that is true.",
+      "matchDepNames": ["compileSdk", "targetSdk"],
+      "enabled": false
+    },
+    {
+      "description": "Actions are grouped and automerged on patch/minor: they are covered by every workflow run, so a break is visible immediately and revertible in one click.",
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Node's major version in CI is a real change of runtime. The engines floor in package.json is a compatibility claim and is not Renovate's to move.",
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Dev-only type checking. Grouped because @types/node and typescript are only meaningful against each other.",
+      "groupName": "typescript",
+      "matchPackageNames": ["typescript", "@types/node"]
+    },
+    {
+      "description": "wrangler is the deploy tool for the coordinator; a major version can change wrangler.toml's schema.",
+      "matchPackageNames": ["wrangler"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "description": "A security fix does not wait for Monday.",
+    "schedule": ["at any time"],
+    "prPriority": 10
+  }
 }

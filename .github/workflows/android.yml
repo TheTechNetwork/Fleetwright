@@ -22,6 +22,11 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # Installed explicitly rather than left to AGP's auto-download, so a
+          # missing platform fails here with an obvious message instead of
+          # halfway through a Gradle task.
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build the debug APK
@@ -49,6 +54,11 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          # Installed explicitly rather than left to AGP's auto-download, so a
+          # missing platform fails here with an obvious message instead of
+          # halfway through a Gradle task.
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Check there is a keystore to sign with

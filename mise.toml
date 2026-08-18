@@ -13,7 +13,7 @@
 [tools]
 # 22 because that is what CI runs. Anything from 18 up works at runtime; the
 # tests use node:test features that landed in 18.17.
-node = "22"
+node = "24"
 
 # For the Android app. Android Gradle Plugin 8.x wants a JDK of 17 or newer,
 # and 21 is the current LTS.
@@ -64,7 +64,7 @@ if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
 fi
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 yes | sdkmanager --licenses >/dev/null
-sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 echo "Android SDK ready at $ANDROID_HOME"
 """
 
