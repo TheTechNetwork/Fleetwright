@@ -20,7 +20,7 @@ jobs:
   # provisioning profile. Signing problems are a separate class of failure and
   # should not be able to hide a syntax error.
   build:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -57,7 +57,7 @@ jobs:
   testflight:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: build
-    runs-on: macos-15
+    runs-on: macos-latest
     environment: production
     steps:
       - uses: actions/checkout@v7

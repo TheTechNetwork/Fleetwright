@@ -1,17 +1,24 @@
 plugins {
+  // AGP 9 has built-in Kotlin support — it registers the `kotlin` extension
+  // itself, so applying org.jetbrains.kotlin.android on top of it fails with
+  // "Cannot add extension with name 'kotlin'". The Compose plugin is still
+  // applied separately; it is a compiler plugin rather than language support.
   id("com.android.application")
-  id("org.jetbrains.kotlin.android")
   id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
   namespace = "dev.agentfleet.app"
-  compileSdk = 36
+  compileSdk = 37
 
   defaultConfig {
     applicationId = "dev.agentfleet.app"
-    minSdk = 26
-    targetSdk = 36
+    // One version back, deliberately. This is a first build with no installed
+    // base to keep working, and every API level supported below this is a
+    // compatibility path somebody has to reason about forever. The cost is
+    // real and worth stating: it excludes most phones in the field today.
+    minSdk = 36
+    targetSdk = 37
     versionCode = 1
     versionName = "0.1.0"
   }
@@ -50,20 +57,28 @@ android {
   }
 
   compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
   }
-  kotlinOptions { jvmTarget = "17" }
   buildFeatures { compose = true }
   // No composeOptions block: the Compose compiler comes from the Kotlin plugin
   // above, at the Kotlin version, so there is nothing to keep in step.
 }
 
+// AGP 9 removed android.kotlinOptions. jvmTarget lives here now, and has to
+// agree with compileOptions above or the two toolchains disagree about what
+// they are producing.
+kotlin {
+  compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+  }
+}
+
 dependencies {
-  implementation("androidx.core:core-ktx:1.17.0")
-  implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
+  implementation("androidx.core:core-ktx:1.19.0")
+  implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
   implementation("androidx.activity:activity-compose:1.13.0")
-  implementation(platform("androidx.compose:compose-bom:2025.08.00"))
+  implementation(platform("androidx.compose:compose-bom:2026.08.00"))
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
   implementation("androidx.compose.material:material-icons-core")

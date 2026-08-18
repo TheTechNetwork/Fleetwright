@@ -11,13 +11,13 @@
 # and they are allowed to differ.
 
 [tools]
-# 22 because that is what CI runs. Anything from 18 up works at runtime; the
-# tests use node:test features that landed in 18.17.
-node = "24"
+# What CI runs. Anything from 18 up works at runtime — package.json's engines
+# floor is a claim about the code, not about the machine building it.
+node = "26"
 
-# For the Android app. Android Gradle Plugin 8.x wants a JDK of 17 or newer,
-# and 21 is the current LTS.
-java = "temurin-21.0.12+8.0.LTS"
+# For the Android app. AGP 9 and Gradle 9.7 both run on 25, which is verified —
+# the whole stack was built on it before this line was written.
+java = "temurin-25"
 
 [env]
 # The Android SDK is NOT managed here. mise can install it through an asdf
@@ -64,7 +64,7 @@ if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
 fi
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 yes | sdkmanager --licenses >/dev/null
-sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+sdkmanager --install "platform-tools" "platforms;android-37.1" "build-tools;37.0.0"
 echo "Android SDK ready at $ANDROID_HOME"
 """
 

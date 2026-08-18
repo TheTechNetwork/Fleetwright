@@ -3,22 +3,26 @@
   "extends": ["config:recommended"],
 
   "//": [
-    "The default configuration opens one PR per dependency, which is wrong for",
-    "this repository in a specific and demonstrable way: a bot bumped the",
-    "Compose compiler on its own and broke the Android build, because that",
-    "version is only meaningful in a pair with Kotlin.",
+    "Two rules, and only two.",
+    "",
+    "GROUP WHAT ONLY WORKS TOGETHER. A bot bumped the Compose compiler alone",
+    "and broke the build, because that version is only meaningful paired with",
+    "Kotlin:",
     "",
     "  e: This version (1.5.15) of the Compose Compiler requires Kotlin version",
     "     1.9.25 but you appear to be using Kotlin version 1.9.24",
     "",
-    "So: anything that must move together is grouped, and anything that cannot",
-    "be verified by CI is left for a person."
+    "STAY ON LATEST OTHERWISE. This project has no installed base to keep",
+    "working and CI builds the APK, compiles the iOS app and bundles the Worker",
+    "on every PR — so a major that breaks something says so in minutes. Holding",
+    "majors back for review would be buying safety CI already provides, and",
+    "paying for it in a permanent backlog of deferred upgrades."
   ],
 
   "timezone": "America/Chicago",
-  "schedule": ["before 6am on monday"],
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 2,
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 4,
+  "rebaseWhen": "behind-base-branch",
 
   "packageRules": [
     {
@@ -47,14 +51,8 @@
       "matchPackageNames": ["com.android.application", "com.android.library", "gradle"]
     },
     {
-      "description": "A major version of the build toolchain changes behaviour rather than versions. CI can prove the app still compiles, but not that it still behaves, so these wait for a person.",
-      "matchManagers": ["gradle", "gradle-wrapper"],
-      "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
-    },
-    {
-      "description": "compileSdk is not a dependency — raising it opts into new platform behaviour and needs the matching SDK installed on every builder. Renovate cannot know when that is true.",
-      "matchDepNames": ["compileSdk", "targetSdk"],
+      "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder — including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
+      "matchDepNames": ["compileSdk", "targetSdk", "minSdk"],
       "enabled": false
     },
     {
@@ -65,10 +63,9 @@
       "automerge": true
     },
     {
-      "description": "Node's major version in CI is a real change of runtime. The engines floor in package.json is a compatibility claim and is not Renovate's to move.",
-      "matchDepNames": ["node"],
-      "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
+      "description": "package.json's engines floor is a compatibility claim about what the code needs, not a statement about what CI runs. Renovate moves the runner; a person moves the claim.",
+      "matchDepTypes": ["engines"],
+      "enabled": false
     },
     {
       "description": "Dev-only type checking. Grouped because @types/node and typescript are only meaningful against each other.",
