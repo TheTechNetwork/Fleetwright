@@ -29,8 +29,11 @@ fleet for anyone who finds the URL, and a Worker URL is not a secret.
 Optionally, for push:
 
 ```sh
-npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
+npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 ```
+
+Base64 of that file is accepted too, and is what you want if this coordinator
+ever moves to a box — see [`push.md`](./push.md).
 
 ## Point a host at it
 

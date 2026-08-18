@@ -53,7 +53,7 @@ unset:
 |---|---|
 | `AGENT_FLEET_HOST_TOKEN` | what a host presents. `openssl rand -hex 24` |
 | `AGENT_FLEET_API_TOKEN` | what a phone or Shortcut presents. `openssl rand -hex 24` |
-| `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON. Optional; without it push is logged rather than sent |
+| `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
 
 **Or directly**, which keeps them out of GitHub entirely:
 
@@ -121,11 +121,12 @@ picking something that still reads correctly in three years.
 Not a CI secret. It goes to whichever coordinator is running:
 
 ```sh
-# on Cloudflare
-cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
+# on Cloudflare — JSON or base64, either works
+cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 
-# on a box
-AGENT_FLEET_FCM_SERVICE_ACCOUNT='{"project_id":…}'   # in /etc/agent-fleet-coordinator.env
+# on a box — base64, because a systemd EnvironmentFile mangles the JSON
+base64 -w0 service-account.json     # into /etc/agent-fleet-coordinator.env as
+AGENT_FLEET_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
 ```
 
 Firebase console → Project settings → Service accounts → Generate new private

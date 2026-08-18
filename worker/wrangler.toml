@@ -61,7 +61,8 @@ enabled = true
 #
 #   AGENT_FLEET_HOST_TOKEN            what a host presents to connect
 #   AGENT_FLEET_API_TOKEN             what a phone or Shortcut presents
-#   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON, for push
+#   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
+#                                     base64 of it), for push
 #
 # Without the first two the Worker refuses every request rather than running
 # open — see worker.js. Without the third, push is logged instead of sent, and

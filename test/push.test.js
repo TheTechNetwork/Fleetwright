@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore, describeEvent } from '../src/fleet/coordinator/core.js';
-import { fcmPusher, logPusher, pusherFromEnv, signJwtRS256, pemToBytes } from '../src/fleet/push.js';
+import { fcmPusher, logPusher, pusherFromEnv, parseServiceAccount, signJwtRS256, pemToBytes } from '../src/fleet/push.js';
 
 /** A sender that records what it was asked to deliver. */
 function fakePusher({ dead = [] } = {}) {
@@ -176,6 +176,57 @@ test('a malformed service account falls back to logging rather than throwing', (
   assert.ok(pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
   assert.ok(pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
   assert.equal(warned.length, 2);
+});
+
+test('a service account is read as raw JSON or as base64', () => {
+  // Base64 exists because of systemd. An EnvironmentFile has no multi-line
+  // values, and a service-account JSON arrives pretty-printed across a dozen
+  // lines — so the only form that survives the box is one line of base64.
+  const account = {
+    project_id: 'p',
+    client_email: 'e@example.iam.gserviceaccount.com',
+    private_key: '-----BEGIN PRIVATE KEY-----\nMII\n-----END PRIVATE KEY-----\n',
+  };
+  const json = JSON.stringify(account);
+  const b64 = Buffer.from(json, 'utf8').toString('base64');
+
+  assert.deepEqual(parseServiceAccount(json), account);
+  assert.deepEqual(parseServiceAccount(b64), account);
+  // Still valid base64 after an editor, a YAML block or a copy-paste has
+  // wrapped it.
+  assert.deepEqual(parseServiceAccount(b64.replace(/(.{40})/g, '$1\n')), account);
+  assert.deepEqual(parseServiceAccount(`  ${json}  `), account);
+});
+
+test('what systemd does to a raw-JSON service account is rejected, not half-read', () => {
+  // The actual failure this guards: systemd expands C escapes inside a
+  // double-quoted EnvironmentFile value, so the \n in private_key arrives as a
+  // real newline — which is an illegal raw control character inside a JSON
+  // string. Better to fall back to logging with an explanation than to throw
+  // on a coordinator that was otherwise fine.
+  const mangled = '{"project_id":"p","private_key":"-----BEGIN-----\n-----END-----"}';
+  assert.equal(parseServiceAccount(mangled), null);
+
+  /** @type {string[]} */
+  const warned = [];
+  const pusher = pusherFromEnv(
+    { AGENT_FLEET_FCM_SERVICE_ACCOUNT: mangled },
+    { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) },
+  );
+  assert.ok(pusher);
+  // The message has to name the fix, since the symptom is silence.
+  assert.match(warned.join('\n'), /base64/);
+});
+
+test('a base64 service account configures FCM end to end', () => {
+  /** @type {string[]} */
+  const infos = [];
+  const encoded = Buffer.from(
+    JSON.stringify({ project_id: 'proj-42', client_email: 'e', private_key: 'k' }),
+    'utf8',
+  ).toString('base64');
+  pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: encoded }, { info: (/** @type {any} */ m) => infos.push(String(m)), warn() {} });
+  assert.match(infos.join('\n'), /proj-42/);
 });
 
 test('the FCM JWT is signed with a real key and has the right shape', async () => {
