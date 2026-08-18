@@ -15,12 +15,17 @@ SwiftUI, plus the App Intents that make Siri work — which §7 puts *above* the
 app itself: "Hey Siri, resume bigjob" from a cold radio in under a second is the
 requirement that chose the transport in §4.
 
-## Reviewed, but unrun
+## Compiled, not run
 
-design.md §9 says this plainly and it has not changed: **this cannot be built or
-tested in the environment it was written in.** No macOS, no Xcode, no signing
-identity. The Swift here is reviewed code, not verified code, and the first
-build on a Mac should be expected to turn up something.
+design.md §9 said this could not be built in the environment it was written in —
+no macOS, no Xcode, no signing identity. That is still true locally, but **CI
+builds it on a macOS runner on every PR** (`.github/workflows/ios.yml`), so it
+is no longer unverified code: it compiles, and the first compile duly turned up
+a `Section` initialiser that does not exist.
+
+What CI does *not* do is run it. Nothing here has been driven by a person on a
+device — no Siri phrase spoken, no push delivered, no session resumed from a
+lock screen. Compiling is a much weaker claim than working.
 
 ## Build
 
@@ -46,9 +51,12 @@ credential in an IPA is public the moment somebody unzips it.
 
 Three intents, with phrases registered so they work without opening Shortcuts:
 
-- "Resume *session* in agent-fleet"
-- "Start a session in agent-fleet"
-- "Stop *session* in agent-fleet"
+- "Resume *session* in Fleetwright"
+- "Start a session in Fleetwright"
+- "Stop *session* in Fleetwright"
+
+The app name in those phrases is `\(.applicationName)` rather than a literal,
+so it followed the rename to Fleetwright without anyone editing it.
 
 The session is a **resolved entity**, not free text: Siri matches what you say
 against the sessions that actually exist, rather than mishearing a name and

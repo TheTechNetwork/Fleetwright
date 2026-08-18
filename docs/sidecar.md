@@ -191,24 +191,31 @@ Every setting is in `src/fleet/host/config.js`. Two are worth calling out:
 
 ## Transport
 
-`stdio` is the only one implemented, because the coordinator does not exist yet.
-It speaks newline-delimited JSON, which makes the whole path drivable by hand:
+Two, selected by `AGENT_FLEET_TRANSPORT`, and swapping them is a constructor
+argument in `bin/agent-fleet-sidecar` and nothing else — §4's "build the host
+agent so transport is one swappable module".
+
+`websocket` is what a deployed host uses: it dials the coordinator and holds the
+connection open, so nothing listens on the host and there is no port to open.
+
+`stdio` speaks the same newline-delimited JSON over stdin/stdout, which makes
+the whole path drivable by hand with no coordinator at all:
 
 ```sh
 echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
   | node bin/agent-fleet-sidecar
 ```
 
-It is also the shape the WebSocket transport will have — dial, hand messages to
-a handler, send replies, stop. Swapping one for the other is a constructor
-argument in `bin/agent-fleet-sidecar` and nothing else, which is §4's "build the
-host agent so transport is one swappable module".
+Replies go to **stdout**, logs to **stderr**. That split is enforced: an `info`
+line landing on stdout would not be noise, it would be a corrupted message.
 
 ## Still to build
 
-- The WebSocket transport, once there is a coordinator to dial.
-- Host → coordinator **events** — a session hit a prompt, finished, errored
-  (§3's third meaning of "wake"). The sidecar can already see this by polling
-  `peek`, but nothing pushes it yet.
-- The sandbox launch path, which is what will call `HookSocketServer.open()` and
-  `close()` around a `podman run`.
+- **Enrollment.** Every host presents the same `AGENT_FLEET_HOST_TOKEN` today.
+  §5 wants a per-host key, so revoking one host does not mean rotating all of
+  them, and a short-lived signed assertion rather than the durable secret on the
+  wire.
+- **Rootless podman.** The sandbox has only ever run as root, which is the wrong
+  posture: an escape currently lands as root on the host.
+- **Wake-on-LAN.** §3's second meaning of "wake" — a box that is asleep cannot
+  be a host, and nothing sends the magic packet yet.
