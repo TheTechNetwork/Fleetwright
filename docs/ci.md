@@ -103,9 +103,18 @@ revocable from the web, and it lets `xcodebuild -allowProvisioningUpdates`
 create the signing assets itself. Fastlane match solves the same problem by
 giving you a second repository of secrets to look after.
 
-Two things to do once in App Store Connect before the first upload, because
-neither can be automated: register the bundle id `dev.agentfleet.app`, and
-create the app record.
+Three things to do once in App Store Connect before the first upload, because
+none of them can be automated:
+
+| | |
+|---|---|
+| Bundle id | `network.thetech.fleetwright` |
+| App name | **Fleetwright** — must be unique across the whole App Store, which is what "Agent Fleet" fell foul of |
+| SKU | `fleetwright-ios-001` — internal only, never shown, and never changeable |
+
+The bundle id is reverse-DNS of a domain you actually control, which
+`dev.agentfleet.app` was not. The SKU is arbitrary but permanent, so it is worth
+picking something that still reads correctly in three years.
 
 ## Firebase — push notifications
 

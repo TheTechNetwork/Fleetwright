@@ -12,5 +12,5 @@ dependencyResolutionManagement {
     mavenCentral()
   }
 }
-rootProject.name = "agent-fleet"
+rootProject.name = "fleetwright"
 include(":app")

@@ -1,4 +1,4 @@
-package dev.agentfleet.app
+package network.thetech.fleetwright
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
