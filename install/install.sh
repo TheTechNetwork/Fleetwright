@@ -403,6 +403,16 @@ else
   warn "EDIT IT before starting: set AGENT_HUB_TELEGRAM_TOKEN and AGENT_HUB_TELEGRAM_ALLOWED_USERS"
 fi
 
+# The installer knows exactly where claude is; the service should not have to
+# work it out again. src/core/which.js searches $HOME/.local/bin and would
+# normally find it — but only for the user it runs as, which is why `doctor`
+# run under sudo reports "claude on PATH: FAIL" on a box where the service is
+# perfectly happy. Recording the path removes the guess for both.
+if [ -n "$CLAUDE_BIN" ]; then
+  set_env "$ENV_FILE" AGENT_HUB_CLAUDE_BIN "$CLAUDE_BIN"
+  ok "recorded claude at $CLAUDE_BIN in $ENV_FILE"
+fi
+
 # --- 3b. sidecar configuration ----------------------------------------------
 # Pre-filled from the session manager's own config, because the hub URL and
 # token MUST agree between the two and hand-copying a secret between files is
@@ -594,7 +604,6 @@ for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   ok "/usr/local/bin/$cli -> $DIR/bin/$cli"
 done
 
-# --- done -------------------------------------------------------------------
 # --- 7. the wizard ----------------------------------------------------------
 # Everything above wrote files. This turns the checklist that used to be printed
 # at the end into questions, because most of that checklist was not decisions —
@@ -734,7 +743,10 @@ say "Installed."
 if [ "$WIZARD" = yes ]; then
   if [ "${STARTED:-0}" = 1 ]; then
     printf '\n'
-    "$DIR/bin/agent-hub" doctor 2>&1 | sed 's/^/  /' || true
+    # As the RUN USER, not as root. doctor resolves paths relative to $HOME, so
+    # running it under sudo answers a question nobody asked — it reports on
+    # root's box while the service runs as somebody else.
+    as_user "'$DIR/bin/agent-hub' doctor" 2>&1 | sed 's/^/  /' || true
   fi
 
   printf '\n'
