@@ -27,6 +27,13 @@ jobs:
       # An unparseable workflow does not fail a check — it shows up as a run
       # named after the FILE PATH, with no jobs, which is easy to miss entirely.
       # This one cost a round trip to notice, so it is a check now.
+      # Renovate rejects a config with an invalid option, and the way you find
+      # out is that your rules silently do not apply — no grouping, no limits,
+      # just the defaults doing whatever they were going to do. An invalid `//`
+      # key sat on main doing exactly that.
+      - name: Renovate config is valid
+        run: npx --yes --package renovate renovate-config-validator renovate.json
+
       - name: Workflows parse
         run: |
           npm i --no-save --no-audit --no-fund js-yaml
