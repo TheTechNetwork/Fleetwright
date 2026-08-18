@@ -38,6 +38,54 @@ case "${1:-}" in
   *) die "unknown argument: $1 (only --check is accepted)" ;;
 esac
 
+# Installing missing OS packages rather than printing a command for someone to
+# copy is the difference between "one installer" and "an installer plus a
+# checklist". It is only ever used for packages from the distro's own
+# repositories — nothing here pipes a remote script into a shell.
+#
+# AGENT_HUB_NO_INSTALL_DEPS=1 turns it off for a box where package management is
+# somebody else's job.
+# Run something as the target user. `sudo` is not guaranteed to exist — a
+# minimal Debian image has none, and neither does a container you are already
+# root in — so fall back to running it directly when we are already that user.
+as_user() {
+  if [ "$(id -un)" = "$RUN_USER" ]; then
+    bash -lc "$1"
+  elif command -v sudo >/dev/null; then
+    sudo -u "$RUN_USER" -H bash -lc "$1"
+  elif command -v runuser >/dev/null; then
+    runuser -l "$RUN_USER" -c "$1"
+  else
+    return 1
+  fi
+}
+
+PKG_UPDATED=0
+pkg_install() {
+  [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ] && return 1
+  [ "$(id -u)" = "0" ] || return 1
+  if command -v apt-get >/dev/null; then
+    if [ "$PKG_UPDATED" = 0 ]; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+      PKG_UPDATED=1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" >/dev/null 2>&1
+  elif command -v dnf >/dev/null; then dnf install -y -q "$@" >/dev/null 2>&1
+  elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --quiet "$@" >/dev/null 2>&1
+  elif command -v zypper >/dev/null; then zypper -nq install "$@" >/dev/null 2>&1
+  elif command -v apk >/dev/null; then apk add --quiet "$@" >/dev/null 2>&1
+  else return 1
+  fi
+}
+
+# Why it could not be installed, phrased for whoever has to fix it.
+pkg_why() {
+  if [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ]; then printf 'AGENT_HUB_NO_INSTALL_DEPS=1 is set'
+  elif [ "$(id -u)" != "0" ]; then printf 'not running as root — re-run with sudo'
+  else printf 'no supported package manager found (apt, dnf, pacman, zypper, apk)'
+  fi
+}
+
 say "agent-fleet installer${CHECK_ONLY:+}"
 printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
 [ "$CHECK_ONLY" = 1 ] && printf '  mode   : --check (nothing will be changed)\n'
@@ -50,63 +98,119 @@ say "Checking prerequisites"
 # secure_path — typically /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # — so a node installed by nvm, fnm, volta, asdf or into ~/.local/bin is
 # invisible to this script even though `node -v` works perfectly in the shell
-# the operator just ran `sudo` from. The old check reported "node is not
-# installed" at somebody with a working Node 24.
+# the operator just ran `sudo` from. An earlier version of this script reported
+# "node is not installed" at somebody with a working Node 24.
 #
-# This is the same trap already documented below for `claude`, so it gets the
-# same treatment: ask the run user's own login shell, then look where the
-# common installers actually put things.
-NODE_BIN="$(
-  command -v node 2>/dev/null && exit 0
+# So: ask the run user's own login shell, then look where the common installers
+# actually put things. Same treatment `claude` already gets below.
+find_node() {
+  command -v node 2>/dev/null && return 0
   # The login shell of whoever invoked sudo — this is what picks up nvm's and
   # asdf's shell functions and shims.
-  sudo -u "$RUN_USER" -H bash -lc 'command -v node' 2>/dev/null && exit 0
+  as_user 'command -v node' 2>/dev/null && return 0
   for candidate in \
       /usr/local/bin/node /usr/bin/node /snap/bin/node \
       "$USER_HOME/.local/bin/node" "$USER_HOME/.volta/bin/node" "$USER_HOME/.asdf/shims/node" \
       /home/linuxbrew/.linuxbrew/bin/node; do
-    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; exit 0; }
+    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
   done
-  # nvm and fnm keep one directory per version; take the newest.
+  # nvm and fnm keep one directory per version; take the newest. sort -V, not
+  # sort — otherwise v9.9.9 beats v24.10.0.
   for root in "$USER_HOME/.nvm/versions/node" "$USER_HOME/.local/share/fnm/node-versions" "$USER_HOME/.fnm/node-versions"; do
     [ -d "$root" ] || continue
     newest="$(ls -1d "$root"/*/bin/node "$root"/*/installation/bin/node 2>/dev/null | sort -V | tail -1)"
-    [ -n "$newest" ] && [ -x "$newest" ] && { printf '%s\n' "$newest"; exit 0; }
+    [ -n "$newest" ] && [ -x "$newest" ] && { printf '%s\n' "$newest"; return 0; }
   done
-  exit 1
-)" || die "node was not found — not on this PATH, not in $RUN_USER's login shell, and not in the usual
-       install locations (nvm, fnm, volta, asdf, ~/.local/bin, /usr/local/bin).
+  return 1
+}
 
-       If \`node -v\` works for you but this failed, that is sudo's secure_path
-       hiding it. Either install node system-wide, or re-run telling the script
-       where it is:
+# Major version, or empty if that is not a working node.
+node_major() {
+  major="$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+  case "$major" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$major"
+}
+
+NODE_BIN="$(find_node || true)"
+
+# Missing entirely: install it, the same way tmux and podman are installed.
+if [ -z "$NODE_BIN" ]; then
+  if [ "$CHECK_ONLY" = 1 ]; then
+    warn "node is not installed — the installer would install it"
+  else
+    say "Installing node"
+    if pkg_install nodejs && NODE_BIN="$(find_node || true)" && [ -n "$NODE_BIN" ]; then
+      ok "installed node $("$NODE_BIN" -v)"
+    else
+      die "node is not installed and could not be installed automatically ($(pkg_why)).
+       Install Node 18 or newer and re-run. If \`node -v\` already works for you,
+       that is sudo's secure_path hiding it — point at it directly:
            sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
+    fi
+  fi
+fi
 
-# An explicit override always wins, for the case none of the above finds it.
-NODE_BIN="${AGENT_HUB_NODE_BIN:-$NODE_BIN}"
-[ -x "$NODE_BIN" ] || die "AGENT_HUB_NODE_BIN=$NODE_BIN is not an executable file."
+# An explicit override always wins.
+NODE_BIN="${AGENT_HUB_NODE_BIN:-${NODE_BIN:-}}"
+if [ -n "$NODE_BIN" ]; then
+  [ -x "$NODE_BIN" ] || die "AGENT_HUB_NODE_BIN=$NODE_BIN is not an executable file."
+  NODE_MAJOR="$(node_major "$NODE_BIN")" || die "could not read a version from $NODE_BIN — is it really node?"
 
-NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
-case "$NODE_MAJOR" in
-  ''|*[!0-9]*) die "could not read a version from $NODE_BIN — is it really node?" ;;
-esac
-[ "$NODE_MAJOR" -ge 18 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 18 or newer (it uses global fetch)."
-ok "node $("$NODE_BIN" -v) at $NODE_BIN"
+  # A distro whose nodejs package is older than we need. Say which, rather than
+  # leaving someone to work out why a fresh install still fails.
+  [ "$NODE_MAJOR" -ge 18 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 18 or newer (it uses global fetch).
+       Your distribution's package is too old; use nodesource or nvm:
+           curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs"
+  ok "node $("$NODE_BIN" -v) at $NODE_BIN"
+fi
 
-# The systemd unit hardcodes this path. A node inside the operator's home is
-# usually nvm's, and `nvm install` / `nvm uninstall` moves or removes it —
-# which takes the service down at the next restart, long after the change that
-# caused it. Worth saying out loud rather than discovering months later.
-case "$NODE_BIN" in
+# The systemd unit hardcodes a node path, and that path has a different job from
+# the one the operator's shell uses. A node inside their home is usually nvm's,
+# and `nvm install` / `nvm uninstall` moves or removes it — which takes the
+# service down at the next restart, long after the change that caused it.
+#
+# So the unit prefers a SYSTEM node, installing one if there is none. The two
+# are allowed to differ: the service wants a path that does not move, the
+# operator wants their toolchain.
+UNIT_NODE_BIN="${NODE_BIN:-}"
+case "${NODE_BIN:-}" in
   "$USER_HOME"/*)
-    warn "$NODE_BIN is inside $RUN_USER's home — the systemd unit will point at it."
-    warn "  A version-manager upgrade will move it and the service will fail to start."
-    warn "  Consider a system-wide node: apt install nodejs, or n/nodesource."
+    for attempt in find install; do
+      for candidate in /usr/local/bin/node /usr/bin/node; do
+        [ -x "$candidate" ] || continue
+        candidate_major="$(node_major "$candidate")" || continue
+        [ "$candidate_major" -ge 18 ] || continue
+        UNIT_NODE_BIN="$candidate"
+        break 3
+      done
+      [ "$attempt" = find ] || break
+      [ "$CHECK_ONLY" = 1 ] && break
+      say "Installing a system node for the service"
+      warn "$NODE_BIN is inside $RUN_USER's home — a version-manager upgrade would move it"
+      pkg_install nodejs || true
+    done
+    if [ "$UNIT_NODE_BIN" = "$NODE_BIN" ]; then
+      warn "no system node available — the systemd unit will point at $NODE_BIN"
+      warn "  A version-manager upgrade will move it and the service will fail to start."
+    else
+      ok "systemd will use $UNIT_NODE_BIN — a path that will not move"
+    fi
     ;;
 esac
 
-command -v tmux >/dev/null || die "tmux is not installed. Try: apt install -y tmux"
-ok "tmux $(tmux -V | awk '{print $2}')"
+# tmux is not optional — it is what holds every session — so a missing one is
+# fixed here rather than reported.
+if ! command -v tmux >/dev/null; then
+  if [ "$CHECK_ONLY" = 1 ]; then
+    warn "tmux is not installed — the installer would install it"
+  elif pkg_install tmux && command -v tmux >/dev/null; then
+    ok "installed tmux"
+  else
+    die "tmux is not installed and could not be installed automatically ($(pkg_why)).
+       Install it and re-run:  apt install -y tmux"
+  fi
+fi
+command -v tmux >/dev/null && ok "tmux $(tmux -V | awk '{print $2}')"
 
 # claude may legitimately be missing at this point — agent-hub can install
 # nothing for you, but it CAN log you in once it is running, so this is a
@@ -134,7 +238,7 @@ if [ -n "$CLAUDE_BIN" ]; then
   fi
   # Put it on the login-shell PATH too, so an operator who SSHes in and types
   # `claude` gets the same binary agent-hub uses.
-  if ! sudo -u "$RUN_USER" -H bash -lc 'command -v claude' >/dev/null 2>&1; then
+  if ! as_user 'command -v claude' >/dev/null 2>&1; then
     BIN_DIR="$(dirname "$CLAUDE_BIN")"
     PROFILE="$CLAUDE_HOME/.profile"
     if ! grep -qF "$BIN_DIR" "$PROFILE" 2>/dev/null; then
@@ -142,19 +246,56 @@ if [ -n "$CLAUDE_BIN" ]; then
       ok "added $BIN_DIR to $PROFILE (it was missing from the login-shell PATH)"
     fi
   fi
+elif [ "$CHECK_ONLY" = 1 ]; then
+  warn "claude is not installed — the installer would install it"
 else
-  warn "claude was not found. Install it before starting sessions:"
-  warn "  curl -fsSL https://claude.ai/install.sh | bash"
+  # The one thing here that is not a distro package. This runs Anthropic's own
+  # installer, as the RUN USER rather than as root, because it installs into
+  # ~/.local/bin and a root-owned binary in someone's home is its own problem.
+  #
+  # Not fatal if it fails: the hub still comes up, still serves its web UI, and
+  # still tells you claude is missing. A box you can log into and fix beats an
+  # installer that stopped halfway.
+  say "Installing the Claude Code CLI"
+  command -v curl >/dev/null || pkg_install curl || true
+  if ! command -v curl >/dev/null; then
+    warn "curl is not available ($(pkg_why)) — install claude yourself:"
+    warn "  curl -fsSL https://claude.ai/install.sh | bash"
+  elif as_user 'curl -fsSL https://claude.ai/install.sh | bash' >/tmp/claude-install.log 2>&1; then
+    for candidate in "$USER_HOME/.local/bin/claude" "$USER_HOME/.claude/local/claude" /usr/local/bin/claude; do
+      [ -x "$candidate" ] && { CLAUDE_BIN="$candidate"; break; }
+    done
+    if [ -n "$CLAUDE_BIN" ]; then
+      ok "installed claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
+      warn "claude is NOT logged in yet — run 'agent-hub login' or send /login in Telegram"
+    else
+      warn "the claude installer finished but no binary was found — see /tmp/claude-install.log"
+    fi
+  else
+    warn "could not install claude — see /tmp/claude-install.log. Install it yourself:"
+    warn "  curl -fsSL https://claude.ai/install.sh | bash"
+  fi
 fi
 
-# The sandbox is optional, so a missing podman is a note rather than a failure.
+# podman is optional — sessions run fine without it, just not sandboxed — so a
+# failure to install is a warning rather than a stop. It is still attempted,
+# because "sandboxed sessions" is not much use as a feature you have to go and
+# enable the prerequisites for yourself.
+HAVE_PODMAN=0
+if ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
+  say "Installing podman (for sandboxed sessions)"
+  if pkg_install podman && command -v podman >/dev/null; then
+    ok "installed podman"
+  else
+    warn "could not install podman ($(pkg_why)) — sessions will run directly on this box"
+    warn "  install it yourself and re-run to build the sandbox image"
+  fi
+fi
 if command -v podman >/dev/null; then
   ok "podman $(podman --version | awk '{print $3}') — the sandbox is available"
   HAVE_PODMAN=1
-else
-  warn "podman is not installed — sessions will run directly on this box, not sandboxed"
-  warn "  apt install -y podman   (then re-run to build the sandbox image)"
-  HAVE_PODMAN=0
+elif [ "$CHECK_ONLY" = 1 ]; then
+  warn "podman is not installed — the installer would install it (sandboxing is optional)"
 fi
 
 if [ "$CHECK_ONLY" = 1 ]; then
@@ -245,12 +386,21 @@ ok "$UNIT"
 # The tmux server must outlive the login session that spawned it, or every
 # session dies when the operator logs out.
 if command -v loginctl >/dev/null; then
-  loginctl enable-linger "$RUN_USER" 2>/dev/null && ok "lingering enabled for $RUN_USER" \
+  loginctl enable-linger "$RUN_USER" >/dev/null 2>&1 && ok "lingering enabled for $RUN_USER" \
     || warn "could not enable lingering for $RUN_USER — sessions may not survive logout"
 fi
 
-systemctl daemon-reload
-ok "systemd reloaded"
+if systemctl daemon-reload >/dev/null 2>&1; then
+  ok "systemd reloaded"
+  HAVE_SYSTEMD=1
+else
+  # A container, WSL, or a chroot. Everything else here still applies — the
+  # unit file is written and will work the moment systemd is running — so this
+  # is a note, not a failure.
+  warn "systemd is not running here, so the unit was written but not loaded."
+  warn "  Start the hub directly instead:  $UNIT_NODE_BIN $DIR/bin/agent-hub serve"
+  HAVE_SYSTEMD=0
+fi
 
 # --- 5. the SessionStart hook ----------------------------------------------
 # This is what makes resume reliable: Claude hands the hook its own session id
@@ -352,7 +502,12 @@ say "Linking the CLIs"
 for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   [ -f "$DIR/bin/$cli" ] || continue
   ln -sf "$DIR/bin/$cli" "/usr/local/bin/$cli"
-  chmod +x "$DIR/bin/$cli"
+  # Belt-and-braces: git already records the executable bit, so this only
+  # matters for a checkout that lost it. Never fatal — the repo may legitimately
+  # be on a read-only mount, or owned by someone else, and the symlink above is
+  # the part that matters.
+  [ -x "$DIR/bin/$cli" ] || chmod +x "$DIR/bin/$cli" 2>/dev/null || \
+    warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
   ok "/usr/local/bin/$cli -> $DIR/bin/$cli"
 done
 
