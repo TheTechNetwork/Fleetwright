@@ -88,7 +88,7 @@ function sandboxArgv(cfg, name, hookSocket) {
 
   // The per-session hook socket, bind-mounted into this container and no other,
   // so the session can report its conversation uuid without being able to name
-  // any session but its own. See src/fleet/host/hook-socket.js.
+  // any session but its own. See src/core/hook-socket.js.
   if (hookSocket) {
     argv.push('-v', `${cfg.sandboxHookSocketDir}/${name}.sock:/run/hub.sock`);
   }

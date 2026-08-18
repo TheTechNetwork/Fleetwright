@@ -21,7 +21,7 @@ import {
 import { isValidName, nameError, generateName } from './names.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 
@@ -36,10 +36,15 @@ export class SessionManager {
   /**
    * @param {import('../config.js').Config} cfg
    * @param {import('./registry.js').Registry} registry
+   * @param {import('./hook-socket.js').HookSocketServer|null} [hooks]
    */
-  constructor(cfg, registry) {
+  constructor(cfg, registry, hooks = null) {
     this.cfg = cfg;
     this.registry = registry;
+    // Serves the per-session hook sockets a sandboxed session reports through.
+    // Optional: an unsandboxed deployment does not need one, and the fleet
+    // sidecar can supply its own.
+    this.hooks = hooks;
     // Names with a start/resume in flight. A start takes up to ~2×rcTimeoutMs
     // while Remote Control is verified, and during that window the session is
     // in tmux but not yet finished. Without this, a second /start with the same
@@ -308,8 +313,15 @@ export class SessionManager {
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
-      // here again. What DOES have to happen first is the volumes existing and
-      // the conversation volume having credentials in it — without that the
+      // here again. The host directory still has to exist, though — it is the
+      // tmux pane's cwd, and `tmux new-session -c` on a missing directory
+      // fails. Skipping trust is not the same as skipping the directory.
+      try {
+        mkdirSync(cwd, { recursive: true });
+      } catch { /* already there, or not ours to make — tmux reports either */ }
+
+      // What DOES have to happen first is the volumes existing and the
+      // conversation volume having credentials in it — without that the
       // session comes up unauthenticated and hangs at a login prompt.
       const volumes = ensureSandboxVolumes(this.cfg, name);
       if (!volumes.ok) {
@@ -328,7 +340,7 @@ export class SessionManager {
         name,
         resumeUuid,
         skipPermissions,
-        hookSocket: this.#hookSocketReady(name),
+        hookSocket: await this.#ensureHookSocket(name),
       });
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
@@ -407,30 +419,40 @@ export class SessionManager {
   }
 
   /**
-   * Is this session's hook socket actually there to mount?
+   * Make sure this session has a hook socket to report through, opening one if
+   * there is not already.
    *
-   * podman creates a DIRECTORY for a bind-mount source that does not exist, so
-   * mounting a missing socket does not fail — it produces a container whose
-   * /run/hub.sock is a directory, whose SessionStart hook silently cannot
-   * report, and therefore a session with no conversation uuid. That is an
-   * unresumable session, which is the single failure this whole tool exists to
-   * prevent, arriving quietly.
+   * This used to warn and carry on, which was the wrong call. podman creates a
+   * DIRECTORY for a bind-mount source that does not exist, so mounting a
+   * missing socket does not fail loudly — it produces a container whose
+   * /run/hub.sock is a directory, whose SessionStart hook cannot report, and
+   * therefore a session with no conversation uuid. An unresumable session, made
+   * quietly, which is the single failure this whole tool exists to prevent.
    *
-   * So: check, and say so. Nothing here creates the socket — that is the fleet
-   * sidecar's job, and a box running without one is a perfectly ordinary
-   * unsandboxed-hook deployment.
+   * So it is opened here instead. Warning about something we can fix is just
+   * asking somebody else to go and fix it.
    *
    * @param {string} name
+   * @returns {Promise<boolean>} whether the launch should mount it
    */
-  #hookSocketReady(name) {
+  async #ensureHookSocket(name) {
     if (!this.cfg.sandbox || !this.cfg.sandboxHookSocket) return false;
     const socket = path.join(this.cfg.sandboxHookSocketDir, `${name}.sock`);
     if (existsSync(socket)) return true;
-    log.warn(
-      `${name}: no hook socket at ${socket} — starting without it. The session will not be able to ` +
-        'report its conversation uuid, so it will not be resumable. Is the fleet sidecar running?',
-    );
-    return false;
+    if (!this.hooks) {
+      log.warn(
+        `${name}: no hook socket at ${socket} and nothing here serves them — starting without it. ` +
+          'The session will not record a conversation uuid, so it will not be resumable.',
+      );
+      return false;
+    }
+    try {
+      await this.hooks.open(name);
+      return true;
+    } catch (e) {
+      log.warn(`${name}: could not open a hook socket: ${/** @type {Error} */ (e).message}`);
+      return false;
+    }
   }
 
   /**
@@ -559,6 +581,7 @@ export class SessionManager {
     // in named volumes indefinitely. Make it true on disk too (design.md §2).
     let volumes = '';
     if (this.cfg.sandbox) {
+      void this.hooks?.close(name);
       stopSandboxContainer(this.cfg, name);
       const { removed, failed } = removeSandboxVolumes(this.cfg, name);
       if (removed.length) volumes = `\nDeleted ${removed.join(' and ')}.`;

@@ -8,7 +8,13 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
+
+// The checkout this process is running from — two levels up from src/config.js.
+// Derived rather than configured, so it is right by construction even when the
+// service is started from somewhere else entirely.
+const INSTALL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** @typedef {ReturnType<typeof loadConfig>} Config */
 
@@ -50,6 +56,9 @@ export function loadConfig(env = process.env) {
 
   const cfg = {
     // --- where state lives -------------------------------------------------
+    // The deployment itself, which /update pulls into. Overridable for the odd
+    // layout where the checkout is not the parent of src/.
+    installDir: str('AGENT_HUB_INSTALL_DIR', INSTALL_DIR),
     stateDir,
     stateFile: path.join(stateDir, 'state.json'),
     // The SessionStart hook appends here when it cannot reach the HTTP control
@@ -103,6 +112,12 @@ export function loadConfig(env = process.env) {
     // configured. Naming it in full skips that lookup entirely. A remote image
     // must likewise be given in full (registry/name:tag).
     sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'localhost/agent-session:latest'),
+    // Build the image on demand if it is missing, rather than refusing to start
+    // a session over something we know how to fix. The first session on a fresh
+    // box pays a few minutes for it; every one after that is instant.
+    sandboxAutoBuild: bool('AGENT_HUB_SANDBOX_AUTO_BUILD', true),
+    // The Containerfile to build from, next to the checkout by default.
+    sandboxContainerfile: str('AGENT_HUB_SANDBOX_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'Containerfile')),
     // Resource limits become podman flags — one mechanism rather than a
     // separate cgroup layer. Empty disables the flag entirely.
     sandboxMemory: str('AGENT_HUB_SANDBOX_MEMORY', '8g'),

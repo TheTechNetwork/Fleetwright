@@ -81,6 +81,7 @@ dispatcher, so nothing can work in one surface and be missing from another.
 | `/list` | Everything — running and resumable. |
 | `/status [name]` | Hub health, or one session's detail. |
 | `/forget <name>` | Stop it *and* erase the record. No longer resumable. |
+| `/update [--restart]` | Pull the latest code onto this box. `--restart` applies it; sessions keep running. |
 | `/login` | Log this box into a Claude account. `/login console`, `/login status`, `/login logout`, `/login cancel`. |
 | `/code <value>` | Send back the authorization code from the login page. |
 | `/whoami` | The id this hub sees you as — what goes in the allowlist. |

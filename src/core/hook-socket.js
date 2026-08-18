@@ -36,11 +36,17 @@
 // That inverts the trust relationship: the body used to be the authority and
 // was forgeable; now the socket is the authority and is not.
 //
-// STATUS: this module is the §10 "still unvalidated" item, now validated — see
-// docs/hook-socket.md and test/hook-socket.test.js. It is written against
-// agent-hub's SessionManager.recordUuid() signature so that upstreaming it is
-// wiring, not a rewrite: the hub constructs one of these and hands it
-// recordUuid as onSessionStart.
+// WHERE THIS LIVES, AND WHY IT MOVED
+//
+// This is core, not fleet. The sandbox is a session-manager feature, and a
+// sandboxed session's conversation uuid can only reach the registry through
+// one of these — so the session manager has to own it. When the fleet sidecar
+// owned it, a box running without a sidecar started sandboxed sessions whose
+// hook could not report, which made them silently unresumable: the single
+// failure this whole tool exists to prevent, arriving quietly.
+//
+// The sidecar still uses it, for the same reason it always did. It just is not
+// the only thing that can.
 
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
