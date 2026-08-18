@@ -572,10 +572,13 @@ chown "$RUN_USER" "${CLAUDE_HOME:-$HOME}/.claude/settings.json" 2>/dev/null || t
 # switched on with no image is a session that dies the instant it starts.
 if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
   say "Building the sandbox image"
-  if podman image exists agent-session:latest && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
-    ok "agent-session:latest already built — AGENT_FLEET_REBUILD_IMAGE=1 to rebuild"
-  elif podman build -t agent-session:latest -f "$DIR/sandbox/Containerfile" "$DIR/sandbox" >/tmp/agent-session-build.log 2>&1; then
-    ok "agent-session:latest"
+  # Tagged with the localhost/ prefix, and referenced that way everywhere else.
+  # A bare name goes through short-name resolution at run time, which fails on a
+  # stock Debian 13 with no unqualified-search-registries configured.
+  if podman image exists localhost/agent-session:latest && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
+    ok "localhost/agent-session:latest already built — AGENT_FLEET_REBUILD_IMAGE=1 to rebuild"
+  elif podman build -t localhost/agent-session:latest -f "$DIR/sandbox/Containerfile" "$DIR/sandbox" >/tmp/agent-session-build.log 2>&1; then
+    ok "localhost/agent-session:latest"
   else
     warn "image build failed — see /tmp/agent-session-build.log. The sandbox stays off until it succeeds."
   fi

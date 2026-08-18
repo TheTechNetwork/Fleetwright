@@ -50,6 +50,20 @@ export function sandboxNames(name) {
   };
 }
 
+/**
+ * Is the sandbox image actually built?
+ *
+ * Checked before anything else touches podman, because otherwise a missing
+ * image first surfaces from the credential-seeding step — which then blames the
+ * credentials file, and sends whoever is reading the error at the wrong
+ * problem entirely.
+ *
+ * @param {import('../config.js').Config} cfg
+ */
+export function sandboxImageExists(cfg) {
+  return podman(cfg, ['image', 'exists', cfg.sandboxImage]).status === 0;
+}
+
 /** @param {import('../config.js').Config} cfg @param {string} volume */
 function volumeExists(cfg, volume) {
   return podman(cfg, ['volume', 'exists', volume]).status === 0;
@@ -71,6 +85,19 @@ function volumeExists(cfg, volume) {
  * @returns {{ ok: boolean, message?: string }}
  */
 export function ensureSandboxVolumes(cfg, name) {
+  if (!podmanAvailable(cfg)) {
+    return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
+  }
+  if (!sandboxImageExists(cfg)) {
+    return {
+      ok: false,
+      message:
+        `the sandbox image ${cfg.sandboxImage} is not built. Build it with:\n` +
+        '  podman build -t localhost/agent-session:latest -f sandbox/Containerfile sandbox/\n' +
+        '(or re-run install/install.sh, which builds it)',
+    };
+  }
+
   const { claude, work } = sandboxNames(name);
 
   for (const volume of [claude, work]) {
@@ -111,9 +138,7 @@ function seedCredentials(cfg, volume) {
   if (r.status !== 0) {
     return {
       ok: false,
-      message:
-        `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}\n` +
-        `(is ${source} readable, and has the image been built? see sandbox/README.md)`,
+      message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}\n(is ${source} readable?)`,
     };
   }
   log.info(`sandbox: seeded credentials into ${volume}`);
