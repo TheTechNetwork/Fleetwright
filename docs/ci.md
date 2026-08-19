@@ -134,6 +134,26 @@ Internal testers need no review, so this costs a macOS build and nothing else.
 External testing still wants a published release, which is where a decision
 belongs.
 
+### The first upload will fail without these
+
+Both errors from a real attempt, and neither is fixable in this repository:
+
+```
+error: exportArchive Cloud signing permission error
+error: exportArchive No profiles for 'network.thetech.fleetwright' were found
+```
+
+1. **Register the App ID.** Developer portal → Certificates, Identifiers &
+   Profiles → Identifiers → `network.thetech.fleetwright`, with **Push
+   Notifications** enabled. There is no profile to find until the identifier
+   exists, and enabling push later means re-issuing the profile.
+2. **The API key needs App Manager or Admin.** Cloud signing —
+   `-allowProvisioningUpdates`, which is how CI signs without certificates in
+   the repo — creates certificates and profiles on demand, and a **Developer**
+   role key is not allowed to. That is what "Cloud signing permission error"
+   means. Users and Access → Integrations → App Store Connect API.
+3. **Create the app record** (below).
+
 Three things to do once in App Store Connect before the first upload, because
 none of them can be automated:
 
@@ -141,11 +161,12 @@ none of them can be automated:
 |---|---|
 | Bundle id | `network.thetech.fleetwright` |
 | App name | **Fleetwright** — must be unique across the whole App Store, which is what "Agent Fleet" fell foul of |
-| SKU | `fleetwright-ios-001` — internal only, never shown, and never changeable |
+| SKU | `network.thetech.fleetwright` — the bundle id reused. Internal only, never shown, and never changeable |
 
 The bundle id is reverse-DNS of a domain you actually control, which
-`dev.agentfleet.app` was not. The SKU is arbitrary but permanent, so it is worth
-picking something that still reads correctly in three years.
+`dev.agentfleet.app` was not. The SKU is arbitrary but permanent; reusing the
+bundle id means there is one string to remember rather than two, and no chance
+of the two drifting into looking like different apps.
 
 ## Firebase — push notifications
 
