@@ -17,7 +17,6 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE=/etc/agent-hub.env
 SIDECAR_ENV=/etc/agent-fleet-sidecar.env
 COORD_ENV=/etc/agent-fleet-coordinator.env
-UNIT=/etc/systemd/system/agent-hub.service
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
 # Resolved once, up here, because finding node depends on it — sudo hides
 # anything a version manager put in this directory.
@@ -468,14 +467,26 @@ NODE
   chmod 0600 "$SIDECAR_ENV"
 fi
 
-# --- 4. systemd unit --------------------------------------------------------
-say "Installing the systemd unit"
-sed -e "s|__USER__|$RUN_USER|g" \
-    -e "s|__DIR__|$DIR|g" \
-    -e "s|__NODE__|$NODE_BIN|g" \
-    "$DIR/install/agent-hub.service" > "$UNIT"
-chmod 0644 "$UNIT"
-ok "$UNIT"
+# --- 4. systemd units -------------------------------------------------------
+say "Installing the systemd units"
+
+# All three, not just agent-hub. Installing only the hub was a real bug with a
+# quiet symptom: the installer went on to call `systemctl enable --now
+# agent-fleet-sidecar` on a unit that did not exist, warned once, and finished
+# looking successful — so the box never joined a fleet, and the coordinator it
+# was meant to join reported that no host had ever connected.
+install_unit() { # install_unit NAME
+  sed -e "s|__USER__|$RUN_USER|g" \
+      -e "s|__DIR__|$DIR|g" \
+      -e "s|__NODE__|$NODE_BIN|g" \
+      "$DIR/install/$1.service" > "/etc/systemd/system/$1.service"
+  chmod 0644 "/etc/systemd/system/$1.service"
+  ok "/etc/systemd/system/$1.service"
+}
+
+install_unit agent-hub
+install_unit agent-fleet-sidecar
+install_unit agent-fleet-coordinator
 
 # Reading the service journal needs group membership: systemd-journald shows a
 # plain user only their own logs. Without this /logs returns "no entries" for a
@@ -505,7 +516,7 @@ else
   # A container, WSL, or a chroot. Everything else here still applies — the
   # unit file is written and will work the moment systemd is running — so this
   # is a note, not a failure.
-  warn "systemd is not running here, so the unit was written but not loaded."
+  warn "systemd is not running here, so the units were written but not loaded."
   warn "  Start the hub directly instead:  $UNIT_NODE_BIN $DIR/bin/agent-hub serve"
   HAVE_SYSTEMD=0
 fi
