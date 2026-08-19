@@ -179,9 +179,8 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
     changed = changed || result.changed;
   }
 
-  if (!changed) return { ok: true, changed: false, message: parts.join('\n\n'), restarting: false };
-
   if (!restart) {
+    if (!changed) return { ok: true, changed: false, message: parts.join('\n\n'), restarting: false };
     parts.push(
       canSelfRestart()
         ? 'The new code is on disk but this process is still the old one. /update --restart to apply it.'
@@ -190,9 +189,28 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
     return { ok: true, changed: true, message: parts.join('\n\n'), restarting: false };
   }
 
+  // A RESTART WAS ASKED FOR, so `changed` no longer decides anything.
+  //
+  // It used to. The check above ran before this block, which broke the exact
+  // path the "Restart to apply" button exists to drive: the first /update
+  // pulls and offers the button, the button runs /update --restart, that pull
+  // finds nothing left to fetch — because the first one already fetched it —
+  // and the whole thing returned "Already up to date" without restarting. The
+  // new code sat on disk and the old process kept serving it, with the UI
+  // reporting success.
+  //
+  // `changed` answers "did THIS invocation pull anything", which is not the
+  // question. The question is whether the running process is the code on disk,
+  // and an explicit restart request settles it: somebody asked, and a restart
+  // that turns out to be unnecessary costs a few seconds and leaves every
+  // session running.
   if (!canSelfRestart()) {
     parts.push('Not running under systemd, so this cannot restart itself — restart it however you started it.');
-    return { ok: true, changed: true, message: parts.join('\n\n'), restarting: false };
+    return { ok: true, changed, message: parts.join('\n\n'), restarting: false };
+  }
+
+  if (!changed) {
+    parts.push('Nothing new to pull — this is applying code that was already fetched.');
   }
 
   // Exit rather than `systemctl restart`: systemd's Restart=always brings us
