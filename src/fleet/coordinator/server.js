@@ -209,7 +209,13 @@ export class Coordinator {
     }
 
     if (p === '/api/hosts' && req.method === 'GET') {
-      return json(res, 200, { ok: true, hosts: this.registry.list() });
+      // core.snapshot(), the same call the Worker makes, so the two
+      // coordinators answer in the SAME SHAPE. They did not: this returned
+      // {ok, hosts} while the Worker returned {ok, protocol, hosts, devices,
+      // events}. A client that works against one and not the other makes
+      // "the same code runs in both places" false in the only place a client
+      // can see — and the apps have to hold both shapes in their head.
+      return json(res, 200, { ok: true, ...this.core.snapshot() });
     }
 
     if (p === '/api/intent' && req.method === 'POST') {
