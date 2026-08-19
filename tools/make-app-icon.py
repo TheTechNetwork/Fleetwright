@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Generate apps/ios/.../AppIcon.appiconset/icon-1024.png.
+"""Generate every store image from one piece of geometry.
+
+  tools/make-app-icon.py
+
+writes the iOS app icon (1024), the Play listing icon (512) and the Play
+feature graphic (1024x500). Three sizes, one definition — so the mark cannot
+drift between the two stores, which is exactly what happens when somebody
+resizes a PNG by hand at eleven at night.
 
 A script rather than a committed-and-forgotten binary: the icon is 30 lines of
 geometry, and this way changing it is editing numbers instead of finding
@@ -12,9 +19,7 @@ apply its own corner mask.
 """
 import struct, zlib, pathlib
 
-S = 1024          # final size
 SS = 2            # supersample factor, for antialiased edges
-N = S * SS
 
 BG_TOP = (0x10, 0x16, 0x20)
 BG_BOTTOM = (0x1C, 0x26, 0x33)
@@ -38,17 +43,32 @@ def rounded(px, py, x0, y0, x1, y1, r):
     return (px - cx) ** 2 + (py - cy) ** 2 <= r * r
 
 
-def render():
-    acc = bytearray(S * S * 3)
-    counts = S * S
+def render(S, H=None):
+    """@param S width @param H height, defaulting to square."""
+    H = H or S
+    N = S * SS
+    NH = H * SS
+    counts = S * H
     # Render at SS scale, box-downsample into the final buffer.
     sums = [[0, 0, 0] for _ in range(counts)]
+    # The bars are placed in units of the SHORT side, so the mark keeps its
+    # proportions on a wide canvas instead of stretching into a smear.
+    unit = min(N, NH)
+    inset_x = (N - unit) / 2
+    inset_y = (NH - unit) / 2
     bars = [
-        (BAR_X * N, y * N, (BAR_X + w) * N, (y + BAR_H) * N, BAR_H * N / 2, c)
+        (
+            inset_x + BAR_X * unit,
+            inset_y + y * unit,
+            inset_x + (BAR_X + w) * unit,
+            inset_y + (y + BAR_H) * unit,
+            BAR_H * unit / 2,
+            c,
+        )
         for (y, w, c) in BARS
     ]
-    for sy in range(N):
-        t = sy / (N - 1)
+    for sy in range(NH):
+        t = sy / (NH - 1)
         bg = tuple(int(a + (b - a) * t) for a, b in zip(BG_TOP, BG_BOTTOM))
         row_base = (sy // SS) * S
         for sx in range(N):
@@ -61,6 +81,7 @@ def render():
             cell[0] += colour[0]
             cell[1] += colour[1]
             cell[2] += colour[2]
+    acc = bytearray(counts * 3)
     n = SS * SS
     for i, cell in enumerate(sums):
         acc[i * 3] = cell[0] // n
@@ -69,20 +90,32 @@ def render():
     return bytes(acc)
 
 
-def png(rgb, size):
-    raw = b''.join(b'\x00' + rgb[y * size * 3:(y + 1) * size * 3] for y in range(size))
+def png(rgb, width, height=None):
+    height = height or width
+    raw = b''.join(b'\x00' + rgb[y * width * 3:(y + 1) * width * 3] for y in range(height))
 
     def chunk(tag, data):
         c = tag + data
         return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
 
     return (b'\x89PNG\r\n\x1a\n'
-            + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+            + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
             + chunk(b'IDAT', zlib.compress(raw, 9))
             + chunk(b'IEND', b''))
 
 
-out = pathlib.Path(__file__).resolve().parent.parent / 'apps/ios/Fleetwright/Assets.xcassets/AppIcon.appiconset/icon-1024.png'
-out.parent.mkdir(parents=True, exist_ok=True)
-out.write_bytes(png(render(), S))
-print(f'wrote {out} ({out.stat().st_size} bytes)')
+root = pathlib.Path(__file__).resolve().parent.parent
+
+# (path, width, height). The Play listing icon is 512 and the feature graphic
+# is 1024x500 — both fixed by Google, neither negotiable.
+TARGETS = [
+    ('apps/ios/Fleetwright/Assets.xcassets/AppIcon.appiconset/icon-1024.png', 1024, None),
+    ('apps/android/store/icon-512.png', 512, None),
+    ('apps/android/store/feature-graphic-1024x500.png', 1024, 500),
+]
+
+for rel, w, h in TARGETS:
+    out = root / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png(render(w, h), w, h))
+    print(f'wrote {rel} ({w}x{h or w}, {out.stat().st_size} bytes)')
