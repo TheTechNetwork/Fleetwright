@@ -36,6 +36,7 @@
 import { describe } from '../core/login.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
+import { reboot } from '../core/reboot.js';
 import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
@@ -452,6 +453,20 @@ export const COMMANDS = {
           '\n\n/upgrade --apply to install them.',
         buttons: ctx.cfg.systemUpgrade ? [{ label: 'Install updates', command: '/upgrade --apply' }] : undefined,
       };
+    },
+  },
+
+  reboot: {
+    usage: '/reboot [token] [hostname]',
+    short: 'Reboot this box',
+    help:
+      'Reboot the machine. Three confirmations, each asking for something ' +
+      'different: the command, a one-time token, and the hostname typed out. ' +
+      'Every running session dies — a reboot takes the tmux server with it.',
+    run: async (ctx, args) => {
+      const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
+      const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running });
+      return { ok: r.ok, text: r.text };
     },
   },
 

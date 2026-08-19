@@ -984,6 +984,34 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
   fi
 
+  # Reboot is asked separately, and defaults to no. It is not a bigger version
+  # of the same permission: installing packages leaves every session running,
+  # and a reboot takes the tmux server with it, so every session dies
+  # mid-thought. Folding the two into one question would mean somebody granting
+  # the second while thinking about the first.
+  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT)" ] \
+     && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
+    printf '  /reboot can restart this machine from chat, behind three confirmations:\n'
+    printf '  the command, a one-time token, and the hostname typed out.\n'
+    printf '  EVERY RUNNING SESSION DIES — a reboot takes the tmux server with it.\n'
+    if confirm "Allow reboot from chat?" N; then
+      SUDO_TMP="$(mktemp)"
+      printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl reboot\n' "$RUN_USER" > "$SUDO_TMP"
+      if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
+        install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-reboot
+        set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 1
+        ok "/etc/sudoers.d/agent-hub-reboot — $RUN_USER may run systemctl reboot"
+      else
+        warn "the sudoers rule did not validate, so it was NOT installed"
+      fi
+      rm -f "$SUDO_TMP"
+    else
+      set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 0
+      ok "skipping — /reboot will explain how to turn it on if anybody asks"
+    fi
+    printf '\n'
+  fi
+
   # --- sandbox -------------------------------------------------------------
   if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" ]; then
     printf '\n  Sandboxed sessions get real root inside a container whose filesystem is\n'

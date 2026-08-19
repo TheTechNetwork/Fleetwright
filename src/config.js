@@ -115,6 +115,9 @@ export function loadConfig(env = process.env) {
     // not have. Turning this on is half the story; the other half is a scoped
     // sudoers rule, and /upgrade prints the exact line when this is off.
     systemUpgrade: bool('AGENT_HUB_SYSTEM_UPGRADE', false),
+    // Separate from systemUpgrade, and separately off. Rebooting ends every
+    // running session; installing packages does not.
+    systemReboot: bool('AGENT_HUB_SYSTEM_REBOOT', false),
     runUser: str('AGENT_HUB_USER', process.env.USER || 'agent'),
 
     // Pulled, not built. Every host running the same published image is the
