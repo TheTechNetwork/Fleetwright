@@ -134,6 +134,29 @@ Internal testers need no review, so this costs a macOS build and nothing else.
 External testing still wants a published release, which is where a decision
 belongs.
 
+### Builds reach internal testers by themselves
+
+`tools/testflight-distribute.mjs` runs after the upload: it waits for the build
+to finish processing, finds the internal beta group, and adds the build to it.
+Testers are notified by App Store Connect as usual.
+
+Two things it needs that this repository cannot create:
+
+- **An internal group** — TestFlight → Internal Testing → **+**. Any name. Set
+  the `BETA_GROUP_NAME` repository *variable* if you have more than one;
+  unset means the first, which is right while there is exactly one.
+- **Testers in it.** Internal testers are people with an App Store Connect
+  role, up to 100, and they need no review.
+
+There is a checkbox in App Store Connect that does the same thing — automatic
+distribution on the group. It works. This is in a file that can be reviewed and
+that does not quietly stop applying when a group is renamed.
+
+Export compliance is answered in the bundle (`ITSAppUsesNonExemptEncryption:
+false`, correct because the app uses HTTPS and nothing else), so builds do not
+stop at "Missing Compliance" — which would otherwise leave a build that looks
+delivered and reaches nobody.
+
 ### The app icon is generated
 
 `tools/make-app-icon.py` writes `Assets.xcassets/AppIcon.appiconset/icon-1024.png`
