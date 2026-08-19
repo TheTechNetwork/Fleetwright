@@ -110,17 +110,29 @@ becomes the *upload* key, which Google can reset if lost. That is the safer
 default for a first release and changes nothing above — the workflow signs with
 whatever it is given.
 
-## Google Play — the internal track
+## Google Play — the closed (alpha) track
 
-Play's answer to TestFlight internal: up to 100 testers, no review, live in
-minutes. A **published GitHub release** builds a signed bundle and uploads it.
+A **published GitHub release** builds a signed bundle and uploads it to Play's
+**closed testing** track.
+
+Closed rather than internal, deliberately:
+
+| | internal | closed (alpha) |
+|---|---|---|
+| review | none, live in minutes | Google reviews the build first |
+| testers | up to 100, named individually | email lists or an opt-in link |
+| what it is for | does the build work at all | the first people who did not build it |
+
+The slowness is the point at this stage. `PLAY_TRACK` is a repository variable,
+so moving between `internal`, `alpha` and `beta` is a setting rather than a
+change to the workflow — unset means `alpha`.
 
 | what | where |
 |---|---|
 | `PLAY_SERVICE_ACCOUNT_JSON` | a GitHub secret. Play Console → Setup → API access → create a service account, grant it **Release manager**, download the JSON key |
 | The app record | Play Console → Create app. Name **Fleetwright**, package `network.thetech.fleetwright` |
 | The first upload | **by hand.** Play asks for the content rating, the data safety form and the target audience on a first release, and no API can answer those for you |
-| An internal testing track with testers | Play Console → Testing → Internal testing |
+| A closed testing track with testers | Play Console → Testing → Closed testing → Alpha |
 
 Unset the secret and the job warns and skips, like every other credential here.
 

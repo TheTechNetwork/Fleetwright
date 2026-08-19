@@ -162,12 +162,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" apps/android/app/build/outputs/apk/release/*.apk --clobber
 
-  # Play's internal testing track: up to 100 testers, no review, live in
-  # minutes. The counterpart to TestFlight internal in ios.yml, and triggered
-  # the same way — on a release rather than every commit, because an Android
-  # release here is a signed artifact somebody chose to cut.
+  # Play's CLOSED testing track — alpha — rather than internal.
+  #
+  # The difference that matters is review: an internal release is live in
+  # minutes and limited to 100 named testers, while a closed one goes through
+  # Google's review first and can take testers by email list or link. Slower,
+  # and the slowness is the point — a closed build is the first one seen by
+  # people who did not build it.
+  #
+  # The track is a variable so moving between internal, alpha and beta is a
+  # setting rather than a pull request.
   internal:
-    name: publish to the internal track
+    name: publish to Play
     needs: release
     if: github.event_name == 'release' && needs.release.outputs.built == 'true'
     runs-on: ubuntu-latest
@@ -185,7 +191,7 @@ jobs:
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_PACKAGE_NAME: network.thetech.fleetwright
-          PLAY_TRACK: internal
+          PLAY_TRACK: ${{ vars.PLAY_TRACK || 'alpha' }}
           RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name }}
         run: |
           if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
