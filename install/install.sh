@@ -314,7 +314,10 @@ done
 
 if [ -n "$CLAUDE_BIN" ]; then
   ok "claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
-  if "$CLAUDE_BIN" auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+  # as_user, not root: the credentials live in the service user's home, and
+  # this script runs under sudo. Checking as root reports a logged-in box as
+  # logged out, which is a scary line in the middle of a successful install.
+  if as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     ok "claude is logged in"
   else
     warn "claude is NOT logged in — once the service is up, run 'agent-hub login' or send /login in Telegram"
@@ -956,16 +959,35 @@ if [ "$WIZARD" = yes ]; then
   # The one remaining step that genuinely needs a human, and the one the hub was
   # built to make possible without SSH. Doing it here means a fresh box is
   # finished when this script is.
+  # The login state lives in the RUN_USER's home, and this script runs under
+  # sudo — so asking root whether claude is logged in gets the wrong answer on
+  # a box that is perfectly well logged in. Same bug as `doctor` had, same fix.
   if [ "${STARTED:-0}" = 1 ] && [ -n "$CLAUDE_BIN" ] \
-     && ! "$CLAUDE_BIN" auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+     && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     printf '\n'
     if confirm "Log this box into a Claude account now?" Y; then
       sleep 2 # let the hub finish binding its port
       if LOGIN_OUT="$("$DIR/bin/agent-hub" login 2>&1)"; then
         printf '%s\n' "$LOGIN_OUT"
-        ask AUTH_CODE "Paste the code from that page (blank to do it later)"
-        if [ -n "$AUTH_CODE" ]; then
-          "$DIR/bin/agent-hub" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+        # Only ask for a code if there is a page to get one from. `login` on an
+        # already-authenticated box answers "Already logged in", and asking for
+        # a code after that is asking the operator to produce something that
+        # does not exist.
+        #
+        # Gated on THAT string rather than on spotting a URL. The first version
+        # of this grepped for https://claude.ai/ — and the live authorize URL is
+        # https://claude.com/cai/oauth/authorize, which src/core/login.js says
+        # in as many words. It would have skipped the prompt on a genuinely
+        # logged-out box and announced the opposite. Matching the sentence the
+        # hub actually emits (src/adapters/commands.js) cannot fail that way,
+        # and a new first-party auth host cannot silently reintroduce it.
+        if ! printf '%s' "$LOGIN_OUT" | grep -q 'Already logged in'; then
+          ask AUTH_CODE "Paste the code from that page (blank to do it later)"
+          if [ -n "$AUTH_CODE" ]; then
+            "$DIR/bin/agent-hub" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+          fi
+        else
+          ok "nothing to do — this box is already logged in"
         fi
       else
         warn "could not start the login: $LOGIN_OUT"
