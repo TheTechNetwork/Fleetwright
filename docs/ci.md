@@ -137,19 +137,37 @@ belongs.
 ### Builds reach internal testers by themselves
 
 `tools/testflight-distribute.mjs` runs after the upload: it waits for the build
-to finish processing, finds the internal beta group, and adds the build to it.
-Testers are notified by App Store Connect as usual.
+to finish processing, finds the beta group, and adds the build to it. Testers
+are notified by App Store Connect as usual.
+
+| audience | when | what happens |
+|---|---|---|
+| **internal** | every commit to `main` touching `apps/ios/**` | assigned to the internal group, available immediately |
+| **external** | only a **published GitHub release** | assigned to the external group, then submitted for Beta App Review |
+
+External is not every commit on purpose. Those testers are the public, Apple
+reviews the first build, and a release is a decision somebody made — which is
+the right shape for a delivery real people install.
+
+The script **submits** for review and stops. Review takes hours to a day, and
+waiting would mean holding a runner open for a decision no amount of polling
+influences. A build already submitted is not an error either — a re-run of a
+release should be idempotent rather than red.
 
 Two things it needs that this repository cannot create:
 
-- **An internal group** — TestFlight → Internal Testing → **+**. Any name. Set
-  the `INTERNAL_BETA_GROUP_NAME` repository *variable* if you have more than
-  one; unset means the first, which is right while there is exactly one.
+- **The groups themselves** — TestFlight → Internal Testing → **+**, and
+  External Testing → **+**. Their names go in two repository *variables*:
 
-  The name says `INTERNAL_` because external distribution is a different group
-  with its own review and its own reasons to be chosen. Renaming a variable
-  later is the kind of change that leaves it unset somewhere and sends a build
-  to whichever group happens to be first.
+  | variable | example |
+  |---|---|
+  | `INTERNAL_BETA_GROUP_NAME` | `Internal Testers` |
+  | `EXTERNAL_BETA_GROUP_NAME` | `External Testers` |
+
+  Either unset means "the first group of that kind", which is right while
+  there is exactly one. One variable per audience rather than one shared name,
+  because a rename later is the change that leaves a variable unset somewhere —
+  and unset here is not an error, it is a silent fallback.
 - **Testers in it.** Internal testers are people with an App Store Connect
   role, up to 100, and they need no review.
 

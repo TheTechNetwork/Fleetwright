@@ -18,12 +18,20 @@ const ISSUER_ID = env('APPSTORE_ISSUER_ID');
 const PRIVATE_KEY = env('APPSTORE_PRIVATE_KEY');
 const BUNDLE_ID = env('BUNDLE_ID');
 const BUILD_NUMBER = env('BUILD_NUMBER');
-// INTERNAL_, not BETA_: external distribution is a separate group with its own
-// name, its own review, and its own reasons to be selected — and a variable
-// called BETA_GROUP_NAME would have to be renamed the day that arrives, in the
-// one place where a rename means a silently-unset variable and a build that
-// goes to whichever group happens to be first.
-const GROUP_NAME = process.env.INTERNAL_BETA_GROUP_NAME || '';
+// internal (default) or external. They are genuinely different deliveries, not
+// two names for one: an internal group is App Store Connect users and needs no
+// review, an external group is anybody and Apple reviews the first build.
+const AUDIENCE = (process.env.AUDIENCE || 'internal').toLowerCase();
+if (AUDIENCE !== 'internal' && AUDIENCE !== 'external') {
+  throw new Error(`AUDIENCE must be internal or external, got ${JSON.stringify(AUDIENCE)}`);
+}
+const IS_INTERNAL = AUDIENCE === 'internal';
+// Named per audience so external distribution never has to rename the other
+// one — a rename is the change that leaves a variable unset somewhere, and
+// unset here is not an error, it is a silent fallback to whichever group
+// happens to be first.
+const GROUP_NAME =
+  (IS_INTERNAL ? process.env.INTERNAL_BETA_GROUP_NAME : process.env.EXTERNAL_BETA_GROUP_NAME) || '';
 
 // Processing is the slow part and nothing here can hurry it. Twenty minutes is
 // long enough for every build this project has produced and short enough that a
@@ -113,17 +121,53 @@ async function main() {
   }
   console.log(`build ${BUILD_NUMBER} is VALID (${build.id})`);
 
-  const groups = await api(`/v1/apps/${app.id}/betaGroups?filter[isInternalGroup]=true&limit=200`);
-  const internal = groups.data;
-  if (!internal.length) throw new Error('no internal beta group — create one in TestFlight → Internal Testing');
-  const group = GROUP_NAME ? internal.find((/** @type {any} */ g) => g.attributes.name === GROUP_NAME) : internal[0];
-  if (!group) throw new Error(`no internal group named ${JSON.stringify(GROUP_NAME)} — have: ${internal.map((/** @type {any} */ g) => g.attributes.name).join(', ')}`);
+  const groups = await api(
+    `/v1/apps/${app.id}/betaGroups?filter[isInternalGroup]=${IS_INTERNAL}&limit=200`,
+  );
+  const candidates = groups.data;
+  const where = IS_INTERNAL ? 'TestFlight → Internal Testing' : 'TestFlight → External Testing';
+  if (!candidates.length) throw new Error(`no ${AUDIENCE} beta group — create one in ${where}`);
+  const group = GROUP_NAME
+    ? candidates.find((/** @type {any} */ g) => g.attributes.name === GROUP_NAME)
+    : candidates[0];
+  if (!group) {
+    throw new Error(
+      `no ${AUDIENCE} group named ${JSON.stringify(GROUP_NAME)} — have: ` +
+        candidates.map((/** @type {any} */ g) => g.attributes.name).join(', '),
+    );
+  }
 
   await api(`/v1/betaGroups/${group.id}/relationships/builds`, {
     method: 'POST',
     body: JSON.stringify({ data: [{ type: 'builds', id: build.id }] }),
   });
   console.log(`build ${BUILD_NUMBER} → "${group.attributes.name}"`);
+
+  if (IS_INTERNAL) return;
+
+  // External testers are the public, so Apple reviews the build before any of
+  // them see it. Submitting is all this can do — review takes hours to a day,
+  // and waiting for it would mean holding a runner open for a decision no
+  // amount of polling influences. The build appears for testers when it
+  // passes.
+  //
+  // Already-submitted is not a failure. A release re-run, or a build already
+  // sent for review by hand, should be idempotent rather than red.
+  try {
+    await api('/v1/betaAppReviewSubmissions', {
+      method: 'POST',
+      body: JSON.stringify({
+        data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: build.id } } } },
+      }),
+    });
+    console.log(`build ${BUILD_NUMBER} submitted for beta app review`);
+  } catch (e) {
+    if (/already|conflict|409|state/i.test(String(e.message))) {
+      console.log(`beta app review not resubmitted: ${e.message.split('\n')[0]}`);
+    } else {
+      throw e;
+    }
+  }
 }
 
 main().catch((e) => {
