@@ -174,6 +174,14 @@ revocable from the web, and it lets `xcodebuild -allowProvisioningUpdates`
 create the signing assets itself. Fastlane match solves the same problem by
 giving you a second repository of secrets to look after.
 
+**The two version numbers come from build settings**, and the Info.plist
+references them rather than carrying literals — `CFBundleShortVersionString:
+$(MARKETING_VERSION)` and `CFBundleVersion: $(CURRENT_PROJECT_VERSION)`.
+XcodeGen fills those keys in itself when they are absent, as fixed strings, and
+a build setting cannot override a value already baked into the plist. The
+symptom is quiet: TestFlight showed `1.0 (7)` while the project said 0.1.0 and
+the archive was passing 48 on the command line.
+
 **Internal TestFlight goes out on every commit to `main` that touches `apps/ios/**`.** The build number is
 `github.run_number`, because App Store Connect refuses a build number it has
 already seen for a version — `project.yml`'s `CURRENT_PROJECT_VERSION: "1"`
