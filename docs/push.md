@@ -65,10 +65,20 @@ was registered against a service that could not reach it.
 iOS to APNs, everything else to FCM. Three variables:
 
 ```sh
-AGENT_FLEET_APNS_KEY_ID=ABC1234567     # the key's id
-AGENT_FLEET_APNS_TEAM_ID=DEF7654321    # Membership details
-AGENT_FLEET_APNS_KEY="$(cat AuthKey_ABC1234567.p8)"
+AGENT_FLEET_APNS_KEY_ID=QK4U44N7R9     # the key's id
+AGENT_FLEET_APNS_TEAM_ID=…             # the same team id the iOS build signs with
+AGENT_FLEET_APNS_KEY="$(cat AuthKey_QK4U44N7R9.p8)"
 ```
+
+On Cloudflare these are already wired, and only one of them is a secret:
+
+| | where | why |
+|---|---|---|
+| `AGENT_FLEET_APNS_KEY_ID` | `wrangler.toml` `[vars]` | an identifier, useless without the key. In a diff, so rotating is visible |
+| `AGENT_FLEET_APNS_TEAM_ID` | synced from the existing `APPLE_TEAM_ID` GitHub secret | the same team the iOS build signs with; two copies is two chances to disagree |
+| `AGENT_FLEET_APNS_KEY` | a GitHub secret, synced to Cloudflare on deploy | the `.p8`, and the only part worth protecting |
+
+So adding iOS push is one new GitHub secret.
 
 The key comes from the Apple Developer portal → **Keys** → **+** → tick **Apple
 Push Notifications service**. It is *not* the App Store Connect API key used for
