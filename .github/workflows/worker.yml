@@ -12,6 +12,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The deploy job authenticates to Cloudflare with CLOUDFLARE_API_TOKEN and to
+# nothing else; GITHUB_TOKEN is never used. Deploy permissions and repository
+# permissions are separate things and it is worth them looking separate.
+permissions:
+  contents: read
+
 jobs:
   # Runs on every PR and needs no secrets. --dry-run does the whole bundle and
   # the Durable Object migration check without touching the account, which is

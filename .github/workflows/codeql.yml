@@ -1,0 +1,174 @@
+name: CodeQL
+
+# WHY THIS FILE EXISTS. Code scanning was on GitHub's *default setup*, and it
+# failed on two of the four languages in this repo, every run:
+#
+#   java   ERROR: Could not detect a suitable build command for the source checkout.
+#   swift  ERRO [autobuilder/main] [no-project-found] `autobuild` detected neither
+#          an Xcode project or workspace, nor a Swift package
+#
+# Neither is a broken build — both are autobuild looking in the wrong place:
+#
+#   * autobuild runs at the REPOSITORY ROOT. There is no settings.gradle there;
+#     the Gradle build is at apps/android. Nothing to detect, so it gives up.
+#   * there is no .xcodeproj, .xcworkspace or Package.swift ANYWHERE — the Xcode
+#     project is generated from apps/ios/project.yml by XcodeGen and is
+#     gitignored (see .gitignore). Nothing to detect there either, and no amount
+#     of retrying will change that.
+#
+# A compiled language only lands in a CodeQL database if the extractor watches a
+# real compiler run, so the fix is `build-mode: manual` and the same build
+# commands android.yml and ios.yml already use. That means an advanced
+# configuration, which means this file, which means **default setup has to be
+# turned off in the repository settings** — the two cannot both upload results.
+# Settings → Code security → Code scanning → CodeQL analysis → Disable.
+#
+# javascript-typescript and actions are here for the same reason: turning off
+# default setup turns off everything it was analysing, and the 50-odd .js files
+# under src/, worker/ and bin/ are the part of this repo that actually faces the
+# network. They need no build, so they cost almost nothing to keep.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a newly-published query finds the code without waiting for
+    # somebody to open a pull request.
+    - cron: '31 5 * * 1'
+  workflow_dispatch:
+
+# Deliberately NO paths filters. ios.yml and android.yml have them and should;
+# a code-scanning run that skips itself reports no status at all, which reads as
+# "nothing found" on a pull request and cannot be a required check.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # No compiler involved, so no build steps and no runner cost worth managing.
+  interpreted:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # `none` means "extract the source directly". This is what autobuild
+          # would have done for these two anyway; saying it explicitly means a
+          # future language addition cannot silently fall back to guessing.
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  # The one the java error was about. Everything here mirrors android.yml's
+  # debug job — if that job builds, this one extracts.
+  java-kotlin:
+    name: analyze (java-kotlin)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    # The Gradle LAUNCHER jvm needs this, not just the daemon. Same reason as
+    # android.yml: JDK 25 warns that restricted native access "will be blocked
+    # in a future release", and gradle.properties only covers the daemon.
+    env:
+      GRADLE_OPTS: --enable-native-access=ALL-UNNAMED
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: android-actions/setup-android@v4
+        with:
+          # Pinned to the same packages android.yml installs. A missing platform
+          # fails here with an obvious message instead of halfway through a
+          # Gradle task — and under CodeQL a half-finished build is worse than a
+          # failed one, because it uploads a database with holes in it.
+          packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
+      - uses: gradle/actions/setup-gradle@v6
+
+      # init BEFORE the build: the extractor works by watching the compiler, so
+      # anything compiled before this step is invisible to it.
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+
+      - name: Build the debug APK
+        working-directory: apps/android
+        # --no-daemon because a Gradle daemon survives the build and compiles in
+        # a process the tracer never attached to; --no-build-cache because a
+        # restored cache entry makes compileDebugKotlin FROM-CACHE, and a task
+        # that does not run compiles nothing for CodeQL to see. Both failures
+        # look identical from the outside: a green run and an empty database.
+        run: ./gradlew --no-daemon --no-build-cache assembleDebug
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+
+  # The one the swift error was about. The project autobuild could not find does
+  # not exist until xcodegen writes it, which is the whole failure.
+  swift:
+    name: analyze (swift)
+    runs-on: macos-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # Before init deliberately. Generating a pbxproj is not compilation, so it
+      # does not need to be traced, and doing it first keeps the traced section
+      # down to the one command that matters.
+      - name: Generate the Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+
+      - name: Build
+        working-directory: apps/ios
+        # The simulator build from ios.yml, minus the xcbeautify pipe and its
+        # `||` re-run: a second build of an already-built target compiles
+        # nothing, so under CodeQL the retry would turn a build failure into an
+        # empty database instead of a red run. CODE_SIGNING_ALLOWED=NO because
+        # type-checking every line needs no team, certificate or profile.
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Fleetwright.xcodeproj \
+            -scheme Fleetwright \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift

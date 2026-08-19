@@ -10,6 +10,11 @@ on:
   release:
     types: [published]
 
+# Neither job touches the GitHub API — the build uploads nothing and TestFlight
+# uploads to App Store Connect with its own API key. Read is all either needs.
+permissions:
+  contents: read
+
 jobs:
   # THE IMPORTANT ONE. design.md §9 says the iOS app cannot be built in the
   # environment it was written in — no macOS, no Xcode — so until now it has
