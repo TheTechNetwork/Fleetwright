@@ -45,11 +45,22 @@ permissions:
   contents: read
 
 concurrency:
-  group: codeql-${{ github.ref }}
-  # PRs only. Cancelling a run on main cancels the analysis that produces the
-  # BASELINE every alert is compared against — and it has already happened
-  # here: `analyze (swift)` was cancelled mid-run by the next merge. A
-  # superseded PR run is waste; a superseded main run is a gap.
+  # A PULL REQUEST shares a group per branch, so a new push supersedes the run
+  # you stopped caring about. A PUSH gets a group of its own, keyed by SHA, so
+  # it contends with nothing.
+  #
+  # `cancel-in-progress: false` is NOT enough to protect a run on main, which
+  # is what the previous version of this assumed. GitHub cancels any
+  # previously PENDING run in a group when a new one arrives, regardless of
+  # that setting — it only governs runs that have already started. Two merges
+  # four seconds apart is all it takes, and it happened here: the CodeQL run
+  # for f6b0852 was created at 01:36:34, the run for b8ab592 at 01:36:38, and
+  # f6b0852's was cancelled at 01:36:39 having never started.
+  #
+  # For code scanning that is a hole rather than a saving: main's analysis is
+  # the baseline every alert is compared against, and a commit whose analysis
+  # was cancelled is simply never looked at.
+  group: codeql-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
