@@ -35,7 +35,7 @@
 
 import { describe } from '../core/login.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
-import { systemUpdates, describeSystemUpdates, runUpgrade } from '../core/upgrades.js';
+import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
@@ -436,6 +436,9 @@ export const COMMANDS = {
         const r = runUpgrade(ctx.cfg, { actor: ctx.actor });
         return { ok: r.ok, text: r.text };
       }
+      // Somebody is waiting for this answer, so refresh before giving it —
+      // rate-limited inside, and a no-op when it is not permitted.
+      refreshPackageLists(ctx.cfg);
       const s = systemUpdates();
       if (!s.supported) return { ok: true, text: `No package information here (${s.reason ?? 'unsupported'}).` };
       const summary = describeSystemUpdates(s);

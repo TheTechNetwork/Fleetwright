@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { describeSystemUpdates, runUpgrade } from '../src/core/upgrades.js';
+import { describeSystemUpdates, refreshPackageLists, runUpgrade } from '../src/core/upgrades.js';
 
 test('a box with nothing waiting says nothing at all', () => {
   // Null, not "0 updates available". This goes into a health report that
@@ -40,7 +40,31 @@ test('with upgrades off, the refusal is the instructions', () => {
   // see it.
   const r = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/apt-get -y upgrade/);
+  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/apt-get update, \/usr\/bin\/apt-get -y upgrade/);
   assert.match(r.text, /AGENT_HUB_SYSTEM_UPGRADE=1/);
   assert.match(r.text, /cannot install, remove or run anything else/);
+  assert.match(r.text, /apt-get update/, 'the refresh is in the rule, because this box never does it itself');
+});
+
+test('stale package lists are reported, because "no updates" would be a lie', () => {
+  // The box this was written for does not refresh its lists on its own: a
+  // minimal Debian only does that once unattended-upgrades has written the
+  // periodic config. So `apt list --upgradable` answers against whatever was
+  // current on install day and reports nothing while the machine falls months
+  // behind — which is worse than reporting nothing at all.
+  const quiet = { supported: true, count: 0, security: 0, rebootRequired: false, packages: [] };
+  assert.equal(describeSystemUpdates({ ...quiet, listsAgeHours: 3 }), null, 'fresh and empty stays quiet');
+  assert.equal(describeSystemUpdates({ ...quiet, listsAgeHours: 24 * 30 }), 'package lists 30d old');
+  assert.equal(
+    describeSystemUpdates({ ...quiet, count: 4, security: 1, listsAgeHours: 24 * 9 }),
+    '4 packages can be upgraded · 1 security · package lists 9d old',
+  );
+});
+
+test('refreshing is refused rather than attempted when it is not permitted', () => {
+  // sudo -n would fail in a second anyway, but a refusal that says why beats a
+  // log line about a password prompt nobody can answer.
+  const r = refreshPackageLists(/** @type {any} */ ({ systemUpgrade: false }));
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not permitted');
 });

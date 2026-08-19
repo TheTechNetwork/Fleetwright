@@ -11,7 +11,7 @@ import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/conf
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
 import { updateAvailable } from '../src/core/update.js';
-import { systemUpdates, describeSystemUpdates } from '../src/core/upgrades.js';
+import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
@@ -89,6 +89,10 @@ async function run() {
     updates: () => {
       const hub = loadConfig();
       const app = updateAvailable(hub);
+      // Refresh first, at most every six hours and only if permitted. A box
+      // that never refreshes its own lists answers "no updates" indefinitely,
+      // which is the reassuring kind of wrong.
+      refreshPackageLists(hub);
       const system = systemUpdates();
       return {
         appBehind: app.ok ? app.behind : null,

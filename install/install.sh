@@ -957,18 +957,22 @@ if [ "$WIZARD" = yes ]; then
   # way to find out.
   if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
-    printf '\n  /upgrade can show what the operating system has waiting. It can also apply\n'
-    printf '  it, which needs one sudoers rule permitting exactly:\n'
-    printf '      apt-get -y upgrade\n'
+    printf '\n  /upgrade can show what the operating system has waiting, and apply it.\n'
+    printf '  That needs one sudoers rule permitting exactly two commands:\n'
+    printf '      apt-get update       (refresh the package lists)\n'
+    printf '      apt-get -y upgrade   (install what is waiting)\n'
     printf '  and nothing else — not install, not remove, not a shell.\n'
+    printf '\n  The refresh matters: this box does not update its package lists on its\n'
+    printf '  own, so without it "no updates" would mean "nobody has looked since\n'
+    printf '  install day".\n'
     if confirm "Allow system updates from chat?" Y; then
       SUDO_TMP="$(mktemp)"
-      printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get -y upgrade\n' "$RUN_USER" > "$SUDO_TMP"
+      printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade\n' "$RUN_USER" > "$SUDO_TMP"
       if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
         install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-upgrade
         set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
-        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may run apt-get -y upgrade"
+        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may run apt-get update and apt-get -y upgrade"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
