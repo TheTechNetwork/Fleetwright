@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +36,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +53,34 @@ class MainActivity : ComponentActivity() {
     private val askForNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* declined is fine */ }
 
+    /**
+     * Tell the coordinator where to send notifications.
+     *
+     * On every launch rather than once: registration is keyed by the token, so
+     * repeating it is an update rather than a duplicate, and "once" would mean
+     * a phone that was configured after its first launch never registers at
+     * all. Messaging.onNewToken covers rotation in between.
+     *
+     * Silent when the app has no coordinator yet — there is nowhere to send it,
+     * and an error about that on first launch would be noise in front of the
+     * settings screen the person is about to fill in.
+     */
+    private fun registerForPush() {
+        val settings = Settings(applicationContext)
+        if (!settings.configured) return
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            val token = task.result
+            if (!task.isSuccessful || token.isNullOrBlank()) {
+                Log.w("Fleetwright", "no FCM token: ${task.exception?.message}")
+                return@addOnCompleteListener
+            }
+            lifecycleScope.launch {
+                runCatching { Fleet(settings).registerDevice(token) }
+                    .onFailure { Log.w("Fleetwright", "could not register for push: ${it.message}") }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -59,6 +90,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        registerForPush()
 
         setContent {
             // MaterialTheme with no argument is lightColorScheme() forever, which
