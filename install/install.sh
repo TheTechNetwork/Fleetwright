@@ -946,6 +946,40 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
   fi
 
+  # --- system updates from chat --------------------------------------------
+  # A NOPASSWD rule for ONE exact command, which is a much narrower grant than
+  # it first sounds: sudoers matches the full argv, so this permits
+  # `apt-get -y upgrade` and nothing else — not install, not remove, not a
+  # shell, not apt-get with different arguments.
+  #
+  # Validated with visudo before it is installed. A malformed file in
+  # /etc/sudoers.d does not break one rule, it breaks sudo, and that is a bad
+  # way to find out.
+  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" ] \
+     && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
+    printf '\n  /upgrade can show what the operating system has waiting. It can also apply\n'
+    printf '  it, which needs one sudoers rule permitting exactly:\n'
+    printf '      apt-get -y upgrade\n'
+    printf '  and nothing else — not install, not remove, not a shell.\n'
+    if confirm "Allow system updates from chat?" Y; then
+      SUDO_TMP="$(mktemp)"
+      printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get -y upgrade\n' "$RUN_USER" > "$SUDO_TMP"
+      if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
+        install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-upgrade
+        set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
+        set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
+        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may run apt-get -y upgrade"
+      else
+        warn "the sudoers rule did not validate, so it was NOT installed"
+      fi
+      rm -f "$SUDO_TMP"
+    else
+      set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 0
+      ok "skipping — /upgrade will report what is waiting but not apply it"
+    fi
+    printf '\n'
+  fi
+
   # --- sandbox -------------------------------------------------------------
   if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" ]; then
     printf '\n  Sandboxed sessions get real root inside a container whose filesystem is\n'

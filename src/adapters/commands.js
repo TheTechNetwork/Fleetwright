@@ -34,7 +34,8 @@
  */
 
 import { describe } from '../core/login.js';
-import { runUpdate, updateStatus, canSelfRestart } from '../core/update.js';
+import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
+import { systemUpdates, describeSystemUpdates, runUpgrade } from '../core/upgrades.js';
 import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
@@ -392,6 +393,23 @@ export const COMMANDS = {
       const status = updateStatus(ctx.cfg);
       if (!status.ok) return { ok: false, text: status.message ?? 'Could not read the checkout.' };
 
+      // --check answers "is there anything" without changing the box, which is
+      // what a notification wants and what somebody asks before deciding to
+      // restart a machine with sessions running on it.
+      if (flags.has('check')) {
+        const avail = updateAvailable(ctx.cfg, { force: true });
+        if (!avail.ok) return { ok: true, text: `${status.dir} (${status.branch})\n\n${avail.message}` };
+        return {
+          ok: true,
+          text:
+            `${status.dir} (${status.branch})\n\n` +
+            (avail.behind
+              ? `${avail.behind} commit${avail.behind === 1 ? '' : 's'} behind ${avail.upstream}. /update to pull.`
+              : 'Up to date.'),
+          buttons: avail.behind ? [{ label: 'Update now', command: '/update' }] : undefined,
+        };
+      }
+
       const restart = flags.has('restart') || flags.has('apply');
       const r = runUpdate(ctx.cfg, { restart, actor: ctx.actor });
 
@@ -403,6 +421,34 @@ export const COMMANDS = {
           : undefined;
 
       return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}`, buttons };
+    },
+  },
+
+  upgrade: {
+    aliases: ['sysupdate'],
+    usage: '/upgrade [--apply]',
+    short: 'System packages on this box',
+    help:
+      'What the operating system has waiting, and — if it has been turned on — ' +
+      'apply it. Separate from /update, which is this app rather than the box.',
+    run: (ctx, _args, flags) => {
+      if (flags.has('apply') || flags.has('yes')) {
+        const r = runUpgrade(ctx.cfg, { actor: ctx.actor });
+        return { ok: r.ok, text: r.text };
+      }
+      const s = systemUpdates();
+      if (!s.supported) return { ok: true, text: `No package information here (${s.reason ?? 'unsupported'}).` };
+      const summary = describeSystemUpdates(s);
+      if (!summary) return { ok: true, text: 'The box is up to date.' };
+
+      const shown = s.packages.slice(0, 12).join(', ');
+      return {
+        ok: true,
+        text:
+          `${summary}\n\n${shown}${s.packages.length > 12 ? `, …and ${s.count - 12} more` : ''}` +
+          '\n\n/upgrade --apply to install them.',
+        buttons: ctx.cfg.systemUpgrade ? [{ label: 'Install updates', command: '/upgrade --apply' }] : undefined,
+      };
     },
   },
 

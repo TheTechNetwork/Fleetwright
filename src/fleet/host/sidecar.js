@@ -88,9 +88,10 @@ export class Sidecar {
    *   logger?: Logger,
    *   healthIntervalMs?: number,
    *   watch?: boolean,
+   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true }) {
+  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
     // limit — where a replayed `start` passes the freshness check against a
@@ -107,6 +108,10 @@ export class Sidecar {
     this.transport = transport;
     this.hostId = hostId || os.hostname();
     this.labels = labels;
+    // Injected rather than read here: the sidecar knows about a coordinator
+    // and an agent-hub, and nothing about git checkouts or package managers.
+    /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null} */
+    this.updates = updates;
     this.maxSkewMs = maxSkewMs;
     this.log = logger;
     this.healthIntervalMs = healthIntervalMs;
@@ -375,6 +380,11 @@ export class Sidecar {
             resumable: Boolean(s.uuid),
           })),
         loggedIn: state.auth?.loggedIn === true,
+        // What is out of date on this box, so a phone can say so without
+        // anybody logging in to look. Both are cheap: the app check is cached
+        // for fifteen minutes, and the system one reads what apt already knows
+        // rather than refreshing anything.
+        updates: this.#updates(),
       };
     } catch (e) {
       const err = /** @type {Error & {code?: string}} */ (e);
@@ -393,7 +403,22 @@ export class Sidecar {
   }
 
   /** @param {string} id */
-  #recall(id) {
+/**
+   * The two "out of date" answers, folded into one small object.
+   *
+   * Failures are swallowed to null. A health report that throws because git
+   * could not reach a remote would take a working host out of the fleet over
+   * something that stops no session running.
+   */
+  #updates() {
+    try {
+      return this.updates?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  #recall(/** @type {string} */ id) {
     const hit = this.replay.get(id);
     if (!hit) return null;
     if (Date.now() - hit.at > REPLAY_TTL_MS) {
