@@ -32,6 +32,10 @@ const IS_INTERNAL = AUDIENCE === 'internal';
 // happens to be first.
 const GROUP_NAME =
   (IS_INTERNAL ? process.env.INTERNAL_BETA_GROUP_NAME : process.env.EXTERNAL_BETA_GROUP_NAME) || '';
+// Optional. 4000 characters is Apple's limit and it is truncated rather than
+// rejected, because a release note being long is not a reason to fail a
+// delivery.
+const WHATS_NEW = (process.env.WHATS_NEW || '').trim();
 
 // Processing is the slow part and nothing here can hurry it. Twenty minutes is
 // long enough for every build this project has produced and short enough that a
@@ -135,6 +139,34 @@ async function main() {
       `no ${AUDIENCE} group named ${JSON.stringify(GROUP_NAME)} — have: ` +
         candidates.map((/** @type {any} */ g) => g.attributes.name).join(', '),
     );
+  }
+
+  // "What to Test" — per build, and therefore the one field that would
+  // otherwise be typed by hand on every release. Testers see it in TestFlight
+  // and reviewers read it during beta review, so leaving it empty is a small
+  // ongoing rudeness rather than a failure.
+  if (WHATS_NEW) {
+    const existing = await api(`/v1/builds/${build.id}/betaBuildLocalizations?limit=200`);
+    const en = existing.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
+    const body = { whatsNew: WHATS_NEW.slice(0, 4000) };
+    if (en) {
+      await api(`/v1/betaBuildLocalizations/${en.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ data: { type: 'betaBuildLocalizations', id: en.id, attributes: body } }),
+      });
+    } else {
+      await api('/v1/betaBuildLocalizations', {
+        method: 'POST',
+        body: JSON.stringify({
+          data: {
+            type: 'betaBuildLocalizations',
+            attributes: { ...body, locale: 'en-US' },
+            relationships: { build: { data: { type: 'builds', id: build.id } } },
+          },
+        }),
+      });
+    }
+    console.log(`what to test: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
   }
 
   await api(`/v1/betaGroups/${group.id}/relationships/builds`, {

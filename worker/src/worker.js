@@ -29,6 +29,17 @@ export default {
       return json({ ok: true, protocol: 1 });
     }
 
+    // The second deliberately unauthenticated surface, and it exists for a
+    // dull reason: App Store Connect will not accept an app for external
+    // testing without a privacy policy at a public URL. Serving it from the
+    // coordinator means the URL is stable, versioned with the code it
+    // describes, and cannot rot separately from it.
+    if (url.pathname === '/privacy') {
+      return new Response(PRIVACY, {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600' },
+      });
+    }
+
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.
@@ -88,3 +99,51 @@ function json(body, status = 200) {
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 }
+
+// Accurate rather than boilerplate. Every claim here is one the code makes
+// true, which is the only kind worth publishing: the app talks to a
+// coordinator the operator runs, and this project runs no service that
+// collects anything.
+const PRIVACY = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleetwright — Privacy</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem;
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  h1 { font-size: 1.6rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  code { font-size: 0.9em; }
+</style></head><body>
+<h1>Fleetwright — Privacy</h1>
+<p><strong>Fleetwright collects nothing.</strong> It is a client for a coordinator
+you run yourself. There is no Fleetwright service, no account, and no analytics.</p>
+
+<h2>What stays on your device</h2>
+<p>The coordinator URL and API token you enter in Settings are stored on the
+device and sent only to that coordinator, as an <code>Authorization</code>
+header over HTTPS.</p>
+
+<h2>What is sent to your coordinator</h2>
+<ul>
+  <li>The commands you issue — list, start, stop, resume a session.</li>
+  <li>Your push notification token, if you enable notifications, so the
+      coordinator can tell you when a session needs an answer.</li>
+</ul>
+<p>That coordinator is infrastructure you operate. Its logs and its data are
+yours, and this app has no other destination.</p>
+
+<h2>Third parties</h2>
+<p>None, other than the push delivery Apple and Google operate in order to
+deliver a notification to your device. No advertising, no tracking, no
+third-party SDKs.</p>
+
+<h2>Deleting your data</h2>
+<p>Deleting the app removes the URL and token from the device. Removing the
+device registration from your coordinator removes the push token.</p>
+
+<h2>Source</h2>
+<p>The app and the coordinator are open source:
+<a href="https://github.com/TheTechNetwork/Fleetwright">github.com/TheTechNetwork/Fleetwright</a>.
+Every claim on this page can be checked against the code.</p>
+</body></html>`;
