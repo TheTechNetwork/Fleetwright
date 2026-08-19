@@ -18,7 +18,12 @@ const ISSUER_ID = env('APPSTORE_ISSUER_ID');
 const PRIVATE_KEY = env('APPSTORE_PRIVATE_KEY');
 const BUNDLE_ID = env('BUNDLE_ID');
 const BUILD_NUMBER = env('BUILD_NUMBER');
-const GROUP_NAME = process.env.BETA_GROUP_NAME || '';
+// INTERNAL_, not BETA_: external distribution is a separate group with its own
+// name, its own review, and its own reasons to be selected — and a variable
+// called BETA_GROUP_NAME would have to be renamed the day that arrives, in the
+// one place where a rename means a silently-unset variable and a build that
+// goes to whichever group happens to be first.
+const GROUP_NAME = process.env.INTERNAL_BETA_GROUP_NAME || '';
 
 // Processing is the slow part and nothing here can hurry it. Twenty minutes is
 // long enough for every build this project has produced and short enough that a

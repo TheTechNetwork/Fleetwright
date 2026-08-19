@@ -143,8 +143,13 @@ Testers are notified by App Store Connect as usual.
 Two things it needs that this repository cannot create:
 
 - **An internal group** — TestFlight → Internal Testing → **+**. Any name. Set
-  the `BETA_GROUP_NAME` repository *variable* if you have more than one;
-  unset means the first, which is right while there is exactly one.
+  the `INTERNAL_BETA_GROUP_NAME` repository *variable* if you have more than
+  one; unset means the first, which is right while there is exactly one.
+
+  The name says `INTERNAL_` because external distribution is a different group
+  with its own review and its own reasons to be chosen. Renaming a variable
+  later is the kind of change that leaves it unset somewhere and sends a build
+  to whichever group happens to be first.
 - **Testers in it.** Internal testers are people with an App Store Connect
   role, up to 100, and they need no review.
 

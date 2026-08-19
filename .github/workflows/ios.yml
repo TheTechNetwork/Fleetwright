@@ -240,6 +240,8 @@ jobs:
           # confusingly.
           BUILD_NUMBER: ${{ github.run_number }}
           # Optional. Unset means the first internal group, which is right
-          # while there is exactly one.
-          BETA_GROUP_NAME: ${{ vars.BETA_GROUP_NAME }}
+          # while there is exactly one. Named INTERNAL_ so that external
+          # distribution, when it comes, gets its own variable rather than
+          # renaming this one.
+          INTERNAL_BETA_GROUP_NAME: ${{ vars.INTERNAL_BETA_GROUP_NAME }}
         run: node tools/testflight-distribute.mjs
