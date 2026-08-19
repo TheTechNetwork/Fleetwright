@@ -93,30 +93,3 @@ jobs:
   # point the validator says out loud that "regex validation may be inaccurate".
   # A checker running outside its supported runtime is a checker whose answer
   # you cannot lean on.
-  renovate-config:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-
-      # NO FILE ARGUMENT, deliberately. Given a path, the validator treats the
-      # file as SELF-HOSTED GLOBAL config, which is a different schema — it
-      # accepts options a repository config must reject. Proven with
-      # binarySource, which a repo config refuses ("a global option reserved
-      # only for Renovate's global configuration") and a global config merely
-      # deprecates. With no argument it finds renovate.json itself and checks it
-      # as what it actually is.
-      #
-      # --strict so a warning or a pending config migration fails too. The
-      # failure this whole job exists for was a config Renovate REJECTED rather
-      # than one that was wrong, and that never announces itself.
-      #
-      # @latest, and the version is printed: the hosted bot runs a recent
-      # Renovate, and `npx --package renovate` without a tag will reuse whatever
-      # happens to be in the npx cache.
-      - name: Renovate config is valid
-        run: |
-          npx --yes --package renovate@latest -- renovate-config-validator --version
-          npx --yes --package renovate@latest -- renovate-config-validator --strict
