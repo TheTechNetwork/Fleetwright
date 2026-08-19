@@ -138,12 +138,26 @@ async function main() {
   }
   console.log(`build ${BUILD_NUMBER} is VALID (${build.id})`);
 
-  const groups = await api(
-    `/v1/apps/${app.id}/betaGroups?filter[isInternalGroup]=${IS_INTERNAL}&limit=200`,
+  // Fetched whole and filtered here, rather than asking the API to filter.
+  //
+  // filter[isInternalGroup] is valid on /v1/betaGroups and NOT on this
+  // relationship endpoint, which answers 400 "A given parameter is not allowed
+  // for this request" — after the twenty minutes spent waiting for the build to
+  // process, which is the worst possible moment to discover a query-string
+  // mistake. isInternalGroup is an attribute on every group either way, so
+  // reading it here depends on nothing Apple has to agree with.
+  const groups = await api(`/v1/apps/${app.id}/betaGroups?limit=200`);
+  const candidates = groups.data.filter(
+    (/** @type {any} */ g) => Boolean(g.attributes?.isInternalGroup) === IS_INTERNAL,
   );
-  const candidates = groups.data;
   const where = IS_INTERNAL ? 'TestFlight → Internal Testing' : 'TestFlight → External Testing';
-  if (!candidates.length) throw new Error(`no ${AUDIENCE} beta group — create one in ${where}`);
+  if (!candidates.length) {
+    const other = groups.data.map((/** @type {any} */ g) => g.attributes?.name).filter(Boolean);
+    throw new Error(
+      `no ${AUDIENCE} beta group — create one in ${where}` +
+        (other.length ? `\n  groups this app does have: ${other.join(', ')}` : '\n  this app has no beta groups at all'),
+    );
+  }
   const group = GROUP_NAME
     ? candidates.find((/** @type {any} */ g) => g.attributes.name === GROUP_NAME)
     : candidates[0];
