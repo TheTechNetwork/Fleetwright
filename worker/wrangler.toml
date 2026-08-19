@@ -58,6 +58,18 @@ routes = [
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
+# Rate limit for the demo token, since the token is public and the point of
+# publishing it was to stop it needing an operator. 60 requests a minute per
+# client address is far more than a person tapping around an app and far less
+# than anything worth doing with a hundred thousand free requests a day.
+#
+# Keyed on the client address rather than the token: a single abuser must not
+# be able to lock out an App Store reviewer by exhausting a shared budget.
+[[ratelimits]]
+name = "DEMO_RATE_LIMIT"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
 [[durable_objects.bindings]]
 name = "FLEET"
 class_name = "Fleet"

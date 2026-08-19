@@ -53,6 +53,11 @@ Worker invocations and nothing else — and in exchange there is no secret to
 rotate, no manual step before a deploy, and no way for App Store review to be
 blocked on somebody being awake to paste a value.
 
+It is rate limited to **60 requests a minute per client address** — far more
+than a person tapping around an app, far less than anything worth doing with a
+free tier. Keyed on the address rather than the token, so one abuser cannot
+lock out an App Store reviewer by exhausting a shared budget.
+
 A request bearing it is answered from `worker/src/demo.js` — two invented
 hosts, three invented sessions, one of them waiting on a person. Verbs like
 `start` and `stop` reply plausibly and change nothing.

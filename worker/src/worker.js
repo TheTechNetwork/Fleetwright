@@ -19,7 +19,7 @@ export { Fleet };
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -78,6 +78,19 @@ export default {
       // coordinator into a toy. Refuse rather than guess which was meant.
       if (timingSafeEqual(env.AGENT_FLEET_DEMO_TOKEN, env.AGENT_FLEET_API_TOKEN || '')) {
         return json({ ok: false, error: { code: 'misconfigured' }, text: 'AGENT_FLEET_DEMO_TOKEN must differ from AGENT_FLEET_API_TOKEN' }, 500);
+      }
+      // The token is public, so the budget is per client address rather than
+      // per token — one abuser must not be able to lock out a reviewer.
+      // Absent binding means local dev, where there is nothing to protect.
+      if (env.DEMO_RATE_LIMIT) {
+        const key = request.headers.get('cf-connecting-ip') || 'unknown';
+        const { success } = await env.DEMO_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json(
+            { ok: false, error: { code: 'rate_limited' }, demo: true, text: 'Too many demo requests. Try again in a minute.' },
+            429,
+          );
+        }
       }
       const body = request.method === 'POST' ? await readJsonSafely(request) : null;
       const reply = demoReply(url, request.method, body);
