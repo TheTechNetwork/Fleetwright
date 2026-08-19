@@ -52,7 +52,11 @@ struct FleetView: View {
 
     private var fleet: Fleet { Fleet(settings: settings) }
 
-    private func refresh() async {
+    /// - Parameter keepStatus: keep whatever is already on screen if the list
+    ///   call succeeds. Set after an action, whose reply text is the only
+    ///   confirmation the coordinator ever gives — a plain refresh would wipe
+    ///   "Started cc-brave-otter." a few hundred milliseconds after it appeared.
+    private func refresh(keepStatus: Bool = false) async {
         guard settings.configured else { return }
         busy = true
         defer { busy = false }
@@ -62,7 +66,11 @@ struct FleetView: View {
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
-            status = (reply.ok == false) ? (reply.text ?? "") : ""
+            if reply.ok == false {
+                status = reply.text ?? ""
+            } else if !keepStatus {
+                status = ""
+            }
         } catch {
             status = error.localizedDescription
         }
@@ -76,7 +84,7 @@ struct FleetView: View {
             status = error.localizedDescription
         }
         busy = false
-        await refresh()
+        await refresh(keepStatus: true)
     }
 }
 

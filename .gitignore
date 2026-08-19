@@ -26,3 +26,11 @@ apps/ios/Fleetwright/Fleetwright.entitlements
 # `git status --porcelain` counts untracked files. A stray release.jks in
 # /opt/agent-fleet would silently stop that host updating.
 *.jks
+
+# IDE state, not project configuration. Android Studio rewrites .idea on
+# almost every interaction and bakes in absolute local paths — the committed
+# workspace.xml pinned an AVD at /Users/<someone>/.android/avd — so it
+# conflicts on contact and is worthless on any other machine.
+.idea/
+*.iml
+.DS_Store
