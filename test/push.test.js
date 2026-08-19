@@ -178,6 +178,60 @@ test('a malformed service account falls back to logging rather than throwing', (
   assert.equal(warned.length, 2);
 });
 
+/** A service account with a real key, since fcmPusher signs before it sends. */
+async function realServiceAccount() {
+  const pair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const pkcs8 = await crypto.subtle.exportKey('pkcs8', pair.privateKey);
+  return {
+    client_email: 'svc@example.iam.gserviceaccount.com',
+    project_id: 'p',
+    private_key: `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8).toString('base64')}\n-----END PRIVATE KEY-----\n`,
+  };
+}
+
+/** @param {string} status @param {number} code */
+function fcmRejecting(status, code) {
+  return async (/** @type {any} */ url) =>
+    String(url).includes('oauth2')
+      ? new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 })
+      : new Response(JSON.stringify({ error: { status } }), { status: code });
+}
+
+test('an APNs token rejected by FCM is kept, not silently unregistered', async () => {
+  // The failure this prevents: an iOS app registers with APNs directly and
+  // posts the raw device token. FCM answers INVALID_ARGUMENT because that is
+  // not an FCM registration token. Reporting it as dead made the coordinator
+  // delete the registration — the phone unregistered itself, and the only
+  // trace was a line saying a dead token was dropped.
+  /** @type {string[]} */
+  const warned = [];
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) },
+    fetchImpl: fcmRejecting('INVALID_ARGUMENT', 400),
+  });
+
+  const r = await pusher.send([{ token: 'a1b2c3d4e5f6', platform: 'ios' }], { title: 't', body: 'b' });
+  assert.equal(r.sent, 0);
+  assert.deepEqual(r.dead, [], 'a misconfigured token is not a dead one');
+  // The message has to name the cause, because the symptom is silence.
+  assert.match(warned.join('\n'), /INVALID_ARGUMENT/);
+  assert.match(warned.join('\n'), /Firebase SDK|Messaging\.messaging/);
+});
+
+test('a genuinely unregistered token is still dropped', async () => {
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn() {} },
+    fetchImpl: fcmRejecting('UNREGISTERED', 404),
+  });
+
+  const r = await pusher.send([{ token: 'gone-forever', platform: 'android' }], { title: 't', body: 'b' });
+  assert.deepEqual(r.dead, ['gone-forever']);
+});
+
 test('a service account is read as raw JSON or as base64', () => {
   // Base64 exists because of systemd. An EnvironmentFile has no multi-line
   // values, and a service-account JSON arrives pretty-printed across a dozen

@@ -55,6 +55,25 @@ one, which should not accumulate as a second registration that fails forever.
 Tokens the provider reports as dead (`404`, `UNREGISTERED`) are dropped rather
 than retried on every event.
 
+## iOS needs one of two things, and has neither yet
+
+`fcmPusher` sends every token to FCM's `messages:send` as an **FCM registration
+token**. The iOS app registers with APNs directly and posts the raw **APNs
+device token**, which is a different kind of value. FCM rejects it.
+
+Until one of these is done, iOS push does not work:
+
+| | what it takes |
+|---|---|
+| **Through FCM** (recommended) | Add the Firebase iOS SDK to the app, and post `Messaging.messaging().token` instead of the APNs token. One sender, both platforms, and nothing here changes. |
+| **Direct APNs** | A second sender beside `fcmPusher`, signing ES256 with a `.p8` key, selected by `device.platform`. Note APNs requires HTTP/2 — fine on Workers, but Node's `fetch` needs `allowH2` before this will work on a box. |
+
+The hex encoding in `Fleet.swift` is correct **for the direct-APNs path**. It is
+not a substitute for having that path.
+
+Until then the failure is at least loud: an `INVALID_ARGUMENT` from FCM keeps
+the registration and logs why. It used to delete it — see below.
+
 ## Configuring the sender
 
 One environment variable, holding the Firebase service-account JSON — as JSON,
