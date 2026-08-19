@@ -99,6 +99,10 @@ jobs:
     needs: build
     runs-on: macos-latest
     environment: production
+    outputs:
+      # So the job that hands the build to testers can tell "uploaded" from
+      # "skipped for want of a key". Both leave this job green.
+      uploaded: ${{ steps.creds.outputs.have }}
     steps:
       - uses: actions/checkout@v7
 
@@ -202,3 +206,66 @@ jobs:
             -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
             -authenticationKeyID "$APPSTORE_KEY_ID" \
             -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
+
+  # An upload is not a delivery. A build processes for anywhere between two
+  # minutes and half an hour and then sits in App Store Connect until something
+  # puts it in front of somebody.
+  #
+  # App Store Connect has a checkbox for this — "automatic distribution" on an
+  # internal group — and it works. This does the same thing in a file that can
+  # be reviewed, and that does not quietly stop applying when a group is
+  # renamed or recreated.
+  #
+  # ubuntu, not macOS: it is one JWT and some HTTP, and holding a macOS runner
+  # open for twenty minutes of polling would cost ten times as much for nothing.
+  distribute:
+    name: distribute to internal testers
+    needs: testflight
+    if: needs.testflight.outputs.uploaded == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Assign the build to the internal group
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          BUNDLE_ID: network.thetech.fleetwright
+          # The same number the archive stamped, which is how the build is
+          # found again — App Store Connect calls it "version" on a build,
+          # confusingly.
+          BUILD_NUMBER: ${{ github.run_number }}
+          AUDIENCE: internal
+          # Optional. Unset means the first internal group, which is right
+          # while there is exactly one.
+          INTERNAL_BETA_GROUP_NAME: ${{ vars.INTERNAL_BETA_GROUP_NAME }}
+        run: node tools/testflight-distribute.mjs
+
+  # External testers are the public, so this is NOT every commit on main. A
+  # published release is a decision somebody made, which is the right shape for
+  # a delivery that Apple reviews and that real people install.
+  distribute-external:
+    name: distribute to external testers
+    needs: testflight
+    if: github.event_name == 'release' && needs.testflight.outputs.uploaded == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Assign the build to the external group and submit it for review
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          BUNDLE_ID: network.thetech.fleetwright
+          BUILD_NUMBER: ${{ github.run_number }}
+          AUDIENCE: external
+          EXTERNAL_BETA_GROUP_NAME: ${{ vars.EXTERNAL_BETA_GROUP_NAME }}
+        run: node tools/testflight-distribute.mjs

@@ -134,6 +134,52 @@ Internal testers need no review, so this costs a macOS build and nothing else.
 External testing still wants a published release, which is where a decision
 belongs.
 
+### Builds reach internal testers by themselves
+
+`tools/testflight-distribute.mjs` runs after the upload: it waits for the build
+to finish processing, finds the beta group, and adds the build to it. Testers
+are notified by App Store Connect as usual.
+
+| audience | when | what happens |
+|---|---|---|
+| **internal** | every commit to `main` touching `apps/ios/**` | assigned to the internal group, available immediately |
+| **external** | only a **published GitHub release** | assigned to the external group, then submitted for Beta App Review |
+
+External is not every commit on purpose. Those testers are the public, Apple
+reviews the first build, and a release is a decision somebody made — which is
+the right shape for a delivery real people install.
+
+The script **submits** for review and stops. Review takes hours to a day, and
+waiting would mean holding a runner open for a decision no amount of polling
+influences. A build already submitted is not an error either — a re-run of a
+release should be idempotent rather than red.
+
+Two things it needs that this repository cannot create:
+
+- **The groups themselves** — TestFlight → Internal Testing → **+**, and
+  External Testing → **+**. Their names go in two repository *variables*:
+
+  | variable | example |
+  |---|---|
+  | `INTERNAL_BETA_GROUP_NAME` | `Internal Testers` |
+  | `EXTERNAL_BETA_GROUP_NAME` | `External Testers` |
+
+  Either unset means "the first group of that kind", which is right while
+  there is exactly one. One variable per audience rather than one shared name,
+  because a rename later is the change that leaves a variable unset somewhere —
+  and unset here is not an error, it is a silent fallback.
+- **Testers in it.** Internal testers are people with an App Store Connect
+  role, up to 100, and they need no review.
+
+There is a checkbox in App Store Connect that does the same thing — automatic
+distribution on the group. It works. This is in a file that can be reviewed and
+that does not quietly stop applying when a group is renamed.
+
+Export compliance is answered in the bundle (`ITSAppUsesNonExemptEncryption:
+false`, correct because the app uses HTTPS and nothing else), so builds do not
+stop at "Missing Compliance" — which would otherwise leave a build that looks
+delivered and reaches nobody.
+
 ### The app icon is generated
 
 `tools/make-app-icon.py` writes `Assets.xcassets/AppIcon.appiconset/icon-1024.png`

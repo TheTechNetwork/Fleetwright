@@ -35,6 +35,17 @@ targets:
       properties:
         CFBundleDisplayName: Fleetwright
         UILaunchScreen: {}
+        # Answers export compliance in the bundle instead of per build in App
+        # Store Connect. Without it every upload lands in "Missing Compliance"
+        # and cannot go to testers until somebody clicks through the same two
+        # questions — which defeats automatic distribution to an internal
+        # group, since the build sits there looking delivered.
+        #
+        # false is the correct answer, not the convenient one: the app uses
+        # HTTPS via URLSession and nothing else. That is exempt. An app that
+        # implemented its own crypto, or used non-exempt algorithms, would have
+        # to say true and file the documentation.
+        ITSAppUsesNonExemptEncryption: false
         # App Store Connect rejects a bundle with no orientations declared —
         # error 90474, "no orientations were specified", raised in the name of
         # iPad multitasking. Upside-down is omitted on iPhone because iOS
