@@ -14,11 +14,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -226,11 +231,25 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        // Masked, like the iOS SecureField. This is the credential that can
+        // start and stop every session in the fleet, and in plain text it is
+        // readable over a shoulder and captured by any screenshot or screen
+        // recording of this panel. `reveal` is there because a mistyped token
+        // otherwise fails as an indistinguishable "rejected the token".
+        var reveal by rememberSaveable { mutableStateOf(false) }
         OutlinedTextField(
             value = token,
             onValueChange = { token = it },
             label = { Text("API token") },
             singleLine = true,
+            visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                autoCorrectEnabled = false,
+            ),
+            trailingIcon = {
+                TextButton(onClick = { reveal = !reveal }) { Text(if (reveal) "Hide" else "Show") }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
