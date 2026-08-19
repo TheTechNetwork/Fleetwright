@@ -125,11 +125,26 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
           continue;
         }
         const text = (await res.text()).slice(0, 300);
-        // A token for an app that was uninstalled stays broken forever, so it
-        // gets reported back for removal rather than retried on every event.
-        if (res.status === 404 || /UNREGISTERED|INVALID_ARGUMENT/i.test(text)) {
+        // UNREGISTERED means the app was uninstalled or the token was replaced:
+        // broken forever, so it is reported back for removal rather than
+        // retried on every event.
+        if (res.status === 404 || /UNREGISTERED/i.test(text)) {
           dead.push(device.token);
           log.warn(`push: dropping dead token (${res.status})`);
+        } else if (/INVALID_ARGUMENT/i.test(text)) {
+          // NOT dead — misconfigured, and the distinction matters more than it
+          // looks. FCM says INVALID_ARGUMENT for a token that is not an FCM
+          // registration token at all, which is exactly what an iOS app that
+          // registered with APNs directly posts. Treating that as dead deleted
+          // the registration, so the phone silently unregistered ITSELF and
+          // the only trace was one line saying a dead token had been dropped.
+          // The next send had nobody to send to, and nothing anywhere said
+          // why.
+          log.warn(
+            `push: FCM rejected the ${device.platform} token as INVALID_ARGUMENT — keeping the registration.\n` +
+              '  This is what an APNs device token looks like to FCM. An iOS app has to post the token from\n' +
+              '  the Firebase SDK (Messaging.messaging().token), not the raw APNs one — see docs/push.md.',
+          );
         } else {
           log.warn(`push: FCM ${res.status} ${text}`);
         }
