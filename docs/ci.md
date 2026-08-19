@@ -134,6 +134,17 @@ Internal testers need no review, so this costs a macOS build and nothing else.
 External testing still wants a published release, which is where a decision
 belongs.
 
+### The app icon is generated
+
+`tools/make-app-icon.py` writes `Assets.xcassets/AppIcon.appiconset/icon-1024.png`
+from ~30 lines of geometry, stdlib only. Editing the icon means editing numbers
+rather than tracking down whoever has the source file, and the PNG is committed
+so no build step depends on running it.
+
+It is deliberately **opaque RGB with no alpha channel** — App Store Connect
+rejects an icon with transparency, and says so unhelpfully. One 1024×1024 image
+is enough; Xcode derives every other size at build time.
+
 ### The first upload will fail without these
 
 Both errors from a real attempt, and neither is fixable in this repository:
