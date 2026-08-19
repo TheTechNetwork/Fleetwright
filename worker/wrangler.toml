@@ -58,12 +58,6 @@ routes = [
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
-# The APNs key id. An identifier, not a credential — it names which key signed
-# the assertion and is useless without the .p8, which is a secret and lives in
-# Cloudflare. Here rather than in a secret so that rotating the key is a visible
-# change in a diff instead of a value somebody changed in a web form.
-AGENT_FLEET_APNS_KEY_ID = "QK4U44N7R9"
-
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per
 # client address is far more than a person tapping around an app and far less
@@ -97,6 +91,15 @@ enabled = true
 #   AGENT_FLEET_API_TOKEN             what a phone or Shortcut presents
 #   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
 #                                     base64 of it), for push
+#   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
+#   AGENT_FLEET_APNS_KEY_ID           which key that is
+#   AGENT_FLEET_APNS_TEAM_ID          the team it belongs to
+#
+# The key id and team id are identifiers rather than credentials, and were
+# briefly a [vars] entry for that reason. They are secrets now because a name
+# cannot be both: Cloudflare keeps vars and secrets in one namespace, so a
+# deploy carrying a var CLOBBERS the secret of the same name. One place per
+# name, and for these the useful place is beside the .p8 they describe.
 #
 # AGENT_FLEET_DEMO_TOKEN is NOT here: it is a [vars] entry below, because it
 # guards nothing worth guarding. See the comment on it.

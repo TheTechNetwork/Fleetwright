@@ -70,15 +70,19 @@ AGENT_FLEET_APNS_TEAM_ID=…             # the same team id the iOS build signs 
 AGENT_FLEET_APNS_KEY="$(cat AuthKey_QK4U44N7R9.p8)"
 ```
 
-On Cloudflare these are already wired, and only one of them is a secret:
+On Cloudflare all three are GitHub secrets, synced to the Worker on deploy:
 
-| | where | why |
-|---|---|---|
-| `AGENT_FLEET_APNS_KEY_ID` | `wrangler.toml` `[vars]` | an identifier, useless without the key. In a diff, so rotating is visible |
-| `AGENT_FLEET_APNS_TEAM_ID` | synced from the existing `APPLE_TEAM_ID` GitHub secret | the same team the iOS build signs with; two copies is two chances to disagree |
-| `AGENT_FLEET_APNS_KEY` | a GitHub secret, synced to Cloudflare on deploy | the `.p8`, and the only part worth protecting |
+| | source |
+|---|---|
+| `AGENT_FLEET_APNS_KEY` | the `.p8` |
+| `AGENT_FLEET_APNS_KEY_ID` | which key that is |
+| `AGENT_FLEET_APNS_TEAM_ID` | reused from `APPLE_TEAM_ID`, the same team the iOS build signs with |
 
-So adding iOS push is one new GitHub secret.
+The key id and team id are identifiers rather than credentials, and the key id
+was briefly a `[vars]` entry for exactly that reason. **A name cannot be both.**
+Cloudflare keeps vars and secrets in one namespace, so a deploy carrying a var
+clobbers the secret of the same name — which would have replaced the key id
+with itself and worked, right up until somebody rotated one and not the other.
 
 The key comes from the Apple Developer portal → **Keys** → **+** → tick **Apple
 Push Notifications service**. It is *not* the App Store Connect API key used for
