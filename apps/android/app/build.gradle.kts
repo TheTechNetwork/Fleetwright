@@ -23,7 +23,7 @@ android {
     // exactly one upload ever — the same trap as CURRENT_PROJECT_VERSION on
     // iOS. The CI run number only increases and is already past 99, so it
     // stays ahead of anything uploaded by hand while this was 1.
-    versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInt()
+    versionCode = providers.environmentVariable("ANDROID_VERSION_CODE").orNull?.toInt() ?: 1
     versionName = "0.1.0"
   }
 
@@ -31,14 +31,22 @@ android {
   // pointing at a file that is not there fails the whole configuration phase,
   // which would break the debug build too — and the debug build is the one
   // every contributor runs.
-  val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+  //
+  // providers.environmentVariable rather than System.getenv, because the
+  // configuration cache has to know which variables the configuration phase
+  // read in order to know when to throw the cache away. A bare System.getenv
+  // is an untracked read: Gradle reports it as a problem and, worse, would
+  // happily reuse a cached configuration carrying the previous versionCode or
+  // the previous keystore.
+  val env = { name: String -> providers.environmentVariable(name).orNull }
+  val keystoreFile = env("ANDROID_KEYSTORE_FILE")
   if (!keystoreFile.isNullOrBlank()) {
     signingConfigs {
       create("release") {
         storeFile = file(keystoreFile)
-        storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-        keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-        keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        storePassword = env("ANDROID_KEYSTORE_PASSWORD")
+        keyAlias = env("ANDROID_KEY_ALIAS")
+        keyPassword = env("ANDROID_KEY_PASSWORD")
       }
     }
   }
