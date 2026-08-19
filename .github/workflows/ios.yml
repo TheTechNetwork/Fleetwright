@@ -183,8 +183,23 @@ jobs:
           # -A would let ANY tool use the key without prompting. Limited to the
           # two that need it instead, which costs nothing here and is the sort
           # of default worth not copying from a blog post.
-          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" \
-            -T /usr/bin/codesign -T /usr/bin/security
+          # The failure this catches is not the one it names. macOS cannot read a
+          # PKCS#12 written with OpenSSL 3's defaults — MAC sha256, AES-256-CBC —
+          # and reports it as "MAC verification failed (wrong password?)", which
+          # sends people to check a password that was always right.
+          if ! security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" \
+               -T /usr/bin/codesign -T /usr/bin/security 2>"$RUNNER_TEMP/import.err"; then
+            cat "$RUNNER_TEMP/import.err"
+            if grep -qi 'MAC verification failed' "$RUNNER_TEMP/import.err"; then
+              echo "::error::Most likely the .p12 was exported with OpenSSL 3 defaults, which macOS cannot read."
+              echo "Re-export the SAME key and certificate with -legacy, and check it says MAC: sha1:"
+              echo "  openssl pkcs12 -export -legacy -inkey distribution.key -in distribution.pem -out distribution.p12"
+              echo "  openssl pkcs12 -in distribution.p12 -info -nokeys -passin pass:... 2>&1 | grep MAC:"
+              echo "If it already says sha1, check APPLE_DISTRIBUTION_P12_PASSWORD for a trailing newline —"
+              echo "piping a file or an echo into a secret includes one, and it fails the same way."
+            fi
+            exit 1
+          fi
           # Without this, codesign stops on a GUI prompt nobody can answer and
           # the job hangs until it times out.
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KEYCHAIN" >/dev/null
