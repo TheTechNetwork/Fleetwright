@@ -10,4 +10,8 @@ plugins {
   //
   // Versioned together, that mismatch cannot be expressed.
   id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
+  // Reads google-services.json and generates the Firebase config the SDK looks
+  // for at runtime. Applied conditionally in app/build.gradle.kts, not here —
+  // see the comment there.
+  id("com.google.gms.google-services") version "4.4.4" apply false
 }

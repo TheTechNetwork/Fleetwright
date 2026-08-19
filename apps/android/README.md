@@ -63,6 +63,28 @@ the device.
 
 ## Push notifications
 
+Wired. The app fetches an FCM token on launch, registers it with the
+coordinator, and re-registers when FCM rotates it (`Messaging.kt`).
+
+**Two Firebase apps are needed, not one.** The debug build appends `.debug` to
+the applicationId so it can sit beside a release build on the same phone, and
+the Google Services plugin fails any build whose package is not in
+`google-services.json`:
+
+```
+No matching client found for package name 'network.thetech.fleetwright.debug'
+```
+
+So register both in the Firebase console — `network.thetech.fleetwright` and
+`network.thetech.fleetwright.debug` — and download the config again; one file
+carries both. Without the second, `assembleDebug` cannot build at all, which
+is every PR and every local build.
+
+`google-services.json` is committed. It is not a secret: it ships inside every
+APK, and its API key is restricted to this package. Treating it as one would
+mean a repository nobody else can build.
+
+
 The **server side is finished** — the sidecar detects that a session needs a
 person, the coordinator fans it out, and `POST /api/devices` is where a phone
 registers. See [`../../docs/push.md`](../../docs/push.md).

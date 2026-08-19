@@ -7,6 +7,17 @@ plugins {
   id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Firebase, only when there is a config to read.
+//
+// The Google Services plugin FAILS THE BUILD when google-services.json is
+// absent, which would mean a fork, a fresh clone or anybody without a Firebase
+// project could not build the app at all. Conditional application keeps the
+// repository buildable by people who are not us, and push simply does nothing
+// for them — which is the honest outcome rather than a broken build.
+if (file("google-services.json").exists()) {
+  apply(plugin = "com.google.gms.google-services")
+}
+
 android {
   namespace = "network.thetech.fleetwright"
   compileSdk = 37
@@ -107,6 +118,27 @@ dependencies {
   implementation(platform("androidx.compose:compose-bom:2026.08.00"))
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
+
+  // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
+  // release train, which is the only way a set of libraries that ship
+  // separately stay compatible.
+  implementation(platform("com.google.firebase:firebase-bom:34.4.0"))
+  implementation("com.google.firebase:firebase-messaging")
+
+  // Firebase drags in androidx.fragment 1.1.0 transitively, and lint fails a
+  // RELEASE build on it: registerForActivityResult needs 1.3.0 or newer, and
+  // below that the callback can be lost when the activity is recreated —
+  // which for this app means the notification permission prompt silently
+  // never answering.
+  //
+  // A constraint rather than a dependency: this app uses no fragments at all,
+  // so it should raise the floor for whoever does pull it in rather than
+  // claiming to depend on it.
+  constraints {
+    implementation("androidx.fragment:fragment:1.8.5") {
+      because("Firebase brings 1.1.0; registerForActivityResult requires >= 1.3.0")
+    }
+  }
   implementation("androidx.compose.material:material-icons-core")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 

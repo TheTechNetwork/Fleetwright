@@ -23,5 +23,18 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <!--
+      Registered so FCM can hand over a rotated token. Without it the app finds
+      out about a new token only on the next launch, and until then the
+      coordinator is sending to a token nothing will deliver.
+    -->
+    <service
+        android:name=".Messaging"
+        android:exported="false">
+      <intent-filter>
+        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+    </service>
   </application>
 </manifest>
