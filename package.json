@@ -1,6 +1,6 @@
 {
   "name": "agent-fleet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it \u2014 sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
