@@ -63,7 +63,13 @@ fun FleetScreen() {
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
-    fun refresh() {
+    /**
+     * @param keepStatus keep whatever is already on screen if the list call
+     *   succeeds. Set after an action, whose reply text is the only
+     *   confirmation the coordinator ever gives — a plain refresh would wipe
+     *   "Started cc-brave-otter." a few hundred milliseconds after it appeared.
+     */
+    fun refresh(keepStatus: Boolean = false) {
         if (!settings.configured) return
         scope.launch {
             busy = true
@@ -72,7 +78,7 @@ fun FleetScreen() {
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
-            status = if (reply.ok) "" else reply.text
+            status = if (!reply.ok) reply.text else if (keepStatus) status else ""
             busy = false
         }
     }
@@ -100,7 +106,7 @@ fun FleetScreen() {
                             val reply = fleet.start(null)
                             status = reply.text
                             busy = false
-                            refresh()
+                            refresh(keepStatus = true)
                         }
                     },
                 )
@@ -143,7 +149,7 @@ fun FleetScreen() {
                                 busy = true
                                 status = fleet.stop(session.name).text
                                 busy = false
-                                refresh()
+                                refresh(keepStatus = true)
                             }
                         },
                         onResume = {
@@ -151,7 +157,7 @@ fun FleetScreen() {
                                 busy = true
                                 status = fleet.resume(session.name, "summary").text
                                 busy = false
-                                refresh()
+                                refresh(keepStatus = true)
                             }
                         },
                         onOpen = { url ->
