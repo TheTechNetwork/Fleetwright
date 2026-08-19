@@ -11,7 +11,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore, describeEvent } from '../src/fleet/coordinator/core.js';
-import { fcmPusher, logPusher, pusherFromEnv, parseServiceAccount, signJwtRS256, pemToBytes } from '../src/fleet/push.js';
+import {
+  fcmPusher,
+  logPusher,
+  pusherFromEnv,
+  parseServiceAccount,
+  signJwtRS256,
+  signJwtES256,
+  apnsPusher,
+  routingPusher,
+  pemToBytes,
+} from '../src/fleet/push.js';
 
 /** A sender that records what it was asked to deliver. */
 function fakePusher({ dead = [] } = {}) {
@@ -428,4 +438,125 @@ test('a test push to one device does not wake the whole fleet', async () => {
 
   await core.testPush('mine-token-01');
   assert.deepEqual(seen, [['mine-token-01']]);
+});
+
+// --- APNs -------------------------------------------------------------------
+
+/** A .p8 as Apple hands it over, from a key generated here. */
+async function apnsKey() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pkcs8 = await crypto.subtle.exportKey('pkcs8', pair.privateKey);
+  return {
+    pair,
+    pem: `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8).toString('base64')}\n-----END PRIVATE KEY-----\n`,
+  };
+}
+
+test('the APNs JWT is ES256, carries the key id, and verifies', async () => {
+  // Getting this wrong is a 403 from Apple with a three-word reason, so it is
+  // worth asserting against a real key rather than eyeballing the shape.
+  const { pair, pem } = await apnsKey();
+  const jwt = await signJwtES256({ iss: 'TEAMID1234', iat: 1_700_000_000 }, pem, 'KEYID5678');
+
+  const [h, c, sig] = jwt.split('.');
+  const header = JSON.parse(Buffer.from(h, 'base64url').toString());
+  assert.equal(header.alg, 'ES256');
+  assert.equal(header.kid, 'KEYID5678', 'the key id lives in the header, not the claim');
+  assert.equal(JSON.parse(Buffer.from(c, 'base64url').toString()).iss, 'TEAMID1234');
+
+  const signature = Buffer.from(sig, 'base64url');
+  assert.equal(signature.length, 64, 'raw r||s, not DER — the mistake that makes Apple say InvalidProviderToken');
+  assert.equal(
+    await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, signature, new TextEncoder().encode(`${h}.${c}`)),
+    true,
+  );
+});
+
+test('an APNs push sends what Apple expects and drops a token Apple has buried', async () => {
+  const { pem } = await apnsKey();
+  /** @type {any[]} */
+  const calls = [];
+  const pusher = apnsPusher(
+    { keyId: 'K', teamId: 'T', bundleId: 'network.thetech.fleetwright', privateKey: pem },
+    {
+      logger: { info() {}, warn() {} },
+      deliver: async (token, payload, headers) => {
+        calls.push({ token, payload: JSON.parse(payload), headers });
+        return token === 'gone' ? { status: 410, body: '{"reason":"Unregistered"}' } : { status: 200, body: '' };
+      },
+    },
+  );
+
+  const r = await pusher.send(
+    [{ token: 'alive', platform: 'ios' }, { token: 'gone', platform: 'ios' }],
+    { title: 'cc-brave-otter', body: 'is waiting for you', data: { name: 'cc-brave-otter' } },
+  );
+
+  assert.equal(r.sent, 1);
+  assert.deepEqual(r.dead, ['gone'], '410 means the app is gone, so the registration should not survive it');
+
+  const first = calls[0];
+  assert.equal(first.headers['apns-topic'], 'network.thetech.fleetwright', 'the topic is the bundle id');
+  assert.equal(first.headers['apns-push-type'], 'alert');
+  assert.equal(first.headers['apns-priority'], '10');
+  assert.match(first.headers.authorization, /^bearer eyJ/);
+  assert.equal(first.payload.aps.alert.title, 'cc-brave-otter');
+  assert.equal(first.payload.name, 'cc-brave-otter', 'data rides alongside aps so the app can deep-link');
+});
+
+test('the bearer token is reused rather than minted per notification', async () => {
+  // Apple rate-limits providers that regenerate too often, and a fleet event
+  // can fan out to every phone at once.
+  const { pem } = await apnsKey();
+  const seen = new Set();
+  const pusher = apnsPusher(
+    { keyId: 'K', teamId: 'T', bundleId: 'b', privateKey: pem },
+    {
+      logger: { info() {}, warn() {} },
+      deliver: async (_t, _p, headers) => {
+        seen.add(headers.authorization);
+        return { status: 200, body: '' };
+      },
+    },
+  );
+  await pusher.send([{ token: 'a', platform: 'ios' }, { token: 'b', platform: 'ios' }], { title: 't', body: 'b' });
+  await pusher.send([{ token: 'c', platform: 'ios' }], { title: 't', body: 'b' });
+  assert.equal(seen.size, 1);
+});
+
+test('iOS goes to APNs and everything else goes to FCM', async () => {
+  // The bug this whole sender exists for: an APNs device token handed to FCM,
+  // rejected, and the registration deleted. Routing is what makes that
+  // impossible rather than unlikely.
+  /** @type {string[]} */
+  const toApns = [];
+  /** @type {string[]} */
+  const toFcm = [];
+  const pusher = routingPusher({
+    ios: { async send(devices) { toApns.push(...devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } },
+    other: { async send(devices) { toFcm.push(...devices.map((d) => d.token)); return { sent: devices.length, dead: ['bad'] }; } },
+  });
+
+  const r = await pusher.send(
+    [
+      { token: 'iphone', platform: 'ios' },
+      { token: 'pixel', platform: 'android' },
+      { token: 'browser', platform: 'web' },
+    ],
+    { title: 't', body: 'b' },
+  );
+
+  assert.deepEqual(toApns, ['iphone']);
+  assert.deepEqual(toFcm, ['pixel', 'browser']);
+  assert.equal(r.sent, 3);
+  assert.deepEqual(r.dead, ['bad'], 'dead tokens from either side come back together');
+});
+
+test('half a set of APNs credentials is refused rather than half-configured', () => {
+  /** @type {string[]} */
+  const warned = [];
+  const logger = { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) };
+  const pusher = pusherFromEnv({ AGENT_FLEET_APNS_KEY_ID: 'K', AGENT_FLEET_APNS_TEAM_ID: 'T' }, logger);
+  assert.ok(pusher);
+  assert.match(warned.join('\n'), /all three/);
 });
