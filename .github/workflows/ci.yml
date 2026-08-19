@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only, and nothing here has ever needed more. Spelled out rather than
+# inherited: the repository default applies to workflows nobody has looked at in
+# a year, and `contents: read` is the thing you want to be true by default when
+# somebody adds a step that runs a dependency's install script.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -36,6 +43,13 @@ jobs:
       # An unparseable workflow does not fail a check — it shows up as a run
       # named after the FILE PATH, with no jobs, which is easy to miss entirely.
       # This one cost a round trip to notice, so it is a check now.
+      #
+      # The permissions assertion is here for the same reason. A workflow with
+      # no `permissions:` block inherits the repository default, which is a
+      # setting in the web UI rather than anything visible in the diff — so the
+      # token a step gets is decided somewhere nobody reviewing the step will
+      # look. Every workflow declares its own, and this keeps the next one
+      # honest. Narrow it at the job level when a single job needs more.
       - name: Workflows parse
         run: |
           npm i --no-save --no-audit --no-fund js-yaml
@@ -46,6 +60,7 @@ jobs:
               try {
                 const doc = yaml.load(fs.readFileSync(".github/workflows/" + f, "utf8"));
                 if (!doc.jobs || !Object.keys(doc.jobs).length) throw new Error("no jobs");
+                if (!doc.permissions) throw new Error("no top-level permissions: block — see the comment in ci.yml");
                 console.log("ok   " + f);
               } catch (e) {
                 bad++;

@@ -10,6 +10,12 @@ on:
   release:
     types: [published]
 
+# The floor. `release` raises its own to contents: write below, because
+# attaching an APK to a release is a write to the repository — nothing else
+# here is, and the debug job that runs on every pull request must not have it.
+permissions:
+  contents: read
+
 # The Gradle LAUNCHER jvm needs this, not just the daemon — it loads Gradle's
 # native-platform library before forking, and JDK 25 warns that
 # "restricted methods will be blocked in a future release". org.gradle.jvmargs
@@ -54,6 +60,10 @@ jobs:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
+    # `gh release upload` in the last step writes to the repository. This is the
+    # only job in the repository that needs more than read.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5

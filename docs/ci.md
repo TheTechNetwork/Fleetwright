@@ -1,6 +1,6 @@
 # CI, and the secrets it needs
 
-Four workflows. **Everything that runs on a pull request needs no secrets at
+Five workflows. **Everything that runs on a pull request needs no secrets at
 all** — the secret-dependent jobs skip themselves with a notice rather than
 failing, so a fork or a fresh clone never shows a red main for something it was
 never given.
@@ -14,6 +14,7 @@ never given.
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
 | `ios.yml` — `testflight` | published release | App Store Connect |
+| `codeql.yml` | every push and PR, plus weekly | none |
 
 ## The one that matters most needs nothing
 
@@ -157,10 +158,68 @@ everyone.
 a secret (it ships inside every APK), but it is account-specific, so CI builds
 without it until the app actually uses FCM.
 
+## Code scanning — one setting, and it is not a secret
+
+`codeql.yml` needs no secrets, but it **does** need GitHub's *default setup* for
+code scanning turned off, because the two cannot both upload results:
+
+> Settings → Code security → Code scanning → CodeQL analysis → **Disable**
+
+Until that is done, this workflow builds everything correctly and then fails at
+the upload with *"CodeQL analyses from advanced configurations cannot be
+processed when the default setup is enabled"*.
+
+### Why there is a workflow at all
+
+Default setup ran `autobuild`, and autobuild failed on both compiled languages
+on every run:
+
+```
+java   ERROR: Could not detect a suitable build command for the source checkout.
+swift  ERRO [no-project-found] `autobuild` detected neither an Xcode project or
+       workspace, nor a Swift package
+```
+
+Neither is a broken build. Autobuild looks at the repository root, and
+
+* the Gradle build is at `apps/android`, not the root — there is no
+  `settings.gradle` for it to find;
+* there is no `.xcodeproj` **anywhere in the repository**. It is generated from
+  `apps/ios/project.yml` by XcodeGen and gitignored, so there is nothing on disk
+  to detect until `xcodegen generate` has run.
+
+A compiled language only enters a CodeQL database if the extractor watches a
+real compiler run, so `codeql.yml` uses `build-mode: manual` and the same build
+commands `android.yml` and `ios.yml` already use. `javascript-typescript` and
+`actions` are analysed too — turning off default setup would otherwise stop
+scanning the ~50 `.js` files under `src/`, `worker/` and `bin/`, which are the
+part of this repository that faces the network.
+
+Two flags in the Android build are load-bearing and easy to remove by accident.
+`--no-daemon`, because a Gradle daemon compiles in a process the tracer never
+attached to; `--no-build-cache`, because a restored cache entry makes
+`compileDebugKotlin` come out `FROM-CACHE` and a task that does not run compiles
+nothing. Both mistakes produce a **green run with an empty database**, which is
+worse than a red one.
+
+## Permissions
+
+Every workflow declares a top-level `permissions:` block, and `ci.yml` fails the
+build if one does not. Without a block a workflow inherits the repository-wide
+default — a setting in the web UI, invisible in the diff — so the token a step
+receives is decided somewhere nobody reviewing that step will look.
+
+The floor is `contents: read`. Two jobs raise their own:
+
+| job | | why |
+|---|---|---|
+| `android.yml` — `release` | `contents: write` | `gh release upload` attaches the APK to the release |
+| `codeql.yml` — all three | `security-events: write` | uploading results is the point of the workflow |
+
 ## What to set up first
 
-1. **Nothing.** Open a PR and the iOS build, the Android debug APK and the
-   Worker bundle check all run. That alone verifies the thing that has never
+1. **Nothing.** Open a PR and the iOS build, the Android debug APK, the Worker
+   bundle check and CodeQL all run. That alone verifies the thing that has never
    been verified.
 2. **Cloudflare**, two secrets — the coordinator deploys on merge to main and
    the phone has something to talk to.
