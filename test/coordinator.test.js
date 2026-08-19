@@ -352,6 +352,24 @@ test('/healthz is the one unauthenticated surface and leaks nothing', async (t) 
   assert.deepEqual(Object.keys(body).sort(), ['ok', 'protocol']);
 });
 
+test('both coordinators answer /api/hosts in the same shape', async (t) => {
+  // The Worker returns core.snapshot(); this one used to return its own
+  // {ok, hosts}. A client cannot see "the same code runs in both places" —
+  // the response shape is the only part of that claim it can check, and the
+  // two disagreeing means every client carries both shapes.
+  const { port } = await fleet(t);
+
+  const body = await (await fetch(`http://127.0.0.1:${port}/api/hosts`)).json();
+  assert.deepEqual(
+    Object.keys(body).sort(),
+    ['devices', 'events', 'hosts', 'ok', 'protocol'],
+    'same keys the Worker sends',
+  );
+  assert.equal(body.protocol, 1);
+  assert.equal(typeof body.devices, 'number');
+  assert.ok(Array.isArray(body.events));
+});
+
 test('an API token is enforced when set', async (t) => {
   const stub = await startStubHub();
   const coordinator = new Coordinator({ apiToken: 'a-token-at-least-16ch' });
