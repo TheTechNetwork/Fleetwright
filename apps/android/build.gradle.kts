@@ -13,5 +13,5 @@ plugins {
   // Reads google-services.json and generates the Firebase config the SDK looks
   // for at runtime. Applied conditionally in app/build.gradle.kts, not here —
   // see the comment there.
-  id("com.google.gms.google-services") version "4.4.4" apply false
+  id("com.google.gms.google-services") version "4.5.0" apply false
 }
