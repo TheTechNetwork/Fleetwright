@@ -34,7 +34,9 @@
  */
 
 import { describe } from '../core/login.js';
-import { runUpdate, updateStatus, canSelfRestart } from '../core/update.js';
+import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
+import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
+import { reboot } from '../core/reboot.js';
 import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
@@ -59,7 +61,16 @@ export function parse(line) {
   /** @type {Set<string>} */
   const flags = new Set();
   for (const part of parts.slice(1)) {
-    if (part.startsWith('--')) flags.add(part.slice(2).toLowerCase());
+    // ONE dash is enough, and so is a dash a phone keyboard has helpfully
+    // rewritten. Telegram on iOS turns `--` into an em dash as you type it, so
+    // `/update --restart` arrives as `/update —restart` and used to be read as
+    // a positional argument — the flag silently did nothing, which is the worst
+    // way for a flag to fail. Buttons were unaffected because their payload is
+    // never typed, so this broke only for people typing the command.
+    // A LETTER after the dash, not \w: otherwise `-5` is a flag called "5"
+    // rather than a negative number, and `/logs -5` stops meaning anything.
+    const flag = /^(?:--|-|—|–)([a-z][\w-]*)$/i.exec(part);
+    if (flag) flags.add(flag[1].toLowerCase());
     else args.push(part);
   }
   return { name, args, flags };
@@ -392,6 +403,23 @@ export const COMMANDS = {
       const status = updateStatus(ctx.cfg);
       if (!status.ok) return { ok: false, text: status.message ?? 'Could not read the checkout.' };
 
+      // --check answers "is there anything" without changing the box, which is
+      // what a notification wants and what somebody asks before deciding to
+      // restart a machine with sessions running on it.
+      if (flags.has('check')) {
+        const avail = updateAvailable(ctx.cfg, { force: true });
+        if (!avail.ok) return { ok: true, text: `${status.dir} (${status.branch})\n\n${avail.message}` };
+        return {
+          ok: true,
+          text:
+            `${status.dir} (${status.branch})\n\n` +
+            (avail.behind
+              ? `${avail.behind} commit${avail.behind === 1 ? '' : 's'} behind ${avail.upstream}. /update to pull.`
+              : 'Up to date.'),
+          buttons: avail.behind ? [{ label: 'Update now', command: '/update' }] : undefined,
+        };
+      }
+
       const restart = flags.has('restart') || flags.has('apply');
       const r = runUpdate(ctx.cfg, { restart, actor: ctx.actor });
 
@@ -403,6 +431,51 @@ export const COMMANDS = {
           : undefined;
 
       return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}`, buttons };
+    },
+  },
+
+  upgrade: {
+    aliases: ['sysupdate'],
+    usage: '/upgrade [--apply]',
+    short: 'System packages on this box',
+    help:
+      'What the operating system has waiting, and — if it has been turned on — ' +
+      'apply it. Separate from /update, which is this app rather than the box.',
+    run: (ctx, _args, flags) => {
+      if (flags.has('apply') || flags.has('yes')) {
+        const r = runUpgrade(ctx.cfg, { actor: ctx.actor });
+        return { ok: r.ok, text: r.text };
+      }
+      // Somebody is waiting for this answer, so refresh before giving it —
+      // rate-limited inside, and a no-op when it is not permitted.
+      refreshPackageLists(ctx.cfg);
+      const s = systemUpdates();
+      if (!s.supported) return { ok: true, text: `No package information here (${s.reason ?? 'unsupported'}).` };
+      const summary = describeSystemUpdates(s);
+      if (!summary) return { ok: true, text: 'The box is up to date.' };
+
+      const shown = s.packages.slice(0, 12).join(', ');
+      return {
+        ok: true,
+        text:
+          `${summary}\n\n${shown}${s.packages.length > 12 ? `, …and ${s.count - 12} more` : ''}` +
+          '\n\n/upgrade --apply to install them.',
+        buttons: ctx.cfg.systemUpgrade ? [{ label: 'Install updates', command: '/upgrade --apply' }] : undefined,
+      };
+    },
+  },
+
+  reboot: {
+    usage: '/reboot [pin] [hostname]',
+    short: 'Reboot this box',
+    help:
+      'Reboot the machine. Three confirmations, each asking for something ' +
+      'different: the command, a one-time PIN, and the hostname typed out. ' +
+      'Every running session dies — a reboot takes the tmux server with it.',
+    run: async (ctx, args) => {
+      const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
+      const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running });
+      return { ok: r.ok, text: r.text };
     },
   },
 

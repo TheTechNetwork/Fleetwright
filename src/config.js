@@ -111,6 +111,15 @@ export function loadConfig(env = process.env) {
     // outright on a stock Debian 13, where no unqualified-search-registries are
     // configured. Naming it in full skips that lookup entirely. A remote image
     // must likewise be given in full (registry/name:tag).
+    // Applying system packages needs root, which this service deliberately does
+    // not have. Turning this on is half the story; the other half is a scoped
+    // sudoers rule, and /upgrade prints the exact line when this is off.
+    systemUpgrade: bool('AGENT_HUB_SYSTEM_UPGRADE', false),
+    // Separate from systemUpgrade, and separately off. Rebooting ends every
+    // running session; installing packages does not.
+    systemReboot: bool('AGENT_HUB_SYSTEM_REBOOT', false),
+    runUser: str('AGENT_HUB_USER', process.env.USER || 'agent'),
+
     // Pulled, not built. Every host running the same published image is the
     // only way "the sandbox" is one thing: with a local build, what a box got
     // depended on the day it built it, and two hosts on the same commit could

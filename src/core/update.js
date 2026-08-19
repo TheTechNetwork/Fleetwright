@@ -88,6 +88,62 @@ export function updateStatus(cfg) {
  * Each returns { ok, changed, text }.
  */
 /**
+ * How far behind upstream this checkout is.
+ *
+ * Separate from updateStatus because it costs a network round trip: this
+ * fetches. Cached for CHECK_TTL_MS so that a health report every fifteen
+ * seconds does not turn into a git fetch every fifteen seconds.
+ *
+ * Deliberately fetch-and-compare rather than `git pull --dry-run`, which is not
+ * a thing, and rather than asking the forge over HTTP, which would need a token
+ * and would only work for one forge.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ now?: () => number, force?: boolean }} [opts]
+ * @returns {{ ok: boolean, behind: number, head?: string, upstream?: string, checkedAt: number, message?: string }}
+ */
+export function updateAvailable(cfg, { now = () => Date.now(), force = false } = {}) {
+  if (!force && cached && now() - cached.checkedAt < CHECK_TTL_MS) return cached;
+
+  const dir = cfg.installDir;
+  const status = updateStatus(cfg);
+  if (!status.ok) return { ok: false, behind: 0, checkedAt: now(), message: status.message };
+
+  const fetched = git(dir, ['fetch', '--quiet', '--no-tags']);
+  if (fetched.status !== 0) {
+    // Offline is not an error worth shouting about — a box that cannot reach
+    // the remote still runs sessions perfectly well.
+    const result = { ok: false, behind: 0, checkedAt: now(), message: `could not fetch: ${fetched.stderr.slice(0, 120)}` };
+    cached = result;
+    return result;
+  }
+
+  const counted = git(dir, ['rev-list', '--count', 'HEAD..@{upstream}']);
+  if (counted.status !== 0) {
+    const result = { ok: false, behind: 0, checkedAt: now(), message: 'this branch has no upstream to compare against' };
+    cached = result;
+    return result;
+  }
+
+  const result = {
+    ok: true,
+    behind: Number(counted.stdout) || 0,
+    head: status.head,
+    upstream: git(dir, ['rev-parse', '--abbrev-ref', '@{upstream}']).stdout,
+    checkedAt: now(),
+  };
+  cached = result;
+  return result;
+}
+
+/** @type {ReturnType<typeof updateAvailable>|null} */
+let cached = null;
+
+// Fifteen minutes. Long enough that health reporting does not hammer the
+// remote, short enough that "there is an update" arrives the same day.
+const CHECK_TTL_MS = 15 * 60_000;
+
+/**
  * Does this git failure mean "you do not own this checkout"?
  *
  * Exported because the phrasing is the entire content of the check, and the
