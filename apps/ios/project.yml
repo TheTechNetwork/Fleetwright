@@ -34,6 +34,21 @@ targets:
       path: Fleetwright/Info.plist
       properties:
         CFBundleDisplayName: Fleetwright
+        # Bound to the build settings, not left to XcodeGen.
+        #
+        # XcodeGen fills these two in itself when they are absent, and it fills
+        # them in as LITERALS — so the plist said 1.0 and 7 while
+        # MARKETING_VERSION said 0.1.0 and the archive was passing
+        # CURRENT_PROJECT_VERSION=48 on the command line. A build setting cannot
+        # override a value that was already baked into the plist, so the
+        # override did nothing and said nothing.
+        #
+        # Referencing the settings makes the command-line override work, which
+        # is what the CI build number depends on: App Store Connect refuses a
+        # build number it has already seen, and every upload was going to claim
+        # to be the same one.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         # Answers export compliance in the bundle instead of per build in App
         # Store Connect. Without it every upload lands in "Missing Compliance"
