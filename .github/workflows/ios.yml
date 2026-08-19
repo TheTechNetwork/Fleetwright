@@ -22,6 +22,11 @@ on:
 # and attach a release APK. A cancelled PR run is waste; a cancelled main run
 # is a thing that did not ship while reporting nothing wrong.
 concurrency:
+  # Deliberately NOT keyed by SHA, unlike ci.yml and codeql.yml. This workflow
+  # ships something, and when two commits land close together the newest is the
+  # one that should ship — so a shared group, where an older PENDING run is
+  # dropped in favour of a newer one, is the behaviour we want rather than a
+  # limitation to work around.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 

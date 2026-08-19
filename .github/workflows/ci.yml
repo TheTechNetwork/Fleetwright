@@ -13,7 +13,11 @@ on:
 # and attach a release APK. A cancelled PR run is waste; a cancelled main run
 # is a thing that did not ship while reporting nothing wrong.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Per-SHA on a push, per-branch on a PR — see the long note in codeql.yml.
+  # A pending run is cancelled by the next one whatever cancel-in-progress
+  # says, so two quick merges would leave a commit on main with no test result
+  # at all.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only, and nothing here has ever needed more. Spelled out rather than
