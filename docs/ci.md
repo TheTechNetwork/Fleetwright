@@ -149,6 +149,19 @@ External is not every commit on purpose. Those testers are the public, Apple
 reviews the first build, and a release is a decision somebody made — which is
 the right shape for a delivery real people install.
 
+**Turn on automatic distribution for the internal group as well.** TestFlight →
+Internal Testing → the group → *Automatic distribution*. It is not redundant
+with the script: Apple applies it whenever processing finishes, with no runner
+waiting, and processing has no deadline — the first build of a new app took
+longer than 20 minutes and the job that was waiting for it timed out. The
+script gets there first when processing is quick, and sets "What to Test",
+which the checkbox cannot do. The checkbox catches everything else.
+
+A slow queue is a **warning, not a failure**. The upload is the delivery this
+pipeline is responsible for; how long Apple takes afterwards is not something a
+run can influence or should be judged on, and a job that goes red when it
+worked is how people learn to ignore red.
+
 The script **submits** for review and stops. Review takes hours to a day, and
 waiting would mean holding a runner open for a decision no amount of polling
 influences. A build already submitted is not an error either — a re-run of a
