@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runUpdate, updateStatus, canSelfRestart } from '../src/core/update.js';
+import { runUpdate, updateStatus, canSelfRestart, looksLikeOwnershipProblem } from '../src/core/update.js';
 
 /** @param {string} cwd @param {string[]} args */
 const git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -152,6 +152,38 @@ test('an unreachable remote is reported, not swallowed', (t) => {
 
   assert.equal(r.ok, false);
   assert.match(r.message, /git pull failed/);
+});
+
+test("git's \"insufficient permission\" counts as the ownership problem", () => {
+  // The exact porcelain from a box where somebody ran `sudo git pull` once.
+  // Git does NOT say "permission denied" here — matching only that phrase
+  // left this branch dead for the failure it was written for, and the
+  // operator got raw git output instead of the fix.
+  assert.equal(
+    looksLikeOwnershipProblem(
+      'error: insufficient permission for adding an object to repository database .git/objects\n' +
+        'fatal: failed to write object\nfatal: unpack-objects failed',
+    ),
+    true,
+  );
+
+  // The other shapes this takes, all seen on real boxes.
+  for (const output of [
+    "fatal: detected dubious ownership in repository at '/opt/agent-fleet'",
+    'error: could not lock config file .git/config: Permission denied',
+    'fatal: could not create work tree dir: Read-only file system',
+  ]) {
+    assert.equal(looksLikeOwnershipProblem(output), true, output);
+  }
+
+  // And what must NOT be swallowed by it: a real merge problem needs its own
+  // advice, not "fix the permissions".
+  for (const output of [
+    'fatal: Not possible to fast-forward, aborting.',
+    'fatal: unable to access https://github.com/x/y: Could not resolve host',
+  ]) {
+    assert.equal(looksLikeOwnershipProblem(output), false, output);
+  }
 });
 
 // --- restarting -------------------------------------------------------------
