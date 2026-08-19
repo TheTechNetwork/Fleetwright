@@ -58,10 +58,24 @@ android {
       applicationIdSuffix = ".debug"
     }
     getByName("release") {
-      // Left off deliberately. R8 on a Compose app needs keep rules that have
-      // to be arrived at by testing what breaks, and shipping a release nobody
-      // has exercised is how you find out in the store review queue.
-      isMinifyEnabled = false
+      // R8, on. The comment here used to say this was left off because Compose
+      // needs keep rules arrived at by testing what breaks — which is true of
+      // apps that use reflection, and this one does not: no Gson or Moshi, no
+      // dependency injection, no class names built from strings. Compose and
+      // AndroidX ship their own consumer rules.
+      //
+      // Play was explicit about the cost of leaving it off: "No R8 metadata
+      // included. Use R8 to get the best performance", an optimisation score of
+      // Low, and an unshrunk bundle.
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(
+        // -optimize, not the plain one. The default android.txt disables the
+        // optimisation passes for historical reasons that stopped applying
+        // several R8 versions ago.
+        getDefaultProguardFile("proguard-android-optimize.txt"),
+        "proguard-rules.pro",
+      )
       if (!keystoreFile.isNullOrBlank()) {
         signingConfig = signingConfigs.getByName("release")
       }
