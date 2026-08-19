@@ -23,7 +23,7 @@ android {
     // exactly one upload ever — the same trap as CURRENT_PROJECT_VERSION on
     // iOS. The CI run number only increases and is already past 99, so it
     // stays ahead of anything uploaded by hand while this was 1.
-    versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInt()
+    versionCode = providers.environmentVariable("ANDROID_VERSION_CODE").orNull?.toInt() ?: 1
     versionName = "0.1.0"
   }
 
@@ -31,14 +31,22 @@ android {
   // pointing at a file that is not there fails the whole configuration phase,
   // which would break the debug build too — and the debug build is the one
   // every contributor runs.
-  val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+  //
+  // providers.environmentVariable rather than System.getenv, because the
+  // configuration cache has to know which variables the configuration phase
+  // read in order to know when to throw the cache away. A bare System.getenv
+  // is an untracked read: Gradle reports it as a problem and, worse, would
+  // happily reuse a cached configuration carrying the previous versionCode or
+  // the previous keystore.
+  val env = { name: String -> providers.environmentVariable(name).orNull }
+  val keystoreFile = env("ANDROID_KEYSTORE_FILE")
   if (!keystoreFile.isNullOrBlank()) {
     signingConfigs {
       create("release") {
         storeFile = file(keystoreFile)
-        storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-        keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-        keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        storePassword = env("ANDROID_KEYSTORE_PASSWORD")
+        keyAlias = env("ANDROID_KEY_ALIAS")
+        keyPassword = env("ANDROID_KEY_PASSWORD")
       }
     }
   }
@@ -50,10 +58,24 @@ android {
       applicationIdSuffix = ".debug"
     }
     getByName("release") {
-      // Left off deliberately. R8 on a Compose app needs keep rules that have
-      // to be arrived at by testing what breaks, and shipping a release nobody
-      // has exercised is how you find out in the store review queue.
-      isMinifyEnabled = false
+      // R8, on. The comment here used to say this was left off because Compose
+      // needs keep rules arrived at by testing what breaks — which is true of
+      // apps that use reflection, and this one does not: no Gson or Moshi, no
+      // dependency injection, no class names built from strings. Compose and
+      // AndroidX ship their own consumer rules.
+      //
+      // Play was explicit about the cost of leaving it off: "No R8 metadata
+      // included. Use R8 to get the best performance", an optimisation score of
+      // Low, and an unshrunk bundle.
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(
+        // -optimize, not the plain one. The default android.txt disables the
+        // optimisation passes for historical reasons that stopped applying
+        // several R8 versions ago.
+        getDefaultProguardFile("proguard-android-optimize.txt"),
+        "proguard-rules.pro",
+      )
       if (!keystoreFile.isNullOrBlank()) {
         signingConfig = signingConfigs.getByName("release")
       }

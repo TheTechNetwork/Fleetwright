@@ -192,6 +192,20 @@ be ticked until somebody has checked it on a device:
       should scale it. Push the size to its maximum and look for clipping in
       the session rows, which are the densest thing here.
 
+### Android only: the release build is not the debug build
+
+R8 is on for release and off for debug, so **the APK sideloaded from a GitHub
+release is not the code Play ships**. Anything R8 breaks appears first in a
+Play internal build and nowhere else.
+
+- [ ] Install the **Play internal** build, not the debug APK, and run the whole
+      checklist above on it once.
+
+This app should survive shrinking — no reflection, no Gson or Moshi, no
+dependency injection, no class names built from strings — but "should" is why
+this checkbox exists. R8 failures are a missing class at runtime rather than a
+build error, so a green build proves nothing here.
+
 ### iOS only: Siri
 
 §7 puts these *above* the app itself — "Hey Siri, resume bigjob" from a locked
