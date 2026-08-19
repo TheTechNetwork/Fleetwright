@@ -129,6 +129,42 @@ const RC_ONLINE_RE =
 // first character that cannot appear in a URL.
 const RC_URL_RE = /https?:\/\/claude\.ai\/code\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/;
 
+/** Things the pane says that explain why Remote Control is not up. */
+const NOT_LOGGED_IN_RE = /Not logged in|Run \/login|Please run \/login|Invalid API key/i;
+const UPDATING_RE = /Update installed\s*·\s*Restart to apply/i;
+
+/**
+ * Read the cause off the pane, so a reply names it instead of describing the
+ * symptom.
+ *
+ * Both of these were seen on a real box within a minute of each other, and
+ * neither is a timeout: a sandbox whose credentials were not seeded, and a
+ * Claude Code that updated itself inside the container and is waiting to be
+ * restarted.
+ *
+ * @param {string} text
+ * @returns {{ detail: string, remedy: string }|null}
+ */
+export function diagnoseRc(text) {
+  const pane = dewrapPane(text);
+  if (NOT_LOGGED_IN_RE.test(pane)) {
+    return {
+      detail: 'the session is not logged in, so Remote Control cannot come online',
+      remedy:
+        'A sandboxed session is given a copy of the host credentials the first time its volume is created. ' +
+        'Check AGENT_HUB_SANDBOX_CREDENTIALS points at a real, current file, then /forget the session and start it ' +
+        'again so the volume is seeded fresh.',
+    };
+  }
+  if (UPDATING_RE.test(pane)) {
+    return {
+      detail: 'Claude Code updated itself inside the sandbox and is waiting for a restart',
+      remedy: 'Stop and start the session. Pin CLAUDE_VERSION in sandbox/Containerfile to stop it happening again.',
+    };
+  }
+  return null;
+}
+
 /** @param {string} text */
 export function extractRcUrl(text) {
   const m = dewrapPane(text).match(RC_URL_RE);
@@ -168,9 +204,23 @@ export async function verifyRemoteControl(cfg, name) {
   const first = await watch('startup');
   if (first) return first; // online, or the pane died — either way we are done
 
-  sendKeys(name, [`/remote-control ${name}`, 'Enter']);
-  log.warn(`rc ${name}: not up after ${cfg.rcTimeoutMs}ms, re-issued /remote-control`);
+  // The pane usually knows why, and the commonest reason is not timing at all:
+  // a sandboxed session whose credentials were never seeded comes up
+  // unauthenticated, and Remote Control cannot come online without an account.
+  // Reporting "did not come online" there sends people to look at timeouts and
+  // networks for something the pane spells out in words.
+  const why = diagnoseRc(capturePane(name));
+  if (why) {
+    log.warn(`rc ${name}: ${why.detail}`);
+    return { online: false, url: null, detail: `${why.detail}. ${why.remedy}` };
+  }
 
+  // NO SLASH COMMAND HERE. This used to send `/remote-control <name>`, and
+  // Claude Code answers "Unknown command: /remote-control" — it is a launch
+  // flag, not an in-session command. The retry typed rubbish into the session
+  // and then waited another full timeout for it to take effect. If the flag did
+  // not bring Remote Control up, nothing sent to the prompt will.
+  log.warn(`rc ${name}: not up after ${cfg.rcTimeoutMs}ms`);
   const second = await watch('retry');
   if (second) return second;
 

@@ -1,0 +1,71 @@
+name: Sandbox image
+
+# Built once, here, and pulled by every host — rather than built on each host at
+# whatever moment it first needed one.
+#
+# That difference is not theoretical. CLAUDE_VERSION was `latest`, so the image
+# a host ended up with depended on the day it built it; one box then had a CLI
+# that behaved differently from another running the same commit. An image built
+# in one place and pulled by name is the only version of "the sandbox" that is
+# actually one thing.
+on:
+  push:
+    branches: [main]
+    paths: ['sandbox/**', '.github/workflows/sandbox.yml']
+  pull_request:
+    paths: ['sandbox/**', '.github/workflows/sandbox.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# packages: write is the whole reason this needs more than the default — it
+# pushes to GHCR with the automatic token, so there is no registry credential
+# to keep anywhere.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # arm64 as well as amd64: design.md's case for dialling out rather than
+      # listening is a Pi behind a NAT, and an image that only runs on x86 makes
+      # that a story rather than a deployment. QEMU makes the arm64 leg slow;
+      # it is built once here instead of on the Pi, which is the trade.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fleetwright-session
+          # `latest` is what a host pulls by default; the sha tag is what makes
+          # "which image is that box running" answerable after the fact.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: sandbox
+          file: sandbox/Containerfile
+          platforms: linux/amd64,linux/arm64
+          # A pull request builds and throws it away: the point there is finding
+          # out that the Containerfile is broken, not publishing it.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
