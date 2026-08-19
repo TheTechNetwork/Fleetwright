@@ -10,6 +10,17 @@ on:
   release:
     types: [published]
 
+# One run per branch. Nothing here cancelled a superseded run before, so a
+# branch pushed three times in a minute kept three builds alive and the answer
+# you waited for was from the commit before last.
+#
+# PRs only, again: on main these jobs deploy the Worker, upload to TestFlight
+# and attach a release APK. A cancelled PR run is waste; a cancelled main run
+# is a thing that did not ship while reporting nothing wrong.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # The floor. `release` raises its own to contents: write below, because
 # attaching an APK to a release is a write to the repository — nothing else
 # here is, and the debug job that runs on every pull request must not have it.

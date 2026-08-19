@@ -10,6 +10,17 @@ on:
   release:
     types: [published]
 
+# One run per branch. Nothing here cancelled a superseded run before, so a
+# branch pushed three times in a minute kept three builds alive and the answer
+# you waited for was from the commit before last.
+#
+# PRs only, again: on main these jobs deploy the Worker, upload to TestFlight
+# and attach a release APK. A cancelled PR run is waste; a cancelled main run
+# is a thing that did not ship while reporting nothing wrong.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Neither job touches the GitHub API — the build uploads nothing and TestFlight
 # uploads to App Store Connect with its own API key. Read is all either needs.
 permissions:
@@ -30,6 +41,11 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install XcodeGen
+        # Skip brew's formula-index refresh, which regularly costs more than
+        # the install it precedes.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew install xcodegen
 
       - name: Generate the Xcode project
@@ -81,6 +97,9 @@ jobs:
 
       - name: Install XcodeGen
         if: steps.creds.outputs.have == 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: brew install xcodegen
 
       - name: Install the App Store Connect API key

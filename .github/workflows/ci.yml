@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+# One run per branch. Nothing here cancelled a superseded run before, so a
+# branch pushed three times in a minute kept three builds alive and the answer
+# you waited for was from the commit before last.
+#
+# PRs only, again: on main these jobs deploy the Worker, upload to TestFlight
+# and attach a release APK. A cancelled PR run is waste; a cancelled main run
+# is a thing that did not ship while reporting nothing wrong.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Read-only, and nothing here has ever needed more. Spelled out rather than
 # inherited: the repository default applies to workflows nobody has looked at in
 # a year, and `contents: read` is the thing you want to be true by default when
@@ -29,6 +40,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+          # The only dependency is the TypeScript used to check the JSDoc, but
+          # it is downloaded on every run of every matrix leg without this.
+          cache: npm
 
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
