@@ -199,10 +199,39 @@ but it changes what "ship it" looks like later and is better known now.
 | `APPSTORE_PRIVATE_KEY` | the **contents** of the `AuthKey_XXXX.p8` file (downloadable once) |
 | `APPLE_TEAM_ID` | Membership details, a 10-character string |
 
-An API key rather than certificates in the repository: it is one secret, it is
-revocable from the web, and it lets `xcodebuild -allowProvisioningUpdates`
-create the signing assets itself. Fastlane match solves the same problem by
-giving you a second repository of secrets to look after.
+An API key rather than certificates in the repository — for the *upload*. That
+part still holds: one secret, revocable from the web, no second repository of
+secrets to look after.
+
+**The signing identity is stored, though, and that was a correction.** The
+original arrangement let `-allowProvisioningUpdates` create the certificate
+too, which is fine on a developer's machine and wrong on CI: a runner is a new
+machine with an empty keychain every time, so every release asked Apple for a
+NEW distribution certificate. Apple caps them, and after a day of releases the
+archive failed with *"Choose a certificate to revoke. Your account has reached
+the maximum number of certificates."* The certificates it had made were also
+worthless — their private keys lived on runners that no longer exist.
+
+So: one certificate, exported once as a `.p12`, imported into a throwaway
+keychain per job.
+
+| secret | what it is |
+|---|---|
+| `APPLE_DISTRIBUTION_P12` | `base64 -w0 distribution.p12` |
+| `APPLE_DISTRIBUTION_P12_PASSWORD` | the export password |
+
+No Mac is needed to make one:
+
+```sh
+openssl req -new -newkey rsa:2048 -nodes -keyout distribution.key -out distribution.csr \
+  -subj "/CN=Fleetwright Distribution/C=US"
+# upload the .csr as an Apple Distribution certificate, download the .cer
+openssl x509 -in distribution.cer -inform DER -out distribution.pem -outform PEM
+openssl pkcs12 -export -inkey distribution.key -in distribution.pem -out distribution.p12
+```
+
+Keep `distribution.key` and the `.p12`. Losing them means doing this again and
+burning another certificate slot, which is the thing being avoided.
 
 **The two version numbers come from build settings**, and the Info.plist
 references them rather than carrying literals — `CFBundleShortVersionString:
