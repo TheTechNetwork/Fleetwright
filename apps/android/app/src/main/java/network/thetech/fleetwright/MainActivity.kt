@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -58,9 +59,18 @@ fun FleetScreen() {
     val fleet = remember { Fleet(settings) }
     val scope = rememberCoroutineScope()
 
-    var showSettings by remember { mutableStateOf(!settings.configured) }
+    // rememberSaveable, not remember: a rotation destroys and recreates the
+    // activity, and plain `remember` state does not survive that. It used to
+    // take you out of the settings panel mid-edit and throw away the URL and
+    // token you had typed — on the one screen where losing input costs the
+    // most, because nothing is saved until you press Save.
+    var showSettings by rememberSaveable { mutableStateOf(!settings.configured) }
+    var status by rememberSaveable { mutableStateOf("") }
+    // The session list is deliberately NOT saved: it is a cache of what the
+    // coordinator said, it is refetched on the way back, and a stale list
+    // restored across a rotation would show sessions that may since have
+    // stopped.
     var sessions by remember { mutableStateOf(listOf<Fleet.Session>()) }
-    var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     fun refresh() {
@@ -207,8 +217,10 @@ private fun SessionCard(
 
 @Composable
 private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
-    var url by remember { mutableStateOf(settings.coordinatorUrl) }
-    var token by remember { mutableStateOf(settings.apiToken) }
+    // Saved, so a rotation mid-typing does not silently reset both fields to
+    // whatever was last persisted.
+    var url by rememberSaveable { mutableStateOf(settings.coordinatorUrl) }
+    var token by rememberSaveable { mutableStateOf(settings.apiToken) }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Coordinator", style = MaterialTheme.typography.titleMedium)
