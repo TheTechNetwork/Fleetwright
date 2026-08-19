@@ -467,6 +467,67 @@ NODE
   chmod 0600 "$SIDECAR_ENV"
 fi
 
+# Reconcile the DERIVED values on every run, existing file or not.
+#
+# AGENT_FLEET_HUB_TOKEN is not an independent secret: it has to equal the hub's
+# AGENT_HUB_TOKEN or the sidecar cannot read /api/state, and the host joins the
+# fleet reporting "degraded — rejected the token". Copying it once at file
+# creation is wrong, because the hub token can be generated afterwards or
+# rotated later, and "already exists, left untouched" then freezes a value that
+# was only ever a copy.
+#
+# Config the operator CHOSE is still never overwritten. This is strictly the
+# two fields that are computed from somewhere else.
+SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" "$NODE_BIN" <<'NODE'
+const fs = require('fs');
+
+const read = (file) => {
+  /** @type {Record<string,string>} */
+  const out = {};
+  try {
+    for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+    }
+  } catch {}
+  return out;
+};
+
+const { SIDECAR_ENV, HUB_ENV } = process.env;
+if (fs.existsSync(SIDECAR_ENV)) {
+  const hub = read(HUB_ENV);
+  const side = read(SIDECAR_ENV);
+
+  let bind = hub.AGENT_HUB_BIND || '127.0.0.1';
+  if (bind === '0.0.0.0' || bind === '::' || bind === '') bind = '127.0.0.1';
+  const want = {
+    AGENT_FLEET_HUB_URL: `http://${bind}:${hub.AGENT_HUB_PORT || '8790'}`,
+    AGENT_FLEET_HUB_TOKEN: hub.AGENT_HUB_TOKEN || '',
+  };
+
+  let text = fs.readFileSync(SIDECAR_ENV, 'utf8');
+  const fixed = [];
+  for (const [key, value] of Object.entries(want)) {
+    // An empty hub value is not authority to blank a working one — that would
+    // turn a half-written hub env into a broken sidecar.
+    if (!value || side[key] === value) continue;
+    const line = `${key}=${value}`;
+    text = new RegExp(`^${key}=.*$`, 'm').test(text)
+      ? text.replace(new RegExp(`^${key}=.*$`, 'm'), line)
+      : `${text.replace(/\n?$/, '\n')}${line}\n`;
+    fixed.push(key);
+  }
+
+  if (fixed.length) {
+    fs.writeFileSync(SIDECAR_ENV, text, { mode: 0o600 });
+    console.log(`  ok   re-copied ${fixed.join(', ')} from ${HUB_ENV} — it had drifted`);
+  }
+}
+NODE
+
 # --- 4. systemd units -------------------------------------------------------
 say "Installing the systemd units"
 
