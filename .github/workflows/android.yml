@@ -76,6 +76,10 @@ jobs:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
+    outputs:
+      # So the Play job can tell "built and signed" from "skipped for want of a
+      # keystore". Both leave this job green.
+      built: ${{ steps.keystore.outputs.have }}
     # `gh release upload` in the last step writes to the repository. This is the
     # only job in the repository that needs more than read.
     permissions:
@@ -131,8 +135,49 @@ jobs:
           name: agent-fleet-release-apk
           path: apps/android/app/build/outputs/apk/release/*.apk
 
+      # The bundle, for the job that publishes to Play. Kept separate from the
+      # APK because they go to different places and only one of them is any use
+      # to a person with a phone.
+      - uses: actions/upload-artifact@v7
+        if: steps.keystore.outputs.have == 'true'
+        with:
+          name: fleetwright-release-bundle
+          path: apps/android/app/build/outputs/bundle/release/*.aab
+
       - name: Attach the APK to the release
         if: steps.keystore.outputs.have == 'true' && github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" apps/android/app/build/outputs/apk/release/*.apk --clobber
+
+  # Play's internal testing track: up to 100 testers, no review, live in
+  # minutes. The counterpart to TestFlight internal in ios.yml, and triggered
+  # the same way — on a release rather than every commit, because an Android
+  # release here is a signed artifact somebody chose to cut.
+  internal:
+    name: publish to the internal track
+    needs: release
+    if: github.event_name == 'release' && needs.release.outputs.built == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: fleetwright-release-bundle
+          path: bundle
+      - name: Upload to the internal track
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_PACKAGE_NAME: network.thetech.fleetwright
+          PLAY_TRACK: internal
+          RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name }}
+        run: |
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping Play. See docs/ci.md."
+            exit 0
+          fi
+          AAB_PATH="$(find bundle -name '*.aab' | head -1)" node tools/play-internal-release.mjs
