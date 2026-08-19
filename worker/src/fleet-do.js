@@ -95,6 +95,15 @@ export class Fleet {
       return json(r, r.ok ? 200 : 400);
     }
 
+    // A notification a person asked for, so they can find out whether push
+    // works before they need it to.
+    if (url.pathname === '/api/devices/test' && request.method === 'POST') {
+      const body = await readJson(request);
+      const r = await this.core.testPush(body?.token ? String(body.token) : undefined);
+      if (!r.ok && r.error?.code === 'not_delivered') await this.#saveDevices();
+      return json(r, r.ok ? 200 : 400);
+    }
+
     if (url.pathname === '/api/devices' && request.method === 'DELETE') {
       const body = await readJson(request);
       const r = this.core.unregisterDevice(String(body?.token || ''));

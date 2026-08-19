@@ -48,6 +48,33 @@ class Fleet(private val settings: Settings) {
 
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
 
+    /**
+     * The last lines of a session's pane — what it is actually doing.
+     *
+     * The verb that makes this more than a list of names. Everything else says
+     * a session exists; this says whether it is stuck.
+     */
+    suspend fun peek(name: String): Reply = intent("peek", mapOf("name" to name))
+
+    /** Forget a session and delete its volumes. Not undoable — the UI asks first. */
+    suspend fun forget(name: String): Reply = intent("forget", mapOf("name" to name))
+
+    /**
+     * Ask the coordinator to send this device a notification now.
+     *
+     * Push fails silently by nature: a registration that never arrived and a
+     * provider that was never configured look identical from a phone, which is
+     * to say they look like nothing at all. This is the only way to find out
+     * before the notification that matters.
+     */
+    suspend fun testPush(token: String?): Reply = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply { if (token != null) put("token", token) }
+        runCatching {
+            val json = post("/api/devices/test", body)
+            Reply(ok = json.optBoolean("ok", false), text = json.optString("text"), sessions = emptyList())
+        }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach the coordinator", sessions = emptyList()) }
+    }
+
     suspend fun resume(name: String, choice: String? = null): Reply =
         intent("resume", buildMap {
             put("name", name)

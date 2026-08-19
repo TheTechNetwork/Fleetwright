@@ -17,10 +17,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -182,6 +185,16 @@ fun FleetScreen() {
                                 refresh(keepStatus = true)
                             }
                         },
+                        // Peek deliberately does NOT refresh afterwards: the
+                        // pane output IS the answer, and a refresh a moment
+                        // later would wipe it off the screen.
+                        onPeek = {
+                            scope.launch {
+                                busy = true
+                                status = fleet.peek(session.name).text
+                                busy = false
+                            }
+                        },
                         onResume = {
                             scope.launch {
                                 busy = true
@@ -206,6 +219,7 @@ private fun SessionCard(
     busy: Boolean,
     onStop: () -> Unit,
     onResume: () -> Unit,
+    onPeek: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
@@ -237,6 +251,7 @@ private fun SessionCard(
                 Text("on $it", style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
                 if (session.status == "running") {
                     TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
                     session.rcUrl?.let { url ->
@@ -305,6 +320,31 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             },
             enabled = url.isNotBlank(),
         ) { Text("Save") }
+
+        // Push is the one feature that fails silently: a registration that
+        // never arrived and a coordinator with no sender configured look
+        // identical from here, which is to say they look like nothing at all.
+        // This asks the coordinator to send one now and reports what happened,
+        // so the answer arrives before the notification that matters does.
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        var pushResult by rememberSaveable { mutableStateOf("") }
+        val scope = rememberCoroutineScope()
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    pushResult = "sending…"
+                    // Save first: testing against a token the user has typed
+                    // but not saved would test the wrong coordinator.
+                    settings.coordinatorUrl = url
+                    settings.apiToken = token
+                    pushResult = Fleet(settings).testPush(null).text
+                }
+            },
+            enabled = url.isNotBlank(),
+        ) { Text("Send a test notification") }
+        if (pushResult.isNotBlank()) {
+            Text(pushResult, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        }
     }
 }
 

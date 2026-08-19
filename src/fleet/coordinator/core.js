@@ -161,6 +161,65 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * Send a notification on demand, so a person can find out whether push works
+   * without waiting for a session to need them at three in the morning.
+   *
+   * This is the only way to test the delivery chain end to end. Every other
+   * notification is a side effect of something happening on a host, so a
+   * failure anywhere between the app's registration and the provider is
+   * invisible until the moment it matters most and nobody hears it. A button
+   * that answers "did that arrive?" turns a silent failure into a question
+   * with an answer.
+   *
+   * @param {string} [token] one device, or every registered device if omitted
+   * @returns {Promise<{ ok: boolean, sent?: number, dead?: number, error?: object, text: string }>}
+   */
+  async testPush(token) {
+    const all = [...this.devices.values()];
+    const devices = token ? all.filter((d) => d.token === token) : all;
+
+    if (!devices.length) {
+      return {
+        ok: false,
+        error: { code: 'no_devices' },
+        text: token
+          ? 'That device is not registered. Open the app and let it register first.'
+          : 'No device is registered for push yet.',
+      };
+    }
+    if (!this.push) {
+      return { ok: false, error: { code: 'no_pusher' }, text: 'This coordinator has no push sender configured.' };
+    }
+
+    try {
+      const result = await this.push.send(devices, {
+        title: 'Fleetwright',
+        body: 'Test notification — push is working.',
+        data: { event: 'test', name: '', hostId: '', url: '' },
+      });
+      if (result.dead?.length) this.pruneDevices(result.dead);
+
+      // sent: 0 with no error is the interesting case, and it is the one a
+      // logging pusher produces — configured to log, so nothing was ever going
+      // to arrive. Saying "sent" there would be a lie a person then spends an
+      // hour on.
+      return result.sent > 0
+        ? { ok: true, sent: result.sent, dead: result.dead?.length ?? 0, text: `Sent to ${result.sent} device(s).` }
+        : {
+            ok: false,
+            sent: 0,
+            error: { code: 'not_delivered' },
+            text:
+              result.dead?.length
+                ? 'The push provider rejected that token as dead; the registration was removed. Reopen the app to register again.'
+                : 'Nothing was sent. This coordinator is logging notifications rather than delivering them — see docs/push.md.',
+          };
+    } catch (e) {
+      return { ok: false, error: { code: 'push_failed' }, text: `Push failed: ${/** @type {Error} */ (e).message}` };
+    }
+  }
+
   // --- devices -------------------------------------------------------------
 
   /**

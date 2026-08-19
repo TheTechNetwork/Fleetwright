@@ -47,6 +47,30 @@ struct Fleet {
     /// The token arrives as Data from the system and must be hex — sending the
     /// Data's description is the classic mistake, and produces a registration
     /// that silently never delivers.
+    /// The last lines of a session's pane — what it is actually doing.
+    ///
+    /// The verb that makes the app more than a list of names. Everything else
+    /// tells you a session exists; this tells you whether it is stuck.
+    func peek(_ name: String) async throws -> Reply { try await intent("peek", params: ["name": name]) }
+
+    /// Forget a session and delete its volumes. Not undoable, which is why the
+    /// UI asks first.
+    func forget(_ name: String) async throws -> Reply { try await intent("forget", params: ["name": name]) }
+
+    /// Ask the coordinator to send this device a notification now.
+    ///
+    /// Push fails silently by nature: a registration that never arrived and a
+    /// provider that is not configured look identical from a phone, which is
+    /// to say they look like nothing at all. This is the only way to find out
+    /// before the notification that matters.
+    func testPush(token: Data?) async throws -> Reply {
+        var body: [String: Any] = [:]
+        if let token { body["token"] = token.map { String(format: "%02x", $0) }.joined() }
+        let data = try await post("/api/devices/test", body: body)
+        let decoded = try JSONDecoder().decode(Reply.self, from: data)
+        return decoded
+    }
+
     func registerDevice(token: Data) async throws {
         let hex = token.map { String(format: "%02x", $0) }.joined()
         _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])

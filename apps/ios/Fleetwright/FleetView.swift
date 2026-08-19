@@ -132,6 +132,7 @@ private struct SettingsView: View {
     let settings: Settings
     let onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var pushResult = ""
 
     var body: some View {
         NavigationStack {
@@ -149,6 +150,31 @@ private struct SettingsView: View {
                 } footer: {
                     Text("From /etc/agent-fleet-coordinator.env. Nothing is baked into the app — "
                          + "a credential in an IPA is public the moment somebody unzips it.")
+                }
+
+                // Push is the one feature that fails silently. A registration
+                // that never arrived and a coordinator with no sender
+                // configured look identical from a phone, which is to say they
+                // look like nothing at all. This asks for one now and reports
+                // what happened, so the answer arrives before the notification
+                // that matters does.
+                Section {
+                    Button("Send a test notification") {
+                        Task {
+                            pushResult = "sending…"
+                            do {
+                                pushResult = try await Fleet(settings: settings).testPush(token: nil).text ?? "Sent."
+                            } catch {
+                                pushResult = error.localizedDescription
+                            }
+                        }
+                    }
+                    .disabled(settings.coordinatorURL.isEmpty)
+                    if !pushResult.isEmpty {
+                        Text(pushResult).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Notifications")
                 }
             }
             .navigationTitle("Settings")
