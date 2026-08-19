@@ -99,7 +99,7 @@ private struct SessionRow: View {
             HStack {
                 Text(session.label).font(.headline)
                 Spacer()
-                Text(session.status).font(.caption).foregroundStyle(.secondary)
+                StatusBadge(status: session.status)
             }
             // Both are shown when they differ: the title is what a person
             // recognises, the name is what everything else keys on.
@@ -158,5 +158,46 @@ private struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// A session's state, as a symbol AND a word.
+///
+/// Never colour alone. The symbol is a shape and the word is a word; the tint
+/// only reinforces what both already say. That is what "differentiate without
+/// colour" asks for, and it is also the difference between a glanceable list
+/// and a pretty one — colour vision deficiency affects around one man in
+/// twelve, and everybody loses colour in bright sun.
+private struct StatusBadge: View {
+    let status: String
+
+    private var symbol: String {
+        switch status {
+        case "running": return "play.circle.fill"
+        case "awaiting-input": return "exclamationmark.bubble.fill"
+        case "stopped": return "pause.circle"
+        case "ended": return "checkmark.circle"
+        default: return "questionmark.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case "running": return .accentColor
+        case "awaiting-input": return .orange
+        default: return .secondary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // Decorative: the word beside it is the label, and VoiceOver
+            // announcing "play circle fill, running" is worse than "running".
+            Image(systemName: symbol)
+                .accessibilityHidden(true)
+            Text(status)
+        }
+        .font(.caption)
+        .foregroundStyle(tint)
     }
 }

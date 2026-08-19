@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- The night half. Same name, dark parent; the system picks between them. -->
+  <style name="Theme.Fleetwright" parent="android:Theme.Material.NoActionBar" />
+</resources>

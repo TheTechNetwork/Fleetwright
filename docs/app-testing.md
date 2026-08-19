@@ -169,6 +169,29 @@ Every action in both apps is one intent to the coordinator, so this is the list:
 - [ ] **A second `start` with the same idempotency key** does not create two sessions
 - [ ] Rotate the device, background and foreground the app, kill and relaunch
 
+### Accessibility
+
+Two claims the App Store's accessibility labels can carry, and neither should
+be ticked until somebody has checked it on a device:
+
+- [ ] **Dark Interface** — both apps follow the system. Toggle dark mode with
+      the app open and again from cold. On Android this was genuinely broken
+      until the `values-night` theme landed: the Compose content was themed and
+      the window behind it was not.
+- [ ] **Differentiate Without Color Alone** — every status is a word, and now a
+      symbol on iOS and a tint on both. Turn on Settings → Accessibility →
+      Display & Text Size → Differentiate Without Color and confirm nothing
+      becomes ambiguous. Grayscale is the blunter test: screenshot the list in
+      grayscale and check you can still tell a running session from one waiting
+      on you.
+- [ ] **VoiceOver** — swipe the session list and confirm each row announces
+      something useful. The status symbol is deliberately
+      `accessibilityHidden`, so a row should read "payments API migration,
+      running", not "play circle fill".
+- [ ] **Larger Text** — every label uses a semantic style, so Dynamic Type
+      should scale it. Push the size to its maximum and look for clipping in
+      the session rows, which are the densest thing here.
+
 ### iOS only: Siri
 
 §7 puts these *above* the app itself — "Hey Siri, resume bigjob" from a locked
