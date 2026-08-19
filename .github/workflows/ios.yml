@@ -243,6 +243,9 @@ jobs:
           # Optional. Unset means the first internal group, which is right
           # while there is exactly one.
           INTERNAL_BETA_GROUP_NAME: ${{ vars.INTERNAL_BETA_GROUP_NAME }}
+          # The commit is the honest answer to "what changed" for an internal
+          # build that ships on every commit.
+          WHATS_NEW: ${{ github.event.head_commit.message || github.sha }}
         run: node tools/testflight-distribute.mjs
 
   # External testers are the public, so this is NOT every commit on main. A
@@ -268,4 +271,7 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           AUDIENCE: external
           EXTERNAL_BETA_GROUP_NAME: ${{ vars.EXTERNAL_BETA_GROUP_NAME }}
+          # The release notes, which is what somebody actually wrote for the
+          # people who will read it.
+          WHATS_NEW: ${{ github.event.release.body || github.event.release.name }}
         run: node tools/testflight-distribute.mjs
