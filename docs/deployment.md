@@ -351,17 +351,42 @@ a dirty tree, and restarts by exiting under systemd:
 agent-hub update
 ```
 
-By hand:
+By hand — and **not with `sudo git pull`**, which is the one way to break this:
 
 ```sh
-git -C /opt/agent-fleet pull
+sudo -u "$(stat -c %U /opt/agent-fleet/bin/agent-hub)" git -C /opt/agent-fleet pull
 sudo /opt/agent-fleet/install/install.sh   # idempotent; never overwrites config
-systemctl restart agent-hub
+sudo systemctl restart agent-hub
+```
+
+### Why the pull is not sudo, when everything else is
+
+Creating `/opt/agent-fleet` needs root. Living in it does not: the installer
+ends with `chown -R $RUN_USER` over the whole checkout, precisely so the service
+can fast-forward itself without being given sudo — `/update` from a phone is the
+whole point, and a service that can run `sudo git` is a service that can run
+anything.
+
+So after the install the directory belongs to the **service user**, and pulling
+as root writes root-owned objects into `.git/objects` that the service can then
+never add to:
+
+```
+error: insufficient permission for adding an object to repository database .git/objects
+fatal: failed to write object
+```
+
+Either fix puts it right — the installer, because it re-chowns every run:
+
+```sh
+sudo /opt/agent-fleet/install/install.sh
+# or just the ownership:
+sudo chown -R "$(stat -c %U /opt/agent-fleet/bin/agent-hub)" /opt/agent-fleet
 ```
 
 Re-running the installer is worth doing after a pull rather than just
-restarting: new steps get asked about (push was added this way), and anything
-already set is left alone.
+restarting: new steps get asked about (push was added this way), anything
+already set is left alone, and it repairs exactly this.
 
 Restarting is safe: the unit's `KillMode=process` leaves the tmux server alone,
 sessions survive, and the next reconcile re-adopts them. Restarting the sidecar

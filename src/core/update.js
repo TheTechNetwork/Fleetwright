@@ -87,6 +87,22 @@ export function updateStatus(cfg) {
  *
  * Each returns { ok, changed, text }.
  */
+/**
+ * Does this git failure mean "you do not own this checkout"?
+ *
+ * Exported because the phrasing is the entire content of the check, and the
+ * only way to be sure it covers a case is to assert it against the porcelain
+ * git actually prints. The first version matched "permission denied" alone,
+ * which is NOT what git says for the common case — see the strings below.
+ *
+ * @param {string} output combined stdout and stderr from git
+ */
+export function looksLikeOwnershipProblem(output) {
+  return /permission denied|insufficient permission|failed to write object|unpack-objects failed|dubious ownership|safe\.directory|read-only file system/i.test(
+    output,
+  );
+}
+
 const STEPS = [
   {
     name: 'code',
@@ -109,14 +125,24 @@ const STEPS = [
         // The common one on a box where the checkout was made by root and the
         // service runs as somebody else. Giving the service sudo would be a
         // much larger grant than the problem deserves.
-        if (/permission denied|dubious ownership|safe\.directory|read-only file system/i.test(output)) {
+        //
+        // "insufficient permission" is git's own wording for the case that
+        // actually happens most — a root-owned object under .git/objects,
+        // usually left by somebody running `sudo git pull` once. It never says
+        // "permission denied" there, so matching only that phrase meant this
+        // whole branch was dead for the very failure it was written for, and
+        // the operator got the raw porcelain instead of the fix.
+        if (looksLikeOwnershipProblem(output)) {
           return {
             ok: false,
             changed: false,
             text:
-              `Cannot write to ${dir} — it belongs to another user.\n` +
-              'Re-run the installer, which gives the checkout to the account the service runs as:\n' +
-              '  sudo ./install/install.sh',
+              `Cannot write to ${dir} — some of it belongs to another user.\n\n` +
+              'Usually a root-owned object left by a `sudo git pull`. Re-run the installer,\n' +
+              'which gives the whole checkout back to the account the service runs as:\n' +
+              `  sudo ${dir}/install/install.sh\n\n` +
+              'Or fix just the ownership:\n' +
+              `  sudo chown -R $(stat -c %U ${dir}/bin/agent-hub) ${dir}`,
           };
         }
         return { ok: false, changed: false, text: `git pull failed: ${output.slice(0, 400)}` };
