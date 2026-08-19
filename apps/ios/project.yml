@@ -35,6 +35,20 @@ targets:
       properties:
         CFBundleDisplayName: Fleetwright
         UILaunchScreen: {}
+        # App Store Connect rejects a bundle with no orientations declared —
+        # error 90474, "no orientations were specified", raised in the name of
+        # iPad multitasking. Upside-down is omitted on iPhone because iOS
+        # ignores it there anyway; iPad gets all four, which is what
+        # multitasking actually requires.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Remote notifications are the entire reason for the app over a
         # Shortcut: a Shortcut cannot tell you a session is waiting.
         UIBackgroundModes: [remote-notification]
@@ -45,6 +59,11 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+        # Names the app icon in Assets.xcassets. Setting it is also what makes
+        # Xcode write CFBundleIconName into the Info.plist, which App Store
+        # Connect requires (error 90713) and which cannot be supplied by hand —
+        # the value has to match a compiled asset catalog, not a file path.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         # APNs has two environments and they do not share tokens. A build must
         # declare the one its provisioning profile was issued for, or signing
