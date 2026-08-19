@@ -1,6 +1,10 @@
 name: iOS
 
 on:
+  # Internal TestFlight on every commit to main THAT AFFECTS THE APP. The
+  # filter stays: a commit touching only the coordinator or the docs produces
+  # a byte-identical binary, so uploading it spends a macOS build and a build
+  # number to give testers the same app twice.
   push:
     branches: [main]
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
@@ -76,7 +80,17 @@ jobs:
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.
   testflight:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Every merge to main goes to TestFlight internal. The previous condition
+    # was release-or-manual, and since no release has ever been published and
+    # nobody has dispatched it by hand, this job had never run once — the app
+    # was building on every PR and reaching nobody.
+    #
+    # Internal testers do not need review, so this costs a build and nothing
+    # else. External testing still wants a release, which is the right place
+    # for a decision.
+    if: >-
+      github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: macos-latest
     environment: production
@@ -134,6 +148,11 @@ jobs:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # App Store Connect refuses a build number it has already seen for a
+          # given version, so project.yml's CURRENT_PROJECT_VERSION of "1"
+          # would have allowed exactly one upload ever. run_number only
+          # increases.
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           set -o pipefail
           xcodebuild archive \
@@ -146,7 +165,8 @@ jobs:
             -authenticationKeyID "$APPSTORE_KEY_ID" \
             -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Upload to TestFlight
         if: steps.creds.outputs.have == 'true'
