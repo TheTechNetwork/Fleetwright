@@ -135,6 +135,13 @@ export function demoReply(url, method, body) {
 
   // Registration is accepted and discarded. A phone that cannot register looks
   // broken in a way that has nothing to do with what is being reviewed.
+  if (p === '/api/devices/test') {
+    // Honest about being a demo: a reviewer tapping this should learn that the
+    // button works, not be left waiting for a notification the demo fleet was
+    // never going to send.
+    return { ok: false, error: { code: 'demo' }, text: 'The demo fleet does not send notifications.' };
+  }
+
   if (p === '/api/devices') return { ok: true, id: 'demo-device' };
 
   if (p === '/api/intent' && method === 'POST') {

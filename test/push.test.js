@@ -362,3 +362,70 @@ test('the log pusher is a real sender, not a stub that pretends', async () => {
   const r = await pusher.send([{ token: 'x'.repeat(40), platform: 'ios' }], { title: 'a', body: 'b' });
   assert.deepEqual(r, { sent: 0, dead: [] });
 });
+
+// --- the test notification --------------------------------------------------
+
+test('a test push reports what actually happened, not that it tried', async () => {
+  // The whole value of this button is telling apart "delivered", "nobody is
+  // registered" and "this coordinator only logs". A cheerful "sent!" in the
+  // last two cases is worse than no button, because somebody then spends an
+  // hour looking at the phone.
+  const core = new CoordinatorCore({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    push: logPusher({ info() {} }),
+  });
+
+  const none = await core.testPush();
+  assert.equal(none.ok, false);
+  assert.equal(none.error?.code, 'no_devices');
+
+  core.registerDevice({ platform: 'ios', token: 'a-real-looking-token' });
+
+  // logPusher reports sent: 0 — configured to log, so nothing was delivered.
+  const logged = await core.testPush();
+  assert.equal(logged.ok, false);
+  assert.equal(logged.error?.code, 'not_delivered');
+  assert.match(logged.text, /logging notifications/);
+});
+
+test('a test push that lands says so, and a dead token unregisters itself', async () => {
+  /** @type {any[]} */
+  const sent = [];
+  const core = new CoordinatorCore({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    push: {
+      async send(devices, message) {
+        sent.push({ devices, message });
+        return devices[0].token === 'dead-token-01' ? { sent: 0, dead: ['dead-token-01'] } : { sent: devices.length, dead: [] };
+      },
+    },
+  });
+
+  core.registerDevice({ platform: 'android', token: 'alive-token-1' });
+  const ok = await core.testPush();
+  assert.equal(ok.ok, true);
+  assert.equal(ok.sent, 1);
+  assert.match(sent[0].message.body, /push is working/i);
+  assert.equal(sent[0].message.data.event, 'test', 'the app can tell a test from a real event');
+
+  core.registerDevice({ platform: 'android', token: 'dead-token-01' });
+  const gone = await core.testPush('dead-token-01');
+  assert.equal(gone.ok, false);
+  assert.match(gone.text, /dead/i);
+  assert.equal(core.devices.has('dead-token-01'), false, 'a dead token is removed, not left to fail forever');
+  assert.equal(core.devices.has('alive-token-1'), true, 'and the others are untouched');
+});
+
+test('a test push to one device does not wake the whole fleet', async () => {
+  /** @type {any[]} */
+  const seen = [];
+  const core = new CoordinatorCore({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    push: { async send(devices) { seen.push(devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } },
+  });
+  core.registerDevice({ platform: 'ios', token: 'mine-token-01' });
+  core.registerDevice({ platform: 'ios', token: 'somebody-elses-token' });
+
+  await core.testPush('mine-token-01');
+  assert.deepEqual(seen, [['mine-token-01']]);
+});

@@ -229,6 +229,12 @@ export class Coordinator {
       return json(res, 200, { ok: true, ...this.core.snapshot() });
     }
 
+    if (p === '/api/devices/test' && req.method === 'POST') {
+      const body = await readJson(req);
+      const r = await this.core.testPush(body?.token ? String(body.token) : undefined);
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
     if (p === '/api/intent' && req.method === 'POST') {
       const body = await readJson(req);
       if (!body || typeof body.verb !== 'string') {
