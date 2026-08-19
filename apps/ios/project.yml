@@ -45,10 +45,26 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+      configs:
+        # APNs has two environments and they do not share tokens. A build must
+        # declare the one its provisioning profile was issued for, or signing
+        # fails; and a TestFlight build declaring `development` installs fine
+        # and then never receives a notification, because its token belongs to
+        # a sandbox nothing is sending to.
+        #
+        # Archive builds Release, Xcode runs Debug, so this follows the build
+        # rather than needing anyone to remember.
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
     entitlements:
       # Generated and gitignored for the same reason as Info.plist above.
       path: Fleetwright/Fleetwright.entitlements
       properties:
-        # `development` until there is a distribution profile. Getting this
-        # wrong is the classic "notifications work in Xcode and not in TestFlight".
-        aps-environment: development
+        # Expanded from the build setting above, not hardcoded. A literal
+        # `development` here is the classic "notifications work in Xcode and
+        # not in TestFlight" — and it is worse than it sounds, because nothing
+        # reports it: the upload succeeds, the build installs, and push is
+        # simply silent.
+        aps-environment: $(APS_ENVIRONMENT)
