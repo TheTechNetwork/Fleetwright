@@ -12,13 +12,14 @@
 // Both on one origin, because a host pins exactly one.
 
 import { Fleet } from './fleet-do.js';
+import { demoReply } from './demo.js';
 
 export { Fleet };
 
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -60,6 +61,42 @@ export default {
     const isHost = url.pathname === '/host/connect';
     const expected = isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN;
     const presented = bearerOf(request.headers.get('authorization')) || url.searchParams.get('token') || '';
+
+    // The demo token, if one is configured. Answered HERE, before the Durable
+    // Object is reached, which is the whole security property: there is no code
+    // path from a demo request to a host socket or a real session. Not "we are
+    // careful" — the object is never fetched.
+    //
+    // App Store review needs credentials that work, and the real API token can
+    // stop every session in the fleet. This is the other way to satisfy that.
+    //
+    // NEVER for /host/connect: a host presenting this must be refused like any
+    // other wrong token, or "demo" would become a way into the fleet rather
+    // than a way around it.
+    if (!isHost && env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
+      // A demo token equal to the real one would silently turn the whole
+      // coordinator into a toy. Refuse rather than guess which was meant.
+      if (timingSafeEqual(env.AGENT_FLEET_DEMO_TOKEN, env.AGENT_FLEET_API_TOKEN || '')) {
+        return json({ ok: false, error: { code: 'misconfigured' }, text: 'AGENT_FLEET_DEMO_TOKEN must differ from AGENT_FLEET_API_TOKEN' }, 500);
+      }
+      // The token is public, so the budget is per client address rather than
+      // per token — one abuser must not be able to lock out a reviewer.
+      // Absent binding means local dev, where there is nothing to protect.
+      if (env.DEMO_RATE_LIMIT) {
+        const key = request.headers.get('cf-connecting-ip') || 'unknown';
+        const { success } = await env.DEMO_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json(
+            { ok: false, error: { code: 'rate_limited' }, demo: true, text: 'Too many demo requests. Try again in a minute.' },
+            429,
+          );
+        }
+      }
+      const body = request.method === 'POST' ? await readJsonSafely(request) : null;
+      const reply = demoReply(url, request.method, body);
+      return reply ? json({ ...reply, demo: true }) : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
+    }
+
     if (!timingSafeEqual(presented, expected)) {
       // Checked HERE, before the request reaches the Durable Object, so an
       // unauthenticated peer never gets as far as something holding state.
@@ -147,3 +184,13 @@ device registration from your coordinator removes the push token.</p>
 <a href="https://github.com/TheTechNetwork/Fleetwright">github.com/TheTechNetwork/Fleetwright</a>.
 Every claim on this page can be checked against the code.</p>
 </body></html>`;
+
+/** @param {Request} request */
+async function readJsonSafely(request) {
+  try {
+    const parsed = await request.json();
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}

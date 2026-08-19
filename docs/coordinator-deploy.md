@@ -35,6 +35,47 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
+## A demo token, for App Store review
+
+App Store review needs credentials that work, and `AGENT_FLEET_API_TOKEN` can
+stop every session in the fleet. So there is a third, optional token:
+
+It is a **`[vars]` entry in `wrangler.toml`, not a secret** — committed, and
+deployed with the code:
+
+```toml
+AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+```
+
+That is deliberate. The string authorises exactly one thing: reading the
+fabricated fleet. There is nothing behind it to reach, so publishing it costs
+Worker invocations and nothing else — and in exchange there is no secret to
+rotate, no manual step before a deploy, and no way for App Store review to be
+blocked on somebody being awake to paste a value.
+
+It is rate limited to **60 requests a minute per client address** — far more
+than a person tapping around an app, far less than anything worth doing with a
+free tier. Keyed on the address rather than the token, so one abuser cannot
+lock out an App Store reviewer by exhausting a shared budget.
+
+A request bearing it is answered from `worker/src/demo.js` — two invented
+hosts, three invented sessions, one of them waiting on a person. Verbs like
+`start` and `stop` reply plausibly and change nothing.
+
+**The safety property is structural.** The match happens in `worker.js` before
+`env.FLEET` is touched, so there is no code path from a demo request to a
+Durable Object, a host socket or a real session. Not "it checks first" — the
+object is never fetched. It is also refused for `/host/connect`, so a host
+presenting it is rejected like any other wrong token, and the Worker returns
+500 if the demo and real tokens are ever set to the same value rather than
+silently turning the whole coordinator into a toy.
+
+Every reply carries `"demo": true`, so a support question is never ambiguous
+about which fleet somebody was looking at.
+
+Remove the var and none of this exists — the token stops being recognised
+and every request falls through to the real token check.
+
 ## Point a host at it
 
 In `/etc/agent-fleet-sidecar.env` on each box:
