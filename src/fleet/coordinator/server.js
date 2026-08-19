@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { attachWebSocketServer } from '../ws.js';
 import { CoordinatorCore } from './core.js';
+import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
 
@@ -64,7 +65,12 @@ export class Coordinator {
     this.core = new CoordinatorCore({
       logger: this.log,
       intentTimeoutMs,
-      push: pusherFromEnv(process.env, this.log),
+      // The HTTP/2 transport is handed in here rather than reached for in
+      // push.js: that file also runs in a Worker, where node:http2 does not
+      // exist and importing it would break the bundle.
+      push: pusherFromEnv(process.env, this.log, {
+        apnsDeliver: http2Deliver(process.env.AGENT_FLEET_APNS_SANDBOX === '1' ? 'api.sandbox.push.apple.com' : undefined),
+      }),
     });
     /** @type {import('node:http').Server|null} */
     this.server = null;

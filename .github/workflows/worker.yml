@@ -125,10 +125,17 @@ jobs:
           AGENT_FLEET_HOST_TOKEN: ${{ secrets.AGENT_FLEET_HOST_TOKEN }}
           AGENT_FLEET_API_TOKEN: ${{ secrets.AGENT_FLEET_API_TOKEN }}
           AGENT_FLEET_FCM_SERVICE_ACCOUNT: ${{ secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
+          AGENT_FLEET_APNS_KEY: ${{ secrets.AGENT_FLEET_APNS_KEY }}
+          AGENT_FLEET_APNS_KEY_ID: ${{ secrets.AGENT_FLEET_APNS_KEY_ID }}
+          # Reused rather than duplicated: the APNs team id is the same team id
+          # the iOS build signs with, and two copies of one value is two chances
+          # for them to disagree.
+          AGENT_FLEET_APNS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -u
           missing=""
-          for name in AGENT_FLEET_HOST_TOKEN AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT; do
+          for name in AGENT_FLEET_HOST_TOKEN AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT \
+                      AGENT_FLEET_APNS_KEY AGENT_FLEET_APNS_KEY_ID AGENT_FLEET_APNS_TEAM_ID; do
             value="$(printenv "$name" || true)"
             if [ -z "$value" ]; then
               missing="$missing $name"

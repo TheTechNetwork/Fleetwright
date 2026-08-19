@@ -55,24 +55,67 @@ one, which should not accumulate as a second registration that fails forever.
 Tokens the provider reports as dead (`404`, `UNREGISTERED`) are dropped rather
 than retried on every event.
 
-## iOS needs one of two things, and has neither yet
+## iOS: APNs, directly
 
-`fcmPusher` sends every token to FCM's `messages:send` as an **FCM registration
-token**. The iOS app registers with APNs directly and posts the raw **APNs
-device token**, which is a different kind of value. FCM rejects it.
+The iOS app registers with APNs and posts the raw device token. That is not an
+FCM registration token and never becomes one, so for a while every iOS device
+was registered against a service that could not reach it.
 
-Until one of these is done, iOS push does not work:
+`apnsPusher` talks to Apple directly, and `pusherFromEnv` routes by platform:
+iOS to APNs, everything else to FCM. Three variables:
 
-| | what it takes |
+```sh
+AGENT_FLEET_APNS_KEY_ID=QK4U44N7R9     # the key's id
+AGENT_FLEET_APNS_TEAM_ID=…             # the same team id the iOS build signs with
+AGENT_FLEET_APNS_KEY="$(cat AuthKey_QK4U44N7R9.p8)"
+```
+
+On Cloudflare all three are GitHub secrets, synced to the Worker on deploy:
+
+| | source |
 |---|---|
-| **Through FCM** (recommended) | Add the Firebase iOS SDK to the app, and post `Messaging.messaging().token` instead of the APNs token. One sender, both platforms, and nothing here changes. |
-| **Direct APNs** | A second sender beside `fcmPusher`, signing ES256 with a `.p8` key, selected by `device.platform`. Note APNs requires HTTP/2 — fine on Workers, but Node's `fetch` needs `allowH2` before this will work on a box. |
+| `AGENT_FLEET_APNS_KEY` | the `.p8` |
+| `AGENT_FLEET_APNS_KEY_ID` | which key that is |
+| `AGENT_FLEET_APNS_TEAM_ID` | reused from `APPLE_TEAM_ID`, the same team the iOS build signs with |
 
-The hex encoding in `Fleet.swift` is correct **for the direct-APNs path**. It is
-not a substitute for having that path.
+The key id and team id are identifiers rather than credentials, and the key id
+was briefly a `[vars]` entry for exactly that reason. **A name cannot be both.**
+Cloudflare keeps vars and secrets in one namespace, so a deploy carrying a var
+clobbers the secret of the same name — which would have replaced the key id
+with itself and worked, right up until somebody rotated one and not the other.
 
-Until then the failure is at least loud: an `INVALID_ARGUMENT` from FCM keeps
-the registration and logs why. It used to delete it — see below.
+The key comes from the Apple Developer portal → **Keys** → **+** → tick **Apple
+Push Notifications service**. It is *not* the App Store Connect API key used for
+TestFlight — different key, different page, downloadable once, and good for
+every app on the team.
+
+`AGENT_FLEET_APNS_BUNDLE_ID` defaults to `network.thetech.fleetwright`, and
+`AGENT_FLEET_APNS_SANDBOX=1` switches to the sandbox host for a build run from
+Xcode. TestFlight and App Store builds use production, which is the default,
+because defaulting the other way makes the common case the one that fails
+silently.
+
+### Why not the Firebase SDK
+
+That is Google's recommendation and a reasonable choice. It also means a
+dependency in an app that has none, a plist checked in or fetched at build
+time, and a second vendor sitting between a session needing a person and the
+person. The direct path needs no app change at all — the hex encoding in
+`Fleet.swift` was already exactly right for it.
+
+### HTTP/2
+
+APNs requires it. A Worker's `fetch` negotiates HTTP/2; Node's does not. Rather
+than add undici, the transport is injected: `src/fleet/apns-node.js` uses
+`node:http2`, which is already in the runtime, and the Worker keeps the default
+`fetch`. That is also why the import lives outside `push.js` — `node:http2` does
+not exist in a Worker and importing it would break the bundle.
+
+### If a token still fails
+
+An `INVALID_ARGUMENT` from FCM keeps the registration and logs why rather than
+deleting it — see below. From APNs, a `410` or `BadDeviceToken` does mean the
+registration is gone for good, and it is pruned.
 
 ## Configuring the sender
 

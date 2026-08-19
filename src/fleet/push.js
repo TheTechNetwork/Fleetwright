@@ -155,26 +155,230 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
 }
 
 /**
+ * Apple Push Notification service, directly.
+ *
+ * The iOS app registers with APNs and posts the raw device token, which is not
+ * an FCM registration token and never becomes one. Until this existed the only
+ * sender was FCM, so every iOS device was registered against a service that
+ * could not deliver to it — and the failure was silent, which is the worst
+ * property a notification system can have.
+ *
+ * The other route was the Firebase SDK in the app, posting an FCM token
+ * instead. That is Google's recommendation and it is a reasonable choice; it
+ * also means a dependency in an app that has none, a plist checked in or
+ * fetched at build time, and a second vendor between a session needing a
+ * person and the person. This is fewer moving parts and no app change at all:
+ * the hex encoding in Fleet.swift was already correct for exactly this.
+ *
+ * PORTABLE, like everything else here. The transport is injected because APNs
+ * requires HTTP/2: a Worker's fetch negotiates it, Node's does not, and
+ * node:http2 covers Node without adding a dependency — see apns-node.js.
+ *
+ * @param {{ keyId: string, teamId: string, bundleId: string, privateKey: string, production?: boolean }} config
+ * @param {{ deliver?: Deliver, logger?: { info: Function, warn: Function }, now?: () => number }} [opts]
+ * @returns {Pusher}
+ */
+export function apnsPusher(config, { deliver, logger, now = () => Date.now() } = {}) {
+  const log = logger || { info() {}, warn() {} };
+  const host = config.production === false ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
+  const send = deliver || fetchDeliver(host);
+
+  /** @type {{ token: string, made: number }|null} */
+  let cached = null;
+
+  async function bearer() {
+    // Apple rejects a token older than an hour and rate-limits regenerating
+    // one more often than every 20 minutes. 30 is comfortably inside both.
+    if (cached && now() - cached.made < 30 * 60_000) return cached.token;
+    const iat = Math.floor(now() / 1000);
+    const token = await signJwtES256({ iss: config.teamId, iat }, config.privateKey, config.keyId);
+    cached = { token, made: now() };
+    return token;
+  }
+
+  return {
+    async send(devices, message) {
+      if (!devices.length) return { sent: 0, dead: [] };
+      const authorization = `bearer ${await bearer()}`;
+      let sent = 0;
+      /** @type {string[]} */
+      const dead = [];
+
+      for (const device of devices) {
+        const payload = JSON.stringify({
+          aps: { alert: { title: message.title, body: message.body }, sound: 'default' },
+          ...(message.data || {}),
+        });
+        const res = await send(device.token, payload, {
+          authorization,
+          'apns-topic': config.bundleId,
+          'apns-push-type': 'alert',
+          // 10 is "deliver now". The whole point is a session waiting on a
+          // person, so there is nothing to gain by letting Apple batch it.
+          'apns-priority': '10',
+        });
+
+        if (res.status === 200) {
+          sent++;
+          continue;
+        }
+        // 410 is Apple saying the app is gone. 400 BadDeviceToken means the
+        // token was never valid for this environment — most often a sandbox
+        // token sent to production, which is worth saying out loud because the
+        // fix is a build setting rather than anything at runtime.
+        if (res.status === 410 || /BadDeviceToken|Unregistered/i.test(res.body)) {
+          dead.push(device.token);
+          log.warn(`push: dropping dead APNs token (${res.status} ${res.body.slice(0, 80)})`);
+        } else {
+          log.warn(`push: APNs ${res.status} ${res.body.slice(0, 200)}`);
+        }
+      }
+      return { sent, dead };
+    },
+  };
+}
+
+/**
+ * @typedef {(token: string, payload: string, headers: Record<string, string>)
+ *   => Promise<{ status: number, body: string }>} Deliver
+ */
+
+/** The default transport: fetch, which is HTTP/2 on Workers. @param {string} host */
+function fetchDeliver(host) {
+  return async (/** @type {string} */ token, /** @type {string} */ payload, /** @type {Record<string,string>} */ headers) => {
+    const res = await fetch(`https://${host}/3/device/${token}`, { method: 'POST', headers, body: payload });
+    return { status: res.status, body: await res.text() };
+  };
+}
+
+/**
+ * Sign an APNs JWT with ES256.
+ *
+ * WebCrypto returns the signature as raw r||s, which is exactly what a JWS
+ * wants — the DER wrapping that trips people up here belongs to other APIs.
+ *
+ * @param {Record<string, unknown>} claim
+ * @param {string} pem PKCS#8, the contents of the .p8
+ * @param {string} keyId
+ */
+export async function signJwtES256(claim, pem, keyId) {
+  const header = { alg: 'ES256', kid: keyId, typ: 'JWT' };
+  const encoder = new TextEncoder();
+  const unsigned = `${b64url(encoder.encode(JSON.stringify(header)))}.${b64url(encoder.encode(JSON.stringify(claim)))}`;
+
+  const key = await crypto.subtle.importKey('pkcs8', pemToBytes(pem), { name: 'ECDSA', namedCurve: 'P-256' }, false, [
+    'sign',
+  ]);
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, encoder.encode(unsigned));
+  return `${unsigned}.${b64url(new Uint8Array(signature))}`;
+}
+
+/**
+ * Send each device to the service that can actually reach it.
+ *
+ * A fleet has both kinds of phone and they are not interchangeable: an APNs
+ * token means nothing to FCM and an FCM token means nothing to APNs. Routing
+ * by platform is the only thing that makes "the push sender" a single idea.
+ *
+ * @param {{ ios?: Pusher, other?: Pusher }} senders
+ * @returns {Pusher}
+ */
+export function routingPusher({ ios, other }) {
+  return {
+    async send(devices, message) {
+      const groups = [
+        { pusher: ios, devices: devices.filter((d) => d.platform === 'ios') },
+        { pusher: other, devices: devices.filter((d) => d.platform !== 'ios') },
+      ];
+      let sent = 0;
+      /** @type {string[]} */
+      const dead = [];
+      for (const group of groups) {
+        if (!group.pusher || !group.devices.length) continue;
+        const r = await group.pusher.send(group.devices, message);
+        sent += r.sent;
+        dead.push(...r.dead);
+      }
+      return { sent, dead };
+    },
+  };
+}
+
+/**
  * Build whichever sender the environment is configured for.
  *
  * @param {Record<string, string|undefined>} env
  * @param {{ info: Function, warn: Function }} logger
+ * @param {{ apnsDeliver?: Deliver }} [opts] the APNs transport, injected by the
+ *   Node coordinator because push.js also runs in a Worker
  * @returns {Pusher}
  */
-export function pusherFromEnv(env, logger) {
+export function pusherFromEnv(env, logger, opts = {}) {
+  const { apnsDeliver } = opts;
+  const apns = apnsFromEnv(env, logger, apnsDeliver);
+  const fcm = fcmFromEnv(env, logger);
+
+  if (apns && fcm) {
+    logger.info('push: APNs for iOS, FCM for everything else');
+    return routingPusher({ ios: apns, other: fcm });
+  }
+  // One configured is still useful — a fleet with only Android phones needs no
+  // Apple key, and an iOS-only one needs no Firebase project. What must not
+  // happen is an iOS token going to FCM, which is what happened before this
+  // function knew the difference.
+  if (apns) return routingPusher({ ios: apns, other: logPusher(logger) });
+  if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm });
+  return logPusher(logger);
+}
+
+/**
+ * @param {Record<string, string|undefined>} env
+ * @param {{ info: Function, warn: Function }} logger
+ * @param {Deliver} [deliver]
+ */
+function apnsFromEnv(env, logger, deliver) {
+  const { AGENT_FLEET_APNS_KEY_ID: keyId, AGENT_FLEET_APNS_TEAM_ID: teamId, AGENT_FLEET_APNS_KEY: privateKey } = env;
+  const bundleId = env.AGENT_FLEET_APNS_BUNDLE_ID || 'network.thetech.fleetwright';
+  if (!keyId && !teamId && !privateKey) return null;
+  if (!keyId || !teamId || !privateKey) {
+    logger.warn('push: APNs needs AGENT_FLEET_APNS_KEY_ID, _TEAM_ID and _KEY — all three. iOS push is off.');
+    return null;
+  }
+  logger.info(`push: APNs configured for ${bundleId}`);
+  return apnsPusher(
+    {
+      keyId,
+      teamId,
+      privateKey,
+      bundleId,
+      // Production unless told otherwise: a TestFlight or App Store build uses
+      // the production environment, and only a build run from Xcode uses the
+      // sandbox. Defaulting the other way would make the common case the one
+      // that silently fails.
+      production: env.AGENT_FLEET_APNS_SANDBOX !== '1',
+    },
+    { logger, deliver },
+  );
+}
+
+/**
+ * @param {Record<string, string|undefined>} env
+ * @param {{ info: Function, warn: Function }} logger
+ */
+function fcmFromEnv(env, logger) {
   const raw = env.AGENT_FLEET_FCM_SERVICE_ACCOUNT;
-  if (!raw) return logPusher(logger);
+  if (!raw) return null;
   const parsed = parseServiceAccount(raw);
   if (!parsed) {
     logger.warn(
       'push: AGENT_FLEET_FCM_SERVICE_ACCOUNT is neither JSON nor base64-encoded JSON — falling back to logging.\n' +
         '  base64 -w0 service-account.json',
     );
-    return logPusher(logger);
+    return null;
   }
   if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
     logger.warn('push: FCM service account is missing client_email, private_key or project_id — falling back to logging');
-    return logPusher(logger);
+    return null;
   }
   logger.info(`push: FCM configured for project ${parsed.project_id}`);
   return fcmPusher(parsed, { logger });
