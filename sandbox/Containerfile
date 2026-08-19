@@ -85,6 +85,18 @@ RUN chmod +x /usr/local/bin/entrypoint
 # under rootless podman its root maps to an unprivileged host user.
 ENV IS_SANDBOX=1
 
+# The CLI updates itself otherwise, INSIDE a container whose whole point is
+# being disposable and identical every time. Observed on a real box: a session
+# came up on a version newer than the image, printed "Update installed ·
+# Restart to apply", and behaved differently from the one before it. An image
+# that changes under you is not a sandbox, it is a surprise — and it makes
+# "works on my box" unanswerable, because the two boxes were not running the
+# same thing.
+#
+# Upgrades happen by changing CLAUDE_VERSION and rebuilding, which is visible
+# in a diff.
+ENV DISABLE_AUTOUPDATER=1
+
 WORKDIR /work
 
 # tini as PID 1: a session that spawns background processes (a dev server, a

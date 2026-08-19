@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parse } from '../src/adapters/commands.js';
-import { parseResumeDialog, extractRcUrl } from '../src/core/claude.js';
+import { parseResumeDialog, extractRcUrl, diagnoseRc } from '../src/core/claude.js';
 import { dewrapPane } from '../src/core/pane.js';
 import { isValidName, generateName } from '../src/core/names.js';
 
@@ -193,4 +193,41 @@ test('a pane with no Remote Control URL yields null', () => {
   // The status-line-only form: RC came up via remoteControlAtStartup rather
   // than --remote-control <name>, so there is no URL to hand out.
   assert.equal(extractRcUrl('/rc active'), null);
+});
+
+// --- why Remote Control is not up -------------------------------------------
+
+test('a pane that says "not logged in" is reported as that, not as a timeout', () => {
+  // Taken from a real session. Remote Control cannot come online without an
+  // account, and "did not come online" sends somebody to look at timeouts and
+  // networks for something the pane spells out in words.
+  const pane = [
+    '│   Opus 5 (1M context) · API Usage Billing   │',
+    '',
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents',
+    '                                                    Not logged in · Run /login',
+  ].join('\n');
+
+  const why = diagnoseRc(pane);
+  assert.ok(why, 'the cause is on the screen');
+  assert.match(why.detail, /not logged in/i);
+  assert.match(why.remedy, /AGENT_HUB_SANDBOX_CREDENTIALS/, 'and the remedy names the setting to check');
+});
+
+test('a self-updated CLI is reported as needing a restart', () => {
+  const why = diagnoseRc('  ✔ Update installed · Restart to apply');
+  assert.ok(why);
+  assert.match(why.detail, /updated itself/i);
+  assert.match(why.remedy, /CLAUDE_VERSION/);
+});
+
+test('a healthy pane diagnoses nothing, so the real timeout still reads as one', () => {
+  assert.equal(diagnoseRc('❯ ready\n  ⏵⏵ bypass permissions on'), null);
+});
+
+test('the diagnosis survives a wrapped pane', () => {
+  // 80 columns splits that status line, which is exactly what defeated the RC
+  // URL matcher this project started with.
+  const wrapped = 'Not logged in ·\nRun /login';
+  assert.ok(diagnoseRc(wrapped), 'dewrapped before matching, like everything else that reads a pane');
 });
