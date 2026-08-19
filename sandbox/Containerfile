@@ -28,10 +28,17 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# The CLI. Pinned by ARG so a rebuild is reproducible and an upgrade is a
-# deliberate one-line change — design.md calls out image rot as a real cost of
-# owning this, so point Renovate at these two ARGs.
-ARG CLAUDE_VERSION=latest
+# The CLI. Pinned to a VERSION, not to `latest`, which was the default here and
+# is not a pin at all: two hosts building a week apart got different images, and
+# "reproducible" quietly meant "whatever npm had that morning".
+#
+# 2.1.234 is the version whose credentials handling is known to work in this
+# image — confirmed on a box with `claude auth status --json` returning
+# loggedIn: true from a seeded volume. Bumping it is a one-line change and a
+# rebuild, which is the point.
+#
+# renovate: datasource=npm depName=@anthropic-ai/claude-code
+ARG CLAUDE_VERSION=2.1.234
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     && npm cache clean --force
 

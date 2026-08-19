@@ -1,5 +1,32 @@
 # The sandbox image
 
+**Built by CI and published to GHCR**, at
+`ghcr.io/thetechnetwork/fleetwright-session:latest`. Hosts pull it; they do not
+build it.
+
+That is the point rather than a convenience. `CLAUDE_VERSION` used to be
+`latest`, so the image a host ended up with depended on the day it first needed
+one — two boxes on the same commit could run different CLIs and disagree about
+how a session behaves. It cost a real evening: a container updated its own CLI
+mid-session, lost its login, and reported "Remote Control did not come online".
+
+One image, built once, pulled by name, with the CLI version pinned in the
+Containerfile and bumped deliberately.
+
+```sh
+# what a host does
+podman pull ghcr.io/thetechnetwork/fleetwright-session:latest
+
+# build it yourself instead — offline, or while editing the Containerfile
+AGENT_HUB_SANDBOX_IMAGE=localhost/agent-session:latest sudo -E install/install.sh
+```
+
+`ensureSandboxImage` builds anything tagged `localhost/` and pulls anything
+else, so switching between the two is one environment variable.
+
+Every push also publishes a `sha-<commit>` tag, which is what makes "which
+image is that box running" answerable after the fact.
+
 The container a sandboxed session runs in. design.md §2: give a session full
 root, and delete everything it did afterwards.
 

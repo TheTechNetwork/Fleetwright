@@ -688,19 +688,43 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
     fi
   fi
 
-  say "Building the sandbox image"
-  # Tagged with the localhost/ prefix, and referenced that way everywhere else.
-  # A bare name goes through short-name resolution at run time, which fails on a
-  # stock Debian 13 with no unqualified-search-registries configured.
-  if as_user 'podman image exists localhost/agent-session:latest' 2>/dev/null \
+  # PULLED, not built. CI builds this image once and publishes it, so every
+  # host runs the same bytes — a local build meant the image a box got depended
+  # on the day it built it, and CLAUDE_VERSION was `latest`, so two hosts on the
+  # same commit could disagree about how a session behaves.
+  #
+  # Building locally is still supported and is the fallback below, for an
+  # offline box or a Containerfile somebody is editing.
+  IMAGE="${AGENT_HUB_SANDBOX_IMAGE:-ghcr.io/thetechnetwork/fleetwright-session:latest}"
+  say "Fetching the sandbox image"
+  if as_user "podman image exists '$IMAGE'" 2>/dev/null \
      && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
-    ok "localhost/agent-session:latest already built for $RUN_USER"
-  elif as_user "podman build -t localhost/agent-session:latest -f '$DIR/sandbox/Containerfile' '$DIR/sandbox'" \
-       >/tmp/agent-session-build.log 2>&1; then
-    ok "localhost/agent-session:latest (in $RUN_USER's image store)"
+    ok "$IMAGE already present for $RUN_USER"
+  elif [ "${IMAGE#localhost/}" != "$IMAGE" ]; then
+    : # a localhost/ image can only be built, so fall through to the build below
+  elif as_user "podman pull '$IMAGE'" >/tmp/agent-session-pull.log 2>&1; then
+    ok "pulled $IMAGE"
+    set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
+    IMAGE=""
   else
-    warn "image build failed — see /tmp/agent-session-build.log."
-    warn "  Sandboxed sessions will not start until it succeeds; everything else works."
+    warn "could not pull $IMAGE — falling back to building it here."
+    warn "  $(tail -1 /tmp/agent-session-pull.log 2>/dev/null || echo 'see /tmp/agent-session-pull.log')"
+    IMAGE="localhost/agent-session:latest"
+  fi
+
+  # The build, for a localhost/ image or a failed pull. Tagged with the
+  # localhost/ prefix deliberately: a bare name goes through short-name
+  # resolution at run time, which fails on a stock Debian 13 with no
+  # unqualified-search-registries configured.
+  if [ -n "$IMAGE" ]; then
+    if as_user "podman build -t '$IMAGE' -f '$DIR/sandbox/Containerfile' '$DIR/sandbox'" \
+       >/tmp/agent-session-build.log 2>&1; then
+      ok "$IMAGE (built in $RUN_USER's image store)"
+      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
+    else
+      warn "image build failed — see /tmp/agent-session-build.log."
+      warn "  Sandboxed sessions will not start until it succeeds; everything else works."
+    fi
   fi
 fi
 

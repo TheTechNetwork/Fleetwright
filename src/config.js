@@ -111,7 +111,15 @@ export function loadConfig(env = process.env) {
     // outright on a stock Debian 13, where no unqualified-search-registries are
     // configured. Naming it in full skips that lookup entirely. A remote image
     // must likewise be given in full (registry/name:tag).
-    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'localhost/agent-session:latest'),
+    // Pulled, not built. Every host running the same published image is the
+    // only way "the sandbox" is one thing: with a local build, what a box got
+    // depended on the day it built it, and two hosts on the same commit could
+    // disagree about how a session behaves.
+    //
+    // Set this to localhost/agent-session:latest to go back to building
+    // locally — ensureSandboxImage builds anything localhost/ and pulls
+    // anything else, so an offline or air-gapped box has a way out.
+    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'ghcr.io/thetechnetwork/fleetwright-session:latest'),
     // Build the image on demand if it is missing, rather than refusing to start
     // a session over something we know how to fix. The first session on a fresh
     // box pays a few minutes for it; every one after that is instant.
