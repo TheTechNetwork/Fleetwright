@@ -1,12 +1,20 @@
 package network.thetech.fleetwright
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Talking to the coordinator.
@@ -136,13 +144,85 @@ class Fleet(private val settings: Settings) {
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("agent-fleet", Context.MODE_PRIVATE)
 
+    /** Not sensitive: an origin, and the app talks to no other. */
     var coordinatorUrl: String
         get() = prefs.getString("coordinatorUrl", "") ?: ""
         set(value) = prefs.edit().putString("coordinatorUrl", value.trim()).apply()
 
+    /**
+     * Encrypted with a key held in the Android Keystore, which never leaves it.
+     *
+     * The same reasoning as the iOS keychain change: this token can start and
+     * stop every session on every machine in the fleet. MODE_PRIVATE keeps
+     * other apps out on a healthy device, but the file is plain text on disk —
+     * readable with root, in some backup configurations, and by anything that
+     * gets at the data directory. The ciphertext is still kept in
+     * SharedPreferences; only the key is special, and it is not extractable.
+     */
     var apiToken: String
-        get() = prefs.getString("apiToken", "") ?: ""
-        set(value) = prefs.edit().putString("apiToken", value.trim()).apply()
+        get() = prefs.getString("apiToken.enc", null)?.let { decrypt(it) }
+            // One-time migration from the plaintext key. Read it, re-store it
+            // encrypted, and remove it — a fix that leaves the plaintext behind
+            // has not fixed anything.
+            ?: prefs.getString("apiToken", null)?.also { apiToken = it; prefs.edit().remove("apiToken").apply() }
+            ?: ""
+        set(value) {
+            val trimmed = value.trim()
+            prefs.edit().apply {
+                if (trimmed.isEmpty()) remove("apiToken.enc") else putString("apiToken.enc", encrypt(trimmed))
+                remove("apiToken")
+            }.apply()
+        }
 
     val configured: Boolean get() = coordinatorUrl.isNotBlank()
+
+    // --- AES-GCM with a non-extractable Keystore key -------------------------
+    //
+    // No dependency, in keeping with the rest of this app. androidx.security's
+    // EncryptedSharedPreferences would do the same job, but it has sat in alpha
+    // for years and is a large surface for one string.
+
+    private fun key(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                // Deliberately NOT setUserAuthenticationRequired: a push
+                // notification has to be actionable on a locked phone, which is
+                // the entire point of the app.
+                .build(),
+        )
+        return generator.generateKey()
+    }
+
+    /** iv:ciphertext, both base64. The IV is not a secret and must not repeat. */
+    private fun encrypt(value: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val bytes = cipher.doFinal(value.toByteArray())
+        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    private fun decrypt(stored: String): String? = runCatching {
+        val (iv, body) = stored.split(":", limit = 2)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            key(),
+            GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)),
+        )
+        String(cipher.doFinal(Base64.decode(body, Base64.NO_WRAP)))
+    }.getOrNull() // A key lost to a backup restore or a reinstall means re-entering the token, not a crash.
+
+    private companion object {
+        const val KEY_ALIAS = "fleetwright.apiToken"
+    }
 }

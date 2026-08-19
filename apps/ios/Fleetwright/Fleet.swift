@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Talking to the coordinator.
 ///
@@ -102,17 +103,84 @@ enum FleetError: LocalizedError {
 /// is a small, self-contained change.
 @Observable
 final class Settings {
+    /// Not sensitive: an origin, and the app refuses to talk to any other.
     var coordinatorURL: String {
         didSet { UserDefaults.standard.set(coordinatorURL, forKey: "coordinatorURL") }
     }
+
+    /// The keychain, not UserDefaults.
+    ///
+    /// This token can start and stop every session on every machine in the
+    /// fleet. UserDefaults is a plist in the app container: not readable by
+    /// other apps on a healthy device, but it is plain text on disk, it goes
+    /// into an unencrypted backup, and it is there for anything that gets file
+    /// access to the container. None of that is an acceptable place for a
+    /// credential with this reach, and CodeQL was right to say so.
     var apiToken: String {
-        didSet { UserDefaults.standard.set(apiToken, forKey: "apiToken") }
+        didSet { Keychain.set(apiToken, for: Self.tokenKey) }
     }
+
+    private static let tokenKey = "apiToken"
 
     init() {
         coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
-        apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
+        apiToken = Keychain.get(Self.tokenKey) ?? ""
+
+        // One-time migration for anyone who set a token in an earlier build.
+        // Read it, write it to the keychain, and remove it — leaving it behind
+        // would mean the plaintext copy survives the fix that was supposed to
+        // remove it.
+        if apiToken.isEmpty, let legacy = UserDefaults.standard.string(forKey: Self.tokenKey), !legacy.isEmpty {
+            apiToken = legacy
+            Keychain.set(legacy, for: Self.tokenKey)
+        }
+        UserDefaults.standard.removeObject(forKey: Self.tokenKey)
     }
 
     var configured: Bool { !coordinatorURL.isEmpty }
+}
+
+/// The smallest keychain wrapper that is correct.
+///
+/// No dependency, in keeping with the rest of this app: a generic-password
+/// item is three Security calls, and a library to make them shorter would be
+/// carried for the life of the app.
+enum Keychain {
+    private static let service = "network.thetech.fleetwright"
+
+    private static func query(_ account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    /// @param value an empty string deletes the item rather than storing "".
+    static func set(_ value: String, for account: String) {
+        SecItemDelete(query(account) as CFDictionary)
+        guard !value.isEmpty, let data = value.data(using: .utf8) else { return }
+
+        var item = query(account)
+        item[kSecValueData as String] = data
+        // ThisDeviceOnly keeps it out of backups and off any other device;
+        // AfterFirstUnlock so a notification arriving on a locked phone can
+        // still be acted on. `WhenUnlocked` would be stricter and would break
+        // exactly that.
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    static func get(_ account: String) -> String? {
+        var item = query(account)
+        item[kSecReturnData as String] = true
+        item[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(item as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data,
+              let string = String(data: data, encoding: .utf8)
+        else { return nil }
+        return string
+    }
 }
