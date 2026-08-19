@@ -11,8 +11,8 @@
 // in kind, and each is harder to produce by accident than the last:
 //
 //   1. the command, which lists exactly what will be lost
-//   2. a one-time token this box just generated — cannot be typed in advance,
-//      cannot be replayed, expires
+//   2. a one-time six-digit PIN this box just generated — cannot be typed in
+//      advance, cannot be replayed, expires
 //   3. the hostname, typed out — the step that makes "wrong box" impossible,
 //      which is the mistake actually worth preventing
 //
@@ -21,7 +21,7 @@
 // only part that requires having read which machine you are talking to.
 
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import os from 'node:os';
 
 import { log } from '../log.js';
@@ -29,7 +29,7 @@ import { log } from '../log.js';
 /** Long enough to read the list of sessions, short enough to not sit around. */
 const CHALLENGE_TTL_MS = 120_000;
 
-/** @type {{ token: string, actor: string|null, at: number, stage: number }|null} */
+/** @type {{ pin: string, actor: string|null, at: number, stage: number }|null} */
 let pending = null;
 
 /** @param {() => number} [now] */
@@ -70,10 +70,13 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   const hostname = os.hostname();
   const current = live(now);
 
-  // Step 1: no arguments. Say what will be lost, then issue the token.
+  // Step 1: no arguments. Say what will be lost, then issue the PIN.
   if (!args.length) {
-    const token = randomBytes(3).toString('hex');
-    pending = { token, actor, at: now(), stage: 1 };
+    // Six DIGITS, not hex. This gets typed on a phone, where a numeric keypad
+    // is the difference between confirming and giving up — and randomInt is
+    // uniform over the range, unlike the modulo of a random byte string.
+    const pin = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    pending = { pin, actor, at: now(), stage: 1 };
     const loss = sessions.length
       ? `This will kill ${sessions.length} running session${sessions.length === 1 ? '' : 's'}:\n` +
         sessions.map((s) => `  ${s}`).join('\n') +
@@ -81,7 +84,7 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
       : 'No sessions are running.';
     return {
       ok: true,
-      text: `Reboot ${hostname}?\n\n${loss}\n\nStep 2 of 3 — confirm with:\n  /reboot ${token}`,
+      text: `Reboot ${hostname}?\n\n${loss}\n\nStep 2 of 3 — confirm with:\n  /reboot ${pin}`,
     };
   }
 
@@ -93,23 +96,23 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   if (current.actor !== actor) {
     return { ok: false, text: 'That reboot was started by somebody else. /reboot to start your own.' };
   }
-  if (args[0] !== current.token) {
-    return { ok: false, text: 'That token does not match. /reboot to start again.' };
+  if (args[0] !== current.pin) {
+    return { ok: false, text: 'That PIN does not match. /reboot to start again.' };
   }
 
-  // Step 2: the token alone. Ask for the hostname.
+  // Step 2: the PIN alone. Ask for the hostname.
   if (args.length === 1) {
     pending = { ...current, stage: 2, at: now() };
     return {
       ok: true,
       text:
         `Step 3 of 3 — type the hostname to confirm which machine this is:\n` +
-        `  /reboot ${current.token} ${hostname}`,
+        `  /reboot ${current.pin} ${hostname}`,
     };
   }
 
   if (current.stage < 2) {
-    return { ok: false, text: 'Confirm the token on its own first: /reboot ' + current.token };
+    return { ok: false, text: 'Confirm the PIN on its own first: /reboot ' + current.pin };
   }
   if (args[1] !== hostname) {
     return {

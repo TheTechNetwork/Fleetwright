@@ -160,6 +160,28 @@ test('the Remote Control URL is read off an 80-column pane', () => {
   assert.equal(extractRcUrl(RC_PANE_80), RC_URL);
 });
 
+test('a flag survives one dash, and a phone keyboard rewriting two', () => {
+  // Telegram on iOS turns `--` into an em dash as you type, so `/update
+  // --restart` arrives as `/update \u2014restart`. That used to parse as a
+  // positional argument: the flag silently did nothing, which is the worst way
+  // for a flag to fail. Buttons were unaffected because their payload is never
+  // typed — so this broke only for people typing the command, which is the
+  // harder half to notice.
+  for (const line of ['/update --restart', '/update -restart', '/update \u2014restart', '/update \u2013restart']) {
+    const { name, flags } = parse(line);
+    assert.equal(name, 'update', line);
+    assert.ok(flags.has('restart'), `${line} should set the flag`);
+  }
+});
+
+test('a bare dash and a negative number stay arguments', () => {
+  // The other direction: the pattern needs a word after the dash, so a stray
+  // one is not a flag called "".
+  assert.deepEqual([...parse('/peek -').flags], []);
+  assert.deepEqual(parse('/peek -').args, ['-']);
+  assert.deepEqual(parse('/logs -5').args, ['-5'], 'a negative number is an argument, not a flag');
+});
+
 test('the Remote Control URL survives a pane narrow enough to wrap it', () => {
   // The regression this guards: extractRcUrl matched the raw capture with no
   // de-wrapping, so a wrapped URL yielded a truncated one — well-formed,

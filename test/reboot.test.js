@@ -15,13 +15,13 @@ import { reboot, cancelReboot } from '../src/core/reboot.js';
 const CFG = /** @type {any} */ ({ systemReboot: true, runUser: 'agent' });
 const ok = () => ({ status: 0, stderr: '' });
 
-/** Walk the flow to the token, returning it. @param {any} [opts] */
+/** Walk the flow to the PIN, returning it. @param {any} [opts] */
 function begin(opts = {}) {
   cancelReboot();
   const first = reboot(CFG, [], { actor: 'telegram:1', sessions: ['cc-brave-otter'], exec: ok, ...opts });
-  const token = /\/reboot ([0-9a-f]{6})/.exec(first.text)?.[1];
-  assert.ok(token, 'step 1 issues a token');
-  return { first, token };
+  const pin = /\/reboot (\d{6})/.exec(first.text)?.[1];
+  assert.ok(pin, 'step 1 issues a PIN');
+  return { first, pin };
 }
 
 test('step 1 says what will be lost before asking anything', () => {
@@ -31,17 +31,17 @@ test('step 1 says what will be lost before asking anything', () => {
   assert.match(first.text, /Step 2 of 3/);
 });
 
-test('the whole flow needs the token AND the hostname, in that order', () => {
-  const { token } = begin();
+test('the whole flow needs the PIN AND the hostname, in that order', () => {
+  const { pin } = begin();
 
-  const skipped = reboot(CFG, [token, os.hostname()], { actor: 'telegram:1', exec: ok });
-  assert.equal(skipped.ok, false, 'the hostname cannot be sent with the token in one go');
+  const skipped = reboot(CFG, [pin, os.hostname()], { actor: 'telegram:1', exec: ok });
+  assert.equal(skipped.ok, false, 'the hostname cannot be sent with the PIN in one go');
 
-  const second = reboot(CFG, [token], { actor: 'telegram:1', exec: ok });
+  const second = reboot(CFG, [pin], { actor: 'telegram:1', exec: ok });
   assert.match(second.text, /Step 3 of 3/);
 
   let ran = false;
-  const third = reboot(CFG, [token, os.hostname()], {
+  const third = reboot(CFG, [pin, os.hostname()], {
     actor: 'telegram:1',
     exec: () => { ran = true; return ok(); },
   });
@@ -50,11 +50,11 @@ test('the whole flow needs the token AND the hostname, in that order', () => {
 });
 
 test('the wrong hostname is refused, which is the mistake worth preventing', () => {
-  const { token } = begin();
-  reboot(CFG, [token], { actor: 'telegram:1', exec: ok });
+  const { pin } = begin();
+  reboot(CFG, [pin], { actor: 'telegram:1', exec: ok });
 
   let ran = false;
-  const r = reboot(CFG, [token, 'some-other-box'], {
+  const r = reboot(CFG, [pin, 'some-other-box'], {
     actor: 'telegram:1',
     exec: () => { ran = true; return ok(); },
   });
@@ -66,29 +66,29 @@ test('the wrong hostname is refused, which is the mistake worth preventing', () 
 test('somebody else cannot finish your reboot', () => {
   // Two people in a chat is the normal case, and a stranger answering a prompt
   // they did not read is a coincidence rather than a confirmation.
-  const { token } = begin();
-  const r = reboot(CFG, [token], { actor: 'telegram:999', exec: ok });
+  const { pin } = begin();
+  const r = reboot(CFG, [pin], { actor: 'telegram:999', exec: ok });
   assert.equal(r.ok, false);
   assert.match(r.text, /started by somebody else/);
 });
 
-test('the token expires, and a stale one starts over rather than working', () => {
+test('the PIN expires, and a stale one starts over rather than working', () => {
   const t0 = 1_000_000;
   cancelReboot();
   const first = reboot(CFG, [], { actor: 'a', now: () => t0, exec: ok });
-  const token = /\/reboot ([0-9a-f]{6})/.exec(first.text)?.[1] ?? '';
+  const pin = /\/reboot (\d{6})/.exec(first.text)?.[1] ?? '';
 
-  const late = reboot(CFG, [token], { actor: 'a', now: () => t0 + 121_000, exec: ok });
+  const late = reboot(CFG, [pin], { actor: 'a', now: () => t0 + 121_000, exec: ok });
   assert.equal(late.ok, false);
   assert.match(late.text, /expired|No reboot is pending/);
 });
 
-test('a token cannot be replayed after it has fired', () => {
-  const { token } = begin();
-  reboot(CFG, [token], { actor: 'telegram:1', exec: ok });
-  reboot(CFG, [token, os.hostname()], { actor: 'telegram:1', exec: ok });
+test('a PIN cannot be replayed after it has fired', () => {
+  const { pin } = begin();
+  reboot(CFG, [pin], { actor: 'telegram:1', exec: ok });
+  reboot(CFG, [pin, os.hostname()], { actor: 'telegram:1', exec: ok });
 
-  const again = reboot(CFG, [token, os.hostname()], { actor: 'telegram:1', exec: ok });
+  const again = reboot(CFG, [pin, os.hostname()], { actor: 'telegram:1', exec: ok });
   assert.equal(again.ok, false, 'single use — the same message sent twice must not reboot twice');
 });
 

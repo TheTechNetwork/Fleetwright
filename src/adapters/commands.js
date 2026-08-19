@@ -61,7 +61,16 @@ export function parse(line) {
   /** @type {Set<string>} */
   const flags = new Set();
   for (const part of parts.slice(1)) {
-    if (part.startsWith('--')) flags.add(part.slice(2).toLowerCase());
+    // ONE dash is enough, and so is a dash a phone keyboard has helpfully
+    // rewritten. Telegram on iOS turns `--` into an em dash as you type it, so
+    // `/update --restart` arrives as `/update —restart` and used to be read as
+    // a positional argument — the flag silently did nothing, which is the worst
+    // way for a flag to fail. Buttons were unaffected because their payload is
+    // never typed, so this broke only for people typing the command.
+    // A LETTER after the dash, not \w: otherwise `-5` is a flag called "5"
+    // rather than a negative number, and `/logs -5` stops meaning anything.
+    const flag = /^(?:--|-|—|–)([a-z][\w-]*)$/i.exec(part);
+    if (flag) flags.add(flag[1].toLowerCase());
     else args.push(part);
   }
   return { name, args, flags };
@@ -457,11 +466,11 @@ export const COMMANDS = {
   },
 
   reboot: {
-    usage: '/reboot [token] [hostname]',
+    usage: '/reboot [pin] [hostname]',
     short: 'Reboot this box',
     help:
       'Reboot the machine. Three confirmations, each asking for something ' +
-      'different: the command, a one-time token, and the hostname typed out. ' +
+      'different: the command, a one-time PIN, and the hostname typed out. ' +
       'Every running session dies — a reboot takes the tmux server with it.',
     run: async (ctx, args) => {
       const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
