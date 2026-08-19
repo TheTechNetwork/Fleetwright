@@ -194,10 +194,25 @@ jobs:
 
   # The one the swift error was about. The project autobuild could not find does
   # not exist until xcodegen writes it, which is the whole failure.
+  # NOT ON PULL REQUESTS, and this is the one place in this file where that is
+  # a real trade rather than a saving.
+  #
+  # Measured: 1127 seconds inside `xcodebuild`, against ~50 for the same
+  # compile in ios.yml. The Swift extractor traces the compiler and pulls in
+  # the SDK modules the app touches — Foundation, SwiftUI, AppIntents — and
+  # there is no version of that which is quick. It is macOS-only, so it cannot
+  # move to a cheaper runner, and Swift has no build-mode: none, so the build
+  # cannot be skipped.
+  #
+  # Twenty minutes on the critical path of every app pull request is a tax that
+  # gets paid by not opening pull requests. main and the weekly schedule still
+  # analyse every line — a PR gate cannot leave a gap, because the merge commit
+  # re-analyses in full. What is lost is finding an alert an hour earlier, on
+  # four SwiftUI files with no dependencies.
   swift:
     name: analyze (swift)
     needs: changes
-    if: needs.changes.outputs.swift == 'true'
+    if: github.event_name != 'pull_request' && needs.changes.outputs.swift == 'true'
     runs-on: macos-latest
     permissions:
       security-events: write
@@ -241,7 +256,9 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            ARCHS=arm64
 
       - uses: github/codeql-action/analyze@v4
         with:

@@ -119,7 +119,7 @@ jobs:
         # A keystore committed by accident is a key you have to rotate.
         run: printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
 
-      - name: Build the signed release APK
+      - name: Build the signed release APK and bundle
         if: steps.keystore.outputs.have == 'true'
         working-directory: apps/android
         env:
@@ -127,13 +127,20 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease
+          # Play refuses a versionCode it has already seen, so this cannot be
+          # the constant the Gradle file falls back to.
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        # BOTH. The APK is what somebody sideloads from a GitHub release, and
+        # Play will not accept it for a new app; the bundle is what Play wants
+        # and is useless for sideloading.
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
 
       - uses: actions/upload-artifact@v7
         if: steps.keystore.outputs.have == 'true'
         with:
           name: agent-fleet-release-apk
           path: apps/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
 
       # The bundle, for the job that publishes to Play. Kept separate from the
       # APK because they go to different places and only one of them is any use
@@ -143,6 +150,11 @@ jobs:
         with:
           name: fleetwright-release-bundle
           path: apps/android/app/build/outputs/bundle/release/*.aab
+          # error, not the default warn. This artifact was silently empty for a
+          # whole release: the build step never ran bundleRelease, upload-artifact
+          # shrugged, and the failure surfaced in a different job as "Artifact not
+          # found" — which says nothing about the cause.
+          if-no-files-found: error
 
       - name: Attach the APK to the release
         if: steps.keystore.outputs.have == 'true' && github.event_name == 'release'
