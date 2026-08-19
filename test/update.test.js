@@ -156,14 +156,41 @@ test('an unreachable remote is reported, not swallowed', (t) => {
 
 // --- restarting -------------------------------------------------------------
 
-test('an update that changed nothing never restarts', (t) => {
+test('an update that changed nothing does not restart on its own', (t) => {
   const { cfg } = deployment(t);
   let exited = false;
 
-  const r = runUpdate(cfg, { restart: true, exit: () => (exited = true) });
+  const r = runUpdate(cfg, { exit: () => (exited = true) });
 
   assert.equal(r.restarting, false);
   assert.equal(exited, false, 'restarting to apply nothing is pure downtime');
+});
+
+test('an explicit restart still restarts when the pull found nothing', (t) => {
+  // This reverses an earlier decision, on purpose. "Restarting to apply
+  // nothing is pure downtime" is true in the abstract and wrong for the path
+  // the button actually drives: /update pulls and offers "Restart to apply",
+  // the button runs /update --restart, and THAT pull finds nothing because the
+  // first one already fetched it. Refusing then meant the button answered
+  // "Already up to date" and never restarted — new code on disk, old process
+  // serving it, and the UI reporting success.
+  //
+  // `changed` answers "did this invocation pull anything", which is not the
+  // question a restart request is asking.
+  const { cfg } = deployment(t);
+  let exited = false;
+  const previous = process.env.INVOCATION_ID;
+  process.env.INVOCATION_ID = 'test-systemd-run';
+  t.after(() => {
+    if (previous === undefined) delete process.env.INVOCATION_ID;
+    else process.env.INVOCATION_ID = previous;
+  });
+
+  const r = runUpdate(cfg, { restart: true, exit: () => (exited = true) });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.restarting, true, 'somebody asked for a restart');
+  assert.match(r.message, /already fetched/, 'and it says why there was nothing to pull');
 });
 
 test('--restart exits so systemd brings the new code back', (t) => {
