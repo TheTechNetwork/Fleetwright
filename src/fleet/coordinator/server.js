@@ -70,6 +70,12 @@ export class Coordinator {
     this.server = null;
     /** @type {NodeJS.Timeout|null} */
     this.healthTimer = null;
+    // Sockets live here, NOT on the registry entry. A registry entry is a
+    // value that gets serialised straight out of `GET /api/hosts`, and a live
+    // WsConnection hanging off it drags the raw socket, the http.Server and
+    // its connection table into that response — see the comment on close().
+    /** @type {Map<string, import('../ws.js').WsConnection>} */
+    this.connections = new Map();
   }
 
   /** The host registry, for tests and for anything that wants to look. */
@@ -116,11 +122,12 @@ export class Coordinator {
     if (this.healthTimer) clearInterval(this.healthTimer);
     for (const [, waiter] of this.pending) clearTimeout(waiter.timer);
     this.pending.clear();
-    for (const host of this.registry.hosts.values()) {
+    for (const conn of this.connections.values()) {
       try {
-        /** @type {any} */ (host).conn?.close(1001, 'coordinator shutting down');
+        conn.close(1001, 'coordinator shutting down');
       } catch { /* best effort */ }
     }
+    this.connections.clear();
     this.server?.closeAllConnections?.();
     await new Promise((r) => (this.server ? this.server.close(() => r(null)) : r(null)));
   }
@@ -140,7 +147,7 @@ export class Coordinator {
     }
 
     this.core.hostConnected(hostId, (msg) => conn.send(JSON.stringify(msg)));
-    /** @type {any} */ (this.registry.hosts.get(hostId)).conn = conn;
+    this.connections.set(hostId, conn);
 
     conn.on('message', (text) => {
       let msg;
@@ -153,6 +160,10 @@ export class Coordinator {
       void this.core.onHostMessage(hostId, msg);
     });
     conn.on('close', (code, reason) => {
+      // Only forget the socket if it is still the current one. A reconnect
+      // from the same host replaces the entry before the old socket's close
+      // event lands, and deleting unconditionally would drop the live one.
+      if (this.connections.get(hostId) === conn) this.connections.delete(hostId);
       this.core.hostDisconnected(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
     });
     conn.on('error', (e) => this.log.warn(`coordinator: ${hostId} socket error: ${e.message}`));

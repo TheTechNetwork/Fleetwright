@@ -251,6 +251,31 @@ async function fleet(t, hubOpts = {}) {
   return { stub, coordinator, sidecar, port };
 }
 
+test('GET /api/hosts describes the host and never the socket carrying it', async (t) => {
+  // A registry entry is serialised straight out of this endpoint. When the
+  // live WsConnection was stored ON the entry, every reply carried the raw
+  // socket, the http.Server and its connection table — a few kilobytes of
+  // server internals per host, handed to anyone holding the API token, and one
+  // circular reference away from a 500.
+  const { port } = await fleet(t);
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/hosts`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  assert.equal(body.hosts.length, 1);
+  assert.deepEqual(
+    Object.keys(body.hosts[0]).sort(),
+    ['connected', 'connectedAt', 'health', 'healthAt', 'hostId', 'reason', 'state'],
+    'the entry is a description of the host, not a window onto the process serving it',
+  );
+
+  const serialised = JSON.stringify(body);
+  for (const leak of ['_connectionKey', '_readableState', 'maxMessageBytes', 'httpAllowHalfOpen']) {
+    assert.ok(!serialised.includes(leak), `/api/hosts leaked ${leak}`);
+  }
+});
+
 test('an intent travels coordinator → websocket → sidecar → agent-hub and back', async (t) => {
   // The host must already report holding `bigjob`, because `stop` is pinned —
   // a fleet where no host claims the session refuses rather than picking one.
