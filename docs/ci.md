@@ -161,11 +161,12 @@ none of them can be automated:
 |---|---|
 | Bundle id | `network.thetech.fleetwright` |
 | App name | **Fleetwright** — must be unique across the whole App Store, which is what "Agent Fleet" fell foul of |
-| SKU | `fleetwright-ios-001` — internal only, never shown, and never changeable |
+| SKU | `network.thetech.fleetwright` — the bundle id reused. Internal only, never shown, and never changeable |
 
 The bundle id is reverse-DNS of a domain you actually control, which
-`dev.agentfleet.app` was not. The SKU is arbitrary but permanent, so it is worth
-picking something that still reads correctly in three years.
+`dev.agentfleet.app` was not. The SKU is arbitrary but permanent; reusing the
+bundle id means there is one string to remember rather than two, and no chance
+of the two drifting into looking like different apps.
 
 ## Firebase — push notifications
 
