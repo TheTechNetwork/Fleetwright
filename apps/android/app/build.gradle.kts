@@ -135,7 +135,7 @@ dependencies {
   // so it should raise the floor for whoever does pull it in rather than
   // claiming to depend on it.
   constraints {
-    implementation("androidx.fragment:fragment:1.8.5") {
+    implementation("androidx.fragment:fragment:1.9.0") {
       because("Firebase brings 1.1.0; registerForActivityResult requires >= 1.3.0")
     }
   }
