@@ -35,6 +35,32 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
+## A demo token, for App Store review
+
+App Store review needs credentials that work, and `AGENT_FLEET_API_TOKEN` can
+stop every session in the fleet. So there is a third, optional token:
+
+```sh
+npx wrangler secret put AGENT_FLEET_DEMO_TOKEN     # openssl rand -hex 24
+```
+
+A request bearing it is answered from `worker/src/demo.js` — two invented
+hosts, three invented sessions, one of them waiting on a person. Verbs like
+`start` and `stop` reply plausibly and change nothing.
+
+**The safety property is structural.** The match happens in `worker.js` before
+`env.FLEET` is touched, so there is no code path from a demo request to a
+Durable Object, a host socket or a real session. Not "it checks first" — the
+object is never fetched. It is also refused for `/host/connect`, so a host
+presenting it is rejected like any other wrong token, and the Worker returns
+500 if the demo and real tokens are ever set to the same value rather than
+silently turning the whole coordinator into a toy.
+
+Every reply carries `"demo": true`, so a support question is never ambiguous
+about which fleet somebody was looking at.
+
+Leave it unset and none of this exists.
+
 ## Point a host at it
 
 In `/etc/agent-fleet-sidecar.env` on each box:
