@@ -40,9 +40,18 @@ ever moves to a box — see [`push.md`](./push.md).
 App Store review needs credentials that work, and `AGENT_FLEET_API_TOKEN` can
 stop every session in the fleet. So there is a third, optional token:
 
-```sh
-npx wrangler secret put AGENT_FLEET_DEMO_TOKEN     # openssl rand -hex 24
+It is a **`[vars]` entry in `wrangler.toml`, not a secret** — committed, and
+deployed with the code:
+
+```toml
+AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 ```
+
+That is deliberate. The string authorises exactly one thing: reading the
+fabricated fleet. There is nothing behind it to reach, so publishing it costs
+Worker invocations and nothing else — and in exchange there is no secret to
+rotate, no manual step before a deploy, and no way for App Store review to be
+blocked on somebody being awake to paste a value.
 
 A request bearing it is answered from `worker/src/demo.js` — two invented
 hosts, three invented sessions, one of them waiting on a person. Verbs like
@@ -59,7 +68,8 @@ silently turning the whole coordinator into a toy.
 Every reply carries `"demo": true`, so a support question is never ambiguous
 about which fleet somebody was looking at.
 
-Leave it unset and none of this exists.
+Remove the var and none of this exists — the token stops being recognised
+and every request falls through to the real token check.
 
 ## Point a host at it
 
