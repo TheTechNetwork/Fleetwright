@@ -19,7 +19,7 @@ node = "26"
 
 # For the Android app. AGP 9 and Gradle 9.7 both run on 25, which is verified —
 # the whole stack was built on it before this line was written.
-java = "temurin-25.0.4+7.0.LTS"
+java = "temurin-25.0.4+101.0.LTS"
 
 [env]
 # JDK 25 warns that Gradle's native-platform library calls a restricted method,
