@@ -227,7 +227,16 @@ openssl req -new -newkey rsa:2048 -nodes -keyout distribution.key -out distribut
   -subj "/CN=Fleetwright Distribution/C=US"
 # upload the .csr as an Apple Distribution certificate, download the .cer
 openssl x509 -in distribution.cer -inform DER -out distribution.pem -outform PEM
-openssl pkcs12 -export -inkey distribution.key -in distribution.pem -out distribution.p12
+openssl pkcs12 -export -legacy -inkey distribution.key -in distribution.pem -out distribution.p12
+```
+
+**`-legacy` is not optional.** OpenSSL 3 defaults to a SHA-256 MAC and AES-256-CBC,
+which macOS cannot read — and `security import` reports that as *"MAC
+verification failed (wrong password?)"*, which is a lie in the most expensive
+direction. Check before uploading it; `MAC: sha1` is what you want:
+
+```sh
+openssl pkcs12 -in distribution.p12 -info -nokeys -passin pass:… 2>&1 | grep MAC:
 ```
 
 Keep `distribution.key` and the `.p12`. Losing them means doing this again and
