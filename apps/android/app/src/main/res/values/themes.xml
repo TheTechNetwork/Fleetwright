@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+  <!--
+    The day half. values-night/themes.xml is the other, and the pair is what
+    makes this app support dark mode at all — the previous single Light theme
+    left the window background and system bars light on a phone in dark mode,
+    however dark the Compose content was.
+
+    A values-night override rather than a DayNight parent because the platform
+    ships no android:Theme.*.DayNight.NoActionBar; DeviceDefault.DayNight
+    exists but not with NoActionBar, and AAPT says so at link time.
+  -->
   <style name="Theme.Fleetwright" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

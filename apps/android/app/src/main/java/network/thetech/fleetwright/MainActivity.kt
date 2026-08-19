@@ -8,17 +8,23 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,7 +57,17 @@ class MainActivity : ComponentActivity() {
             askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        setContent { MaterialTheme { FleetScreen() } }
+        setContent {
+            // MaterialTheme with no argument is lightColorScheme() forever, which
+            // is how this app had a dark theme in the manifest and a white screen
+            // in the hand. dynamicColorScheme picks up the wallpaper palette on
+            // Android 12+, which every device running minSdk 36 is.
+            val dark = isSystemInDarkTheme()
+            val context = LocalContext.current
+            MaterialTheme(
+                colorScheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
+            ) { FleetScreen() }
+        }
     }
 }
 
@@ -102,7 +118,7 @@ fun FleetScreen() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("agent-fleet") },
+                title = { Text("Fleetwright") },
                 actions = {
                     TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
                     TextButton(onClick = { showSettings = !showSettings }) { Text("Settings") }
@@ -200,7 +216,19 @@ private fun SessionCard(
                 // differ rather than hiding one.
                 Text(session.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f))
-                AssistChip(onClick = {}, label = { Text(session.status) })
+                // Colour AND the word, never colour alone: the label is what
+                // carries the meaning and the tint only reinforces it, which is
+                // what "differentiate without colour" asks for and is also just
+                // legible to everybody else.
+                val tint = statusColour(session.status)
+                AssistChip(
+                    onClick = {},
+                    label = { Text(session.status) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        labelColor = tint,
+                        leadingIconContentColor = tint,
+                    ),
+                )
             }
             if (session.label != session.name) {
                 Text(session.name, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
@@ -278,4 +306,19 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             enabled = url.isNotBlank(),
         ) { Text("Save") }
     }
+}
+
+/**
+ * A colour per session state, as reinforcement only.
+ *
+ * Every caller shows the status word beside it. Nothing in this app is
+ * distinguishable by colour alone, which matters for the eight percent of men
+ * with a colour vision deficiency and for anybody using the phone outdoors.
+ */
+@Composable
+private fun statusColour(status: String): Color = when (status) {
+    "running" -> MaterialTheme.colorScheme.primary
+    "awaiting-input" -> MaterialTheme.colorScheme.error
+    "stopped" -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
