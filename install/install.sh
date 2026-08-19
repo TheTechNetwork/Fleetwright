@@ -912,7 +912,15 @@ if [ "$WIZARD" = yes ]; then
         # already-authenticated box answers "Already logged in", and asking for
         # a code after that is asking the operator to produce something that
         # does not exist.
-        if printf '%s' "$LOGIN_OUT" | grep -q 'https://claude\.ai/'; then
+        #
+        # Gated on THAT string rather than on spotting a URL. The first version
+        # of this grepped for https://claude.ai/ — and the live authorize URL is
+        # https://claude.com/cai/oauth/authorize, which src/core/login.js says
+        # in as many words. It would have skipped the prompt on a genuinely
+        # logged-out box and announced the opposite. Matching the sentence the
+        # hub actually emits (src/adapters/commands.js) cannot fail that way,
+        # and a new first-party auth host cannot silently reintroduce it.
+        if ! printf '%s' "$LOGIN_OUT" | grep -q 'Already logged in'; then
           ask AUTH_CODE "Paste the code from that page (blank to do it later)"
           if [ -n "$AUTH_CODE" ]; then
             "$DIR/bin/agent-hub" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
