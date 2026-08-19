@@ -77,10 +77,30 @@ async function api(bearer, path, init = {}) {
 
 async function main() {
   const size = (await stat(AAB)).size;
+  // The account is named up front because every interesting failure here is
+  // about WHICH account is asking, and Play's errors never say. "The caller
+  // does not have permission" is the same message whether the account was
+  // never invited, was invited without app permissions, or belongs to a
+  // different project than the one somebody granted.
   console.log(`${AAB} (${(size / 1_048_576).toFixed(1)} MB) → ${PACKAGE} ${TRACK}`);
+  console.log(`as ${serviceAccount().client_email}`);
   const bearer = await token();
 
-  const edit = await api(bearer, `/androidpublisher/v3/applications/${PACKAGE}/edits`, { method: 'POST' });
+  const edit = await api(bearer, `/androidpublisher/v3/applications/${PACKAGE}/edits`, { method: 'POST' }).catch(
+    (e) => {
+      if (!/403|permission/i.test(String(e.message))) throw e;
+      throw new Error(
+        `${e.message}\n\n` +
+          `Play refused ${serviceAccount().client_email} on ${PACKAGE}.\n` +
+          'It returns the same 403 for "not invited", "invited without app permissions" and\n' +
+          '"no such app", so check in this order:\n' +
+          '  1. Play Console -> Users and permissions -> is that exact address listed?\n' +
+          '  2. Open it -> App permissions -> the app must have "Release to testing tracks".\n' +
+          '     Account-level access alone is not enough.\n' +
+          '  3. The package must already be bound to an app record by one manual upload.',
+      );
+    },
+  );
   console.log(`edit ${edit.id}`);
 
   // Nothing below takes effect until the commit at the end. If this throws,

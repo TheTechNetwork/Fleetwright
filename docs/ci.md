@@ -154,6 +154,24 @@ declarations, which apply to every track:
 `tools/make-app-icon.py`. Screenshots are not there and cannot be: they have to
 come from a running app.
 
+### When Play says the caller has no permission
+
+It returns the same 403 for three different problems, so check in this order —
+the job now prints which account it is asking as, which is the piece Play's
+error leaves out:
+
+1. **Users and permissions** — is that exact service account address listed?
+2. Open it → **App permissions** → the app needs **Release to testing tracks**.
+   Account-level access on its own is not enough, and its absence looks
+   identical to never having been invited.
+3. The package must already be bound to an app record by one manual upload.
+   Play fixes the package name from the first bundle you upload, so until then
+   `network.thetech.fleetwright` matches nothing the account can see.
+
+A different 403 — *"Google Play Android Developer API has not been used in
+project N"* — is the API itself being switched off in the Google Cloud project
+the service account belongs to. That one names its own fix and links to it.
+
 ### Two things that would otherwise bite
 
 **Play wants an `.aab`, not an `.apk`.** CI builds both: the bundle for Play,
