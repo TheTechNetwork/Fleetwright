@@ -19,7 +19,11 @@ android {
     // real and worth stating: it excludes most phones in the field today.
     minSdk = 36
     targetSdk = 37
-    versionCode = 1
+    // Play refuses a versionCode it has already seen, so a constant allows
+    // exactly one upload ever — the same trap as CURRENT_PROJECT_VERSION on
+    // iOS. The CI run number only increases and is already past 99, so it
+    // stays ahead of anything uploaded by hand while this was 1.
+    versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInt()
     versionName = "0.1.0"
   }
 

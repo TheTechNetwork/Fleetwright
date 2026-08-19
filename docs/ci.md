@@ -110,6 +110,38 @@ becomes the *upload* key, which Google can reset if lost. That is the safer
 default for a first release and changes nothing above — the workflow signs with
 whatever it is given.
 
+## Google Play — the internal track
+
+Play's answer to TestFlight internal: up to 100 testers, no review, live in
+minutes. A **published GitHub release** builds a signed bundle and uploads it.
+
+| what | where |
+|---|---|
+| `PLAY_SERVICE_ACCOUNT_JSON` | a GitHub secret. Play Console → Setup → API access → create a service account, grant it **Release manager**, download the JSON key |
+| The app record | Play Console → Create app. Name **Fleetwright**, package `network.thetech.fleetwright` |
+| The first upload | **by hand.** Play asks for the content rating, the data safety form and the target audience on a first release, and no API can answer those for you |
+| An internal testing track with testers | Play Console → Testing → Internal testing |
+
+Unset the secret and the job warns and skips, like every other credential here.
+
+### Two things that would otherwise bite
+
+**Play wants an `.aab`, not an `.apk`.** CI builds both: the bundle for Play,
+the APK for the GitHub release, since an `.aab` is useless to somebody
+sideloading. They are different deliveries of the same build.
+
+**`versionCode` comes from the CI run number.** A constant allows exactly one
+upload ever — the same trap as `CURRENT_PROJECT_VERSION` on iOS, and it was
+hardcoded to `1` here until it was found. Run numbers only increase and are
+already past 99, so they stay ahead of anything uploaded by hand.
+
+### A note on the 14-day rule
+
+A **personal** Play developer account created after November 2023 must run a
+closed test with 12 testers for 14 days before it can promote to production.
+Organisation accounts are exempt. Internal testing is unaffected either way,
+but it changes what "ship it" looks like later and is better known now.
+
 ## App Store Connect — TestFlight
 
 | secret | where it comes from |
