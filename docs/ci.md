@@ -124,7 +124,7 @@ revocable from the web, and it lets `xcodebuild -allowProvisioningUpdates`
 create the signing assets itself. Fastlane match solves the same problem by
 giving you a second repository of secrets to look after.
 
-**Internal TestFlight goes out on every commit to `main`.** The build number is
+**Internal TestFlight goes out on every commit to `main` that touches `apps/ios/**`.** The build number is
 `github.run_number`, because App Store Connect refuses a build number it has
 already seen for a version — `project.yml`'s `CURRENT_PROJECT_VERSION: "1"`
 would have allowed exactly one upload, ever. The *version* still comes from

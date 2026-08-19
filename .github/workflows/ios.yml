@@ -1,15 +1,13 @@
 name: iOS
 
 on:
-  # NO paths filter on main, deliberately. Internal TestFlight goes out on
-  # every commit to main, and a path filter would silently skip the ones that
-  # did not touch apps/ios — including a coordinator or protocol change, which
-  # is exactly the kind of thing a tester most needs a fresh build to exercise.
-  # A build the testers cannot get is not a build.
+  # Internal TestFlight on every commit to main THAT AFFECTS THE APP. The
+  # filter stays: a commit touching only the coordinator or the docs produces
+  # a byte-identical binary, so uploading it spends a macOS build and a build
+  # number to give testers the same app twice.
   push:
     branches: [main]
-  # PRs keep the filter: they only compile, and compiling the iOS app for a
-  # change to install.sh buys nothing.
+    paths: ['apps/ios/**', '.github/workflows/ios.yml']
   pull_request:
     paths: ['apps/ios/**', '.github/workflows/ios.yml']
   workflow_dispatch:
