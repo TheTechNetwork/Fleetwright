@@ -81,6 +81,18 @@ name = "DEMO_RATE_LIMIT"
 namespace_id = "1001"
 simple = { limit = 60, period = 60 }
 
+# Signing in is the other route reachable without a credential, and it does real
+# work for an anonymous caller: fetch a key set, verify a JWT, and on success
+# write a client record. Ten a minute per address is more than a person tapping
+# a button and less than anything worth doing with somebody else's CPU.
+#
+# A separate namespace from the demo budget on purpose: sharing one would mean a
+# script hammering the demo fleet could stop real people signing in.
+[[ratelimits]]
+name = "SIGNIN_RATE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
 [[durable_objects.bindings]]
 name = "FLEET"
 class_name = "Fleet"

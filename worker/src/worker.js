@@ -19,7 +19,7 @@ export { Fleet };
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -118,7 +118,22 @@ export default {
     // Signing in cannot require being signed in. The Durable Object verifies
     // the identity token itself, so this route is reachable without a fleet
     // credential and refuses on its own terms.
+    //
+    // Bounded here rather than there, so a flood never reaches the object that
+    // holds the fleet. It is the one unauthenticated route that does real work
+    // for an anonymous caller — a key-set fetch, a signature verification, and
+    // on success a stored client record.
     if (url.pathname === '/api/session' && request.method === 'POST') {
+      if (env.SIGNIN_RATE_LIMIT) {
+        const key = `signin:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+        const { success } = await env.SIGNIN_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json(
+            { ok: false, error: { code: 'rate_limited' }, text: 'Too many sign-in attempts. Try again in a minute.' },
+            429,
+          );
+        }
+      }
       const id = env.FLEET.idFromName('fleet');
       return env.FLEET.get(id).fetch(request);
     }
