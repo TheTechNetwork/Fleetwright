@@ -9,7 +9,12 @@ struct FleetwrightApp: App {
     var body: some Scene {
         WindowGroup {
             FleetView(settings: settings)
-                .task { await delegate.registerForPush(settings: settings) }
+                // Keyed on the credential, not run once. Permission is asked
+                // for after there is something to notify about, which now means
+                // after signing in — and a `.task` that fires only on first
+                // appearance would leave a phone that signed in on its first
+                // launch unregistered until its second.
+                .task(id: settings.credential) { await delegate.registerForPush(settings: settings) }
         }
     }
 }

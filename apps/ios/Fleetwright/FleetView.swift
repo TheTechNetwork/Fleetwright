@@ -142,6 +142,7 @@ private struct SettingsView: View {
     @State private var showingAdvanced = false
     @State private var pastedCredential = ""
 
+    @MainActor
     private func loadHosts() async {
         guard !settings.credential.isEmpty else { return }
         hosts = (try? await Fleet(settings: settings).enrolledHosts()) ?? []
@@ -152,24 +153,31 @@ private struct SettingsView: View {
         pin.count == 6 ? "\(pin.prefix(3)) \(pin.suffix(3))" : pin
     }
 
+    /// Deliberately NOT `@MainActor` on the function itself.
+    ///
+    /// It is handed to `SignInWithAppleButton` as a plain closure, and a
+    /// global-actor-isolated function converted to a non-isolated one loses its
+    /// isolation — a warning today and an error under Swift 6. `Task { @MainActor in }`
+    /// says the same thing where it is actually needed, which is every line
+    /// below: the state, the settings object and `UIDevice` are all main-actor.
     private func signIn(_ result: Result<ASAuthorization, Error>) {
-        signingIn = true
-        signInResult = "signing in…"
-        // Read before the Task: it names the credential in the fleet's device
-        // list, and it is the difference between "revoke the right phone" and
-        // "revoke one of three called Client".
-        let deviceName = UIDevice.current.name
-        Task {
+        Task { @MainActor in
+            signingIn = true
+            signInResult = "signing in…"
             defer { signingIn = false }
             do {
                 let idToken = try SignIn.identityToken(from: result)
                 let issued = try await Fleet(settings: settings).signIn(
                     idToken: idToken,
-                    deviceName: deviceName
+                    // Names the credential in the fleet's device list, and it is
+                    // the difference between "revoke the right phone" and
+                    // "revoke one of three called iPhone".
+                    deviceName: UIDevice.current.name
                 )
                 settings.credential = issued.token
                 settings.signedInAs = issued.email
                 signInResult = ""
+                await loadHosts()
                 onDone()
             } catch SignIn.Failure.cancelled {
                 signInResult = ""

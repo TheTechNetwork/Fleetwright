@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -100,14 +101,14 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             MaterialTheme(
                 colorScheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
-            ) { FleetScreen() }
+            ) { FleetScreen(onSignedIn = ::registerForPush) }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetScreen() {
+fun FleetScreen(onSignedIn: () -> Unit = {}) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val fleet = remember { Fleet(settings) }
@@ -182,6 +183,12 @@ fun FleetScreen() {
             if (showSettings) {
                 SettingsPanel(settings) {
                     showSettings = false
+                    // Signing in is what makes push registration possible at
+                    // all — before it there is no credential to POST with — so
+                    // this runs on the way out of settings rather than only at
+                    // launch, which would leave a phone that signed in on its
+                    // first run unregistered until its second.
+                    onSignedIn()
                     refresh()
                 }
                 return@Column
@@ -299,6 +306,17 @@ private fun SessionCard(
     }
 }
 
+/**
+ * The enrolled hosts, or nothing when this device has no credential.
+ *
+ * A top-level function rather than a local one inside the composable: local
+ * suspend functions that capture composable state are the kind of thing that
+ * compiles until the Compose compiler decides otherwise, and there is nothing
+ * here that needs to be inside.
+ */
+private suspend fun enrolledHosts(settings: Settings): List<Fleet.Host> =
+    if (settings.credential.isNotBlank()) Fleet(settings).enrolledHosts() else emptyList()
+
 @Composable
 private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     val context = LocalContext.current
@@ -314,11 +332,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var pin by rememberSaveable { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
 
-    suspend fun loadHosts() {
-        hosts = if (settings.credential.isNotBlank()) Fleet(settings).enrolledHosts() else emptyList()
-    }
-
-    LaunchedEffect(signedIn) { loadHosts() }
+    LaunchedEffect(signedIn) { hosts = enrolledHosts(settings) }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Coordinator", style = MaterialTheme.typography.titleMedium)
@@ -389,7 +403,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             signedIn = true
                             identity = email
                             signInResult = ""
-                            loadHosts()
+                            hosts = enrolledHosts(settings)
                         } catch (e: SignIn.Cancelled) {
                             signInResult = ""
                         } catch (e: Exception) {
@@ -452,7 +466,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                         scope.launch {
                                             busy = true
                                             signInResult = Fleet(settings).revokeHost(host.hostId).text
-                                            loadHosts()
+                                            hosts = enrolledHosts(settings)
                                             busy = false
                                         }
                                     },
@@ -495,11 +509,15 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                 "For a demo fleet, and for getting back in when sign-in is what is broken.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            // Masked. It is a credential, and in plain text it is readable over
+            // a shoulder and captured by any screenshot or screen recording of
+            // this panel.
             OutlinedTextField(
                 value = pasted,
                 onValueChange = { pasted = it },
                 label = { Text("Credential") },
                 singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
                 modifier = Modifier.fillMaxWidth(),
             )
