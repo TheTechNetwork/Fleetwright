@@ -15,6 +15,7 @@ import { place } from '../src/fleet/coordinator/scheduler.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
+import { generateKeyPair, sign, signingInput } from '../src/fleet/crypto.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 
 // --- the registry: `unknown` is a state, not a default ----------------------
@@ -216,6 +217,38 @@ test('list fans out to every host', () => {
 // --- end to end -------------------------------------------------------------
 
 /**
+ * Enrol a fresh key the way a real box does — mint a pin, spend it over HTTP —
+ * and hand back the proof function the transport calls on every dial.
+ *
+ * Going through the actual endpoint rather than poking core.hostIds keeps the
+ * enrolment path itself under test in every end-to-end case.
+ *
+ * @param {import('../src/fleet/coordinator/server.js').Coordinator} coordinator
+ * @param {number} port
+ * @param {string} hostId
+ */
+async function enrolledProof(coordinator, port, hostId) {
+  const keys = await generateKeyPair();
+  const { code } = coordinator.core.enrollment.mint({ purpose: 'host' });
+  const res = await fetch(`http://127.0.0.1:${port}/api/enroll/host`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, hostId, publicJwk: keys.publicJwk }),
+  });
+  assert.equal(res.status, 200, 'enrolment succeeded');
+
+  return async () => {
+    const chal = await fetch(`http://127.0.0.1:${port}/api/host/challenge`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hostId }),
+    });
+    const { nonce } = await chal.json();
+    return sign(keys.privateJwk, signingInput('host-connect', { hostId, nonce }));
+  };
+}
+
+/**
  * A coordinator, a stub agent-hub, and a sidecar joined over a real WebSocket.
  * @param {import('node:test').TestContext} t
  * @param {object} [hubOpts]
@@ -228,6 +261,7 @@ async function fleet(t, hubOpts = {}) {
   const transport = new WebSocketTransport({
     origin: `http://127.0.0.1:${port}`,
     hostId: 'unabandoned',
+    proof: await enrolledProof(coordinator, port, 'unabandoned'),
   });
   const sidecar = new Sidecar({
     hub: new HubClient({ baseUrl: stub.baseUrl, readTimeoutMs: 2000 }),
@@ -386,21 +420,61 @@ test('an API token is enforced when set', async (t) => {
   assert.equal(ok.status, 200);
 });
 
-test('a host with the wrong token cannot connect at all', async (t) => {
-  const coordinator = new Coordinator({ hostToken: 'right-token-16chars' });
+test('a host that was never enrolled cannot connect at all', async (t) => {
+  const coordinator = new Coordinator();
   const port = await coordinator.listen(0, '127.0.0.1');
   t.after(() => coordinator.close());
 
+  // A well-formed proof from a key the coordinator has never seen. This is the
+  // interesting impostor: not a missing header, a real signature over a real
+  // nonce, made by the wrong key.
+  const keys = await generateKeyPair();
   const transport = new WebSocketTransport({
     origin: `http://127.0.0.1:${port}`,
     hostId: 'imposter',
-    token: 'wrong',
+    proof: async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/host/challenge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hostId: 'imposter' }),
+      });
+      const { nonce } = await res.json();
+      return sign(keys.privateJwk, signingInput('host-connect', { hostId: 'imposter', nonce }));
+    },
     maxBackoffMs: 50,
   });
   await transport.start();
   await new Promise((r) => setTimeout(r, 300));
 
   assert.equal(coordinator.registry.list().length, 0, 'a refused host never enters the registry');
+  await transport.stop();
+});
+
+test('a revoked host is disconnected and stays out', async (t) => {
+  const coordinator = new Coordinator({ apiToken: 'a-token-at-least-16ch' });
+  const port = await coordinator.listen(0, '127.0.0.1');
+  t.after(() => coordinator.close());
+
+  const transport = new WebSocketTransport({
+    origin: `http://127.0.0.1:${port}`,
+    hostId: 'condemned',
+    proof: await enrolledProof(coordinator, port, 'condemned'),
+    maxBackoffMs: 50,
+  });
+  await transport.start();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(coordinator.registry.list().length, 1, 'enrolled host connected');
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/hosts/condemned`, {
+    method: 'DELETE',
+    headers: { authorization: 'Bearer a-token-at-least-16ch' },
+  });
+  assert.equal(res.status, 200);
+
+  // It will retry — that is what the transport does — and every retry must be
+  // refused. A revocation that only holds until the host reconnects is not one.
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(coordinator.registry.hosts.get('condemned')?.connected, false);
   await transport.stop();
 });
 

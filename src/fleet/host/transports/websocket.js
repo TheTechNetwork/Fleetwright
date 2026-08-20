@@ -33,15 +33,17 @@ export class WebSocketTransport {
    * @param {{
    *   origin: string,
    *   hostId: string,
-   *   token?: string|null,
+   *   proof?: (() => Promise<string>)|null,
    *   logger?: typeof import('../../../log.js').log,
    *   maxBackoffMs?: number,
    * }} opts
    */
-  constructor({ origin, hostId, token = null, logger, maxBackoffMs = MAX_BACKOFF_MS }) {
+  constructor({ origin, hostId, proof = null, logger, maxBackoffMs = MAX_BACKOFF_MS }) {
     this.origin = origin;
     this.hostId = hostId;
-    this.token = token;
+    // A function rather than a value: it is called on every dial, because each
+    // connection needs its own nonce.
+    this.proof = proof;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
     this.maxBackoffMs = maxBackoffMs;
     /** @type {((msg: unknown) => Promise<void>)|null} */
@@ -89,9 +91,14 @@ export class WebSocketTransport {
   async #dial() {
     if (this.stopped) return;
     try {
-      const conn = await connectWebSocket(this.url, {
-        headers: this.token ? { authorization: `Bearer ${this.token}` } : {},
-      });
+      // Prove first, then upgrade. The proof is a signature over a nonce the
+      // coordinator issued seconds ago, so a captured connection contains
+      // nothing that can open another one — which a bearer token, sent
+      // identically on every reconnect, could not say.
+      /** @type {Record<string, string>} */
+      const headers = {};
+      if (this.proof) headers['x-fleet-proof'] = await this.proof();
+      const conn = await connectWebSocket(this.url, { headers });
       this.conn = conn;
       this.backoff = INITIAL_BACKOFF_MS;
       this.connectedOnce = true;

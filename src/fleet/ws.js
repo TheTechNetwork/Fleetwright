@@ -203,7 +203,7 @@ export class WsConnection extends EventEmitter {
  * @param {import('node:http').Server} server
  * @param {{
  *   path?: string,
- *   authorise?: (req: import('node:http').IncomingMessage) => boolean | string,
+ *   authorise?: (req: import('node:http').IncomingMessage) => boolean | string | Promise<boolean|string>,
  *   onConnection: (conn: WsConnection, req: import('node:http').IncomingMessage) => void,
  *   maxMessageBytes?: number,
  * }} opts
@@ -212,8 +212,9 @@ export function attachWebSocketServer(server, { path = '/', authorise, onConnect
   /**
    * @param {import('node:http').IncomingMessage} req
    * @param {import('node:stream').Duplex} socket
+   * @param {Buffer} [_head]
    */
-  const onUpgrade = (req, socket) => {
+  const onUpgrade = async (req, socket, _head) => {
     /** @param {number} status @param {string} message */
     const refuse = (status, message) => {
       socket.write(`HTTP/1.1 ${status} ${message}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`);
@@ -234,8 +235,14 @@ export function attachWebSocketServer(server, { path = '/', authorise, onConnect
 
     // Authorisation happens BEFORE the upgrade completes, so an unauthenticated
     // peer never gets a framed connection it can send anything down.
+    //
+    // Awaited: verifying a signature is asynchronous. Nothing reads the socket
+    // until the connection object is built below, and an unread socket buffers
+    // rather than dropping, so a peer that talks early is not truncated by the
+    // wait — it just waits with us.
     if (authorise) {
-      const verdict = authorise(req);
+      const verdict = await authorise(req);
+      if (socket.destroyed) return;
       if (verdict !== true) return refuse(401, typeof verdict === 'string' ? verdict : 'Unauthorized');
     }
 
@@ -251,7 +258,13 @@ export function attachWebSocketServer(server, { path = '/', authorise, onConnect
     );
   };
 
-  server.on('upgrade', onUpgrade);
+  server.on('upgrade', (req, socket, head) => {
+    void onUpgrade(req, /** @type {import('node:stream').Duplex} */ (socket), head).catch(() => {
+      try {
+        socket.destroy();
+      } catch { /* already gone */ }
+    });
+  });
   return () => server.off('upgrade', onUpgrade);
 }
 

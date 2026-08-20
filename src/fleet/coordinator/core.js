@@ -154,6 +154,31 @@ export class CoordinatorCore {
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
   }
 
+  /**
+   * Record something the coordinator itself did, as opposed to something a
+   * host reported.
+   *
+   * Enrolment and revocation belong in the same stream as sessions starting
+   * and stopping: when somebody asks "how did that machine get in", the answer
+   * should be in one place and not in a log nobody kept.
+   *
+   * @param {{ event: string, hostId?: string, name?: string|null, text?: string|null, fingerprint?: string }} entry
+   */
+  record(entry) {
+    const event = {
+      hostId: entry.hostId ?? 'coordinator',
+      event: String(entry.event),
+      name: entry.name ?? null,
+      text: entry.text ?? (entry.fingerprint ? `fingerprint ${entry.fingerprint}` : null),
+      url: null,
+      at: this.now(),
+    };
+    this.events.push(event);
+    if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
+    this.log.info(`coordinator: ${event.event}${event.hostId !== 'coordinator' ? ` ${event.hostId}` : ''}`);
+    return event;
+  }
+
   /** @param {Record<string, any>} event */
   async #notify(event) {
     const devices = [...this.devices.values()];

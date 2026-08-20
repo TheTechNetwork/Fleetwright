@@ -23,6 +23,8 @@
 // sessions. It cannot run anything.
 
 import { createServer } from 'node:http';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { attachWebSocketServer } from '../ws.js';
@@ -41,22 +43,26 @@ const HEALTH_INTERVAL_MS = 15_000;
 export class Coordinator {
   /**
    * @param {{
-   *   hostToken?: string|null,
    *   apiToken?: string|null,
+   *   stateFile?: string|null,
    *   intentTimeoutMs?: number,
    *   healthIntervalMs?: number,
    *   logger?: typeof import('../../log.js').log,
    * }} [opts]
    */
   constructor({
-    hostToken = null,
     apiToken = null,
+    stateFile = null,
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
     healthIntervalMs = HEALTH_INTERVAL_MS,
     logger,
   } = {}) {
-    this.hostToken = hostToken;
     this.apiToken = apiToken;
+    // Enrolled host keys ARE the authority — the registry is the cache, they
+    // are not. Losing them on restart means every box in the fleet is refused
+    // until somebody walks round re-enrolling them, so unlike everything else
+    // in this process, this goes to disk.
+    this.stateFile = stateFile;
     this.intentTimeoutMs = intentTimeoutMs;
     this.healthIntervalMs = healthIntervalMs;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
@@ -93,6 +99,53 @@ export class Coordinator {
     return this.core.pending;
   }
 
+  /**
+   * Read back what was enrolled.
+   *
+   * A missing file is a new coordinator, not an error. A CORRUPT one is an
+   * error and is left alone rather than overwritten: the recovery for "the
+   * file got truncated" is restoring it, and a coordinator that silently
+   * starts empty makes that impossible to notice.
+   */
+  loadState() {
+    if (!this.stateFile) return;
+    let raw;
+    try {
+      raw = readFileSync(this.stateFile, 'utf8');
+    } catch {
+      return; // never enrolled anything yet
+    }
+    const state = JSON.parse(raw);
+    this.core.hostIds.restore(state.hosts || []);
+    this.core.clients.restore(state.clients || []);
+    this.core.enrollment.restore(state.enrollment || []);
+    const hosts = this.core.hostIds.list().filter((h) => !h.revokedAt).length;
+    this.log.info(`coordinator: ${hosts} enrolled host${hosts === 1 ? '' : 's'} from ${this.stateFile}`);
+  }
+
+  /** Write it back. Through a temp file, because a half-written host list is
+   *  a fleet that cannot connect. */
+  saveState() {
+    if (!this.stateFile) return;
+    const body = JSON.stringify(
+      {
+        hosts: this.core.hostIds.serialise(),
+        clients: this.core.clients.serialise(),
+        enrollment: this.core.enrollment.serialise(),
+      },
+      null,
+      2,
+    );
+    try {
+      mkdirSync(path.dirname(this.stateFile), { recursive: true, mode: 0o700 });
+      const tmp = `${this.stateFile}.tmp`;
+      writeFileSync(tmp, `${body}\n`, { mode: 0o600 });
+      renameSync(tmp, this.stateFile);
+    } catch (e) {
+      this.log.error(`coordinator: could not save state to ${this.stateFile}: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
   /** @param {number} port @param {string} host */
   async listen(port = 8791, host = '127.0.0.1') {
     this.server = createServer((req, res) => {
@@ -104,10 +157,19 @@ export class Coordinator {
 
     attachWebSocketServer(this.server, {
       path: '/host/connect',
-      authorise: (req) => {
-        if (!this.hostToken) return true; // loopback dev; see validateCoordinatorConfig
-        const bearer = bearerOf(req.headers.authorization);
-        return safeEqual(bearer, this.hostToken) || 'Unauthorized';
+      // The same handshake the Worker makes, for the same reason: a host proves
+      // it holds the enrolled private key by signing a nonce issued moments
+      // ago. There is no shared host token to fall back to, not even on
+      // loopback — "it's only dev" is how a shared secret ends up in
+      // production, and the sidecar generates its key without being asked.
+      authorise: async (req) => {
+        const url = new URL(req.url || '/', 'http://placeholder');
+        const hostId = url.searchParams.get('hostId') || '';
+        const proof = String(req.headers['x-fleet-proof'] || '');
+        const outcome = await this.core.hostIds.prove(hostId, proof);
+        if (outcome.ok) return true;
+        this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
+        return outcome.reason;
       },
       onConnection: (conn, req) => this.#onHost(conn, req),
     });
@@ -221,6 +283,57 @@ export class Coordinator {
     // nothing else — no host names, no counts.
     if (p === '/healthz') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION });
 
+    // --- enrolment, before the token gate ------------------------------------
+    //
+    // These three are what an UNAUTHENTICATED machine uses to become an
+    // authenticated one, so requiring the API token here would mean every host
+    // needed the fleet-wide admin credential to join — exactly the shared
+    // secret this rework removes. The pin is the authorisation for the first;
+    // a signature is the authorisation for the other two.
+    if (p === '/api/enroll/host' && req.method === 'POST') {
+      const body = await readJson(req);
+      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host');
+      if (!spent.ok) {
+        this.saveState(); // a spent code must not survive a restart
+        return json(res, 403, { ok: false, error: { code: 'bad_code' }, text: spent.reason });
+      }
+
+      const result = await this.core.hostIds.enrol({
+        hostId: String(body?.hostId || ''),
+        publicJwk: body?.publicJwk,
+        enrolledBy: spent.entry.actor,
+      });
+      // Saved either way: the code was spent above whether or not the key that
+      // arrived with it was any good, and a spent code that comes back after a
+      // restart is a second host nobody minted.
+      this.saveState();
+      if (!result.ok || !result.host) {
+        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+      }
+      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+      return json(res, 200, {
+        ok: true,
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        replaced: result.replaced,
+        text: result.replaced
+          ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
+          : `Enrolled ${result.host.hostId}.`,
+      });
+    }
+
+    if (p === '/api/host/challenge' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, 200, { ok: true, nonce: this.core.hostIds.challenge(String(body?.hostId || '')) });
+    }
+
+    if (p === '/api/host/verify' && req.method === 'POST') {
+      const body = await readJson(req);
+      const outcome = await this.core.hostIds.prove(String(body?.hostId || ''), String(body?.proof || ''));
+      if (!outcome.ok) return json(res, 401, { ok: false, text: outcome.reason });
+      return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
+    }
+
     if (this.apiToken && !safeEqual(bearerOf(req.headers.authorization) || url.searchParams.get('token') || '', this.apiToken)) {
       return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'a token is required' });
     }
@@ -233,6 +346,40 @@ export class Coordinator {
       // "the same code runs in both places" false in the only place a client
       // can see — and the apps have to hold both shapes in their head.
       return json(res, 200, { ok: true, ...this.core.snapshot() });
+    }
+
+    if (p === '/api/hosts/enrolled' && req.method === 'GET') {
+      return json(res, 200, { ok: true, hosts: this.core.hostIds.list() });
+    }
+
+    if (p.startsWith('/api/hosts/') && req.method === 'DELETE') {
+      const hostId = decodeURIComponent(p.slice('/api/hosts/'.length));
+      const gone = this.core.hostIds.revoke(hostId);
+      if (gone) {
+        // Revoked AND disconnected. A revoked host holding a live socket is
+        // still in the fleet until something closes it.
+        this.connections.get(hostId)?.close(1008, 'revoked');
+        this.core.record({ event: 'host.revoked', hostId });
+        this.saveState();
+      }
+      return json(res, gone ? 200 : 404, {
+        ok: gone,
+        text: gone ? `${hostId} is revoked and disconnected.` : `${hostId} is not enrolled.`,
+      });
+    }
+
+    if (p === '/api/enroll' && req.method === 'POST') {
+      const body = await readJson(req);
+      const kind = body?.kind === 'device' ? 'device' : 'host';
+      // Six digits is small enough to read down a phone and small enough to
+      // guess, so the guessing is what has to be bounded — see enrollment.js.
+      const issued = this.core.enrollment.mint({
+        purpose: kind,
+        label: body?.label ? String(body.label) : '',
+        actor: body?.actor ? String(body.actor) : null,
+      });
+      this.saveState();
+      return json(res, 200, { ok: true, ...issued });
     }
 
     if (p === '/api/devices/test' && req.method === 'POST') {

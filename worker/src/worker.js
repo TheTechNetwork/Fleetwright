@@ -19,7 +19,7 @@ export { Fleet };
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -44,23 +44,42 @@ export default {
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.
-    if (!env.AGENT_FLEET_HOST_TOKEN || !env.AGENT_FLEET_API_TOKEN) {
+    //
+    // Only the admin token is required now. Hosts carry their own keys, and
+    // people sign in — so the thing that must exist at boot is the credential
+    // that can mint the first enrolment code, and nothing else.
+    if (!env.AGENT_FLEET_API_TOKEN) {
       return json(
         {
           ok: false,
           error: { code: 'not_configured' },
           text:
-            'This coordinator has no tokens set. Run:\n' +
-            '  wrangler secret put AGENT_FLEET_HOST_TOKEN\n' +
-            '  wrangler secret put AGENT_FLEET_API_TOKEN',
+            'This coordinator has no admin token set. Run:\n' +
+            '  wrangler secret put AGENT_FLEET_API_TOKEN\n\n' +
+            'Hosts and phones do not use it — they enrol and sign in. It exists to ' +
+            'mint the first enrolment code and to get back in when nothing else works.',
         },
         503,
       );
     }
 
-    const isHost = url.pathname === '/host/connect';
-    const expected = isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN;
+    // A host authenticates by SIGNATURE, inside the Durable Object, which is
+    // the only thing holding the enrolled keys. There is no shared host token
+    // any more: AGENT_FLEET_HOST_TOKEN was one string that every machine
+    // presented, so it could not distinguish two hosts, could not revoke one,
+    // and was replayable by anything that saw a single connection.
+    if (
+      url.pathname === '/host/connect' ||
+      url.pathname === '/api/host/challenge' ||
+      url.pathname === '/api/host/verify' ||
+      url.pathname === '/api/enroll/host'
+    ) {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
     const presented = bearerOf(request.headers.get('authorization')) || url.searchParams.get('token') || '';
+    const isHost = false;
 
     // The demo token, if one is configured. Answered HERE, before the Durable
     // Object is reached, which is the whole security property: there is no code

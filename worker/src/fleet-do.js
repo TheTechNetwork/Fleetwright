@@ -51,7 +51,9 @@ export class Fleet {
     // messages, and every socket that is still open comes back with the host id
     // we attached to it.
     this.state.blockConcurrencyWhile(async () => {
+      this.core.hostIds.restore(/** @type {any[]} */ ((await this.state.storage.get('hostIds')) || []));
       this.core.clients.restore(/** @type {any[]} */ ((await this.state.storage.get('clients')) || []));
+      this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       const devices = (await this.state.storage.get('devices')) || [];
       for (const device of /** @type {any[]} */ (devices)) this.core.devices.set(device.token, device);
       for (const socket of this.state.getWebSockets()) {
@@ -88,6 +90,84 @@ export class Fleet {
     }
 
     if (url.pathname === '/host/connect') return this.#acceptHost(request, url);
+
+    // --- enrolment ---------------------------------------------------------
+    //
+    // A machine with no credential asking for one. The code is the whole of the
+    // authorisation, which is why it is short-lived and single-use — see
+    // enrollment.js.
+    if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
+      const body = await readJson(request);
+      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host');
+      // Saved either way: a spent code must not come back if this object is
+      // evicted between the redemption and the next write.
+      await this.#saveEnrollment();
+      if (!spent.ok) return json({ ok: false, error: { code: 'bad_code' }, text: spent.reason }, 403);
+
+      const result = await this.core.hostIds.enrol({
+        hostId: String(body?.hostId || ''),
+        publicJwk: body?.publicJwk,
+        enrolledBy: spent.entry.actor,
+      });
+      if (!result.ok) return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
+      await this.#saveHosts();
+
+      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+      return json({
+        ok: true,
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        replaced: result.replaced,
+        text: result.replaced
+          ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
+          : `Enrolled ${result.host.hostId}.`,
+      });
+    }
+
+    // A nonce to sign. Unauthenticated by necessity — it is what an
+    // unauthenticated party asks for in order to become authenticated — and it
+    // gives nothing away: a nonce is only useful to whoever holds the key.
+    if (url.pathname === '/api/host/challenge' && request.method === 'POST') {
+      const body = await readJson(request);
+      const hostId = String(body?.hostId || '');
+      return json({ ok: true, nonce: this.core.hostIds.challenge(hostId) });
+    }
+
+    // The same check `/host/connect` makes, without the socket. `sidecar doctor`
+    // asks this so an operator finds out that the key on disk was never enrolled
+    // — or was revoked — from a diagnostic that says so, instead of from a
+    // reconnect loop in the journal. It reveals nothing a connect attempt would
+    // not, and it spends the challenge exactly the same way.
+    if (url.pathname === '/api/host/verify' && request.method === 'POST') {
+      const body = await readJson(request);
+      const outcome = await this.core.hostIds.prove(String(body?.hostId || ''), String(body?.proof || ''));
+      if (!outcome.ok) return json({ ok: false, text: outcome.reason }, 401);
+      return json({ ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
+    }
+
+    if (url.pathname === '/api/hosts/enrolled' && request.method === 'GET') {
+      return json({ ok: true, hosts: this.core.hostIds.list() });
+    }
+
+    if (url.pathname.startsWith('/api/hosts/') && request.method === 'DELETE') {
+      const hostId = decodeURIComponent(url.pathname.slice('/api/hosts/'.length));
+      const gone = this.core.hostIds.revoke(hostId);
+      if (gone) {
+        await this.#saveHosts();
+        // Disconnected as well as revoked: a revoked host with a live socket is
+        // still in the fleet until something closes it, and "revoked" that
+        // leaves the machine working is not revoked.
+        for (const socket of this.state.getWebSockets()) {
+          if (this.#hostIdOf(socket) === hostId) {
+            try {
+              socket.close(1008, 'revoked');
+            } catch { /* already gone */ }
+          }
+        }
+        this.core.hostDisconnected(hostId, 'revoked');
+      }
+      return json({ ok: gone, text: gone ? `${hostId} is out of the fleet.` : 'No such host, or already revoked.' }, gone ? 200 : 404);
+    }
 
     // Signing in: the one route that takes an identity token rather than a
     // fleet credential, because it is where a fleet credential comes from.
@@ -131,6 +211,31 @@ export class Fleet {
       const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
       await this.#saveClients();
       return json({ ok: true, ...issued });
+    }
+
+    // Minting a pin. Requires an existing credential — this is the operator
+    // handing out an invitation, not a way in — and the pin it returns is the
+    // only thing shown, once, because it is written down and typed somewhere
+    // else.
+    if (url.pathname === '/api/enroll' && request.method === 'POST') {
+      const body = await readJson(request);
+      const kind = body?.kind === 'device' ? 'device' : 'host';
+      // Whoever signed in owns the code. A caller using the admin token can
+      // name themselves, and if they do not, the event says so — an enrolment
+      // nobody is attached to is a thing worth being able to see later.
+      const actor = client?.email || (body?.actor ? String(body.actor) : null);
+      const issued = this.core.enrollment.mint({
+        purpose: kind,
+        label: body?.label ? String(body.label) : '',
+        actor,
+      });
+      await this.#saveEnrollment();
+      this.core.record({ event: 'enrol.minted', hostId: null, text: `a ${kind} code was minted by ${actor || 'the admin token'}` });
+      return json({ ok: true, ...issued });
+    }
+
+    if (url.pathname === '/api/enroll' && request.method === 'GET') {
+      return json({ ok: true, codes: this.core.enrollment.outstanding() });
     }
 
     // Which devices can reach this fleet, and dropping one.
@@ -229,6 +334,27 @@ export class Fleet {
       return new Response('hostId missing or malformed', { status: 400 });
     }
 
+    // THE HANDSHAKE. A host proves it holds the enrolled private key by
+    // signing a nonce this coordinator issued moments ago, and the signature
+    // arrives in a header on the upgrade request.
+    //
+    // Nothing reusable crosses the wire. The old arrangement sent a shared
+    // bearer token on every connection, so anything that saw one connection
+    // could open its own — and every host sent the same one, so seeing any
+    // host's connection was as good as seeing all of them.
+    //
+    // The reason is in the response body rather than a bare 401, because the
+    // party reading it is a machine whose operator will be reading its journal:
+    // "not enrolled", "revoked" and "signature does not match" send them to
+    // three different actions.
+    const proof = request.headers.get('x-fleet-proof') || '';
+    const outcome = await this.core.hostIds.prove(hostId, proof);
+    if (!outcome.ok) {
+      this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
+      return new Response(outcome.reason, { status: 401 });
+    }
+    await this.#saveHosts();
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
@@ -289,8 +415,16 @@ export class Fleet {
     await this.state.storage.setAlarm(Date.now() + ALARM_MS);
   }
 
+  async #saveHosts() {
+    await this.state.storage.put('hostIds', this.core.hostIds.serialise());
+  }
+
   async #saveClients() {
     await this.state.storage.put('clients', this.core.clients.serialise());
+  }
+
+  async #saveEnrollment() {
+    await this.state.storage.put('enrollment', this.core.enrollment.serialise());
   }
 
   async #saveDevices() {

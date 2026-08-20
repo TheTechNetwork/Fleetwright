@@ -21,6 +21,16 @@ import { randomInt } from './random.js';
 
 const CODE_TTL_MS = 10 * 60_000;
 
+// Six digits is a million possibilities, which is plenty for a human and not
+// much for a script: unthrottled, an attacker who can post a few hundred
+// guesses a second walks the space inside a code's lifetime. So failures are
+// counted, and once there have been enough the door is shut for everybody until
+// the window passes. Deliberately GLOBAL rather than per-IP — an attacker
+// picks their IP, and these fleets have a handful of operators who will mint
+// another code, whereas a per-source limit is no limit at all.
+const MAX_FAILURES = 10;
+const FAILURE_WINDOW_MS = 60_000;
+
 /** @typedef {'host'|'device'} Purpose */
 
 /**
@@ -33,12 +43,15 @@ const CODE_TTL_MS = 10 * 60_000;
  */
 
 export class Enrollment {
-  /** @param {{ now?: () => number, ttlMs?: number }} [opts] */
-  constructor({ now = () => Date.now(), ttlMs = CODE_TTL_MS } = {}) {
+  /** @param {{ now?: () => number, ttlMs?: number, maxFailures?: number }} [opts] */
+  constructor({ now = () => Date.now(), ttlMs = CODE_TTL_MS, maxFailures = MAX_FAILURES } = {}) {
     /** @type {Map<string, Pending>} */
     this.pending = new Map();
     this.now = now;
     this.ttlMs = ttlMs;
+    this.maxFailures = maxFailures;
+    /** @type {number[]} timestamps of recent wrong guesses */
+    this.failures = [];
   }
 
   /**
@@ -76,8 +89,14 @@ export class Enrollment {
    */
   redeem(code, purpose) {
     this.#sweep();
+    if (this.#lockedOut()) {
+      return { ok: false, reason: 'too many wrong codes lately — wait a minute and try again' };
+    }
     const entry = this.pending.get(String(code || '').replace(/\s+/g, ''));
-    if (!entry) return { ok: false, reason: 'that code is not valid, or has already been used' };
+    if (!entry) {
+      this.failures.push(this.now());
+      return { ok: false, reason: 'that code is not valid, or has already been used' };
+    }
     if (entry.expiresAt <= this.now()) {
       this.pending.delete(entry.code);
       return { ok: false, reason: 'that code has expired — mint another' };
@@ -92,10 +111,35 @@ export class Enrollment {
     return { ok: true, entry };
   }
 
+  /**
+   * Codes survive a restart.
+   *
+   * They have to: a Durable Object can be evicted between minting a code and
+   * somebody typing it into a terminal, and a pin that silently stops working
+   * because the coordinator went to sleep is indistinguishable from a pin that
+   * was typed wrong. The TTL still applies on the way back in.
+   */
+  serialise() {
+    this.#sweep();
+    return [...this.pending.values()];
+  }
+
+  /** @param {Pending[]} entries */
+  restore(entries) {
+    for (const e of entries || []) if (e?.code && e.expiresAt > this.now()) this.pending.set(e.code, e);
+  }
+
   /** What is outstanding, for a person who wants to know what they left lying around. */
   outstanding() {
     this.#sweep();
     return [...this.pending.values()].map(({ code, ...rest }) => ({ ...rest, code: `${code.slice(0, 3)} ***` }));
+  }
+
+  /** True while the guess budget is spent. */
+  #lockedOut() {
+    const cutoff = this.now() - FAILURE_WINDOW_MS;
+    this.failures = this.failures.filter((t) => t > cutoff);
+    return this.failures.length >= this.maxFailures;
   }
 
   #sweep() {

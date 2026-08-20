@@ -57,10 +57,11 @@ export function loadSidecarConfig(env = process.env) {
     // on this box ever listens. `stdio` speaks the same protocol over
     // stdin/stdout and exists for driving the sidecar by hand.
     transport: str(env, 'AGENT_FLEET_TRANSPORT', 'websocket'),
-    // Long-lived, one per box, 0600 on disk. §5 wants a short-lived JWT signed
-    // per connection so the durable secret never crosses the wire; this is the
-    // bearer-token step before that, and the enrollment flow replaces it.
-    hostToken: str(env, 'AGENT_FLEET_HOST_TOKEN') || null,
+    // This box's private key, 0600 on disk. Nothing derived from it is reusable:
+    // connecting means signing a nonce the coordinator issued seconds earlier.
+    // It replaces AGENT_FLEET_HOST_TOKEN, which was one shared string that
+    // could not tell two hosts apart and could not be revoked for one of them.
+    hostKeyFile: str(env, 'AGENT_FLEET_HOST_KEY', '/var/lib/agent-fleet/host-key.json'),
 
     // --- this host ----------------------------------------------------------
     hostId: str(env, 'AGENT_FLEET_HOST_ID', os.hostname()),
@@ -143,11 +144,12 @@ export function validateSidecarConfig(cfg) {
       if (!['http:', 'https:'].includes(u.protocol)) {
         errors.push(`AGENT_FLEET_COORDINATOR_URL must be http(s) for the websocket transport, got ${u.protocol}`);
       } else if (u.protocol === 'http:' && !['127.0.0.1', 'localhost', '::1'].includes(u.hostname)) {
-        // The host credential goes in an Authorization header on the upgrade.
-        // Over plain http, off-box, that is a token on the wire in clear.
+        // The proof on the wire is single-use, so a listener learns nothing it
+        // can replay — but everything after the upgrade is session content, and
+        // an active attacker on a cleartext path can still be the coordinator.
         warnings.push(
-          `AGENT_FLEET_COORDINATOR_URL is plain http to ${u.hostname} — the host token crosses the network ` +
-            'in clear. Use https for anything that is not loopback.',
+          `AGENT_FLEET_COORDINATOR_URL is plain http to ${u.hostname} — session output crosses the network ` +
+            'in clear, and nothing authenticates the far end. Use https for anything that is not loopback.',
         );
       }
     } catch {
