@@ -873,6 +873,21 @@ if [ "$WIZARD" = yes ]; then
   install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
   set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "/var/lib/agent-fleet/host-key.json"
 
+  # Sweep out the credential this replaced. It does nothing now — no coordinator
+  # reads it and no sidecar sends it — but a dead secret sitting in a config
+  # file still looks live to whoever finds it next, and the whole point of the
+  # change is that there is no shared string to leak.
+  for STALE_ENV in "$COORD_ENV" "$SIDECAR_ENV"; do
+    if [ -f "$STALE_ENV" ] && grep -q '^AGENT_FLEET_HOST_TOKEN=' "$STALE_ENV"; then
+      ENVFILE="$STALE_ENV" "$NODE_BIN" -e '
+        const fs = require("fs");
+        const f = process.env.ENVFILE;
+        fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^AGENT_FLEET_HOST_TOKEN=.*\n?/gm, ""));
+      '
+      ok "removed the old shared host token from $STALE_ENV — hosts hold a key now"
+    fi
+  done
+
   # agent-hub reads this file to answer /enroll and /identity — it is a
   # different unit with a different EnvironmentFile, so the sidecar's variables
   # are not in its process. It runs as RUN_USER; this file is written by root at
