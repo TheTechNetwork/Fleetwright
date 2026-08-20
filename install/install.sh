@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # agent-fleet installer — the whole thing, in one script.
 #
+#   curl -fsSL https://fleet.thetech.network/install | sudo sh
+#
+# ...which is install/bootstrap.sh fetching the repository and then running
+# this. By hand, which is the same thing:
+#
 #   git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 #   sudo /opt/agent-fleet/install/install.sh
 #

@@ -41,6 +41,20 @@ export default {
       });
     }
 
+    // The third, and the reason it is a redirect rather than a copy: the thing
+    // people paste into a root shell should be served by the place that has the
+    // source, so it cannot go stale here and cannot be edited here either. This
+    // Worker answers with a Location and holds no shell script of its own.
+    //
+    // Above the token gate on purpose. A box being installed has no credential
+    // — acquiring one is what the install is for.
+    if (url.pathname === '/install' || url.pathname === '/install.sh') {
+      return Response.redirect(
+        'https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh',
+        302,
+      );
+    }
+
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.

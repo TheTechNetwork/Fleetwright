@@ -46,10 +46,38 @@ works and sessions run directly on the box.
 ## 1. Install the session manager
 
 ```sh
-git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet   # the repo is Fleetwright; the install path is not
+curl -fsSL https://fleet.thetech.network/install | sudo sh
+```
+
+That fetches the repository to `/opt/agent-fleet` — the repo is Fleetwright,
+the install path is not — and runs `install/install.sh` from it. Arguments go
+after `-s --`, which is how `sh` is told the rest belongs to the script:
+
+```sh
+curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check
+```
+
+`/install` is a redirect to `install/bootstrap.sh` in this repository, served by
+the coordinator so the URL is short and the script has exactly one home. Read it
+before you run it; it is forty lines and it does three things — get git, clone,
+hand over.
+
+The same thing by hand, which is all the one-liner does:
+
+```sh
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```
+
+Three environment variables change where it comes from and where it goes, which
+is what you want for a fork or a branch under test:
+
+| | |
+|---|---|
+| `FLEETWRIGHT_REPO` | default `https://github.com/TheTechNetwork/Fleetwright` |
+| `FLEETWRIGHT_REF` | default `main` |
+| `FLEETWRIGHT_DIR` | default `/opt/agent-fleet` |
 
 > **If it says node was not found but `node -v` works for you**, that is `sudo`.
 > It replaces `PATH` with sudoers' `secure_path` — usually just `/usr/*` and
