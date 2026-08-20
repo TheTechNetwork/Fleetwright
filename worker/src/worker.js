@@ -152,6 +152,18 @@ export default {
       return env.FLEET.get(id).fetch(request);
     }
 
+    // The admin token, which is the only shared credential left. Non-empty by
+    // the time control gets here: the guard above answers 503 when it is unset,
+    // rather than comparing against '' and letting a blank Authorization
+    // header through.
+    //
+    // This was `isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN`
+    // and the declaration went out with the host token while the reference
+    // below stayed. Every authenticated request threw ReferenceError. Bundling
+    // does not catch that, and neither does anything else that never executes
+    // the file — which was everything, until test/worker-routes.test.js.
+    const expected = env.AGENT_FLEET_API_TOKEN || '';
+
     if (!timingSafeEqual(presented, expected)) {
       // Checked HERE, before the request reaches the Durable Object, so an
       // unauthenticated peer never gets as far as something holding state.
