@@ -291,6 +291,16 @@ jobs:
     if: needs.testflight.outputs.uploaded == 'true'
     runs-on: ubuntu-latest
     environment: production
+    # App Store Connect's automatic distribution is now on for the internal
+    # group, so assignment happens whether this job runs or not. What is left
+    # here is "What to Test", which the checkbox cannot set — a nicety, and a
+    # nicety must not be able to redden a run whose upload succeeded.
+    #
+    # The first automated note was refused for containing the robot emoji from
+    # this project's own commit footer. That is exactly the class of failure
+    # that should be a warning: the build is fine, the testers have it, and the
+    # notes are missing a line.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

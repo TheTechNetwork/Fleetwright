@@ -35,7 +35,37 @@ const GROUP_NAME =
 // Optional. 4000 characters is Apple's limit and it is truncated rather than
 // rejected, because a release note being long is not a reason to fail a
 // delivery.
-const WHATS_NEW = (process.env.WHATS_NEW || '').trim();
+const WHATS_NEW = whatsNew(process.env.WHATS_NEW || '');
+
+/**
+ * What testers read, in the character set App Store Connect will take.
+ *
+ * Apple rejects emoji outright — "Text for whatsNew contains invalid
+ * characters: '[🤖]'" — and the text here is a commit message, which on a
+ * squash merge is the whole pull request body, footer and all. So the first
+ * automated release note this project produced was refused for containing the
+ * robot from its own sign-off.
+ *
+ * For an INTERNAL build only the first line is kept. That build ships on every
+ * commit, so the subject line is the change; the body is a pull request
+ * description written for reviewers, and handing a tester four paragraphs of
+ * rationale is not release notes.
+ *
+ * @param {string} raw
+ */
+function whatsNew(raw) {
+  const audience = (process.env.AUDIENCE || 'internal').toLowerCase();
+  const text = audience === 'internal' ? raw.split('\n')[0] : raw;
+  return text
+    // Emoji and the pieces that join them. \p{Extended_Pictographic} covers the
+    // pictographs; the variation selector and zero-width joiner are what turn
+    // several of them into one, and leaving those behind is its own kind of
+    // invalid.
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F\u200D]/gu, '')
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
 
 // Processing is the slow part and nothing here can hurry it. The first upload
 // of a new app took longer than twenty minutes, which is ordinary — Apple's
