@@ -1019,8 +1019,14 @@ if [ "$WIZARD" = yes ]; then
     # words on the failing line, so grepping for the phrase alone would report
     # every unenrolled box as already enrolled and silently skip the one step
     # this function exists to do.
-    if sidecar_cli "identity" >/dev/null 2>&1 \
-       && sidecar_cli "doctor" 2>/dev/null | grep -q '^ ok .*coordinator knows this host'; then
+    # Captured, then matched — NOT piped. `doctor` exits non-zero when anything
+    # it checks is unhappy, and on a fresh box something usually is (claude not
+    # logged in yet, most often). Under `set -o pipefail` that failing exit code
+    # sinks the whole pipeline no matter what grep found, so the box would be
+    # re-enrolled on every run of the installer. Caught by running this against
+    # a live coordinator rather than by reading it.
+    DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
+    if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
       ok "this box is already enrolled at $ENROL_URL"
       return 0
     fi
@@ -1174,6 +1180,15 @@ if [ "$WIZARD" = yes ]; then
     printf '      systemctl enable --now agent-hub'
     [ "$FLEET_LOCAL" = 1 ] && printf ' agent-fleet-coordinator'
     printf ' agent-fleet-sidecar\n'
+  fi
+
+  # Enrolment only happens on the path where the services were started, because
+  # that is the only path where there is a coordinator up to enrol WITH. Say so
+  # on the other two rather than leaving a box that connects and is refused.
+  if [ -n "$ENROL_URL" ] && [ "${STARTED:-0}" != 1 ]; then
+    printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
+    printf '      sudo -u %s %s/bin/agent-fleet-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
+    printf '  or send /enroll <pin> to your bot. Until then the sidecar is refused on every try.\n'
   fi
 
   # As the service user: root's ~/.claude is not where the credentials live, so

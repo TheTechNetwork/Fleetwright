@@ -224,6 +224,14 @@ GET  /host/connect?hostId=…  x-fleet-proof: <signature over the nonce>
 Nothing reusable crosses the wire. A captured connection yields a signature
 over a value that will never be accepted again.
 
+**A challenge, not a self-issued JWT** — which is a deliberate departure from
+design.md §5, and the cheaper of the two. A JWT the host signs for itself is
+replayable for as long as it is valid, so its window has to be short; and a
+short window means the two clocks have to agree, on boxes that may have been
+asleep. A nonce the coordinator issued is replayable for exactly zero seconds
+and needs no clock at all. The cost is one extra round trip per connection,
+which happens on the order of minutes at worst.
+
 Joining, once:
 
 ```sh
