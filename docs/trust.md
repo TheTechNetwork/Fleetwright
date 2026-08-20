@@ -173,6 +173,91 @@ and running one would add an availability dependency to every session start.
 What is actually needed is a policy about which of the three rows a given
 secret belongs in.
 
+## Does Sign in with Apple lean on the phone's security?
+
+At the moment of signing in, yes: the platform account is unlocked by a face or
+a fingerprint, and the token comes from an OS component an app cannot reach
+into. That instinct is right.
+
+But it stops there. **What the app holds afterwards is a bearer token**, and a
+bearer token is a bearer token wherever it came from — copied out of a backup,
+read from a debugger, or carried in a log, it works. The phone's security
+protected the sign-in; it does not protect the credential the sign-in produced.
+
+The thing that actually delivers "this request came from that phone, unlocked
+by that person" is a **key the hardware will not export**: the Secure Enclave on
+iOS, a StrongBox-backed key in the Android Keystore, gated on biometrics. Every
+request is then a signature the enclave produces and nothing else can, and the
+credential cannot be copied because there is no copy of it to take.
+
+Which is the enrolment/authentication split again:
+
+| | mechanism | what it proves |
+|---|---|---|
+| enrolment | Sign in with Apple / Google | this is `eli@thetech.network`, and a domain rule can act on it |
+| authentication | enclave-backed key, or a passkey | this request is from that device, with the person present |
+
+So both, and for different reasons — not one instead of the other. The version
+where the app is "kind of an authenticator" is exactly this: the enclave key is
+the authenticator, and sign-in is how the fleet learned whose it is.
+
+## The chain, link by link
+
+User authentication is one link of four, and the others are weaker.
+
+| link | today | what it should be |
+|---|---|---|
+| device → coordinator | shared bearer token | enclave-backed key, per device, revocable |
+| host → coordinator | `AGENT_FLEET_HOST_TOKEN`, **the same on every host** | per-host keypair |
+| coordinator → host | trusted absolutely: an intent is obeyed because it arrived | intents signed by the device, verified by the host |
+| session ← host | unix socket, identity from the socket | already right |
+
+The third row is the interesting one, and it is where the design's own paranoia
+points. design.md is emphatic that the coordinator is a cache and never the
+authority — but a host today obeys any intent the coordinator sends, so a
+compromised coordinator has full control of every box. The registry being a
+cache does not help, because the commands are not.
+
+**If a device signs its intents and the host verifies that signature, a
+compromised coordinator can no longer forge one.** It can still drop intents or
+delay them — it is the transport — but it cannot invent "stop every session" or
+"start one in this directory". That reduces the worst case from *owns the fleet*
+to *can deny service*, which is the difference between a bad day and a very
+different day.
+
+It also makes the fourth link honest: the host learns who asked, end to end,
+rather than being told by the coordinator.
+
+## Short-lived secrets that outlive their session
+
+A session runs for hours. A minted token lasts an hour, or ten minutes. So the
+obvious version — hand the session a token at start — breaks in the middle of
+the work, and lengthening the token defeats the point of minting it.
+
+The way out is to stop handing over values. **A session should receive an
+indirection, not a secret**, and the host should keep what is behind it fresh:
+
+- **git** takes a `credential.helper`. The helper is a script; it prints a
+  username and password on demand, and the host mints a fresh installation
+  token each time it is asked. Git asks again on the next fetch, so an expiry
+  between operations is invisible.
+- **anything reading a file** — a token path the host rewrites in place before
+  expiry. Works when the tool re-reads; does not when it caches at startup.
+- **anything speaking to an endpoint** — the pattern cloud instances already
+  use, where the SDK re-reads from a local address and rotation is something it
+  never notices.
+
+The failure this cannot fix is a tool that reads a secret once into memory at
+launch and never looks again. For those the choice is an honest one: a token
+long enough to cover the session, or a session that can be told to restart the
+tool. Pretending otherwise produces the worst outcome — an expiry mid-run, hours
+in, with a failure that looks like a permissions problem.
+
+Which is why the indirection matters more than the minting. Minting is the easy
+half and every provider does it differently; the part that has to be right here
+is that **the session never holds the value**, so that whatever is behind it can
+change without the session knowing.
+
 ## What is missing under all of it
 
 **Hosts have no identity.** Every host presents the same
