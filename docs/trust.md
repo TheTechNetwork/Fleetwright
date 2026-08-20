@@ -91,6 +91,88 @@ a phone — pasted once, never stored on a host — then it is encrypted to the
 destination host's public key before it leaves the device. The coordinator
 relays ciphertext it cannot read. This needs hosts to have keypairs.
 
+## Unlocking it, which is the question that does not go away
+
+Any store needs a key, and that key needs a key. The honest starting point is
+that one pair of requirements cannot both hold:
+
+- **a host recovers unattended** — it reboots at three in the morning and comes
+  back with its sessions, which is most of why this project exists
+- **a secret survives the host being owned** — root on the running machine
+  cannot read it
+
+If the machine can unlock without a person, then whoever owns the machine can
+unlock too. Every scheme that claims otherwise has moved the key somewhere and
+not said so. So the question is not "how do we make it unbreakable" but **what
+are we defending against**, and the answers differ enough to be worth naming.
+
+### Against a stolen disk, a copied VM, a backup: TPM sealing
+
+`systemd-creds` is on the box already — systemd 257 with `+TPM2` — and it seals
+a secret to *that machine in that boot state*:
+
+```sh
+systemd-creds encrypt --with-key=tpm2 --name=github-deploy plain.txt cred.enc
+```
+
+The unit reads it with `LoadCredentialEncrypted=`, systemd unseals it at start,
+and the service sees a file under `$CREDENTIALS_DIRECTORY` that exists nowhere
+else. The ciphertext is useless on another machine, in a backup, or to anyone
+who takes the disk. No new infrastructure, no vault to run, no network
+dependency at boot.
+
+This is the default worth building. It matches how the host is already
+deployed, and it turns "a file of secrets on a box" into "a file that is only a
+secret on *this* box".
+
+What it does not do is defend against root on the live host — and nothing
+running on that host can. A vault agent, an encrypted store, a KMS client: all
+of them can be asked by root to hand over what they just unlocked.
+
+### Against the host itself: do not keep the secret
+
+The way out is not a better lock, it is having less to steal. A stored
+long-lived credential is worth more than a well-protected one is safe. So where
+the provider allows it, the thing at rest should be a credential that MINTS
+short-lived scoped ones — a GitHub App private key rather than a personal token,
+an OIDC exchange rather than a stored cloud key — and the session receives
+something that expires in minutes and can do one thing.
+
+Then the unlock question shrinks to a key that is useless without also being
+authorised, and the blast radius of a compromised host is measured in minutes
+rather than in whatever was in the file.
+
+### For the few that are worth interrupting you: ask the phone
+
+Some secrets should not be unattended at all. A production deploy key does not
+need to be available while everyone is asleep, and that is the case where the
+fleet has an unusual advantage: **it already wakes a phone.**
+
+The same path that says *a session is waiting for an answer* can say *this
+session wants the production key — approve?* The host holds the ciphertext, the
+approval releases the unwrapping key for one use, and a machine that reboots
+unattended comes back with its sessions and without that secret until somebody
+says so.
+
+That is a real design rather than a flourish: push, device identity and
+per-session context all exist already, which is why this is worth writing down
+now rather than reaching for a vault product that would need all three built
+again.
+
+### So, in order of what to reach for
+
+| the secret | how it is unlocked |
+|---|---|
+| ordinary, needed at boot | TPM-sealed with `systemd-creds`, unattended |
+| anything a provider can mint | not stored at all — a minting credential is, and the session gets a short-lived one |
+| high value, rarely used | held encrypted, released by an approval on a phone |
+
+None of these is a secrets manager, and that is deliberate. A secrets manager
+is a place to put the same question — it stores things and needs unlocking —
+and running one would add an availability dependency to every session start.
+What is actually needed is a policy about which of the three rows a given
+secret belongs in.
+
 ## What is missing under all of it
 
 **Hosts have no identity.** Every host presents the same
