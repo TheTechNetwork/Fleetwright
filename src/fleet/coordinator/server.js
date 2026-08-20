@@ -466,7 +466,11 @@ export class Coordinator {
       const reply = await this.dispatch({
         verb: body.verb,
         params: body.params && typeof body.params === 'object' ? body.params : {},
-        actor: typeof body.actor === 'string' ? body.actor : undefined,
+        // The client's own identity wins over anything the request claims: an
+        // actor a caller can choose is a label, not an attribution. Same rule
+        // as the Worker's, because a session record that means one thing on one
+        // coordinator and another thing on the other means nothing.
+        actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
         // An idempotency key supplied by the caller is honoured, so a phone that
         // retries a `start` gets the original outcome rather than a second
         // session. One we mint is unique per call, which is right for a first
@@ -486,7 +490,11 @@ export class Coordinator {
       const params = name ? { name } : {};
       const choice = url.searchParams.get('choice');
       if (verb === 'resume' && choice) params.choice = choice;
-      return json(res, 200, await this.dispatch({ verb, params, actor: url.searchParams.get('actor') || undefined }));
+      return json(res, 200, await this.dispatch({
+        verb,
+        params,
+        actor: client?.email || url.searchParams.get('actor') || undefined,
+      }));
     }
 
     return json(res, 404, { ok: false, error: { code: 'not_found' } });

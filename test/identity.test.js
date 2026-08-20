@@ -441,3 +441,25 @@ test('the sidecar env file is read, and the environment still wins', () => {
   });
   assert.equal(overridden.coordinatorUrl, 'https://from-the-environment');
 });
+
+test('an intent is attributed to the credential, not to what the caller claims', async (t) => {
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const { token } = await c.core.clients.issue('a phone (someone@example.com)');
+  c.core.clients.clients.values().next().value.email = 'someone@example.com';
+
+  /** @type {any} */
+  let seen = null;
+  c.core.dispatch = async (/** @type {any} */ spec) => {
+    seen = spec;
+    return { ok: true };
+  };
+
+  await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ verb: 'list', actor: 'somebody-else@example.com' }),
+  });
+  // An actor a caller can choose is a label, not an attribution — and this is
+  // what ends up on the session record.
+  assert.equal(seen.actor, 'someone@example.com');
+});
