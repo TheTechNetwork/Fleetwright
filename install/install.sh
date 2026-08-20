@@ -749,6 +749,48 @@ for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
 done
 ok "config readable by $RUN_USER"
 
+# --- 5b. runtime dependencies ------------------------------------------------
+# There is exactly ONE, and until recently there were none: `jose`, for
+# verifying the ID tokens the apps sign in with. node_modules is gitignored, so
+# a fresh checkout has no way to get it — and the Node coordinator does not
+# start without it. It dies with ERR_MODULE_NOT_FOUND, which names a package
+# nobody asked for and no fix at all.
+#
+# The sidecar and agent-hub are unaffected: neither imports it. That is why this
+# was invisible until a box tried to run its own coordinator.
+say "Runtime dependencies"
+NPM_BIN="$(command -v npm 2>/dev/null || true)"
+if [ -z "$NPM_BIN" ]; then
+  # Debian ships npm separately from nodejs, so a box that got node from
+  # `pkg_install nodejs` above very often has no npm at all.
+  pkg_install npm >/dev/null 2>&1 || true
+  NPM_BIN="$(command -v npm 2>/dev/null || true)"
+fi
+
+if [ "$CHECK_ONLY" = 1 ]; then
+  [ -n "$NPM_BIN" ] && ok "npm at $NPM_BIN" || warn "npm is not installed — the installer would install it"
+elif [ -z "$NPM_BIN" ]; then
+  warn "npm is not installed and could not be installed automatically ($(pkg_why)).
+       The sidecar and agent-hub are fine without it. A coordinator on this box is not:
+         cd $DIR && npm install --omit=dev"
+else
+  # ci first: it installs exactly the lockfile and is the reproducible one. It
+  # refuses when package.json and the lock disagree, which is a state a fork or
+  # a half-finished merge can be in, so `install` is the fallback rather than
+  # the failure.
+  if (cd "$DIR" && "$NPM_BIN" ci --omit=dev --no-audit --no-fund >/dev/null 2>&1) \
+     || (cd "$DIR" && "$NPM_BIN" install --omit=dev --no-audit --no-fund >/dev/null 2>&1); then
+    # Owned by the service user, so `/update` can rewrite it after a pull that
+    # changes a dependency. Root-owned node_modules is the same class of bug as
+    # the root-owned .git objects the block below exists for.
+    chown -R "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
+    ok "installed $(cd "$DIR" && "$NPM_BIN" ls --omit=dev --depth=0 2>/dev/null | grep -c '^[├└]' || echo '?') runtime dependencies"
+  else
+    warn "npm install failed in $DIR — a coordinator on this box will not start.
+       Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
+  fi
+fi
+
 # The checkout must belong to the user that runs the service, or /update cannot
 # pull: git refuses to operate on a repository owned by somebody else ("dubious
 # ownership"), and even past that, writing the objects needs the permission.
@@ -887,23 +929,6 @@ if [ "$WIZARD" = yes ]; then
       ok "removed the old shared host token from $STALE_ENV — hosts hold a key now"
     fi
   done
-
-  # agent-hub reads this file to answer /enroll and /identity — it is a
-  # different unit with a different EnvironmentFile, so the sidecar's variables
-  # are not in its process. It runs as RUN_USER; this file is written by root at
-  # 0600, and without this the bot would report a box with a coordinator as
-  # having none.
-  #
-  # Group-READABLE rather than chowned: the service user should be able to see
-  # which fleet this box belongs to and should not be able to rewrite it. If
-  # there is no group of that name — usual on Debian, not guaranteed anywhere —
-  # ownership is the fallback, which is still better than a feature that
-  # silently does not work.
-  if chgrp "$RUN_USER" "$SIDECAR_ENV" 2>/dev/null; then
-    chmod 0640 "$SIDECAR_ENV"
-  else
-    chown "$RUN_USER" "$SIDECAR_ENV"
-  fi
 
   ENROL_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
 

@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -281,4 +281,76 @@ test('an update without --restart says the running process is still the old one'
   assert.equal(r.changed, true);
   assert.equal(r.restarting, false);
   assert.match(r.message, /still the old one|Restart the service/);
+});
+
+// --- dependencies -----------------------------------------------------------
+//
+// A pull can change what the code needs. Until this step existed it did not
+// change what is installed, and the shape of that failure is the worst one
+// available: /update reports success, the service restarts, and the coordinator
+// dies naming a package nobody has heard of — after the operator was told it
+// worked.
+
+test('a deployment with no package.json is left alone', (t) => {
+  // Which is what every other test in this file is, and what a deployment of
+  // something that is not an npm project would be. Running npm there is how a
+  // perfectly good update reports a failure.
+  const { cfg, pushUpstream } = deployment(t);
+  pushUpstream('two');
+
+  const r = runUpdate(cfg);
+  assert.equal(r.ok, true);
+  assert.equal(r.changed, true);
+  assert.equal(/npm|packages/i.test(r.message), false, 'and says nothing about packages');
+});
+
+test('a pull that changes dependencies installs them', (t) => {
+  const { cfg, origin, clone, pushUpstream } = deployment(t);
+  // A real package.json with a real lockfile, and no dependencies — so this
+  // exercises the whole path, npm included, without a network.
+  for (const dir of [origin, clone]) {
+    // Mirrors the real deployment: node_modules is gitignored. Without that it
+    // shows up as untracked, /update calls the tree dirty and refuses to pull —
+    // which is exactly what would happen on a box if it were ever un-ignored.
+    writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n');
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
+    writeFileSync(
+      path.join(dir, 'package-lock.json'),
+      JSON.stringify({ name: 'x', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'x', version: '1.0.0' } } }),
+    );
+  }
+  git(origin, ['add', '-A']);
+  git(origin, ['commit', '-qm', 'add a manifest']);
+  git(clone, ['add', '-A']);
+  git(clone, ['commit', '-qm', 'add a manifest']);
+  git(clone, ['reset', '-q', '--hard', 'HEAD']);
+  git(clone, ['pull', '-q', '--ff-only']);
+  pushUpstream('later');
+
+  // `npm ci` empties node_modules before installing, so a file left in there is
+  // proof that npm actually ran rather than that the step reported success.
+  mkdirSync(path.join(clone, 'node_modules'), { recursive: true });
+  writeFileSync(path.join(clone, 'node_modules', 'stale.txt'), 'from the old dependencies');
+
+  const r = runUpdate(cfg);
+  assert.equal(r.ok, true, r.message);
+  assert.match(r.message, /Packages are up to date/);
+  assert.equal(existsSync(path.join(clone, 'node_modules', 'stale.txt')), false, 'npm ci actually ran');
+});
+
+test('nothing pulled and packages present is not worth running npm for', (t) => {
+  const { cfg, clone } = deployment(t);
+  writeFileSync(path.join(clone, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
+  mkdirSync(path.join(clone, 'node_modules'), { recursive: true });
+  git(clone, ['add', '-A']);
+  git(clone, ['commit', '-qm', 'manifest']);
+  git(clone, ['reset', '-q', '--hard', 'HEAD~1']);
+  git(clone, ['clean', '-qfd', '--', '.']);
+
+  const started = Date.now();
+  const r = runUpdate(cfg);
+  assert.equal(r.ok, true, r.message);
+  // Not a timing assertion so much as a shape one: turning a five-second
+  // command into a thirty-second one on every /update is its own bug.
+  assert.ok(Date.now() - started < 10_000);
 });

@@ -32,6 +32,9 @@ import { log } from '../log.js';
 /** Long enough for a slow network, short enough that chat does not time out. */
 const GIT_TIMEOUT_MS = 60_000;
 
+/** npm is slower than git and a cold cache is not unusual. */
+const NPM_TIMEOUT_MS = 180_000;
+
 /** Time to let an adapter deliver the reply before the process exits. */
 const RESTART_DELAY_MS = 1500;
 
@@ -217,7 +220,75 @@ const STEPS = [
       };
     },
   },
+
+  {
+    name: 'dependencies',
+    /**
+     * A pull can change what the code needs, and until this step existed it
+     * did not change what is installed. The failure that produces is the worst
+     * shape available: /update reports success, the service restarts, and the
+     * coordinator dies with ERR_MODULE_NOT_FOUND naming a package nobody has
+     * heard of — after the operator has been told it worked.
+     *
+     * @param {import('../config.js').Config} cfg
+     * @param {{ changed: boolean }} prior
+     */
+    run(cfg, prior) {
+      const dir = cfg.installDir;
+      // A deployment with no package.json has no packages, and running npm in
+      // one is how a perfectly good update reports a failure. Caught by the
+      // existing update tests, which drive a bare git repo.
+      if (!existsSync(path.join(dir, 'package.json'))) return { ok: true, changed: false, text: '' };
+
+      const installed = existsSync(path.join(dir, 'node_modules'));
+      // Nothing pulled and the packages are there: there is nothing this could
+      // usefully do, and running npm on every /update turns a five-second
+      // command into a thirty-second one.
+      if (!prior.changed && installed) return { ok: true, changed: false, text: '' };
+
+      const r = spawnSync('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund'], {
+        cwd: dir,
+        encoding: 'utf8',
+        timeout: NPM_TIMEOUT_MS,
+      });
+      if (r.error && /** @type {any} */ (r.error).code === 'ENOENT') {
+        return {
+          ok: false,
+          changed: false,
+          text:
+            'The code is updated, but npm is not installed on this box, so its packages are not.\n' +
+            'agent-hub and the sidecar are fine without them; a coordinator here is not.\n' +
+            `  sudo apt install npm && cd ${dir} && npm ci --omit=dev`,
+        };
+      }
+      if (r.status !== 0) {
+        const output = `${r.stderr || ''}${r.stdout || ''}`;
+        // Same ownership story as the git objects above, and the same fix.
+        if (looksLikeOwnershipProblem(output)) {
+          return {
+            ok: false,
+            changed: false,
+            text:
+              `Cannot write ${path.join(dir, 'node_modules')} — it belongs to another user.\n` +
+              `  sudo ${dir}/install/install.sh`,
+          };
+        }
+        return { ok: false, changed: false, text: `npm ci failed:\n${output.slice(0, 400)}` };
+      }
+
+      // Comparing the lockfile before and after was the first version of this,
+      // and it could not work: the code step has already pulled by the time
+      // this runs, so both readings are of the same file. What is actually
+      // known here is whether something was pulled and whether the packages
+      // were there — which is enough to say something true.
+      return installed
+        ? { ok: true, changed: true, text: 'Packages are up to date.' }
+        : { ok: true, changed: true, text: 'Installed the packages that were missing.' };
+    },
+  },
 ];
+
+
 
 /**
  * Is this process running under systemd, and therefore able to come back after
@@ -255,8 +326,10 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   const parts = [];
   let changed = false;
   for (const step of STEPS) {
-    const result = step.run(cfg);
-    parts.push(result.text);
+    const result = step.run(cfg, { changed });
+    // A step with nothing to say says nothing, rather than contributing a blank
+    // paragraph to a chat message.
+    if (result.text) parts.push(result.text);
     if (!result.ok) return { ok: false, changed, message: parts.join('\n\n'), restarting: false };
     changed = changed || result.changed;
   }
