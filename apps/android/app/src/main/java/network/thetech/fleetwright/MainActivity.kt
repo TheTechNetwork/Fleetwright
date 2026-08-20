@@ -331,6 +331,32 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var busy by rememberSaveable { mutableStateOf(false) }
     var pin by rememberSaveable { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
+    var confirming by rememberSaveable { mutableStateOf<String?>(null) }
+
+    confirming?.let { hostId ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text("Revoke $hostId?") },
+            text = {
+                Text(
+                    "It is disconnected immediately, and its sessions keep running without it. " +
+                        "Getting it back means a new pin, typed on that box.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = null
+                    scope.launch {
+                        busy = true
+                        signInResult = Fleet(settings).revokeHost(hostId).text
+                        hosts = enrolledHosts(settings)
+                        busy = false
+                    }
+                }) { Text("Revoke") }
+            },
+            dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
+        )
+    }
 
     LaunchedEffect(signedIn) { hosts = enrolledHosts(settings) }
 
@@ -460,16 +486,14 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             if (host.revoked) {
                                 Text("revoked", style = MaterialTheme.typography.bodySmall)
                             } else {
+                                // Asked first. Revoking is one tap next to a
+                                // name in a list, it disconnects a machine
+                                // mid-session, and the only way back is a new
+                                // pin typed on the box — which is exactly the
+                                // errand this app exists to avoid.
                                 TextButton(
                                     enabled = !busy,
-                                    onClick = {
-                                        scope.launch {
-                                            busy = true
-                                            signInResult = Fleet(settings).revokeHost(host.hostId).text
-                                            hosts = enrolledHosts(settings)
-                                            busy = false
-                                        }
-                                    },
+                                    onClick = { confirming = host.hostId },
                                 ) { Text("Revoke") }
                             }
                         }

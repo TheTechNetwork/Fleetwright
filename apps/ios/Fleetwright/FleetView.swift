@@ -141,6 +141,7 @@ private struct SettingsView: View {
     @State private var hosts: [Fleet.Host] = []
     @State private var showingAdvanced = false
     @State private var pastedCredential = ""
+    @State private var confirmingRevoke: String?
 
     @MainActor
     private func loadHosts() async {
@@ -272,12 +273,13 @@ private struct SettingsView: View {
                             }
                             .swipeActions {
                                 if !host.isRevoked {
-                                    Button("Revoke", role: .destructive) {
-                                        Task {
-                                            _ = try? await Fleet(settings: settings).revokeHost(host.hostId)
-                                            await loadHosts()
-                                        }
-                                    }
+                                    // Asked first. A swipe and a tap is not a
+                                    // deliberate enough gesture for something
+                                    // that disconnects a machine mid-session
+                                    // and can only be undone by typing a new
+                                    // pin on the box — which is the errand this
+                                    // app exists to avoid.
+                                    Button("Revoke", role: .destructive) { confirmingRevoke = host.hostId }
                                 }
                             }
                         }
@@ -345,6 +347,23 @@ private struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .task { await loadHosts() }
+            .alert(
+                "Revoke \(confirmingRevoke ?? "")?",
+                isPresented: Binding(get: { confirmingRevoke != nil }, set: { if !$0 { confirmingRevoke = nil } })
+            ) {
+                Button("Cancel", role: .cancel) { confirmingRevoke = nil }
+                Button("Revoke", role: .destructive) {
+                    guard let hostId = confirmingRevoke else { return }
+                    confirmingRevoke = nil
+                    Task {
+                        _ = try? await Fleet(settings: settings).revokeHost(hostId)
+                        await loadHosts()
+                    }
+                }
+            } message: {
+                Text("It is disconnected immediately, and its sessions keep running without it. "
+                     + "Getting it back means a new pin, typed on that box.")
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { onDone(); dismiss() }
