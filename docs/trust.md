@@ -261,6 +261,39 @@ different day.
 It also makes the fourth link honest: the host learns who asked, end to end,
 rather than being told by the coordinator.
 
+## The link that is still missing, and the thing that makes it hard
+
+Signed intents are the third row of that table, and the interesting question is
+not the signing. It is: **who tells a host which device keys are real?**
+
+A host verifies a signature against a public key. It has to get that key from
+somewhere, and the obvious somewhere is the coordinator — which is precisely
+the party the signature exists to distrust. A coordinator that can say "this is
+Eli's key" can say it about a key it made up, and the signature verifies
+perfectly.
+
+Three ways out, in increasing order of how much they cost:
+
+- **A fleet root key.** The coordinator holds no signing authority; some
+  offline key signs device certificates, and hosts trust that. Correct, and it
+  is a PKI — key ceremonies, rotation, an offline thing to lose.
+- **Pin the first device out-of-band.** The enrolment pin already travels
+  through a human: somebody reads six digits and types them on a box. If the
+  pin carried a *hash of the minting device's public key*, the host would learn
+  one device key through a channel the coordinator cannot forge, and that
+  device could vouch for the next. Cheap, and it bootstraps exactly one device
+  per host — which for a fleet of one operator and three colleagues may be
+  enough.
+- **Trust on first use, and shout on change.** The host records the key it
+  first saw for a device and refuses a changed one until a human says so. Weak
+  against a coordinator compromised before first use; strong against one
+  compromised after, which is the likelier order.
+
+**None of this is built.** It is written down because the host keypair made it
+buildable — before, there was no per-host identity to bind anything to — and
+because the mistake to avoid is shipping signed intents whose keys the
+coordinator hands out, which looks like the property and is not.
+
 ## Short-lived secrets that outlive their session
 
 A session runs for hours. A minted token lasts an hour, or ten minutes. So the

@@ -867,7 +867,10 @@ if [ "$WIZARD" = yes ]; then
 
   # The key file, and the directory systemd will also create. Made here as well
   # so `enrol` below can run before the service has ever started.
-  install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/agent-fleet
+  # No -g: a matching group usually exists but is not guaranteed, and the mode
+  # is 0700 so the group does not decide anything anyway. Same shape as the
+  # STATE_DIR line above.
+  install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
   set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "/var/lib/agent-fleet/host-key.json"
 
   ENROL_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
