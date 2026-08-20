@@ -14,6 +14,8 @@
 
 import { HostRegistry } from './registry.js';
 import { ClientRegistry } from './clients.js';
+import { HostIdentities } from './hosts.js';
+import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent } from '../protocol/intents.js';
 
@@ -59,6 +61,11 @@ export class CoordinatorCore {
     this.registry = new HostRegistry({ now });
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
+    // Which machines are in the fleet. The authority, unlike `registry` above,
+    // which is a cache of what those machines say about themselves.
+    this.hostIds = new HostIdentities({ now });
+    // Codes that admit a new host or device, once.
+    this.enrollment = new Enrollment({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any }>} */
     this.pending = new Map();
     /** @type {Map<string, Device>} */
