@@ -20,6 +20,7 @@
 
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
+import { verifyIdToken, isAllowed, isPrivateRelay } from '../../src/fleet/coordinator/oidc.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -50,6 +51,7 @@ export class Fleet {
     // messages, and every socket that is still open comes back with the host id
     // we attached to it.
     this.state.blockConcurrencyWhile(async () => {
+      this.core.clients.restore(/** @type {any[]} */ ((await this.state.storage.get('clients')) || []));
       const devices = (await this.state.storage.get('devices')) || [];
       for (const device of /** @type {any[]} */ (devices)) this.core.devices.set(device.token, device);
       for (const socket of this.state.getWebSockets()) {
@@ -72,7 +74,75 @@ export class Fleet {
   async fetch(request) {
     const url = new URL(request.url);
 
+    // A device credential, if that is what arrived. worker.js has already
+    // established this is not the shared token, so anything reaching here with
+    // an fwk_ prefix is either a live client or a revoked one — and a revoked
+    // one must be refused rather than falling through to the routes below.
+    const presented = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+    let client = null;
+    if (presented.startsWith('fwk_')) {
+      client = await this.core.clients.verify(presented);
+      if (!client) {
+        return json({ ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' }, 401);
+      }
+    }
+
     if (url.pathname === '/host/connect') return this.#acceptHost(request, url);
+
+    // Signing in: the one route that takes an identity token rather than a
+    // fleet credential, because it is where a fleet credential comes from.
+    if (url.pathname === '/api/session' && request.method === 'POST') {
+      const body = await readJson(request);
+      const issuers = split(this.env.AGENT_FLEET_AUTH_ISSUERS);
+      const audiences = split(this.env.AGENT_FLEET_AUTH_AUDIENCES);
+      const allow = split(this.env.AGENT_FLEET_AUTH_ALLOW);
+
+      if (!issuers.length || !audiences.length) {
+        return json({ ok: false, error: { code: 'not_configured' }, text: 'This coordinator has no sign-in configured.' }, 503);
+      }
+
+      let who;
+      try {
+        who = await verifyIdToken(String(body?.idToken || ''), { issuers, audiences });
+      } catch (e) {
+        // The reason is returned rather than swallowed: every failure here is
+        // something an operator may need to act on, and "sign-in failed" tells
+        // them none of it. It reveals nothing a holder of the token does not
+        // already have.
+        return json({ ok: false, error: { code: 'unauthorised' }, text: String(/** @type {Error} */ (e).message) }, 401);
+      }
+
+      if (isPrivateRelay(who.email)) {
+        return json(
+          {
+            ok: false,
+            error: { code: 'private_relay' },
+            text:
+              'Sign in again and choose "Share My Email". This coordinator allows people by email domain, ' +
+              'and a hidden Apple address can never match one.',
+          },
+          403,
+        );
+      }
+      if (!isAllowed(who.email, allow)) {
+        return json({ ok: false, error: { code: 'not_allowed' }, text: `${who.email} is not on this fleet's list.` }, 403);
+      }
+
+      const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
+      await this.#saveClients();
+      return json({ ok: true, ...issued });
+    }
+
+    // Which devices can reach this fleet, and dropping one.
+    if (url.pathname === '/api/clients' && request.method === 'GET') {
+      return json({ ok: true, clients: this.core.clients.list() });
+    }
+    if (url.pathname.startsWith('/api/clients/') && request.method === 'DELETE') {
+      const id = url.pathname.slice('/api/clients/'.length);
+      const gone = this.core.clients.revoke(id);
+      if (gone) await this.#saveClients();
+      return json({ ok: gone, text: gone ? 'Revoked.' : 'No such client, or already revoked.' }, gone ? 200 : 404);
+    }
 
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
       return json({ ok: true, ...this.core.snapshot() });
@@ -120,7 +190,9 @@ export class Fleet {
         await this.core.dispatch({
           verb: body.verb,
           params: body.params && typeof body.params === 'object' ? body.params : {},
-          actor: typeof body.actor === 'string' ? body.actor : undefined,
+          // The client's own identity wins over anything the request claims:
+          // an actor a caller can choose is a label, not an attribution.
+          actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
           // A caller-supplied idempotency key is honoured, so a phone that
           // retries a `start` gets the original outcome rather than a second
           // session.
@@ -217,6 +289,10 @@ export class Fleet {
     await this.state.storage.setAlarm(Date.now() + ALARM_MS);
   }
 
+  async #saveClients() {
+    await this.state.storage.put('clients', this.core.clients.serialise());
+  }
+
   async #saveDevices() {
     await this.state.storage.put('devices', [...this.core.devices.values()]);
   }
@@ -238,4 +314,12 @@ async function readJson(request) {
   } catch {
     return null;
   }
+}
+
+/** A comma or space separated setting, as a list. */
+function split(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
