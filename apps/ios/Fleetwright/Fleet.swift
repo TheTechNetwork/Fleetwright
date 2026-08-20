@@ -71,6 +71,81 @@ struct Fleet {
         return decoded
     }
 
+    /// Spend an ID token for a credential of this device's own.
+    ///
+    /// The reply is the ONLY time the credential exists in full — the
+    /// coordinator keeps a hash. Losing it means signing in again, which is the
+    /// correct cost: a coordinator that could tell you an existing credential
+    /// is a coordinator that could be made to.
+    func signIn(idToken: String, deviceName: String) async throws -> (token: String, email: String) {
+        let data = try await post(
+            "/api/session",
+            body: ["idToken": idToken, "deviceName": deviceName],
+            authenticated: false
+        )
+        struct Issued: Codable {
+            struct Client: Codable { let name: String? }
+            let ok: Bool?
+            let text: String?
+            let token: String?
+            let client: Client?
+        }
+        let reply = try JSONDecoder().decode(Issued.self, from: data)
+        guard reply.ok == true, let token = reply.token else {
+            throw FleetError.message(reply.text ?? "The coordinator refused the sign-in.")
+        }
+        // The name it chose looks like "iPhone (someone@example.com)" — the
+        // address inside it is what the app shows, so a phone signed into the
+        // wrong account is visible rather than merely wrong.
+        let email = reply.client?.name.flatMap(Self.emailIn) ?? ""
+        return (token, email)
+    }
+
+    /// `Someone's iPhone (a@b.com)` -> `a@b.com`
+    private static func emailIn(_ label: String) -> String? {
+        guard let open = label.lastIndex(of: "("), let close = label.lastIndex(of: ")"), open < close else { return nil }
+        let inner = String(label[label.index(after: open)..<close])
+        return inner.contains("@") ? inner : nil
+    }
+
+    /// The machines in this fleet, and their key fingerprints.
+    func enrolledHosts() async throws -> [Host] {
+        let data = try await get("/api/hosts/enrolled")
+        struct Reply: Codable { let hosts: [Host]? }
+        return try JSONDecoder().decode(Reply.self, from: data).hosts ?? []
+    }
+
+    /// Mint a six-digit pin for a machine to join with.
+    ///
+    /// This is how a host gets in now: no shared token to copy, one pin, ten
+    /// minutes, single use.
+    func mintHostPin() async throws -> String {
+        let data = try await post("/api/enroll", body: ["kind": "host"])
+        struct Reply: Codable { let ok: Bool?; let code: String?; let text: String? }
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        guard let code = reply.code else { throw FleetError.message(reply.text ?? "Could not mint a pin.") }
+        return code
+    }
+
+    /// Remove a machine from the fleet. It is disconnected as well as revoked —
+    /// a revoked host with a live socket is still in the fleet.
+    func revokeHost(_ hostId: String) async throws -> Reply {
+        let data = try await send("DELETE", "/api/hosts/\(hostId)", body: nil)
+        return try JSONDecoder().decode(Reply.self, from: data)
+    }
+
+    struct Host: Codable, Identifiable, Hashable {
+        let hostId: String
+        let fingerprint: String
+        let enrolledBy: String?
+        let enrolledAt: Double?
+        let lastSeenAt: Double?
+        let revokedAt: Double?
+
+        var id: String { hostId }
+        var isRevoked: Bool { (revokedAt ?? 0) > 0 }
+    }
+
     func registerDevice(token: Data) async throws {
         let hex = token.map { String(format: "%02x", $0) }.joined()
         _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])
@@ -89,24 +164,44 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: data)
     }
 
-    private func post(_ path: String, body: [String: Any]) async throws -> Data {
+    private func post(_ path: String, body: [String: Any], authenticated: Bool = true) async throws -> Data {
+        try await send("POST", path, body: body, authenticated: authenticated)
+    }
+
+    private func get(_ path: String) async throws -> Data {
+        try await send("GET", path, body: nil)
+    }
+
+    private func send(
+        _ method: String,
+        _ path: String,
+        body: [String: Any]?,
+        authenticated: Bool = true
+    ) async throws -> Data {
         guard let url = URL(string: settings.coordinatorURL.trimmingCharacters(in: ["/"]) + path) else {
             throw FleetError.message("That coordinator URL is not a URL")
         }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if !settings.apiToken.isEmpty {
-            request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "authorization")
+        if authenticated, !settings.credential.isEmpty {
+            request.setValue("Bearer \(settings.credential)", forHTTPHeaderField: "authorization")
         }
         // Long, because a `start` waits out the Remote Control check on the
         // host. A short timeout reports a working fleet as unreachable.
         request.timeoutInterval = 120
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-            throw FleetError.message("The coordinator rejected the token")
+            // A credential is revoked by somebody deliberately removing this
+            // device. Clearing it here is what turns "every request fails" into
+            // "sign in again", which is the actual remedy.
+            if authenticated, !settings.credential.isEmpty {
+                await MainActor.run { settings.signOut() }
+                throw FleetError.message("This device is no longer allowed in. Sign in again.")
+            }
+            throw FleetError.message("The coordinator refused that.")
         }
         return data
     }
@@ -119,12 +214,12 @@ enum FleetError: LocalizedError {
     }
 }
 
-/// Where the coordinator is and how to authenticate to it.
+/// Where the coordinator is, and this device's own credential.
 ///
 /// §5 is explicit that a credential must never be baked into an app binary — it
-/// is public the moment somebody pulls the IPA — so this is entered once and
-/// kept on the device. UserDefaults for now; the Keychain is the right home and
-/// is a small, self-contained change.
+/// is public the moment somebody pulls the IPA. It is also not typed in any
+/// more: signing in mints one for THIS device, which is what makes losing a
+/// phone one revocation instead of a fleet-wide rotation.
 @Observable
 final class Settings {
     /// Not sensitive: an origin, and the app refuses to talk to any other.
@@ -134,34 +229,49 @@ final class Settings {
 
     /// The keychain, not UserDefaults.
     ///
-    /// This token can start and stop every session on every machine in the
+    /// This credential can start and stop sessions on every machine in the
     /// fleet. UserDefaults is a plist in the app container: not readable by
     /// other apps on a healthy device, but it is plain text on disk, it goes
     /// into an unencrypted backup, and it is there for anything that gets file
     /// access to the container. None of that is an acceptable place for a
     /// credential with this reach, and CodeQL was right to say so.
-    var apiToken: String {
-        didSet { Keychain.set(apiToken, for: Self.tokenKey) }
+    var credential: String {
+        didSet { Keychain.set(credential, for: Self.credentialKey) }
     }
 
-    private static let tokenKey = "apiToken"
+    /// Who this device is signed in as. Not a secret — it is displayed — and
+    /// deliberately not the thing that authorises anything.
+    var signedInAs: String {
+        didSet { UserDefaults.standard.set(signedInAs, forKey: "signedInAs") }
+    }
+
+    private static let credentialKey = "credential"
 
     init() {
         coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
-        apiToken = Keychain.get(Self.tokenKey) ?? ""
+        credential = Keychain.get(Self.credentialKey) ?? ""
+        signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
 
-        // One-time migration for anyone who set a token in an earlier build.
-        // Read it, write it to the keychain, and remove it — leaving it behind
-        // would mean the plaintext copy survives the fix that was supposed to
-        // remove it.
-        if apiToken.isEmpty, let legacy = UserDefaults.standard.string(forKey: Self.tokenKey), !legacy.isEmpty {
-            apiToken = legacy
-            Keychain.set(legacy, for: Self.tokenKey)
-        }
-        UserDefaults.standard.removeObject(forKey: Self.tokenKey)
+        // Nothing is carried over from the build that asked for an admin token.
+        // That token is the fleet's break-glass credential and every phone had
+        // the same one; silently promoting it to this device's credential would
+        // preserve exactly what this replaces. It is deleted instead, and the
+        // app asks to sign in.
+        Keychain.set("", for: "apiToken")
+        UserDefaults.standard.removeObject(forKey: "apiToken")
     }
 
-    var configured: Bool { !coordinatorURL.isEmpty }
+    @MainActor
+    func signOut() {
+        credential = ""
+        signedInAs = ""
+    }
+
+    /// Reachable AND allowed in. Both matter: a URL with no credential gets a
+    /// 401 on every call, which reads as a broken fleet rather than a phone
+    /// that has not signed in.
+    var configured: Bool { !coordinatorURL.isEmpty && !credential.isEmpty }
+    var hasCoordinator: Bool { !coordinatorURL.isEmpty }
 }
 
 /// The smallest keychain wrapper that is correct.

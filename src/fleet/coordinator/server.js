@@ -32,6 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
+import { verifyIdToken, isAllowed, isPrivateRelay } from './oidc.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -322,6 +323,43 @@ export class Coordinator {
       });
     }
 
+    // Signing in: the one route that takes an identity token rather than a
+    // fleet credential, because it is where a fleet credential comes from.
+    // Identical in shape to the Worker's — the apps must not be able to tell
+    // which coordinator they are talking to.
+    if (p === '/api/session' && req.method === 'POST') {
+      const body = await readJson(req);
+      const issuers = splitList(process.env.AGENT_FLEET_AUTH_ISSUERS);
+      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+      const allow = splitList(process.env.AGENT_FLEET_AUTH_ALLOW);
+      if (!issuers.length || !audiences.length) {
+        return json(res, 503, { ok: false, error: { code: 'not_configured' }, text: 'This coordinator has no sign-in configured.' });
+      }
+
+      let who;
+      try {
+        who = await verifyIdToken(String(body?.idToken || ''), { issuers, audiences });
+      } catch (e) {
+        return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: String(/** @type {Error} */ (e).message) });
+      }
+      if (isPrivateRelay(who.email)) {
+        return json(res, 403, {
+          ok: false,
+          error: { code: 'private_relay' },
+          text:
+            'Sign in again and choose "Share My Email". This coordinator allows people by email domain, ' +
+            'and a hidden Apple address can never match one.',
+        });
+      }
+      if (!isAllowed(who.email, allow)) {
+        return json(res, 403, { ok: false, error: { code: 'not_allowed' }, text: `${who.email} is not on this fleet's list.` });
+      }
+
+      const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
+      this.saveState();
+      return json(res, 200, { ok: true, ...issued });
+    }
+
     if (p === '/api/host/challenge' && req.method === 'POST') {
       const body = await readJson(req);
       return json(res, 200, { ok: true, nonce: this.core.hostIds.challenge(String(body?.hostId || '')) });
@@ -334,8 +372,25 @@ export class Coordinator {
       return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
     }
 
-    if (this.apiToken && !safeEqual(bearerOf(req.headers.authorization) || url.searchParams.get('token') || '', this.apiToken)) {
+    // Two ways to be allowed past here, and they are not the same thing.
+    //
+    // A per-device credential is the everyday one: issued at sign-in, named
+    // after the person who holds it, revocable on its own. The admin token is
+    // break-glass — it can stop every session in the fleet — and exists to mint
+    // the first pin and to get back in when nothing else works.
+    const presented = bearerOf(req.headers.authorization) || url.searchParams.get('token') || '';
+    let client = null;
+    if (presented.startsWith('fwk_')) {
+      client = await this.core.clients.verify(presented);
+      if (!client) {
+        return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' });
+      }
+    } else if (this.apiToken && !safeEqual(presented, this.apiToken)) {
       return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'a token is required' });
+    } else if (!this.apiToken && presented) {
+      // Nothing configured and something presented: refuse rather than wave it
+      // through, or a fleet that forgot to set a token looks authenticated.
+      return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'this coordinator has no admin token set' });
     }
 
     if (p === '/api/hosts' && req.method === 'GET') {
@@ -368,6 +423,21 @@ export class Coordinator {
       });
     }
 
+    if (p === '/api/clients' && req.method === 'GET') {
+      return json(res, 200, { ok: true, clients: this.core.clients.list() });
+    }
+
+    if (p.startsWith('/api/clients/') && req.method === 'DELETE') {
+      const id = p.slice('/api/clients/'.length);
+      const gone = this.core.clients.revoke(id);
+      if (gone) this.saveState();
+      return json(res, gone ? 200 : 404, { ok: gone, text: gone ? 'Revoked.' : 'No such client, or already revoked.' });
+    }
+
+    if (p === '/api/enroll' && req.method === 'GET') {
+      return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
+    }
+
     if (p === '/api/enroll' && req.method === 'POST') {
       const body = await readJson(req);
       const kind = body?.kind === 'device' ? 'device' : 'host';
@@ -376,7 +446,7 @@ export class Coordinator {
       const issued = this.core.enrollment.mint({
         purpose: kind,
         label: body?.label ? String(body.label) : '',
-        actor: body?.actor ? String(body.actor) : null,
+        actor: client?.email || (body?.actor ? String(body.actor) : null),
       });
       this.saveState();
       return json(res, 200, { ok: true, ...issued });
@@ -424,6 +494,15 @@ export class Coordinator {
 }
 
 // --- helpers ----------------------------------------------------------------
+
+/** Comma or whitespace separated, the same shape the Worker reads from its env. */
+/** @param {string|undefined} value */
+function splitList(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /** @param {string|undefined} header */
 function bearerOf(header) {

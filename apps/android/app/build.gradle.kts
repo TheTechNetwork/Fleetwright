@@ -140,6 +140,20 @@ dependencies {
     }
   }
   implementation("androidx.compose.material:material-icons-core")
+
+  // Signing in. The system account picker, not a screen this app draws — there
+  // is no password here to phish, and the ID token it returns is verified at
+  // the coordinator against Google's published keys.
+  //
+  // All three are Google-maintained and stable: androidx.credentials is the
+  // platform API that replaced GoogleSignInClient, credentials-play-services-auth
+  // is the Play Services provider behind it, and googleid is the small shim that
+  // turns a returned credential into a typed ID token. They are pinned rather
+  // than floated for the same reason `jose` is on the server — see
+  // docs/dependencies.md.
+  implementation("androidx.credentials:credentials:1.6.0")
+  implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+  implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
   // Firebase Cloud Messaging is deliberately NOT here yet — it needs a
