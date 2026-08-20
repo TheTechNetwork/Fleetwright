@@ -129,18 +129,51 @@ What it does not do is defend against root on the live host — and nothing
 running on that host can. A vault agent, an encrypted store, a KMS client: all
 of them can be asked by root to hand over what they just unlocked.
 
-### Against the host itself: do not keep the secret
+### Against the host itself: move the secret, because it cannot be removed
 
-The way out is not a better lock, it is having less to steal. A stored
-long-lived credential is worth more than a well-protected one is safe. So where
-the provider allows it, the thing at rest should be a credential that MINTS
-short-lived scoped ones — a GitHub App private key rather than a personal token,
-an OIDC exchange rather than a stored cloud key — and the session receives
-something that expires in minutes and can do one thing.
+An earlier version of this section said "do not keep the secret", and that was
+wrong in a way worth recording. **To mint a short-lived credential you need a
+long-lived one**, and it has to live somewhere. Minting does not remove the
+problem; it relocates it, and what it leaves behind is arguably worse — a
+GitHub App private key is a factory, where a personal token is one item.
 
-Then the unlock question shrinks to a key that is useless without also being
-authorised, and the blast radius of a compromised host is measured in minutes
-rather than in whatever was in the file.
+So the claim has to be smaller and more honest. Minting buys three things, and
+protecting the host is not among them:
+
+- **The session never holds it.** A session is an agent running code nobody
+  reviewed, in a container with network access, which is by a wide margin the
+  least trustworthy thing in this system. If it leaks what it has, it leaks ten
+  minutes of scoped access rather than a permanent credential.
+- **Scope.** An installation token can be one repository and three permissions.
+  The personal token it replaces is usually everything its owner can reach.
+- **Expiry without action.** A leaked short-lived token stops mattering on its
+  own, which is not true of anything that has to be noticed and revoked.
+
+That is the whole trade: **the long-lived credential moves from the session to
+the host**, and it is worth making only because the gap in exposure between
+those two is enormous. Root on the host can still take the minting key and mint
+forever. TPM sealing narrows that to *root on that machine while it is running*,
+which is a real narrowing and not a solution.
+
+There is one arrangement that removes the stored provider credential entirely,
+and it is worth naming precisely so its cost is visible. Workload identity
+federation — GitHub and the cloud providers will exchange an OIDC token from an
+issuer you nominate for a scoped credential — means a host could prove itself
+and receive a token with no provider secret stored anywhere. The coordinator
+would be that issuer.
+
+**That is a worse trade here, and the reason is the rule two sections up.** It
+would make the coordinator able to mint access to every provider for every
+host, which is precisely what "the coordinator must never be able to read a
+session secret" exists to prevent. Spreading minting keys across hosts means a
+compromised host costs that host's access. Centralising them means a
+compromised coordinator costs everything, in a component that is
+internet-facing by design.
+
+So: keep it on the host, sealed, and be clear that this bounds the damage from
+a leaked *session* rather than from a compromised *host*. That is a smaller
+claim than the one this section originally made, and it is the one that
+survives being asked where the long-lived credential lives.
 
 ### For the few that are worth interrupting you: ask the phone
 
