@@ -221,6 +221,14 @@ jobs:
           # would have allowed exactly one upload ever. run_number only
           # increases.
           BUILD_NUMBER: ${{ github.run_number }}
+        # If this fails with "provisioning profile does not include the
+        # com.apple.developer.applesignin entitlement", it is not a certificate
+        # problem however much it reads like one. The app entitles Sign in with
+        # Apple — that is the whole of how the app authenticates — and the App
+        # ID has to carry the capability before a profile can include it.
+        # -allowProvisioningUpdates with an API key usually enables it for you;
+        # when it does not, it is one checkbox in the developer portal under
+        # Identifiers -> network.thetech.fleetwright.
         run: |
           set -o pipefail
           xcodebuild archive \

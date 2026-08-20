@@ -38,14 +38,39 @@ cd apps/ios && xcodegen generate && open Fleetwright.xcodeproj
 `project.pbxproj` is a generated file full of UUID cross-references; hand-writing
 one produces a project that opens on exactly one machine.
 
-Then in Xcode: set your team on the target, and check that **Push Notifications**
-is on under Signing & Capabilities.
+Then in Xcode: set your team on the target, and check that **Push
+Notifications** and **Sign in with Apple** are both on under Signing &
+Capabilities.
+
+Sign in with Apple is entitled in `project.yml`, so XcodeGen writes it into the
+entitlements file — but an entitlement is only half of it. The App ID has to
+carry the capability before a provisioning profile can include it, and until it
+does, signing fails with *"provisioning profile does not include the
+com.apple.developer.applesignin entitlement"*, which reads like a certificate
+problem and is not one. Xcode's automatic signing usually enables it for you;
+otherwise it is one checkbox in the developer portal under Identifiers.
 
 ## First run
 
-Settings → the coordinator URL and the API token from
-`/etc/agent-fleet-coordinator.env`. Nothing is baked into the binary — §5: a
-credential in an IPA is public the moment somebody unzips it.
+Settings → the coordinator URL, then **Sign in with Apple**. The app hands the
+coordinator the resulting ID token and is issued a credential for this device,
+kept in the keychain. There is no token to type — §5: a credential in an IPA is
+public the moment somebody unzips it, and one shared between phones cannot be
+revoked for just one of them.
+
+Choose **Share My Email**. Hide My Email produces a real, stable address that
+can never match a company domain, so a fleet that allows people by domain can
+never allow it; the coordinator detects it and says so rather than reporting
+"not on the list".
+
+The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
+`AGENT_FLEET_AUTH_AUDIENCES` (which must include this app's bundle id, because
+that is the audience Apple issues its ID tokens for) and
+`AGENT_FLEET_AUTH_ALLOW`. See [`../../docs/identity.md`](../../docs/identity.md).
+
+The collapsed **"use a credential instead"** field takes the public demo
+credential or the admin token, which is how App Review gets in and how you
+exercise everything downstream of sign-in before sign-in works.
 
 ## Siri
 
