@@ -29,7 +29,23 @@ import { log } from '../../log.js';
  */
 export async function loadOrCreateKey(file) {
   const dir = path.dirname(file);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (e) {
+      // The usual cause is a box upgraded in place: the unit file gained
+      // StateDirectory=agent-fleet, but the copy in /etc/systemd/system is only
+      // refreshed by the installer, so nothing has created the directory and an
+      // unprivileged service cannot create it under /var/lib itself. EACCES on
+      // a path nobody mentioned is a crash loop with an obscure message
+      // attached, so say what to run.
+      throw new Error(
+        `could not create ${dir}: ${/** @type {Error} */ (e).message}\n` +
+          '  This box has no state directory for its key yet. Either re-run install.sh, or:\n' +
+          `    sudo install -d -m 0700 -o "$(id -un)" ${dir}`,
+      );
+    }
+  }
 
   if (existsSync(file)) {
     const mode = statSync(file).mode & 0o777;
