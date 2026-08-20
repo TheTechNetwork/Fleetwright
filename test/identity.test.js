@@ -463,3 +463,22 @@ test('an intent is attributed to the credential, not to what the caller claims',
   // what ends up on the session record.
   assert.equal(seen.actor, 'someone@example.com');
 });
+
+test('no command name is also another command\'s alias', async () => {
+  // Not identity work, but found by it: the lookup table is built by iterating
+  // COMMANDS, so a name that is also somebody else's alias resolves by
+  // DECLARATION ORDER. /upgrade was one — it installs system packages, and
+  // /update restarts the service, and which one you got depended on where the
+  // two entries sat in the object.
+  const { COMMANDS } = await import('../src/adapters/commands.js');
+  /** @type {Map<string, string>} */
+  const seen = new Map();
+  const collisions = [];
+  for (const [name, def] of Object.entries(COMMANDS)) {
+    for (const key of [name, ...(def.aliases || [])]) {
+      if (seen.has(key)) collisions.push(`${key}: ${seen.get(key)} and ${name}`);
+      seen.set(key, name);
+    }
+  }
+  assert.deepEqual(collisions, []);
+});

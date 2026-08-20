@@ -394,7 +394,13 @@ export const COMMANDS = {
   },
 
   update: {
-    aliases: ['upgrade', 'pull'],
+    // NOT 'upgrade': that is a command of its own, further down, and having it
+    // as an alias here too means the lookup table is decided by declaration
+    // order. It happens to resolve the right way today — `upgrade` is defined
+    // after `update`, so it overwrites — and if anybody reordered this object,
+    // /upgrade would quietly start restarting the service instead of
+    // installing system packages.
+    aliases: ['pull'],
     usage: '/update [--restart]',
     short: 'Pull the latest code',
     help:
