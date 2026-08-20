@@ -79,7 +79,6 @@ export default {
     }
 
     const presented = bearerOf(request.headers.get('authorization')) || url.searchParams.get('token') || '';
-    const isHost = false;
 
     // The demo token, if one is configured. Answered HERE, before the Durable
     // Object is reached, which is the whole security property: there is no code
@@ -89,10 +88,10 @@ export default {
     // App Store review needs credentials that work, and the real API token can
     // stop every session in the fleet. This is the other way to satisfy that.
     //
-    // NEVER for /host/connect: a host presenting this must be refused like any
-    // other wrong token, or "demo" would become a way into the fleet rather
-    // than a way around it.
-    if (!isHost && env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
+    // NEVER for a host route: "demo" must not become a way into the fleet. That
+    // used to be a condition here; it is now structural — every host route
+    // returned above, so control cannot reach this line on one.
+    if (env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
       // A demo token equal to the real one would silently turn the whole
       // coordinator into a toy. Refuse rather than guess which was meant.
       if (timingSafeEqual(env.AGENT_FLEET_DEMO_TOKEN, env.AGENT_FLEET_API_TOKEN || '')) {
@@ -131,7 +130,7 @@ export default {
       // Checked in the Durable Object, which is the only thing holding the
       // client registry; the shared token stays a fast path that never needs
       // it.
-      if (!isHost && /^fwk_/.test(presented)) {
+      if (/^fwk_/.test(presented)) {
         const id = env.FLEET.idFromName('fleet');
         return env.FLEET.get(id).fetch(request);
       }

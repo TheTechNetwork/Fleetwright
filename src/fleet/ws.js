@@ -329,7 +329,34 @@ export function connectWebSocket(url, { headers = {}, timeoutMs = 15_000, maxMes
       const raw = head.subarray(0, end).toString('latin1');
       const [status, ...rest] = raw.split('\r\n');
       if (!/^HTTP\/1\.1 101/.test(status)) {
-        return fail(new Error(`websocket upgrade refused: ${status.trim()}`));
+        // The BODY, not only the status line. A refusal says which of "not
+        // enrolled", "revoked" and "the signature does not match" happened, and
+        // those send an operator to three different actions — but only the Node
+        // coordinator can put it in the reason phrase. A Worker's Response puts
+        // it in the body, so reporting the status line alone would throw away
+        // the sentence somebody needs.
+        let body = head.subarray(end + 4).toString('utf8');
+        const refused = () =>
+          fail(new Error(`websocket upgrade refused: ${status.trim()}${body ? ` — ${body.trim()}` : ''}`));
+        if (body) {
+          refused();
+        } else {
+          // Nothing yet: one short beat for it to arrive, and report whatever
+          // there is either way rather than hanging on a server that says
+          // nothing.
+          const bodyTimer = setTimeout(refused, 250);
+          bodyTimer.unref?.();
+          socket.on('data', (/** @type {Buffer} */ more) => {
+            body += more.toString('utf8');
+            clearTimeout(bodyTimer);
+            refused();
+          });
+          socket.once('end', () => {
+            clearTimeout(bodyTimer);
+            refused();
+          });
+        }
+        return;
       }
       const got = rest
         .map((l) => l.split(':'))

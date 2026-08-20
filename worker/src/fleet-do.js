@@ -351,7 +351,11 @@ export class Fleet {
     const outcome = await this.core.hostIds.prove(hostId, proof);
     if (!outcome.ok) {
       this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
-      return new Response(outcome.reason, { status: 401 });
+      // In the reason phrase as well as the body. A refused upgrade is read out
+      // of a journal on the box, and some clients only surface the status line
+      // — a bare "401 Unauthorized" throws away the one sentence that says
+      // which of three completely different problems this is.
+      return new Response(outcome.reason, { status: 401, statusText: outcome.reason.replace(/[^\x20-\x7e]/g, ' ') });
     }
     await this.#saveHosts();
 
