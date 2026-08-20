@@ -149,6 +149,24 @@ for two things sign-in cannot cover: App Review, whose reviewers are on nobody's
 allowlist and use the public demo credential, and getting back in when sign-in
 itself is what is broken.
 
+## The hardening this stops short of
+
+**The ID token carries no nonce.** Both providers support one — you generate a
+value, pass it with the request, and it comes back as a claim — and it binds a
+token to the sign-in attempt that asked for it, so a captured token cannot be
+exchanged a second time somewhere else.
+
+It is not here, and the reason is proportion rather than principle. A token is
+only reachable over TLS to this coordinator, is only issued for this app's
+audience, and lives ten minutes to an hour. The two providers also disagree
+about the convention — Apple wants the SHA-256 of the value in the request and
+compares the digest; Google wants the value itself — which is a bug waiting in
+a flow that cannot be exercised without two real phones.
+
+Worth doing. Worth doing *after* the flow has been driven end to end once,
+because an extra required round trip in an untested sign-in is a way to have
+neither.
+
 ## What is left
 
 - **Roles.** Every allowed address gets the same access. The client record is

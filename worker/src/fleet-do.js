@@ -113,6 +113,22 @@ export class Fleet {
       await this.#saveHosts();
 
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+
+      // A re-enrolment REPLACES the key, and the machine holding the old one
+      // may still be connected on this name. Leaving that socket open means two
+      // machines are one host: the old one keeps answering intents addressed to
+      // a name whose key it no longer holds, and which of them a `resume` lands
+      // on is whichever the registry saw last. Close it and let whoever holds
+      // the current key dial back in.
+      if (result.replaced) {
+        for (const socket of this.state.getWebSockets()) {
+          if (this.#hostIdOf(socket) === result.host.hostId) {
+            try {
+              socket.close(1008, 're-enrolled');
+            } catch { /* already gone */ }
+          }
+        }
+      }
       return json({
         ok: true,
         hostId: result.host.hostId,

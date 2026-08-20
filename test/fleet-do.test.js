@@ -36,7 +36,10 @@ function fakeState() {
     // the callback settles, and awaiting it in the constructor is the closest
     // equivalent a test can get.
     blockConcurrencyWhile: (/** @type {() => Promise<any>} */ fn) => fn(),
+    /** @type {() => any[]} */
     getWebSockets: () => [],
+    /** @type {undefined | ((s: any) => string[])} */
+    getTags: undefined,
     setAlarm: () => {},
     raw: storage,
   };
@@ -165,4 +168,37 @@ test('sign-in is refused clearly when the coordinator has none configured', asyn
   const res = await call(f, '/api/session', 'POST', { idToken: 'anything' });
   assert.equal(res.status, 503);
   assert.match((await res.json()).text, /no sign-in configured/);
+});
+
+test('re-enrolling a name disconnects whoever held the old key', async () => {
+  const { fleet: f, state } = fleet();
+  const first = await generateKeyPair();
+  const { code } = f.core.enrollment.mint({ purpose: 'host' });
+  await call(f, '/api/enroll/host', 'POST', { code, hostId: 'rebuilt', publicJwk: first.publicJwk });
+
+  // Stand in for the machine that is still connected on that name. The DO finds
+  // the host id from the socket's tags, which is how it survives hibernation.
+  /** @type {any[]} */
+  const closed = [];
+  const socket = { close: (/** @type {number} */ c, /** @type {string} */ r) => closed.push([c, r]) };
+  state.getWebSockets = () => [socket];
+  state.getTags = () => ['rebuilt'];
+
+  const second = await generateKeyPair();
+  const { code: code2 } = f.core.enrollment.mint({ purpose: 'host' });
+  const res = await call(f, '/api/enroll/host', 'POST', { code: code2, hostId: 'rebuilt', publicJwk: second.publicJwk });
+  assert.equal((await res.json()).replaced, true);
+
+  // Two machines as one host is the worst shape this can take: the old one
+  // keeps answering intents addressed to a name whose key it no longer holds,
+  // and which of them a `resume` lands on is whichever the registry saw last.
+  assert.deepEqual(closed, [[1008, 're-enrolled']]);
+
+  // And the old key no longer proves anything.
+  const { nonce } = await (await call(f, '/api/host/challenge', 'POST', { hostId: 'rebuilt' })).json();
+  const stale = await sign(first.privateJwk, signingInput('host-connect', { hostId: 'rebuilt', nonce }));
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', proof: stale })).status, 401);
+
+  const fresh = await sign(second.privateJwk, signingInput('host-connect', { hostId: 'rebuilt', nonce }));
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', proof: fresh })).status, 200);
 });

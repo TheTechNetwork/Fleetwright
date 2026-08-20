@@ -482,3 +482,45 @@ test('no command name is also another command\'s alias', async () => {
   }
   assert.deepEqual(collisions, []);
 });
+
+test('re-enrolling a name disconnects whoever held the old key', async (t) => {
+  // The Node coordinator's half of the same rule, tested through a real socket
+  // rather than a stub: the machine holding the old key is still connected on
+  // that name until something closes it.
+  const { coordinator: c, origin } = await coordinator(t);
+  const port = Number(new URL(origin).port);
+  const original = await enrolledProofFor(c, port, 'rebuilt');
+
+  const { WebSocketTransport } = await import('../src/fleet/host/transports/websocket.js');
+  const transport = new WebSocketTransport({ origin, hostId: 'rebuilt', proof: original, maxBackoffMs: 50 });
+  await transport.start();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(c.registry.hosts.get('rebuilt')?.connected, true);
+
+  // A rebuilt machine presents a new key under the same name.
+  const replacement = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  const again = await enrol({ origin, code, hostId: 'rebuilt', publicJwk: replacement.publicJwk });
+  assert.equal(again.replaced, true);
+
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(c.registry.hosts.get('rebuilt')?.connected, false, 'the old key holder is out');
+  await transport.stop();
+
+  // And it is the new key that works now.
+  const known = await checkEnrolled({ origin, hostId: 'rebuilt', privateJwk: replacement.privateJwk });
+  assert.equal(known.ok, true);
+});
+
+/** enrolledProof, but taking the coordinator rather than re-deriving the port. */
+async function enrolledProofFor(coordinatorInstance, port, hostId) {
+  const key = await loadOrCreateKey(scratch());
+  const { code } = coordinatorInstance.core.enrollment.mint({ purpose: 'host' });
+  const res = await fetch(`http://127.0.0.1:${port}/api/enroll/host`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, hostId, publicJwk: key.publicJwk }),
+  });
+  assert.equal(res.status, 200);
+  return () => proveIdentity({ origin: `http://127.0.0.1:${port}`, hostId, privateJwk: key.privateJwk });
+}

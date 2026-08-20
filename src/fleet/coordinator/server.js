@@ -312,6 +312,12 @@ export class Coordinator {
         return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
       }
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+
+      // A re-enrolment REPLACES the key, and the machine holding the old one may
+      // still be connected on this name. Two machines as one host is the worst
+      // shape this can take: the old one keeps answering intents addressed to a
+      // name whose key it no longer holds. Same close the Worker does.
+      if (result.replaced) this.connections.get(result.host.hostId)?.close(1008, 're-enrolled');
       return json(res, 200, {
         ok: true,
         hostId: result.host.hostId,
