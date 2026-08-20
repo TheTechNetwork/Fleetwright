@@ -1011,20 +1011,21 @@ if [ "$WIZARD" = yes ]; then
   enrol_host() {
     [ -n "$ENROL_URL" ] || return 0
 
-    # Already enrolled? `identity` prints the fingerprint of whatever key is on
-    # disk; `doctor` is the one that asks the coordinator. Re-running the
-    # installer on a working box must not demand a new pin.
+    # Already enrolled? `doctor` is the one that asks the coordinator, because a
+    # key on disk looks identical whether it was ever presented or has since
+    # been revoked. Re-running the installer on a working box must not demand a
+    # new pin.
     #
-    # Matched on the LEADING " ok ", not on the sentence: doctor prints the same
-    # words on the failing line, so grepping for the phrase alone would report
-    # every unenrolled box as already enrolled and silently skip the one step
-    # this function exists to do.
-    # Captured, then matched — NOT piped. `doctor` exits non-zero when anything
-    # it checks is unhappy, and on a fresh box something usually is (claude not
-    # logged in yet, most often). Under `set -o pipefail` that failing exit code
-    # sinks the whole pipeline no matter what grep found, so the box would be
-    # re-enrolled on every run of the installer. Caught by running this against
-    # a live coordinator rather than by reading it.
+    # Two things this line has to get right, and it got both wrong first:
+    #
+    #   CAPTURED, NOT PIPED. doctor exits non-zero when anything it checks is
+    #   unhappy, and on a fresh box something usually is — claude not being
+    #   logged in yet, most often. Under `set -o pipefail` that exit code sinks
+    #   the pipeline no matter what grep found.
+    #
+    #   MATCHED ON THE LEADING " ok ". doctor prints the same words on the
+    #   FAILING line, so grepping for the sentence reports every unenrolled box
+    #   as enrolled and skips the one step this function exists to do.
     DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
     if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
       ok "this box is already enrolled at $ENROL_URL"
@@ -1040,11 +1041,11 @@ if [ "$WIZARD" = yes ]; then
       # pin it could have minted itself.
       local i=0
       while [ "$i" -lt 20 ]; do
-        curl -fsS "http://127.0.0.1:8791/healthz" >/dev/null 2>&1 && break
+        curl -fsS "$ENROL_URL/healthz" >/dev/null 2>&1 && break
         i=$((i + 1))
         sleep 0.5
       done
-      pin="$(curl -fsS -X POST "http://127.0.0.1:8791/api/enroll" \
+      pin="$(curl -fsS -X POST "$ENROL_URL/api/enroll" \
                -H "authorization: Bearer $admin" -H 'content-type: application/json' \
                -d '{"kind":"host","label":"installed on this box"}' 2>/dev/null \
              | sed -n 's/.*"code":"\([0-9]*\)".*/\1/p')"
