@@ -124,10 +124,35 @@ export class Coordinator {
     this.log.info(`coordinator: ${hosts} enrolled host${hosts === 1 ? '' : 's'} from ${this.stateFile}`);
   }
 
+  /**
+   * Prove the state file can be written, before anything depends on it.
+   *
+   * Called once at startup and allowed to throw. An upgraded box is the case
+   * that needs it: the unit gained StateDirectory=agent-fleet-coordinator, but
+   * the copy in /etc/systemd/system is only refreshed by the installer, and
+   * ProtectSystem=strict makes /var/lib read-only to the service — so the
+   * directory does not exist and cannot be created. Everything would then work
+   * perfectly until the first restart, at which point the whole fleet is
+   * refused. A coordinator that cannot remember who is in the fleet should say
+   * so while somebody is still looking at it.
+   */
+  assertStateWritable() {
+    if (!this.stateFile) return;
+    this.#writeState();
+  }
+
   /** Write it back. Through a temp file, because a half-written host list is
    *  a fleet that cannot connect. */
   saveState() {
     if (!this.stateFile) return;
+    try {
+      this.#writeState();
+    } catch (e) {
+      this.log.error(`coordinator: could not save state to ${this.stateFile}: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  #writeState() {
     const body = JSON.stringify(
       {
         hosts: this.core.hostIds.serialise(),
@@ -137,14 +162,10 @@ export class Coordinator {
       null,
       2,
     );
-    try {
-      mkdirSync(path.dirname(this.stateFile), { recursive: true, mode: 0o700 });
-      const tmp = `${this.stateFile}.tmp`;
-      writeFileSync(tmp, `${body}\n`, { mode: 0o600 });
-      renameSync(tmp, this.stateFile);
-    } catch (e) {
-      this.log.error(`coordinator: could not save state to ${this.stateFile}: ${/** @type {Error} */ (e).message}`);
-    }
+    mkdirSync(path.dirname(String(this.stateFile)), { recursive: true, mode: 0o700 });
+    const tmp = `${this.stateFile}.tmp`;
+    writeFileSync(tmp, `${body}\n`, { mode: 0o600 });
+    renameSync(tmp, String(this.stateFile));
   }
 
   /** @param {number} port @param {string} host */
