@@ -98,8 +98,18 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_HOST_TOKEN            what a host presents to connect
-#   AGENT_FLEET_API_TOKEN             what a phone or Shortcut presents
+#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
+#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
+#                                     https://appleid.apple.com https://accounts.google.com
+#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
+#                                     iOS bundle id, the Android web client id
+#   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
+#                                     @domain. EMPTY ALLOWS NOBODY, on purpose
+#
+# THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
+# they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
+# was one string every machine presented — indistinguishable hosts, no way to
+# revoke one, replayable by anything that saw a single connection.
 #   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
 #                                     base64 of it), for push
 #   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
@@ -115,6 +125,7 @@ enabled = true
 # AGENT_FLEET_DEMO_TOKEN is NOT here: it is a [vars] entry below, because it
 # guards nothing worth guarding. See the comment on it.
 #
-# Without the first two the Worker refuses every request rather than running
-# open — see worker.js. Without the third, push is logged instead of sent, and
-# says so.
+# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
+# running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
+# says so, which leaves the admin token as the only way in. Without the FCM
+# service account, push is logged instead of sent, and says so.

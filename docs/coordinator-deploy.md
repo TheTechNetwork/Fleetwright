@@ -17,14 +17,63 @@ coordinator origin it will talk to, so changing it means editing every host's
 
 ```sh
 cd worker
-npx wrangler secret put AGENT_FLEET_HOST_TOKEN     # openssl rand -hex 24
 npx wrangler secret put AGENT_FLEET_API_TOKEN      # openssl rand -hex 24
 npx wrangler deploy
 ```
 
-The Worker **refuses every request** until both are set, with a message saying
-which. A coordinator with no credentials is remote control of every box in the
-fleet for anyone who finds the URL, and a Worker URL is not a secret.
+The Worker **refuses every request** until that is set. A coordinator with no
+credential is remote control of every box in the fleet for anyone who finds the
+URL, and a Worker URL is not a secret.
+
+That token is **break-glass, not the everyday credential**. It can stop every
+session and revoke every host. Phones sign in and are issued their own; hosts
+never have it at all.
+
+### Sign-in
+
+Three more, and none of them is a secret — they are the difference between
+"nobody can sign in" and "anybody with a Google account can".
+
+```sh
+npx wrangler secret put AGENT_FLEET_AUTH_ISSUERS
+#   https://appleid.apple.com https://accounts.google.com
+
+npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
+#   network.thetech.fleetwright                  (the iOS bundle id)
+#   654943059314-....apps.googleusercontent.com  (the Android WEB client id)
+
+npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
+#   @thetech.network someone@example.com
+```
+
+`AGENT_FLEET_AUTH_ALLOW` empty allows **nobody**. That is deliberate: a
+coordinator that has not been told who is allowed should refuse everyone rather
+than everyone.
+
+The audience is not one value. Apple issues its ID tokens for the iOS bundle
+id; Google issues them for the OAuth **web** client id the Android app names as
+its server client. Both are listed, and a token is checked against the list.
+
+### Hosts
+
+There is nothing to set. A host generates its own keypair, presents the public
+half once with a six-digit pin, and signs a fresh nonce on every connection —
+see [`trust.md`](./trust.md). Mint the first pin with the admin token:
+
+```sh
+curl -sX POST https://fleet.thetech.network/api/enroll \
+     -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+     -H 'content-type: application/json' -d '{"kind":"host"}'
+```
+
+then on the box, as the service user:
+
+```sh
+agent-fleet-sidecar enrol 123456
+```
+
+or send `/enroll 123456` to that box's Telegram bot, which does the same thing
+without an SSH session.
 
 Optionally, for push:
 
@@ -37,8 +86,11 @@ ever moves to a box — see [`push.md`](./push.md).
 
 ## A demo token, for App Store review
 
-App Store review needs credentials that work, and `AGENT_FLEET_API_TOKEN` can
-stop every session in the fleet. So there is a third, optional token:
+App Store review needs credentials that work, and no reviewer's address is on
+anybody's allowlist — so signing in cannot be the answer, and
+`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. So there is a
+third, optional token, and the apps have a collapsed "use a credential instead"
+field to put it in:
 
 It is a **`[vars]` entry in `wrangler.toml`, not a secret** — committed, and
 deployed with the code:
@@ -83,7 +135,7 @@ In `/etc/agent-fleet-sidecar.env` on each box:
 ```
 AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network
 AGENT_FLEET_TRANSPORT=websocket
-AGENT_FLEET_HOST_TOKEN=<the same AGENT_FLEET_HOST_TOKEN>
+AGENT_FLEET_HOST_KEY=/var/lib/agent-fleet/host-key.json
 ```
 
 then `systemctl restart agent-fleet-sidecar`. It dials out, so there is nothing

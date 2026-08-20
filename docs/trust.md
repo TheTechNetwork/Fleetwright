@@ -240,8 +240,8 @@ User authentication is one link of four, and the others are weaker.
 
 | link | today | what it should be |
 |---|---|---|
-| device → coordinator | shared bearer token | enclave-backed key, per device, revocable |
-| host → coordinator | `AGENT_FLEET_HOST_TOKEN`, **the same on every host** | per-host keypair |
+| device → coordinator | **per-device credential, issued at sign-in, revocable on its own** | a key in the Secure Enclave / StrongBox, so the credential cannot be exported either |
+| host → coordinator | **per-host keypair, a signed nonce per connection** | unchanged — this is the shape it should be |
 | coordinator → host | trusted absolutely: an intent is obeyed because it arrived | intents signed by the device, verified by the host |
 | session ← host | unix socket, identity from the socket | already right |
 
@@ -291,22 +291,40 @@ half and every provider does it differently; the part that has to be right here
 is that **the session never holds the value**, so that whatever is behind it can
 change without the session knowing.
 
-## What is missing under all of it
+## What was missing under all of it, and now is not
 
-**Hosts have no identity.** Every host presents the same
-`AGENT_FLEET_HOST_TOKEN`, so the fleet cannot distinguish one from another,
-cannot revoke one, and — the part that matters here — has nothing to encrypt a
-secret *to*.
+**Hosts had no identity.** Every host presented the same
+`AGENT_FLEET_HOST_TOKEN`, so the fleet could not distinguish one from another,
+could not revoke one, and — the part that mattered here — had nothing to
+encrypt a secret *to*.
 
-A host keypair is the missing primitive. It gives per-host revocation, real
-attribution for which box did what, and the recipient key that envelope custody
-needs. It is also the thing §5 already wanted and the thing this project has
-deferred longest.
+Each host now holds a P-256 keypair. The private half lives at
+`/var/lib/agent-fleet/host-key.json`, 0600, generated on first run and never
+sent anywhere; the coordinator keeps the public half and a name. Connecting is
+signing a nonce the coordinator issued seconds earlier, so nothing reusable
+crosses the wire — a captured connection yields a signature over a value that
+will never be accepted again.
+
+Joining is a **six-digit pin**: short-lived, single-use, purpose-bound, minted
+by somebody already in. A pin is not a credential — it buys exactly one
+exchange, in which the host presents a public key and receives an identity.
+Guessing is bounded too: ten wrong pins in a minute shuts redemption for
+everybody until the window passes, because a million possibilities is plenty
+for a human and not much for a script.
+
+P-256 rather than Ed25519 for a reason that matters later: it is what the
+Secure Enclave and StrongBox support, so the same shape of key works when the
+private half moves into hardware.
+
+That gives per-host revocation, real attribution for which box did what, and
+**the recipient key that envelope custody needs** — which is what makes the
+rest of this document buildable rather than aspirational.
 
 ## Order
 
-1. **Host keypairs.** Everything else is a special case of a fleet whose members
-   have identities. It closes the oldest gap and unlocks custody.
+1. ~~**Host keypairs.**~~ **Done.** Everything else is a special case of a fleet
+   whose members have identities; this closed the oldest gap and unlocked
+   custody.
 2. **Secret references.** No cryptography, immediate value, and it establishes
    that the coordinator names secrets rather than holding them — the habit
    matters more than the mechanism.

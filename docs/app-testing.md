@@ -49,13 +49,30 @@ misconfigured one. Pick one:
 | **A box on the LAN** | `http://<box>:8791` after `install.sh` | Android; see the ATS note before trying it on iOS |
 | **Local Node coordinator** | `node bin/agent-fleet-coordinator` on the Mac | fastest loop, no fleet — but with no host connected, `list` is legitimately empty |
 
-The **API token** is what both apps authenticate with — `Bearer <token>` on every
-request. Get it from whichever coordinator you chose:
+**Both apps sign in.** There is no token to type: the app hands the coordinator
+an Apple or Google ID token, and gets back a credential issued to that device.
+So the coordinator has to have sign-in configured before either app can get
+past its settings screen — `AGENT_FLEET_AUTH_ISSUERS`,
+`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your own address
+on the allowlist. See [`identity.md`](./identity.md).
 
-```sh
-sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env   # a box
-# for the Worker it is the AGENT_FLEET_API_TOKEN GitHub Actions secret
-```
+Two shortcuts while testing:
+
+- The collapsed **"use a credential instead"** field takes the public demo
+  credential (a fleet with no hosts, for App Review) or the admin token from
+  `AGENT_FLEET_API_TOKEN`. That is the way to test everything downstream of
+  sign-in without sign-in working yet.
+- `sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env` on a box;
+  for the Worker it is the `AGENT_FLEET_API_TOKEN` GitHub Actions secret.
+
+Two things that will stop a real sign-in, both worth checking before debugging
+the app:
+
+- **iOS**: the App ID needs the *Sign In with Apple* capability enabled in the
+  developer portal, or the archive will not sign at all.
+- **Android**: the Firebase project needs a **web** OAuth client, and
+  `google-services.json` has to carry it — the app looks up
+  `default_web_client_id` at runtime and says so plainly when it is absent.
 
 Sanity-check the coordinator from the same machine **before** blaming an app:
 
@@ -159,8 +176,14 @@ and confirm what actually went out rather than what `defaults read` reports.
 
 Every action in both apps is one intent to the coordinator, so this is the list:
 
-- [ ] **Settings** accept a URL and token, and persist across a relaunch
-- [ ] **A wrong token** produces "The coordinator rejected the token", not a crash or a silent empty list
+- [ ] **Settings** accept a URL, and it persists across a relaunch
+- [ ] **Sign in** — the system sheet appears, and the app shows the address afterwards
+- [ ] **Hide My Email** (iOS) is refused with "choose Share My Email", not "not on the list"
+- [ ] **An address not on the allowlist** is refused, and says so
+- [ ] **Revoking this device** from another signed-in device logs it out on the next call, rather than failing forever
+- [ ] **Mint a pin**, and it enrols a real box — `agent-fleet-sidecar enrol <pin>` or `/enroll <pin>` in Telegram
+- [ ] **The fingerprint** shown for that host matches what `agent-fleet-sidecar identity` prints on the box
+- [ ] **A bad credential** produces a readable refusal, not a crash or a silent empty list
 - [ ] **An unreachable URL** produces a readable error
 - [ ] **list** — sessions appear, each attributed to a host
 - [ ] **start** — with a name, and without one (the coordinator generates `cc-brave-otter`)

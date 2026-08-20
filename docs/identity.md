@@ -95,9 +95,10 @@ a fleet of one operator and three colleagues does not need roles yet. When it
 does, the client record is where a role belongs — it already carries a name and
 a creation time, and adding a field is cheaper than retrofitting identity.
 
-**It does not cover hosts.** A host presents `AGENT_FLEET_HOST_TOKEN`, still
-shared by every host, and §5 wants a per-host key. Same registry, different
-credential type, and worth doing after this rather than at the same time.
+**It is not how hosts authenticate.** A host is a machine, not a person: it
+holds a keypair and signs a nonce per connection, and it joins with a pin
+rather than by signing in. Same registry, different kind of thing — see
+[`trust.md`](./trust.md).
 
 ## What exists now
 
@@ -108,29 +109,50 @@ Server side, working and tested:
 | `POST /api/session` | ID token in, device credential out. The only route reachable without a fleet credential, because it is where one comes from |
 | `GET /api/clients` | which devices can reach this fleet |
 | `DELETE /api/clients/{id}` | revoke one |
-| every other route | accepts the shared API token **or** a device credential |
+| every other route | accepts a device credential, **or** the break-glass admin token |
 
 An intent from a device credential is attributed to the verified email it was
 issued to, and a caller-supplied `actor` cannot override it — an actor the
 caller chooses is a label, not an attribution.
 
+Both coordinators — the Worker and the Node one — implement these identically,
+because an app must not be able to tell which one it is talking to.
+
 Configure with three settings; the sample is commented in `worker/wrangler.toml`:
 
 ```
-AGENT_FLEET_AUTH_ISSUERS    https://accounts.google.com
-AGENT_FLEET_AUTH_AUDIENCES  the OAuth client id the app uses
+AGENT_FLEET_AUTH_ISSUERS    https://appleid.apple.com https://accounts.google.com
+AGENT_FLEET_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-….apps.googleusercontent.com
 AGENT_FLEET_AUTH_ALLOW      @thetech.network
 ```
 
+## In the apps
+
+**iOS** uses Sign in with Apple; **Android** uses the system account picker via
+Credential Manager. Different providers, one allowlist: it is keyed on the
+verified email address, so the same person signs in on both and appears as the
+same person.
+
+Two things that will refuse a sign-in for reasons worth stating in advance:
+
+- **Hide My Email.** Apple's relay address is real and stable and can never
+  match a company domain. The coordinator detects it and says "choose Share My
+  Email" rather than "you are not on the list", which would send somebody to ask
+  why they are missing from a list they are on.
+- **Audiences.** Apple issues its ID tokens for the **iOS bundle id**; Google
+  issues them for the OAuth **web** client id the Android app names as its
+  server client. `AGENT_FLEET_AUTH_AUDIENCES` needs both, and a token for
+  another application is refused.
+
+Both apps also have a collapsed **"use a credential instead"** field. It exists
+for two things sign-in cannot cover: App Review, whose reviewers are on nobody's
+allowlist and use the public demo credential, and getting back in when sign-in
+itself is what is broken.
+
 ## What is left
 
-- **The apps.** Neither has a sign-in button yet: they still take a coordinator
-  URL and the shared token typed into Settings, which keeps working and should
-  keep working for a single-operator fleet.
-- **The Node coordinator** has the registry but not the routes. The Worker is
-  the deployment that faces phones; the Node one is for a single machine, where
-  the shared token is proportionate.
 - **Roles.** Every allowed address gets the same access. The client record is
   where a role would go, and adding a field beats retrofitting identity.
-- **Hosts.** Still one shared `AGENT_FLEET_HOST_TOKEN`. Same registry, different
-  credential type, and worth doing next.
+- **Session secrets.** Signing in proves who is asking. It does not yet decide
+  what a *session* may hold — see [`trust.md`](./trust.md) for the custody half
+  of this, which is the larger unfinished piece.
