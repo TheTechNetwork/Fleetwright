@@ -133,6 +133,46 @@ export function demoReply(url, method, body) {
 
   if (p === '/api/events' && method === 'GET') return { ok: true, events: events() };
 
+  // The identity screen. A reviewer opens Settings and the app asks for these
+  // two; without them the panel is empty and the "mint a pin" button reports an
+  // error, which reads as a broken app rather than a demo fleet.
+  //
+  // The fingerprints are invented and fixed. Nothing verifies them — there is
+  // no host behind any of this — and a fingerprint that changed per request
+  // would be the one thing on the screen that could not be real.
+  if (p === '/api/hosts/enrolled' && method === 'GET') {
+    return {
+      ok: true,
+      hosts: HOSTS.map((h, i) => ({
+        hostId: h.hostId,
+        fingerprint: ['3f9c1a20b7e4d558', '8b2e7d41c0a96f13'][i] || '0000000000000000',
+        enrolledBy: 'demo@example.com',
+        enrolledAt: 1_754_000_000_000,
+        lastSeenAt: 1_754_000_600_000,
+        revokedAt: null,
+      })),
+    };
+  }
+
+  // A pin that is not a pin. It cannot enrol anything, because there is no
+  // coordinator behind the demo to enrol with — the point is that the screen
+  // does what it says and the reviewer can see the flow.
+  if (p === '/api/enroll' && method === 'POST') {
+    return {
+      ok: true,
+      code: '000000',
+      purpose: 'host',
+      expiresAt: 1_754_000_600_000,
+      text: 'This is the demo fleet, so the pin is not a real one.',
+    };
+  }
+
+  // Revoking a demo host is accepted and discarded, for the same reason
+  // registration is: a button that errors reads as a broken app.
+  if (p.startsWith('/api/hosts/') && method === 'DELETE') {
+    return { ok: true, text: 'The demo fleet is read-only, so nothing changed.' };
+  }
+
   // Registration is accepted and discarded. A phone that cannot register looks
   // broken in a way that has nothing to do with what is being reviewed.
   if (p === '/api/devices/test') {

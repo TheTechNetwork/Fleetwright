@@ -106,3 +106,37 @@ test('a credential survives being persisted and restored', async () => {
   after.restore(JSON.parse(JSON.stringify(before.serialise())));
   assert.ok(await after.verify(token), 'a Durable Object eviction must not sign everybody out');
 });
+
+test('the identity screen has something to show', () => {
+  // A reviewer opens Settings before anything else. Without these the panel is
+  // empty and the buttons report errors, which reads as a broken app rather
+  // than a demo fleet.
+  const hosts = /** @type {any} */ (call('/api/hosts/enrolled'));
+  assert.equal(hosts.hosts.length, 2);
+  for (const h of hosts.hosts) {
+    assert.match(h.hostId, /^demo-/);
+    assert.match(h.fingerprint, /^[0-9a-f]{16}$/, 'the app renders this next to the name');
+    assert.equal(h.revokedAt, null);
+  }
+
+  const minted = /** @type {any} */ (call('/api/enroll', 'POST', { kind: 'host' }));
+  assert.match(minted.code, /^\d{6}$/);
+  assert.match(minted.text, /demo/i, 'and it says it is not a real pin');
+
+  assert.equal(/** @type {any} */ (call('/api/hosts/demo-attic', 'DELETE')).ok, true);
+});
+
+test('the demo cannot express anything about a real host', () => {
+  // The property that matters, restated for the routes added above: every
+  // answer comes from constants in this file, and there is no path from any of
+  // them to the Durable Object.
+  const body = JSON.stringify([
+    call('/api/hosts/enrolled'),
+    call('/api/enroll', 'POST', { kind: 'host' }),
+    call('/api/hosts/anything', 'DELETE'),
+  ]);
+  assert.equal(/fwk_|[0-9a-f]{48}/.test(body), false, 'no credential-shaped string is ever returned');
+  for (const name of ['deb13-staging', 'thetech']) {
+    assert.equal(body.includes(name), false);
+  }
+});
