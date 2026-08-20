@@ -873,6 +873,23 @@ if [ "$WIZARD" = yes ]; then
   install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
   set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "/var/lib/agent-fleet/host-key.json"
 
+  # agent-hub reads this file to answer /enroll and /identity — it is a
+  # different unit with a different EnvironmentFile, so the sidecar's variables
+  # are not in its process. It runs as RUN_USER; this file is written by root at
+  # 0600, and without this the bot would report a box with a coordinator as
+  # having none.
+  #
+  # Group-READABLE rather than chowned: the service user should be able to see
+  # which fleet this box belongs to and should not be able to rewrite it. If
+  # there is no group of that name — usual on Debian, not guaranteed anywhere —
+  # ownership is the fallback, which is still better than a feature that
+  # silently does not work.
+  if chgrp "$RUN_USER" "$SIDECAR_ENV" 2>/dev/null; then
+    chmod 0640 "$SIDECAR_ENV"
+  else
+    chown "$RUN_USER" "$SIDECAR_ENV"
+  fi
+
   ENROL_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
 
   # --- push notifications --------------------------------------------------

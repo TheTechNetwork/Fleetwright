@@ -41,19 +41,24 @@ export function sidecarConfig({ env = process.env, readFile } = {}) {
   const file = env.AGENT_FLEET_SIDECAR_ENV || '/etc/agent-fleet-sidecar.env';
   /** @type {Record<string, string>} */
   const fromFile = {};
+  /** @type {string|null} */
+  let unreadable = null;
   try {
     const read = readFile || ((/** @type {string} */ p) => readFileSync(p, 'utf8'));
     for (const line of read(file).split('\n')) {
       const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
       if (match) fromFile[match[1]] = match[2].replace(/^["']|["']$/g, '').trim();
     }
-  } catch {
-    // No file is not an error: a box running from a checkout has these in its
-    // environment instead, and one that has neither gets told so below.
+  } catch (e) {
+    // A MISSING file is not an error: a box running from a checkout has these
+    // in its environment instead. A file that exists and cannot be read is a
+    // different thing entirely, and reporting it as "this box is not in a
+    // fleet" would send somebody to configure something already configured.
+    if (/** @type {any} */ (e)?.code !== 'ENOENT') unreadable = `${file}: ${/** @type {Error} */ (e).message}`;
   }
   // The process environment WINS over the file, so a test or a hand-run hub can
   // point at something else without editing /etc.
-  return loadSidecarConfig({ ...fromFile, ...env });
+  return { ...loadSidecarConfig({ ...fromFile, ...env }), unreadable };
 }
 
 /**
@@ -64,6 +69,15 @@ export function sidecarConfig({ env = process.env, readFile } = {}) {
 export async function identity({ config } = {}) {
   const cfg = config || sidecarConfig();
   if (!cfg.coordinatorUrl) {
+    if (cfg.unreadable) {
+      return {
+        ok: false,
+        text:
+          `Cannot read this box's fleet configuration.\n${cfg.unreadable}\n\n` +
+          'The hub has to be able to read /etc/agent-fleet-sidecar.env to know which coordinator ' +
+          'this box belongs to. Re-running install.sh fixes the permissions.',
+      };
+    }
     return { ok: false, text: 'This box is not part of a fleet — AGENT_FLEET_COORDINATOR_URL is not set.' };
   }
 
@@ -107,7 +121,12 @@ export async function enrol(pin, { config, actor = null } = {}) {
     return { ok: false, text: 'Send the six digits: /enroll 123456' };
   }
   if (!cfg.coordinatorUrl) {
-    return { ok: false, text: 'This box has no coordinator set, so there is nothing to enrol with.' };
+    return {
+      ok: false,
+      text: cfg.unreadable
+        ? `Cannot read this box's fleet configuration.\n${cfg.unreadable}\n\nRe-running install.sh fixes the permissions.`
+        : 'This box has no coordinator set, so there is nothing to enrol with.',
+    };
   }
 
   let key;

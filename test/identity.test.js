@@ -524,3 +524,32 @@ async function enrolledProofFor(coordinatorInstance, port, hostId) {
   assert.equal(res.status, 200);
   return () => proveIdentity({ origin: `http://127.0.0.1:${port}`, hostId, privateJwk: key.privateJwk });
 }
+
+test('a config the hub cannot read is not reported as "no fleet"', async () => {
+  // agent-hub runs as the service user; /etc/agent-fleet-sidecar.env is written
+  // by root. If it cannot be read, the box HAS a coordinator and the bot cannot
+  // see it — and "this box is not part of a fleet" would send somebody to
+  // configure something that is already configured.
+  const cfg = sidecarConfig({
+    env: { AGENT_FLEET_SIDECAR_ENV: '/etc/shadow-does-not-matter-here' },
+    readFile: () => {
+      const e = new Error('EACCES: permission denied');
+      /** @type {any} */ (e).code = 'EACCES';
+      throw e;
+    },
+  });
+  assert.match(String(cfg.unreadable), /permission denied/);
+
+  const who = await identity({ config: cfg });
+  assert.match(who.text, /Cannot read this box's fleet configuration/);
+  assert.match(who.text, /install\.sh/, 'and what to do about it');
+
+  const joined = await fleetEnrol('123456', { config: cfg });
+  assert.equal(joined.ok, false);
+  assert.match(joined.text, /Cannot read/);
+});
+
+test('a missing config file is still just "no fleet"', () => {
+  const cfg = sidecarConfig({ env: { AGENT_FLEET_SIDECAR_ENV: '/nonexistent' } });
+  assert.equal(cfg.unreadable, null, 'a box running from a checkout has these in its environment');
+});
