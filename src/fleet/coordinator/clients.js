@@ -62,6 +62,7 @@ function timingSafeEqual(a, b) {
  * @property {number} createdAt
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
+ * @property {string} [email]     the verified address this was issued to
  */
 
 export class ClientRegistry {

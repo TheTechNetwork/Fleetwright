@@ -58,6 +58,17 @@ routes = [
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
+# --- who is allowed to sign in ----------------------------------------------
+# Identifiers, not credentials: the issuer is public, the audience is the client
+# id an app ships anyway, and the allowlist is a list of colleagues. Keeping
+# them here means changing who can reach a fleet is a reviewable diff rather
+# than a value somebody edited in a web form at midnight.
+#
+# Empty ALLOW means nobody, deliberately — see src/fleet/coordinator/oidc.js.
+# AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+# AGENT_FLEET_AUTH_AUDIENCES = "<the OAuth client id the app uses>"
+# AGENT_FLEET_AUTH_ALLOW = "@thetech.network"
+
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per
 # client address is far more than a person tapping around an app and far less

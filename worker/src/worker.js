@@ -97,9 +97,25 @@ export default {
       return reply ? json({ ...reply, demo: true }) : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
     }
 
+    // Signing in cannot require being signed in. The Durable Object verifies
+    // the identity token itself, so this route is reachable without a fleet
+    // credential and refuses on its own terms.
+    if (url.pathname === '/api/session' && request.method === 'POST') {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
     if (!timingSafeEqual(presented, expected)) {
       // Checked HERE, before the request reaches the Durable Object, so an
       // unauthenticated peer never gets as far as something holding state.
+      // Not the shared token — but it may be a credential issued to a device.
+      // Checked in the Durable Object, which is the only thing holding the
+      // client registry; the shared token stays a fast path that never needs
+      // it.
+      if (!isHost && /^fwk_/.test(presented)) {
+        const id = env.FLEET.idFromName('fleet');
+        return env.FLEET.get(id).fetch(request);
+      }
       return json({ ok: false, error: { code: 'unauthorised' } }, 401);
     }
 

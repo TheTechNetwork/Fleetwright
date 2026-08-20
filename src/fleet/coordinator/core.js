@@ -13,6 +13,7 @@
 // build breaks, which is the check that keeps it honest.
 
 import { HostRegistry } from './registry.js';
+import { ClientRegistry } from './clients.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent } from '../protocol/intents.js';
 
@@ -56,6 +57,8 @@ export class CoordinatorCore {
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
     this.registry = new HostRegistry({ now });
+    // Credentials issued to devices, one per phone, each revocable alone.
+    this.clients = new ClientRegistry({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any }>} */
     this.pending = new Map();
     /** @type {Map<string, Device>} */
@@ -218,6 +221,26 @@ export class CoordinatorCore {
     } catch (e) {
       return { ok: false, error: { code: 'push_failed' }, text: `Push failed: ${/** @type {Error} */ (e).message}` };
     }
+  }
+
+  /**
+   * Turn a verified identity into a credential for this device.
+   *
+   * The ID token is spent here and never stored: everything afterwards uses the
+   * client token, so revoking a phone is a local act and no request needs the
+   * identity provider to be reachable.
+   *
+   * @param {{ email: string, name?: string|null }} who
+   * @param {string} [deviceName]
+   */
+  async issueClient(who, deviceName) {
+    const label = String(deviceName || '').trim() || who.name || who.email;
+    const { client, token } = await this.clients.issue(`${label} (${who.email})`);
+    // Recorded on the client so an intent can say who sent it without another
+    // lookup, and so a revocation list reads as people rather than ids.
+    client.email = who.email;
+    this.log.info(`coordinator: issued a credential to ${who.email} for ${label}`);
+    return { token, client: { id: client.id, name: client.name, createdAt: client.createdAt } };
   }
 
   // --- devices -------------------------------------------------------------

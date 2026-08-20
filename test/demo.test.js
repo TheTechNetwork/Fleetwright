@@ -62,3 +62,47 @@ test('anything the demo does not serve returns null, never a real answer', () =>
   assert.equal(call('/api/whatever'), null);
   assert.equal(call('/'), null);
 });
+
+// --- the sign-in path -------------------------------------------------------
+
+test('a device credential is refused once revoked, and revoking one leaves the rest', async () => {
+  // The property the whole exercise is for: losing a phone costs that phone.
+  const { ClientRegistry } = await import('../src/fleet/coordinator/clients.js');
+  const clients = new ClientRegistry();
+
+  const phone = await clients.issue('Eli iPhone');
+  const pixel = await clients.issue('Eli Pixel');
+
+  assert.ok(await clients.verify(phone.token));
+  assert.ok(await clients.verify(pixel.token));
+
+  assert.equal(clients.revoke(phone.client.id), true);
+  assert.equal(await clients.verify(phone.token), null, 'the lost phone is out');
+  assert.ok(await clients.verify(pixel.token), 'and nothing else had to change');
+
+  assert.equal(clients.revoke(phone.client.id), false, 'revoking twice is not an error worth reporting');
+});
+
+test('a token is stored hashed, so the registry is not a list of credentials', async () => {
+  const { ClientRegistry, hashSecret } = await import('../src/fleet/coordinator/clients.js');
+  const clients = new ClientRegistry();
+  const { client, token } = await clients.issue('phone');
+
+  const stored = JSON.stringify(clients.serialise());
+  const secret = token.split('_')[2];
+  assert.equal(stored.includes(secret), false, 'the secret is not in what gets persisted');
+  assert.equal(client.secretHash, await hashSecret(secret));
+
+  // And what an app renders carries no hash either.
+  assert.equal(JSON.stringify(clients.list()).includes(client.secretHash), false);
+});
+
+test('a credential survives being persisted and restored', async () => {
+  const { ClientRegistry } = await import('../src/fleet/coordinator/clients.js');
+  const before = new ClientRegistry();
+  const { token } = await before.issue('phone');
+
+  const after = new ClientRegistry();
+  after.restore(JSON.parse(JSON.stringify(before.serialise())));
+  assert.ok(await after.verify(token), 'a Durable Object eviction must not sign everybody out');
+});
