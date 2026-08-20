@@ -1014,7 +1014,13 @@ if [ "$WIZARD" = yes ]; then
     # Already enrolled? `identity` prints the fingerprint of whatever key is on
     # disk; `doctor` is the one that asks the coordinator. Re-running the
     # installer on a working box must not demand a new pin.
-    if sidecar_cli "identity" >/dev/null 2>&1 && sidecar_cli "doctor" 2>/dev/null | grep -q 'coordinator knows this host'; then
+    #
+    # Matched on the LEADING " ok ", not on the sentence: doctor prints the same
+    # words on the failing line, so grepping for the phrase alone would report
+    # every unenrolled box as already enrolled and silently skip the one step
+    # this function exists to do.
+    if sidecar_cli "identity" >/dev/null 2>&1 \
+       && sidecar_cli "doctor" 2>/dev/null | grep -q '^ ok .*coordinator knows this host'; then
       ok "this box is already enrolled at $ENROL_URL"
       return 0
     fi

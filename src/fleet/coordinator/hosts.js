@@ -24,6 +24,19 @@ import { randomInt } from './random.js';
 const CHALLENGE_TTL_MS = 120_000;
 
 /**
+ * How many nonces a host may have outstanding at once.
+ *
+ * More than one, because there is only one key in the map and anybody can ask
+ * for a nonce: with a single slot, a stranger requesting challenges for a host
+ * id in a loop would overwrite the nonce that host is in the middle of signing,
+ * and the machine would reconnect forever without ever being able to say why.
+ * A small ring makes that race unwinnable without any authentication on the
+ * challenge endpoint, which is a thing that cannot be authenticated — asking
+ * for a nonce is what an unauthenticated party does in order to authenticate.
+ */
+const MAX_OUTSTANDING = 8;
+
+/**
  * @typedef {object} EnrolledHost
  * @property {string} hostId
  * @property {any} publicJwk
@@ -39,7 +52,7 @@ export class HostIdentities {
   constructor({ now = () => Date.now() } = {}) {
     /** @type {Map<string, EnrolledHost>} */
     this.hosts = new Map();
-    /** @type {Map<string, { nonce: string, at: number }>} */
+    /** @type {Map<string, { nonce: string, at: number }[]>} */
     this.challenges = new Map();
     this.now = now;
   }
@@ -95,7 +108,21 @@ export class HostIdentities {
   challenge(hostId) {
     this.#sweep();
     const nonce = `${this.now().toString(36)}.${randomInt(0, 2 ** 32).toString(36)}${randomInt(0, 2 ** 32).toString(36)}`;
-    this.challenges.set(hostId, { nonce, at: this.now() });
+
+    // Issued to anyone, REMEMBERED only for a host that exists. A nonce for a
+    // name nobody enrolled is useless — nothing can produce a signature over it
+    // that will verify — so handing one back costs nothing and telling the
+    // caller apart from a real host costs nothing either. What it buys is a
+    // bound: an unauthenticated party cannot make this map grow by naming a
+    // million machines that do not exist.
+    const host = this.hosts.get(String(hostId || ''));
+    if (!host || host.revokedAt) return nonce;
+
+    const outstanding = this.challenges.get(host.hostId) || [];
+    outstanding.push({ nonce, at: this.now() });
+    // Oldest out first. A host that asks nine times has abandoned the first.
+    if (outstanding.length > MAX_OUTSTANDING) outstanding.splice(0, outstanding.length - MAX_OUTSTANDING);
+    this.challenges.set(host.hostId, outstanding);
     return nonce;
   }
 
@@ -112,14 +139,39 @@ export class HostIdentities {
     if (!host) return { ok: false, reason: 'that host is not enrolled' };
     if (host.revokedAt) return { ok: false, reason: 'that host has been revoked' };
 
-    const challenge = this.challenges.get(host.hostId);
-    if (!challenge) return { ok: false, reason: 'no challenge is outstanding — ask for one first' };
-    // Spent whether or not it verifies. A nonce that survives a failed attempt
-    // is a nonce somebody can grind against.
-    this.challenges.delete(host.hostId);
+    const outstanding = this.challenges.get(host.hostId) || [];
+    if (!outstanding.length) return { ok: false, reason: 'no challenge is outstanding — ask for one first' };
 
-    const ok = await verify(host.publicJwk, signature, signingInput('host-connect', { hostId: host.hostId, nonce: challenge.nonce }));
-    if (!ok) return { ok: false, reason: 'the signature does not match the enrolled key' };
+    // Tried against each, because the proof does not say which nonce it
+    // answers. At most MAX_OUTSTANDING verifications, which is the price of the
+    // ring above.
+    let matched = -1;
+    for (let i = 0; i < outstanding.length; i++) {
+      const ok = await verify(
+        host.publicJwk,
+        signature,
+        signingInput('host-connect', { hostId: host.hostId, nonce: outstanding[i].nonce }),
+      );
+      if (ok) {
+        matched = i;
+        break;
+      }
+    }
+    if (matched === -1) {
+      // Deliberately NOT spending anything. An earlier version burned the nonce
+      // on a failed attempt, on the theory that a surviving nonce is something
+      // to grind against — but there is nothing to grind: producing a signature
+      // over a known nonce without the key is the thing ECDSA makes hard. What
+      // burning it actually bought was a way for anyone who can reach this
+      // endpoint to invalidate an honest host's challenge with one bad guess.
+      return { ok: false, reason: 'the signature does not match the enrolled key' };
+    }
+
+    // Spent on use, which is the property that matters: a captured proof cannot
+    // open a second connection.
+    outstanding.splice(matched, 1);
+    if (outstanding.length) this.challenges.set(host.hostId, outstanding);
+    else this.challenges.delete(host.hostId);
 
     host.lastSeenAt = this.now();
     return { ok: true, host };
@@ -160,6 +212,10 @@ export class HostIdentities {
 
   #sweep() {
     const cutoff = this.now() - CHALLENGE_TTL_MS;
-    for (const [id, c] of this.challenges) if (c.at < cutoff) this.challenges.delete(id);
+    for (const [id, list] of this.challenges) {
+      const live = list.filter((c) => c.at >= cutoff);
+      if (live.length) this.challenges.set(id, live);
+      else this.challenges.delete(id);
+    }
   }
 }

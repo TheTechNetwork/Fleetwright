@@ -64,18 +64,53 @@ test('a signature cannot be replayed, even seconds later', async () => {
   assert.match(/** @type {any} */ (again).reason, /no challenge/);
 });
 
-test('a failed attempt spends the challenge too', async () => {
-  // Otherwise a wrong signature leaves the nonce standing, and an attacker can
-  // grind against a fixed target instead of a moving one.
+test('a stranger cannot stop a host from connecting', async () => {
+  // The challenge endpoint cannot be authenticated — asking for a nonce is what
+  // an unauthenticated party does IN ORDER to authenticate — so anyone can
+  // reach it for any host id. Two ways that could have been turned into a
+  // denial of service, and neither works.
   const hosts = new HostIdentities();
   const { keys } = await enrolled(hosts);
   const nonce = hosts.challenge('deb13-staging');
 
+  // One: a wrong signature, to burn the nonce the host is in the middle of
+  // signing. An earlier version spent the challenge on failure and this
+  // succeeded.
   assert.equal((await hosts.prove('deb13-staging', 'not-a-signature')).ok, false);
 
+  // Two: flooding the host with fresh challenges, to overwrite its nonce. The
+  // ring keeps several outstanding, so the one in flight survives.
+  for (let i = 0; i < 5; i++) hosts.challenge('deb13-staging');
+
   const honest = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
-  const r = await hosts.prove('deb13-staging', honest);
-  assert.equal(r.ok, false, 'the nonce is gone, so even the right answer must ask again');
+  assert.equal((await hosts.prove('deb13-staging', honest)).ok, true);
+});
+
+test('challenges for hosts that do not exist are not remembered', async () => {
+  // Unbounded growth from an unauthenticated endpoint, otherwise: naming a
+  // million machines that were never enrolled would cost a million entries. A
+  // nonce is still returned, because refusing one would answer "does this host
+  // exist" to anybody who asks.
+  const hosts = new HostIdentities();
+  await enrolled(hosts);
+
+  assert.match(hosts.challenge('never-heard-of-it'), /\./);
+  assert.equal(hosts.challenges.has('never-heard-of-it'), false);
+
+  hosts.revoke('deb13-staging');
+  hosts.challenge('deb13-staging');
+  assert.equal(hosts.challenges.has('deb13-staging'), false, 'nor for one that was removed');
+});
+
+test('a host that asks many times keeps only the recent ones', async () => {
+  const hosts = new HostIdentities();
+  const { keys } = await enrolled(hosts);
+  const first = hosts.challenge('deb13-staging');
+  for (let i = 0; i < 20; i++) hosts.challenge('deb13-staging');
+
+  const stale = await answer(hosts, 'deb13-staging', keys.privateJwk, first);
+  const r = await hosts.prove('deb13-staging', stale);
+  assert.equal(r.ok, false, 'the ring is bounded, so a long-abandoned nonce does fall out');
 });
 
 test('a signature for one host is not a signature for another', async () => {
