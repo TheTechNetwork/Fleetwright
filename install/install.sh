@@ -1247,6 +1247,17 @@ if [ "$WIZARD" = yes ]; then
     printf "           -H 'content-type: application/json' -d '{\"kind\":\"host\"}' \\\n"
     printf '           http://127.0.0.1:8791/api/enroll\n'
     printf '  then on that box:  sudo -u %s agent-fleet-sidecar enrol <pin>\n' "$RUN_USER"
+    # The app does not want the admin token. It signs in — which this box can
+    # only accept if it has been told who is allowed, so say so here rather than
+    # letting somebody discover it from a 503 on a phone.
+    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_AUTH_ALLOW)" ]; then
+      printf '\n  For the app to SIGN IN to this coordinator, add to %s:\n' "$COORD_ENV"
+      printf '      AGENT_FLEET_AUTH_ISSUERS=https://appleid.apple.com https://accounts.google.com\n'
+      printf '      AGENT_FLEET_AUTH_AUDIENCES=<the iOS bundle id> <the Android web client id>\n'
+      printf '      AGENT_FLEET_AUTH_ALLOW=@yourdomain.com\n'
+      printf '  Empty ALLOW lets nobody in, on purpose. Until then the app can use the admin\n'
+      printf '  token above, under "use a credential instead".\n'
+    fi
   fi
 
   # This box's own identity, printed because it is the thing to compare against
