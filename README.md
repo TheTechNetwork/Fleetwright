@@ -54,6 +54,8 @@ sudo /opt/agent-fleet/install/install.sh
 
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
+[`docs/wanted.md`](./docs/wanted.md) is what is not built yet, and what makes
+each of those hard.
 
 ## Layout
 
