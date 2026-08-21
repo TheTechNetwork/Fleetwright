@@ -77,25 +77,47 @@ Mac host would run sessions unsandboxed unless something else is found.
 
 ## Elsewhere
 
-### A Telnyx integration, as its own package
+### Reachability: an Inkbox-shaped thing, on Telnyx
 
-> "Inkbox style implementation ... but with Telnyx, our own repo, publish as an
-> NPM module and consume here."
+[Inkbox](https://inkbox.ai) gives an agent **one identity that is reachable on
+many channels** — email, phone, SMS, iMessage, an HTTP address and
+agent-to-agent — with the conversations across those channels tied together, and
+per-channel control over who gets through. Wanted: our own, in its own
+repository, published to npm and consumed here as a dependency.
 
-Recorded in those words because I do not know what Inkbox is and guessing at the
-shape would put the wrong thing in this file — **worth pinning down before
-anyone starts.** What is clear: a Telnyx integration, built in a repository of
-its own, published to npm, and consumed here as a dependency rather than living
-in this tree.
+**Telnyx covers the telephony third of that, and only that.** It sells phone
+numbers, SMS and MMS, and voice. It does not do email and it does not do
+iMessage, so anyone starting from "Inkbox but Telnyx" should know they are
+building the phone-shaped part and would need a second provider for mail
+(Postmark, SES) and something else again for iMessage, which in practice needs
+Apple hardware. Deciding to build only the telephony part is a fine decision;
+discovering it halfway through is not.
 
-What that would look like here: adapters are a solved seam — Telegram and the
-web UI both parse a line, call `dispatch()` from `src/adapters/commands.js`, and
-render the reply. A new surface is that and nothing else, which is what makes it
-reasonable to develop somewhere else and depend on.
+Three things this repository already has that the package should not reinvent:
 
-A dependency is a decision this project takes slowly (`docs/dependencies.md`).
-Our own package is an easier one than a stranger's, but "we wrote it" is not an
-audit.
+- **The adapter seam.** Telegram and the web UI both do the same two things:
+  parse a line and call `dispatch()` from `src/adapters/commands.js`. A channel
+  is that and nothing more, which is exactly what makes it sane to develop in
+  another repository and depend on.
+- **An actor.** Every command carries who asked — `telegram:12345` today, a
+  verified email address once a device credential is doing the asking. The
+  interesting half of Inkbox is that a person is the SAME actor whether they
+  text, mail or call, and that is a question about the identity model rather
+  than about Telnyx.
+- **An allowlist.** `AGENT_HUB_TELEGRAM_ALLOWED_USERS` and
+  `AGENT_FLEET_AUTH_ALLOW` are the existing answers to "who gets through".
+
+**The security shape is different from every surface here today, and worse.**
+Telegram is allowlisted user ids; the apps sign in and hold a per-device
+credential. A phone number is public by construction — anyone who learns it can
+send to it — and caller ID and SMS sender IDs are both spoofable, so neither is
+an authentication. An inbound channel that can start sessions therefore needs
+its own answer to who is allowed, and the honest default is that inbound
+messages from unknown numbers do nothing at all.
+
+Worth reading Inkbox's own docs before designing: agent-to-agent and the
+cross-channel thread are the parts that are actually hard, and they may have
+already made the decisions worth copying.
 
 ### Session configuration from the app and Telegram
 
