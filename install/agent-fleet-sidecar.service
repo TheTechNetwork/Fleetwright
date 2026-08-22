@@ -26,6 +26,14 @@ RestartSec=3
 RuntimeDirectory=agent-fleet
 RuntimeDirectoryMode=0700
 
+# This box's private key lives here — /var/lib/agent-fleet, created 0700 owned
+# by this user before the service starts. It is the whole of this host's
+# identity in the fleet: whoever can read it can be this machine, and nothing
+# else can. Deliberately NOT under /etc with the env file, because the env file
+# is a config file people copy between boxes and this must never be copied.
+StateDirectory=agent-fleet
+StateDirectoryMode=0700
+
 # It holds no session state and stopping it must never disturb a session — the
 # same reasoning as agent-hub's own shutdown.
 KillMode=control-group

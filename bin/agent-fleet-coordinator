@@ -12,6 +12,7 @@
 // agnostic on purpose.
 
 import os from 'node:os';
+import { dirname } from 'node:path';
 import { Coordinator } from '../src/fleet/coordinator/server.js';
 import { log, setLogLevel } from '../src/log.js';
 
@@ -25,26 +26,54 @@ setLogLevel(str('AGENT_FLEET_LOG_LEVEL', 'info'));
 
 const bind = str('AGENT_FLEET_COORDINATOR_BIND', '127.0.0.1');
 const port = Number(str('AGENT_FLEET_COORDINATOR_PORT', '8791'));
-const hostToken = str('AGENT_FLEET_HOST_TOKEN') || null;
 const apiToken = str('AGENT_FLEET_API_TOKEN') || null;
+// Enrolled host keys live here. Hosts authenticate by signature, so this file
+// is the fleet's membership list — see saveState() in coordinator/server.js.
+const stateFile = str('AGENT_FLEET_COORDINATOR_STATE', '/var/lib/agent-fleet-coordinator/state.json');
 
 // Same rule as agent-hub's own bind check, for the same reason: a control
 // surface reachable off-box with no credential is remote control of every host
 // in the fleet for anyone who can route to the port. Refuse rather than warn.
+//
+// Only the admin token is checked. Hosts have no token to forget to set — they
+// are refused by default and let in one at a time by enrolment, which is the
+// same property this check exists to guarantee, obtained structurally.
 const loopback = ['127.0.0.1', 'localhost', '::1'].includes(bind);
-if (!loopback && (!hostToken || !apiToken)) {
+if (!loopback && !apiToken) {
   log.error(
     `config: AGENT_FLEET_COORDINATOR_BIND is ${bind} (not loopback) but ` +
-      `${!hostToken ? 'AGENT_FLEET_HOST_TOKEN' : 'AGENT_FLEET_API_TOKEN'} is empty. ` +
-      'Set both, or bind 127.0.0.1 and put a tunnel in front.',
+      'AGENT_FLEET_API_TOKEN is empty. Set it, or bind 127.0.0.1 and put a tunnel in front.',
   );
   process.exit(1);
 }
-if (loopback && (!hostToken || !apiToken)) {
-  log.warn('no tokens set — fine on loopback for testing, not for anything reachable');
+if (loopback && !apiToken) {
+  log.warn('no admin token set — fine on loopback for testing, not for anything reachable');
 }
 
-const coordinator = new Coordinator({ hostToken, apiToken, logger: log });
+const coordinator = new Coordinator({ apiToken, stateFile, logger: log });
+try {
+  coordinator.loadState();
+} catch (e) {
+  // Deliberately fatal. Starting with an empty membership list because the file
+  // would not parse means refusing every host in the fleet and looking healthy
+  // while doing it.
+  log.error(`config: ${stateFile} could not be read: ${/** @type {Error} */ (e).message}`);
+  process.exit(1);
+}
+try {
+  coordinator.assertStateWritable();
+} catch (e) {
+  // Also fatal, and for a failure mode that is otherwise invisible for weeks:
+  // everything works until the first restart, and then the entire fleet is
+  // refused because nothing was ever written down.
+  log.error(
+    `config: cannot write ${stateFile}: ${/** @type {Error} */ (e).message}\n` +
+      '  The coordinator has to remember which hosts are enrolled — that list IS the fleet.\n' +
+      '  Re-run install.sh so the unit gets StateDirectory=, or:\n' +
+      `    sudo install -d -m 0700 -o "$(id -un)" ${dirname(stateFile)}`,
+  );
+  process.exit(1);
+}
 const actualPort = await coordinator.listen(port, bind);
 
 log.info(`coordinator: ${os.hostname()} · hosts dial ws://${bind}:${actualPort}/host/connect`);

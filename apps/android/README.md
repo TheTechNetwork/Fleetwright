@@ -54,12 +54,40 @@ with no keystore still builds debug. CI does the same thing from the four
 
 ## First run
 
-Settings → the coordinator URL and the API token from
-`/etc/agent-fleet-coordinator.env`.
+Settings → the coordinator URL, then **Sign in with Google**. The app hands the
+coordinator the resulting ID token and is issued a credential for this device,
+kept encrypted with a key that never leaves the phone's keystore. There is no
+token to type: §5 is explicit that a credential in an APK is public the moment
+somebody unzips it, and a credential shared between phones is one that cannot be
+revoked for one of them.
 
-Nothing is baked into the binary. §5 is explicit about this: a credential in an
-APK is public the moment somebody unzips it, so it is entered once and kept on
-the device.
+The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
+`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your address on
+the allowlist. See [`../../docs/identity.md`](../../docs/identity.md).
+
+### Google sign-in needs a web OAuth client
+
+The ID token's audience is the OAuth **web** client id, not the Android one —
+that is what `setServerClientId` names, and it is what the coordinator checks.
+The google-services plugin only writes `default_web_client_id` into resources
+when the Firebase project has one.
+
+`SignIn.kt` looks that resource up **by name at runtime** rather than
+referencing `R.string.default_web_client_id`. That is deliberate: this
+repository is public, most checkouts have no Firebase configuration, and a
+direct reference would mean the app does not compile for any of them. Without a
+web client, the app builds and says plainly that this build has no Google
+sign-in configured.
+
+To get one: Firebase console → Authentication → Sign-in method → enable Google.
+That creates the web client. Add your machine's and CI's SHA-1 under Project
+settings → your Android app, download `google-services.json` again, and the
+`default_web_client_id` string appears. Put the same client id in
+`AGENT_FLEET_AUTH_AUDIENCES` on the coordinator, alongside the iOS bundle id.
+
+Until then, the collapsed **"use a credential instead"** field takes the demo
+credential or the admin token, which is enough to exercise everything
+downstream of sign-in.
 
 ## Push notifications
 

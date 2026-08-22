@@ -13,13 +13,14 @@
 
 import { Fleet } from './fleet-do.js';
 import { demoReply } from './demo.js';
+import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 
 export { Fleet };
 
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_HOST_TOKEN?: string, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -41,26 +42,58 @@ export default {
       });
     }
 
+    // The third, and the reason it is a redirect rather than a copy: the thing
+    // people paste into a root shell should be served by the place that has the
+    // source, so it cannot go stale here and cannot be edited here either. This
+    // Worker answers with a Location and holds no shell script of its own.
+    //
+    // Above the token gate on purpose. A box being installed has no credential
+    // — acquiring one is what the install is for.
+    if (url.pathname === '/install' || url.pathname === '/install.sh') {
+      return Response.redirect(
+        'https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh',
+        302,
+      );
+    }
+
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.
-    if (!env.AGENT_FLEET_HOST_TOKEN || !env.AGENT_FLEET_API_TOKEN) {
+    //
+    // Only the admin token is required now. Hosts carry their own keys, and
+    // people sign in — so the thing that must exist at boot is the credential
+    // that can mint the first enrolment code, and nothing else.
+    if (!env.AGENT_FLEET_API_TOKEN) {
       return json(
         {
           ok: false,
           error: { code: 'not_configured' },
           text:
-            'This coordinator has no tokens set. Run:\n' +
-            '  wrangler secret put AGENT_FLEET_HOST_TOKEN\n' +
-            '  wrangler secret put AGENT_FLEET_API_TOKEN',
+            'This coordinator has no admin token set. Run:\n' +
+            '  wrangler secret put AGENT_FLEET_API_TOKEN\n\n' +
+            'Hosts and phones do not use it — they enrol and sign in. It exists to ' +
+            'mint the first enrolment code and to get back in when nothing else works.',
         },
         503,
       );
     }
 
-    const isHost = url.pathname === '/host/connect';
-    const expected = isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN;
-    const presented = bearerOf(request.headers.get('authorization')) || url.searchParams.get('token') || '';
+    // A host authenticates by SIGNATURE, inside the Durable Object, which is
+    // the only thing holding the enrolled keys. There is no shared host token
+    // any more: AGENT_FLEET_HOST_TOKEN was one string that every machine
+    // presented, so it could not distinguish two hosts, could not revoke one,
+    // and was replayable by anything that saw a single connection.
+    if (
+      url.pathname === '/host/connect' ||
+      url.pathname === '/api/host/challenge' ||
+      url.pathname === '/api/host/verify' ||
+      url.pathname === '/api/enroll/host'
+    ) {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
+    const presented = credentialFrom(request.headers.get('authorization'), url);
 
     // The demo token, if one is configured. Answered HERE, before the Durable
     // Object is reached, which is the whole security property: there is no code
@@ -70,10 +103,10 @@ export default {
     // App Store review needs credentials that work, and the real API token can
     // stop every session in the fleet. This is the other way to satisfy that.
     //
-    // NEVER for /host/connect: a host presenting this must be refused like any
-    // other wrong token, or "demo" would become a way into the fleet rather
-    // than a way around it.
-    if (!isHost && env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
+    // NEVER for a host route: "demo" must not become a way into the fleet. That
+    // used to be a condition here; it is now structural — every host route
+    // returned above, so control cannot reach this line on one.
+    if (env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
       // A demo token equal to the real one would silently turn the whole
       // coordinator into a toy. Refuse rather than guess which was meant.
       if (timingSafeEqual(env.AGENT_FLEET_DEMO_TOKEN, env.AGENT_FLEET_API_TOKEN || '')) {
@@ -97,9 +130,52 @@ export default {
       return reply ? json({ ...reply, demo: true }) : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
     }
 
+    // Signing in cannot require being signed in. The Durable Object verifies
+    // the identity token itself, so this route is reachable without a fleet
+    // credential and refuses on its own terms.
+    //
+    // Bounded here rather than there, so a flood never reaches the object that
+    // holds the fleet. It is the one unauthenticated route that does real work
+    // for an anonymous caller — a key-set fetch, a signature verification, and
+    // on success a stored client record.
+    if (url.pathname === '/api/session' && request.method === 'POST') {
+      if (env.SIGNIN_RATE_LIMIT) {
+        const key = `signin:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+        const { success } = await env.SIGNIN_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json(
+            { ok: false, error: { code: 'rate_limited' }, text: 'Too many sign-in attempts. Try again in a minute.' },
+            429,
+          );
+        }
+      }
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
+    // The admin token, which is the only shared credential left. Non-empty by
+    // the time control gets here: the guard above answers 503 when it is unset,
+    // rather than comparing against '' and letting a blank Authorization
+    // header through.
+    //
+    // This was `isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN`
+    // and the declaration went out with the host token while the reference
+    // below stayed. Every authenticated request threw ReferenceError. Bundling
+    // does not catch that, and neither does anything else that never executes
+    // the file — which was everything, until test/worker-routes.test.js.
+    const expected = env.AGENT_FLEET_API_TOKEN || '';
+
     if (!timingSafeEqual(presented, expected)) {
       // Checked HERE, before the request reaches the Durable Object, so an
       // unauthenticated peer never gets as far as something holding state.
+      // Not the shared token — but it may be a credential issued to a device.
+      // Checked in the Durable Object, which is the only thing holding the
+      // client registry; the shared token stays a fast path that never needs
+      // it.
+      if (isClientCredential(presented)) {
+        const id = env.FLEET.idFromName('fleet');
+        return env.FLEET.get(id).fetch(request);
+      }
       return json({ ok: false, error: { code: 'unauthorised' } }, 401);
     }
 
@@ -110,11 +186,6 @@ export default {
   },
 };
 
-/** @param {string|null} header */
-function bearerOf(header) {
-  const h = header || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : '';
-}
 
 /**
  * Constant-time compare. Not because a token is guessable byte by byte over the

@@ -34,15 +34,28 @@ the per-session sandbox plumbing.
 installer, what it asks, what is deployable today and what is not.
 
 ```sh
+curl -fsSL https://fleet.thetech.network/install | sudo sh
+```
+
+It installs what is missing, generates the admin token, asks about Telegram, the
+coordinator, push and the sandbox, enrols the box in its fleet, and starts the
+services. Re-running it is how you upgrade.
+
+The one-liner fetches the repository to `/opt/agent-fleet` and runs the
+installer from there, so the clone is still what ends up on the box and
+`git -C /opt/agent-fleet log` still answers "what is this running". To do those
+two steps yourself, or to see what the prerequisites are first:
+
+```sh
 git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
+sudo /opt/agent-fleet/install/install.sh --check    # changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```
 
-It installs what is missing, generates the tokens, asks about Telegram, the
-coordinator, push and the sandbox, and starts the services.
-
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
+[`docs/wanted.md`](./docs/wanted.md) is what is not built yet, and what makes
+each of those hard.
 
 ## Layout
 

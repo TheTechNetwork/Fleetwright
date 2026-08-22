@@ -58,6 +58,13 @@ jobs:
       # in it is a worse bug than one in the service.
       - run: bash -n install/install.sh
 
+      # And the bootstrap is checked as SH, not bash. It is the one file here
+      # that strangers execute out of a pipe under whatever /bin/sh is, and a
+      # bashism in it fails on their box with "Bad substitution" and nothing
+      # else. test/bootstrap.test.js runs it for real; this catches the typo
+      # before that gets as far as cloning anything.
+      - run: sh -n install/bootstrap.sh
+
       # An unparseable workflow does not fail a check — it shows up as a run
       # named after the FILE PATH, with no jobs, which is easy to miss entirely.
       # This one cost a round trip to notice, so it is a check now.

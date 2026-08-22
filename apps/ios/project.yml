@@ -113,3 +113,17 @@ targets:
         # reports it: the upload succeeds, the build installs, and push is
         # simply silent.
         aps-environment: $(APS_ENVIRONMENT)
+        # Sign in with Apple. The app has no accounts of its own: it hands the
+        # coordinator an Apple ID token and gets a per-device credential back,
+        # so this entitlement is the whole of the sign-in mechanism.
+        #
+        # OPERATIONAL NOTE, because it fails at SIGNING rather than at build:
+        # the App ID has to have the Sign In with Apple capability enabled in
+        # the developer portal, and the provisioning profile has to postdate
+        # that. Cloud signing regenerates the profile, so enabling the
+        # capability is the only manual step — but until it is done, archiving
+        # fails with "provisioning profile does not include the
+        # com.apple.developer.applesignin entitlement", which reads like a
+        # certificate problem and is not one.
+        com.apple.developer.applesignin:
+          - Default

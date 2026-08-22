@@ -52,22 +52,34 @@ unset:
 
 | secret | |
 |---|---|
-| `AGENT_FLEET_HOST_TOKEN` | what a host presents. `openssl rand -hex 24` |
-| `AGENT_FLEET_API_TOKEN` | what a phone or Shortcut presents. `openssl rand -hex 24` |
+| `AGENT_FLEET_API_TOKEN` | break-glass admin. `openssl rand -hex 24`. Not what phones use |
 | `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
+
+And three repository **variables**, which configure sign-in. Not secrets — an
+issuer list, an audience list and a list of allowed addresses — but the deploy
+job syncs them the same way, because they are the difference between "nobody
+can sign in" and "anybody with a Google account can":
+
+| variable | |
+|---|---|
+| `AGENT_FLEET_AUTH_ISSUERS` | `https://appleid.apple.com https://accounts.google.com` |
+| `AGENT_FLEET_AUTH_AUDIENCES` | the iOS bundle id and the Android **web** OAuth client id |
+| `AGENT_FLEET_AUTH_ALLOW` | `@yourdomain.com`, or whole addresses. **Empty allows nobody** |
 
 **Or directly**, which keeps them out of GitHub entirely:
 
 ```sh
 cd worker
-npx wrangler secret put AGENT_FLEET_HOST_TOKEN
 npx wrangler secret put AGENT_FLEET_API_TOKEN
+npx wrangler secret put AGENT_FLEET_AUTH_ISSUERS
+npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
+npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
 npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
 ```
 
-Whichever you choose, `AGENT_FLEET_HOST_TOKEN` has to match the value in each
-host's `/etc/agent-fleet-sidecar.env`, or the host's websocket is refused at the
-upgrade.
+**Hosts need none of this.** There is no shared host token to keep in step any
+more: a host generates a keypair, enrols once with a six-digit pin, and signs a
+fresh nonce on every connection.
 
 ## Android — a signed release APK
 

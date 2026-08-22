@@ -15,13 +15,18 @@ ExecStart=__NODE__ __DIR__/bin/agent-fleet-coordinator
 Restart=always
 RestartSec=3
 
-# Unlike agent-hub, this one holds nothing that must survive a restart. Hosts
-# reconnect on their own with backoff, and their sessions are untouched by any
-# of it — the coordinator's registry is a cache, not the authority.
+# The registry is still a cache — hosts reconnect on their own and their
+# sessions are untouched. What DOES have to survive is the membership list:
+# which hosts are enrolled, and their public keys. Lose that and every box in
+# the fleet is refused until somebody re-enrols it by hand.
+StateDirectory=agent-fleet-coordinator
+StateDirectoryMode=0700
+
 KillMode=control-group
 TimeoutStopSec=10
 
-# It talks to hosts and to clients, and touches nothing on disk.
+# It talks to hosts and to clients, and writes exactly one file — the state
+# directory above, which ProtectSystem=strict leaves writable.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
