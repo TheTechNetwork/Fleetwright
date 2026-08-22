@@ -13,6 +13,7 @@
 
 import { Fleet } from './fleet-do.js';
 import { demoReply } from './demo.js';
+import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 
 export { Fleet };
 
@@ -92,7 +93,7 @@ export default {
       return env.FLEET.get(id).fetch(request);
     }
 
-    const presented = bearerOf(request.headers.get('authorization')) || url.searchParams.get('token') || '';
+    const presented = credentialFrom(request.headers.get('authorization'), url);
 
     // The demo token, if one is configured. Answered HERE, before the Durable
     // Object is reached, which is the whole security property: there is no code
@@ -171,7 +172,7 @@ export default {
       // Checked in the Durable Object, which is the only thing holding the
       // client registry; the shared token stays a fast path that never needs
       // it.
-      if (/^fwk_/.test(presented)) {
+      if (isClientCredential(presented)) {
         const id = env.FLEET.idFromName('fleet');
         return env.FLEET.get(id).fetch(request);
       }
@@ -185,11 +186,6 @@ export default {
   },
 };
 
-/** @param {string|null} header */
-function bearerOf(header) {
-  const h = header || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : '';
-}
 
 /**
  * Constant-time compare. Not because a token is guessable byte by byte over the

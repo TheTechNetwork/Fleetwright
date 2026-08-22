@@ -23,18 +23,33 @@ import { randomInt } from './random.js';
  *  short of anything worth replaying. */
 const CHALLENGE_TTL_MS = 120_000;
 
-/**
- * How many nonces a host may have outstanding at once.
- *
- * More than one, because there is only one key in the map and anybody can ask
- * for a nonce: with a single slot, a stranger requesting challenges for a host
- * id in a loop would overwrite the nonce that host is in the middle of signing,
- * and the machine would reconnect forever without ever being able to say why.
- * A small ring makes that race unwinnable without any authentication on the
- * challenge endpoint, which is a thing that cannot be authenticated — asking
- * for a nonce is what an unauthenticated party does in order to authenticate.
- */
-const MAX_OUTSTANDING = 8;
+// NONCES ARE NOT STORED. They are minted, and the coordinator recognises its own.
+//
+// They were stored, in a ring of eight per host, and that was wrong in a way
+// that took a reproduction to see. The challenge endpoint cannot be
+// authenticated — asking for a nonce is what an unauthenticated party does in
+// order to authenticate — so anybody could ask for one, and every ask pushed
+// an entry into the ring of whichever host id they named. Nine asks evicted the
+// nonce an honest host was in the middle of signing. The machine then failed
+// its handshake, retried, and was evicted again, for as long as the flood
+// lasted; and because the eviction is indistinguishable from a bad answer, it
+// was told "the signature does not match the enrolled key" — which sends an
+// operator to re-key a machine whose key is perfectly good.
+//
+// A ring made that cost nine requests instead of one. It did not make it
+// impossible, and the comment claiming it did was wrong.
+//
+// So: a nonce carries its own proof that we issued it. `<issuedAt>.<random>.<mac>`,
+// where the mac is HMAC-SHA-256 over the first two parts and the host id, under
+// a secret this coordinator generates and keeps. Verifying is recomputing it.
+// There is no per-host state, so there is nothing to evict, nothing to grow,
+// and no index into an array to go stale across an await.
+//
+// Replay still has to be stopped, and that DOES need memory — but only of
+// nonces that were actually SPENT, which requires the private key. An attacker
+// cannot make that set grow; only real hosts connecting can, and they connect
+// on the order of once a minute.
+const NONCE_SECRET_BYTES = 32;
 
 /**
  * @typedef {object} EnrolledHost
@@ -52,8 +67,16 @@ export class HostIdentities {
   constructor({ now = () => Date.now() } = {}) {
     /** @type {Map<string, EnrolledHost>} */
     this.hosts = new Map();
-    /** @type {Map<string, { nonce: string, at: number }[]>} */
-    this.challenges = new Map();
+    /** Nonces that have been SPENT, and when. Bounded by real connections,
+     *  because getting into it requires a valid signature. */
+    /** @type {Map<string, number>} */
+    this.spent = new Map();
+    /** The key this coordinator recognises its own nonces by, as a promise so
+     *  it is made once. Regenerated if lost, which invalidates outstanding
+     *  challenges — harmless, because a host asks for a new one on its next
+     *  dial. */
+    /** @type {Promise<CryptoKey>|null} */
+    this.nonceSecret = null;
     this.now = now;
   }
 
@@ -105,25 +128,57 @@ export class HostIdentities {
    *
    * @param {string} hostId
    */
-  challenge(hostId) {
+  async challenge(hostId) {
     this.#sweep();
-    const nonce = `${this.now().toString(36)}.${randomInt(0, 2 ** 32).toString(36)}${randomInt(0, 2 ** 32).toString(36)}`;
+    const id = String(hostId || '');
+    const issuedAt = this.now();
+    const random = `${randomInt(0, 2 ** 32).toString(36)}${randomInt(0, 2 ** 32).toString(36)}`;
+    // Issued to ANYONE, for any name, and it costs this coordinator nothing to
+    // do so: there is no entry to make. A nonce for a host that does not exist
+    // is useless, because nothing can produce a signature over it that will
+    // verify — and refusing one would answer "does this host exist" to whoever
+    // asked.
+    return `${issuedAt.toString(36)}.${random}.${await this.#mac(issuedAt, random, id)}`;
+  }
 
-    // Issued to anyone, REMEMBERED only for a host that exists. A nonce for a
-    // name nobody enrolled is useless — nothing can produce a signature over it
-    // that will verify — so handing one back costs nothing and telling the
-    // caller apart from a real host costs nothing either. What it buys is a
-    // bound: an unauthenticated party cannot make this map grow by naming a
-    // million machines that do not exist.
-    const host = this.hosts.get(String(hostId || ''));
-    if (!host || host.revokedAt) return nonce;
+  /** The signing key, made once and kept. @returns {Promise<CryptoKey>} */
+  async #secret() {
+    if (!this.nonceSecret) {
+      this.nonceSecret = crypto.subtle.importKey(
+        'raw',
+        crypto.getRandomValues(new Uint8Array(NONCE_SECRET_BYTES)),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+    }
+    return this.nonceSecret;
+  }
 
-    const outstanding = this.challenges.get(host.hostId) || [];
-    outstanding.push({ nonce, at: this.now() });
-    // Oldest out first. A host that asks nine times has abandoned the first.
-    if (outstanding.length > MAX_OUTSTANDING) outstanding.splice(0, outstanding.length - MAX_OUTSTANDING);
-    this.challenges.set(host.hostId, outstanding);
-    return nonce;
+  /** @param {number} issuedAt @param {string} random @param {string} hostId */
+  async #mac(issuedAt, random, hostId) {
+    return hmac(await this.#secret(), `${issuedAt.toString(36)}.${random}.${hostId}`);
+  }
+
+  /**
+   * Is this a nonce we issued, for this host, recently, and unspent?
+   *
+   * @param {string} nonce
+   * @param {string} hostId
+   */
+  async #nonceState(nonce, hostId) {
+    const parts = String(nonce || '').split('.');
+    if (parts.length !== 3) return 'malformed';
+    const [stamp, random, mac] = parts;
+    const issuedAt = parseInt(stamp, 36);
+    if (!Number.isFinite(issuedAt)) return 'malformed';
+    // Constant-time-ish: compare the whole string rather than short-circuiting
+    // on the first differing character. There is nothing to learn from the
+    // timing of a mac that is not ours, but it costs nothing to not leak it.
+    if (!equalStrings(mac, await this.#mac(issuedAt, random, hostId))) return 'not-ours';
+    if (this.now() - issuedAt > CHALLENGE_TTL_MS) return 'expired';
+    if (this.spent.has(nonce)) return 'spent';
+    return 'live';
   }
 
   /**
@@ -131,47 +186,37 @@ export class HostIdentities {
    *
    * @param {string} hostId
    * @param {string} signature
+   * @param {string} presentedNonce the challenge this signature answers
    * @returns {Promise<{ ok: true, host: EnrolledHost } | { ok: false, reason: string }>}
    */
-  async prove(hostId, signature) {
+  async prove(hostId, signature, presentedNonce) {
     this.#sweep();
     const host = this.hosts.get(String(hostId || ''));
     if (!host) return { ok: false, reason: 'that host is not enrolled' };
     if (host.revokedAt) return { ok: false, reason: 'that host has been revoked' };
 
-    const outstanding = this.challenges.get(host.hostId) || [];
-    if (!outstanding.length) return { ok: false, reason: 'no challenge is outstanding — ask for one first' };
-
-    // Tried against each, because the proof does not say which nonce it
-    // answers. At most MAX_OUTSTANDING verifications, which is the price of the
-    // ring above.
-    let matched = -1;
-    for (let i = 0; i < outstanding.length; i++) {
-      const ok = await verify(
-        host.publicJwk,
-        signature,
-        signingInput('host-connect', { hostId: host.hostId, nonce: outstanding[i].nonce }),
-      );
-      if (ok) {
-        matched = i;
-        break;
-      }
+    // The nonce comes back WITH the proof now, rather than being looked up.
+    // The host has it — it was just handed to them — and carrying it means the
+    // coordinator holds no per-host state that a stranger can churn.
+    const nonce = String(presentedNonce || '');
+    const state = await this.#nonceState(nonce, host.hostId);
+    if (state === 'malformed' || state === 'not-ours') {
+      return { ok: false, reason: 'that challenge was not issued by this coordinator — ask for one first' };
     }
-    if (matched === -1) {
-      // Deliberately NOT spending anything. An earlier version burned the nonce
-      // on a failed attempt, on the theory that a surviving nonce is something
-      // to grind against — but there is nothing to grind: producing a signature
-      // over a known nonce without the key is the thing ECDSA makes hard. What
-      // burning it actually bought was a way for anyone who can reach this
-      // endpoint to invalidate an honest host's challenge with one bad guess.
-      return { ok: false, reason: 'the signature does not match the enrolled key' };
-    }
+    if (state === 'expired') return { ok: false, reason: 'that challenge has expired — ask for another' };
+    if (state === 'spent') return { ok: false, reason: 'that challenge has already been used' };
 
-    // Spent on use, which is the property that matters: a captured proof cannot
-    // open a second connection.
-    outstanding.splice(matched, 1);
-    if (outstanding.length) this.challenges.set(host.hostId, outstanding);
-    else this.challenges.delete(host.hostId);
+    const ok = await verify(
+      host.publicJwk,
+      signature,
+      signingInput('host-connect', { hostId: host.hostId, nonce }),
+    );
+    if (!ok) return { ok: false, reason: 'the signature does not match the enrolled key' };
+
+    // Spent only on SUCCESS, so a wrong answer costs an attacker nothing to
+    // make and gains them nothing either — and the set only grows for parties
+    // holding the private key.
+    this.spent.set(nonce, this.now());
 
     host.lastSeenAt = this.now();
     return { ok: true, host };
@@ -190,7 +235,6 @@ export class HostIdentities {
     const host = this.hosts.get(String(hostId || ''));
     if (!host || host.revokedAt) return false;
     host.revokedAt = this.now();
-    this.challenges.delete(host.hostId);
     return true;
   }
 
@@ -211,11 +255,34 @@ export class HostIdentities {
   }
 
   #sweep() {
+    // A spent nonce only has to be remembered until it would expire anyway.
     const cutoff = this.now() - CHALLENGE_TTL_MS;
-    for (const [id, list] of this.challenges) {
-      const live = list.filter((c) => c.at >= cutoff);
-      if (live.length) this.challenges.set(id, live);
-      else this.challenges.delete(id);
-    }
+    for (const [nonce, at] of this.spent) if (at < cutoff) this.spent.delete(nonce);
   }
+}
+
+/**
+ * HMAC-SHA-256, hex, through WebCrypto.
+ *
+ * NOT node:crypto's createHmac, which would have been synchronous and simpler
+ * and would also have broken the Worker — this file is shared verbatim with it,
+ * and the rule that the coordinator core imports nothing from `node:` is the
+ * only reason there is one implementation rather than two.
+ *
+ * @param {CryptoKey} key @param {string} message
+ */
+async function hmac(key, message) {
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Length-safe comparison that does not stop at the first difference.
+ *  @param {string} a @param {string} b */
+function equalStrings(a, b) {
+  const as = String(a);
+  const bs = String(b);
+  if (as.length !== bs.length) return false;
+  let diff = 0;
+  for (let i = 0; i < as.length; i++) diff |= as.charCodeAt(i) ^ bs.charCodeAt(i);
+  return diff === 0;
 }

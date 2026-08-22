@@ -33,6 +33,7 @@ import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
 import { verifyIdToken, isAllowed, isPrivateRelay } from './oidc.js';
+import { credentialFrom, isClientCredential } from './credential.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -188,7 +189,8 @@ export class Coordinator {
         const url = new URL(req.url || '/', 'http://placeholder');
         const hostId = url.searchParams.get('hostId') || '';
         const proof = String(req.headers['x-fleet-proof'] || '');
-        const outcome = await this.core.hostIds.prove(hostId, proof);
+        const nonce = String(req.headers['x-fleet-nonce'] || '');
+        const outcome = await this.core.hostIds.prove(hostId, proof, nonce);
         if (outcome.ok) return true;
         this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
         return outcome.reason;
@@ -389,12 +391,16 @@ export class Coordinator {
 
     if (p === '/api/host/challenge' && req.method === 'POST') {
       const body = await readJson(req);
-      return json(res, 200, { ok: true, nonce: this.core.hostIds.challenge(String(body?.hostId || '')) });
+      return json(res, 200, { ok: true, nonce: await this.core.hostIds.challenge(String(body?.hostId || '')) });
     }
 
     if (p === '/api/host/verify' && req.method === 'POST') {
       const body = await readJson(req);
-      const outcome = await this.core.hostIds.prove(String(body?.hostId || ''), String(body?.proof || ''));
+      const outcome = await this.core.hostIds.prove(
+        String(body?.hostId || ''),
+        String(body?.proof || ''),
+        String(body?.nonce || ''),
+      );
       if (!outcome.ok) return json(res, 401, { ok: false, text: outcome.reason });
       return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
     }
@@ -405,9 +411,9 @@ export class Coordinator {
     // after the person who holds it, revocable on its own. The admin token is
     // break-glass — it can stop every session in the fleet — and exists to mint
     // the first pin and to get back in when nothing else works.
-    const presented = bearerOf(req.headers.authorization) || url.searchParams.get('token') || '';
+    const presented = credentialFrom(req.headers.authorization, url);
     let client = null;
-    if (presented.startsWith('fwk_')) {
+    if (isClientCredential(presented)) {
       client = await this.core.clients.verify(presented);
       if (!client) {
         return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' });
@@ -539,11 +545,6 @@ function splitList(value) {
     .filter(Boolean);
 }
 
-/** @param {string|undefined} header */
-function bearerOf(header) {
-  const h = header || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : '';
-}
 
 /** @param {unknown} a @param {unknown} b */
 function safeEqual(a, b) {

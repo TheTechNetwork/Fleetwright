@@ -27,10 +27,10 @@ test('a host proves itself by signing a challenge', async () => {
   const hosts = new HostIdentities();
   const { keys } = await enrolled(hosts);
 
-  const nonce = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
   const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
 
-  const r = await hosts.prove('deb13-staging', proof);
+  const r = await hosts.prove('deb13-staging', proof, nonce);
   assert.equal(r.ok, true);
   assert.equal(/** @type {any} */ (r).host.hostId, 'deb13-staging');
 });
@@ -42,10 +42,10 @@ test('another key does not get in, however well formed', async () => {
   await enrolled(hosts);
   const impostor = await generateKeyPair();
 
-  const nonce = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
   const proof = await answer(hosts, 'deb13-staging', impostor.privateJwk, nonce);
 
-  const r = await hosts.prove('deb13-staging', proof);
+  const r = await hosts.prove('deb13-staging', proof, nonce);
   assert.equal(r.ok, false);
   assert.match(/** @type {any} */ (r).reason, /does not match/);
 });
@@ -54,63 +54,99 @@ test('a signature cannot be replayed, even seconds later', async () => {
   const hosts = new HostIdentities();
   const { keys } = await enrolled(hosts);
 
-  const nonce = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
   const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
-  assert.equal((await hosts.prove('deb13-staging', proof)).ok, true);
+  assert.equal((await hosts.prove('deb13-staging', proof, nonce)).ok, true);
 
   // Same proof, same nonce, immediately after: the nonce is spent.
-  const again = await hosts.prove('deb13-staging', proof);
+  const again = await hosts.prove('deb13-staging', proof, nonce);
   assert.equal(again.ok, false);
-  assert.match(/** @type {any} */ (again).reason, /no challenge/);
+  assert.match(/** @type {any} */ (again).reason, /already been used/);
 });
 
 test('a stranger cannot stop a host from connecting', async () => {
   // The challenge endpoint cannot be authenticated — asking for a nonce is what
-  // an unauthenticated party does IN ORDER to authenticate — so anyone can
-  // reach it for any host id. Two ways that could have been turned into a
-  // denial of service, and neither works.
+  // an unauthenticated party does IN ORDER to authenticate — so anyone can ask
+  // for one, for any host id, as often as they like.
+  //
+  // This used to be survivable rather than harmless. Nonces were kept in a ring
+  // of eight per host, so nine requests evicted the one an honest host was in
+  // the middle of signing, and a sustained flood kept a named machine out of
+  // the fleet indefinitely. Now there is no per-host state to churn: a nonce
+  // carries its own proof that this coordinator issued it.
   const hosts = new HostIdentities();
   const { keys } = await enrolled(hosts);
-  const nonce = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
 
-  // One: a wrong signature, to burn the nonce the host is in the middle of
-  // signing. An earlier version spent the challenge on failure and this
-  // succeeded.
-  assert.equal((await hosts.prove('deb13-staging', 'not-a-signature')).ok, false);
+  // A wrong answer, which used to burn the nonce.
+  assert.equal((await hosts.prove('deb13-staging', 'not-a-signature', nonce)).ok, false);
 
-  // Two: flooding the host with fresh challenges, to overwrite its nonce. The
-  // ring keeps several outstanding, so the one in flight survives.
-  for (let i = 0; i < 5; i++) hosts.challenge('deb13-staging');
+  // And a flood, which used to evict it. Far past the old ring size.
+  for (let i = 0; i < 500; i++) await hosts.challenge('deb13-staging');
 
   const honest = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
-  assert.equal((await hosts.prove('deb13-staging', honest)).ok, true);
+  assert.equal((await hosts.prove('deb13-staging', honest, nonce)).ok, true);
 });
 
-test('challenges for hosts that do not exist are not remembered', async () => {
-  // Unbounded growth from an unauthenticated endpoint, otherwise: naming a
-  // million machines that were never enrolled would cost a million entries. A
-  // nonce is still returned, because refusing one would answer "does this host
-  // exist" to anybody who asks.
+test('issuing a challenge stores nothing at all', async () => {
+  // Not "nothing for hosts that do not exist" — nothing for anyone. An
+  // unauthenticated caller naming a million machines costs this coordinator a
+  // million HMACs and zero bytes, which is the property that makes the flood
+  // above pointless rather than merely expensive.
   const hosts = new HostIdentities();
   await enrolled(hosts);
 
-  assert.match(hosts.challenge('never-heard-of-it'), /\./);
-  assert.equal(hosts.challenges.has('never-heard-of-it'), false);
-
-  hosts.revoke('deb13-staging');
-  hosts.challenge('deb13-staging');
-  assert.equal(hosts.challenges.has('deb13-staging'), false, 'nor for one that was removed');
+  assert.equal(hosts.spent.size, 0);
+  for (let i = 0; i < 100; i++) await hosts.challenge(`whatever-${i}`);
+  await hosts.challenge('deb13-staging');
+  assert.equal(hosts.spent.size, 0, 'nothing is remembered until a nonce is actually spent');
 });
 
-test('a host that asks many times keeps only the recent ones', async () => {
+test('a nonce this coordinator did not issue is refused', async () => {
   const hosts = new HostIdentities();
   const { keys } = await enrolled(hosts);
-  const first = hosts.challenge('deb13-staging');
-  for (let i = 0; i < 20; i++) hosts.challenge('deb13-staging');
 
-  const stale = await answer(hosts, 'deb13-staging', keys.privateJwk, first);
-  const r = await hosts.prove('deb13-staging', stale);
-  assert.equal(r.ok, false, 'the ring is bounded, so a long-abandoned nonce does fall out');
+  // Shaped right, signed properly, and simply not ours.
+  const forged = `${Date.now().toString(36)}.abcdef.${'0'.repeat(64)}`;
+  const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, forged);
+  const r = await hosts.prove('deb13-staging', proof, forged);
+  assert.equal(r.ok, false);
+  assert.match(/** @type {any} */ (r).reason, /not issued by this coordinator/);
+});
+
+test('a nonce minted for one host does not work for another', async () => {
+  // The host id is inside the MAC, so a nonce is bound to the name it was asked
+  // for even before any signature is checked.
+  const hosts = new HostIdentities();
+  await enrolled(hosts);
+  await hosts.enrol({ hostId: 'box-b', publicJwk: (await generateKeyPair()).publicJwk });
+
+  const forOther = await hosts.challenge('box-b');
+  const r = await hosts.prove('deb13-staging', 'whatever', forOther);
+  assert.match(/** @type {any} */ (r).reason, /not issued by this coordinator/);
+});
+
+test('an old nonce keeps working until it expires', async () => {
+  // The ring used to drop it: ask twenty times and the first was gone. Nothing
+  // evicts now, so the only thing that ends a nonce is its age or its use —
+  // which is what a host on a slow link needs.
+  let clock = 1_000_000;
+  const hosts = new HostIdentities({ now: () => clock });
+  const { keys } = await enrolled(hosts);
+
+  const first = await hosts.challenge('deb13-staging');
+  for (let i = 0; i < 20; i++) await hosts.challenge('deb13-staging');
+
+  const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, first);
+  assert.equal((await hosts.prove('deb13-staging', proof, first)).ok, true);
+
+  // ...and age does end it.
+  const second = await hosts.challenge('deb13-staging');
+  clock += 130_000;
+  const late = await answer(hosts, 'deb13-staging', keys.privateJwk, second);
+  const r = await hosts.prove('deb13-staging', late, second);
+  assert.equal(r.ok, false);
+  assert.match(/** @type {any} */ (r).reason, /expired/);
 });
 
 test('a signature for one host is not a signature for another', async () => {
@@ -121,11 +157,11 @@ test('a signature for one host is not a signature for another', async () => {
   const a = await enrolled(hosts, 'box-a');
   await enrolled(hosts, 'box-b');
 
-  const nonceB = hosts.challenge('box-b');
+  const nonceB = await hosts.challenge('box-b');
   // box-a signs box-b's nonce, but names itself.
   const proof = await answer(hosts, 'box-a', a.keys.privateJwk, nonceB);
 
-  const r = await hosts.prove('box-b', proof);
+  const r = await hosts.prove('box-b', proof, nonceB);
   assert.equal(r.ok, false);
 });
 
@@ -134,9 +170,9 @@ test('a revoked host is refused, and told that it was revoked', async () => {
   const { keys } = await enrolled(hosts);
   assert.equal(hosts.revoke('deb13-staging'), true);
 
-  const nonce = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
   const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
-  const r = await hosts.prove('deb13-staging', proof);
+  const r = await hosts.prove('deb13-staging', proof, nonce);
 
   assert.equal(r.ok, false);
   assert.match(/** @type {any} */ (r).reason, /revoked/, 'not "unknown host" — the machine should learn why');
@@ -148,12 +184,15 @@ test('re-enrolling replaces the key, which is what a rebuilt machine needs', asy
   const first = await enrolled(hosts);
   const second = await enrolled(hosts);
 
-  const nonce = hosts.challenge('deb13-staging');
-  assert.equal((await hosts.prove('deb13-staging', await answer(hosts, 'deb13-staging', second.keys.privateJwk, nonce))).ok, true);
-
-  const nonce2 = hosts.challenge('deb13-staging');
+  const nonce = await hosts.challenge('deb13-staging');
   assert.equal(
-    (await hosts.prove('deb13-staging', await answer(hosts, 'deb13-staging', first.keys.privateJwk, nonce2))).ok,
+    (await hosts.prove('deb13-staging', await answer(hosts, 'deb13-staging', second.keys.privateJwk, nonce), nonce)).ok,
+    true,
+  );
+
+  const nonce2 = await hosts.challenge('deb13-staging');
+  assert.equal(
+    (await hosts.prove('deb13-staging', await answer(hosts, 'deb13-staging', first.keys.privateJwk, nonce2), nonce2)).ok,
     false,
     'the old key stops working, or a rebuild leaves a spare way in',
   );

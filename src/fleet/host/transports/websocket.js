@@ -33,7 +33,7 @@ export class WebSocketTransport {
    * @param {{
    *   origin: string,
    *   hostId: string,
-   *   proof?: (() => Promise<string>)|null,
+   *   proof?: (() => Promise<{ nonce: string, proof: string }>)|null,
    *   logger?: typeof import('../../../log.js').log,
    *   maxBackoffMs?: number,
    * }} opts
@@ -97,7 +97,14 @@ export class WebSocketTransport {
       // identically on every reconnect, could not say.
       /** @type {Record<string, string>} */
       const headers = {};
-      if (this.proof) headers['x-fleet-proof'] = await this.proof();
+      if (this.proof) {
+        // Two headers, not one string to be split: the nonce says which
+        // challenge this answers, and the coordinator holds no record of having
+        // issued it — the nonce authenticates itself.
+        const { nonce, proof } = await this.proof();
+        headers['x-fleet-nonce'] = nonce;
+        headers['x-fleet-proof'] = proof;
+      }
       const conn = await connectWebSocket(this.url, { headers });
       this.conn = conn;
       this.backoff = INITIAL_BACKOFF_MS;

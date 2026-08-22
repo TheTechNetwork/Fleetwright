@@ -21,6 +21,7 @@
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyIdToken, isAllowed, isPrivateRelay } from '../../src/fleet/coordinator/oidc.js';
+import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -80,9 +81,13 @@ export class Fleet {
     // established this is not the shared token, so anything reaching here with
     // an fwk_ prefix is either a live client or a revoked one — and a revoked
     // one must be refused rather than falling through to the routes below.
-    const presented = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+    // credentialFrom, NOT a second extraction. This read the header only, while
+    // worker.js also accepted ?token= — so `?token=fwk_` passed the Worker's
+    // "let the object judge it" check and arrived here looking like no
+    // credential at all, which meant no judging and no refusal.
+    const presented = credentialFrom(request.headers.get('authorization'), url);
     let client = null;
-    if (presented.startsWith('fwk_')) {
+    if (isClientCredential(presented)) {
       client = await this.core.clients.verify(presented);
       if (!client) {
         return json({ ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' }, 401);
@@ -146,7 +151,7 @@ export class Fleet {
     if (url.pathname === '/api/host/challenge' && request.method === 'POST') {
       const body = await readJson(request);
       const hostId = String(body?.hostId || '');
-      return json({ ok: true, nonce: this.core.hostIds.challenge(hostId) });
+      return json({ ok: true, nonce: await this.core.hostIds.challenge(hostId) });
     }
 
     // The same check `/host/connect` makes, without the socket. `sidecar doctor`
@@ -156,7 +161,11 @@ export class Fleet {
     // not, and it spends the challenge exactly the same way.
     if (url.pathname === '/api/host/verify' && request.method === 'POST') {
       const body = await readJson(request);
-      const outcome = await this.core.hostIds.prove(String(body?.hostId || ''), String(body?.proof || ''));
+      const outcome = await this.core.hostIds.prove(
+        String(body?.hostId || ''),
+        String(body?.proof || ''),
+        String(body?.nonce || ''),
+      );
       if (!outcome.ok) return json({ ok: false, text: outcome.reason }, 401);
       return json({ ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
     }
@@ -364,7 +373,8 @@ export class Fleet {
     // "not enrolled", "revoked" and "signature does not match" send them to
     // three different actions.
     const proof = request.headers.get('x-fleet-proof') || '';
-    const outcome = await this.core.hostIds.prove(hostId, proof);
+    const nonce = request.headers.get('x-fleet-nonce') || '';
+    const outcome = await this.core.hostIds.prove(hostId, proof, nonce);
     if (!outcome.ok) {
       this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
       // In the reason phrase as well as the body. A refused upgrade is read out

@@ -116,9 +116,9 @@ test('the challenge/proof pair is the same one the Node coordinator makes', asyn
   const { nonce } = await (await call(f, '/api/host/challenge', 'POST', { hostId: 'proving' })).json();
   const proof = await sign(key.privateJwk, signingInput('host-connect', { hostId: 'proving', nonce }));
 
-  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'proving', proof })).status, 200);
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'proving', nonce, proof })).status, 200);
   // Spent. This is the property the whole handshake rests on.
-  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'proving', proof })).status, 401);
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'proving', nonce, proof })).status, 401);
 });
 
 test('a revoked host is told it was revoked, not that it is a stranger', async () => {
@@ -131,7 +131,7 @@ test('a revoked host is told it was revoked, not that it is a stranger', async (
 
   const { nonce } = await (await call(f, '/api/host/challenge', 'POST', { hostId: 'condemned' })).json();
   const proof = await sign(key.privateJwk, signingInput('host-connect', { hostId: 'condemned', nonce }));
-  const refused = await call(f, '/api/host/verify', 'POST', { hostId: 'condemned', proof });
+  const refused = await call(f, '/api/host/verify', 'POST', { hostId: 'condemned', nonce, proof });
   assert.equal(refused.status, 401);
   // Different actions: one sends you to enrol the box, the other tells you
   // somebody removed it on purpose.
@@ -197,8 +197,8 @@ test('re-enrolling a name disconnects whoever held the old key', async () => {
   // And the old key no longer proves anything.
   const { nonce } = await (await call(f, '/api/host/challenge', 'POST', { hostId: 'rebuilt' })).json();
   const stale = await sign(first.privateJwk, signingInput('host-connect', { hostId: 'rebuilt', nonce }));
-  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', proof: stale })).status, 401);
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', nonce, proof: stale })).status, 401);
 
   const fresh = await sign(second.privateJwk, signingInput('host-connect', { hostId: 'rebuilt', nonce }));
-  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', proof: fresh })).status, 200);
+  assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', nonce, proof: fresh })).status, 200);
 });

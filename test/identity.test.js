@@ -122,11 +122,11 @@ test('a proof is spent, so a captured one opens nothing', async (t) => {
   const { code } = c.core.enrollment.mint({ purpose: 'host' });
   await enrol({ origin, code, hostId: 'watched', publicJwk: key.publicJwk });
 
-  const proof = await proveIdentity({ origin, hostId: 'watched', privateJwk: key.privateJwk });
+  const { nonce, proof } = await proveIdentity({ origin, hostId: 'watched', privateJwk: key.privateJwk });
   const once = await fetch(`${origin}/api/host/verify`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hostId: 'watched', proof }),
+    body: JSON.stringify({ hostId: 'watched', nonce, proof }),
   });
   assert.equal(once.status, 200);
 
@@ -135,7 +135,7 @@ test('a proof is spent, so a captured one opens nothing', async (t) => {
   const again = await fetch(`${origin}/api/host/verify`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hostId: 'watched', proof }),
+    body: JSON.stringify({ hostId: 'watched', nonce, proof }),
   });
   assert.equal(again.status, 401);
 });

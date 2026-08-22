@@ -135,3 +135,70 @@ test('host routes reach the object without any token at all', async () => {
   }
   assert.deepEqual(reached, ['/host/connect', '/api/host/challenge', '/api/host/verify', '/api/enroll/host']);
 });
+
+// --- the credential is read once ---------------------------------------------
+
+import { Fleet } from '../worker/src/fleet-do.js';
+
+/** The Worker with a REAL Durable Object behind it, not a stub. */
+function wired() {
+  const storage = new Map();
+  const state = {
+    storage: {
+      get: async (/** @type {string} */ k) => storage.get(k),
+      put: async (/** @type {string} */ k, /** @type {any} */ v) => storage.set(k, JSON.parse(JSON.stringify(v))),
+    },
+    blockConcurrencyWhile: (/** @type {() => any} */ fn) => fn(),
+    getWebSockets: () => [],
+    setAlarm: () => {},
+  };
+  const fleet = new Fleet(/** @type {any} */ (state), {});
+  return {
+    fleet,
+    env: /** @type {any} */ ({
+      FLEET: { idFromName: () => 'id', get: () => fleet },
+      AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch',
+    }),
+  };
+}
+
+test('the four characters fwk_ in a query parameter are not a credential', async () => {
+  // They were. worker.js accepted `?token=` as well as the header; the Durable
+  // Object read the header and only the header. So `?token=fwk_` passed the
+  // Worker's "this looks like a device credential, let the object judge it"
+  // check and reached an object that saw no credential, judged nothing and
+  // answered — list hosts, send intents, mint pins, revoke machines.
+  //
+  // Wired to a REAL Fleet object rather than a stub, because a stub would have
+  // answered 200 to all of this and proved nothing.
+  const { env } = wired();
+  for (const token of ['fwk_', 'fwk_x', 'fwk_anything_at_all', 'fwk_0000000000_0000000000']) {
+    const res = await worker.fetch(new Request(`https://fleet.example/api/hosts?token=${token}`), env);
+    assert.equal(res.status, 401, token);
+  }
+});
+
+test('a real device credential still works both ways round', async () => {
+  // The query form is not a mistake to be removed — §7 wants a Shortcut to be
+  // able to call this through "Get Contents of URL", which cannot set headers.
+  const { fleet, env } = wired();
+  const { token } = await fleet.core.clients.issue('a phone (someone@example.com)');
+
+  const query = await worker.fetch(new Request(`https://fleet.example/api/hosts?token=${token}`), env);
+  assert.equal(query.status, 200);
+
+  const header = await worker.fetch(
+    new Request('https://fleet.example/api/hosts', { headers: { authorization: `Bearer ${token}` } }),
+    env,
+  );
+  assert.equal(header.status, 200);
+});
+
+test('a revoked credential is refused in the query form too', async () => {
+  const { fleet, env } = wired();
+  const { token, client } = await fleet.core.clients.issue('a lost phone (someone@example.com)');
+  fleet.core.clients.revoke(client.id);
+
+  const res = await worker.fetch(new Request(`https://fleet.example/api/hosts?token=${token}`), env);
+  assert.equal(res.status, 401);
+});

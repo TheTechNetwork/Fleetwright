@@ -244,7 +244,7 @@ async function enrolledProof(coordinator, port, hostId) {
       body: JSON.stringify({ hostId }),
     });
     const { nonce } = await chal.json();
-    return sign(keys.privateJwk, signingInput('host-connect', { hostId, nonce }));
+    return { nonce, proof: await sign(keys.privateJwk, signingInput('host-connect', { hostId, nonce })) };
   };
 }
 
@@ -439,7 +439,7 @@ test('a host that was never enrolled cannot connect at all', async (t) => {
         body: JSON.stringify({ hostId: 'imposter' }),
       });
       const { nonce } = await res.json();
-      return sign(keys.privateJwk, signingInput('host-connect', { hostId: 'imposter', nonce }));
+      return { nonce, proof: await sign(keys.privateJwk, signingInput('host-connect', { hostId: 'imposter', nonce })) };
     },
     maxBackoffMs: 50,
   });

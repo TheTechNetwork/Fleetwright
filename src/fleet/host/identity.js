@@ -95,6 +95,7 @@ export async function enrol({ origin, code, hostId, publicJwk, fetchImpl }) {
  * connection, and a host reconnects on the order of minutes at worst.
  *
  * @param {{ origin: string, hostId: string, privateJwk: any, fetchImpl?: typeof fetch }} spec
+ * @returns {Promise<{ nonce: string, proof: string }>}
  */
 export async function proveIdentity({ origin, hostId, privateJwk, fetchImpl }) {
   const doFetch = fetchImpl || globalThis.fetch;
@@ -107,7 +108,10 @@ export async function proveIdentity({ origin, hostId, privateJwk, fetchImpl }) {
   const { nonce } = /** @type {any} */ (await res.json());
   if (!nonce) throw new Error('the coordinator issued no challenge');
 
-  return sign(privateJwk, signingInput('host-connect', { hostId, nonce }));
+  // BOTH halves go back. The coordinator keeps no per-host record of what it
+  // issued — the nonce carries its own proof of origin — so the answer has to
+  // say which challenge it is answering.
+  return { nonce, proof: await sign(privateJwk, signingInput('host-connect', { hostId, nonce })) };
 }
 
 /**
@@ -121,11 +125,11 @@ export async function proveIdentity({ origin, hostId, privateJwk, fetchImpl }) {
  */
 export async function checkEnrolled({ origin, hostId, privateJwk, fetchImpl }) {
   const doFetch = fetchImpl || globalThis.fetch;
-  const proof = await proveIdentity({ origin, hostId, privateJwk, fetchImpl });
+  const { nonce, proof } = await proveIdentity({ origin, hostId, privateJwk, fetchImpl });
   const res = await doFetch(`${origin.replace(/\/$/, '')}/api/host/verify`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hostId, proof }),
+    body: JSON.stringify({ hostId, nonce, proof }),
   });
   const body = /** @type {any} */ (await res.json().catch(() => null));
   if (!res.ok || !body?.ok) return { ok: false, reason: body?.text || `coordinator said ${res.status}` };
