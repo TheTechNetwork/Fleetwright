@@ -39,6 +39,8 @@ const FAILURE_WINDOW_MS = 60_000;
  * @property {Purpose} purpose
  * @property {string} label      what this will be called once it exists
  * @property {string|null} actor who minted it
+ * @property {string|null} hostId if set, the ONLY host id this pin may enrol
+ * @property {boolean} readmit   may this pin bring back a revoked host
  * @property {number} expiresAt
  */
 
@@ -57,9 +59,19 @@ export class Enrollment {
   /**
    * Mint a code.
    *
-   * @param {{ purpose: Purpose, label?: string, actor?: string|null }} spec
+   * A pin can be BOUND to one host id, and can carry permission to readmit a
+   * revoked one. Both default off, so an unbound pin still enrols a new machine
+   * under whatever name it has — which is the ordinary case and stays one step.
+   *
+   * Binding matters because re-enrolling an existing name REPLACES its key.
+   * Without it, a pin minted so somebody could add a Raspberry Pi is also a pin
+   * that can take over the build server: same six digits, different hostId in
+   * the request, and the fleet now routes that name to a machine of their
+   * choosing.
+   *
+   * @param {{ purpose: Purpose, label?: string, actor?: string|null, hostId?: string|null, readmit?: boolean }} spec
    */
-  mint({ purpose, label = '', actor = null }) {
+  mint({ purpose, label = '', actor = null, hostId = null, readmit = false }) {
     this.#sweep();
     // 6 digits, shown as two groups of three. randomInt over the whole range
     // rather than the modulo of random bytes, which is not uniform.
@@ -70,10 +82,12 @@ export class Enrollment {
       purpose,
       label: String(label || '').slice(0, 60),
       actor,
+      hostId: hostId ? String(hostId) : null,
+      readmit: Boolean(readmit),
       expiresAt: this.now() + this.ttlMs,
     };
     this.pending.set(code, entry);
-    return { code, expiresAt: entry.expiresAt, purpose };
+    return { code, expiresAt: entry.expiresAt, purpose, hostId: entry.hostId, readmit: entry.readmit };
   }
 
   /**
@@ -85,9 +99,10 @@ export class Enrollment {
    *
    * @param {string} code
    * @param {Purpose} purpose
+   * @param {string} [hostId] the name being enrolled, for a pin bound to one
    * @returns {{ ok: true, entry: Pending } | { ok: false, reason: string }}
    */
-  redeem(code, purpose) {
+  redeem(code, purpose, hostId) {
     this.#sweep();
     if (this.#lockedOut()) {
       return { ok: false, reason: 'too many wrong codes lately — wait a minute and try again' };
@@ -103,6 +118,14 @@ export class Enrollment {
     }
     if (entry.purpose !== purpose) {
       return { ok: false, reason: `that code was issued for a ${entry.purpose}, not a ${purpose}` };
+    }
+    // Checked HERE, beside the purpose check, and deliberately BEFORE the
+    // delete below. A bound pin presented for the wrong host is a refusal, not
+    // a spend — otherwise anyone who guessed a pin existed could burn it by
+    // naming the wrong machine, and the person it was minted for would be left
+    // asking for another.
+    if (entry.hostId && String(hostId || '') !== entry.hostId) {
+      return { ok: false, reason: `that code was minted for ${entry.hostId}` };
     }
     // Deleted before the caller does anything with it: a redemption that fails
     // downstream must not leave the code usable, because the safe failure is

@@ -553,3 +553,95 @@ test('a missing config file is still just "no fleet"', () => {
   const cfg = sidecarConfig({ env: { AGENT_FLEET_SIDECAR_ENV: '/nonexistent' } });
   assert.equal(cfg.unreadable, null, 'a box running from a checkout has these in its environment');
 });
+
+// --- what review turned up --------------------------------------------------
+
+test('a pin can be bound to one host, so it cannot take over another', async (t) => {
+  // Re-enrolling an existing name REPLACES its key. So without binding, a pin
+  // minted so somebody could add a Raspberry Pi is also a pin that takes over
+  // the build server — same six digits, different hostId in the request.
+  const { coordinator: c, origin } = await coordinator(t);
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host', hostId: 'the-pi' });
+
+  await assert.rejects(
+    () => enrol({ origin, code, hostId: 'build-server', publicJwk: key.publicJwk }),
+    /minted for the-pi/,
+  );
+  // And the pin is NOT spent by the attempt, so the person it was minted for
+  // can still use it.
+  const proper = await enrol({ origin, code, hostId: 'the-pi', publicJwk: key.publicJwk });
+  assert.equal(proper.ok, true);
+});
+
+test('an unbound pin still enrols whatever name it is given', async (t) => {
+  // The ordinary case stays one step. Binding is opt-in.
+  const { coordinator: c, origin } = await coordinator(t);
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  assert.equal((await enrol({ origin, code, hostId: 'anything', publicJwk: key.publicJwk })).ok, true);
+});
+
+test('revoked means revoked: an ordinary pin cannot bring a host back', async (t) => {
+  const { coordinator: c, origin } = await coordinator(t);
+  const key = await loadOrCreateKey(scratch());
+  const first = c.core.enrollment.mint({ purpose: 'host' });
+  await enrol({ origin, code: first.code, hostId: 'condemned', publicJwk: key.publicJwk });
+  c.core.hostIds.revoke('condemned');
+
+  // This used to write a fresh record with revokedAt: null over the top, and
+  // report it as a brand-new enrolment — so any pin undid any revocation and
+  // nothing in the event stream said the removed machine was back.
+  const ordinary = c.core.enrollment.mint({ purpose: 'host' });
+  await assert.rejects(
+    () => enrol({ origin, code: ordinary.code, hostId: 'condemned', publicJwk: key.publicJwk }),
+    /was revoked/,
+  );
+  const still = await checkEnrolled({ origin, hostId: 'condemned', privateJwk: key.privateJwk });
+  assert.equal(still.ok, false);
+
+  // Readmission is possible, and it takes a pin minted for it.
+  const readmit = c.core.enrollment.mint({ purpose: 'host', readmit: true });
+  const back = await enrol({ origin, code: readmit.code, hostId: 'condemned', publicJwk: key.publicJwk });
+  assert.match(back.text, /Readmitted/);
+  assert.equal((await checkEnrolled({ origin, hostId: 'condemned', privateJwk: key.privateJwk })).ok, true);
+});
+
+test('a plus-addressed sign-in can actually send an intent', async (t) => {
+  // The actor is the verified email now, and the envelope validator did not
+  // allow '+'. Plus-addressing is ordinary, so every intent from that person's
+  // phone was refused as a bad envelope — sign-in worked and nothing else did.
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const { token, client } = await c.core.clients.issue('a phone (eli+fleet@thetech.network)');
+  client.email = 'eli+fleet@thetech.network';
+
+  const res = await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ verb: 'list' }),
+  });
+  const body = /** @type {any} */ (await res.json());
+  assert.notEqual(body?.error?.code, 'bad_envelope', JSON.stringify(body));
+});
+
+test('the Node coordinator registers a device for push', async (t) => {
+  // The Worker has had these since push was built and the Node one never did,
+  // so a phone pointed at a box registered against a 404 and then waited for
+  // notifications that had nowhere to come from.
+  const { origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const auth = { 'content-type': 'application/json', authorization: 'Bearer a-token-at-least-16ch' };
+
+  const reg = await fetch(`${origin}/api/devices`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ platform: 'ios', token: 'a'.repeat(64) }),
+  });
+  assert.equal(reg.status, 200);
+
+  const gone = await fetch(`${origin}/api/devices`, {
+    method: 'DELETE',
+    headers: auth,
+    body: JSON.stringify({ token: 'a'.repeat(64) }),
+  });
+  assert.equal(gone.status, 200);
+});

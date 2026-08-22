@@ -103,16 +103,19 @@ export class Fleet {
     // enrollment.js.
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
-      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host');
+      const wanted = String(body?.hostId || '');
+      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
       // Saved either way: a spent code must not come back if this object is
       // evicted between the redemption and the next write.
       await this.#saveEnrollment();
       if (!spent.ok) return json({ ok: false, error: { code: 'bad_code' }, text: spent.reason }, 403);
 
+
       const result = await this.core.hostIds.enrol({
-        hostId: String(body?.hostId || ''),
+        hostId: wanted,
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
+        readmit: spent.entry.readmit,
       });
       if (!result.ok) return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
       await this.#saveHosts();
@@ -139,9 +142,11 @@ export class Fleet {
         hostId: result.host.hostId,
         fingerprint: result.host.fingerprint,
         replaced: result.replaced,
-        text: result.replaced
-          ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
-          : `Enrolled ${result.host.hostId}.`,
+        text: result.readmitted
+          ? `Readmitted ${result.host.hostId}, which had been revoked.`
+          : result.replaced
+            ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
+            : `Enrolled ${result.host.hostId}.`,
       });
     }
 
@@ -253,6 +258,8 @@ export class Fleet {
         purpose: kind,
         label: body?.label ? String(body.label) : '',
         actor,
+        hostId: body?.hostId ? String(body.hostId) : null,
+        readmit: Boolean(body?.readmit),
       });
       await this.#saveEnrollment();
       this.core.record({ event: 'enrol.minted', hostId: null, text: `a ${kind} code was minted by ${actor || 'the admin token'}` });

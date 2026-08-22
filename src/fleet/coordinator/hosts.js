@@ -90,9 +90,9 @@ export class HostIdentities {
    * rebuilt machine should do; the alternative is a fleet slowly filling with
    * dead entries nobody dares delete.
    *
-   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null }} spec
+   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean }} spec
    */
-  async enrol({ hostId, publicJwk, enrolledBy = null }) {
+  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false }) {
     const id = String(hostId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
       return { ok: false, error: 'a host id is letters, digits, dot, dash and underscore' };
@@ -105,6 +105,21 @@ export class HostIdentities {
     if (publicJwk.d) return { ok: false, error: 'that is a private key — send only the public half' };
 
     const previous = this.hosts.get(id);
+    // REVOKED MEANS REVOKED. This wrote a fresh record with revokedAt: null
+    // over the top, so any pin undid any revocation — and reported it as a
+    // brand-new enrolment rather than a readmission, so nothing in the event
+    // stream said the machine somebody removed was back.
+    //
+    // Readmission is deliberate now: it takes a pin minted for it.
+    if (previous?.revokedAt && !readmit) {
+      return {
+        ok: false,
+        error:
+          `${id} was revoked. Readmitting it takes a pin minted for that, ` +
+          'so that bringing a removed machine back is a decision somebody makes rather than a side effect.',
+      };
+    }
+
     /** @type {EnrolledHost} */
     const host = {
       hostId: id,
@@ -116,7 +131,12 @@ export class HostIdentities {
       revokedAt: null,
     };
     this.hosts.set(id, host);
-    return { ok: true, host, replaced: Boolean(previous && !previous.revokedAt) };
+    return {
+      ok: true,
+      host,
+      replaced: Boolean(previous && !previous.revokedAt),
+      readmitted: Boolean(previous?.revokedAt),
+    };
   }
 
   /**

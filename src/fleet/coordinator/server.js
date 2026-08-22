@@ -316,16 +316,18 @@ export class Coordinator {
     // a signature is the authorisation for the other two.
     if (p === '/api/enroll/host' && req.method === 'POST') {
       const body = await readJson(req);
-      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host');
+      const wanted = String(body?.hostId || '');
+      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
       if (!spent.ok) {
         this.saveState(); // a spent code must not survive a restart
         return json(res, 403, { ok: false, error: { code: 'bad_code' }, text: spent.reason });
       }
 
       const result = await this.core.hostIds.enrol({
-        hostId: String(body?.hostId || ''),
+        hostId: wanted,
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
+        readmit: spent.entry.readmit,
       });
       // Saved either way: the code was spent above whether or not the key that
       // arrived with it was any good, and a spent code that comes back after a
@@ -346,9 +348,11 @@ export class Coordinator {
         hostId: result.host.hostId,
         fingerprint: result.host.fingerprint,
         replaced: result.replaced,
-        text: result.replaced
-          ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
-          : `Enrolled ${result.host.hostId}.`,
+        text: result.readmitted
+          ? `Readmitted ${result.host.hostId}, which had been revoked.`
+          : result.replaced
+            ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
+            : `Enrolled ${result.host.hostId}.`,
       });
     }
 
@@ -480,9 +484,34 @@ export class Coordinator {
         purpose: kind,
         label: body?.label ? String(body.label) : '',
         actor: client?.email || (body?.actor ? String(body.actor) : null),
+        hostId: body?.hostId ? String(body.hostId) : null,
+        readmit: Boolean(body?.readmit),
       });
       this.saveState();
       return json(res, 200, { ok: true, ...issued });
+    }
+
+    // Push registration. The Worker has had these since push was built; the
+    // Node coordinator never did, so a phone pointed at a box registered
+    // against a 404 and then waited for notifications that had nowhere to come
+    // from. Both apps call this on every launch.
+    if (p === '/api/devices' && req.method === 'POST') {
+      const body = await readJson(req);
+      const r = this.core.registerDevice({
+        platform: String(body?.platform || ''),
+        token: String(body?.token || ''),
+        actor: client?.email || (body?.actor ? String(body.actor) : undefined),
+      });
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    if (p === '/api/devices' && req.method === 'DELETE') {
+      const body = await readJson(req);
+      const { ok: gone } = this.core.unregisterDevice(String(body?.token || ''));
+      return json(res, gone ? 200 : 404, {
+        ok: gone,
+        text: gone ? 'This device will not be notified again.' : 'That device was not registered.',
+      });
     }
 
     if (p === '/api/devices/test' && req.method === 'POST') {
