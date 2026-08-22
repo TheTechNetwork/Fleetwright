@@ -324,6 +324,84 @@ half and every provider does it differently; the part that has to be right here
 is that **the session never holds the value**, so that whatever is behind it can
 change without the session knowing.
 
+## Where the indirection should live: a broker, and sometimes a proxy
+
+The section above says a session gets an indirection rather than a value. This
+one is about what that indirection actually is, because "the host keeps it
+fresh" is doing a lot of work in that sentence.
+
+### The socket is already there
+
+The sandbox already bind-mounts **one unix socket per session** into that
+session's container and nowhere else (`docs/hook-socket.md`). It exists so a
+container can report its conversation uuid without being able to name any
+session but its own — and the authentication is the bind-mount itself: the
+sidecar knows which session is asking because of which socket it arrived on,
+and a container cannot reach a socket it was not given.
+
+That is the same shape a credential broker needs, and it is already built. A
+session asks its own socket for `github`; the sidecar decides whether that
+session may have it, mints or fetches, and returns a value that is good for
+minutes. Nothing is stored in the container, nothing is in the environment, and
+rotation is invisible because the next ask returns the next value.
+
+**Take this from the tools rather than inventing it.** Git has
+`credential.helper`, which is a program that prints a credential on demand.
+`GIT_ASKPASS` is the same idea one layer down. Cloud SDKs already re-read from a
+local metadata address and treat rotation as unremarkable. Claude Code itself
+has the shape — a helper command that produces the auth value and is re-run on
+an interval rather than a key pasted into a file. Every one of those is a hook
+for exactly this, and none of them needs anything intercepted.
+
+### The proxy, and what it is actually for
+
+For tools with no such hook, the remaining move is to put the credential in the
+**network path** instead of the process: the session's outbound request carries
+no authorization, and something on the way out adds it.
+
+What that buys, stated precisely:
+
+- the secret is not in the container filesystem, environment or process memory,
+  so it cannot be read out of a core dump, a log, or the session's own history
+- it cannot be **exfiltrated and used later, somewhere else** — which is the
+  difference that matters, because a token that leaves the box outlives the
+  session and the box
+- rotation and revocation become the proxy's business, not the session's
+- there is one place that sees every credentialed request, which is the only
+  practical audit point
+
+And what it does **not** buy, which is the part that gets skipped: a session can
+still *use* the credential even though it cannot *hold* it. Anything the proxy
+will sign, a compromised session can ask for. So the proxy's value is exactly
+proportional to how narrowly it is willing to sign — per host, per method, per
+path prefix. "It may reach api.github.com" is barely a control. "It may POST to
+`/repos/OWNER/REPO/issues` and nothing else" is one.
+
+### The awkward part is TLS
+
+To add a header to an HTTPS request, something must terminate the TLS. There are
+three ways and they are not equally good:
+
+| | how | cost |
+|---|---|---|
+| **Protocol hooks** | `credential.helper`, `GIT_ASKPASS`, a metadata endpoint, an `apiKeyHelper`-shaped command | none — no interception, and the tool already expects it. **Use this wherever it exists.** |
+| **Per-service reverse proxy** | the session calls `http://gh.fleet.local`, the proxy makes the real call | one shim per service, and every tool has to be pointed at it |
+| **Intercepting forward proxy** | a CA the container trusts, `HTTPS_PROXY` set | the proxy can now read ALL of the session's traffic, not just what it injects into; pinned clients break; and a trusted CA inside the container is itself a thing worth being careful with |
+
+The last row is the one people picture when they say "inject at the proxy", and
+it is the one to reach for last. It is a large new trusted component that sees
+everything, introduced to solve a problem the first row already solves for git,
+for cloud SDKs and for Claude Code.
+
+### What this does not solve, and should be said out loud
+
+An agent that can make authorised requests can make bad ones. Moving the
+credential out of the session bounds *theft*, not *misuse* — the same
+distinction as design.md §5's containment argument, where a contained agent can
+still push with whatever credential it holds. Scoping what the broker will
+answer for, and what the proxy will sign, is the part that bounds misuse, and it
+is separate work from either mechanism.
+
 ## What was missing under all of it, and now is not
 
 **Hosts had no identity.** Every host presented the same

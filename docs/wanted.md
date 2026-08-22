@@ -54,26 +54,42 @@ before designing anything.
 Android Studio itself is only needed for the GUI; `sdkmanager`, `avdmanager`,
 `emulator` and `gradle` are the parts a session would actually use.
 
-### Xcode
+### Xcode, and hosts that are not Linux
 
 The honest answer first: **Xcode does not run on Linux and cannot be made to.**
 There is no port, and macOS on non-Apple hardware is against Apple's licence, so
 "sandbox it on Linux" is not a thing to find a way to do.
 
-What *is* available, in rough order of how well it fits what already exists:
+But the wider goal — a Windows box, a Linux box and a Mac in one fleet, so a
+session can build and run anything — is not blocked by that, because **a host is
+just a box that dials in.** The scheduler already filters on labels before it
+ranks by capacity, so `macos` or `windows` is most of the routing. What differs
+is how much of a host each platform can be:
 
-1. **A Mac as a fleet host.** The sidecar is Node, tmux and HTTP — nothing in it
-   is Linux-specific. A Mac mini running agent-hub and the sidecar would be a
-   host like any other, with `xcodebuild` available to sessions placed on it.
-   The scheduler already filters on labels, so `macos` is the whole of the
-   routing change. This is the one that fits the design rather than fighting it.
-2. **Keep signing in CI**, which is where it is today, and accept that a session
-   cannot archive.
-3. Cross-platform pieces for the parts that are not Xcode — XcodeGen already
-   runs anywhere, and the project is generated rather than committed.
+| | agent-hub | sidecar | sandbox | what it is for |
+|---|---|---|---|---|
+| **Linux** | works | works | podman, works | everything today |
+| **macOS** | needs checking — tmux is fine, the systemd units are not | should work: Node, tmux and HTTP, nothing Linux-specific | no. podman on a Mac is a Linux VM, which gets you Linux containers on Apple hardware and still no Xcode | Xcode, `xcodebuild`, signing, the iOS simulator |
+| **Windows** | tmux does not exist there | same problem | no | Visual Studio, MSVC, Windows-only runtimes |
 
-The sandbox question is separate and unsolved either way: podman is Linux, so a
-Mac host would run sessions unsandboxed unless something else is found.
+Two real pieces of work fall out of that table:
+
+- **launchd units and a macOS install path.** Everything the installer does with
+  systemd — the services, `StateDirectory`, `RuntimeDirectory` for the hook
+  sockets — needs a launchd equivalent. Sessions on a Mac would run
+  unsandboxed, which should be stated in the UI rather than assumed.
+- **Windows is really WSL2.** agent-hub drives sessions through tmux
+  `capture-pane` and `send-keys`; there is no tmux on Windows and no obvious
+  substitute that keeps resume-dialog detection and `peek` working. A WSL2 host
+  is a Linux host that happens to live on a Windows machine, and reaching
+  Windows tooling from it means interop rather than a native port. That is
+  probably the right answer, and it is worth deciding deliberately instead of
+  discovering it after writing a Windows pane driver.
+
+The cheapest first step for the Mac is not the installer: it is running the
+sidecar on one by hand against the deployed coordinator and seeing what breaks.
+Nothing in `src/fleet/host/` imports anything platform-specific, so the answer
+may be "nothing", and that is worth knowing before designing launchd units.
 
 ## Elsewhere
 
@@ -140,6 +156,27 @@ Two things to get right rather than fast:
   "let this session see that credential" are decisions with consequences, and
   the fleet has no roles yet (`docs/identity.md`). Worth knowing which side of
   that line each setting is on before any of them is a button.
+
+### Serving secrets into a session without the session holding them
+
+Designed in [`trust.md`](./trust.md) — a per-session broker on the socket the
+sandbox already bind-mounts, protocol hooks (`credential.helper`, `GIT_ASKPASS`,
+a metadata endpoint) wherever the tool has one, and a credential-injecting proxy
+only for the tools that have none.
+
+The two things that section insists on, repeated here because they are what make
+this worth building rather than theatre:
+
+- An intercepting proxy is the LAST resort, not the first. It has to terminate
+  TLS, which makes it a new trusted component that sees all of a session's
+  traffic rather than just the requests it adds a header to.
+- Moving a credential out of a session bounds theft, not misuse. A session can
+  still use anything the broker will answer for. Scoping what gets signed — per
+  host, per method, per path — is separate work and is the half that actually
+  bounds the damage.
+
+Prerequisite for the interesting version: hosts now have keypairs, which is what
+gives a secret something to be encrypted *to*.
 
 ### A browser control surface, and a PWA
 
