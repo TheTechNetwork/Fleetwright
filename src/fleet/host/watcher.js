@@ -19,10 +19,16 @@
 // that mattered.
 
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
+import { readPrompt, promptId, describePrompt } from './prompt.js';
 
 const DEFAULT_INTERVAL_MS = 20_000;
 
-/** Text in a pane that means a person is needed. */
+/** Text in a pane that means a person is needed.
+ *
+ *  Still here, and still the backstop: prompt.js recognises the shapes it can
+ *  describe, and this catches the case where a person is plainly needed and we
+ *  cannot say why. "Something is waiting" is worth a notification even when the
+ *  question is not one we know how to read. */
 const AWAITING_RE = /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files/i;
 
 export class SessionWatcher {
@@ -31,12 +37,23 @@ export class SessionWatcher {
    *   hub: import('./hub-client.js').HubClient,
    *   emit: (event: Record<string, any>) => void,
    *   intervalMs?: number,
+   *   allowSessionText?: boolean,
    *   logger?: typeof import('../../log.js').log,
    * }} opts
    */
-  constructor({ hub, emit, intervalMs = DEFAULT_INTERVAL_MS, logger }) {
+  constructor({ hub, emit, intervalMs = DEFAULT_INTERVAL_MS, allowSessionText = false, logger }) {
     this.hub = hub;
     this.emit = emit;
+    // Whether a prompt that quotes the session — a path, a command line — may
+    // travel. Default off, and the default is the interesting part: the fuller
+    // form goes to a lock screen, through Apple's and Google's servers, for a
+    // fleet that may not belong to the person holding the phone.
+    //
+    // It costs less than it sounds. The question is always ours, because
+    // prompt.js writes it; what this gates is the option LABELS on the two
+    // kinds that can name a command. A resume prompt — the common one — is
+    // unaffected either way.
+    this.allowSessionText = allowSessionText;
     this.intervalMs = intervalMs;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
     /**
@@ -96,11 +113,18 @@ export class SessionWatcher {
       // Only a running session has a pane worth reading, and only a running
       // session can be waiting for anybody.
       let awaiting = false;
+      /** @type {any} */
+      let prompt = null;
       let rcUrl = session.rcUrl ?? null;
       if (running) {
         const pane = await this.hub.peek(name).catch(() => null);
         if (pane) {
           awaiting = AWAITING_RE.test(pane);
+          // The pane is read either way. Reading the QUESTION out of it costs
+          // one more pass over text already in hand, and is the difference
+          // between a notification that says "resumed (summary)" and one that
+          // says what is being asked.
+          prompt = readPrompt(pane);
           rcUrl = extractRcUrl(pane) ?? rcUrl;
           if (!before?.rcUrl && isRemoteControlOnline(pane) && rcUrl) {
             this.#fire(quiet, { event: 'session.rc-online', name, url: rcUrl });
@@ -112,7 +136,7 @@ export class SessionWatcher {
         // New to us. On a restart everything is new, which is why the first
         // pass is quiet.
         if (session.status === 'error') this.#fire(quiet, { event: 'session.error', name, text: session.detail });
-        else if (awaiting) this.#fire(quiet, { event: 'session.awaiting-input', name, text: firstPrompt(session) });
+        else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt));
       } else {
         if (before.status === 'running' && !running) {
           this.#fire(quiet, {
@@ -124,7 +148,7 @@ export class SessionWatcher {
         // The transition, not the state — a session parked at a prompt is one
         // notification, not one every twenty seconds until somebody answers.
         if (!before.awaiting && awaiting) {
-          this.#fire(quiet, { event: 'session.awaiting-input', name, text: firstPrompt(session) });
+          this.#fire(quiet, this.#awaiting(name, session, prompt));
         }
       }
 
@@ -137,6 +161,38 @@ export class SessionWatcher {
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */
+  /**
+   * The event for "this one needs you".
+   *
+   * It used to be `{event, name, text: firstPrompt(session)}`, and
+   * firstPrompt returns `session.detail` — the registry's last lifecycle
+   * string. So the notification said "resumed (summary)" or "/new (safe)". The
+   * one event whose entire job is to tell you what a session wants was the one
+   * event that could not.
+   *
+   * @param {string} name
+   * @param {any} session
+   * @param {any} prompt
+   */
+  #awaiting(name, session, prompt) {
+    if (!prompt) {
+      // Recognised as waiting, not recognised as a question. Honest about it.
+      return { event: 'session.awaiting-input', name, text: firstPrompt(session) };
+    }
+    const shown = describePrompt(prompt, this.allowSessionText);
+    return {
+      event: 'session.awaiting-input',
+      name,
+      text: shown.question,
+      prompt: {
+        id: promptId(name, prompt),
+        kind: prompt.kind,
+        question: shown.question,
+        options: shown.options,
+      },
+    };
+  }
+
   #fire(quiet, event) {
     if (quiet) return;
     this.log.info(`watcher: ${event.event} ${event.name ?? ''}`);

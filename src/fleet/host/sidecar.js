@@ -91,7 +91,9 @@ export class Sidecar {
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
    * }} opts
    */
-  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null }) {
+  constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
+    promptText = false,
+  }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
     // limit — where a replayed `start` passes the freshness check against a
@@ -120,7 +122,7 @@ export class Sidecar {
     // Watching is what turns "a session needs you" into a notification on a
     // phone. Off in tests, which drive tick() directly.
     this.watcher = watch
-      ? new SessionWatcher({ hub, emit: (event) => this.emitEvent(event), logger })
+      ? new SessionWatcher({ hub, emit: (event) => this.emitEvent(event), allowSessionText: promptText, logger })
       : null;
     /** @type {Map<string, { at: number, reply: Promise<object> }>} */
     this.replay = new Map();

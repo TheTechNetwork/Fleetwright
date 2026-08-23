@@ -75,6 +75,12 @@ export function loadSidecarConfig(env = process.env) {
     // host clock is not reliably synchronised.
     maxSkewMs: Math.max(0, int(env, 'AGENT_FLEET_MAX_SKEW_MS', 300_000)),
 
+    // May a notification quote the session — a path, a command line — or only
+    // the question this fleet wrote? Off by default: the fuller form reaches a
+    // lock screen through somebody else's servers, and the fleet may not belong
+    // to the person holding the phone. See src/fleet/host/prompt.js.
+    promptText: str(env, 'AGENT_FLEET_PROMPT_TEXT', '0') === '1',
+
     // --- the per-session hook socket ---------------------------------------
     // Where the sockets bind-mounted into sandboxes live. See host/hook-socket.js.
     hookSocketDir: str(env, 'AGENT_FLEET_HOOK_SOCKET_DIR', '/run/agent-fleet'),

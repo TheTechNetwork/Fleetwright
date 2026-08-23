@@ -109,6 +109,7 @@ async function run() {
     hostId: cfg.hostId,
     labels: cfg.labels,
     maxSkewMs: cfg.maxSkewMs,
+    promptText: cfg.promptText,
     logger: log,
     // Reported with health, so a phone can say "this box is 3 commits behind
     // and has 12 packages waiting" without anybody logging in to look.
