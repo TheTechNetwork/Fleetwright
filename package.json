@@ -20,7 +20,8 @@
     "build:web": "node scripts/build-web.mjs",
     "pretest": "node scripts/build-web.mjs",
     "browse": "node scripts/browse.mjs",
-    "nojs": "node scripts/nojs.mjs"
+    "nojs": "node scripts/nojs.mjs",
+    "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

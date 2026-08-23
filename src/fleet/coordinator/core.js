@@ -77,6 +77,14 @@ export class CoordinatorCore {
     /** Recent events, so a phone that was asleep can catch up on open. */
     /** @type {Array<Record<string, any>>} */
     this.events = [];
+    /**
+     * Called after the ring changes, so whoever owns storage can persist it —
+     * a file on a box, Durable Object storage in the Worker. The core does not
+     * know which, and must not: it is shared by both and imports nothing from
+     * `node:`.
+     * @type {(() => void)|null}
+     */
+    this.onEvents = null;
   }
 
   // --- hosts ---------------------------------------------------------------
