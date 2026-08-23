@@ -1,0 +1,1650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleetwright — console</title>
+<!--
+  THE OPERATOR CONSOLE — static prototype.
+
+  Everything below the DATA section is the real design; the DATA section is fake
+  and exists so this file can be opened in a browser and judged. See
+  docs/console-design.md for the argument.
+
+  Rules this file obeys, because the live version must:
+    * one <style>, one <script>, no build step, no framework, no CDN, no fonts.
+    * textContent only. There is exactly one node factory, el(), and it never
+      touches innerHTML. Anything that came from a pane also goes through
+      scrub() first, which strips C0 controls and Unicode bidi overrides — a
+      right-to-left override inside an option label can make a button read
+      "Deny" and mean "Approve", six pixels from an irreversible action.
+    * no external request of any kind, no telemetry, no storage beyond theme.
+
+  Press ? for the keymap, 0 to cycle through the eleven states.
+-->
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   TOKENS. Light is the base; dark is repeated under both the media query and
+   the explicit attribute so the toggle wins in both directions and the page
+   never borrows a ground it did not choose.
+   The palette carries FOUR meanings. The vocabulary carries eleven.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --bg:#f4f6f8; --surface:#fff; --surface-2:#eaeef3; --surface-3:#dfe5ec;
+  --line:#dfe4ea; --line-strong:#c2cad4;
+  --ink:#14171c; --ink-dim:#59626f; --ink-faint:#8b94a1;
+  --ok:#0f7a52; --ask:#8a4f00; --ask-edge:#d98a17; --bad:#b3261e; --accent:#2159c9;
+  --ask-fill:rgba(255,179,64,.16); --bad-fill:rgba(179,38,30,.09); --ok-fill:rgba(15,122,82,.09);
+  --shadow:0 1px 2px rgba(16,20,28,.06),0 8px 24px rgba(16,20,28,.08);
+
+  --t-micro:.6875rem; --t-meta:.8125rem; --t-body:.9375rem; --t-lead:1.0625rem; --t-head:1.375rem;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  --row:44px; --rail:280px; --ledgerw:340px;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --bg:#0d0f13; --surface:#14171d; --surface-2:#1b1f27; --surface-3:#232833;
+  --line:#252b34; --line-strong:#39414e;
+  --ink:#e6e9ee; --ink-dim:#98a2b0; --ink-faint:#6a7482;
+  --ok:#46c08b; --ask:#ffb340; --ask-edge:#ffb340; --bad:#f0736c; --accent:#7aa2ff;
+  --ask-fill:rgba(255,179,64,.10); --bad-fill:rgba(240,115,108,.10); --ok-fill:rgba(70,192,139,.10);
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 32px rgba(0,0,0,.45);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d0f13; --surface:#14171d; --surface-2:#1b1f27; --surface-3:#232833;
+  --line:#252b34; --line-strong:#39414e;
+  --ink:#e6e9ee; --ink-dim:#98a2b0; --ink-faint:#6a7482;
+  --ok:#46c08b; --ask:#ffb340; --ask-edge:#ffb340; --bad:#f0736c; --accent:#7aa2ff;
+  --ask-fill:rgba(255,179,64,.10); --bad-fill:rgba(240,115,108,.10); --ok-fill:rgba(70,192,139,.10);
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 32px rgba(0,0,0,.45);
+  color-scheme:dark;
+}
+body.compact{ --row:32px; }
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:var(--t-body)/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px;}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;}
+a{color:var(--accent);text-decoration:none;}
+a:hover{text-decoration:underline;}
+.mono{font-family:var(--mono);}
+.dim{color:var(--ink-dim);}
+.faint{color:var(--ink-faint);}
+.micro{font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;}
+.meta{font-size:var(--t-meta);color:var(--ink-dim);}
+.prose{max-width:68ch;}
+.tone-ok{color:var(--ok);} .tone-bad{color:var(--bad);} .tone-ask{color:var(--ask);} .tone-dim{color:var(--ink-dim);}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
+
+/* ── the stale treatment: hatch is the shape, dimming is the colour,
+      the banner is the word. Three encodings for one fact. ───────────── */
+.hatched{position:relative;}
+.hatched::after{
+  content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:repeating-linear-gradient(45deg,transparent 0 6px,currentColor 6px 7px);
+  opacity:.10;
+}
+body.stale #grid, body.stale #ask{filter:saturate(.28);}
+body.stale #grid::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:30;
+  background:repeating-linear-gradient(45deg,transparent 0 9px,var(--ink) 9px 10px);opacity:.06;
+}
+
+/* ── top bar ───────────────────────────────────────────────────────────── */
+#topbar{
+  flex:0 0 auto;display:flex;align-items:center;gap:var(--s4);
+  padding:0 var(--s4);height:46px;background:var(--surface);
+  border-bottom:1px solid var(--line-strong);
+}
+#brand{font-weight:650;letter-spacing:-.01em;display:flex;align-items:center;gap:var(--s2);}
+#brand .mark{
+  width:11px;height:11px;border:2px solid var(--accent);border-radius:2px;transform:rotate(45deg);
+}
+#fleetline{color:var(--ink-dim);font-size:var(--t-meta);}
+#topbar .spacer{flex:1 1 auto;}
+#freshness{font-size:var(--t-meta);color:var(--ink-dim);font-family:var(--mono);white-space:nowrap;}
+.tbtn{
+  padding:5px 10px;border:1px solid var(--line-strong);border-radius:6px;
+  font-size:var(--t-meta);color:var(--ink-dim);white-space:nowrap;
+}
+.tbtn:hover{color:var(--ink);border-color:var(--ink-faint);}
+#scenario{
+  font:var(--t-meta) var(--sans);color:var(--ink-dim);background:var(--surface-2);
+  border:1px solid var(--line-strong);border-radius:6px;padding:4px 6px;max-width:230px;
+}
+
+/* ── the offline banner ────────────────────────────────────────────────── */
+#offline{
+  flex:0 0 auto;display:none;align-items:center;gap:var(--s3);
+  padding:var(--s3) var(--s4);background:var(--bad-fill);
+  border-bottom:1px solid var(--bad);color:var(--ink);
+}
+body.stale #offline{display:flex;}
+#offline .g{color:var(--bad);font-size:1.1rem;}
+#offline .w{font-weight:650;color:var(--bad);letter-spacing:.04em;}
+
+/* ── THE ASK. Always present. Only its height changes, so nothing below
+      it ever jumps. ─────────────────────────────────────────────────────── */
+#ask{flex:0 0 auto;background:var(--surface);border-bottom:1px solid var(--line-strong);}
+@media (prefers-reduced-motion:no-preference){ #ask{transition:background .18s ease;} }
+#ask.quiet{padding:0 var(--s4);height:34px;display:flex;align-items:center;gap:var(--s2);font-size:var(--t-meta);color:var(--ink-dim);}
+#ask.loud{background:var(--ask-fill);border-bottom-color:var(--ask-edge);}
+
+.promptcard{position:relative;padding:var(--s4) var(--s5) var(--s4) calc(var(--s5) + 10px);max-width:min(100%,1600px);}
+/* the hazard edge: a texture, not a colour. Survives monochrome. */
+.promptcard::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:8px;
+  background:repeating-linear-gradient(45deg,var(--ask-edge) 0 5px,transparent 5px 10px);
+}
+.p-head{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap;}
+.p-state{display:flex;align-items:center;gap:var(--s2);color:var(--ask);font-weight:700;letter-spacing:.06em;font-size:var(--t-meta);}
+.p-state .g{font-size:1rem;line-height:1;}
+.p-age{font-family:var(--mono);font-size:var(--t-meta);color:var(--ask);}
+.p-id{margin-left:auto;font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-dim);display:flex;gap:var(--s3);align-items:center;}
+.p-title{font-size:var(--t-lead);font-weight:600;margin:var(--s3) 0 var(--s3);}
+.p-q{
+  font-family:var(--mono);font-size:.8125rem;line-height:1.5;tab-size:8;
+  white-space:pre;overflow-x:auto;overscroll-behavior-x:contain;
+  background:var(--bg);border:1px solid var(--line);border-radius:7px;
+  padding:var(--s3);margin:0 0 var(--s4);max-height:16rem;overflow-y:auto;
+}
+.opts{display:flex;flex-direction:column;gap:var(--s2);max-width:76ch;}
+.opt{
+  display:flex;align-items:flex-start;gap:var(--s3);width:100%;text-align:left;
+  padding:9px var(--s3);border:2px solid var(--line-strong);border-radius:8px;
+  background:var(--surface);
+}
+.opt:hover:not(:disabled){border-color:var(--ink-faint);}
+.opt .n{
+  flex:0 0 auto;min-width:26px;height:22px;display:grid;place-items:center;
+  font-family:var(--mono);font-size:var(--t-meta);font-weight:700;
+  border:1px solid var(--line-strong);border-radius:5px;color:var(--ink-dim);
+}
+.opt .l{flex:1 1 auto;}
+.opt[aria-pressed="true"]{border-color:var(--accent);background:var(--surface-2);}
+.opt[aria-pressed="true"] .n{background:var(--accent);border-color:var(--accent);color:#fff;}
+@media (prefers-reduced-motion:no-preference){ .opt,.opt .n{transition:border-color .12s,background .12s;} }
+.opt:disabled{opacity:.45;cursor:not-allowed;}
+.opts.held .opt .n{opacity:.4;}
+.p-foot{margin-top:var(--s3);font-size:var(--t-meta);color:var(--ink-dim);max-width:88ch;}
+.p-foot strong{color:var(--ink);font-weight:600;}
+.p-foot.armed{color:var(--ink);}
+.p-result{margin-top:var(--s3);font-size:var(--t-body);display:flex;align-items:flex-start;gap:var(--s2);max-width:88ch;}
+.p-refuse{
+  margin-top:var(--s3);padding:var(--s3);border-radius:7px;border:1px dashed var(--line-strong);
+  font-size:var(--t-meta);color:var(--ink-dim);max-width:80ch;
+}
+.queue{max-width:min(100%,1600px);border-top:1px dashed var(--ask-edge);padding:var(--s2) var(--s5) var(--s3) calc(var(--s5) + 10px);}
+.queue .qh{font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ask);font-weight:700;margin-bottom:var(--s1);}
+.qrow{display:flex;align-items:center;gap:var(--s3);width:100%;padding:5px 0;font-size:var(--t-meta);color:var(--ink-dim);text-align:left;}
+.qrow:hover{color:var(--ink);}
+.qrow .qn{font-family:var(--mono);color:var(--ink);}
+.qrow .qa{margin-left:auto;font-family:var(--mono);color:var(--ask);}
+
+/* ── grid ──────────────────────────────────────────────────────────────── */
+#grid{
+  position:relative;
+  flex:1 1 auto;min-height:0;display:grid;
+  grid-template-columns:var(--rail) minmax(320px,1fr) minmax(0,1.4fr) var(--ledgerw);
+}
+@media (min-width:2200px){ #grid{grid-template-columns:320px 620px minmax(0,1fr) 400px;} }
+.pane{min-width:0;min-height:0;overflow:auto;border-right:1px solid var(--line-strong);background:var(--surface);}
+.pane:last-child{border-right:0;}
+#wall,#detail{background:var(--bg);}
+.paneheadwrap{position:sticky;top:0;z-index:5;background:inherit;}
+.panehead{
+  display:flex;align-items:center;gap:var(--s2);padding:var(--s3) var(--s4);
+  border-bottom:1px solid var(--line);font-size:var(--t-micro);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-faint);font-weight:600;
+}
+.panehead .k{margin-left:auto;font-family:var(--mono);letter-spacing:0;text-transform:none;}
+
+/* ── host rail ─────────────────────────────────────────────────────────── */
+.hostcard{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);cursor:pointer;}
+.hostcard.sel{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent);}
+.h-top{display:flex;align-items:center;gap:var(--s2);}
+.h-state{display:flex;align-items:center;gap:6px;font-size:var(--t-micro);font-weight:700;letter-spacing:.07em;}
+.h-name{font-family:var(--mono);font-weight:600;margin-left:auto;}
+.h-reason{margin-top:6px;font-size:var(--t-body);}
+.h-conseq{margin-top:3px;font-size:var(--t-meta);color:var(--ink-dim);}
+.h-nums{
+  margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-dim);line-height:1.65;
+}
+.h-labels{margin-top:4px;display:flex;gap:5px;flex-wrap:wrap;}
+.lbl{font-size:var(--t-micro);font-family:var(--mono);border:1px solid var(--line-strong);border-radius:4px;padding:1px 5px;color:var(--ink-dim);}
+#railfoot{padding:var(--s4);font-size:var(--t-meta);color:var(--ink-dim);border-top:1px solid var(--line-strong);}
+#railfoot .k{color:var(--ink);font-weight:600;}
+
+/* ── session wall ──────────────────────────────────────────────────────── */
+.group{padding-top:var(--s2);}
+.grouphead{
+  display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s4) 6px;
+  font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;
+}
+.grouphead .gn{font-family:var(--mono);letter-spacing:0;text-transform:none;font-size:var(--t-meta);color:var(--ink-dim);}
+.grouphead .cap{margin-left:auto;font-family:var(--mono);letter-spacing:0;text-transform:none;}
+.srow{
+  display:flex;align-items:center;gap:var(--s3);width:100%;text-align:left;
+  min-height:var(--row);padding:6px var(--s4) 6px calc(var(--s4) - 3px);
+  border-left:3px solid transparent;border-bottom:1px solid var(--line);
+}
+.srow:hover{background:var(--surface-2);}
+.srow .caret{width:9px;flex:0 0 auto;color:var(--accent);opacity:0;font-size:.7rem;}
+.srow.sel{background:var(--surface-2);border-left-color:var(--accent);}
+.srow.sel .caret{opacity:1;}
+.srow.asking{border-left-color:var(--ask);background:var(--ask-fill);}
+.srow.broken{border-left-color:var(--bad);}
+.srow.unreachable{opacity:.6;}
+.s-state{flex:0 0 auto;display:flex;align-items:center;gap:6px;width:11.5rem;font-size:var(--t-micro);font-weight:700;letter-spacing:.06em;}
+.s-state .g{font-size:.95rem;line-height:1;}
+.s-body{flex:1 1 auto;min-width:0;}
+.s-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.s-sub{font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.s-age{flex:0 0 auto;font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-dim);}
+.s-age.ask{color:var(--ask);font-weight:600;}
+.fanfail{
+  margin:var(--s2) var(--s4);padding:var(--s3);border:1px solid var(--bad);border-radius:7px;
+  background:var(--bad-fill);font-size:var(--t-meta);display:flex;gap:var(--s2);align-items:flex-start;
+}
+.empty{padding:var(--s7) var(--s5);}
+.empty h2{font-size:var(--t-head);margin:0 0 var(--s3);font-weight:650;}
+.empty p{margin:0 0 var(--s3);color:var(--ink-dim);max-width:56ch;}
+.bigbtn{
+  display:inline-flex;align-items:center;gap:var(--s2);padding:9px 14px;border-radius:8px;
+  border:1px solid var(--accent);color:var(--accent);font-weight:600;font-size:var(--t-meta);
+}
+.bigbtn:hover{background:var(--accent);color:#fff;}
+.bigbtn[disabled]{border-color:var(--line-strong);color:var(--ink-faint);cursor:not-allowed;}
+.pin{
+  font-family:var(--mono);font-size:2rem;letter-spacing:.22em;margin:var(--s4) 0 var(--s2);
+  padding:var(--s3) var(--s4);border:1px dashed var(--line-strong);border-radius:8px;display:inline-block;
+}
+.cmd{
+  font-family:var(--mono);font-size:var(--t-meta);white-space:pre;overflow-x:auto;
+  background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:var(--s3);margin:var(--s3) 0;max-width:64ch;
+}
+
+/* ── detail ────────────────────────────────────────────────────────────── */
+#detail{padding-bottom:var(--s6);}
+.d-wrap{padding:var(--s4) var(--s5);}
+.d-state{display:flex;align-items:center;gap:var(--s2);font-size:var(--t-micro);font-weight:700;letter-spacing:.07em;}
+.d-title{font-size:var(--t-head);font-weight:650;margin:var(--s2) 0 var(--s1);letter-spacing:-.01em;}
+.d-sub{font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-dim);}
+.d-acts{display:flex;gap:var(--s2);flex-wrap:wrap;margin:var(--s4) 0;}
+.act{
+  padding:6px 11px;border:1px solid var(--line-strong);border-radius:7px;
+  font-size:var(--t-meta);color:var(--ink);display:inline-flex;gap:7px;align-items:center;
+}
+.act .kk{font-family:var(--mono);font-size:var(--t-micro);color:var(--ink-faint);}
+.act:hover:not([disabled]){border-color:var(--accent);color:var(--accent);}
+.act[disabled]{color:var(--ink-faint);cursor:not-allowed;}
+.act.danger:hover:not([disabled]){border-color:var(--bad);color:var(--bad);}
+.errbox{
+  border:1px solid var(--bad);border-left-width:4px;background:var(--bad-fill);
+  border-radius:7px;padding:var(--s3);margin-bottom:var(--s4);
+}
+.peekhead{display:flex;align-items:center;gap:var(--s2);margin:var(--s5) 0 var(--s2);}
+.peekhead .t{font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;}
+.peekhead .s{margin-left:auto;font-size:var(--t-meta);color:var(--ink-dim);font-family:var(--mono);}
+pre.pane{
+  font-family:var(--mono);font-size:.8125rem;line-height:1.5;tab-size:8;
+  white-space:pre;overflow-x:auto;overscroll-behavior-x:contain;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:var(--s3);margin:0;max-height:none;
+}
+.notterm{margin-top:var(--s2);font-size:var(--t-meta);color:var(--ink-faint);}
+
+/* ── ledger ────────────────────────────────────────────────────────────── */
+#ledger{background:var(--surface);}
+.ev{display:flex;gap:var(--s3);padding:7px var(--s4);border-bottom:1px solid var(--line);font-size:var(--t-meta);align-items:baseline;}
+.ev .t{flex:0 0 auto;font-family:var(--mono);color:var(--ink-faint);}
+.ev .b{flex:1 1 auto;min-width:0;}
+.ev .w{font-weight:650;}
+.ev .who{color:var(--ink-dim);font-family:var(--mono);}
+.ev .noattr{color:var(--ink-faint);font-style:italic;}
+.ev.fresh{background:var(--ok-fill);}
+.gap{display:flex;align-items:center;gap:var(--s2);padding:var(--s3) var(--s4);color:var(--ink-faint);font-size:var(--t-meta);}
+.gap::before,.gap::after{content:"";flex:1 1 auto;height:1px;background:repeating-linear-gradient(90deg,var(--line-strong) 0 3px,transparent 3px 6px);}
+#ledgerfoot{padding:var(--s3) var(--s4);font-size:var(--t-meta);color:var(--ink-faint);border-top:1px solid var(--line);}
+
+@media (max-width:1559px){
+  #grid{grid-template-columns:var(--rail) minmax(300px,1fr) minmax(0,1.4fr);}
+  #ledger{
+    position:fixed;top:0;right:0;bottom:0;width:360px;z-index:40;
+    transform:translateX(101%);box-shadow:var(--shadow);border-left:1px solid var(--line-strong);
+  }
+  @media (prefers-reduced-motion:no-preference){ #ledger{transition:transform .18s ease;} }
+  body.ledger-open #ledger{transform:none;}
+}
+@media (min-width:1560px){ body.ledger-closed{ --ledgerw:0px; } body.ledger-closed #ledger{display:none;} }
+@media (max-width:1199px){
+  #grid{grid-template-columns:minmax(280px,1fr) minmax(0,1.3fr);}
+  #hosts{
+    position:fixed;top:0;left:0;bottom:0;width:300px;z-index:40;
+    transform:translateX(-101%);box-shadow:var(--shadow);
+  }
+  body.hosts-open #hosts{transform:none;}
+}
+
+/* ── status bar ────────────────────────────────────────────────────────── */
+#status{
+  flex:0 0 auto;display:flex;align-items:center;gap:var(--s4);
+  height:30px;padding:0 var(--s4);background:var(--surface);
+  border-top:1px solid var(--line-strong);font-size:var(--t-meta);color:var(--ink-dim);
+  overflow:hidden;white-space:nowrap;
+}
+#status .kb{font-family:var(--mono);color:var(--ink);}
+#status .sep{color:var(--line-strong);}
+#status .spacer{flex:1 1 auto;min-width:var(--s4);}
+#statusmsg{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+#statuskeys{flex:0 0 auto;}
+#statusmsg{color:var(--ink);}
+#statusmsg.warn{color:var(--ask);}
+#statusmsg.bad{color:var(--bad);}
+
+/* ── filter + overlays ─────────────────────────────────────────────────── */
+#filterbar{display:none;padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);background:var(--surface-2);}
+body.filtering #filterbar{display:flex;gap:var(--s2);align-items:center;}
+#filterbar input{
+  flex:1 1 auto;min-width:0;font:var(--t-meta) var(--mono);padding:5px 8px;
+  background:var(--surface);color:var(--ink);border:1px solid var(--line-strong);border-radius:6px;
+}
+#scrim{position:fixed;inset:0;background:rgba(8,10,14,.62);z-index:60;display:none;}
+body.modal #scrim{display:block;}
+.modal{
+  position:fixed;z-index:61;left:50%;top:12vh;transform:translateX(-50%);
+  width:min(640px,92vw);max-height:76vh;overflow:auto;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:12px;
+  box-shadow:var(--shadow);padding:var(--s5);
+}
+.modal h2{margin:0 0 var(--s3);font-size:var(--t-lead);font-weight:650;}
+.modal p{margin:0 0 var(--s3);color:var(--ink-dim);max-width:60ch;}
+.modal .danger-line{color:var(--bad);font-weight:600;}
+.modal input[type=text]{
+  width:100%;font:var(--t-body) var(--mono);padding:8px 10px;margin:var(--s2) 0 var(--s3);
+  background:var(--bg);color:var(--ink);border:1px solid var(--line-strong);border-radius:7px;
+}
+.modal .row{display:flex;gap:var(--s2);justify-content:flex-end;}
+.modal .row .bigbtn.no{border-color:var(--line-strong);color:var(--ink-dim);}
+.modal .row .bigbtn.no:hover{background:var(--surface-2);color:var(--ink);}
+.modal .row .bigbtn.go{border-color:var(--bad);color:var(--bad);}
+.modal .row .bigbtn.go:hover{background:var(--bad);color:#fff;}
+.modal .row .bigbtn.go[disabled]{border-color:var(--line-strong);color:var(--ink-faint);background:none;}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px var(--s4);align-items:baseline;font-size:var(--t-meta);}
+.keys kbd{
+  font:var(--t-meta) var(--mono);border:1px solid var(--line-strong);border-bottom-width:2px;
+  border-radius:5px;padding:1px 6px;color:var(--ink);white-space:nowrap;
+}
+.keys .h{grid-column:1/-1;margin-top:var(--s3);font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);font-weight:700;}
+.tiers{margin-top:var(--s4);border-top:1px solid var(--line);padding-top:var(--s3);font-size:var(--t-meta);color:var(--ink-dim);}
+.tiers b{color:var(--ink);}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div id="brand"><span class="mark" aria-hidden="true"></span><span>Fleetwright</span></div>
+  <div id="fleetline"></div>
+  <div class="spacer"></div>
+  <label class="sr" for="scenario">Prototype state</label>
+  <select id="scenario" title="Prototype only — cycle with 0"></select>
+  <button class="tbtn" id="btn-theme" title="t">Theme</button>
+  <button class="tbtn" id="btn-help" title="?">? Keys</button>
+  <div id="freshness"></div>
+</div>
+
+<div id="offline" role="alert">
+  <span class="g" aria-hidden="true">✕</span>
+  <span class="w">NOT CONNECTED</span>
+  <span id="offline-text"></span>
+  <button class="tbtn" id="btn-retry">Retry now &nbsp;r</button>
+</div>
+
+<section id="ask" aria-live="polite"></section>
+
+<main id="grid">
+  <aside class="pane" id="hosts" aria-label="Hosts"></aside>
+  <section class="pane" id="wall" aria-label="Sessions"></section>
+  <section class="pane" id="detail" aria-label="Selected session"></section>
+  <aside class="pane" id="ledger" aria-label="Event ledger"></aside>
+</main>
+
+<div id="status">
+  <span id="statusmsg"></span>
+  <span class="spacer"></span>
+  <span id="statuskeys"></span>
+</div>
+
+<div id="scrim"></div>
+
+<script>
+"use strict";
+/* ══════════════════════════════════════════════════════════════════════════
+   0. PRIMITIVES
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** The only node factory in the file. It cannot set markup. */
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+function frag(){ return document.createDocumentFragment(); }
+function clear(node){ while (node.firstChild) node.removeChild(node.firstChild); }
+function $(id){ return document.getElementById(id); }
+
+/**
+ * Anything that came off a pane goes through here before it reaches the DOM.
+ *  - C0 controls except \n and \t: a bare \r can overwrite a rendered line and
+ *    make the pane show text the session never printed.
+ *  - Bidi overrides: an RLO inside an option label can make a button read
+ *    "Deny" and mean "Approve", next to an irreversible action, on the origin
+ *    that holds every credential in the fleet.
+ */
+function scrub(s){
+  return String(s == null ? '' : s)
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '')
+    .replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '\uFFFD');
+}
+
+function fmtAge(ms){
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
+}
+function fmtAgeShort(ms){
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  if (s < 86400) return Math.round(s / 3600) + 'h';
+  return Math.round(s / 86400) + 'd';
+}
+function fmtClock(ts){
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+}
+function fmtBytes(b){
+  if (b == null) return '—';
+  const gb = b / 1073741824;
+  return (gb >= 10 ? gb.toFixed(0) : gb.toFixed(1)) + ' GB';
+}
+function fmtUptime(sec){
+  if (sec == null) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600);
+  return d > 0 ? d + 'd ' + h + 'h' : h + 'h';
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   1. THE STATE VOCABULARY — owned here and nowhere else.
+      plan.md Phase 2a: left as five separate strings, five surfaces drift.
+      Every badge, sort key, detail header and status line reads from these.
+      Solid glyph = we know. Hollow glyph = we do not.
+   ══════════════════════════════════════════════════════════════════════════ */
+const SESSION_STATE = {
+  asking:      { glyph:'◆', word:'WAITING FOR YOU', tone:'ask', rank:0 },
+  broken:      { glyph:'▲', word:'BROKEN',          tone:'bad', rank:1 },
+  unreachable: { glyph:'△', word:'UNREACHABLE',     tone:'dim', rank:2 },
+  working:     { glyph:'●', word:'WORKING',         tone:'ok',  rank:3 },
+  finished:    { glyph:'✓', word:'FINISHED',        tone:'dim', rank:4 },
+  stopped:     { glyph:'○', word:'STOPPED',         tone:'dim', rank:5 },
+};
+const HOST_STATE = {
+  healthy:  { glyph:'●', word:'HEALTHY',  tone:'ok',
+              conseq:'Accepting new sessions.' },
+  degraded: { glyph:'▲', word:'DEGRADED', tone:'bad',
+              conseq:'New sessions will not be scheduled here. Sessions already on it are still listed, and can still be answered.' },
+  unknown:  { glyph:'△', word:'UNKNOWN',  tone:'dim',
+              conseq:'We have not heard from it recently. Everything shown for it may be out of date.' },
+  offline:  { glyph:'✕', word:'OFFLINE',  tone:'bad',
+              conseq:'Its socket is closed. Its sessions are unreachable, not stopped.' },
+};
+const EVENT_WORD = {
+  'session.awaiting-input': 'is waiting for you',
+  'session.answered':       'answered',
+  'session.ended':          'finished',
+  'session.error':          'hit an error',
+  'session.rc-online':      'is ready to drive',
+  'session.started':        'started',
+  'session.stopped':        'stopped',
+  'session.forgotten':      'forgotten',
+  'host.enrolled':          'enrolled',
+  'host.refused':           'refused',
+  'host.revoked':           'revoked',
+  'host.connected':         'connected',
+  'host.disconnected':      'disconnected',
+  'enrol.minted':           'enrolment pin minted',
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   2. FAKE DATA — the only part of this file that is not the design.
+      Shapes are exactly what GET /api/hosts returns:
+        { ok, protocol, hosts:[{hostId,connected,connectedAt,state,reason,
+          health,healthAt}], devices, events:[{hostId,event,name,text,url,at}] }
+      health: { labels, loadavg, freeMemBytes, totalMemBytes, uptimeSec,
+                maxSessions, running, free, resumable, loggedIn, sessions[] }
+      A session may carry an open prompt: {id, question, options:[{index,label}], openedAt}
+   ══════════════════════════════════════════════════════════════════════════ */
+const T0 = Date.now();
+const ago = (s) => T0 - s * 1000;
+
+const PANE_FORCE_PUSH =
+"● Bash(git push --force-with-lease origin main)\n" +
+"  ⎿  Running…\n" +
+"\n" +
+"  I've rebased the 4 commits onto origin/main and the tests pass locally.\n" +
+"  Pushing this will rewrite the remote branch.\n" +
+"\n" +
+"╭──────────────────────────────────────────────────────────────────────────╮\n" +
+"│ Do you want to proceed?                                                  │\n" +
+"│                                                                          │\n" +
+"│ ╭──────────────────────────────────────────────────────────────────────╮ │\n" +
+"│ │ git push --force-with-lease origin main                              │ │\n" +
+"│ ╰──────────────────────────────────────────────────────────────────────╯ │\n" +
+"│                                                                          │\n" +
+"│ ❯ 1. Yes                                                                 │\n" +
+"│   2. Yes, and remember for this session                                  │\n" +
+"│   3. No, tell Claude what to do differently (esc)                        │\n" +
+"╰──────────────────────────────────────────────────────────────────────────╯";
+
+const PANE_TRUST =
+"╭──────────────────────────────────────────────────────────────────────────╮\n" +
+"│ Do you trust the files in this folder?                                   │\n" +
+"│                                                                          │\n" +
+"│   /work/inkbox                                                           │\n" +
+"│                                                                          │\n" +
+"│ Claude Code may read, execute, or modify files in this folder.           │\n" +
+"│                                                                          │\n" +
+"│ ❯ 1. Yes, proceed                                                        │\n" +
+"│   2. No, exit                                                            │\n" +
+"╰──────────────────────────────────────────────────────────────────────────╯";
+
+const PANE_RESUME =
+"  Found a saved conversation for cc-plain-lark (14 turns, 2h ago).\n" +
+"\n" +
+"╭──────────────────────────────────────────────────────────────────────────╮\n" +
+"│ How would you like to resume?                                            │\n" +
+"│                                                                          │\n" +
+"│ ❯ 1. Continue with a summary of what happened                            │\n" +
+"│   2. Continue with the full transcript                                   │\n" +
+"╰──────────────────────────────────────────────────────────────────────────╯";
+
+const PANE_WORKING =
+"● Read(src/fleet/coordinator/registry.js)\n" +
+"  ⎿  Read 214 lines\n" +
+"\n" +
+"● Update(src/fleet/coordinator/scheduler.js)\n" +
+"  ⎿  Updated with 3 additions and 1 removal\n" +
+"       43    export function place(registry, spec) {\n" +
+"       44      const verb = VERBS[spec.verb];\n" +
+"    -  45      const hosts = registry.schedulable();\n" +
+"    +  45      // reads fan over `connected`; schedulability is a write-path\n" +
+"    +  46      // question and a logged-out box must not swallow its sessions.\n" +
+"    +  47      const hosts = verb.mutating ? registry.schedulable() : registry.connected();\n" +
+"\n" +
+"● Now the tests. Running the fleet suite:\n" +
+"\n" +
+"● Bash(node --test test/fleet/scheduler.test.js)\n" +
+"  ⎿  ✔ place() fans list over connected hosts (4ms)\n" +
+"     ✔ place() refuses an ambiguous pin naming both hosts (2ms)\n" +
+"     ℹ pass 18  ℹ fail 0\n" +
+"\n" +
+"● Eighteen passing. Next I'll update the two tests that asserted the old\n" +
+"  behaviour, then check whether anything else calls schedulable().\n" +
+"\n" +
+"  esc to interrupt · ⏵⏵ accept edits on";
+
+const PANE_ERROR =
+"● Bash(npm run build:sandbox)\n" +
+"  ⎿  Error: podman: command not found\n" +
+"\n" +
+"● The sandbox image cannot be built on this host — podman is not installed and\n" +
+"  install.sh's container path was skipped. I cannot continue without it.\n" +
+"\n" +
+"  Error: process exited with code 127\n" +
+"      at ChildProcess.<anonymous> (/opt/agent-fleet/src/core/run.js:88:19)\n" +
+"      at Process.onexit (node:internal/child_process:294:12)\n" +
+"\n" +
+"[process exited 127]";
+
+const PANE_STOPPED =
+"● I've finished the migration: 31 files touched, all tests green, and the\n" +
+"  changelog entry is written. Nothing is committed — you asked me to leave\n" +
+"  that to you.\n" +
+"\n" +
+"  Summary of the change is in NOTES.md.\n" +
+"\n" +
+"[session stopped — conversation saved, resumable]";
+
+/** name -> pane text. Stands in for GET /api/peek. */
+const PANES = {
+  'cc-brave-otter': PANE_FORCE_PUSH,
+  'cc-quiet-heron': PANE_TRUST,
+  'cc-plain-lark':  PANE_RESUME,
+  'cc-still-fox':   PANE_WORKING,
+  'cc-warm-vole':   PANE_WORKING,
+  'cc-lone-pike':   PANE_ERROR,
+  'cc-glad-newt':   PANE_STOPPED,
+  'cc-tall-crane':  PANE_WORKING,
+  'cc-idle-shrew':  PANE_STOPPED,
+  'cc-swift-mole':  PANE_WORKING,
+  'cc-dark-wren':   PANE_STOPPED,
+};
+/** name -> rcUrl, which only GET /api/list carries. */
+const RC = {
+  'cc-brave-otter':'https://claude.ai/remote/9f2a41', 'cc-quiet-heron':'https://claude.ai/remote/2b7c08',
+  'cc-plain-lark':'https://claude.ai/remote/55da13',  'cc-still-fox':'https://claude.ai/remote/71ee90',
+  'cc-warm-vole':'https://claude.ai/remote/0c39ab',   'cc-lone-pike':'https://claude.ai/remote/44f1c2',
+  'cc-tall-crane':'https://claude.ai/remote/8ab304',  'cc-swift-mole':'https://claude.ai/remote/ff2071',
+};
+
+function host(hostId, state, reason, opts){
+  opts = opts || {};
+  return {
+    hostId, state, reason,
+    connected: state !== 'offline',
+    connectedAt: opts.connectedAt || ago(86400 * 3),
+    healthAt: opts.healthAt === undefined ? ago(4) : opts.healthAt,
+    health: opts.health || null,
+  };
+}
+function health(o){
+  return {
+    labels: o.labels || [], loadavg: o.loadavg || [0.2,0.2,0.2],
+    freeMemBytes: o.freeMemBytes, totalMemBytes: o.totalMemBytes, uptimeSec: o.uptimeSec,
+    maxSessions: o.maxSessions, running: o.running, free: o.free,
+    resumable: o.resumable || [], loggedIn: o.loggedIn !== false,
+    sessions: o.sessions || [],
+  };
+}
+const s = (name, title, status, extra) => Object.assign({ name, title, status, resumable: status !== 'running' }, extra || {});
+
+function baseHosts(){
+  return [
+    host('bramble','healthy','reporting normally',{ healthAt: ago(3), connectedAt: ago(86400*11),
+      health: health({ labels:['amd64','gpu','uk'], loadavg:[1.24,0.98,0.71],
+        freeMemBytes: 13.4*1073741824, totalMemBytes: 32*1073741824, uptimeSec: 86400*11 + 3600*4,
+        maxSessions: 6, running: 4, free: 2, resumable:['cc-glad-newt','cc-dark-wren'],
+        sessions: [
+          s('cc-brave-otter','Rewrite the auth middleware','running',{ prompt:{
+            id:'pr_01J8QW', question: PANE_FORCE_PUSH, openedAt: ago(252), demo:'ok',
+            options:[{index:1,label:'Yes'},{index:2,label:'Yes, and remember for this session'},{index:3,label:'No, tell Claude what to do differently'}] } }),
+          s('cc-still-fox','Fan reads over connected, not schedulable','running'),
+          s('cc-swift-mole','Wire fixtures for the iOS/Android decoders','running'),
+          s('cc-plain-lark','Port the install script to Debian 13','running',{ prompt:{
+            id:'pr_01J8QX', question: PANE_RESUME, openedAt: ago(1580), demo:'stale',
+            options:[{index:1,label:'Continue with a summary of what happened'},{index:2,label:'Continue with the full transcript'}] } }),
+          s('cc-glad-newt','Migrate the event ring to its own DO key','stopped'),
+          s('cc-dark-wren','Draft docs/console-design.md','stopped'),
+        ]})}),
+    host('hazel','degraded','claude is not logged in on this host',{ healthAt: ago(4), connectedAt: ago(86400*3),
+      health: health({ labels:['arm64','pi'], loadavg:[0.31,0.44,0.52],
+        freeMemBytes: 9.1*1073741824, totalMemBytes: 16*1073741824, uptimeSec: 86400*3 + 3600*4,
+        maxSessions: 4, running: 2, free: 2, loggedIn: false, resumable:['cc-idle-shrew'],
+        sessions: [
+          s('cc-quiet-heron','Sandbox entrypoint for safe-mode sessions','running',{ prompt:{
+            id:'pr_01J8QY', question: PANE_TRUST, openedAt: ago(668), demo:'already',
+            options:[{index:1,label:'Yes, proceed'},{index:2,label:'No, exit'}] } }),
+          s('cc-lone-pike','Multi-arch sandbox build','error'),
+          s('cc-idle-shrew','Telnyx spike (closed on scope)','stopped'),
+        ]})}),
+    host('thistle','unknown','last health report was 71s ago',{ healthAt: ago(71), connectedAt: ago(86400*6),
+      health: health({ labels:['amd64','build'], loadavg:[3.90,3.10,2.40],
+        freeMemBytes: 2.2*1073741824, totalMemBytes: 64*1073741824, uptimeSec: 86400*6,
+        maxSessions: 8, running: 2, free: 6, resumable:[],
+        sessions: [
+          s('cc-warm-vole','Rebuild the arm64 image under QEMU','running'),
+          s('cc-tall-crane','Renovate config for the worker package','running'),
+        ]})}),
+    host('quarry','offline','socket closed',{ healthAt: ago(940), connectedAt: ago(86400*2),
+      health: health({ labels:['amd64','eu-west'], loadavg:[0.04,0.09,0.14],
+        freeMemBytes: 30.7*1073741824, totalMemBytes: 32*1073741824, uptimeSec: 86400*2,
+        maxSessions: 4, running: 1, free: 3, resumable:[],
+        sessions: [ s('cc-idle-shrew','Nightly dependency sweep','running') ]})}),
+  ];
+}
+
+function baseEvents(){
+  return [
+    { hostId:'bramble', event:'host.connected', name:null, text:null, url:null, at: ago(86400*11), actor:null },
+    { hostId:'coordinator', event:'enrol.minted', name:null, text:'for hazel, by eli@example.com', url:null, at: ago(86400*3+120), actor:'eli@example.com' },
+    { hostId:'hazel', event:'host.enrolled', name:null, text:'fingerprint 4f:9c:21:ee', url:null, at: ago(86400*3), actor:null },
+    { hostId:'bramble', event:'session.started', name:'cc-still-fox', text:'start', url:null, at: ago(7400), actor:'eli@example.com' },
+    { hostId:'thistle', event:'session.started', name:'cc-warm-vole', text:'start', url:null, at: ago(6100), actor:'sam@example.com' },
+    { hostId:'bramble', event:'session.rc-online', name:'cc-still-fox', text:null, url:'https://claude.ai/remote/71ee90', at: ago(6080), actor:null },
+    { hostId:'bramble', event:'session.ended', name:'cc-dark-wren', text:null, url:null, at: ago(5200), actor:null },
+    { hostId:'hazel', event:'session.started', name:'cc-quiet-heron', text:'start', url:null, at: ago(3300), actor:'sam@example.com' },
+    { hostId:'bramble', event:'session.answered', name:'cc-still-fox', text:'option 1 — "Yes"', url:null, at: ago(2950), actor:'eli@example.com' },
+    { hostId:'hazel', event:'session.error', name:'cc-lone-pike', text:'podman: command not found', url:null, at: ago(2400), actor:null },
+    { hostId:'bramble', event:'session.awaiting-input', name:'cc-plain-lark', text:'is waiting for you', url:null, at: ago(1580), actor:null },
+    { hostId:'quarry', event:'host.disconnected', name:null, text:'socket closed', url:null, at: ago(940), actor:null },
+    { hostId:'hazel', event:'session.awaiting-input', name:'cc-quiet-heron', text:'is waiting for you', url:null, at: ago(668), actor:null },
+    { hostId:'bramble', event:'session.stopped', name:'cc-glad-newt', text:'stop', url:null, at: ago(600), actor:'eli@example.com' },
+    { hostId:'coordinator', event:'host.refused', name:null, text:'pin already used', url:null, at: ago(430), actor:null },
+    { hostId:'bramble', event:'session.awaiting-input', name:'cc-brave-otter', text:'is waiting for you', url:null, at: ago(252), actor:null },
+  ];
+}
+
+/* ── the eleven states, as scenarios ─────────────────────────────────────── */
+const SCENARIOS = [
+  { id:'ask', label:'Three sessions asking (default)', build(){
+      return { ok:true, protocol:1, devices:2, hosts: baseHosts(), events: baseEvents(), enrolled:4, stale:false, gap:false, admin:true }; } },
+
+  { id:'calm', label:'Everything healthy, nothing waiting', build(){
+      const hs = baseHosts();
+      for (const h of hs) if (h.health) for (const ss of h.health.sessions) delete ss.prompt;
+      hs[1].state='healthy'; hs[1].reason='reporting normally'; hs[1].health.loggedIn=true;
+      hs[1].health.sessions = hs[1].health.sessions.filter(x => x.status !== 'error');
+      hs[2].state='healthy'; hs[2].reason='reporting normally'; hs[2].healthAt=ago(5);
+      hs[3].state='healthy'; hs[3].reason='reporting normally'; hs[3].connected=true; hs[3].healthAt=ago(6);
+      return { ok:true, protocol:1, devices:2, hosts:hs, events: baseEvents().filter(e=>e.event!=='session.awaiting-input'&&e.event!=='session.error'), enrolled:4, stale:false, gap:false, admin:true }; } },
+
+  { id:'storm', label:'Prompt storm — four asking at once', build(){
+      const st = SCENARIOS[0].build();
+      const h = st.hosts[2];
+      h.state='healthy'; h.reason='reporting normally'; h.healthAt=ago(4);
+      h.health.sessions[0].prompt = { id:'pr_01J8R0', question: PANE_TRUST, openedAt: ago(95), demo:'timeout',
+        options:[{index:1,label:'Yes, proceed'},{index:2,label:'No, exit'}] };
+      return st; } },
+
+  { id:'degraded', label:'A host degraded, one session broken', build(){
+      const st = SCENARIOS[0].build();
+      for (const h of st.hosts) if (h.health) for (const ss of h.health.sessions) delete ss.prompt;
+      return st; } },
+
+  { id:'fanfail', label:'Partial fan-out failure', build(){
+      const st = SCENARIOS[3].build();
+      st.fanfail = { hostId:'thistle', text:'thistle did not answer list within 8000 ms' };
+      return st; } },
+
+  { id:'nosessions', label:'Fleet up, no sessions', build(){
+      const hs = baseHosts();
+      for (const h of hs){ h.state='healthy'; h.reason='reporting normally'; h.connected=true; h.healthAt=ago(4);
+        if (h.health){ h.health.loggedIn=true; h.health.sessions=[]; h.health.running=0; h.health.free=h.health.maxSessions; h.health.resumable=[]; } }
+      return { ok:true, protocol:1, devices:2, hosts:hs, events: baseEvents().slice(0,3), enrolled:4, stale:false, gap:false, admin:true }; } },
+
+  { id:'nofleet', label:'No fleet yet — nothing enrolled', build(){
+      return { ok:true, protocol:1, devices:0, hosts:[], events:[], enrolled:0, stale:false, gap:false, admin:true }; } },
+
+  { id:'enrolled', label:'Enrolled, none connected', build(){
+      return { ok:true, protocol:1, devices:1, hosts:[], events:[
+        { hostId:'bramble', event:'host.enrolled', name:null, text:'fingerprint 4f:9c:21:ee', url:null, at: ago(86400), actor:null },
+        { hostId:'quarry', event:'host.disconnected', name:null, text:'socket closed', url:null, at: ago(3600), actor:null },
+      ], enrolled:3, stale:false, gap:false, admin:true }; } },
+
+  { id:'offline', label:'Coordinator unreachable', build(){
+      const st = SCENARIOS[0].build();
+      st.stale = true; st.lastSeen = ago(47);
+      return st; } },
+
+  { id:'gap', label:'Reconnected with a gap in the ring', build(){
+      const st = SCENARIOS[1].build();
+      st.gap = true;
+      return st; } },
+
+  { id:'noadmin', label:'Signed in without the admin capability', build(){
+      const st = SCENARIOS[3].build();
+      st.admin = false; st.actor = 'sam@example.com';
+      return st; } },
+];
+
+/* ══════════════════════════════════════════════════════════════════════════
+   3. VIEW STATE
+   ══════════════════════════════════════════════════════════════════════════ */
+const UI = {
+  scenario: 0,
+  snap: null,
+  actor: 'eli@example.com',
+  sel: null,            // "hostId/name"
+  focusPane: 'wall',
+  hostSel: 0,
+  peeking: false,
+  peekTicks: 0,
+  filter: '',
+  armed: null,          // {index,label}
+  held: false,          // 150ms double-Enter guard
+  promptIx: 0,          // which open prompt is expanded
+  answered: {},         // promptId -> {kind, text, at}
+  pending: null,
+  freshEvents: [],
+  msg: '',
+  msgTone: '',
+  confirm: null,        // {verb, session}
+};
+
+function load(i){
+  UI.scenario = (i + SCENARIOS.length) % SCENARIOS.length;
+  UI.snap = SCENARIOS[UI.scenario].build();
+  UI.actor = UI.snap.actor || 'eli@example.com';
+  UI.armed = null; UI.promptIx = 0; UI.answered = {}; UI.pending = null;
+  UI.peeking = false; UI.freshEvents = []; UI.confirm = null;
+  document.body.classList.toggle('stale', !!UI.snap.stale);
+  const sess = sessions();
+  UI.sel = sess.length ? key(sess[0]) : null;
+  $('scenario').value = String(UI.scenario);
+  setMsg('');
+  render();
+}
+const key = (x) => x.hostId + '/' + x.name;
+const now = () => (UI.snap && UI.snap.stale ? UI.snap.lastSeen : Date.now());
+
+/** The wall is built from health.sessions[] — one coordinator-local request,
+ *  zero round trips to any box. /api/list (a fan-out) is on-demand only. */
+function sessions(){
+  const out = [];
+  for (const h of (UI.snap.hosts || [])){
+    if (!h.health || !h.health.sessions) continue;
+    for (const ss of h.health.sessions){
+      const st = derive(h, ss);
+      out.push({
+        hostId: h.hostId, name: ss.name, title: ss.title, status: ss.status,
+        resumable: ss.resumable, prompt: ss.prompt || null, host: h,
+        state: st, rcUrl: RC[ss.name] || null,
+        since: ss.prompt ? ss.prompt.openedAt : (h.healthAt || h.connectedAt),
+      });
+    }
+  }
+  out.sort((a,b) => (SESSION_STATE[a.state].rank - SESSION_STATE[b.state].rank) || (a.since - b.since));
+  return out;
+}
+function derive(h, ss){
+  if (ss.prompt && h.connected) return 'asking';
+  if (!h.connected) return 'unreachable';
+  if (ss.status === 'error') return 'broken';
+  if (ss.status === 'running') return 'working';
+  const ended = (UI.snap.events || []).filter(e => e.name === ss.name).slice(-1)[0];
+  if (ended && ended.event === 'session.ended') return 'finished';
+  return 'stopped';
+}
+function openPrompts(){
+  return sessions().filter(x => x.state === 'asking' && !UI.answered[x.prompt.id])
+                   .sort((a,b) => a.prompt.openedAt - b.prompt.openedAt);
+}
+function selected(){ return sessions().find(x => key(x) === UI.sel) || null; }
+function matches(x){
+  if (!UI.filter) return true;
+  const q = UI.filter.toLowerCase();
+  return (x.name + ' ' + (x.title||'') + ' ' + x.hostId + ' ' + SESSION_STATE[x.state].word).toLowerCase().includes(q);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   4. RENDER
+   ══════════════════════════════════════════════════════════════════════════ */
+function render(){
+  renderTop(); renderAsk(); renderHosts(); renderWall(); renderDetail(); renderLedger(); renderStatus();
+}
+
+function badge(map, k, cls){
+  const st = map[k];
+  const w = el('span', (cls||'') + ' tone-' + st.tone);
+  w.append(el('span','g',st.glyph), el('span','w',st.word));
+  return w;
+}
+
+function renderTop(){
+  const S = UI.snap;
+  const conn = (S.hosts||[]).filter(h => h.connected).length;
+  const sess = sessions();
+  const working = sess.filter(x => x.state === 'working').length;
+  const parts = [];
+  parts.push(S.hosts.length ? conn + ' of ' + S.enrolled + ' hosts connected' : S.enrolled + ' enrolled, none connected');
+  if (sess.length) parts.push(working + ' working, ' + (sess.length - working) + ' not');
+  parts.push('protocol v' + S.protocol);
+  parts.push(S.devices + ' device' + (S.devices === 1 ? '' : 's'));
+  $('fleetline').textContent = parts.join('  ·  ');
+
+  const fr = $('freshness');
+  if (S.stale){ fr.textContent = 'frozen at ' + fmtClock(S.lastSeen); fr.className = 'tone-bad'; }
+  else { fr.textContent = 'updated ' + fmtAgeShort(Date.now() - (T0 - 2000)) + ' ago'; fr.className = ''; }
+
+  $('offline-text').textContent = S.stale
+    ? 'Everything below is what we knew ' + fmtAgeShort(Date.now() - S.lastSeen) + ' ago. Ages are frozen and every action is disabled. Next attempt in 4s.'
+    : '';
+
+  const n = openPrompts().length;
+  document.title = (n ? '(' + n + ') ' : '') + 'Fleetwright — console';
+}
+
+/* ── THE ASK ─────────────────────────────────────────────────────────────── */
+function renderAsk(){
+  const box = $('ask');
+  clear(box);
+  const ps = openPrompts();
+  const sess = sessions();
+
+  if (!ps.length){
+    box.className = 'quiet';
+    if (!UI.snap.hosts.length){
+      const g0 = el('span','faint','○'); g0.setAttribute('aria-hidden','true');
+      box.append(g0, el('span','', UI.snap.enrolled
+        ? 'Nothing is waiting on you. No host is connected, so nothing can be.'
+        : 'No fleet yet.'));
+      return;
+    }
+    const g = el('span','tone-dim','○'); g.setAttribute('aria-hidden','true');
+    box.append(g, el('span','','Nothing is waiting on you.'),
+      el('span','faint','·'),
+      el('span','', sess.filter(x=>x.state==='working').length + ' working, ' +
+                    sess.filter(x=>x.state!=='working').length + ' not, across ' +
+                    UI.snap.hosts.filter(h=>h.connected).length + ' hosts.'));
+    return;
+  }
+
+  box.className = 'loud';
+  const p = ps[Math.min(UI.promptIx, ps.length - 1)];
+  box.append(promptCard(p));
+  if (ps.length > 1){
+    const q = el('div','queue');
+    q.append(el('div','qh','◆ ' + (ps.length - 1) + ' more asking'));
+    ps.forEach((x, i) => {
+      if (i === Math.min(UI.promptIx, ps.length - 1)) return;
+      const r = el('button','qrow');
+      r.type = 'button';
+      r.append(el('span','qn', x.name), el('span','', '· ' + x.hostId + ' ·'),
+               el('span','', scrub(x.title)), el('span','qa', fmtAgeShort(now() - x.prompt.openedAt)), el('span','','›'));
+      r.addEventListener('click', () => { UI.promptIx = i; UI.armed = null; UI.sel = key(x); render(); });
+      q.append(r);
+    });
+    box.append(q);
+  }
+}
+
+function promptCard(x){
+  const card = el('div','promptcard');
+  const head = el('div','p-head');
+  const st = el('span','p-state');
+  st.append(el('span','g','◆'), el('span','','WAITING FOR YOU'));
+  head.append(st, el('span','p-age', fmtAge(now() - x.prompt.openedAt)));
+  const id = el('span','p-id');
+  id.append(el('span','', x.name), el('span','faint','·'), el('span','', x.hostId));
+  if (x.rcUrl){
+    const a = el('a','', 'Remote Control ↗');
+    a.href = x.rcUrl; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    id.append(a);
+  }
+  head.append(id);
+  card.append(head);
+  card.append(el('div','p-title', scrub(x.title)));
+
+  const q = el('pre','p-q', scrub(x.prompt.question));
+  q.tabIndex = 0;
+  card.append(q);
+
+  const res = UI.answered[x.prompt.id];
+  const opts = x.prompt.options || [];
+
+  /* Refusals: the console must not offer a button it cannot honour. */
+  if (!opts.length || opts.length > 9){
+    const r = el('div','p-refuse');
+    r.textContent = !opts.length
+      ? 'This session published no options. There is nothing to answer from here — open it in Remote Control.'
+      : 'This session published ' + opts.length + ' options. The wire format is option 1–9, so none of them can be addressed from here. Open it in Remote Control.';
+    card.append(r);
+    return card;
+  }
+
+  const list = el('div','opts');
+  if (UI.held) list.classList.add('held');
+  opts.forEach(o => {
+    const b = el('button','opt');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(!!UI.armed && UI.armed.index === o.index));
+    b.append(el('span','n', String(o.index)), el('span','l', scrub(o.label)));
+    b.disabled = !!res || !!UI.pending || UI.held || !!UI.snap.stale;
+    b.addEventListener('click', () => {
+      if (UI.armed && UI.armed.index === o.index) sendAnswer(x);
+      else { UI.armed = { index:o.index, label:o.label }; render(); }
+    });
+    list.append(b);
+  });
+  card.append(list);
+
+  if (res){
+    const line = el('div','p-result');
+    line.append(el('span','tone-' + res.tone, res.glyph), el('span','', res.text));
+    card.append(line);
+    if (res.extra) card.append(el('div','p-foot', res.extra));
+    return card;
+  }
+  if (UI.pending === x.prompt.id){
+    card.append(el('div','p-foot','sent — waiting for ' + x.hostId + '…'));
+    return card;
+  }
+
+  const foot = el('div','p-foot');
+  if (UI.armed){
+    foot.classList.add('armed');
+    foot.append(el('strong','','Enter'), el('span','', ' sends option ' + UI.armed.index + ' — '),
+      el('strong','', '"' + scrub(UI.armed.label) + '"'),
+      el('span','', ' — to ' + x.name + ' on ' + x.hostId + ', as ' + UI.actor + '.   '),
+      el('strong','','Esc'), el('span','', ' cancels.'));
+  } else if (UI.snap.stale){
+    foot.textContent = 'The coordinator is unreachable. Nothing can be sent.';
+  } else {
+    foot.append(el('span','', 'Press '), el('strong','','1–' + opts.length),
+      el('span','', ' to choose. Nothing is sent until you press '), el('strong','','Enter'), el('span','','.'));
+  }
+  card.append(foot);
+  return card;
+}
+
+/* The four outcomes, all designed. None of them is a generic error. */
+function sendAnswer(x){
+  if (!UI.armed || UI.pending || UI.snap.stale) return;
+  const opt = UI.armed, pid = x.prompt.id, demo = x.prompt.demo || 'ok';
+  UI.pending = pid; UI.armed = null; render();
+  setTimeout(() => {
+    UI.pending = null;
+    if (demo === 'ok'){
+      UI.answered[pid] = { tone:'ok', glyph:'✓', text:'answered · option ' + opt.index + ' · by you · ' + fmtClock(Date.now()) };
+      pushEvent({ hostId:x.hostId, event:'session.answered', name:x.name,
+                  text:'option ' + opt.index + ' — "' + opt.label + '"', at:Date.now(), actor:UI.actor });
+      retire(pid);
+    } else if (demo === 'already'){
+      UI.answered[pid] = { tone:'ok', glyph:'✓', text:'already answered by sam@example.com at ' + fmtClock(Date.now() - 90000),
+        extra:'Not an error. Somebody got there first, and the record says who — which is the whole point of the ring.' };
+      retire(pid);
+    } else if (demo === 'stale'){
+      UI.answered[pid] = { tone:'dim', glyph:'△', text:'The screen changed while you were reading. Nothing was sent.',
+        extra:'The host re-captured the pane before typing and the option list had moved. It refused rather than guessing. Re-read the question below — it has been fetched fresh and disarmed.' };
+      setTimeout(() => { delete UI.answered[pid]; UI.armed = null; render(); }, 4200);
+    } else {
+      UI.answered[pid] = { tone:'bad', glyph:'▲', text:x.hostId + ' did not answer within 8 s. We do not know whether it landed.',
+        extra:'An unknown is not a failure and will not be presented as one. Peek before you try again — press p.' };
+    }
+    setMsg('');
+    render();
+  }, 620);
+}
+function retire(pid){
+  setTimeout(() => {
+    delete UI.answered[pid];
+    const s0 = sessions().find(z => z.prompt && z.prompt.id === pid);
+    if (s0){ for (const h of UI.snap.hosts) if (h.health) for (const ss of h.health.sessions) if (ss.prompt && ss.prompt.id === pid) delete ss.prompt; }
+    UI.promptIx = 0;
+    /* the double-Enter guard: the next prompt is promoted immediately but is
+       inert for 150 ms, so a fast second Enter cannot answer it by accident. */
+    UI.held = true; render();
+    setTimeout(() => { UI.held = false; render(); }, 150);
+  }, 1400);
+}
+function pushEvent(e){
+  UI.snap.events.push(Object.assign({ text:null, url:null }, e));
+  UI.freshEvents.push(e.at);
+  setTimeout(() => { UI.freshEvents = UI.freshEvents.filter(t => t !== e.at); renderLedger(); }, 6000);
+}
+
+/* ── host rail ───────────────────────────────────────────────────────────── */
+function renderHosts(){
+  const pane = $('hosts');
+  clear(pane);
+  const hd = el('div','paneheadwrap');
+  const h = el('div','panehead'); h.append(el('span','','Hosts'), el('span','k','h / l'));
+  hd.append(h); pane.append(hd);
+
+  if (!UI.snap.hosts.length){
+    const e = el('div','empty');
+    e.append(el('p','dim', UI.snap.enrolled ? UI.snap.enrolled + ' machines are enrolled. None is connected right now.' : 'No machine has enrolled yet.'));
+    pane.append(e);
+  }
+
+  UI.snap.hosts.forEach((hh, i) => {
+    const st = HOST_STATE[hh.state] || HOST_STATE.unknown;
+    const c = el('div','hostcard' + (UI.focusPane === 'hosts' && UI.hostSel === i ? ' sel' : ''));
+    c.tabIndex = 0;
+    c.addEventListener('click', () => { UI.focusPane = 'hosts'; UI.hostSel = i; render(); });
+
+    const top = el('div','h-top');
+    top.append(badge(HOST_STATE, hh.state, 'h-state'), el('span','h-name mono', hh.hostId));
+    c.append(top);
+
+    /* THE REASON. Verbatim, never truncated, never turned into a code.
+       registry.js works hard to always populate it; nothing rendered it. */
+    c.append(el('div','h-reason', hh.reason));
+    c.append(el('div','h-conseq', st.conseq));
+
+    const nums = el('div','h-nums' + (hh.state === 'unknown' ? ' hatched' : ''));
+    const hl = hh.health;
+    if (hl){
+      nums.append(el('div','', (hl.running == null ? '—' : hl.running) + ' of ' + (hl.maxSessions == null ? '—' : hl.maxSessions) +
+        ' running   ·   ' + (hl.free == null ? 'free unknown' : hl.free + ' free')));
+      nums.append(el('div','', 'load ' + hl.loadavg.map(n => n.toFixed(2)).join(' ')));
+      nums.append(el('div','', fmtBytes(hl.freeMemBytes) + ' free of ' + fmtBytes(hl.totalMemBytes) + '   ·   up ' + fmtUptime(hl.uptimeSec)));
+      nums.append(el('div','', 'health ' + (hh.healthAt ? fmtAgeShort(now() - hh.healthAt) + ' ago' : 'never') +
+        '   ·   ' + (hl.loggedIn === false ? 'claude logged out' : 'claude logged in')));
+      if (hl.labels && hl.labels.length){
+        const lb = el('div','h-labels');
+        hl.labels.forEach(l => lb.append(el('span','lbl', l)));
+        nums.append(lb);
+      }
+    } else {
+      nums.append(el('div','','no health report has ever arrived'));
+    }
+    c.append(nums);
+    pane.append(c);
+  });
+
+  /* plan.md §5.4 — the whole discoverability plan for Phase 1's headline
+     feature is this sentence. Fleet-level, because the switch is per fleet. */
+  const foot = el('div','railfoot'); foot.id = 'railfoot';
+  foot.append(el('div','k','Prompt text stays in the fleet.'));
+  foot.append(el('div','','Notifications say a session is waiting. They do not say what it asked.'));
+  const ch = el('button','tbtn','Change'); ch.style.marginTop = '8px';
+  ch.addEventListener('click', () => setMsg('Fleet setting — not wired in this prototype.', 'warn'));
+  foot.append(ch);
+  pane.append(foot);
+}
+
+/* ── session wall ────────────────────────────────────────────────────────── */
+function renderWall(){
+  const pane = $('wall');
+  clear(pane);
+
+  const hd = el('div','paneheadwrap');
+  const h = el('div','panehead');
+  h.append(el('span','','Sessions'), el('span','k','j k  ·  n next needing you  ·  / filter'));
+  hd.append(h);
+  const fb = el('div',''); fb.id = 'filterbar';
+  const inp = el('input',''); inp.type = 'text'; inp.id = 'filterinput';
+  inp.placeholder = 'filter — client-side only, nothing is sent to a host';
+  inp.value = UI.filter; inp.autocomplete = 'off'; inp.spellcheck = false;
+  inp.addEventListener('input', () => { UI.filter = inp.value; renderWall(); const f = $('filterinput'); if (f){ f.focus(); f.selectionStart = f.value.length; } });
+  fb.append(inp, el('span','meta','Esc clears'));
+  hd.append(fb);
+  pane.append(hd);
+
+  const all = sessions();
+
+  if (!UI.snap.hosts.length){ pane.append(UI.snap.enrolled ? emptyEnrolled() : emptyNoFleet()); return; }
+  if (!all.length){ pane.append(emptyNoSessions()); return; }
+
+  if (UI.snap.fanfail){
+    const f = el('div','fanfail');
+    f.append(el('span','tone-bad','▲'),
+      el('span','', UI.snap.fanfail.text + ' — its sessions are missing from this list. Absence is the thing that has to be visible.'));
+    pane.append(f);
+  }
+
+  for (const hh of UI.snap.hosts){
+    const rows = all.filter(x => x.hostId === hh.hostId && matches(x));
+    if (!rows.length) continue;
+    const g = el('div','group');
+    const gh = el('div','grouphead');
+    const st = HOST_STATE[hh.state] || HOST_STATE.unknown;
+    gh.append(el('span','tone-' + st.tone, st.glyph), el('span','gn', hh.hostId), el('span','', st.word));
+    if (hh.health) gh.append(el('span','cap', (hh.health.running == null ? '—' : hh.health.running) + '/' + (hh.health.maxSessions == null ? '—' : hh.health.maxSessions)));
+    g.append(gh);
+    rows.forEach(x => g.append(sessionRow(x)));
+    pane.append(g);
+  }
+}
+
+function sessionRow(x){
+  const st = SESSION_STATE[x.state];
+  const r = el('button','srow ' + x.state + (key(x) === UI.sel ? ' sel' : ''));
+  r.type = 'button';
+  r.append(el('span','caret','▸'));
+  r.append(badge(SESSION_STATE, x.state, 's-state'));
+  const body = el('span','s-body');
+  body.append(el('span','s-title', scrub(x.title || '(no title)')));
+  body.append(el('span','s-sub', x.name + (x.resumable && x.state === 'stopped' ? '  ·  resumable' : '')));
+  r.append(body);
+  r.append(el('span','s-age' + (x.state === 'asking' ? ' ask' : ''), fmtAgeShort(now() - x.since)));
+  r.addEventListener('click', () => { UI.sel = key(x); UI.focusPane = 'wall'; UI.armed = null; render(); });
+  r.addEventListener('dblclick', () => { UI.peeking = true; render(); });
+  return r;
+}
+
+function emptyNoFleet(){
+  const e = el('div','empty prose');
+  e.append(el('h2','','No machine has enrolled yet.'));
+  e.append(el('p','','A host joins by dialling out to this coordinator with a pin you mint here. Nothing you own ever listens — the box opens the socket, not the other way round.'));
+  const b = el('button','bigbtn','Mint an enrolment pin');
+  b.addEventListener('click', () => {
+    clear(e);
+    e.append(el('h2','','Read this pin to the machine.'));
+    e.append(el('div','pin','4718  2036'));
+    e.append(el('p','meta','Expires in 9m 42s. It can be used once.'));
+    e.append(el('div','cmd','sudo agent-fleet enrol --coordinator https://fleet.example.com --pin 4718-2036'));
+    e.append(el('p','','This panel will not dismiss itself. The host appears in the rail on the left the moment it dials in.'));
+  });
+  e.append(b);
+  if (!UI.snap.admin){ b.disabled = true; e.append(el('p','meta','Minting a pin needs the admin capability. You are signed in as ' + UI.actor + '.')); }
+  return e;
+}
+function emptyEnrolled(){
+  const e = el('div','empty prose');
+  e.append(el('h2','', UI.snap.enrolled + ' machines are enrolled. None of them is connected right now.'));
+  e.append(el('p','','This is not the same as an empty fleet, and the console will not merge the two: an enrolled host that is not dialling in is a box to go and look at, not a box to enrol again.'));
+  e.append(el('p','meta','The ledger on the right holds the last thing each of them did.'));
+  return e;
+}
+function emptyNoSessions(){
+  const free = UI.snap.hosts.reduce((a,h) => a + ((h.health && h.health.free) || 0), 0);
+  const conn = UI.snap.hosts.filter(h => h.connected).length;
+  const e = el('div','empty prose');
+  e.append(el('h2','','Nothing is running.'));
+  e.append(el('p','', conn + ' hosts connected, ' + free + ' free slots.'));
+  const b = el('button','bigbtn','');
+  b.append(el('span','','Start a session'), el('span','kk mono','S'));
+  b.addEventListener('click', () => setMsg('The start panel names the host explicitly — placement is never hidden, because an ambiguous pin is refused and a refusal you cannot explain is worse than the bug.', 'warn'));
+  e.append(b);
+  e.append(el('p','meta','Sessions start with permissions bypassed on this fleet. The start panel says so on the button, not in a tooltip.'));
+  return e;
+}
+
+/* ── detail ──────────────────────────────────────────────────────────────── */
+function renderDetail(){
+  const pane = $('detail');
+  clear(pane);
+  const hd = el('div','paneheadwrap');
+  const h = el('div','panehead'); h.append(el('span','','Detail'), el('span','k','p peek  ·  Enter open'));
+  hd.append(h); pane.append(hd);
+
+  const x = selected();
+  if (!x){
+    const e = el('div','empty prose');
+    e.append(el('p','dim','No session selected.'));
+    pane.append(e); return;
+  }
+  const st = SESSION_STATE[x.state];
+  const w = el('div','d-wrap');
+  w.append(badge(SESSION_STATE, x.state, 'd-state'));
+  w.append(el('div','d-title', scrub(x.title || '(no title)')));
+  const sub = el('div','d-sub');
+  sub.append(el('span','', x.name + '  ·  ' + x.hostId + '  ·  ' + fmtAge(now() - x.since) + (x.state === 'asking' ? ' waiting' : '')));
+  w.append(sub);
+
+  const acts = el('div','d-acts');
+  const disabled = !!UI.snap.stale || x.state === 'unreachable';
+  const why = UI.snap.stale ? 'the coordinator is unreachable'
+            : x.state === 'unreachable' ? x.hostId + ' is not connected' : '';
+  acts.append(action('Peek', 'p', () => { UI.peeking = !UI.peeking; UI.peekTicks = 0; render(); }, UI.snap.stale, why));
+  if (x.state === 'working' || x.state === 'asking')
+    acts.append(action('Stop', 's', () => askConfirm('stop', x), disabled, why));
+  if (x.state === 'stopped' || x.state === 'finished')
+    acts.append(action('Resume', 'R', () => askConfirm('resume', x), disabled || !x.resumable, x.resumable ? why : 'no saved conversation'));
+  if (x.rcUrl){
+    const a = el('a','act','');
+    a.href = x.rcUrl; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.append(el('span','','Open in Remote Control ↗'));
+    acts.append(a);
+  }
+  acts.append(action('Forget', 'F', () => askConfirm('forget', x), disabled, why, true));
+  w.append(acts);
+
+  if (x.state === 'broken'){
+    const ev = (UI.snap.events || []).filter(e => e.name === x.name && e.event === 'session.error').slice(-1)[0];
+    const b = el('div','errbox');
+    b.append(el('div','micro tone-bad','Last error reported by ' + x.hostId));
+    b.append(el('div','', scrub(ev ? (ev.text || 'hit an error') : 'hit an error')));
+    if (ev) b.append(el('div','meta', fmtClock(ev.at) + '  ·  ' + fmtAgeShort(now() - ev.at) + ' ago'));
+    b.append(el('div','meta','There is no retry. A button that means stop-then-start is a workflow invented here, with a different conversation on the other side.'));
+    w.append(b);
+  }
+  if (x.state === 'unreachable'){
+    const b = el('div','errbox');
+    b.append(el('div','micro tone-bad','Unreachable, not stopped'));
+    b.append(el('div','', x.hostId + ' is not connected, so nothing here can be confirmed. This row is kept rather than dropped — a box that swallows its own sessions is the bug this console exists to end.'));
+    w.append(b);
+  }
+
+  const ph = el('div','peekhead');
+  ph.append(el('span','t','Pane — last 60 lines'));
+  const psTxt = UI.peeking
+    ? (UI.peekTicks < 10 ? 'live · every 3s' : UI.peekTicks < 40 ? 'live · every 10s' : 'paused — press p')
+    : 'paused — press p';
+  ph.append(el('span','s', psTxt));
+  w.append(ph);
+  const pre = el('pre','pane', scrub(PANES[x.name] || '(nothing captured)'));
+  pre.tabIndex = 0;
+  w.append(pre);
+  w.append(el('div','notterm','A snapshot, not a terminal. Capped at 60 lines by the API, never reflowed, and the poll stops on its own — a console left open on a desk must not fork capture-pane on a production box all night.'));
+  pane.append(w);
+}
+function action(label, k, fn, disabled, why, danger){
+  const b = el('button','act' + (danger ? ' danger' : ''));
+  b.type = 'button';
+  b.append(el('span','', label), el('span','kk mono', k));
+  if (disabled){ b.disabled = true; b.title = 'Disabled — ' + why; }
+  else b.addEventListener('click', fn);
+  return b;
+}
+
+/* ── ledger — "who said yes" ─────────────────────────────────────────────── */
+function renderLedger(){
+  const pane = $('ledger');
+  clear(pane);
+  const hd = el('div','paneheadwrap');
+  const h = el('div','panehead'); h.append(el('span','','Ledger'), el('span','k','e'));
+  hd.append(h); pane.append(hd);
+
+  const evs = (UI.snap.events || []).slice().sort((a,b) => b.at - a.at);
+  if (!evs.length){
+    const e = el('div','empty prose');
+    e.append(el('p','dim','Nothing recorded yet.'));
+    pane.append(e);
+    return;
+  }
+
+  if (UI.snap.gap) pane.append(el('div','gap','some events were missed'));
+
+  evs.forEach(e => {
+    const row = el('div','ev' + (UI.freshEvents.includes(e.at) ? ' fresh' : ''));
+    row.append(el('span','t', fmtClock(e.at)));
+    const b = el('span','b');
+    const line1 = el('div','');
+    line1.append(el('span','mono dim', e.hostId), el('span','',' '),
+                 el('span','w', EVENT_WORD[e.event] || e.event));
+    if (e.name) line1.append(el('span','',' '), el('span','mono', e.name));
+    b.append(line1);
+    if (e.text) b.append(el('div','dim', scrub(e.text)));
+    const attr = el('div','');
+    if (e.actor) attr.append(el('span','who', e.actor));
+    else attr.append(el('span','noattr','unattributed'));
+    attr.append(el('span','faint','  ·  ' + fmtAgeShort(now() - e.at) + ' ago'));
+    b.append(attr);
+    row.append(b);
+    pane.append(row);
+  });
+
+  const f = el('div','ledgerfoot');
+  f.id = 'ledgerfoot';
+  f.textContent = 'The last ' + evs.length + ' events the coordinator still holds. This is a ring, not a log — it says so rather than implying a stream it does not have.';
+  pane.append(f);
+}
+
+/* ── status bar ──────────────────────────────────────────────────────────── */
+function renderStatus(){
+  /* An armed tier-1 action owns the status bar until it is confirmed or
+     cancelled. A re-render must not quietly erase the sentence a person is
+     in the middle of reading. */
+  if (!UI.confirm){
+    $('statusmsg').textContent = UI.msg;
+    $('statusmsg').className = UI.msgTone;
+  }
+  const k = $('statuskeys');
+  clear(k);
+  const ps = openPrompts();
+  const hints = [];
+  if (ps.length && !UI.armed) hints.push(['1–' + (ps[0].prompt.options||[]).length, 'choose']);
+  if (UI.armed) hints.push(['Enter','send'], ['Esc','cancel']);
+  hints.push(['j k','move'], ['n','next needing you'], ['a','ask'], ['p','peek'], ['/','filter'], ['?','keys'], ['0','state']);
+  hints.forEach((pair, i) => {
+    if (i) k.append(el('span','sep',' │ '));
+    k.append(el('span','kb', pair[0]), el('span','', ' ' + pair[1]));
+  });
+}
+function setMsg(m, tone){ UI.msg = m || ''; UI.msgTone = tone || ''; const n = $('statusmsg'); if (n){ n.textContent = UI.msg; n.className = UI.msgTone; } }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   5. CONFIRMATION TIERS
+      0 — read-only, one keystroke, no confirmation.
+      1 — arm, then Enter. Recoverable: stop, resume, start, answer.
+      2 — type the name out. Destroys what nothing recreates: forget, revoke.
+      There is no tier 3 and there is no "don't ask me again".
+   ══════════════════════════════════════════════════════════════════════════ */
+function askConfirm(verb, x){
+  if (verb === 'forget') return tier2(x);
+  UI.confirm = { verb, session: x };
+  setMsg('', '');
+  const n = $('statusmsg');
+  clear(n);
+  n.className = 'warn';
+  n.append(el('span','kb','Enter'), el('span','', ' ' + verb + 's ' + x.name + ' on ' + x.hostId + ', as ' + UI.actor + '.   '),
+           el('span','kb','Esc'), el('span','', ' cancels.'));
+}
+function doConfirm(){
+  const c = UI.confirm; if (!c) return;
+  UI.confirm = null;
+  pushEvent({ hostId:c.session.hostId, event:'session.' + (c.verb === 'stop' ? 'stopped' : 'started'),
+              name:c.session.name, text:c.verb, at:Date.now(), actor:UI.actor });
+  setMsg(c.verb + ' sent for ' + c.session.name + ' — recorded as ' + UI.actor + '.', '');
+  render();
+}
+
+let modalNode = null;
+function closeModal(){ if (modalNode){ modalNode.remove(); modalNode = null; } document.body.classList.remove('modal'); }
+function openModal(build){
+  closeModal();
+  modalNode = el('div','modal');
+  modalNode.setAttribute('role','dialog');
+  modalNode.setAttribute('aria-modal','true');
+  build(modalNode);
+  document.body.append(modalNode);
+  document.body.classList.add('modal');
+  const first = modalNode.querySelector('input,button');
+  if (first) first.focus();
+}
+function tier2(x){
+  openModal(m => {
+    m.append(el('h2','','Forget ' + x.name + '?'));
+    const p1 = el('p','');
+    p1.append(el('span','','This stops the session and erases its record. Its conversation can never be resumed, and '));
+    p1.append(el('span','mono','work-' + x.name));
+    p1.append(el('span','',' goes with it. Nothing recreates either.'));
+    m.append(p1);
+    m.append(el('p','danger-line','Type the session name to confirm.'));
+    const inp = el('input',''); inp.type = 'text'; inp.placeholder = x.name;
+    inp.autocomplete = 'off'; inp.spellcheck = false;
+    m.append(inp);
+    m.append(el('p','meta','Recorded as ' + UI.actor + '.'));
+    const row = el('div','row');
+    const no = el('button','bigbtn no','Cancel');
+    const go = el('button','bigbtn go','Forget it');
+    go.disabled = true;
+    inp.addEventListener('input', () => { go.disabled = inp.value !== x.name; });
+    no.addEventListener('click', closeModal);
+    go.addEventListener('click', () => {
+      closeModal();
+      pushEvent({ hostId:x.hostId, event:'session.forgotten', name:x.name, text:'forget', at:Date.now(), actor:UI.actor });
+      for (const h of UI.snap.hosts) if (h.health) h.health.sessions = h.health.sessions.filter(z => z.name !== x.name);
+      UI.sel = null; setMsg('Forgot ' + x.name + '. Recorded as ' + UI.actor + '.', 'bad'); render();
+    });
+    row.append(no, go);
+    m.append(row);
+  });
+}
+function helpModal(){
+  openModal(m => {
+    m.append(el('h2','','Keys'));
+    const g = el('div','keys');
+    const add = (k, d) => { g.append(el('kbd','', k), el('span','', d)); };
+    const hdr = (t) => g.append(el('div','h', t));
+    hdr('Navigate — free, instant, no confirmation');
+    add('j / k','Next / previous session');
+    add('g / G','First / last');
+    add('n','Next session that needs you — asking, then broken, then unreachable');
+    add('a','Jump to the oldest open prompt');
+    add('h / l','Move between panes');
+    add('Enter','Open the selected session');
+    add('p','Toggle the live peek');
+    add('/','Filter — client-side only, nothing is sent to a host');
+    add('e','Toggle the ledger');
+    add('r','Refresh now, including the fan-out list');
+    add('t / d','Theme / density');
+    add('?','This');
+    add('Esc','Cancel, close, disarm — at every level');
+    hdr('Answer — the only two-keystroke write');
+    add('1 – 9','Arm option N. Nothing is sent.');
+    add('Enter','Send the armed option');
+    add('Esc','Disarm');
+    hdr('Act');
+    add('s','Stop the selected session — tier 1');
+    add('R','Resume — tier 1');
+    add('S','Start a session — tier 1');
+    add('F','Forget — tier 2, type the name');
+    add('X','Revoke the selected host — tier 2, type the hostId');
+    hdr('Prototype only');
+    add('0','Cycle the eleven states');
+    m.append(g);
+    const t = el('div','tiers');
+    t.append(el('b','','Tier 0'), el('span','',' one keystroke — everything that only reads.  '));
+    t.append(el('b','','Tier 1'), el('span','',' arm, then Enter, with the action restated in words including who it will be recorded as.  '));
+    t.append(el('b','','Tier 2'), el('span','',' type the name out — only for what nothing recreates. There is no tier 3 and no "don’t ask me again".'));
+    m.append(t);
+    const row = el('div','row'); const b = el('button','bigbtn no','Close');
+    b.addEventListener('click', closeModal); row.append(b); m.append(row);
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   6. KEYBOARD
+   ══════════════════════════════════════════════════════════════════════════ */
+function move(delta){
+  const list = sessions().filter(matches);
+  if (!list.length) return;
+  let i = list.findIndex(x => key(x) === UI.sel);
+  i = i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + delta));
+  UI.sel = key(list[i]); UI.focusPane = 'wall'; UI.armed = null; UI.confirm = null;
+  render();
+  const n = document.querySelector('.srow.sel');
+  if (n) n.scrollIntoView({ block:'nearest' });
+}
+function nextNeeding(){
+  const list = sessions().filter(x => x.state === 'asking' || x.state === 'broken' || x.state === 'unreachable');
+  if (!list.length){ setMsg('Nothing needs you.', ''); renderStatus(); return; }
+  const i = list.findIndex(x => key(x) === UI.sel);
+  const nx = list[(i + 1) % list.length];
+  UI.sel = key(nx); UI.focusPane = 'wall'; render();
+  const n = document.querySelector('.srow.sel');
+  if (n) n.scrollIntoView({ block:'nearest' });
+}
+
+document.addEventListener('keydown', (ev) => {
+  const tag = (ev.target && ev.target.tagName) || '';
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+  if (ev.key === 'Escape'){
+    if (modalNode){ closeModal(); return; }
+    if (UI.confirm){ UI.confirm = null; setMsg('Cancelled.',''); return; }
+    if (UI.armed){ UI.armed = null; render(); return; }
+    if (document.body.classList.contains('filtering')){
+      document.body.classList.remove('filtering'); UI.filter = ''; render(); return;
+    }
+    return;
+  }
+  if (typing) return;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+
+  const ps = openPrompts();
+  const cur = ps.length ? ps[Math.min(UI.promptIx, ps.length - 1)] : null;
+
+  /* Digits are ONLY ever option ordinals. A digit that means "pane 3" in one
+     context and "approve a force-push" in another is a bug waiting for a
+     tired operator. */
+  if (/^[1-9]$/.test(ev.key)){
+    if (!cur || UI.held || UI.pending || UI.snap.stale) return;
+    const o = (cur.prompt.options || []).find(z => z.index === Number(ev.key));
+    if (!o) return;
+    ev.preventDefault();
+    UI.armed = { index:o.index, label:o.label };
+    UI.sel = key(cur);
+    render();
+    return;
+  }
+
+  switch (ev.key){
+    case 'Enter':
+      ev.preventDefault();
+      if (UI.armed && cur) sendAnswer(cur);
+      else if (UI.confirm) doConfirm();
+      else { UI.peeking = true; render(); }
+      return;
+    case 'j': ev.preventDefault(); move(1); return;
+    case 'k': ev.preventDefault(); move(-1); return;
+    case 'g': { const l = sessions().filter(matches); if (l.length){ UI.sel = key(l[0]); render(); } return; }
+    case 'G': { const l = sessions().filter(matches); if (l.length){ UI.sel = key(l[l.length-1]); render(); } return; }
+    case 'n': ev.preventDefault(); nextNeeding(); return;
+    case 'a':
+      if (!ps.length){ setMsg('Nothing is waiting on you.',''); renderStatus(); return; }
+      UI.promptIx = (UI.promptIx + 1) % ps.length; UI.armed = null;
+      UI.sel = key(ps[UI.promptIx]); render(); return;
+    case 'h':
+      if (window.innerWidth < 1200) document.body.classList.toggle('hosts-open');
+      UI.focusPane = UI.focusPane === 'wall' ? 'hosts' : UI.focusPane === 'detail' ? 'wall' : 'detail';
+      render(); return;
+    case 'l': UI.focusPane = UI.focusPane === 'hosts' ? 'wall' : UI.focusPane === 'wall' ? 'detail' : 'ledger'; render(); return;
+    case 'p': UI.peeking = !UI.peeking; UI.peekTicks = 0; render(); return;
+    case '/':
+      ev.preventDefault();
+      document.body.classList.add('filtering');
+      renderWall();
+      { const f = $('filterinput'); if (f) f.focus(); }
+      return;
+    case 'e':
+      if (window.innerWidth >= 1560) document.body.classList.toggle('ledger-closed');
+      else document.body.classList.toggle('ledger-open');
+      return;
+    case 'r':
+      setMsg('Refreshed — /api/hosts plus one fan-out list. The wall normally runs on health.sessions[] alone, which costs no round trip to any box.', '');
+      renderStatus(); return;
+    case 't': cycleTheme(); return;
+    case 'd': document.body.classList.toggle('compact'); return;
+    case '?': ev.preventDefault(); helpModal(); return;
+    case '0': load(UI.scenario + 1); return;
+    case 's': { const x = selected(); if (x && (x.state === 'working' || x.state === 'asking')) askConfirm('stop', x); return; }
+    case 'R': { const x = selected(); if (x && x.resumable) askConfirm('resume', x); return; }
+    case 'S': setMsg('Start panel — names the host explicitly, and says "permissions bypassed" on the button when they are.', 'warn'); renderStatus(); return;
+    case 'F': { const x = selected(); if (x) tier2(x); return; }
+    case 'X': setMsg('Revoking a host is tier 2 — type the hostId. ' + (UI.snap.admin ? '' : 'You do not have the admin capability.'), UI.snap.admin ? 'warn' : 'bad'); renderStatus(); return;
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+   7. WIRING
+   ══════════════════════════════════════════════════════════════════════════ */
+function cycleTheme(){
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? null : 'dark';
+  if (next) document.documentElement.setAttribute('data-theme', next);
+  else document.documentElement.removeAttribute('data-theme');
+  setMsg('Theme: ' + (next || 'system'), '');
+  renderStatus();
+}
+
+const sel = $('scenario');
+SCENARIOS.forEach((sc, i) => { const o = el('option','', sc.label); o.value = String(i); sel.append(o); });
+sel.addEventListener('change', () => load(Number(sel.value)));
+$('btn-theme').addEventListener('click', cycleTheme);
+$('btn-help').addEventListener('click', helpModal);
+$('btn-retry').addEventListener('click', () => { setMsg('Retrying…',''); renderStatus(); });
+$('scrim').addEventListener('click', closeModal);
+
+/* Ages tick. On a stale snapshot they do NOT — a counter that keeps ticking
+   over frozen data is the most convincing lie a stale UI tells. */
+setInterval(() => {
+  if (UI.snap && UI.snap.stale) return;
+  if (modalNode) return;
+  if (UI.peeking) UI.peekTicks++;
+  renderTop();
+  const ps = openPrompts();
+  if (ps.length){
+    const cur = ps[Math.min(UI.promptIx, ps.length - 1)];
+    const n = document.querySelector('.p-age');
+    if (n) n.textContent = fmtAge(now() - cur.prompt.openedAt);
+  }
+  document.querySelectorAll('.qrow .qa').forEach((n, i) => {
+    const list = ps.filter((_, j) => j !== Math.min(UI.promptIx, ps.length - 1));
+    if (list[i]) n.textContent = fmtAgeShort(now() - list[i].prompt.openedAt);
+  });
+}, 1000);
+
+if (window.innerWidth < 1560) document.body.classList.add('ledger-open');
+load(0);
+setMsg('Prototype — fake data. Press ? for keys, 0 to cycle the eleven states.', '');
+</script>
+</body>
+</html>

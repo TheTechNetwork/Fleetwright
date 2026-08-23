@@ -55,7 +55,10 @@ sudo /opt/agent-fleet/install/install.sh
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
 [`docs/wanted.md`](./docs/wanted.md) is what is not built yet, and what makes
-each of those hard. [`docs/plan.md`](./docs/plan.md) is the sequenced plan that
+each of those hard. [`docs/psychology.md`](./docs/psychology.md) is why the interfaces are shaped
+the way they are — interruption cost, what may be decided from a lock screen,
+and why "nothing needs you" is the most important state in the system.
+[`docs/plan.md`](./docs/plan.md) is the sequenced plan that
 came out of reviewing all of it, including the argument that the obvious next
 step — letting the app type a reply into a session — is the one thing that must
 never be built.
