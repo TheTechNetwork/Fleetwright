@@ -51,6 +51,10 @@ jobs:
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
       - run: npm install --no-audit --no-fund
+      # `npm test` builds the console first (pretest), because node cannot
+      # import JSX and the component tests render the compiled output. A UI that
+      # cannot be rendered in a test is a UI that ships broken — which is
+      # exactly how the hand-rolled version of this page shipped.
       - run: npm test
       - run: npm run typecheck
 

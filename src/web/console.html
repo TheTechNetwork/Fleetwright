@@ -124,10 +124,12 @@ body.stale #grid::after{
 
 /* ── the offline banner ────────────────────────────────────────────────── */
 #offline{
-  flex:0 0 auto;display:none;align-items:center;gap:var(--s3);
+  flex:0 0 auto;display:none;align-items:flex-start;gap:var(--s3);
   padding:var(--s3) var(--s4);background:var(--bad-fill);
   border-bottom:1px solid var(--bad);color:var(--ink);
 }
+#offline .col{display:flex;flex-direction:column;gap:3px;min-width:0;}
+#offline .calm{color:var(--ink-dim);font-size:var(--t-meta);}
 body.stale #offline{display:flex;}
 #offline .g{color:var(--bad);font-size:1.1rem;}
 #offline .w{font-weight:650;color:var(--bad);letter-spacing:.04em;}
@@ -136,8 +138,54 @@ body.stale #offline{display:flex;}
       it ever jumps. ─────────────────────────────────────────────────────── */
 #ask{flex:0 0 auto;background:var(--surface);border-bottom:1px solid var(--line-strong);}
 @media (prefers-reduced-motion:no-preference){ #ask{transition:background .18s ease;} }
-#ask.quiet{padding:0 var(--s4);height:34px;display:flex;align-items:center;gap:var(--s2);font-size:var(--t-meta);color:var(--ink-dim);}
 #ask.loud{background:var(--ask-fill);border-bottom-color:var(--ask-edge);}
+
+/* THE ASSURANCE PANEL. This is the screen a person is looking at 95% of the
+   time, so it is the most designed thing in the file — and it is the SAME
+   object as the alarm panel. A claim that fails changes its glyph and its
+   sentence in the row it already occupies; it is never removed and never
+   replaced by a different component somewhere else. Quiet-because-fine and
+   quiet-because-blind must not look the same. */
+#ask.assure{padding:var(--s3) var(--s5) var(--s4);position:relative;}
+#ask.assure.doubt{background:var(--surface);}
+#ask.assure.doubt::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ink-faint);
+}
+.a-head{display:flex;align-items:baseline;gap:var(--s2);max-width:110ch;}
+.a-head .g{font-size:1.05rem;line-height:1;}
+.a-head .t{font-size:var(--t-lead);font-weight:650;letter-spacing:-.01em;}
+.a-head .when{margin-left:auto;font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-faint);white-space:nowrap;}
+.claims{margin-top:var(--s3);display:flex;flex-direction:column;gap:7px;max-width:104ch;}
+.claim{display:flex;gap:var(--s3);align-items:flex-start;font-size:var(--t-meta);line-height:1.5;}
+.claim .g{flex:0 0 auto;width:1.05rem;text-align:center;font-size:.9rem;}
+.claim .b{flex:1 1 auto;min-width:0;}
+.claim .c{display:block;}
+.claim .e,.claim .f{display:block;color:var(--ink-dim);}
+.claim .f::before{content:"↳ ";color:var(--ink-faint);}
+/* A passing claim recedes; a failing one is full ink. The calm panel is
+   low-contrast on purpose — it is reassurance, not an announcement. */
+.claim.ok .c{color:var(--ink-dim);}
+.claim.bad .c,.claim.unknown .c{color:var(--ink);font-weight:600;}
+.claim .tbtn{margin-left:var(--s2);padding:1px 7px;}
+.a-fact{
+  margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--line);
+  display:flex;gap:var(--s3);font-size:var(--t-meta);color:var(--ink-dim);max-width:104ch;
+}
+.a-fact .g{flex:0 0 auto;width:1.05rem;text-align:center;color:var(--ink-faint);}
+.a-cond{
+  display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap;
+  padding:var(--s2) var(--s5) var(--s3) calc(var(--s5) + 10px);
+  font-size:var(--t-meta);color:var(--ink-dim);border-top:1px solid var(--ask-edge);
+}
+.a-cond .g{font-size:.9rem;}
+
+/* Announce ONCE. watcher.js: an event fires on a transition, never on a state.
+   A card that re-slides on every 5s poll is 720 announcements an hour of a
+   fact you acknowledged in the first second. */
+@media (prefers-reduced-motion:no-preference){
+  @keyframes askin{ from{opacity:0;transform:translateY(-6px);} to{opacity:1;transform:none;} }
+  .promptcard.new{animation:askin .18s ease-out;}
+}
 
 .promptcard{position:relative;padding:var(--s4) var(--s5) var(--s4) calc(var(--s5) + 10px);max-width:min(100%,1600px);}
 /* the hazard edge: a texture, not a colour. Survives monochrome. */
@@ -406,7 +454,10 @@ body.modal #scrim{display:block;}
 <div id="offline" role="alert">
   <span class="g" aria-hidden="true">✕</span>
   <span class="w">NOT CONNECTED</span>
-  <span id="offline-text"></span>
+  <span class="col">
+    <span id="offline-text"></span>
+    <span class="calm" id="offline-calm"></span>
+  </span>
   <button class="tbtn" id="btn-retry">Retry now &nbsp;r</button>
 </div>
 
@@ -501,16 +552,140 @@ const SESSION_STATE = {
   finished:    { glyph:'✓', word:'FINISHED',        tone:'dim', rank:4 },
   stopped:     { glyph:'○', word:'STOPPED',         tone:'dim', rank:5 },
 };
+/* Consequence AND remedy. psychology.md §6: a message that ends at the
+   diagnosis makes an already-frustrated person go and find the cure in that
+   state. `sidecar doctor` does not say `unauthorised`; it prints the command
+   that enrols the host. */
 const HOST_STATE = {
   healthy:  { glyph:'●', word:'HEALTHY',  tone:'ok',
-              conseq:'Accepting new sessions.' },
+              conseq:'Accepting new sessions.', remedy:null },
   degraded: { glyph:'▲', word:'DEGRADED', tone:'bad',
-              conseq:'New sessions will not be scheduled here. Sessions already on it are still listed, and can still be answered.' },
+              conseq:'New sessions will not be scheduled here. Sessions already on it are still listed, and can still be answered.',
+              remedy:'Restart the session manager on that box: systemctl restart agent-hub.' },
   unknown:  { glyph:'△', word:'UNKNOWN',  tone:'dim',
-              conseq:'We have not heard from it recently. Everything shown for it may be out of date.' },
+              conseq:'We have not heard from it recently. Everything shown for it may be out of date.',
+              remedy:'If it stays unknown, check systemctl status agent-fleet-sidecar on that box.' },
   offline:  { glyph:'✕', word:'OFFLINE',  tone:'bad',
-              conseq:'Its socket is closed. Its sessions are unreachable, not stopped.' },
+              conseq:'Its socket is closed. Its sessions are unreachable, not stopped.',
+              remedy:'It will reappear here on its own when it dials back in. Nothing needs re-enrolling.' },
 };
+/** The remedy is chosen from the registry's own reason where it can be. */
+function remedyFor(h){
+  if (h.state === 'degraded'){
+    if (/not logged in/i.test(h.reason))
+      return "Log in on the box: agent-hub's own page on that machine, or agent-fleet login over SSH.";
+    return HOST_STATE.degraded.remedy;
+  }
+  return (HOST_STATE[h.state] || HOST_STATE.unknown).remedy;
+}
+
+/* THE STANDING CLAIMS. Five things that can each fail, derived from
+   GET /api/hosts alone. Every one is a specific way this console could be
+   lying to you, stated as the reason it is not. psychology.md §7: if the fleet
+   can be quiet because everything is fine and ALSO quiet because a host
+   dropped or push broke, then quiet means nothing. */
+const CLAIM_GLYPH = { ok:'✓', bad:'▲', unknown:'△' };
+const CLAIM_TONE  = { ok:'ok', bad:'bad', unknown:'dim' };
+
+function claims(){
+  const S = UI.snap, hs = S.hosts || [], conn = hs.filter(h => h.connected);
+  const out = [];
+
+  // 1. Coverage — am I seeing every box? (§2.2's bug, asked as a question)
+  if (!S.enrolled){
+    out.push({ id:'coverage', k:'unknown', c:'No machine has enrolled yet.',
+      e:'There is no fleet to watch, so there is nothing this page could be failing to show you.',
+      f:'Mint an enrolment pin below.' });
+    out.push(S.stale
+      ? { id:'self', k:'bad', c:'This page is not talking to the coordinator.',
+          e:'Frozen at ' + fmtClock(S.lastSeen) + '.', f:'Press r to retry.' }
+      : { id:'self', k:'ok', c:'This page is talking to the coordinator, and it is ready.' });
+    return out;
+  }
+  if (conn.length >= S.enrolled){
+    out.push({ id:'coverage', k:'ok', c:'All ' + S.enrolled + ' enrolled hosts are connected.' });
+  } else {
+    const gone = hs.filter(h => !h.connected).map(h => h.hostId);
+    const never = S.enrolled - hs.length;
+    const bits = [];
+    if (gone.length) bits.push(gone.join(', ') + ' stopped dialling in');
+    if (never > 0) bits.push(never + (never === 1 ? ' enrolled host has' : ' enrolled hosts have') + ' never dialled in');
+    out.push({ id:'coverage', k:'bad',
+      c: conn.length + ' of ' + S.enrolled + ' enrolled hosts are connected.',
+      e: bits.join('; ') + '. Sessions on ' + (gone.length + Math.max(0, never) === 1 ? 'it' : 'them') + ' cannot be seen from here.',
+      f: 'A host reappears on its own when it dials back in — nothing needs re-enrolling. If it stays away, check agent-fleet-sidecar on the box.' });
+  }
+
+  // 2. Freshness — is what I am showing you current?
+  if (!conn.length){
+    out.push({ id:'fresh', k:'unknown', c:'No host is reporting.', e:'Nothing on this page is current.' });
+  } else {
+    const stale = conn.filter(h => !h.healthAt || (now() - h.healthAt) > 45000);
+    if (!stale.length){
+      const oldest = Math.max.apply(null, conn.map(h => now() - h.healthAt));
+      out.push({ id:'fresh', k:'ok', c:'Every host reported in the last ' + fmtAgeShort(oldest) + '.' });
+    } else {
+      out.push({ id:'fresh', k:'unknown',
+        c: stale.map(h => h.hostId).join(', ') + (stale.length === 1 ? ' has' : ' have') + ' gone quiet.',
+        e: stale.map(h => h.hostId + ': ' + h.reason).join('  ·  ') + '. What is shown for ' + (stale.length === 1 ? 'it' : 'them') + ' may be out of date.',
+        f: 'Check systemctl status agent-fleet-sidecar on that box.' });
+    }
+  }
+
+  // 3. Capability — can the fleet actually do work?
+  const deg = conn.filter(h => h.state === 'degraded');
+  if (!conn.length){
+    out.push({ id:'able', k:'unknown', c:'No host can be asked to start work.' });
+  } else if (!deg.length){
+    out.push({ id:'able', k:'ok', c:'Every connected host can start work.' });
+  } else {
+    out.push({ id:'able', k:'bad',
+      c: deg.length + (deg.length === 1 ? ' host cannot start work.' : ' hosts cannot start work.'),
+      /* the registry's reason, verbatim. This is the string nothing rendered. */
+      e: deg.map(h => h.hostId + ': ' + h.reason).join('  ·  '),
+      f: deg.map(h => remedyFor(h)).filter(Boolean)[0] });
+  }
+
+  // 4. Reach — would I be told if I walked away? Push breaking produces
+  //    exactly the same silence as everything being fine.
+  if (S.devices > 0){
+    out.push({ id:'reach', k:'ok',
+      c:'Notifications are reaching ' + S.devices + ' device' + (S.devices === 1 ? '' : 's') + '.', test:true });
+  } else {
+    out.push({ id:'reach', k:'bad', c:'No device is registered for notifications.',
+      e:'Nothing here can tell you a session is waiting while you are away from this screen.',
+      f:'Sign in on the phone app and enable notifications, then send a test from here.' });
+  }
+
+  // 5. This page's own connection.
+  if (S.stale){
+    out.push({ id:'self', k:'bad', c:'This page is not talking to the coordinator.',
+      e:'Everything shown is frozen at ' + fmtClock(S.lastSeen) + '.',
+      f:'Your hosts keep running and keep their sessions — each box is the authority on its own tmux. Press r to retry.' });
+  } else {
+    out.push({ id:'self', k:'ok', c:'This page is talking to the coordinator.' });
+  }
+  return out;
+}
+
+/** Neither good nor bad, and deliberately not a claim: the console cannot tell
+ *  a session thinking hard for three hours from one wedged for three hours, so
+ *  it reports the number and passes no judgement. It exists because "has it
+ *  been stuck for an hour" is the anxiety, and a number answers it. */
+function standingFact(){
+  const work = sessions().filter(x => x.state === 'working');
+  if (!work.length) return null;
+  let best = null;
+  for (const x of work){
+    const ev = (UI.snap.events || []).filter(e => e.name === x.name).sort((a,b) => b.at - a.at)[0];
+    const at = ev ? ev.at : (x.host.connectedAt || 0);
+    if (!best || at < best.at) best = { x, at, seen: !!ev };
+  }
+  if (!best) return null;
+  return 'Longest silence: ' + best.x.name + ' — ' + scrub(best.x.title) + ' — ' +
+         (best.seen ? 'last event ' + fmtAgeShort(now() - best.at) + ' ago.'
+                    : 'nothing about it is in the event ring.');
+}
 const EVENT_WORD = {
   'session.awaiting-input': 'is waiting for you',
   'session.answered':       'answered',
@@ -642,6 +817,22 @@ const PANES = {
   'cc-swift-mole':  PANE_WORKING,
   'cc-dark-wren':   PANE_STOPPED,
 };
+/** Titles the console has seen before, so the ledger can still lead with the
+ *  work after a session is stopped, forgotten or moved. */
+const KNOWN_TITLES = {
+  'cc-brave-otter':'Rewrite the auth middleware',
+  'cc-quiet-heron':'Sandbox entrypoint for safe-mode sessions',
+  'cc-plain-lark':'Port the install script to Debian 13',
+  'cc-still-fox':'Fan reads over connected, not schedulable',
+  'cc-warm-vole':'Rebuild the arm64 image under QEMU',
+  'cc-lone-pike':'Multi-arch sandbox build',
+  'cc-glad-newt':'Migrate the event ring to its own DO key',
+  'cc-tall-crane':'Renovate config for the worker package',
+  'cc-idle-shrew':'Nightly dependency sweep',
+  'cc-swift-mole':'Wire fixtures for the iOS/Android decoders',
+  'cc-dark-wren':'Draft docs/console-design.md',
+};
+
 /** name -> rcUrl, which only GET /api/list carries. */
 const RC = {
   'cc-brave-otter':'https://claude.ai/remote/9f2a41', 'cc-quiet-heron':'https://claude.ai/remote/2b7c08',
@@ -737,7 +928,8 @@ function baseEvents(){
   ];
 }
 
-/* ── the eleven states, as scenarios ─────────────────────────────────────── */
+/* ── the twelve states, as scenarios ─────────────────────────────────────── */
+const byId = (id) => SCENARIOS.find(z => z.id === id);
 const SCENARIOS = [
   { id:'ask', label:'Three sessions asking (default)', build(){
       return { ok:true, protocol:1, devices:2, hosts: baseHosts(), events: baseEvents(), enrolled:4, stale:false, gap:false, admin:true }; } },
@@ -751,8 +943,13 @@ const SCENARIOS = [
       hs[3].state='healthy'; hs[3].reason='reporting normally'; hs[3].connected=true; hs[3].healthAt=ago(6);
       return { ok:true, protocol:1, devices:2, hosts:hs, events: baseEvents().filter(e=>e.event!=='session.awaiting-input'&&e.event!=='session.error'), enrolled:4, stale:false, gap:false, admin:true }; } },
 
+  { id:'nopush', label:'Quiet — but nothing is registered for push', build(){
+      const st = byId('calm').build();
+      st.devices = 0;
+      return st; } },
+
   { id:'storm', label:'Prompt storm — four asking at once', build(){
-      const st = SCENARIOS[0].build();
+      const st = byId('ask').build();
       const h = st.hosts[2];
       h.state='healthy'; h.reason='reporting normally'; h.healthAt=ago(4);
       h.health.sessions[0].prompt = { id:'pr_01J8R0', question: PANE_TRUST, openedAt: ago(95), demo:'timeout',
@@ -760,12 +957,12 @@ const SCENARIOS = [
       return st; } },
 
   { id:'degraded', label:'A host degraded, one session broken', build(){
-      const st = SCENARIOS[0].build();
+      const st = byId('ask').build();
       for (const h of st.hosts) if (h.health) for (const ss of h.health.sessions) delete ss.prompt;
       return st; } },
 
   { id:'fanfail', label:'Partial fan-out failure', build(){
-      const st = SCENARIOS[3].build();
+      const st = byId('degraded').build();
       st.fanfail = { hostId:'thistle', text:'thistle did not answer list within 8000 ms' };
       return st; } },
 
@@ -785,17 +982,17 @@ const SCENARIOS = [
       ], enrolled:3, stale:false, gap:false, admin:true }; } },
 
   { id:'offline', label:'Coordinator unreachable', build(){
-      const st = SCENARIOS[0].build();
+      const st = byId('ask').build();
       st.stale = true; st.lastSeen = ago(47);
       return st; } },
 
   { id:'gap', label:'Reconnected with a gap in the ring', build(){
-      const st = SCENARIOS[1].build();
+      const st = byId('calm').build();
       st.gap = true;
       return st; } },
 
   { id:'noadmin', label:'Signed in without the admin capability', build(){
-      const st = SCENARIOS[3].build();
+      const st = byId('degraded').build();
       st.admin = false; st.actor = 'sam@example.com';
       return st; } },
 ];
@@ -817,6 +1014,7 @@ const UI = {
   held: false,          // 150ms double-Enter guard
   promptIx: 0,          // which open prompt is expanded
   answered: {},         // promptId -> {kind, text, at}
+  seen: new Set(),      // prompt ids already announced — never announced twice
   pending: null,
   freshEvents: [],
   msg: '',
@@ -829,7 +1027,7 @@ function load(i){
   UI.snap = SCENARIOS[UI.scenario].build();
   UI.actor = UI.snap.actor || 'eli@example.com';
   UI.armed = null; UI.promptIx = 0; UI.answered = {}; UI.pending = null;
-  UI.peeking = false; UI.freshEvents = []; UI.confirm = null;
+  UI.peeking = false; UI.freshEvents = []; UI.confirm = null; UI.seen = new Set();
   document.body.classList.toggle('stale', !!UI.snap.stale);
   const sess = sessions();
   UI.sel = sess.length ? key(sess[0]) : null;
@@ -912,6 +1110,11 @@ function renderTop(){
   $('offline-text').textContent = S.stale
     ? 'Everything below is what we knew ' + fmtAgeShort(Date.now() - S.lastSeen) + ' ago. Ages are frozen and every action is disabled. Next attempt in 4s.'
     : '';
+  /* True, and nobody would otherwise know it. design.md §3's architecture
+     doing psychological work: leaving it out means the person infers the worst. */
+  $('offline-calm').textContent = S.stale
+    ? 'Your hosts keep running and keep their sessions. Each box is the authority on its own tmux — this page being blind does not stop the work.'
+    : '';
 
   const n = openPrompts().length;
   document.title = (n ? '(' + n + ') ' : '') + 'Fleetwright — console';
@@ -925,20 +1128,9 @@ function renderAsk(){
   const sess = sessions();
 
   if (!ps.length){
-    box.className = 'quiet';
-    if (!UI.snap.hosts.length){
-      const g0 = el('span','faint','○'); g0.setAttribute('aria-hidden','true');
-      box.append(g0, el('span','', UI.snap.enrolled
-        ? 'Nothing is waiting on you. No host is connected, so nothing can be.'
-        : 'No fleet yet.'));
-      return;
-    }
-    const g = el('span','tone-dim','○'); g.setAttribute('aria-hidden','true');
-    box.append(g, el('span','','Nothing is waiting on you.'),
-      el('span','faint','·'),
-      el('span','', sess.filter(x=>x.state==='working').length + ' working, ' +
-                    sess.filter(x=>x.state!=='working').length + ' not, across ' +
-                    UI.snap.hosts.filter(h=>h.connected).length + ' hosts.'));
+    const cs = claims();
+    box.className = 'assure' + (cs.some(c => c.k !== 'ok') ? ' doubt' : '');
+    box.append(assurePanel(cs, sess));
     return;
   }
 
@@ -959,10 +1151,101 @@ function renderAsk(){
     });
     box.append(q);
   }
+  /* The claims yield priority; they never yield existence. If they vanished
+     whenever something else was happening, a person would have no way to know
+     whether the one prompt they can see is the only one there is. */
+  box.append(assureCondensed(claims()));
+}
+
+/** Headline, five claims, one fact. The same object in both moods. */
+function assurePanel(cs, sess){
+  const wrap = el('div','');
+  const failing = cs.filter(c => c.k !== 'ok');
+
+  /* The headline is licensed by the lines beneath it and by nothing else. */
+  let g = '✓', tone = 'ok', text = 'Nothing needs you.';
+  if (!UI.snap.enrolled){ g = '○'; tone = 'dim'; text = 'No fleet yet.'; }
+  else if (failing.length){
+    tone = 'dim'; g = '△';
+    const ids = failing.map(c => c.id);
+    if (ids.length === 1 && ids[0] === 'reach')
+      text = 'Nothing is asking you — but nothing would reach you if it did.';
+    else if (ids.includes('self'))
+      text = 'Nothing is asking you — but this page is not connected, so it cannot know.';
+    else
+      text = 'Nothing is asking you — but this screen is not seeing the whole fleet.';
+  }
+  const head = el('div','a-head');
+  const gg = el('span','g tone-' + tone, g); gg.setAttribute('aria-hidden','true');
+  head.append(gg, el('span','t', text));
+  head.append(el('span','when', UI.snap.stale ? 'frozen ' + fmtClock(UI.snap.lastSeen) : 'checked 2s ago'));
+  wrap.append(head);
+
+  const list = el('div','claims');
+  cs.forEach(c => list.append(claimRow(c)));
+  wrap.append(list);
+
+  if (sess && sess.length){
+    const f = standingFact();
+    if (f){
+      const row = el('div','a-fact');
+      const fg = el('span','g','·'); fg.setAttribute('aria-hidden','true');
+      row.append(fg, el('span','', f));
+      wrap.append(row);
+    }
+  }
+  return wrap;
+}
+
+function claimRow(c){
+  const row = el('div','claim ' + c.k);
+  const g = el('span','g tone-' + CLAIM_TONE[c.k], CLAIM_GLYPH[c.k]);
+  g.setAttribute('aria-hidden','true');
+  row.append(g);
+  const b = el('span','b');
+  const line = el('span','c');
+  line.append(el('span','', c.c));
+  if (c.test){
+    const t = el('button','tbtn','Send a test →');
+    t.type = 'button';
+    t.addEventListener('click', () => setMsg('POST /api/devices/test — the button exists so push breaking cannot look like everything being fine.', 'warn'));
+    line.append(t);
+  }
+  b.append(line);
+  if (c.e) b.append(el('span','e', c.e));
+  if (c.f) b.append(el('span','f', c.f));
+  row.append(b);
+  return row;
+}
+
+function assureCondensed(cs){
+  const row = el('div','a-cond');
+  const bad = cs.filter(c => c.k !== 'ok');
+  const put = (kind, text, faint) => {
+    const g = el('span','g tone-' + CLAIM_TONE[kind], CLAIM_GLYPH[kind]);
+    g.setAttribute('aria-hidden','true');
+    row.append(g, el('span', faint ? 'faint' : '', text));
+  };
+  if (!bad.length){
+    const S = UI.snap;
+    put('ok', S.enrolled + ' of ' + S.enrolled + ' hosts reporting', true);
+    row.append(el('span','faint','·'));
+    put('ok', 'notifications reaching ' + S.devices + ' device' + (S.devices === 1 ? '' : 's'), true);
+    return row;
+  }
+  /* Only what is wrong. The prompt above already owns the attention; the strip
+     exists so a person can see it is not the whole story, not to re-narrate. */
+  bad.forEach((c, i) => { if (i) row.append(el('span','faint','·')); put(c.k, c.c, false); });
+  return row;
 }
 
 function promptCard(x){
   const card = el('div','promptcard');
+  /* Announce ONCE. A card that re-slides on every poll is 720 announcements an
+     hour of a fact acknowledged in the first second — the screen version of a
+     phone that cries wolf. The age keeps ticking, because that is new
+     information every second. Nothing else moves. */
+  if (!UI.seen.has(x.prompt.id)){ card.classList.add('new'); UI.seen.add(x.prompt.id); }
   const head = el('div','p-head');
   const st = el('span','p-state');
   st.append(el('span','g','◆'), el('span','','WAITING FOR YOU'));
@@ -1282,7 +1565,7 @@ function renderDetail(){
     a.append(el('span','','Open in Remote Control ↗'));
     acts.append(a);
   }
-  acts.append(action('Forget', 'F', () => askConfirm('forget', x), disabled, why, true));
+  acts.append(action('Forget', 'F', () => forgetQuestion(x), disabled, why, true));
   w.append(acts);
 
   if (x.state === 'broken'){
@@ -1331,6 +1614,12 @@ function renderLedger(){
   const h = el('div','panehead'); h.append(el('span','','Ledger'), el('span','k','e'));
   hd.append(h); pane.append(hd);
 
+  /* name -> title, so the ledger can lead with what a person would recognise. */
+  const TITLES = {};
+  for (const h of (UI.snap.hosts || [])) if (h.health && h.health.sessions)
+    for (const ss of h.health.sessions) if (ss.title) TITLES[ss.name] = ss.title;
+  for (const k in KNOWN_TITLES) if (!TITLES[k]) TITLES[k] = KNOWN_TITLES[k];
+
   const evs = (UI.snap.events || []).slice().sort((a,b) => b.at - a.at);
   if (!evs.length){
     const e = el('div','empty prose');
@@ -1348,8 +1637,19 @@ function renderLedger(){
     const line1 = el('div','');
     line1.append(el('span','mono dim', e.hostId), el('span','',' '),
                  el('span','w', EVENT_WORD[e.event] || e.event));
-    if (e.name) line1.append(el('span','',' '), el('span','mono', e.name));
-    b.append(line1);
+    /* psychology.md §3: nobody remembers what cc-brave-otter is; everybody
+       remembers "the billing importer refactor". Events carry only `name`, so
+       the console joins to the session list and leads with the work — and
+       keeps the name underneath, because that is what everything else keys on
+       and hiding it makes support impossible. */
+    if (e.name){
+      const title = TITLES[e.name];
+      if (title) line1.append(el('span','',' '), el('span','', scrub(title)));
+      b.append(line1);
+      b.append(el('div','mono faint', e.name));
+    } else {
+      b.append(line1);
+    }
     if (e.text) b.append(el('div','dim', scrub(e.text)));
     const attr = el('div','');
     if (e.actor) attr.append(el('span','who', e.actor));
@@ -1390,14 +1690,28 @@ function renderStatus(){
 function setMsg(m, tone){ UI.msg = m || ''; UI.msgTone = tone || ''; const n = $('statusmsg'); if (n){ n.textContent = UI.msg; n.className = UI.msgTone; } }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   5. CONFIRMATION TIERS
-      0 — read-only, one keystroke, no confirmation.
-      1 — arm, then Enter. Recoverable: stop, resume, start, answer.
-      2 — type the name out. Destroys what nothing recreates: forget, revoke.
-      There is no tier 3 and there is no "don't ask me again".
+   5. CONFIRMATIONS — DIFFERENT IN KIND, NEVER REPEATED IN NUMBER
+      reboot.js: "Tapping yes three times is one decision made three times; a
+      person who misread the first prompt misreads all three."
+      So there is NO escalation ladder here. There is never more than one
+      question. What varies is what the one question asks for, chosen against
+      the mistake actually worth preventing:
+        FREE      nothing changes — a confirmation here is noise that teaches
+                  people to click through the real ones.
+        RESTATED  the action echoed back in words you did not type, then Enter.
+                  Catches "I did not mean to press that".
+        NAMED     type the identifier. Catches "wrong session" / "wrong box" —
+                  the only step that requires having read which one you mean,
+                  which is why a button cannot finish it: a button carries its
+                  payload with it.
+      Proportionality: revoking a host is disruptive and RECOVERABLE, so it
+      asks once — and the once is the typed kind, because wrong-box is the
+      mistake worth preventing. Not three times. Escalating everything trains
+      people to click through everything, which is how the reboot ceremony
+      stops working too.
    ══════════════════════════════════════════════════════════════════════════ */
 function askConfirm(verb, x){
-  if (verb === 'forget') return tier2(x);
+  if (verb === 'forget') return forgetQuestion(x);
   UI.confirm = { verb, session: x };
   setMsg('', '');
   const n = $('statusmsg');
@@ -1428,33 +1742,68 @@ function openModal(build){
   const first = modalNode.querySelector('input,button');
   if (first) first.focus();
 }
-function tier2(x){
+/** ONE question, of the kind that prevents the mistake worth preventing. */
+function namedQuestion(o){
   openModal(m => {
-    m.append(el('h2','','Forget ' + x.name + '?'));
-    const p1 = el('p','');
-    p1.append(el('span','','This stops the session and erases its record. Its conversation can never be resumed, and '));
-    p1.append(el('span','mono','work-' + x.name));
-    p1.append(el('span','',' goes with it. Nothing recreates either.'));
-    m.append(p1);
-    m.append(el('p','danger-line','Type the session name to confirm.'));
-    const inp = el('input',''); inp.type = 'text'; inp.placeholder = x.name;
+    m.append(el('h2','', o.heading));
+    o.body.forEach(node => m.append(node));
+    m.append(el('p','danger-line', o.ask));
+    const inp = el('input',''); inp.type = 'text'; inp.placeholder = o.identifier;
     inp.autocomplete = 'off'; inp.spellcheck = false;
     m.append(inp);
     m.append(el('p','meta','Recorded as ' + UI.actor + '.'));
+    if (o.note) m.append(el('p','meta', o.note));
     const row = el('div','row');
     const no = el('button','bigbtn no','Cancel');
-    const go = el('button','bigbtn go','Forget it');
+    const go = el('button','bigbtn go', o.go);
     go.disabled = true;
-    inp.addEventListener('input', () => { go.disabled = inp.value !== x.name; });
+    inp.addEventListener('input', () => { go.disabled = inp.value !== o.identifier; });
     no.addEventListener('click', closeModal);
-    go.addEventListener('click', () => {
-      closeModal();
+    go.addEventListener('click', () => { closeModal(); o.run(); });
+    row.append(no, go);
+    m.append(row);
+  });
+}
+function forgetQuestion(x){
+  const p1 = el('p','');
+  p1.append(el('span','','This stops the session and erases its record. Its conversation can never be resumed, and '));
+  p1.append(el('span','mono','work-' + x.name));
+  p1.append(el('span','',' goes with it. Nothing recreates either.'));
+  namedQuestion({
+    heading: 'Forget ' + x.name + '?',
+    body: [p1],
+    ask: 'Type the session name to confirm.',
+    identifier: x.name,
+    go: 'Forget it',
+    run(){
       pushEvent({ hostId:x.hostId, event:'session.forgotten', name:x.name, text:'forget', at:Date.now(), actor:UI.actor });
       for (const h of UI.snap.hosts) if (h.health) h.health.sessions = h.health.sessions.filter(z => z.name !== x.name);
       UI.sel = null; setMsg('Forgot ' + x.name + '. Recorded as ' + UI.actor + '.', 'bad'); render();
-    });
-    row.append(no, go);
-    m.append(row);
+    },
+  });
+}
+function revokeQuestion(h){
+  if (!UI.snap.admin){
+    setMsg('Revoking a host needs the admin capability. You are signed in as ' + UI.actor + '.', 'bad');
+    renderStatus(); return;
+  }
+  const n = (h.health && h.health.sessions ? h.health.sessions.length : 0);
+  const p1 = el('p','', 'Its socket is closed and its credential stops working. ' +
+    (n ? n + ' session' + (n === 1 ? '' : 's') + ' on it drop off this page — they keep running on the box.'
+       : 'It holds no sessions we can see.'));
+  namedQuestion({
+    heading: 'Revoke ' + h.hostId + '?',
+    body: [p1],
+    ask: 'Type the host id to confirm which machine this is.',
+    identifier: h.hostId,
+    go: 'Revoke it',
+    note: 'Asked once, not three times: this is disruptive and recoverable — the box can enrol again with a new pin. The one question is the typed kind because "wrong box" is the mistake worth preventing.',
+    run(){
+      pushEvent({ hostId:h.hostId, event:'host.revoked', name:null, text:'revoke', at:Date.now(), actor:UI.actor });
+      UI.snap.hosts = UI.snap.hosts.filter(z => z.hostId !== h.hostId);
+      UI.hostSel = 0; UI.sel = null;
+      setMsg('Revoked ' + h.hostId + '. Recorded as ' + UI.actor + '.', 'bad'); render();
+    },
   });
 }
 function helpModal(){
@@ -1481,19 +1830,26 @@ function helpModal(){
     add('1 – 9','Arm option N. Nothing is sent.');
     add('Enter','Send the armed option');
     add('Esc','Disarm');
-    hdr('Act');
-    add('s','Stop the selected session — tier 1');
-    add('R','Resume — tier 1');
-    add('S','Start a session — tier 1');
-    add('F','Forget — tier 2, type the name');
-    add('X','Revoke the selected host — tier 2, type the hostId');
+    hdr('Act — one question each, never more');
+    add('s','Stop the selected session — restated, then Enter');
+    add('R','Resume — restated, then Enter');
+    add('S','Start a session — restated, then Enter');
+    add('F','Forget — type the session name');
+    add('X','Revoke the selected host — type the host id');
     hdr('Prototype only');
-    add('0','Cycle the eleven states');
+    add('0','Cycle the twelve states');
     m.append(g);
     const t = el('div','tiers');
-    t.append(el('b','','Tier 0'), el('span','',' one keystroke — everything that only reads.  '));
-    t.append(el('b','','Tier 1'), el('span','',' arm, then Enter, with the action restated in words including who it will be recorded as.  '));
-    t.append(el('b','','Tier 2'), el('span','',' type the name out — only for what nothing recreates. There is no tier 3 and no "don’t ask me again".'));
+    t.append(el('div','','There is never more than one question. What varies is what it asks for, chosen against the mistake worth preventing.'));
+    const t2 = el('div',''); t2.style.marginTop = '8px';
+    t2.append(el('b','','Free'), el('span','',' — nothing changes. A confirmation here is noise that teaches people to click through the real ones.'));
+    const t3 = el('div','');
+    t3.append(el('b','','Restated'), el('span','',' — the action echoed back in words you did not type, then Enter. Catches "I did not mean to press that". Stop, resume, start, and answering a prompt.'));
+    const t4 = el('div','');
+    t4.append(el('b','','Named'), el('span','',' — type the identifier. Catches "wrong session" and "wrong box" — the only step that requires having read which one you mean, which is why a button cannot finish it. Forget, and revoking a host.'));
+    const t5 = el('div',''); t5.style.marginTop = '8px';
+    t5.append(el('span','','Revoking a host asks '), el('b','','once'), el('span','', ', not three times: it is disruptive and recoverable. Escalating everything trains people to click through everything. There is no "don’t ask me again", on anything. Rebooting a box is not offered here at all — its ceremony only works where it has to be typed.'));
+    t.append(t2, t3, t4, t5);
     m.append(t);
     const row = el('div','row'); const b = el('button','bigbtn no','Close');
     b.addEventListener('click', closeModal); row.append(b); m.append(row);
@@ -1598,8 +1954,8 @@ document.addEventListener('keydown', (ev) => {
     case 's': { const x = selected(); if (x && (x.state === 'working' || x.state === 'asking')) askConfirm('stop', x); return; }
     case 'R': { const x = selected(); if (x && x.resumable) askConfirm('resume', x); return; }
     case 'S': setMsg('Start panel — names the host explicitly, and says "permissions bypassed" on the button when they are.', 'warn'); renderStatus(); return;
-    case 'F': { const x = selected(); if (x) tier2(x); return; }
-    case 'X': setMsg('Revoking a host is tier 2 — type the hostId. ' + (UI.snap.admin ? '' : 'You do not have the admin capability.'), UI.snap.admin ? 'warn' : 'bad'); renderStatus(); return;
+    case 'F': { const x = selected(); if (x) forgetQuestion(x); return; }
+    case 'X': { const h = UI.snap.hosts[UI.hostSel]; if (h) revokeQuestion(h); return; }
   }
 });
 
@@ -1644,7 +2000,7 @@ setInterval(() => {
 
 if (window.innerWidth < 1560) document.body.classList.add('ledger-open');
 load(0);
-setMsg('Prototype — fake data. Press ? for keys, 0 to cycle the eleven states.', '');
+setMsg('Prototype — fake data. Press ? for keys, 0 to cycle the twelve states.', '');
 </script>
 </body>
 </html>

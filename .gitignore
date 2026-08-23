@@ -44,3 +44,7 @@ apps/ios/Fleetwright/Fleetwright.entitlements
 .idea/
 *.iml
 .DS_Store
+
+# Compiled from src/web/console/*.jsx by scripts/build-web.mjs. The tests import
+# from here because node cannot import JSX; `npm test` builds it first.
+build/
