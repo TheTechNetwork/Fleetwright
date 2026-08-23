@@ -215,3 +215,27 @@ test('both coordinators serve the contract they implement', async (t) => {
     'the Worker has been rebuilt from a different openapi.json than the one on disk',
   );
 });
+
+test('the enums in the document are the enums in the code', async () => {
+  // The Host.state enum said three values and registry.js declares four —
+  // `offline`, which is what a host becomes when its socket drops, and which is
+  // a thing we KNOW as opposed to `unknown`, which is what we say when we have
+  // not heard recently enough to be sure. A client that collapses them reports
+  // a box we know is gone as a box we cannot see.
+  //
+  // Caught by a designer reading registry.js, not by this file, because the
+  // route tests assert that a path is ROUTED and never look at the shape of
+  // what comes back. This is that gap, closed for the enums that matter.
+  const registry = readFileSync(new URL('../src/fleet/coordinator/registry.js', import.meta.url), 'utf8');
+  const declared = /** @type {string[]} */ (SPEC.components.schemas.Host.properties.state.enum);
+  const inCode = [...registry.matchAll(/'(healthy|degraded|unknown|offline)'/g)].map((m) => m[1]);
+  for (const state of new Set(inCode)) {
+    assert.ok(declared.includes(state), `registry.js can produce state '${state}' and the document does not list it`);
+  }
+
+  const sessions = readFileSync(new URL('../src/core/sessions.js', import.meta.url), 'utf8');
+  const status = /** @type {string[]} */ (SPEC.components.schemas.Session.properties.status.enum);
+  for (const s of ['running', 'stopped', 'error']) {
+    if (sessions.includes(`'${s}'`)) assert.ok(status.includes(s), `sessions.js produces '${s}' and the document does not list it`);
+  }
+});

@@ -4,19 +4,42 @@
     "title": "Fleetwright coordinator",
     "version": "1.0.0",
     "summary": "Long-running Claude Code sessions on machines you own, driven from a phone.",
-    "description": "There are TWO implementations of this API — a Cloudflare Worker with a Durable Object, and a Node process — and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge — they did once, and `?token=fwk_` was full access.",
-    "license": { "name": "See repository" }
+    "description": "There are TWO implementations of this API \u2014 a Cloudflare Worker with a Durable Object, and a Node process \u2014 and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge \u2014 they did once, and `?token=fwk_` was full access.",
+    "license": {
+      "name": "See repository"
+    }
   },
   "servers": [
-    { "url": "https://fleet.thetech.network", "description": "the Cloudflare Worker" },
-    { "url": "http://127.0.0.1:8791", "description": "a Node coordinator on a box" }
+    {
+      "url": "https://fleet.thetech.network",
+      "description": "the Cloudflare Worker"
+    },
+    {
+      "url": "http://127.0.0.1:8791",
+      "description": "a Node coordinator on a box"
+    }
   ],
   "tags": [
-    { "name": "public", "description": "Reachable with no credential, deliberately. Each one is here for a stated reason." },
-    { "name": "identity", "description": "Becoming allowed in: signing in, enrolling a machine." },
-    { "name": "fleet", "description": "What exists and what it is doing." },
-    { "name": "intents", "description": "Doing something to a session." },
-    { "name": "devices", "description": "Push registration." }
+    {
+      "name": "public",
+      "description": "Reachable with no credential, deliberately. Each one is here for a stated reason."
+    },
+    {
+      "name": "identity",
+      "description": "Becoming allowed in: signing in, enrolling a machine."
+    },
+    {
+      "name": "fleet",
+      "description": "What exists and what it is doing."
+    },
+    {
+      "name": "intents",
+      "description": "Doing something to a session."
+    },
+    {
+      "name": "devices",
+      "description": "Push registration."
+    }
   ],
   "components": {
     "securitySchemes": {
@@ -35,93 +58,290 @@
     "schemas": {
       "Reply": {
         "type": "object",
-        "required": ["ok"],
+        "required": [
+          "ok"
+        ],
         "properties": {
-          "ok": { "type": "boolean" },
-          "text": { "type": ["string", "null"], "description": "For a person. Shown as-is." },
+          "ok": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a person. Shown as-is."
+          },
           "error": {
             "type": "object",
-            "properties": { "code": { "type": "string" } },
-            "required": ["code"]
+            "properties": {
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
           }
         }
       },
       "Session": {
         "type": "object",
-        "required": ["name", "status"],
+        "required": [
+          "name",
+          "status"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Generated and stable, e.g. cc-brave-otter. The identity everything keys on." },
-          "title": { "type": ["string", "null"], "description": "What the work is. For people." },
-          "status": { "type": "string", "enum": ["running", "stopped", "error"] },
-          "hostId": { "type": ["string", "null"], "description": "Which box. Attached by the coordinator on fan-out, because two hosts can hold the same name." },
-          "rcUrl": { "type": ["string", "null"], "description": "Remote Control, if this session has published one." },
-          "uuid": { "type": ["string", "null"], "description": "The conversation. Present means resumable." }
+          "name": {
+            "type": "string",
+            "description": "Generated and stable, e.g. cc-brave-otter. The identity everything keys on."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the work is. For people."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "stopped",
+              "error"
+            ]
+          },
+          "hostId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which box. Attached by the coordinator on fan-out, because two hosts can hold the same name."
+          },
+          "rcUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Remote Control, if this session has published one."
+          },
+          "uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The conversation. Present means resumable."
+          }
         }
       },
       "Host": {
         "type": "object",
-        "required": ["hostId", "connected", "state"],
+        "required": [
+          "hostId",
+          "connected",
+          "state"
+        ],
         "properties": {
-          "hostId": { "type": "string" },
-          "connected": { "type": "boolean" },
-          "connectedAt": { "type": ["number", "null"] },
-          "state": { "type": "string", "enum": ["healthy", "degraded", "unknown"] },
-          "reason": { "type": ["string", "null"], "description": "Why it is not healthy, as a sentence. The registry works hard to make \"we don't know\" unrepresentable." },
-          "health": { "type": ["object", "null"], "additionalProperties": true },
-          "healthAt": { "type": ["number", "null"] }
+          "hostId": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "connectedAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "unknown",
+              "offline"
+            ],
+            "description": "Four values, not three. `offline` is what a host becomes when its socket drops \u2014 a fact we know, distinct from `unknown`, which is what we say when we have not heard recently enough to be sure. A client that collapses them reports a box we KNOW is gone as a box we cannot see, which is the more alarming of the two and the less accurate."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is not healthy, as a sentence. The registry works hard to make \"we don't know\" unrepresentable."
+          },
+          "health": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "healthAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
         }
       },
       "EnrolledHost": {
         "type": "object",
-        "required": ["hostId", "fingerprint"],
+        "required": [
+          "hostId",
+          "fingerprint"
+        ],
         "properties": {
-          "hostId": { "type": "string" },
-          "fingerprint": { "type": "string", "description": "16 hex characters of SHA-256 over the public key. Compare against what the box prints." },
-          "enrolledBy": { "type": ["string", "null"] },
-          "enrolledAt": { "type": ["number", "null"] },
-          "lastSeenAt": { "type": ["number", "null"] },
-          "revokedAt": { "type": ["number", "null"] }
+          "hostId": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "16 hex characters of SHA-256 over the public key. Compare against what the box prints."
+          },
+          "enrolledBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enrolledAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lastSeenAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
         }
       },
       "Event": {
         "type": "object",
-        "required": ["event", "at"],
+        "required": [
+          "event",
+          "at"
+        ],
         "properties": {
-          "hostId": { "type": ["string", "null"] },
-          "event": { "type": "string", "description": "session.awaiting-input, session.ended, session.error, session.rc-online, host.enrolled, host.refused, host.revoked, enrol.minted, intent" },
-          "name": { "type": ["string", "null"] },
-          "text": { "type": ["string", "null"] },
-          "actor": { "type": ["string", "null"], "description": "The verified email of whoever asked. Null for events the fleet originated." },
-          "verb": { "type": ["string", "null"] },
-          "url": { "type": ["string", "null"] },
-          "at": { "type": "number" }
+          "hostId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event": {
+            "type": "string",
+            "description": "session.awaiting-input, session.ended, session.error, session.rc-online, host.enrolled, host.refused, host.revoked, enrol.minted, intent"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The verified email of whoever asked. Null for events the fleet originated."
+          },
+          "verb": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "number"
+          }
         }
       },
       "Prompt": {
         "type": "object",
-        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text — see src/fleet/host/prompt.js.",
-        "required": ["id", "kind", "question", "options"],
+        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text \u2014 see src/fleet/host/prompt.js.",
+        "required": [
+          "id",
+          "kind",
+          "question",
+          "options"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Names this question as rendered. An answer that no longer matches is refused rather than typed into whatever is on screen instead." },
-          "kind": { "type": "string", "enum": ["resume", "trust", "permission"] },
-          "question": { "type": "string", "description": "Written by the fleet, drawn from a fixed vocabulary. Never lifted from the terminal." },
+          "id": {
+            "type": "string",
+            "description": "Names this question as rendered. An answer that no longer matches is refused rather than typed into whatever is on screen instead."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "resume",
+              "trust",
+              "permission"
+            ]
+          },
+          "question": {
+            "type": "string",
+            "description": "Written by the fleet, drawn from a fixed vocabulary. Never lifted from the terminal."
+          },
           "options": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["index", "label"],
-              "properties": { "index": { "type": "integer" }, "label": { "type": "string", "maxLength": 80 } }
+              "required": [
+                "index",
+                "label"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 80
+                }
+              }
             }
           }
         }
       }
     }
   },
-  "security": [{ "bearer": [] }, { "queryToken": [] }],
+  "security": [
+    {
+      "bearer": []
+    },
+    {
+      "queryToken": []
+    }
+  ],
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["public"],
+        "tags": [
+          "public"
+        ],
         "security": [],
         "summary": "Liveness, and nothing else",
         "description": "No host names, no counts. A liveness endpoint that leaks the fleet is not a liveness endpoint.",
@@ -132,8 +352,18 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "protocol"],
-                  "properties": { "ok": { "const": true }, "protocol": { "type": "integer" } }
+                  "required": [
+                    "ok",
+                    "protocol"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "protocol": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
@@ -143,7 +373,9 @@
     },
     "/api/session": {
       "post": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "security": [],
         "summary": "Sign in, and receive a credential for this device",
         "description": "The one route that takes an identity token rather than a fleet credential, because it is where a fleet credential comes from. The ID token is verified against the provider's published keys and the address checked against the fleet's allowlist. Rate limited.",
@@ -153,10 +385,18 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["idToken"],
+                "required": [
+                  "idToken"
+                ],
                 "properties": {
-                  "idToken": { "type": "string", "description": "From Sign in with Apple or Google." },
-                  "deviceName": { "type": "string", "description": "Names the credential in the fleet's device list." }
+                  "idToken": {
+                    "type": "string",
+                    "description": "From Sign in with Apple or Google."
+                  },
+                  "deviceName": {
+                    "type": "string",
+                    "description": "Names the credential in the fleet's device list."
+                  }
                 }
               }
             }
@@ -169,38 +409,74 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "token"],
+                  "required": [
+                    "ok",
+                    "token"
+                  ],
                   "properties": {
-                    "ok": { "const": true },
-                    "token": { "type": "string", "pattern": "^fwk_" },
-                    "client": { "type": "object", "additionalProperties": true }
+                    "ok": {
+                      "const": true
+                    },
+                    "token": {
+                      "type": "string",
+                      "pattern": "^fwk_"
+                    },
+                    "client": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
                   }
                 }
               }
             }
           },
-          "401": { "description": "The token did not verify, and the reason says which check failed." },
-          "403": { "description": "Verified, and not allowed in. `private_relay` means Hide My Email, which can never match a domain." },
-          "429": { "description": "Too many attempts from this address." },
-          "503": { "description": "This coordinator has no sign-in configured." }
+          "401": {
+            "description": "The token did not verify, and the reason says which check failed."
+          },
+          "403": {
+            "description": "Verified, and not allowed in. `private_relay` means Hide My Email, which can never match a domain."
+          },
+          "429": {
+            "description": "Too many attempts from this address."
+          },
+          "503": {
+            "description": "This coordinator has no sign-in configured."
+          }
         }
       }
     },
     "/api/enroll": {
       "post": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "Mint a six-digit pin",
-        "description": "An invitation, not a way in — it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
+        "description": "An invitation, not a way in \u2014 it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "kind": { "type": "string", "enum": ["host", "device"], "default": "host" },
-                  "label": { "type": "string" },
-                  "hostId": { "type": "string", "description": "Bind the pin to one machine." },
-                  "readmit": { "type": "boolean", "description": "Allow this pin to bring back a REVOKED host." }
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "host",
+                      "device"
+                    ],
+                    "default": "host"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "hostId": {
+                    "type": "string",
+                    "description": "Bind the pin to one machine."
+                  },
+                  "readmit": {
+                    "type": "boolean",
+                    "description": "Allow this pin to bring back a REVOKED host."
+                  }
                 }
               }
             }
@@ -213,30 +489,55 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "code"],
+                  "required": [
+                    "ok",
+                    "code"
+                  ],
                   "properties": {
-                    "ok": { "const": true },
-                    "code": { "type": "string", "pattern": "^[0-9]{6}$" },
-                    "expiresAt": { "type": "number" },
-                    "purpose": { "type": "string" }
+                    "ok": {
+                      "const": true
+                    },
+                    "code": {
+                      "type": "string",
+                      "pattern": "^[0-9]{6}$"
+                    },
+                    "expiresAt": {
+                      "type": "number"
+                    },
+                    "purpose": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             }
           },
-          "401": { "description": "no credential" }
+          "401": {
+            "description": "no credential"
+          }
         }
       },
       "get": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "What pins are outstanding",
         "description": "Codes are masked. This answers \"what did I leave lying around\", not \"what is the pin\".",
-        "responses": { "200": { "description": "outstanding pins, masked" }, "401": { "description": "no credential" } }
+        "responses": {
+          "200": {
+            "description": "outstanding pins, masked"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
       }
     },
     "/api/enroll/host": {
       "post": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "security": [],
         "summary": "Spend a pin to register a machine's public key",
         "description": "Reachable without a credential BECAUSE it is how a machine that has none gets one. The pin is the authorisation.",
@@ -246,38 +547,82 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["code", "hostId", "publicJwk"],
+                "required": [
+                  "code",
+                  "hostId",
+                  "publicJwk"
+                ],
                 "properties": {
-                  "code": { "type": "string" },
-                  "hostId": { "type": "string" },
-                  "publicJwk": { "type": "object", "description": "P-256 public key. A private key here is refused." }
+                  "code": {
+                    "type": "string"
+                  },
+                  "hostId": {
+                    "type": "string"
+                  },
+                  "publicJwk": {
+                    "type": "object",
+                    "description": "P-256 public key. A private key here is refused."
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "enrolled, re-enrolled or readmitted — `text` says which" },
-          "400": { "description": "the key or the host id was not acceptable" },
-          "403": { "description": "the pin was wrong, spent, expired, or minted for another host" }
+          "200": {
+            "description": "enrolled, re-enrolled or readmitted \u2014 `text` says which"
+          },
+          "400": {
+            "description": "the key or the host id was not acceptable"
+          },
+          "403": {
+            "description": "the pin was wrong, spent, expired, or minted for another host"
+          }
         }
       }
     },
     "/api/host/challenge": {
       "post": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "security": [],
         "summary": "A nonce to sign",
-        "description": "Unauthenticated by necessity — asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
+        "description": "Unauthenticated by necessity \u2014 asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
         "requestBody": {
-          "content": { "application/json": { "schema": { "type": "object", "properties": { "hostId": { "type": "string" } } } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "hostId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         },
         "responses": {
           "200": {
             "description": "a nonce",
             "content": {
               "application/json": {
-                "schema": { "type": "object", "required": ["ok", "nonce"], "properties": { "ok": { "const": true }, "nonce": { "type": "string" } } }
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "nonce"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "nonce": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             }
           }
@@ -286,7 +631,9 @@
     },
     "/api/host/verify": {
       "post": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "security": [],
         "summary": "The same check /host/connect makes, without the socket",
         "description": "So `agent-fleet-sidecar doctor` can tell an operator that the key on disk was never enrolled, or has been revoked, instead of leaving them to read a reconnect loop out of the journal.",
@@ -296,21 +643,41 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["hostId", "nonce", "proof"],
-                "properties": { "hostId": { "type": "string" }, "nonce": { "type": "string" }, "proof": { "type": "string" } }
+                "required": [
+                  "hostId",
+                  "nonce",
+                  "proof"
+                ],
+                "properties": {
+                  "hostId": {
+                    "type": "string"
+                  },
+                  "nonce": {
+                    "type": "string"
+                  },
+                  "proof": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "this host would be admitted" },
-          "401": { "description": "and the reason distinguishes not-enrolled, revoked, expired, already-used and wrong-key" }
+          "200": {
+            "description": "this host would be admitted"
+          },
+          "401": {
+            "description": "and the reason distinguishes not-enrolled, revoked, expired, already-used and wrong-key"
+          }
         }
       }
     },
     "/api/hosts": {
       "get": {
-        "tags": ["fleet"],
+        "tags": [
+          "fleet"
+        ],
         "summary": "Everything a client can see about the fleet",
         "responses": {
           "200": {
@@ -319,25 +686,49 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "protocol", "hosts"],
+                  "required": [
+                    "ok",
+                    "protocol",
+                    "hosts"
+                  ],
                   "properties": {
-                    "ok": { "const": true },
-                    "protocol": { "type": "integer" },
-                    "hosts": { "type": "array", "items": { "$ref": "#/components/schemas/Host" } },
-                    "devices": { "type": "integer" },
-                    "events": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } }
+                    "ok": {
+                      "const": true
+                    },
+                    "protocol": {
+                      "type": "integer"
+                    },
+                    "hosts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Host"
+                      }
+                    },
+                    "devices": {
+                      "type": "integer"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    }
                   }
                 }
               }
             }
           },
-          "401": { "description": "no credential" }
+          "401": {
+            "description": "no credential"
+          }
         }
       }
     },
     "/api/hosts/enrolled": {
       "get": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "Which machines are in this fleet, with their key fingerprints",
         "description": "Carries no key material. The fingerprint is for a person to compare against what the box prints.",
         "responses": {
@@ -347,53 +738,113 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "hosts"],
-                  "properties": { "ok": { "const": true }, "hosts": { "type": "array", "items": { "$ref": "#/components/schemas/EnrolledHost" } } }
+                  "required": [
+                    "ok",
+                    "hosts"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "hosts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EnrolledHost"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "401": { "description": "no credential" }
+          "401": {
+            "description": "no credential"
+          }
         }
       }
     },
     "/api/hosts/{hostId}": {
       "delete": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "Remove a machine from the fleet",
         "description": "Revoked AND disconnected: a revoked host holding a live socket is still in the fleet until something closes it. Marked rather than deleted, so a host that reconnects is told it was revoked rather than that it was never known.",
-        "parameters": [{ "name": "hostId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "parameters": [
+          {
+            "name": "hostId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "revoked and disconnected" },
-          "401": { "description": "no credential" },
-          "404": { "description": "no such host, or already revoked" }
+          "200": {
+            "description": "revoked and disconnected"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no such host, or already revoked"
+          }
         }
       }
     },
     "/api/clients": {
       "get": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "Which devices can reach this fleet",
-        "description": "Without secrets — the coordinator stores a hash, not a token.",
-        "responses": { "200": { "description": "devices" }, "401": { "description": "no credential" } }
+        "description": "Without secrets \u2014 the coordinator stores a hash, not a token.",
+        "responses": {
+          "200": {
+            "description": "devices"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
       }
     },
     "/api/clients/{id}": {
       "delete": {
-        "tags": ["identity"],
+        "tags": [
+          "identity"
+        ],
         "summary": "Revoke one device, leaving every other alone",
         "description": "Which is the whole point of there being more than one credential.",
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "revoked" },
-          "401": { "description": "no credential" },
-          "404": { "description": "no such client, or already revoked" }
+          "200": {
+            "description": "revoked"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no such client, or already revoked"
+          }
         }
       }
     },
     "/api/events": {
       "get": {
-        "tags": ["fleet"],
+        "tags": [
+          "fleet"
+        ],
         "summary": "What happened while you were asleep",
         "description": "Push wakes a phone; this tells it what it missed. Capped at the same page size on both coordinators.",
         "responses": {
@@ -403,19 +854,36 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["ok", "events"],
-                  "properties": { "ok": { "const": true }, "events": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } } }
+                  "required": [
+                    "ok",
+                    "events"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    }
+                  }
                 }
               }
             }
           },
-          "401": { "description": "no credential" }
+          "401": {
+            "description": "no credential"
+          }
         }
       }
     },
     "/api/intent": {
       "post": {
-        "tags": ["intents"],
+        "tags": [
+          "intents"
+        ],
         "summary": "Do something to a session",
         "description": "The fixed verb set is the security model: this API cannot express a shell string even to itself, so a compromised coordinator can start and stop sessions and can never run anything. A caller-supplied `actor` is a label; a signed-in device's verified email overrides it.",
         "requestBody": {
@@ -424,12 +892,34 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["verb"],
+                "required": [
+                  "verb"
+                ],
                 "properties": {
-                  "verb": { "type": "string", "enum": ["list", "status", "peek", "health", "start", "resume", "stop", "forget"] },
-                  "params": { "type": "object", "additionalProperties": true },
-                  "actor": { "type": "string" },
-                  "id": { "type": "string", "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session." }
+                  "verb": {
+                    "type": "string",
+                    "enum": [
+                      "list",
+                      "status",
+                      "peek",
+                      "health",
+                      "start",
+                      "resume",
+                      "stop",
+                      "forget"
+                    ]
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "actor": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session."
+                  }
                 }
               }
             }
@@ -442,13 +932,28 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Reply" },
+                    {
+                      "$ref": "#/components/schemas/Reply"
+                    },
                     {
                       "type": "object",
                       "properties": {
-                        "sessions": { "type": "array", "items": { "$ref": "#/components/schemas/Session" } },
-                        "fanout": { "type": "boolean" },
-                        "hosts": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+                        "sessions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Session"
+                          }
+                        },
+                        "fanout": {
+                          "type": "boolean"
+                        },
+                        "hosts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        }
                       }
                     }
                   ]
@@ -456,45 +961,111 @@
               }
             }
           },
-          "400": { "description": "not a well-formed intent" },
-          "401": { "description": "no credential" }
+          "400": {
+            "description": "not a well-formed intent"
+          },
+          "401": {
+            "description": "no credential"
+          }
         }
       }
     },
     "/api/devices": {
       "post": {
-        "tags": ["devices"],
+        "tags": [
+          "devices"
+        ],
         "summary": "Register for push",
-        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target — and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
+        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target \u2014 and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["platform", "token"],
-                "properties": { "platform": { "type": "string", "enum": ["ios", "android", "web"] }, "token": { "type": "string" } }
+                "required": [
+                  "platform",
+                  "token"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "ios",
+                      "android",
+                      "web"
+                    ]
+                  },
+                  "token": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
-        "responses": { "200": { "description": "registered" }, "400": { "description": "unknown platform, or no token" }, "401": { "description": "no credential" } }
+        "responses": {
+          "200": {
+            "description": "registered"
+          },
+          "400": {
+            "description": "unknown platform, or no token"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
       },
       "delete": {
-        "tags": ["devices"],
+        "tags": [
+          "devices"
+        ],
         "summary": "Stop notifying this device",
         "requestBody": {
-          "content": { "application/json": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string" } } } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         },
-        "responses": { "200": { "description": "forgotten" }, "401": { "description": "no credential" }, "404": { "description": "not registered" } }
+        "responses": {
+          "200": {
+            "description": "forgotten"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "not registered"
+          }
+        }
       }
     },
     "/api/devices/test": {
       "post": {
-        "tags": ["devices"],
+        "tags": [
+          "devices"
+        ],
         "summary": "Send this device a notification now",
         "description": "Push fails silently by nature: a registration that never arrived and a provider that was never configured look identical from a phone, which is to say they look like nothing at all. This is the only way to find out before the notification that matters.",
-        "responses": { "200": { "description": "sent, or a reason it was not" }, "401": { "description": "no credential" } }
+        "responses": {
+          "200": {
+            "description": "sent, or a reason it was not"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
       }
     }
   }
