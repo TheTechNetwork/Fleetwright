@@ -193,6 +193,7 @@ export class SessionWatcher {
     };
   }
 
+  /** @param {boolean} quiet @param {Record<string, any>} event */
   #fire(quiet, event) {
     if (quiet) return;
     this.log.info(`watcher: ${event.event} ${event.name ?? ''}`);

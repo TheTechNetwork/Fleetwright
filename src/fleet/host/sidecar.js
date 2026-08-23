@@ -87,6 +87,7 @@ export class Sidecar {
    *   maxSkewMs?: number,
    *   logger?: Logger,
    *   healthIntervalMs?: number,
+   *   promptText?: boolean,
    *   watch?: boolean,
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
    * }} opts
