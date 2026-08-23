@@ -116,6 +116,7 @@ export class Fleet {
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
         readmit: spent.entry.readmit,
+        boundToThisHost: Boolean(spent.entry.hostId),
       });
       if (!result.ok) return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
       await this.#saveHosts();

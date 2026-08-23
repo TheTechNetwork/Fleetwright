@@ -90,9 +90,9 @@ export class HostIdentities {
    * rebuilt machine should do; the alternative is a fleet slowly filling with
    * dead entries nobody dares delete.
    *
-   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean }} spec
+   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean, boundToThisHost?: boolean }} spec
    */
-  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false }) {
+  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false, boundToThisHost = false }) {
     const id = String(hostId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
       return { ok: false, error: 'a host id is letters, digits, dot, dash and underscore' };
@@ -111,6 +111,24 @@ export class HostIdentities {
     // stream said the machine somebody removed was back.
     //
     // Readmission is deliberate now: it takes a pin minted for it.
+    // An unbound pin ADDS a machine. It does not take one over.
+    //
+    // Binding was added so a pin minted for a Raspberry Pi could not be spent on
+    // the build server — but every path that actually mints one mints it
+    // unbound, so in practice nothing was bound and the hole stayed open. The
+    // rule that closes it without making the ordinary case worse: replacing the
+    // key of a host that already exists requires a pin minted for THAT NAME.
+    // Adding a new machine, which is what almost every pin is for, still takes
+    // an unbound pin and one step.
+    if (previous && !previous.revokedAt && !boundToThisHost) {
+      return {
+        ok: false,
+        error:
+          `${id} is already enrolled. Replacing the key of a machine that exists takes a pin minted ` +
+          'for that name, so that a pin handed out to add a box cannot be spent taking over another one.',
+      };
+    }
+
     if (previous?.revokedAt && !readmit) {
       return {
         ok: false,

@@ -11,9 +11,9 @@ import { HostIdentities } from '../src/fleet/coordinator/hosts.js';
 import { generateKeyPair, sign, signingInput } from '../src/fleet/crypto.js';
 
 /** @param {HostIdentities} hosts @param {string} id */
-async function enrolled(hosts, id = 'deb13-staging') {
+async function enrolled(hosts, id = 'deb13-staging', opts = {}) {
   const keys = await generateKeyPair();
-  const r = await hosts.enrol({ hostId: id, publicJwk: keys.publicJwk, enrolledBy: 'eli@thetech.network' });
+  const r = await hosts.enrol({ hostId: id, publicJwk: keys.publicJwk, enrolledBy: 'eli@thetech.network', ...opts });
   assert.equal(r.ok, true);
   return { keys, host: /** @type {any} */ (r).host };
 }
@@ -179,10 +179,24 @@ test('a revoked host is refused, and told that it was revoked', async () => {
   assert.equal(hosts.revoke('deb13-staging'), false, 'revoking twice is not an event');
 });
 
-test('re-enrolling replaces the key, which is what a rebuilt machine needs', async () => {
+test('replacing the key of a machine that exists takes a pin minted for that name', async () => {
+  // Binding existed but nothing used it: every path that mints a pin minted an
+  // unbound one, so a pin handed out to add a Raspberry Pi was still a pin that
+  // took over the build server. The rule that closes it without making the
+  // ordinary case worse — an unbound pin ADDS a machine, and replacing one that
+  // already exists needs a pin minted for that name.
+  const hosts = new HostIdentities();
+  await enrolled(hosts);
+
+  const takeover = await hosts.enrol({ hostId: 'deb13-staging', publicJwk: (await generateKeyPair()).publicJwk });
+  assert.equal(takeover.ok, false);
+  assert.match(String(takeover.error), /already enrolled/);
+});
+
+test('a rebuilt machine re-enrols, with a pin minted for it', async () => {
   const hosts = new HostIdentities();
   const first = await enrolled(hosts);
-  const second = await enrolled(hosts);
+  const second = await enrolled(hosts, 'deb13-staging', { boundToThisHost: true });
 
   const nonce = await hosts.challenge('deb13-staging');
   assert.equal(

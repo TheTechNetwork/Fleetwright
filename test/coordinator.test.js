@@ -443,11 +443,11 @@ test('a host that was never enrolled cannot connect at all', async (t) => {
     },
     maxBackoffMs: 50,
   });
+  t.after(() => transport.stop());
   await transport.start();
   await new Promise((r) => setTimeout(r, 300));
 
   assert.equal(coordinator.registry.list().length, 0, 'a refused host never enters the registry');
-  await transport.stop();
 });
 
 test('a revoked host is disconnected and stays out', async (t) => {
@@ -461,6 +461,7 @@ test('a revoked host is disconnected and stays out', async (t) => {
     proof: await enrolledProof(coordinator, port, 'condemned'),
     maxBackoffMs: 50,
   });
+  t.after(() => transport.stop());
   await transport.start();
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(coordinator.registry.list().length, 1, 'enrolled host connected');
@@ -475,7 +476,6 @@ test('a revoked host is disconnected and stays out', async (t) => {
   // refused. A revocation that only holds until the host reconnects is not one.
   await new Promise((r) => setTimeout(r, 400));
   assert.equal(coordinator.registry.hosts.get('condemned')?.connected, false);
-  await transport.stop();
 });
 
 test('a host that drops is marked offline and its work is refused, not misrouted', async (t) => {

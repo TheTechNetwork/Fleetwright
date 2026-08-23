@@ -132,6 +132,12 @@ export class Coordinator {
     this.core.hostIds.restore(state.hosts || []);
     this.core.clients.restore(state.clients || []);
     this.core.enrollment.restore(state.enrollment || []);
+    // Push registrations too. The Worker has always kept these in Durable
+    // Object storage; the Node coordinator held them in a Map and lost them on
+    // every restart, so push worked until the service bounced and then stopped
+    // — silently, because a coordinator with no registrations has nothing to
+    // report and a phone has no way to know it was forgotten.
+    for (const device of state.devices || []) if (device?.token) this.core.devices.set(device.token, device);
     const hosts = this.core.hostIds.list().filter((h) => !h.revokedAt).length;
     this.log.info(`coordinator: ${hosts} enrolled host${hosts === 1 ? '' : 's'} from ${this.stateFile}`);
   }
@@ -170,6 +176,7 @@ export class Coordinator {
         hosts: this.core.hostIds.serialise(),
         clients: this.core.clients.serialise(),
         enrollment: this.core.enrollment.serialise(),
+        devices: [...this.core.devices.values()],
       },
       null,
       2,
@@ -339,6 +346,7 @@ export class Coordinator {
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
         readmit: spent.entry.readmit,
+        boundToThisHost: Boolean(spent.entry.hostId),
       });
       // Saved either way: the code was spent above whether or not the key that
       // arrived with it was any good, and a spent code that comes back after a
@@ -513,12 +521,14 @@ export class Coordinator {
         token: String(body?.token || ''),
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
       });
+      if (r.ok) this.saveState();
       return json(res, r.ok ? 200 : 400, r);
     }
 
     if (p === '/api/devices' && req.method === 'DELETE') {
       const body = await readJson(req);
       const { ok: gone } = this.core.unregisterDevice(String(body?.token || ''));
+      if (gone) this.saveState();
       return json(res, gone ? 200 : 404, {
         ok: gone,
         text: gone ? 'This device will not be notified again.' : 'That device was not registered.',

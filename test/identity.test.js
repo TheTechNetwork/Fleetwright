@@ -493,19 +493,26 @@ test('re-enrolling a name disconnects whoever held the old key', async (t) => {
 
   const { WebSocketTransport } = await import('../src/fleet/host/transports/websocket.js');
   const transport = new WebSocketTransport({ origin, hostId: 'rebuilt', proof: original, maxBackoffMs: 50 });
+  // Registered as cleanup BEFORE the assertions, not stopped after them. The
+  // retry timer is no longer unref'd — that was the bug that made the sidecar
+  // exit instead of reconnecting — so a transport left running now holds the
+  // event loop open and the whole suite hangs instead of failing. Cleanup in
+  // the happy path is cleanup that does not run when a test fails.
+  t.after(() => transport.stop());
   await transport.start();
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(c.registry.hosts.get('rebuilt')?.connected, true);
 
   // A rebuilt machine presents a new key under the same name.
   const replacement = await loadOrCreateKey(scratch());
-  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  // Bound to that name: replacing the key of a machine that already exists is
+  // exactly what an unbound pin may no longer do.
+  const { code } = c.core.enrollment.mint({ purpose: 'host', hostId: 'rebuilt' });
   const again = await enrol({ origin, code, hostId: 'rebuilt', publicJwk: replacement.publicJwk });
   assert.equal(again.replaced, true);
 
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(c.registry.hosts.get('rebuilt')?.connected, false, 'the old key holder is out');
-  await transport.stop();
 
   // And it is the new key that works now.
   const known = await checkEnrolled({ origin, hostId: 'rebuilt', privateJwk: replacement.privateJwk });

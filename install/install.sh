@@ -1170,8 +1170,22 @@ if [ "$WIZARD" = yes ]; then
     if confirm "Enable and start the services now?" Y; then
       # Print the reason rather than where to look for it. "failed to start,
       # go read the journal" is a round trip for information we already have.
+      # `enable --now` STARTS a stopped unit and does nothing at all to a
+      # running one. So re-running the installer over an existing deployment —
+      # which is the documented way to upgrade, and what `/update` tells people
+      # to do — left the old code running with the old environment, reported
+      # "running", and looked like a successful upgrade.
+      #
+      # An already-active unit is restarted. It is the same reload systemd would
+      # do anyway, and the unit files may have changed underneath it.
       start_service() {
-        if systemctl enable --now "$1" >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        if systemctl is-active --quiet "$1"; then
+          if systemctl restart "$1" >/dev/null 2>&1; then
+            ok "$1 restarted, on the new code"
+            return 0
+          fi
+        elif systemctl enable --now "$1" >/dev/null 2>&1; then
           ok "$1 running"
           return 0
         fi

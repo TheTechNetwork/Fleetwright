@@ -185,7 +185,9 @@ test('re-enrolling a name disconnects whoever held the old key', async () => {
   state.getTags = () => ['rebuilt'];
 
   const second = await generateKeyPair();
-  const { code: code2 } = f.core.enrollment.mint({ purpose: 'host' });
+  // Bound to that name, because replacing the key of a machine that already
+  // exists is exactly what an unbound pin is no longer allowed to do.
+  const { code: code2 } = f.core.enrollment.mint({ purpose: 'host', hostId: 'rebuilt' });
   const res = await call(f, '/api/enroll/host', 'POST', { code: code2, hostId: 'rebuilt', publicJwk: second.publicJwk });
   assert.equal((await res.json()).replaced, true);
 
