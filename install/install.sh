@@ -1130,7 +1130,13 @@ if [ "$WIZARD" = yes ]; then
       [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
     fi
 
-    if sidecar_cli "enrol $pin" 2>&1 | sed 's/^/  /'; then
+    # Six digits or nothing. A pin is not free text and never was.
+    pin="$(printf '%s' "$pin" | tr -cd '0-9')"
+    if [ ${#pin} -ne 6 ]; then
+      warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
+      return 0
+    fi
+    if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
       ok "enrolled at $ENROL_URL"
     else
       warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
@@ -1140,11 +1146,22 @@ if [ "$WIZARD" = yes ]; then
   # Run a sidecar subcommand as the service user, with the environment the unit
   # would have given it. Running it as root would put a root-owned key file
   # where the service expects its own, and the service would refuse to read it.
+  # $1 is a SUBCOMMAND, $2 an optional argument, and the argument is quoted
+  # before it reaches the shell.
+  #
+  # It used to be one string interpolated raw into `bash -lc`, and the only
+  # thing ever put in it was a pin the operator pasted at a prompt — running as
+  # root. `enrol 123 456` silently enrolled with the code "123"; anything with a
+  # $( ) in it did rather more than that. The pin is checked to be six digits
+  # first, and %q-quoted after, because either alone would be enough and neither
+  # costs anything.
   sidecar_cli() {
+    local sub="$1" arg="${2:-}" quoted=""
+    [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
     as_user "AGENT_FLEET_COORDINATOR_URL='$ENROL_URL' \
              AGENT_FLEET_HOST_ID='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)' \
-             AGENT_FLEET_HOST_KEY='/var/lib/agent-fleet/host-key.json' \
-             '$UNIT_NODE_BIN' '$DIR/bin/agent-fleet-sidecar' $1"
+             AGENT_FLEET_HOST_KEY='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY)' \
+             '$UNIT_NODE_BIN' '$DIR/bin/agent-fleet-sidecar' $sub$quoted"
   }
 
   # --- start it ------------------------------------------------------------

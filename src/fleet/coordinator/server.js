@@ -114,8 +114,19 @@ export class Coordinator {
     let raw;
     try {
       raw = readFileSync(this.stateFile, 'utf8');
-    } catch {
-      return; // never enrolled anything yet
+    } catch (e) {
+      // ONLY a missing file means "new coordinator". This caught everything —
+      // a permission error, an EISDIR, a failing disk — and returned quietly,
+      // after which assertStateWritable() wrote an empty state over the top and
+      // the fleet's entire membership list was gone. Permanently, and with a
+      // healthy-looking startup line saying "0 enrolled hosts".
+      //
+      // That is the failure this file already refuses to have for a CORRUPT
+      // file. Guarding JSON.parse and not the read that feeds it was half a
+      // guard. A root-owned state file left by somebody running the coordinator
+      // under sudo once is the ordinary way to get here.
+      if (/** @type {any} */ (e)?.code === 'ENOENT') return;
+      throw e;
     }
     const state = JSON.parse(raw);
     this.core.hostIds.restore(state.hosts || []);
