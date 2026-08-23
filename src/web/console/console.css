@@ -1,0 +1,246 @@
+/*
+ * The console's appearance.
+ *
+ * MOBILE FIRST, and that is a correction rather than a preference. The design
+ * this implements assumed 1280px and up — "someone sitting down, supervising
+ * ten sessions" — and the first time it was opened it was opened on a phone.
+ * A four-pane operator surface on a 390px screen is three empty columns and a
+ * divider, which is precisely what it looked like.
+ *
+ * So: one column by default, panes at 900px and up. The phone is meant to be
+ * the interrupt handler and this is meant to be the console, but "meant to be"
+ * is not a viewport query.
+ *
+ * NEVER COLOUR ALONE (docs/psychology.md §5). Every tone below is reinforcement
+ * for a word and a glyph that are already in the markup. Deleting this entire
+ * file leaves a page that still says everything it means.
+ */
+
+:root {
+  color-scheme: dark light;
+  --bg: #0b0d10;
+  --panel: #12151a;
+  --line: #232833;
+  --ink: #e6e9ef;
+  --ink-dim: #8b93a3;
+  --ok: #4ade80;
+  --attention: #fbbf24;
+  --bad: #f87171;
+  --active: #60a5fa;
+  --unsure: #a78bfa;
+  --idle: #6b7280;
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 14px;
+  --s4: 22px;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --line: #e2e6ee;
+    --ink: #12151a;
+    --ink-dim: #5b6474;
+    --idle: #9aa2b1;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.console { padding: var(--s3); max-width: 1600px; margin: 0 auto; }
+
+/* --- the assurance panel -------------------------------------------------
+ *
+ * The most important thing on the page, because "nothing needs you" is where a
+ * person is ninety-five percent of the time. Calm is LOW CONTRAST on purpose:
+ * claims that hold recede, claims that fail come forward. */
+
+.confidence {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s3);
+  margin-bottom: var(--s3);
+}
+.confidence.unsettled { border-color: color-mix(in srgb, var(--attention) 45%, var(--line)); }
+
+.headline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  margin: 0 0 var(--s3);
+  font-size: clamp(1.15rem, 4.5vw, 1.5rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.settled .headline .glyph { color: var(--ok); }
+.unsettled .headline .glyph { color: var(--attention); }
+.headline .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+
+.claims { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+
+.claim {
+  display: grid;
+  grid-template-columns: 1.4em 1fr;
+  gap: var(--s2);
+  align-items: start;
+  font-size: 0.94rem;
+}
+.claim .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.claim.holds { color: var(--ink-dim); }
+.claim.holds .glyph { color: var(--ok); }
+.claim.fails { color: var(--ink); }
+.claim.fails .glyph { color: var(--bad); }
+.claim.unsure { color: var(--ink); }
+.claim.unsure .glyph { color: var(--unsure); }
+
+.c-claim { grid-column: 2; }
+.c-because,
+.c-remedy {
+  grid-column: 2;
+  display: block;
+  font-size: 0.86rem;
+  color: var(--ink-dim);
+  margin-top: 2px;
+}
+/* The remedy, because a person reading an error has less working memory
+ * available than usual (docs/psychology.md §6). */
+.c-remedy::before { content: '→ '; }
+
+/* --- panes ---------------------------------------------------------------- */
+
+.panes { display: flex; flex-direction: column; gap: var(--s3); }
+
+@media (min-width: 900px) {
+  .panes { display: grid; grid-template-columns: 17rem minmax(0, 1fr) 19rem; gap: var(--s3); align-items: start; }
+}
+
+.rail h2, .side h2 {
+  margin: 0 0 var(--s2);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.hosts, .sessions, .asks, .ledger, .options { list-style: none; margin: 0; padding: 0; }
+.hosts, .sessions, .asks { display: flex; flex-direction: column; gap: var(--s2); }
+
+/* --- a machine ------------------------------------------------------------ */
+
+.host {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s2) var(--s3);
+}
+.host.state-healthy { border-left-color: var(--ok); }
+.host.state-degraded { border-left-color: var(--attention); }
+.host.state-offline { border-left-color: var(--bad); }
+.host.state-unknown { border-left-color: var(--unsure); }
+
+.host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.host-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
+
+/* Verbatim and never truncated: the registry works to make "we don't know"
+ * unrepresentable as a benign value, and nothing used to render it. */
+.reason { margin: var(--s1) 0 0; font-size: 0.84rem; color: var(--ink-dim); }
+.labels { margin: var(--s1) 0 0; font-size: 0.78rem; color: var(--ink-dim); }
+
+/* --- badges: a word and a glyph, tint agreeing --------------------------- */
+
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; white-space: nowrap; }
+.badge .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.tone-ok { color: var(--ok); }
+.tone-attention { color: var(--attention); }
+.tone-bad { color: var(--bad); }
+.tone-active { color: var(--active); }
+.tone-unsure { color: var(--unsure); }
+.tone-idle { color: var(--idle); }
+
+/* --- what is being asked -------------------------------------------------- */
+
+.ask {
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--attention) 50%, var(--line));
+  border-radius: var(--radius);
+  padding: var(--s3);
+  margin-bottom: var(--s2);
+}
+.ask-head { display: flex; justify-content: space-between; gap: var(--s2); font-size: 0.8rem; color: var(--ink-dim); }
+.ask-what { font-weight: 600; color: var(--ink); font-size: 0.95rem; }
+.question { margin: var(--s2) 0 var(--s3); font-size: 1.02rem; }
+
+.options { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  /* 44px minimum: this gets used on a phone whether or not it was designed to. */
+  min-height: 44px;
+  padding: 0 var(--s3);
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.option:hover, .option:focus-visible { border-color: var(--active); outline: none; }
+.ordinal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 6px;
+  font-size: 0.8rem;
+}
+.withheld { margin: 0; font-size: 0.86rem; color: var(--ink-dim); }
+
+/* --- the wall ------------------------------------------------------------- */
+
+.srow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--s2);
+  align-items: baseline;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s2) var(--s3);
+}
+.s-title { font-weight: 550; }
+.s-name, .s-host {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: var(--ink-dim);
+}
+.s-name { grid-column: 1; }
+.s-host { grid-column: 1; }
+.srow .badge { grid-row: 1; grid-column: 2; }
+.srow.state-waiting { border-color: color-mix(in srgb, var(--attention) 50%, var(--line)); }
+
+/* --- who did what --------------------------------------------------------- */
+
+.ledger { display: flex; flex-direction: column; gap: var(--s2); font-size: 0.84rem; }
+.entry { display: flex; flex-direction: column; gap: 1px; }
+.e-who { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; color: var(--ink-dim); }
+
+/* --- the coordinator is unreachable --------------------------------------
+ *
+ * Desaturated so the page looks as stale as it is. Age counters stop
+ * elsewhere; a ticking clock over frozen data is the most convincing lie a
+ * stale UI tells. */
+.console.stale .panes { filter: saturate(0.35); opacity: 0.75; }

@@ -15,7 +15,7 @@
 // dependency of the Worker build, and it does JSX without a config file.
 
 import { build } from 'esbuild';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const SRC = 'src/web/console';
 const jsx = { jsxFactory: 'h', jsxFragment: 'Fragment', jsxImportSource: 'preact', jsx: 'automatic' };
@@ -54,3 +54,49 @@ await build({
   bundle: false,
   ...jsx,
 });
+
+// --- one openable file ------------------------------------------------------
+//
+// The bundle, the stylesheet and a shell, inlined. Not a convenience: the first
+// version of this page was reviewed by READING it, rendered a topbar and
+// nothing else, and nobody found out until somebody opened it on a phone. A
+// design that cannot be opened has not been reviewed.
+
+const preview = await build({
+  entryPoints: [`${SRC}/preview.jsx`],
+  outfile: 'build/preview.bundle.js',
+  format: 'iife',
+  platform: 'browser',
+  bundle: true,
+  minify: true,
+  write: false,
+  ...jsx,
+});
+
+const css = readFileSync(`${SRC}/console.css`, 'utf8');
+const js = preview.outputFiles[0].text;
+
+mkdirSync('build', { recursive: true });
+writeFileSync(
+  'build/console-preview.html',
+  `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleetwright console</title>
+<style>
+${css}
+.preview-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
+.preview-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-dim)}
+.preview-pick{flex:1;max-width:24rem;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;min-height:38px;padding:0 10px;font:inherit;font-size:.9rem}
+</style>
+</head>
+<body>
+<div id="console-root"></div>
+<script>${js}</script>
+</body>
+</html>
+`,
+);
+console.log('and one openable preview at build/console-preview.html');
