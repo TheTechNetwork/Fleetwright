@@ -181,24 +181,33 @@ export class HostIdentities {
   }
 
   /**
-   * Is this a nonce we issued, for this host, recently, and unspent?
+   * Pull a nonce apart, and insist on its CANONICAL spelling.
+   *
+   * The stamp is read with parseInt(base 36), which is generous in ways that
+   * matter here: it skips leading whitespace, accepts a leading `+`, and stops
+   * at the first character it does not like. So ` abc.r.m`, `+abc.r.m` and
+   * `abc!.r.m` all parse to the same instant, recompute to the same MAC, and
+   * pass — while being three different strings.
+   *
+   * That is harmless on its own, because the literal nonce is inside what gets
+   * signed, so each spelling needs its own signature from the enrolled key. It
+   * is NOT harmless for the replay bookkeeping below, which has to key on the
+   * identity of a challenge rather than on however it happened to be typed —
+   * otherwise "spent" can be dodged by adding a space.
    *
    * @param {string} nonce
-   * @param {string} hostId
+   * @returns {{ issuedAt: number, random: string, mac: string, key: string }|null}
    */
-  async #nonceState(nonce, hostId) {
+  #parseNonce(nonce) {
     const parts = String(nonce || '').split('.');
-    if (parts.length !== 3) return 'malformed';
+    if (parts.length !== 3) return null;
     const [stamp, random, mac] = parts;
     const issuedAt = parseInt(stamp, 36);
-    if (!Number.isFinite(issuedAt)) return 'malformed';
-    // Constant-time-ish: compare the whole string rather than short-circuiting
-    // on the first differing character. There is nothing to learn from the
-    // timing of a mac that is not ours, but it costs nothing to not leak it.
-    if (!equalStrings(mac, await this.#mac(issuedAt, random, hostId))) return 'not-ours';
-    if (this.now() - issuedAt > CHALLENGE_TTL_MS) return 'expired';
-    if (this.spent.has(nonce)) return 'spent';
-    return 'live';
+    if (!Number.isFinite(issuedAt) || issuedAt <= 0) return null;
+    // The one spelling we issue is the only one we accept.
+    if (issuedAt.toString(36) !== stamp) return null;
+    if (!/^[0-9a-z]{1,32}$/.test(random) || !/^[0-9a-f]{64}$/.test(mac)) return null;
+    return { issuedAt, random, mac, key: `${stamp}.${random}` };
   }
 
   /**
@@ -218,25 +227,42 @@ export class HostIdentities {
     // The nonce comes back WITH the proof now, rather than being looked up.
     // The host has it — it was just handed to them — and carrying it means the
     // coordinator holds no per-host state that a stranger can churn.
-    const nonce = String(presentedNonce || '');
-    const state = await this.#nonceState(nonce, host.hostId);
-    if (state === 'malformed' || state === 'not-ours') {
+    const parsed = this.#parseNonce(String(presentedNonce || ''));
+    if (!parsed) {
       return { ok: false, reason: 'that challenge was not issued by this coordinator — ask for one first' };
     }
-    if (state === 'expired') return { ok: false, reason: 'that challenge has expired — ask for another' };
-    if (state === 'spent') return { ok: false, reason: 'that challenge has already been used' };
+    const expected = await this.#mac(parsed.issuedAt, parsed.random, host.hostId);
+    if (!equalStrings(parsed.mac, expected)) {
+      return { ok: false, reason: 'that challenge was not issued by this coordinator — ask for one first' };
+    }
+    if (this.now() - parsed.issuedAt > CHALLENGE_TTL_MS) {
+      return { ok: false, reason: 'that challenge has expired — ask for another' };
+    }
+
+    // RESERVED BEFORE THE SIGNATURE IS CHECKED, and there is deliberately no
+    // await between the has() and the set().
+    //
+    // It used to be spent AFTER verify(), two awaits downstream of the check
+    // that read it — so five copies of one captured handshake submitted in
+    // parallel all read an empty set, all verified, and all succeeded. Measured:
+    // five parallel calls returned ok five times with one nonce remembered.
+    // "A captured proof cannot open a second connection" was true only for
+    // strictly sequential callers, which an attacker has no reason to be.
+    if (this.spent.has(parsed.key)) return { ok: false, reason: 'that challenge has already been used' };
+    this.spent.set(parsed.key, this.now());
 
     const ok = await verify(
       host.publicJwk,
       signature,
-      signingInput('host-connect', { hostId: host.hostId, nonce }),
+      signingInput('host-connect', { hostId: host.hostId, nonce: String(presentedNonce) }),
     );
-    if (!ok) return { ok: false, reason: 'the signature does not match the enrolled key' };
-
-    // Spent only on SUCCESS, so a wrong answer costs an attacker nothing to
-    // make and gains them nothing either — and the set only grows for parties
-    // holding the private key.
-    this.spent.set(nonce, this.now());
+    if (!ok) {
+      // RELEASED on a bad signature, which is what keeps the reservation from
+      // becoming the denial of service the ring was: anyone who saw a nonce
+      // could otherwise burn it by answering with rubbish.
+      this.spent.delete(parsed.key);
+      return { ok: false, reason: 'the signature does not match the enrolled key' };
+    }
 
     host.lastSeenAt = this.now();
     return { ok: true, host };

@@ -226,3 +226,49 @@ test('a fingerprint is stable across exports of the same key', async () => {
   const [a, b] = ['a', 'b'].map((id) => hosts.hosts.get(id));
   assert.equal(a?.fingerprint, b?.fingerprint, 'a fingerprint that moves when nothing moved is worse than none');
 });
+
+test('one captured handshake cannot open five sockets at once', async () => {
+  // The nonce used to be spent AFTER verify(), two awaits downstream of the
+  // check that read it. So five copies of one captured handshake submitted in
+  // PARALLEL all read an empty spent set, all verified, and all succeeded — and
+  // "a captured proof cannot open a second connection" was true only for a
+  // caller polite enough to be sequential.
+  const hosts = new HostIdentities();
+  const { keys } = await enrolled(hosts);
+  const nonce = await hosts.challenge('deb13-staging');
+  const proof = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
+
+  const together = await Promise.all(
+    Array.from({ length: 5 }, () => hosts.prove('deb13-staging', proof, nonce)),
+  );
+  assert.equal(together.filter((r) => r.ok).length, 1, 'exactly one, however many arrive at once');
+});
+
+test('a bad answer does not burn somebody else s nonce', async () => {
+  // The reservation above must not become the denial of service the old ring
+  // was: anyone who saw a nonce could otherwise spend it by answering rubbish.
+  const hosts = new HostIdentities();
+  const { keys } = await enrolled(hosts);
+  const nonce = await hosts.challenge('deb13-staging');
+
+  assert.equal((await hosts.prove('deb13-staging', 'rubbish', nonce)).ok, false);
+  const honest = await answer(hosts, 'deb13-staging', keys.privateJwk, nonce);
+  assert.equal((await hosts.prove('deb13-staging', honest, nonce)).ok, true, 'the real host still gets in');
+});
+
+test('a nonce has exactly one spelling', async () => {
+  // parseInt(stamp, 36) skips whitespace, takes a leading '+', and stops at the
+  // first character it dislikes — so one challenge had an unbounded family of
+  // spellings that all recomputed to the same MAC while being different keys in
+  // the spent map. Adding a space dodged "already used".
+  const hosts = new HostIdentities();
+  const { keys } = await enrolled(hosts);
+  const nonce = await hosts.challenge('deb13-staging');
+  const [stamp, ...rest] = nonce.split('.');
+
+  for (const variant of [` ${nonce}`, `+${nonce}`, `${stamp}!.${rest.join('.')}`, `${nonce}\n`]) {
+    const sig = await answer(hosts, 'deb13-staging', keys.privateJwk, variant);
+    const r = await hosts.prove('deb13-staging', sig, variant);
+    assert.equal(r.ok, false, `accepted ${JSON.stringify(variant)}`);
+  }
+});
