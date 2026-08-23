@@ -76,6 +76,23 @@ const preview = await build({
 const css = readFileSync(`${SRC}/console.css`, 'utf8');
 const js = preview.outputFiles[0].text;
 
+// PRE-RENDERED, and this is not an optimisation.
+//
+// The first version of this page was opened in a file viewer inside an app,
+// which renders HTML and CSS in a sandbox and does not execute scripts. It
+// showed a title bar and nothing else — measured afterwards: 40 characters with
+// JavaScript disabled. The JSX rebuild was strictly WORSE there, at zero
+// characters, because every pixel of it came from a script.
+//
+// So the markup is rendered here, at build time, and shipped in the file. With
+// scripts, the page hydrates and the switcher works. Without, you still see the
+// console. A design nobody can open has not been reviewed.
+const { render: renderToString } = await import('preact-render-to-string');
+const { h } = await import('preact');
+const { Console } = await import('../build/console/components.js');
+const { SCENARIOS } = await import('../build/console/demo.js');
+const prerendered = renderToString(h(Console, { snap: SCENARIOS.calm.snap }));
+
 mkdirSync('build', { recursive: true });
 writeFileSync(
   'build/console-preview.html',
@@ -93,7 +110,7 @@ ${css}
 </style>
 </head>
 <body>
-<div id="console-root"></div>
+<div id="console-root">${prerendered}</div>
 <script>${js}</script>
 </body>
 </html>

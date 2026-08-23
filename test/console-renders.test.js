@@ -145,3 +145,28 @@ test('the built page is self-contained', () => {
   assert.deepEqual(external, []);
   assert.equal(html.includes('<style>'), true, 'the stylesheet is inlined');
 });
+
+
+test('the page shows the console even when scripts do not run', () => {
+  // THE ACTUAL BUG, finally diagnosed. The first console was opened in a file
+  // viewer inside an app — one that renders HTML and CSS in a sandbox and does
+  // not execute scripts. It showed a title bar and nothing else, and every
+  // check available at the time passed it, including a real Chromium run where
+  // it rendered 6,368 characters perfectly.
+  //
+  // Measured with scripts disabled: the old page produced 40 characters, which
+  // is exactly the static topbar in the screenshot. The JSX rebuild produced
+  // ZERO, because every pixel of it came from a script — strictly worse in the
+  // one place it was actually being looked at.
+  //
+  // So the markup is pre-rendered into the file at build time. This asserts it
+  // stays that way, WITHOUT needing a browser: the shipped HTML must contain
+  // the console's own text, not just a mount point.
+  const html = readFileSync(new URL('../build/console-preview.html', import.meta.url), 'utf8');
+  const body = html.slice(html.indexOf('<body>'), html.indexOf('<script>'));
+
+  assert.ok(body.length > 1000, 'the body is a mount point and nothing else');
+  assert.match(body, /Nothing needs you/, 'the calm state is in the HTML itself');
+  assert.match(body, /enrolled machines are connected/);
+  assert.match(body, /deb13-staging/, 'and so are the machines');
+});

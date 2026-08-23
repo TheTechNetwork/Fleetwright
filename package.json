@@ -18,11 +18,14 @@
     "test": "node --test test/*.test.js build/*.test.js",
     "typecheck": "tsc -p tsconfig.json",
     "build:web": "node scripts/build-web.mjs",
-    "pretest": "node scripts/build-web.mjs"
+    "pretest": "node scripts/build-web.mjs",
+    "browse": "node scripts/browse.mjs",
+    "nojs": "node scripts/nojs.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "esbuild": "^0.28.2",
+    "playwright": "^1.62.1",
     "preact": "^10.29.8",
     "preact-render-to-string": "^6.7.0",
     "typescript": "^7.0.0"
