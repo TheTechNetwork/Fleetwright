@@ -1107,10 +1107,17 @@ if [ "$WIZARD" = yes ]; then
         i=$((i + 1))
         sleep 0.5
       done
+      # `|| true`, and it is load-bearing. Under `set -euo pipefail` a failing
+      # command substitution ABORTS THE SCRIPT — so when the coordinator did not
+      # answer, the installer exited 7 partway through rather than reaching the
+      # warning three lines below, which was therefore unreachable. The
+      # coordinator not answering is the ordinary case on a box where it failed
+      # to start, which is exactly when the operator needs the rest of the
+      # install to finish and tell them so.
       pin="$(curl -fsS -X POST "$ENROL_URL/api/enroll" \
                -H "authorization: Bearer $admin" -H 'content-type: application/json' \
                -d '{"kind":"host","label":"installed on this box"}' 2>/dev/null \
-             | sed -n 's/.*"code":"\([0-9]*\)".*/\1/p')"
+             | sed -n 's/.*"code":"\([0-9]*\)".*/\1/p' || true)"
       if [ -z "$pin" ]; then
         warn "could not mint an enrolment pin from the local coordinator — enrol by hand later"
         return 0
@@ -1293,7 +1300,9 @@ if [ "$WIZARD" = yes ]; then
   # This box's own identity, printed because it is the thing to compare against
   # /hosts when something does not line up.
   if [ -n "$ENROL_URL" ]; then
-    FP="$(sidecar_cli identity 2>/dev/null | sed -n 's/^fingerprint  *//p')"
+    # Same trap as the pin above: this is a summary line, and a summary line
+    # must not be able to end the install it is summarising.
+    FP="$(sidecar_cli identity 2>/dev/null | sed -n 's/^fingerprint  *//p' || true)"
     [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)" "$FP"
   fi
 

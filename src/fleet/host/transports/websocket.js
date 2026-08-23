@@ -147,7 +147,15 @@ export class WebSocketTransport {
       this.retryTimer = null;
       void this.#dial();
     }, wait);
-    this.retryTimer.unref?.();
+    // NOT unref'd, and that is the whole difference between a service and a
+    // script. While this timer is pending it is the ONLY thing holding the
+    // event loop open — the socket is gone, that is why we are here — so an
+    // unref'd one lets node decide there is nothing left to do and exit. The
+    // sidecar then died every time it lost its coordinator, which under systemd
+    // looks like a restart loop with no reason in it, and on a box run by hand
+    // is simply a process that vanished.
+    //
+    // stop() clears it, so nothing hangs on the way out.
   }
 
   /** @param {import('../../ws.js').WsConnection} conn */

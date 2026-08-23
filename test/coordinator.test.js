@@ -496,3 +496,24 @@ test('a host that drops is marked offline and its work is refused, not misrouted
   assert.equal(reply.ok, false);
   assert.equal(reply.error.code, 'host_unreachable');
 });
+
+test('losing the coordinator makes the sidecar reconnect, not exit', async (t) => {
+  // Every timer in the transport was unref'd. While a retry is pending it is
+  // the ONLY thing holding the event loop open — the socket is gone, that is
+  // why we are retrying — so node decided there was nothing left to do and
+  // exited. Under systemd that reads as a restart loop with no reason in it;
+  // run by hand, the process simply vanishes.
+  const transport = new WebSocketTransport({
+    origin: 'http://127.0.0.1:9',
+    hostId: 'persistent',
+    maxBackoffMs: 100,
+    proof: async () => ({ nonce: 'n', proof: 'p' }),
+  });
+  await transport.start();
+  t.after(() => transport.stop());
+
+  // If the loop were empty this would never resolve, because node would be
+  // gone. Asserting on a real wait rather than on the flag is the point.
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(transport.retryTimer, 'a retry is pending and holding the process up');
+});
