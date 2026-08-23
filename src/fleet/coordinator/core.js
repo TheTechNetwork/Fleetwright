@@ -27,6 +27,10 @@ const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
  * @property {'ios'|'android'|'web'} platform
  * @property {string} token         APNs/FCM token
  * @property {string} [actor]       who this device belongs to
+ * @property {string} [clientId]    the credential this registration belongs to,
+ *                                  so revoking a phone stops the fleet talking
+ *                                  to it. Optional only for registrations made
+ *                                  before it existed.
  * @property {number} registeredAt
  */
 
@@ -187,7 +191,12 @@ export class CoordinatorCore {
 
   /** @param {Record<string, any>} event */
   async #notify(event) {
-    const devices = [...this.devices.values()];
+    // Filtered here as well as on revocation. The cascade above is the fix; this
+    // is the belt — a registration that somehow outlives its credential must
+    // not be told what a session is asking.
+    const devices = [...this.devices.values()].filter(
+      (d) => !d.clientId || !this.clients.clients.get(d.clientId)?.revokedAt,
+    );
     if (!devices.length) return;
     const body = describeEvent(event);
     try {
@@ -289,9 +298,9 @@ export class CoordinatorCore {
    * target — and a reinstall gives the same phone a new one, which should not
    * accumulate as a second registration that fails forever.
    *
-   * @param {{ platform: string, token: string, actor?: string }} reg
+   * @param {{ platform: string, token: string, actor?: string, clientId?: string }} reg
    */
-  registerDevice({ platform, token, actor }) {
+  registerDevice({ platform, token, actor, clientId }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
@@ -304,6 +313,12 @@ export class CoordinatorCore {
       platform: /** @type {any} */ (platform),
       token,
       ...(actor ? { actor } : {}),
+      // WHICH CREDENTIAL THIS BELONGS TO, so revoking a phone can stop the
+      // fleet talking to it. Without this a revoked device kept receiving
+      // session names — and since prompts started carrying the question, the
+      // questions themselves. Revoking a lost phone removed its ability to ASK
+      // and left its ability to be TOLD, which is the wrong half.
+      ...(clientId ? { clientId } : {}),
       registeredAt: existing?.registeredAt ?? this.now(),
     };
     this.devices.set(token, device);
@@ -314,6 +329,32 @@ export class CoordinatorCore {
   /** @param {string} token */
   unregisterDevice(token) {
     return { ok: this.devices.delete(token) };
+  }
+
+  /**
+   * Revoke a credential AND stop notifying the device that held it.
+   *
+   * Two halves of one act. Revoking used to do only the first, so a stolen
+   * phone lost the ability to ask the fleet anything and kept the ability to be
+   * told everything — every session name, every host, and now every question a
+   * session asks.
+   *
+   * @param {string} clientId
+   * @returns {{ revoked: boolean, devices: number }}
+   */
+  revokeClient(clientId) {
+    const revoked = this.clients.revoke(clientId);
+    let devices = 0;
+    for (const [token, device] of this.devices) {
+      if (device.clientId === clientId) {
+        this.devices.delete(token);
+        devices++;
+      }
+    }
+    if (revoked || devices) {
+      this.record({ event: 'client.revoked', text: `a device credential was revoked, and ${devices} push registration${devices === 1 ? '' : 's'} with it` });
+    }
+    return { revoked, devices };
   }
 
   /** Drop a token the provider told us is dead. */

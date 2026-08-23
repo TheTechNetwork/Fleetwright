@@ -692,3 +692,54 @@ test('reads do not fill the ring', async (t) => {
   }
   assert.equal(c.core.snapshot().events.filter((e) => e.event === 'intent').length, 0);
 });
+
+test('revoking a phone stops the fleet talking to it', async (t) => {
+  // Revocation used to do one half of the job: a stolen phone lost the ability
+  // to ASK the fleet anything, and kept the ability to be TOLD everything —
+  // every session name, every host, and since prompts started carrying the
+  // question, the questions themselves. That got worse the day the notification
+  // stopped saying "resumed (summary)".
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const { token, client } = await c.core.clients.issue('a phone (eli@thetech.network)');
+  client.email = 'eli@thetech.network';
+
+  const reg = await fetch(`${origin}/api/devices`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ platform: 'ios', token: 'a'.repeat(64) }),
+  });
+  assert.equal(reg.status, 200);
+  assert.equal(c.core.devices.size, 1);
+  assert.equal([...c.core.devices.values()][0].clientId, client.id, 'the registration knows whose it is');
+
+  const gone = await fetch(`${origin}/api/clients/${client.id}`, {
+    method: 'DELETE',
+    headers: { authorization: 'Bearer a-token-at-least-16ch' },
+  });
+  assert.equal(gone.status, 200);
+  assert.match(/** @type {any} */ (await gone.json()).text, /stopped 1 push registration/);
+  assert.equal(c.core.devices.size, 0, 'the registration went with the credential');
+});
+
+test('a registration that outlives its credential is still not notified', async (t) => {
+  // Belt as well as braces: the cascade above is the fix, and this is the
+  // filter for a registration that somehow survives it — restored from an old
+  // state file, say. A device must never be told what a session is asking on a
+  // credential that no longer exists.
+  const { coordinator: c } = await coordinator(t);
+  const { client } = await c.core.clients.issue('a phone (eli@thetech.network)');
+  c.core.registerDevice({ platform: 'ios', token: 'b'.repeat(64), clientId: client.id });
+
+  /** @type {any[]} */
+  const sent = [];
+  c.core.push = { send: async (/** @type {any[]} */ devices) => { sent.push(...devices); return { ok: true }; } };
+
+  // Sanity: it does notify while the credential is live.
+  await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
+  assert.equal(sent.length, 1, 'a live device is notified');
+
+  sent.length = 0;
+  c.core.clients.revoke(client.id); // revoked WITHOUT the cascade
+  await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
+  assert.deepEqual(sent, [], 'nothing reaches a device whose credential is revoked');
+});

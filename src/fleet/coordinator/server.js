@@ -501,9 +501,14 @@ export class Coordinator {
 
     if (p.startsWith('/api/clients/') && req.method === 'DELETE') {
       const id = p.slice('/api/clients/'.length);
-      const gone = this.core.clients.revoke(id);
-      if (gone) this.saveState();
-      return json(res, gone ? 200 : 404, { ok: gone, text: gone ? 'Revoked.' : 'No such client, or already revoked.' });
+      const { revoked, devices } = this.core.revokeClient(id);
+      if (revoked || devices) this.saveState();
+      return json(res, revoked ? 200 : 404, {
+        ok: revoked,
+        text: revoked
+          ? `Revoked${devices ? `, and stopped ${devices} push registration${devices === 1 ? '' : 's'}` : ''}.`
+          : 'No such client, or already revoked.',
+      });
     }
 
     if (p === '/api/enroll' && req.method === 'GET') {
@@ -536,6 +541,7 @@ export class Coordinator {
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
+        clientId: client?.id,
       });
       if (r.ok) this.saveState();
       return json(res, r.ok ? 200 : 400, r);

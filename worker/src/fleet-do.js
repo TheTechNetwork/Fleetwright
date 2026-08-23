@@ -277,9 +277,23 @@ export class Fleet {
     }
     if (url.pathname.startsWith('/api/clients/') && request.method === 'DELETE') {
       const id = url.pathname.slice('/api/clients/'.length);
-      const gone = this.core.clients.revoke(id);
-      if (gone) await this.#saveClients();
-      return json({ ok: gone, text: gone ? 'Revoked.' : 'No such client, or already revoked.' }, gone ? 200 : 404);
+      // Revoke the credential AND stop notifying the device that held it —
+      // otherwise a stolen phone loses the ability to ASK the fleet anything
+      // and keeps the ability to be TOLD everything.
+      const { revoked, devices } = this.core.revokeClient(id);
+      if (revoked || devices) {
+        await this.#saveClients();
+        await this.#saveDevices();
+      }
+      return json(
+        {
+          ok: revoked,
+          text: revoked
+            ? `Revoked${devices ? `, and stopped ${devices} push registration${devices === 1 ? '' : 's'}` : ''}.`
+            : 'No such client, or already revoked.',
+        },
+        revoked ? 200 : 404,
+      );
     }
 
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
@@ -297,7 +311,10 @@ export class Fleet {
       const r = this.core.registerDevice({
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
-        actor: body?.actor ? String(body.actor) : undefined,
+        // The credential this registration belongs to, so revoking a phone can
+        // stop the fleet talking to it. The Node coordinator does the same.
+        clientId: client?.id,
+        actor: client?.email || (body?.actor ? String(body.actor) : undefined),
       });
       if (r.ok) await this.#saveDevices();
       return json(r, r.ok ? 200 : 400);
