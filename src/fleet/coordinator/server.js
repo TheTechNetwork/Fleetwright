@@ -325,6 +325,13 @@ export class Coordinator {
     // nothing else — no host names, no counts.
     if (p === '/healthz') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION });
 
+    // The same contract the Worker serves, read from the file rather than
+    // inlined, because this process has a filesystem and the Worker does not.
+    if (p === '/openapi.json') {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(readFileSync(new URL('../../../openapi.json', import.meta.url), 'utf8'));
+    }
+
     // --- enrolment, before the token gate ------------------------------------
     //
     // These three are what an UNAUTHENTICATED machine uses to become an
@@ -457,6 +464,15 @@ export class Coordinator {
       // "the same code runs in both places" false in the only place a client
       // can see — and the apps have to hold both shapes in their head.
       return json(res, 200, { ok: true, ...this.core.snapshot() });
+    }
+
+    // The event ring. The Worker has had this since push was built and the Node
+    // coordinator never did — the fifth parity gap on this branch, and the one
+    // that made the case for openapi.json: it was found by listing both route
+    // tables side by side, in about ten seconds, after four others had been
+    // found the hard way.
+    if (p === '/api/events' && req.method === 'GET') {
+      return json(res, 200, { ok: true, events: this.core.recentEvents() });
     }
 
     if (p === '/api/hosts/enrolled' && req.method === 'GET') {

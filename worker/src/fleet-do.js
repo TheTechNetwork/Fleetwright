@@ -289,7 +289,7 @@ export class Fleet {
     if (url.pathname === '/api/events' && request.method === 'GET') {
       // What a phone asks for when it opens, having been asleep while things
       // happened. Push wakes it; this tells it what it missed.
-      return json({ ok: true, events: this.core.events.slice(-50) });
+      return json({ ok: true, events: this.core.recentEvents() });
     }
 
     if (url.pathname === '/api/devices' && request.method === 'POST') {

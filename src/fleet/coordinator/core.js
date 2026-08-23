@@ -419,6 +419,17 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * What a phone asks for when it opens, having been asleep while things
+   * happened. Push wakes it; this tells it what it missed.
+   *
+   * On the core rather than in each coordinator's route, because the two had
+   * already drifted — the Worker served 50 and the Node one served none at all.
+   */
+  recentEvents() {
+    return this.events.slice(-EVENT_PAGE);
+  }
+
   /** Everything a client can see about the fleet. */
   snapshot() {
     return {
@@ -429,6 +440,9 @@ export class CoordinatorCore {
     };
   }
 }
+
+/** How many events a catch-up returns. One number, two coordinators. */
+const EVENT_PAGE = 50;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set(['session.awaiting-input', 'session.ended', 'session.error', 'session.rc-online']);
