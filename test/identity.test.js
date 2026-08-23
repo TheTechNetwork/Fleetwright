@@ -743,3 +743,96 @@ test('a registration that outlives its credential is still not notified', async 
   await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
   assert.deepEqual(sent, [], 'nothing reaches a device whose credential is revoked');
 });
+
+test('what happened while you were asleep survives a restart', async (t) => {
+  // The ring was RAM only, so "a phone that was asleep can catch up" was false
+  // the moment anything restarted — and the actor attribution added earlier on
+  // this branch evaporated with it.
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'fleet-ev-')), 'state.json');
+  const first = new Coordinator({ stateFile: file, apiToken: 'a-token-at-least-16ch' });
+  const port = await first.listen(0, '127.0.0.1');
+  const { token, client } = await first.core.clients.issue('a phone (eli@thetech.network)');
+  client.email = 'eli@thetech.network';
+
+  await fetch(`http://127.0.0.1:${port}/api/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ verb: 'stop', params: { name: 'bigjob' } }),
+  });
+  await first.close(); // flushes
+
+  const second = new Coordinator({ stateFile: file });
+  second.loadEvents();
+  t.after(() => second.close());
+
+  const recorded = second.core.events.find((e) => e.event === 'intent');
+  assert.ok(recorded, 'the history came back');
+  assert.equal(recorded.actor, 'eli@thetech.network');
+  assert.equal(recorded.verb, 'stop');
+});
+
+test('a corrupt history does not stop the coordinator, unlike a corrupt fleet', async (t) => {
+  // Deliberately asymmetric. A membership list that will not parse is fatal,
+  // because starting with no members refuses the whole fleet while looking
+  // healthy. Losing the HISTORY is a shame; refusing to boot over it would be
+  // worse than the thing it protects.
+  const dir = mkdtempSync(path.join(tmpdir(), 'fleet-ev-'));
+  const file = path.join(dir, 'state.json');
+  writeFileSync(`${file}.events`, '{ not json at all');
+
+  const c = new Coordinator({ stateFile: file });
+  t.after(() => c.close());
+  assert.doesNotThrow(() => c.loadEvents());
+  assert.deepEqual(c.core.events, []);
+});
+
+test('the first person into a fresh fleet is its admin, and later ones are not', async (t) => {
+  const { provider: p, coordinator: c, origin } = await signInFleet(t);
+
+  const first = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }), deviceName: 'first phone' });
+  assert.equal(first.body.client.admin, true);
+
+  const second = await session(origin, { idToken: await p.token({ email: 'colleague@thetech.network' }), deviceName: 'their phone' });
+  assert.equal(second.body.client.admin, undefined_or_false(second.body.client.admin), 'not admin');
+  assert.ok(c.core.clients.hasAdmin());
+});
+
+/** @param {any} v */
+function undefined_or_false(v) {
+  return v === true ? true : v;
+}
+
+test('a colleague cannot remove machines or other people', async (t) => {
+  // Until now every allowed address could do everything: revoke every machine,
+  // revoke every other person's phone, mint pins. On a fleet whose allowlist is
+  // a DOMAIN, that is every colleague.
+  const { provider: p, coordinator: c, origin } = await signInFleet(t);
+  await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }) }); // admin
+  const them = await session(origin, { idToken: await p.token({ email: 'colleague@thetech.network' }) });
+
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  await enrol({ origin, code, hostId: 'the-build-server', publicJwk: key.publicJwk });
+
+  const tryRevoke = await fetch(`${origin}/api/hosts/the-build-server`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${them.body.token}` },
+  });
+  assert.equal(tryRevoke.status, 403);
+  assert.match(/** @type {any} */ (await tryRevoke.json()).text, /admin credential/);
+  assert.equal(c.core.hostIds.list().find((h) => h.hostId === 'the-build-server')?.revokedAt, null, 'still there');
+});
+
+test('the break-glass token still works when the admin phone is what was lost', async (t) => {
+  // Which is the case it exists for.
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const key = await loadOrCreateKey(scratch());
+  const { code } = c.core.enrollment.mint({ purpose: 'host' });
+  await enrol({ origin, code, hostId: 'stranded', publicJwk: key.publicJwk });
+
+  const res = await fetch(`${origin}/api/hosts/stranded`, {
+    method: 'DELETE',
+    headers: { authorization: 'Bearer a-token-at-least-16ch' },
+  });
+  assert.equal(res.status, 200);
+});

@@ -204,3 +204,23 @@ test('re-enrolling a name disconnects whoever held the old key', async () => {
   const fresh = await sign(second.privateJwk, signingInput('host-connect', { hostId: 'rebuilt', nonce }));
   assert.equal((await call(f, '/api/host/verify', 'POST', { hostId: 'rebuilt', nonce, proof: fresh })).status, 200);
 });
+
+test('a colleague cannot revoke machines on the Worker either', async () => {
+  // The Node coordinator had this guard placed after the route it guards, so it
+  // never fired. The Worker had the identical bug, and the tests did not catch
+  // it — because they only exercised the Node one. That is the parity failure
+  // this branch keeps rediscovering, so: both, here.
+  const { fleet: f } = fleet();
+  const admin = await f.core.clients.issue('first phone (eli@thetech.network)', { admin: true });
+  const colleague = await f.core.clients.issue('their phone (colleague@thetech.network)');
+
+  const { code } = f.core.enrollment.mint({ purpose: 'host' });
+  await call(f, '/api/enroll/host', 'POST', { code, hostId: 'build-server', publicJwk: (await generateKeyPair()).publicJwk });
+
+  const refused = await call(f, '/api/hosts/build-server', 'DELETE', null, { authorization: `Bearer ${colleague.token}` });
+  assert.equal(refused.status, 403);
+  assert.equal(f.core.hostIds.list().find((h) => h.hostId === 'build-server')?.revokedAt, null, 'still enrolled');
+
+  const allowed = await call(f, '/api/hosts/build-server', 'DELETE', null, { authorization: `Bearer ${admin.token}` });
+  assert.equal(allowed.status, 200);
+});

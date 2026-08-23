@@ -63,6 +63,8 @@ function timingSafeEqual(a, b) {
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
  * @property {string} [email]     the verified address this was issued to
+ * @property {boolean} [admin]    may this credential remove machines and other
+ *                                people's devices
  */
 
 export class ClientRegistry {
@@ -82,9 +84,10 @@ export class ClientRegistry {
    * can be made to.
    *
    * @param {string} name
+   * @param {{ admin?: boolean }} [opts]
    * @returns {Promise<{ client: Client, token: string }>}
    */
-  async issue(name) {
+  async issue(name, { admin = false } = {}) {
     const id = randomHex(ID_BYTES);
     const secret = randomHex(SECRET_BYTES);
     /** @type {Client} */
@@ -95,6 +98,7 @@ export class ClientRegistry {
       createdAt: this.now(),
       lastSeenAt: null,
       revokedAt: null,
+      admin,
     };
     this.clients.set(id, client);
     return { client, token: `${PREFIX}_${id}_${secret}` };
@@ -135,6 +139,11 @@ export class ClientRegistry {
     if (!client || client.revokedAt) return false;
     client.revokedAt = this.now();
     return true;
+  }
+
+  /** Is anybody an admin yet? The first person to sign in becomes one. */
+  hasAdmin() {
+    return [...this.clients.values()].some((c) => c.admin && !c.revokedAt);
   }
 
   /** Without secrets, obviously — this is what an app renders. */

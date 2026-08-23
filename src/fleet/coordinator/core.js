@@ -153,6 +153,10 @@ export class CoordinatorCore {
     // Durable Object is a memory leak with a long fuse.
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
+    // Persisted by whoever owns storage — a file on a box, DO storage in the
+    // Worker. The ring used to be RAM only, so "a phone that was asleep can
+    // catch up" was false the moment anything restarted.
+    this.onEvents?.();
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
@@ -186,6 +190,7 @@ export class CoordinatorCore {
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     this.log.info(`coordinator: ${event.event}${event.hostId !== 'coordinator' ? ` ${event.hostId}` : ''}`);
+    this.onEvents?.();
     return event;
   }
 
@@ -282,12 +287,25 @@ export class CoordinatorCore {
    */
   async issueClient(who, deviceName) {
     const label = String(deviceName || '').trim() || who.name || who.email;
-    const { client, token } = await this.clients.issue(`${label} (${who.email})`);
+    // THE FIRST PERSON INTO A FRESH FLEET IS ITS ADMIN.
+    //
+    // Not a role system — there are two levels and this is the top one. Until
+    // now every allowed address could do everything: revoke every machine,
+    // revoke every other person's phone, mint pins. On a fleet whose allowlist
+    // is a domain, that is every colleague.
+    //
+    // Written down where docs/identity.md can point at it: this is a guardrail
+    // against mistakes and against a colleague having a bad day. It is NOT a
+    // security control, because it is enforced inside the coordinator — the
+    // component docs/trust.md assumes compromised.
+    const admin = !this.clients.hasAdmin();
+    const { client, token } = await this.clients.issue(`${label} (${who.email})`, { admin });
     // Recorded on the client so an intent can say who sent it without another
     // lookup, and so a revocation list reads as people rather than ids.
     client.email = who.email;
-    this.log.info(`coordinator: issued a credential to ${who.email} for ${label}`);
-    return { token, client: { id: client.id, name: client.name, createdAt: client.createdAt } };
+    this.log.info(`coordinator: issued a credential to ${who.email} for ${label}${admin ? ' (admin — first in)' : ''}`);
+    if (admin) this.record({ event: 'client.admin', actor: who.email, text: `${who.email} is the first person in, and is this fleet's admin` });
+    return { token, client: { id: client.id, name: client.name, createdAt: client.createdAt, admin: client.admin } };
   }
 
   // --- devices -------------------------------------------------------------

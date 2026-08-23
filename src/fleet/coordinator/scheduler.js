@@ -60,7 +60,25 @@ export function place(registry, intent, { maxPinAgeMs = 120_000 } = {}) {
   }
 
   if (PINNED.has(verb)) {
-    const found = name ? registry.findSession(name) : null;
+    const claims = name ? registry.findSessions(name) : [];
+    // MORE THAN ONE BOX CLAIMS IT. Refuse, and name them both.
+    //
+    // findSession() returned the first match in Map order, so `stop bigjob`
+    // picked whichever host the iterator reached first and killed it with no
+    // sign a choice had been made. Everything else in this file refuses rather
+    // than guesses — a stale placement, an offline host, an unknown name — for
+    // the same reason, and this was the one gap in it.
+    if (claims.length > 1) {
+      return {
+        kind: 'refused',
+        code: 'ambiguous_session',
+        reason:
+          `"${name}" exists on ${claims.map((c) => c.host.hostId).join(' and ')}. ` +
+          'Refusing rather than picking one: a stop that lands on the wrong box is not ' +
+          'recoverable by trying again. Rename one, or stop it from the box itself.',
+      };
+    }
+    const found = claims[0] || null;
     if (!found) {
       return {
         kind: 'refused',

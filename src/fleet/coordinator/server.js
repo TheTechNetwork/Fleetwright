@@ -90,6 +90,19 @@ export class Coordinator {
     // its connection table into that response — see the comment on close().
     /** @type {Map<string, import('../ws.js').WsConnection>} */
     this.connections = new Map();
+    // Debounced: a busy fleet records several events a second and this is a
+    // file write. Losing the last 2s of history to a hard kill is a fair price
+    // for not writing the ring on every line.
+    /** @type {any} */
+    this.eventSaveTimer = null;
+    this.core.onEvents = () => {
+      if (this.eventSaveTimer) return;
+      this.eventSaveTimer = setTimeout(() => {
+        this.eventSaveTimer = null;
+        this.saveEvents();
+      }, 2000);
+      this.eventSaveTimer.unref?.();
+    };
   }
 
   /** The host registry, for tests and for anything that wants to look. */
@@ -157,6 +170,47 @@ export class Coordinator {
   assertStateWritable() {
     if (!this.stateFile) return;
     this.#writeState();
+  }
+
+  /**
+   * The event ring, in a SEPARATE file from the membership list.
+   *
+   * Separate on purpose. loadState() deliberately throws on anything but
+   * ENOENT, because a coordinator that starts with no members refuses the whole
+   * fleet while looking healthy — and events are appended far more often than
+   * hosts are, so a truncated event write must never be able to take the host
+   * list down with it.
+   *
+   * "A phone that was asleep can catch up" was false until this existed: the
+   * ring was RAM, so a restart lost every record of who did what.
+   */
+  #eventsFile() {
+    return this.stateFile ? `${this.stateFile}.events` : null;
+  }
+
+  loadEvents() {
+    const f = this.#eventsFile();
+    if (!f) return;
+    try {
+      const events = JSON.parse(readFileSync(f, 'utf8'));
+      if (Array.isArray(events)) this.core.events.push(...events);
+    } catch (e) {
+      // NOT fatal, unlike the membership list. Losing the history is a shame;
+      // refusing to start over it would be worse than the thing it protects.
+      if (/** @type {any} */ (e)?.code !== 'ENOENT') {
+        this.log.warn(`coordinator: could not read ${f}, starting with no history`);
+      }
+    }
+  }
+
+  saveEvents() {
+    const f = this.#eventsFile();
+    if (!f) return;
+    try {
+      writeFileSync(f, JSON.stringify(this.core.events.slice(-500)), { mode: 0o600 });
+    } catch (e) {
+      this.log.warn(`coordinator: could not save events: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /** Write it back. Through a temp file, because a half-written host list is
@@ -229,6 +283,8 @@ export class Coordinator {
   }
 
   async close() {
+    if (this.eventSaveTimer) clearTimeout(this.eventSaveTimer);
+    this.saveEvents();
     if (this.healthTimer) clearInterval(this.healthTimer);
     for (const [, waiter] of this.pending) clearTimeout(waiter.timer);
     this.pending.clear();
@@ -456,6 +512,22 @@ export class Coordinator {
       return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'this coordinator has no admin token set' });
     }
 
+    // The destructive routes, checked BEFORE any of them run. The first version
+    // of this sat further down the file, after the /api/hosts/ DELETE handler
+    // it was supposed to guard, so it never fired — a check placed after the
+    // thing it guards, which is on this project's own review checklist.
+    //
+    // A device credential needs the admin bit; the
+    // break-glass token always passes, because it is what you use when the
+    // admin's phone is the thing that got lost.
+    if (DESTRUCTIVE.test(p) && req.method === 'DELETE' && client && !client.admin) {
+      return json(res, 403, {
+        ok: false,
+        error: { code: 'not_admin' },
+        text: 'Removing machines and other people\u2019s devices needs an admin credential on this fleet.',
+      });
+    }
+
     if (p === '/api/hosts' && req.method === 'GET') {
       // core.snapshot(), the same call the Worker makes, so the two
       // coordinators answer in the SAME SHAPE. They did not: this returned
@@ -494,6 +566,7 @@ export class Coordinator {
         text: gone ? `${hostId} is revoked and disconnected.` : `${hostId} is not enrolled.`,
       });
     }
+
 
     if (p === '/api/clients' && req.method === 'GET') {
       return json(res, 200, { ok: true, clients: this.core.clients.list() });
@@ -607,6 +680,9 @@ export class Coordinator {
 }
 
 // --- helpers ----------------------------------------------------------------
+
+/** The routes that remove something somebody else depends on. */
+const DESTRUCTIVE = /^\/api\/(hosts|clients)\//;
 
 /** Comma or whitespace separated, the same shape the Worker reads from its env. */
 /** @param {string|undefined} value */

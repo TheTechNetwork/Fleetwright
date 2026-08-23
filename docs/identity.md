@@ -90,10 +90,20 @@ a few hundred lines; being an identity provider is a product.
 
 ## What this does not do
 
-**It is not authorisation.** Every allowed address gets the same access, because
-a fleet of one operator and three colleagues does not need roles yet. When it
-does, the client record is where a role belongs — it already carries a name and
-a creation time, and adding a field is cheaper than retrofitting identity.
+**It is barely authorisation.** There are exactly two levels: the first person
+to sign in to a fresh fleet gets an `admin` bit on their credential, and
+removing machines or other people's devices requires it. Everyone else can drive
+sessions and mint enrolment pins.
+
+Two levels, not a role system. Before it existed, every allowed address could
+revoke every machine and every other person's phone — and on a fleet whose
+allowlist is a *domain*, that is every colleague.
+
+**And it is a guardrail, not a security control.** It is enforced inside the
+coordinator, which `trust.md` assumes compromised; it protects against mistakes
+and against a colleague having a bad day, and against nothing else. The
+break-glass `AGENT_FLEET_API_TOKEN` always passes it, because the case it exists
+for is the admin's phone being the thing that got lost.
 
 **It is not how hosts authenticate.** A host is a machine, not a person: it
 holds a keypair and signs a nonce per connection, and it joins with a pin

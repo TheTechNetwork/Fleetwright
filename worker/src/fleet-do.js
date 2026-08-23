@@ -48,6 +48,18 @@ export class Fleet {
       intentTimeoutMs: 60_000,
     });
 
+    // Coalesced per invocation: several events can be recorded while handling
+    // one message, and a DO storage write per line would be wasteful.
+    let pending = null;
+    this.core.onEvents = () => {
+      if (pending) return;
+      pending = Promise.resolve().then(() => {
+        pending = null;
+        return this.#saveEvents();
+      });
+      this.state.waitUntil?.(pending);
+    };
+
     // Rebuilt on wake: hibernation means this object is evicted between
     // messages, and every socket that is still open comes back with the host id
     // we attached to it.
@@ -55,6 +67,11 @@ export class Fleet {
       this.core.hostIds.restore(/** @type {any[]} */ ((await this.state.storage.get('hostIds')) || []));
       this.core.clients.restore(/** @type {any[]} */ ((await this.state.storage.get('clients')) || []));
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
+      // The event ring, under its OWN key. Hibernation is by design here, so a
+      // RAM-only ring meant "what happened while you were asleep" was answered
+      // by whatever had accumulated since the last eviction — usually nothing.
+      const events = /** @type {any[]} */ ((await this.state.storage.get('events')) || []);
+      if (Array.isArray(events)) this.core.events.push(...events);
       const devices = (await this.state.storage.get('devices')) || [];
       for (const device of /** @type {any[]} */ (devices)) this.core.devices.set(device.token, device);
       for (const socket of this.state.getWebSockets()) {
@@ -180,6 +197,23 @@ export class Fleet {
       return json({ ok: true, hosts: this.core.hostIds.list() });
     }
 
+    // The destructive routes, checked BEFORE any of them run.
+    //
+    // This sat ninety lines further down, after the /api/hosts/ DELETE it was
+    // supposed to guard, so it never fired here. The Node coordinator had the
+    // identical bug and the tests caught it there — because they only
+    // exercised that one. Same rule, same place, both now covered.
+    if (/^\/api\/(hosts|clients)\//.test(url.pathname) && request.method === 'DELETE' && client && !client.admin) {
+      return json(
+        {
+          ok: false,
+          error: { code: 'not_admin' },
+          text: 'Removing machines and other people\u2019s devices needs an admin credential on this fleet.',
+        },
+        403,
+      );
+    }
+
     if (url.pathname.startsWith('/api/hosts/') && request.method === 'DELETE') {
       const hostId = decodeURIComponent(url.pathname.slice('/api/hosts/'.length));
       const gone = this.core.hostIds.revoke(hostId);
@@ -272,6 +306,7 @@ export class Fleet {
     }
 
     // Which devices can reach this fleet, and dropping one.
+
     if (url.pathname === '/api/clients' && request.method === 'GET') {
       return json({ ok: true, clients: this.core.clients.list() });
     }
@@ -476,6 +511,10 @@ export class Fleet {
 
   async #saveClients() {
     await this.state.storage.put('clients', this.core.clients.serialise());
+  }
+
+  async #saveEvents() {
+    await this.state.storage.put('events', this.core.events.slice(-500));
   }
 
   async #saveEnrollment() {

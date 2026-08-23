@@ -60,6 +60,7 @@ try {
   log.error(`config: ${stateFile} could not be read: ${/** @type {Error} */ (e).message}`);
   process.exit(1);
 }
+coordinator.loadEvents();
 try {
   coordinator.assertStateWritable();
 } catch (e) {
