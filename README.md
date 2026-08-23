@@ -55,7 +55,10 @@ sudo /opt/agent-fleet/install/install.sh
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
 [`docs/wanted.md`](./docs/wanted.md) is what is not built yet, and what makes
-each of those hard.
+each of those hard. [`docs/plan.md`](./docs/plan.md) is the sequenced plan that
+came out of reviewing all of it, including the argument that the obvious next
+step — letting the app type a reply into a session — is the one thing that must
+never be built.
 
 ## Layout
 
