@@ -117,25 +117,14 @@ The **server side is finished** — the sidecar detects that a session needs a
 person, the coordinator fans it out, and `POST /api/devices` is where a phone
 registers. See [`../../docs/push.md`](../../docs/push.md).
 
-The app side needs a Firebase project, because the FCM token has to come from
-somewhere. It is deliberately **not** wired up yet: the Google Services Gradle
-plugin *fails the build* when `google-services.json` is absent, so adding it
-before there is a Firebase project would mean nobody could build the app at all.
-
-To turn it on:
-
-1. Firebase console → add an Android app with the id `network.thetech.fleetwright.debug`
-   (note the `.debug` suffix the debug build applies), download
-   `google-services.json` into `apps/android/app/`.
-2. `apps/android/build.gradle.kts` → add
-   `id("com.google.gms.google-services") version "4.4.2" apply false`
-3. `apps/android/app/build.gradle.kts` → add `id("com.google.gms.google-services")`
-   to the plugins block, and
-   `implementation(platform("com.google.firebase:firebase-bom:33.1.2"))` plus
-   `implementation("com.google.firebase:firebase-messaging")` to dependencies.
-4. Call `Fleet.registerDevice(token)` with the token from
-   `FirebaseMessaging.getInstance().token`. That method already exists and
-   already posts to the coordinator.
+The app side needed a Firebase project, because the FCM token has to come from
+somewhere — that is done, not pending. Both `network.thetech.fleetwright` and
+`network.thetech.fleetwright.debug` are registered, `google-services.json`
+above is the result, the Google Services plugin is applied
+(`apps/android/build.gradle.kts`), and `firebase-bom` plus `firebase-messaging`
+are on the classpath (`app/build.gradle.kts`). A fork that wants its own
+Firebase project repeats those same steps with its own console and its own
+`google-services.json`.
 
 The same Firebase project delivers to iOS through FCM's APNs bridge, which is
 why it is one integration rather than two.

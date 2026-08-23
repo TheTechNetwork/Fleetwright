@@ -106,7 +106,8 @@ Server side, working and tested:
 
 | | |
 |---|---|
-| `POST /api/session` | ID token in, device credential out. The only route reachable without a fleet credential, because it is where one comes from |
+| `POST /api/session` | ID token in, device credential out. Reachable without a fleet credential, because it is where one comes from |
+| `POST /api/enroll/host`, `/api/host/challenge`, `/api/host/verify` | Also reachable without a fleet credential — a pin or a host signature gates these instead, since a host is not a person signing in |
 | `GET /api/clients` | which devices can reach this fleet |
 | `DELETE /api/clients/{id}` | revoke one |
 | every other route | accepts a device credential, **or** the break-glass admin token |

@@ -14,7 +14,7 @@ Used for verifying OIDC ID tokens at sign-in.
 
 | | |
 |---|---|
-| version | pinned in `package.json`, not floated |
+| version | `6.2.9`, exact — see below |
 | dependencies | **none** — nothing transitive to audit |
 | licence | MIT |
 | adoption | ~100M downloads a week |
@@ -32,11 +32,22 @@ about. Key rotation, cooldowns and concurrent cache misses are also real work
 that jose has already done carefully.
 
 **The residual risk, stated.** A single maintainer is a single account to
-compromise. Mitigations: the version is pinned so an upgrade is a reviewable
-diff; there are no transitive dependencies to hide a change; and the blast
-radius is bounded by what the code does — it verifies tokens, and a malicious
-version could forge a sign-in but could not reach a host, because hosts verify
-signatures themselves.
+compromise.
+
+Mitigations: the version is **exact, not a caret range**, and that was a
+correction rather than a decision — this table said "pinned" while
+`package.json` said `^6.2.9`, which floats within 6.x. The lockfile and
+`npm ci` meant the installed version was pinned in practice, but the
+installer falls back to `npm install` when the lockfile and the manifest
+disagree, and that path would have taken whatever 6.x was newest. An
+argument for pinning is worth nothing if the pin is not there, so the pin
+is there. Renovate proposes upgrades as reviewable pull requests either
+way.
+
+There are also no transitive dependencies to hide a change; and the blast
+radius is bounded by what the code does — it verifies tokens, and a
+malicious version could forge a sign-in but could not reach a host,
+because hosts verify signatures themselves.
 
 ## androidx.credentials + googleid — Android app
 

@@ -202,3 +202,18 @@ test('a revoked credential is refused in the query form too', async () => {
   const res = await worker.fetch(new Request(`https://fleet.example/api/hosts?token=${token}`), env);
   assert.equal(res.status, 401);
 });
+
+test('the privacy policy describes the app that exists', async () => {
+  // It is the URL App Store Connect points at, and it predated sign-in: it said
+  // Fleetwright collects nothing, that there is no account, and that you type an
+  // API token into Settings. All three became false, and it contradicted the
+  // Data Safety declaration in apps/android/store/store-listing.md.
+  const res = await get('/privacy');
+  const html = await res.text();
+
+  for (const required of ['email', 'Keychain', 'Share My Email', 'sign in']) {
+    assert.ok(html.toLowerCase().includes(required.toLowerCase()), `does not mention ${required}`);
+  }
+  assert.equal(html.includes('collects nothing'), false, 'it collects an email address now');
+  assert.equal(/API token you enter/.test(html), false, 'nobody types a token any more');
+});

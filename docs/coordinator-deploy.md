@@ -173,9 +173,6 @@ headroom nobody needs at the cost of a consistency problem.
 
 ## What is not done
 
-- **Enrollment.** One shared host token today. §5 wants a short-lived JWT signed
-  per connection so the durable secret never crosses the wire, and a per-host
-  key so revoking one host does not mean rotating all of them.
 - **Telegram on the Worker.** §5 covers it: webhook mode with a `secret_token`,
   because validating a user id from the request body is authorization, not
   authentication.

@@ -76,16 +76,17 @@ each of those hard.
 | `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
 | `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [naming](./docs/naming.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
-Still to come: host enrollment (one shared token today), rootless podman
-(the sandbox has only run as root), Wake-on-LAN, and Telegram on the Worker.
+Still to come: rootless podman (the sandbox has only run as root), Wake-on-LAN,
+and Telegram on the Worker.
 The apps and the Cloudflare deployment exist — see
 [`docs/deployment.md`](./docs/deployment.md) for what is proven and what is
 merely built.
 
 ## Running things
 
-No runtime dependencies and no build step. The only install is the TypeScript
-devDependency used to check the JSDoc annotations.
+One runtime dependency — `jose`, for verifying the ID tokens sign-in relies on
+— and no build step. `npm install` also pulls in the TypeScript devDependency
+used to check the JSDoc annotations.
 
 ```sh
 npm install

@@ -17,7 +17,9 @@ The rename stopped at the surface on purpose. These are the same as they were:
   service names that `systemctl` and `/logs` know
 - `AGENT_FLEET_API_TOKEN`, `AGENT_FLEET_AUTH_*`,
   `AGENT_FLEET_FCM_SERVICE_ACCOUNT` — set as GitHub Actions secrets, as
-  Cloudflare Worker secrets, and in `/etc/agent-fleet/*.env` on each host.
+  Cloudflare Worker secrets, and in `/etc/agent-hub.env`,
+  `/etc/agent-fleet-sidecar.env` and `/etc/agent-fleet-coordinator.env` on each
+  host.
   (There is no `AGENT_FLEET_HOST_TOKEN`: hosts hold a keypair, not a token)
 - `agent-fleet` — the npm package name
 - `agent-hub` — the session manager beneath it, which has its own upstream

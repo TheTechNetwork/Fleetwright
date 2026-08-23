@@ -224,17 +224,33 @@ const PRIVACY = `<!doctype html>
   code { font-size: 0.9em; }
 </style></head><body>
 <h1>Fleetwright — Privacy</h1>
-<p><strong>Fleetwright collects nothing.</strong> It is a client for a coordinator
-you run yourself. There is no Fleetwright service, no account, and no analytics.</p>
+<p><strong>There is no Fleetwright service.</strong> It is a client for a
+coordinator you run yourself, there is no account to create here, and there is
+no analytics, advertising or tracking of any kind.</p>
+
+<p>Signing in uses <strong>your own Apple or Google account</strong>. Fleetwright
+does not create one, does not store a password, and never sees one.</p>
+
+<h2>Your email address</h2>
+<p>When you sign in, Apple or Google confirms your email address to your
+coordinator, which decides whether that address is allowed in and issues this
+device a credential of its own. The address is shown in Settings so you can see
+who the app is signed in as, and it is attached to the commands you send so your
+coordinator's records say who did what.</p>
+<p>It goes to your coordinator and nowhere else. Choose <em>Share My Email</em>
+on iOS: a hidden relay address cannot be matched against the list of people your
+coordinator allows, and signing in will be refused.</p>
 
 <h2>What stays on your device</h2>
-<p>The coordinator URL and API token you enter in Settings are stored on the
-device and sent only to that coordinator, as an <code>Authorization</code>
-header over HTTPS.</p>
+<p>The coordinator's address, the credential issued to this device, and the email
+address you signed in with. The credential is held in the iOS Keychain or behind
+an Android Keystore key that cannot be exported, and it is sent only to that
+coordinator, as an <code>Authorization</code> header over HTTPS.</p>
 
 <h2>What is sent to your coordinator</h2>
 <ul>
   <li>The commands you issue — list, start, stop, resume a session.</li>
+  <li>The email address you signed in with, so the commands are attributable.</li>
   <li>Your push notification token, if you enable notifications, so the
       coordinator can tell you when a session needs an answer.</li>
 </ul>
@@ -242,13 +258,17 @@ header over HTTPS.</p>
 yours, and this app has no other destination.</p>
 
 <h2>Third parties</h2>
-<p>None, other than the push delivery Apple and Google operate in order to
-deliver a notification to your device. No advertising, no tracking, no
-third-party SDKs.</p>
+<p>Two, and only for the two things that cannot be done without them: Apple or
+Google confirm who you are when you sign in, and Apple or Google deliver a push
+notification to your device. No advertising, no tracking, no analytics, and no
+third-party SDKs beyond the sign-in components each platform provides.</p>
+<p>Your coordinator is not a third party — it is infrastructure you operate.</p>
 
 <h2>Deleting your data</h2>
-<p>Deleting the app removes the URL and token from the device. Removing the
-device registration from your coordinator removes the push token.</p>
+<p>Deleting the app removes the credential, the coordinator address and the email
+address from the device. Revoking the device from your coordinator — from another
+signed-in device, or with the admin credential — stops it reaching the fleet at
+all and takes its push registration with it.</p>
 
 <h2>Source</h2>
 <p>The app and the coordinator are open source:

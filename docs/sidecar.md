@@ -213,13 +213,18 @@ line landing on stdout would not be noise, it would be a corrupted message.
 
 This box has a **keypair**, not a token. The private half lives at
 `/var/lib/agent-fleet/host-key.json` — 0600, in a directory systemd creates
-0700 for this service — and is generated on first run. Connecting means asking
-the coordinator for a nonce and signing it:
+0700 for this service — and is generated the first time anything needs it, not
+only by `run`. Connecting means asking the coordinator for a nonce and signing
+it:
 
 ```
 POST /api/host/challenge   {hostId}            -> {nonce}
-GET  /host/connect?hostId=…  x-fleet-proof: <signature over the nonce>
+GET  /host/connect?hostId=…  x-fleet-nonce: <the nonce>  x-fleet-proof: <signature over it>
 ```
+
+Both headers travel back, not just the proof: a nonce is `<issuedAt>.<random>.<HMAC>`
+and nothing is stored server-side, so the coordinator keeps no record of what
+it issued and needs the nonce back to check the signature against it.
 
 Nothing reusable crosses the wire. A captured connection yields a signature
 over a value that will never be accepted again.

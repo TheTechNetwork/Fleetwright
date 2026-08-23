@@ -13,7 +13,7 @@ standable-up yet.
 | **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
 | **Cloudflare deployment** (Worker + Durable Objects) | ✅ deployed by CI to `fleet.thetech.network` |
 | **Push notifications** | ⚠️ server side done; needs a Firebase project, and untested against real FCM |
-| **Android app** | ⚠️ builds, signs, installs; push not wired (needs Firebase) |
+| **Android app** | ⚠️ builds, signs, installs; push wired to FCM, untested against a real device |
 | **iOS app** | ⚠️ compiles in CI on macOS; never run on a device |
 
 A box you set up today runs the whole loop: a coordinator, this box as a fleet
@@ -167,9 +167,11 @@ can be revoked without disturbing any other device. Sign-in needs
 `AGENT_FLEET_AUTH_ALLOW`; see [`identity.md`](./identity.md).
 
 On a box **joining a coordinator that already exists** — the Worker, or another
-machine — the host token is *asked for*, because it has to match what that
-coordinator was given. A generated one produces a sidecar that connects, is
-rejected, and retries forever.
+machine — the enrolment pin is *asked for*, because it has to come from that
+coordinator: minted with the admin token, handed out by the app (Fleet → Add
+a host), or sent as `/enroll <pin>` in Telegram. Leave it blank and the box
+stays unenrolled — the sidecar keeps connecting and getting refused until
+someone runs `agent-fleet-sidecar enrol <pin>`, as the service user.
 
 Either way, to read one back later:
 
@@ -386,9 +388,10 @@ Shortcut could call it directly.
 
 ```sh
 agent-hub doctor                      # can this box run sessions at all
-agent-fleet-sidecar doctor            # can the sidecar drive it
+SVC="$(stat -c %U /opt/agent-fleet/bin/agent-hub)"
+sudo -u "$SVC" agent-fleet-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
 agent-hub list                        # the session manager answers
-agent-fleet-sidecar identity          # this box's key, and whether it is enrolled
+sudo -u "$SVC" agent-fleet-sidecar identity  # this box's key and fingerprint
 curl -s localhost:8791/api/hosts      # the coordinator sees this box
 systemctl status agent-hub
 journalctl -u agent-hub -f
