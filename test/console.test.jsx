@@ -17,9 +17,14 @@ import { render } from 'preact-render-to-string';
 // compiles the components with preact left external and the tests render THOSE.
 // `npm test` builds first — see the pretest script.
 import { Console, Confidence, HostCard, Ask, Wall } from '../build/console/components.js';
-import { sessionState, byUrgency, fleetConfidence, HOST_STATES } from '../build/console/state.js';
+import { sessionState, byUrgency, standingClaims, headline, scrub, HOST_STATES } from '../build/console/state.js';
 
-const HEALTHY = { hostId: 'deb13-staging', state: 'healthy', connected: true, health: { labels: ['linux'] } };
+// A connected healthy host HAS reported recently — the first version of this
+// fixture omitted healthAt, and the freshness claim correctly refused to vouch
+// for it, which downgraded the headline. The model working, and a fixture that
+// described a machine that cannot exist.
+const NOW = Date.now();
+const HEALTHY = { hostId: 'deb13-staging', state: 'healthy', connected: true, healthAt: NOW - 2000, health: { labels: ['linux'] } };
 const WORKING = { name: 'cc-brave-otter', title: 'refactor the billing importer', status: 'running', hostId: 'deb13-staging' };
 const WAITING = {
   name: 'cc-quiet-badger',
@@ -40,24 +45,54 @@ test('"nothing needs you" is a claim with its working shown, not an empty state'
   // docs/psychology.md: this is where a person is ninety-five percent of the
   // time. A surface that only becomes useful when something is wrong leaves the
   // anxiety exactly where it was.
-  const html = render(<Confidence snap={{ hosts: [HEALTHY], sessions: [WORKING] }} />);
+  const html = render(<Confidence snap={{ hosts: [HEALTHY], sessions: [WORKING], enrolled: 1, now: NOW }} />);
   assert.match(html, /Nothing needs you/);
-  assert.match(html, /connected and reporting healthy/);
-  assert.match(html, /reported within the last minute/);
+  assert.match(html, /All 1 enrolled machines are connected\./);
+  assert.match(html, /Every machine has reported in the last minute\./);
+  assert.match(html, /Every connected machine can take work\./);
   assert.match(html, /class="[^"]*settled/);
 });
 
 test('quiet that cannot be vouched for is never reported as quiet', () => {
-  // §7: if the fleet is silent because everything is fine, and also silent
-  // because a host dropped, then silence means nothing.
+  // psychology.md §7: if the fleet is silent because everything is fine, and
+  // also silent because a host dropped, then silence means nothing.
   const degraded = { hostId: 'attic-pi', state: 'degraded', connected: true, reason: 'claude is not logged in on this host' };
-  const c = fleetConfidence({ hosts: [HEALTHY, degraded], sessions: [] });
-  assert.equal(c.settled, false);
-  assert.match(c.headline, /cannot be vouched for/);
+  const snap = { hosts: [HEALTHY, degraded], sessions: [], enrolled: 2, now: Date.now() };
 
-  const html = render(<Confidence snap={{ hosts: [HEALTHY, degraded], sessions: [] }} />);
+  const head = headline(snap);
+  assert.equal(head.settled, false);
+  assert.match(head.text, /not seeing the whole fleet/);
+
+  const html = render(<Confidence snap={snap} />);
   assert.equal(html.includes('Nothing needs you'), false);
-  assert.match(html, /claude is not logged in on this host/, 'the registry sentence is shown, not summarised');
+  assert.match(html, /claude is not logged in on this host/, 'the registry sentence, verbatim');
+});
+
+test('a claim that holds is still shown, because a claim that vanishes is one nobody is checking', () => {
+  // This is the correction the design review made to my first version, which
+  // BRANCHED: one headline and the reasons for whichever thing was worst, so a
+  // single degraded host hid the fact that everything else was fine and being
+  // watched. You cannot tell "this is fine" from "this is not being checked".
+  const degraded = { hostId: 'attic-pi', state: 'degraded', connected: true, reason: 'not logged in' };
+  const claims = standingClaims({ hosts: [HEALTHY, degraded], sessions: [], enrolled: 2, now: Date.now() });
+
+  const ids = claims.map((c) => c.id).sort();
+  assert.deepEqual(ids, ['capability', 'coverage', 'freshness', 'self']);
+  assert.ok(claims.some((c) => c.ok === true), 'some still hold');
+  assert.ok(claims.some((c) => c.ok === false), 'and the failing one is among them, not instead of them');
+
+  // Every claim is present in the markup whether it passes or fails.
+  const html = render(<Confidence snap={{ hosts: [HEALTHY, degraded], sessions: [], enrolled: 2, now: Date.now() }} />);
+  for (const c of claims) assert.ok(html.includes(c.claim), `missing claim: ${c.claim}`);
+});
+
+test('a failing claim carries the remedy, not just the diagnosis', () => {
+  // psychology.md §6: a person reading an error has less working memory
+  // available than usual, and the remedy is cheap for us and expensive for them.
+  const claims = standingClaims({ hosts: [{ hostId: 'a', state: 'degraded', connected: true, reason: 'x' }], enrolled: 2, sessions: [], now: Date.now() });
+  const failing = claims.filter((c) => c.ok === false);
+  assert.ok(failing.length);
+  assert.ok(failing.every((c) => c.remedy), 'every failing claim says what to do');
 });
 
 test('a host reason is rendered verbatim and never truncated', () => {
@@ -110,9 +145,10 @@ test('withheld options say they were withheld rather than showing nothing', () =
 });
 
 test('an unreachable coordinator says so before anything else', () => {
-  const html = render(<Console snap={{ reachable: false, hosts: [HEALTHY], sessions: [WORKING], events: [] }} />);
-  assert.match(html, /Cannot reach the coordinator/);
+  const html = render(<Console snap={{ reachable: false, hosts: [HEALTHY], sessions: [WORKING], events: [], enrolled: 1, now: NOW }} />);
+  assert.match(html, /This page is not talking to the coordinator/);
   assert.match(html, /not being updated/);
+  assert.match(html, /each box is the authority on its own tmux/, 'and says your work is unaffected');
   assert.match(html, /class="[^"]*stale/, 'and the whole page is marked stale');
 });
 
@@ -120,6 +156,24 @@ test('the ledger shows who, because the actor used to be thrown away', () => {
   const events = [{ event: 'intent', verb: 'stop', actor: 'eli@thetech.network', text: 'eli@thetech.network asked for stop bigjob', at: 1 }];
   const html = render(<Console snap={{ hosts: [HEALTHY], sessions: [], events }} />);
   assert.match(html, /eli@thetech\.network/);
+});
+
+test('a bidi override cannot make a button lie about what it does', () => {
+  // An RLO inside an option label can render "Deny" while meaning "Approve",
+  // six pixels from an irreversible action, on the origin holding every
+  // credential. Replaced with a visible marker rather than deleted, so a label
+  // that tried it looks wrong instead of looking fine.
+  const rlo = '\u202EevorppA';
+  assert.equal(scrub(rlo).includes('\u202E'), false);
+  assert.match(scrub(rlo), /\uFFFD/);
+
+  const nasty = { ...WAITING, prompt: { ...WAITING.prompt, options: [{ index: 1, label: rlo }] } };
+  const html = render(<Ask session={nasty} />);
+  assert.equal(html.includes('\u202E'), false);
+});
+
+test('a carriage return cannot make a pane show text the session never printed', () => {
+  assert.equal(scrub('real output\rfake output').includes('\r'), false);
 });
 
 test('a session state is derived in one place and covers every stored status', () => {

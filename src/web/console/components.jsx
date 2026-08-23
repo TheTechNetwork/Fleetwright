@@ -14,7 +14,7 @@
 // Preact rather than React: same API, 3KB instead of 45, and
 // preact-render-to-string is what the tests use.
 
-import { SESSION_STATES, HOST_STATES, sessionState, byUrgency, fleetConfidence } from './state.js';
+import { SESSION_STATES, HOST_STATES, sessionState, byUrgency, standingClaims, headline, scrub } from './state.js';
 
 /** A state, shown as a word and a glyph with colour agreeing rather than carrying. */
 function Badge({ vocab, state }) {
@@ -39,18 +39,26 @@ function Badge({ vocab, state }) {
  * could mean either means nothing.
  */
 export function Confidence({ snap }) {
-  const c = fleetConfidence(snap);
+  const head = headline(snap);
+  const claims = standingClaims(snap);
   return (
-    <section class={`confidence ${c.settled ? 'settled' : 'unsettled'}`} aria-live="polite">
+    <section class={`confidence ${head.settled ? 'settled' : 'unsettled'}`} aria-live="polite">
       <h1 class="headline">
         <span class="glyph" aria-hidden="true">
-          {c.settled ? '+' : '!'}
+          {head.glyph}
         </span>
-        {c.headline}
+        {head.text}
       </h1>
-      <ul class="because">
-        {c.because.map((line) => (
-          <li key={line}>{line}</li>
+      <ul class="claims">
+        {claims.map((c) => (
+          <li key={c.id} class={`claim ${c.ok === true ? 'holds' : c.ok === false ? 'fails' : 'unsure'}`}>
+            <span class="glyph" aria-hidden="true">
+              {c.ok === true ? '+' : c.ok === false ? 'x' : '?'}
+            </span>
+            <span class="c-claim">{c.claim}</span>
+            {c.because ? <span class="c-because">{c.because}</span> : null}
+            {c.remedy ? <span class="c-remedy">{c.remedy}</span> : null}
+          </li>
         ))}
       </ul>
     </section>
@@ -73,7 +81,7 @@ export function HostCard({ host }) {
         <span class="host-id">{host.hostId}</span>
         <Badge vocab={HOST_STATES} state={state} />
       </div>
-      {host.reason ? <p class="reason">{host.reason}</p> : null}
+      {host.reason ? <p class="reason">{scrub(host.reason)}</p> : null}
       {host.health?.labels?.length ? <p class="labels">{host.health.labels.join(' · ')}</p> : null}
     </li>
   );
@@ -85,10 +93,10 @@ export function Ask({ session, onAnswer }) {
   return (
     <li class="ask">
       <div class="ask-head">
-        <span class="ask-what">{session.title || session.name}</span>
+        <span class="ask-what">{scrub(session.title || session.name)}</span>
         <span class="ask-where">{session.hostId}</span>
       </div>
-      <p class="question">{p.question}</p>
+      <p class="question">{scrub(p.question)}</p>
       {p.options?.length ? (
         <ol class="options">
           {p.options.map((o) => (
@@ -97,7 +105,7 @@ export function Ask({ session, onAnswer }) {
                 <span class="ordinal" aria-hidden="true">
                   {o.index}
                 </span>
-                {o.label}
+                {scrub(o.label)}
               </button>
             </li>
           ))}
@@ -132,7 +140,7 @@ export function Wall({ sessions, onAnswer }) {
           const state = sessionState(s);
           return (
             <li key={s.name} class={`srow state-${state}`}>
-              <span class="s-title">{s.title || s.name}</span>
+              <span class="s-title">{scrub(s.title || s.name)}</span>
               {s.title && s.title !== s.name ? <span class="s-name">{s.name}</span> : null}
               <span class="s-host">{s.hostId}</span>
               <Badge vocab={SESSION_STATES} state={state} />
@@ -151,7 +159,7 @@ export function Ledger({ events }) {
     <ul class="ledger">
       {shown.map((e, i) => (
         <li key={`${e.at}-${i}`} class="entry">
-          <span class="e-what">{e.text || e.event}</span>
+          <span class="e-what">{scrub(e.text || e.event)}</span>
           {e.actor ? <span class="e-who">{e.actor}</span> : null}
         </li>
       ))}

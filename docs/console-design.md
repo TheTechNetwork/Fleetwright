@@ -1,3 +1,23 @@
+> **Status: this is the specification. The implementation is
+> `src/web/console/*.jsx`, rendered by Preact and tested in
+> `test/console.test.jsx`.**
+>
+> This document was written alongside a self-contained `console.html`
+> prototype, which has been removed. Two implementations of one page is the
+> parity problem this branch spent days fixing in the coordinators, and it was
+> going to end the same way — the prototype and the components would have
+> drifted, and nobody would have known which was true.
+>
+> The prototype lost for one reason: it could not be tested. It was 2,000 lines
+> of hand-rolled DOM, and the only checks available were "does it parse" and
+> "does it mention innerHTML" — both of which it passed while being broken, and
+> it shipped that way. A component returns a value, so every state below can be
+> rendered to a string and asserted on.
+>
+> What is described here that the components do not yet do — the detail pane,
+> the keymap, the confirmation model, the twelve-state switcher — is the work
+> queue, not a second design.
+
 # The operator console — design
 
 **Status:** design, not built. The prototype at `src/web/console.html` is a
