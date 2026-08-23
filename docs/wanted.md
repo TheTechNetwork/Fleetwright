@@ -157,6 +157,56 @@ Two things to get right rather than fast:
   the fleet has no roles yet (`docs/identity.md`). Worth knowing which side of
   that line each setting is on before any of them is a button.
 
+### Injecting rules, helpers and tools into a session at start
+
+> "Prompt efficiency helpers in the sessions we start by injecting rules… there
+> is sooo much we can inject including rules helpers and tools we already
+> use/maintain."
+
+The mechanism is largely already here, which is why this is worth writing down
+carefully rather than starting. A session's context comes from `~/.claude` —
+`settings.json`, `CLAUDE.md`, skills, hooks, MCP servers. `install.sh` already
+writes a merged `settings.json` per box, and a sandboxed session gets a fresh
+`claude-<name>` volume that is SEEDED at first launch (`src/core/podman.js`).
+That seed is the injection point, and it exists.
+
+**The trap, and it is the same one this project has just spent a rework on.**
+
+Injected rules are instructions to an agent that has root in a container. If the
+COORDINATOR chooses what gets injected, then a compromised coordinator writes
+that agent's instructions — which is a far larger capability than the eight
+verbs, and is precisely the thing design.md §5 exists to forbid. It is the
+`reply { text }` argument in different clothes: it looks like configuration and
+it is arbitrary text reaching a model that can act.
+
+So the rule that has to hold: **the coordinator may NAME a profile; it may never
+CARRY one.** The content lives on the host, or in the repository being worked
+on, and `start { profile: 'reviewer' }` selects among things the host already
+has — exactly the shape `docs/trust.md` argues for with secrets, for exactly the
+same reason. `start` already takes a bounded `enum` for `mode`, so the protocol
+precedent is there too.
+
+**On whether it is more efficient, which you are right to say is arguable.**
+Nobody in this repository has measured it, so the honest answer is that we do
+not know, and the shape of the answer probably differs by kind:
+
+- **Always-on rules** (`CLAUDE.md`, a system-prompt preamble) are the expensive
+  kind. They cost their tokens on every single turn of every session, forever,
+  whether or not that turn needed them. A 2,000-token house style is a 2,000-token
+  tax on a one-line question.
+- **On-demand things** (skills, MCP tools, hooks) are the cheap kind. They cost a
+  line in a manifest until something actually invokes them.
+- **The measurable claim** is not "does injecting help" but "does this specific
+  injection change the number of turns to done, or the number of times a person
+  is interrupted". Both are countable, and the prompt work in Phase 1 of
+  `docs/plan.md` is what makes the second one countable for the first time —
+  every `session.awaiting-input` is now a structured record of an interruption.
+
+Which suggests the order: **ship a profile mechanism that is host-side and named,
+then measure interruptions per session with and without a profile, and let that
+decide what goes in one.** The argument about which rules help is not settled by
+argument.
+
 ### Serving secrets into a session without the session holding them
 
 Designed in [`trust.md`](./trust.md) — a per-session broker on the socket the
