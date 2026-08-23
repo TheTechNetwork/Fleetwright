@@ -358,6 +358,38 @@ export class CoordinatorCore {
   }
 
   /**
+   * Revoke everything belonging to one person.
+   *
+   * For when the person themselves withdraws consent — revoking this app from
+   * their Apple ID settings, or deleting their Apple Account. An admin removing
+   * a lost phone revokes one credential; this revokes all of them, because the
+   * subject is the person rather than the device.
+   *
+   * @param {string} email
+   * @param {string} why
+   */
+  revokePerson(email, why) {
+    const address = String(email || '').toLowerCase();
+    if (!address) return { revoked: 0, devices: 0 };
+    let revoked = 0;
+    let devices = 0;
+    for (const client of [...this.clients.clients.values()]) {
+      if (String(client.email || '').toLowerCase() !== address || client.revokedAt) continue;
+      const r = this.revokeClient(client.id);
+      if (r.revoked) revoked++;
+      devices += r.devices;
+    }
+    if (revoked) {
+      this.record({
+        event: 'client.withdrawn',
+        actor: address,
+        text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
+      });
+    }
+    return { revoked, devices };
+  }
+
+  /**
    * Revoke a credential AND stop notifying the device that held it.
    *
    * Two halves of one act. Revoking used to do only the first, so a stolen

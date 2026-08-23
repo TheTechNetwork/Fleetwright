@@ -69,6 +69,13 @@ export default {
       });
     }
 
+    // Apple's notifications carry no credential of ours and cannot — the
+    // signature on the JWT is the authentication, checked in the object.
+    if (url.pathname === '/apple/notifications' && request.method === 'POST') {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.
@@ -1294,6 +1301,46 @@ const OPENAPI = JSON.stringify({
           },
           "401": {
             "description": "no credential"
+          }
+        }
+      }
+    },
+    "/apple/notifications": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "security": [],
+        "summary": "Apple's server-to-server notification",
+        "description": "Apple POSTs a signed JWT here when a user changes mail forwarding, REVOKES this app from their Apple ID settings, or deletes their Apple Account. The last two mean a person has withdrawn consent, and every credential issued to that address is revoked \u2014 along with the push registrations that went with them.\n\nPublic by necessity: Apple holds no credential of ours, so the signature on the JWT is the entire authentication. Anyone may POST here; only a message signed by Apple, for this app's audience, does anything.\n\nAnswers 200 to anything it can verify, including notifications it deliberately ignores, because Apple retries on failure and there is nothing to gain from making it retry a message we understood.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "payload"
+                ],
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "description": "A JWT signed by Apple."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "verified \u2014 acted on, or deliberately ignored"
+          },
+          "401": {
+            "description": "the notification did not verify"
+          },
+          "503": {
+            "description": "this coordinator has no audience configured, so it cannot check one"
           }
         }
       }

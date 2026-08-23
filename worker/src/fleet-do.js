@@ -20,7 +20,7 @@
 
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
-import { verifyIdToken, isAllowed, isPrivateRelay } from '../../src/fleet/coordinator/oidc.js';
+import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
@@ -171,6 +171,34 @@ export class Fleet {
     // A nonce to sign. Unauthenticated by necessity — it is what an
     // unauthenticated party asks for in order to become authenticated — and it
     // gives nothing away: a nonce is only useful to whoever holds the key.
+    // Apple's server-to-server notification.
+    //
+    // PUBLIC BY NECESSITY — Apple has no credential of ours, and the signature
+    // on the JWT is the whole authentication. Anyone can POST here; only a
+    // message signed by Apple, for our audience, does anything.
+    //
+    // It answers 200 to everything it can parse, including notifications it
+    // ignores, because Apple retries on failure and there is nothing to gain
+    // from making it retry a message we understood and did not act on.
+    if (url.pathname === '/apple/notifications' && request.method === 'POST') {
+      const body = await readJson(request);
+      const audiences = split(this.env.AGENT_FLEET_AUTH_AUDIENCES);
+      if (!audiences.length) return json({ ok: false, text: 'no audience configured' }, 503);
+      try {
+        const note = await verifyAppleNotification(String(body?.payload || ''), { audiences });
+        if (isWithdrawal(note.type) && note.email) {
+          const r = this.core.revokePerson(note.email, `withdrew consent at Apple (${note.type})`);
+          if (r.revoked) {
+            await this.#saveClients();
+            await this.#saveDevices();
+          }
+        }
+        return json({ ok: true });
+      } catch {
+        return json({ ok: false, text: 'that notification did not verify' }, 401);
+      }
+    }
+
     if (url.pathname === '/api/host/challenge' && request.method === 'POST') {
       const body = await readJson(request);
       const hostId = String(body?.hostId || '');

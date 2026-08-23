@@ -179,3 +179,65 @@ export function isPrivateRelay(email) {
 export function forgetJwks() {
   jwks.clear();
 }
+
+/**
+ * A server-to-server notification from Apple.
+ *
+ * Apple POSTs one of these when a user changes their mail forwarding
+ * preference, REVOKES this app from their Apple ID settings, or deletes their
+ * Apple Account. The first is housekeeping; the other two mean a person has
+ * withdrawn consent, and until now that flowed only one way — an admin could
+ * revoke a phone, and a user revoking the app at Apple's end left their
+ * credential working indefinitely.
+ *
+ * Verified exactly like an ID token, because it is one: a JWT signed by Apple,
+ * for our audience. The signature is the entire authentication — this endpoint
+ * is public by necessity, and anyone can POST to it.
+ *
+ * @param {string} token the `payload` field Apple sends
+ * @param {{ audiences: string[] }} opts
+ * @returns {Promise<{ type: string, email: string|null, sub: string|null }>}
+ */
+export async function verifyAppleNotification(token, { audiences }) {
+  const raw = String(token || '');
+  if (raw.split('.').length !== 3) throw new Error('not a JWT');
+
+  // Fixed issuer, not read from the token. verifyIdToken has to look at `iss`
+  // because it serves several providers; this one is Apple by definition, and
+  // taking the issuer from the message would let the message choose whose keys
+  // we fetch.
+  const issuer = 'https://appleid.apple.com';
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(raw, keysFor(issuer), {
+      issuer,
+      audience: audiences,
+      algorithms: ['RS256', 'ES256'],
+      clockTolerance: 60,
+    }));
+  } catch (e) {
+    throw new Error(reasonFor(/** @type {any} */ (e)));
+  }
+
+  // The interesting fields are nested one level down, as a JSON string.
+  let events = payload.events;
+  if (typeof events === 'string') {
+    try {
+      events = JSON.parse(events);
+    } catch {
+      throw new Error('the notification carried no readable events');
+    }
+  }
+  const e = /** @type {any} */ (events || {});
+  return {
+    type: String(e.type || ''),
+    email: e.email ? String(e.email).toLowerCase() : null,
+    sub: e.sub ? String(e.sub) : null,
+  };
+}
+
+/** The two that mean a person has withdrawn consent, as opposed to housekeeping.
+ *  @param {string} type */
+export function isWithdrawal(type) {
+  return type === 'consent-revoked' || type === 'account-delete';
+}

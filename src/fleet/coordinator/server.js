@@ -32,7 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
-import { verifyIdToken, isAllowed, isPrivateRelay } from './oidc.js';
+import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 
 /** How long to wait for a host's reply before giving up on it. */
@@ -473,6 +473,32 @@ export class Coordinator {
       const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
       this.saveState();
       return json(res, 200, { ok: true, ...issued });
+    }
+
+    // Apple's server-to-server notification.
+    //
+    // PUBLIC BY NECESSITY — Apple has no credential of ours, and the signature
+    // on the JWT is the whole authentication. Anyone can POST here; only a
+    // message signed by Apple, for our audience, does anything.
+    //
+    // It answers 200 to everything it can parse, including notifications it
+    // ignores, because Apple retries on failure and there is nothing to gain
+    // from making it retry a message we understood and did not act on.
+    if (p === '/apple/notifications' && req.method === 'POST') {
+      const body = await readJson(req);
+      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+      if (!audiences.length) return json(res, 503, { ok: false, text: 'no audience configured' });
+      try {
+        const note = await verifyAppleNotification(String(body?.payload || ''), { audiences });
+        if (isWithdrawal(note.type) && note.email) {
+          const r = this.core.revokePerson(note.email, `withdrew consent at Apple (${note.type})`);
+          if (r.revoked) this.saveState();
+        }
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        this.log.warn(`apple notification refused: ${/** @type {Error} */ (e).message}`);
+        return json(res, 401, { ok: false, text: 'that notification did not verify' });
+      }
     }
 
     if (p === '/api/host/challenge' && req.method === 'POST') {

@@ -836,3 +836,75 @@ test('the break-glass token still works when the admin phone is what was lost', 
   });
   assert.equal(res.status, 200);
 });
+
+// --- when the person, not the admin, withdraws --------------------------------
+
+test('a user revoking the app at Apple revokes their credentials here', async (t) => {
+  // Revocation flowed one way. An admin could remove a lost phone; a person
+  // revoking this app in their own Apple ID settings left every credential they
+  // held working indefinitely, and nothing here would ever learn about it.
+  const { provider: p, coordinator: c, origin } = await signInFleet(t);
+
+  const phone = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }), deviceName: 'phone' });
+  const tablet = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }), deviceName: 'tablet' });
+  const other = await session(origin, { idToken: await p.token({ email: 'colleague@thetech.network' }), deviceName: 'theirs' });
+  assert.equal((await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${phone.body.token}` } })).status, 200);
+
+  // Apple signs the notification with the same key it signs ID tokens with, so
+  // the provider stub can produce a real one.
+  const note = await p.token({
+    iss: 'https://appleid.apple.com',
+    events: JSON.stringify({ type: 'consent-revoked', email: 'eli@thetech.network', sub: 'u1' }),
+  });
+  const res = await fetch(`${origin}/apple/notifications`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ payload: note }),
+  });
+  assert.equal(res.status, 200);
+
+  // BOTH of that person's devices, because the subject is the person.
+  for (const [what, token] of [['phone', phone.body.token], ['tablet', tablet.body.token]]) {
+    const after = await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(after.status, 401, `${what} still works`);
+  }
+  // And nobody else's.
+  assert.equal((await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${other.body.token}` } })).status, 200);
+  assert.ok(c.core.events.some((e) => e.event === 'client.withdrawn'));
+});
+
+test('an unsigned notification does nothing at all', async (t) => {
+  // The endpoint is public by necessity — Apple holds no credential of ours —
+  // so the signature is the entire authentication and anyone can POST here.
+  const { provider: p, origin } = await signInFleet(t);
+  const phone = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }) });
+
+  for (const payload of ['', 'not-a-jwt', 'aaa.bbb.ccc']) {
+    const res = await fetch(`${origin}/apple/notifications`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload }),
+    });
+    assert.equal(res.status, 401, JSON.stringify(payload));
+  }
+  assert.equal((await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${phone.body.token}` } })).status, 200);
+});
+
+test('a mail-forwarding change is acknowledged and ignored', async (t) => {
+  // Apple retries on failure, so a notification we understood and chose not to
+  // act on gets a 200 rather than a rejection.
+  const { provider: p, origin } = await signInFleet(t);
+  const phone = await session(origin, { idToken: await p.token({ email: 'eli@thetech.network' }) });
+
+  const note = await p.token({
+    iss: 'https://appleid.apple.com',
+    events: JSON.stringify({ type: 'email-disabled', email: 'eli@thetech.network' }),
+  });
+  const res = await fetch(`${origin}/apple/notifications`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ payload: note }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${phone.body.token}` } })).status, 200, 'still signed in');
+});
