@@ -65,25 +65,54 @@ The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
 `AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your address on
 the allowlist. See [`../../docs/identity.md`](../../docs/identity.md).
 
-### Google sign-in needs a web OAuth client
+### Google sign-in needs a web OAuth client — four steps
 
-The ID token's audience is the OAuth **web** client id, not the Android one —
-that is what `setServerClientId` names, and it is what the coordinator checks.
-The google-services plugin only writes `default_web_client_id` into resources
-when the Firebase project has one.
+The committed `google-services.json` has `"oauth_client": []` for both package
+names. Until that changes, the app builds, runs, and says plainly that this
+build has no Google sign-in configured.
 
-`SignIn.kt` looks that resource up **by name at runtime** rather than
-referencing `R.string.default_web_client_id`. That is deliberate: this
-repository is public, most checkouts have no Firebase configuration, and a
-direct reference would mean the app does not compile for any of them. Without a
-web client, the app builds and says plainly that this build has no Google
-sign-in configured.
+**1. Enable Google as a sign-in provider.** Firebase console → Authentication →
+Sign-in method → Google → Enable. This is what creates the OAuth clients,
+including the **web** one, which is the one that matters.
 
-To get one: Firebase console → Authentication → Sign-in method → enable Google.
-That creates the web client. Add your machine's and CI's SHA-1 under Project
-settings → your Android app, download `google-services.json` again, and the
-`default_web_client_id` string appears. Put the same client id in
-`AGENT_FLEET_AUTH_AUDIENCES` on the coordinator, alongside the iOS bundle id.
+**2. Register SHA-1 fingerprints, for every keystore that will ever build.**
+Project settings → your Android app → Add fingerprint. Google Sign-In checks the
+signing certificate, so a missing fingerprint fails at the account picker with a
+message that does not say why.
+
+```sh
+# the debug keystore, for local builds — password is literally "android"
+keytool -list -v -alias androiddebugkey -keystore ~/.android/debug.keystore \
+  -storepass android -keypass android | grep SHA1
+
+# your release keystore, the one ANDROID_KEYSTORE_FILE points at
+keytool -list -v -alias fleetwright -keystore ~/fleetwright-release.jks | grep SHA1
+```
+
+Do it for **both package names** — `network.thetech.fleetwright` and
+`network.thetech.fleetwright.debug`, which the debug build appends.
+
+**THE ONE THAT CATCHES PEOPLE: Play App Signing.** If Play re-signs your app —
+and it does by default — then the certificate a user's device sees is Google's,
+not yours. Sign-in works perfectly in an APK you built and fails for every
+install from Play, which is the worst possible order to discover it in. Take the
+SHA-1 from **Play Console → your app → Setup → App integrity → App signing key
+certificate** and add that one too.
+
+**3. Download `google-services.json` again and commit it.** One file carries
+every client. With a web client present, the Google Services plugin generates
+the `default_web_client_id` string resource that `SignIn.kt` looks up at runtime.
+
+**4. Put the WEB client id in `AGENT_FLEET_AUTH_AUDIENCES`** on the coordinator
+— not the Android one. `setServerClientId` names the web client, so the web
+client is what appears as `aud` on the ID token, and the coordinator checks
+`aud`. It sits alongside the iOS bundle id; the list holds both because Apple
+and Google issue for different audiences.
+
+```sh
+npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
+#   network.thetech.fleetwright  654943059314-....apps.googleusercontent.com
+```
 
 Until then, the collapsed **"use a credential instead"** field takes the demo
 credential or the admin token, which is enough to exercise everything
