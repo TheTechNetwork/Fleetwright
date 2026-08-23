@@ -17,7 +17,7 @@ import { ClientRegistry } from './clients.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, buildIntent } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -162,7 +162,7 @@ export class CoordinatorCore {
    * and stopping: when somebody asks "how did that machine get in", the answer
    * should be in one place and not in a log nobody kept.
    *
-   * @param {{ event: string, hostId?: string, name?: string|null, text?: string|null, fingerprint?: string }} entry
+   * @param {{ event: string, hostId?: string|null, name?: string|null, text?: string|null, fingerprint?: string, actor?: string|null, verb?: string|null, url?: string|null }} entry
    */
   record(entry) {
     const event = {
@@ -170,7 +170,13 @@ export class CoordinatorCore {
       event: String(entry.event),
       name: entry.name ?? null,
       text: entry.text ?? (entry.fingerprint ? `fingerprint ${entry.fingerprint}` : null),
-      url: null,
+      // WHO, and WHAT THEY ASKED FOR. Both were already in hand and both were
+      // thrown away: every intent arrives carrying a verified email since
+      // sign-in, and it was forwarded to a host and forgotten. So the fleet
+      // could tell you a session stopped and never who stopped it.
+      actor: entry.actor ?? null,
+      verb: entry.verb ?? null,
+      url: entry.url ?? null,
       at: this.now(),
     };
     this.events.push(event);
@@ -359,10 +365,32 @@ export class CoordinatorCore {
       return { ok: false, error: { code: 'unknown_verb' }, text: `unknown verb ${JSON.stringify(spec.verb)}` };
     }
 
+    // Recorded BEFORE placement, and only for verbs that change something.
+    //
+    // Before placement, not after the work: an intent that was REFUSED — no
+    // hosts, ambiguous name, a box that had just gone — is exactly the one an
+    // audit wants, and recording on the way back loses every one of them. "Who
+    // tried to stop everything at 3am" is a better question to be able to
+    // answer than "what succeeded".
+    //
+    // Mutating only: a `list` every fifteen seconds from three phones would
+    // push everything else out of a 200-entry ring inside an hour, and that
+    // ring is the only memory this coordinator has.
+    if (isMutating(spec.verb) && spec.actor) {
+      this.record({
+        event: 'intent',
+        verb: spec.verb,
+        actor: spec.actor,
+        name: spec.params?.name ?? null,
+        text: `${spec.actor} asked for ${spec.verb}${spec.params?.name ? ` ${spec.params.name}` : ''}`,
+      });
+    }
+
     const placement = place(this.registry, spec);
     if (placement.kind === 'refused') {
       return { ok: false, error: { code: placement.code }, text: placement.reason };
     }
+
 
     if (placement.kind === 'fanout') {
       const results = await Promise.all(

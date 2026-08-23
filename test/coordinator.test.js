@@ -517,3 +517,44 @@ test('losing the coordinator makes the sidecar reconnect, not exit', async (t) =
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(transport.retryTimer, 'a retry is pending and holding the process up');
 });
+
+test('a box whose claude is logged out is still asked what it has', async (t) => {
+  // `list` fanned out over schedulable(), which requires state === 'healthy'.
+  // So a degraded box — agent-hub answering, sessions running, claude merely
+  // logged out — dropped out of the answer entirely. Not greyed out, not
+  // flagged: absent. The phone showed a shorter list and said nothing, and the
+  // sessions it hid were the ones on the box that needed attention.
+  //
+  // Asserted on which HOSTS were reached rather than on the sessions returned,
+  // because the stub hub answers /list without a session payload — the property
+  // under test is that the box is still asked, not what it says back.
+  const { coordinator, stub } = await fleet(t, { sessions: [sessionRecord('inherited')] });
+  await new Promise((r) => setTimeout(r, 600));
+
+  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const host = coordinator.registry.hosts.get('unabandoned');
+  assert.notEqual(host?.state, 'healthy', 'the box is degraded, which is the whole point');
+  assert.equal(host?.connected, true, 'and still on the end of a socket');
+
+  const reply = await coordinator.dispatch({ verb: 'list' });
+  assert.equal(reply.ok, true, 'not refused as no_hosts');
+  assert.ok(
+    (reply.hosts || []).some((h) => h.hostId === 'unabandoned'),
+    'the degraded box is still asked, because a read is not a placement',
+  );
+});
+
+test('a degraded host is still refused new work', async (t) => {
+  // The other half, and the reason the two selectors exist separately: placing
+  // a session on a box whose claude is logged out is placing it nowhere.
+  const { coordinator, stub } = await fleet(t);
+  await new Promise((r) => setTimeout(r, 600));
+  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const reply = await coordinator.dispatch({ verb: 'start', params: { name: 'nope' } });
+  assert.equal(reply.ok, false);
+  assert.match(String(reply.text || reply.error?.code), /no_hosts|not logged in|degraded/i);
+});

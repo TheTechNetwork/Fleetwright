@@ -149,10 +149,34 @@ export class HostRegistry {
     return this.hosts.get(hostId) || null;
   }
 
-  /** Hosts that could accept work right now. */
+  /**
+   * Hosts that could accept NEW WORK right now.
+   *
+   * Healthy, because placing a session on a box whose agent-hub is unreachable
+   * or whose claude is logged out is placing it nowhere.
+   */
   schedulable() {
     this.sweep();
     return [...this.hosts.values()].filter((h) => h.connected && h.state === 'healthy' && h.health);
+  }
+
+  /**
+   * Hosts worth ASKING A QUESTION of. A strictly wider set, and the difference
+   * matters more than it looks.
+   *
+   * `list` used to fan out over schedulable(), which meant a box whose claude
+   * was merely logged out — degraded, not gone, still holding every one of its
+   * running sessions — dropped out of the answer entirely. Not greyed out, not
+   * flagged: absent. The phone showed a shorter list and said nothing, and the
+   * sessions it stopped showing were exactly the ones on the box that needed
+   * attention.
+   *
+   * Schedulability is a question about writes. A read should reach anything
+   * that is on the end of a socket.
+   */
+  reachable() {
+    this.sweep();
+    return [...this.hosts.values()].filter((h) => h.connected);
   }
 
   /**

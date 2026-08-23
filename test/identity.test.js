@@ -652,3 +652,43 @@ test('the Node coordinator registers a device for push', async (t) => {
   });
   assert.equal(gone.status, 200);
 });
+
+test('the fleet records who asked for what', async (t) => {
+  // The single highest-value line in the design review: every intent has
+  // carried a verified email since sign-in, and it was forwarded to a host and
+  // forgotten. The fleet could tell you a session stopped and never who
+  // stopped it.
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const { token, client } = await c.core.clients.issue('a phone (eli@thetech.network)');
+  client.email = 'eli@thetech.network';
+
+  await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ verb: 'stop', params: { name: 'bigjob' } }),
+  });
+
+  const recorded = c.core.snapshot().events.find((e) => e.event === 'intent');
+  assert.ok(recorded, 'the intent is in the ring');
+  assert.equal(recorded.actor, 'eli@thetech.network');
+  assert.equal(recorded.verb, 'stop');
+  assert.equal(recorded.name, 'bigjob');
+});
+
+test('reads do not fill the ring', async (t) => {
+  // A `list` every fifteen seconds from three phones would push everything else
+  // out of a 200-entry ring within the hour, and the ring is the only memory
+  // this coordinator has.
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const { token, client } = await c.core.clients.issue('a phone (eli@thetech.network)');
+  client.email = 'eli@thetech.network';
+
+  for (let i = 0; i < 5; i++) {
+    await fetch(`${origin}/api/intent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ verb: 'list' }),
+    });
+  }
+  assert.equal(c.core.snapshot().events.filter((e) => e.event === 'intent').length, 0);
+});

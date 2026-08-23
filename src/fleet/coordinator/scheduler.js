@@ -42,7 +42,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000 } = {}) {
   const name = intent.params?.name;
 
   if (FANOUT.has(verb)) {
-    const hosts = registry.schedulable();
+    // reachable(), not schedulable(): see the comment on both in registry.js.
+    // Asking every connected box what it has is a different question from
+    // choosing one to start work on.
+    const hosts = registry.reachable();
     return hosts.length
       ? { kind: 'fanout', hosts }
       : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
@@ -50,7 +53,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000 } = {}) {
 
   // `status` with no name is a fleet-wide question, not a session one.
   if (verb === 'status' && !name) {
-    const hosts = registry.schedulable();
+    const hosts = registry.reachable();
     return hosts.length
       ? { kind: 'fanout', hosts }
       : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
