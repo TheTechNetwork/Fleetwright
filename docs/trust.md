@@ -393,7 +393,93 @@ it is the one to reach for last. It is a large new trusted component that sees
 everything, introduced to solve a problem the first row already solves for git,
 for cloud SDKs and for Claude Code.
 
-### What this does not solve, and should be said out loud
+#### Worked example: `gh` in every session
+
+Every session should have `gh`. Working out what that means end to end is the
+clearest test of everything above, because it has all the awkward parts —
+a long-running session, a short-lived credential, a CLI nobody wrote, and a
+durable secret that has to live somewhere.
+
+**What the durable credential is: a GitHub App, not a token.**
+
+A personal access token is the obvious answer and the wrong one. It is
+long-lived by construction, it carries the permissions of a person rather than
+of a task, and the only way to scope it down is to make a second one. A
+**GitHub App** installed on the org mints **installation access tokens** that
+expire in an hour and can be scoped, at the moment of minting, to specific
+repositories and specific permissions. So the thing a session receives is
+already bounded in time and in reach before any of our machinery is involved.
+
+The App's private key is then the ONLY durable secret in the system, which is
+the property worth buying: one thing to protect, in one place, rather than a
+token per box per repo.
+
+**Where that key lives, which is the question underneath the question.**
+
+Minting relocates a secret; it never removes one. The private key has to sit
+somewhere, and the honest options are:
+
+- **Sealed to the host.** `systemd-creds` with TPM2, `LoadCredentialEncrypted=`
+  in the unit. The key is decryptable only on that machine, in that unit. This
+  is the answer that needs nothing external.
+- **In a secrets manager, fetched by the host.** 1Password with a service
+  account and `op read op://vault/item/field`, or the equivalent elsewhere.
+  Better custody than a file — real access control, real audit, rotation
+  somebody else operates — at the cost of an availability dependency at session
+  start, and of the **service account token becoming the new durable secret**.
+  That recursion never terminates; it only relocates, and relocating it into a
+  vault with an audit log is a genuine improvement over relocating it into a
+  file with none.
+
+Either is defensible. What is not defensible is the coordinator holding it.
+
+**On a secrets-manager MCP server specifically: no.**
+
+Handing a session an MCP tool that can read a vault is not the same shape as
+anything above, and it is worth being precise about why. It gives the agent
+standing read access to every secret in that tool's scope, for the whole
+session, decided once at configuration time — not per call, not per task, not
+revocable without changing the configuration. It also puts the values into the
+model's context, which is the one place we have been trying to keep them out of.
+
+A broker answers *one named request at a time* and can refuse. A vault tool
+answers *whatever is asked*. The first is an indirection; the second is a copy
+of the vault with extra steps.
+
+**How the token reaches `gh` without the session holding it.**
+
+Two mechanisms, because `gh` and `git` want different things:
+
+- **`git`** takes `credential.helper`, a program git runs on every operation. It
+  prints a username and password on demand, so an expiry between a fetch and a
+  push is invisible — git simply asks again. This is the mechanism the tool was
+  built for and it needs nothing clever.
+- **`gh`** reads `GH_TOKEN` from the environment on every invocation, and `gh`
+  is a CLI: it starts, does one thing, and exits. So a **shim on PATH** —
+  `/usr/local/bin/gh` — asks the per-session socket for a token and `exec`s the
+  real binary with `GH_TOKEN` set for that one process. The value exists in one
+  process's environment for the life of one command, and never in a file, never
+  in the session's shell, never in `~/.config/gh/hosts.yml`.
+
+The socket is the one that already exists: `/run/agent-fleet/<name>.sock`,
+bind-mounted into that session's container and nowhere else. The sidecar knows
+which session is asking because of which socket it arrived on, so a session
+cannot ask for another session's scope. That is the same unforgeability the
+hook socket already relies on, used for a second purpose.
+
+**What this bounds, stated exactly.**
+
+A session can ask the broker for a token and then exfiltrate that token. Nothing
+here prevents it. What it gets is good for an hour, for the repositories that
+session was scoped to, and is attributable in GitHub's audit log to an
+installation rather than to a person.
+
+So the property is: **no durable credential ever enters a session, and nothing a
+session leaks outlives the session by more than an hour.** That is a real and
+bounded claim. It is not "the session cannot misuse GitHub", which no mechanism
+on this list provides — see below.
+
+## What this does not solve, and should be said out loud
 
 An agent that can make authorised requests can make bad ones. Moving the
 credential out of the session bounds *theft*, not *misuse* — the same
