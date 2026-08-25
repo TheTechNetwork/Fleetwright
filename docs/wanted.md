@@ -209,38 +209,51 @@ argument.
 
 ### Serving secrets into a session without the session holding them
 
-Designed in [`trust.md`](./trust.md) — as a general broker with a small adapter
-per service, not as a GitHub feature, because every service a session touches
-has this problem and it does not go away.
+Designed in [`trust.md`](./trust.md). Not a GitHub feature and not a per-service
+one: every service a session touches has this problem and it does not go away.
 
-The part of that design worth knowing before starting: services fall into three
-categories and only the first gets the good property. **Mintable** (GitHub Apps,
-AWS STS, Google service accounts) yields a short-lived scoped credential per
-request. **Storable only** — most SaaS, most registries — means the broker holds
-one durable value and hands it over, which bounds reach and revocability but not
-time, and a session that receives it is holding a durable secret however it
-arrived. **Unnecessary** is the row people skip: where the session needs the
-outcome rather than the credential, the host performs the operation and the
-credential never enters the container.
+**The design landed on a proxy that terminates credentials**, and the reason is
+worth carrying into whoever picks this up. An earlier version sorted services by
+what the upstream supports — mintable, storable-only, unnecessary — and accepted
+that most of them fall in the middle row, where the best available answer is
+handing a session a durable secret and bounding only its reach. That table sorts
+on the wrong axis. If session egress goes through a proxy, the credential the
+session holds is issued by **us**, so it has whatever lifetime and revocation we
+choose no matter what the real service supports; the proxy substitutes the real
+credential on the way out. Exfiltrated, what the session held is a random string
+that authenticates to one listener from one network namespace.
 
-What gets built once is the socket, the request protocol, the policy, the audit
-line, and about four delivery adapters — which are per-TOOL rather than
-per-service. `gh` is worked through end to end in `trust.md` as the concrete
-example. — a per-session broker on the socket the
-sandbox already bind-mounts, protocol hooks (`credential.helper`, `GIT_ASKPASS`,
-a metadata endpoint) wherever the tool has one, and a credential-injecting proxy
-only for the tools that have none.
+That collapses the table. The upstream's capability becomes an internal detail
+of one adapter rather than the thing that bounds the design.
 
-The two things that section insists on, repeated here because they are what make
-this worth building rather than theatre:
+**Build order**, easiest real win first:
 
-- An intercepting proxy is the LAST resort, not the first. It has to terminate
-  TLS, which makes it a new trusted component that sees all of a session's
-  traffic rather than just the requests it adds a header to.
-- Moving a credential out of a session bounds theft, not misuse. A session can
-  still use anything the broker will answer for. Scoping what gets signed — per
-  host, per method, per path — is separate work and is the half that actually
-  bounds the damage.
+1. the proxy, per-session identity by network namespace, a substitution table,
+   and **default-deny egress** — which may be worth more than the credential
+   handling, and needs nothing from anyone to start
+2. 1Password as custody for the real credentials, on a short cache TTL so
+   rotation propagates. This is not the vault-MCP idea that got rejected: one
+   component the session cannot address reads the vault, and the objection was
+   always to putting a vault in the model's context, never to using one
+3. SigV4 re-signing, only if something actually needs AWS
+
+**The three things that section insists on**, repeated because they are what
+make this worth building rather than theatre:
+
+- **Substitution is trivial for bearer tokens and not for signed requests.**
+  SigV4 and other HMAC schemes sign over headers and body client-side, so there
+  is no header to swap — verify with the issued key, re-sign with the real one.
+  Per-scheme work, and the difference between a substitution table and a project.
+- **The CA key becomes the most powerful durable secret in the system.** It can
+  impersonate any site to a session, including the coordinator. Concentrating
+  custody is the right trade; it is still concentration and not elimination.
+- **This bounds theft, not misuse.** A session can use anything policy permits,
+  authenticated as us, for as long as it runs. Scoping what gets signed — per
+  host, per method, per path — is the half that actually bounds damage, and a
+  proxy is what makes it a config file instead of a bespoke operation each time.
+
+Not everything is HTTP: `git` over SSH wants `ssh-agent` forwarding to an agent
+outside the container, which is this same design twenty-five years early.
 
 Prerequisite for the interesting version: hosts now have keypairs, which is what
 gives a secret something to be encrypted *to*.
