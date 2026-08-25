@@ -388,10 +388,18 @@ three ways and they are not equally good:
 | **Per-service reverse proxy** | the session calls `http://gh.fleet.local`, the proxy makes the real call | one shim per service, and every tool has to be pointed at it |
 | **Intercepting forward proxy** | a CA the container trusts, `HTTPS_PROXY` set | the proxy can now read ALL of the session's traffic, not just what it injects into; pinned clients break; and a trusted CA inside the container is itself a thing worth being careful with |
 
-The last row is the one people picture when they say "inject at the proxy", and
-it is the one to reach for last. It is a large new trusted component that sees
+The last row is the one people picture when they say "inject at the proxy". It
+is the most expensive by a distance — a large new trusted component that sees
 everything, introduced to solve a problem the first row already solves for git,
 for cloud SDKs and for Claude Code.
+
+**But it buys two things the first row cannot, and they are not small**: a
+credential the session holds can be given an expiry the upstream does not
+support, and egress can be denied by default. Neither is reachable through a
+protocol hook, because a hook only controls what the session is *given*, never
+where the session can *go*. So the ordering here is about cost, not about
+capability — reach for a hook first because it is nearly free, not because it is
+sufficient. `Terminating credentials at the proxy` below is the full argument.
 
 #### The general shape, because GitHub is one of many
 
@@ -412,7 +420,12 @@ adapters are not equivalent, because the services are not.
 The middle row is the common case and the weakest, and pretending a uniform
 abstraction hides that would be the worst outcome of building this. When a
 provider cannot mint, the broker should say so — `expiresAt: null` is a fact the
-UI should show, not a detail to smooth over. What is still gained there is real
+UI should show, not a detail to smooth over.
+
+**That row is defeatable, though, and the next section is how.** Everything
+above is true of a broker that hands over whatever the upstream gave it. A
+proxy that terminates credentials does not have to hand over the upstream's
+credential at all, and that changes which category a service is in. What is still gained there is real
 but smaller: the value is not in the image, not in the environment of every
 session, not in a config file somebody copies to the next box, and it is
 revocable centrally with an audit trail of which session asked.
@@ -453,6 +466,112 @@ token, a vault token. There is no arrangement in which nothing durable exists.
 The whole game is moving the durable thing to the fewest, best-protected places
 and making everything downstream of it short-lived, scoped and attributable —
 not eliminating it, which is not available.
+
+### Terminating credentials at the proxy, which collapses the table
+
+The table above sorts services by what the *upstream* supports. That is the
+wrong axis, and noticing it is the single best idea in this document.
+
+If every session's egress goes through a proxy that terminates credentials,
+then what the session holds is **issued by us**, not by the upstream — and a
+credential we issue has whatever expiry, scope and revocation we decide,
+regardless of what the real service is capable of. For a service that cannot
+mint, the proxy invents a credential that authenticates *to the proxy*, and
+swaps it for the real one on the way out.
+
+    session                proxy                      upstream
+    ───────                ─────                      ────────
+    Authorization:    →    recognise, check policy,  →  Authorization:
+    Bearer fwk_live_…      substitute                   Bearer <the real one>
+
+What the session holds is then:
+
+- **short-lived by construction**, because we chose the lifetime
+- **instantly revocable**, because revoking is deleting a row we own
+- **useless anywhere else** — it authenticates to one listener, reachable from
+  one network namespace. Exfiltrated, it is a random string. This is the
+  property the storable-only row could not have, and it is now free
+
+So the three categories collapse to one. Every service becomes mintable *from
+the session's side*, which is the only side whose blast radius we were ever
+arguing about. The upstream's own capability stops being the constraint and
+becomes an internal detail of one adapter.
+
+**And the bigger win is the one that comes free with the same plumbing.** If all
+egress goes through the proxy, egress can be **denied by default**. A session
+that can reach `api.github.com` and `registry.npmjs.org` and nothing else cannot
+post the working tree to a pastebin, cannot phone home, cannot fetch its second
+stage. That is plausibly worth more than the credential handling, and it is not
+available in any design where the session talks to the internet directly.
+
+**Per-request policy also stops being bespoke.** The section above said a
+session usually needs an outcome rather than a credential, and that each such
+operation has to be designed. A proxy that sees the request can express the same
+thing as a rule — `DELETE /repos/*` refused, force-push refused, publish
+refused — without designing an operation for each. Row three of the table
+becomes a config file rather than a project.
+
+#### What it costs, stated at full price
+
+**TLS must be terminated, so the container must trust our CA.** That CA key is
+now the most powerful durable secret in the system: it can impersonate *any*
+site to a session, including the coordinator. Concentrating custody is the right
+trade — one key in a TPM beats twenty in config files — but it is concentration,
+not elimination, and it should be written down as such.
+
+**Every runtime finds its trust store somewhere different**, and this is dull,
+unavoidable, per-image work: `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and
+`REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, the system bundle for Go, and a separate
+keystore for the JVM. Each one that is missed fails closed and loudly, which is
+the good kind of failure, but there is a list and it has to be worked through.
+
+**Substitution is trivial for bearer tokens and not for signed requests.** This
+is the sharp edge. AWS SigV4 — and anything else doing HMAC request signing —
+computes the signature client-side over the headers and body. There is no header
+to swap: the proxy has to *verify* the signature with the fake key it issued and
+then *re-sign* the whole request with the real one. That is a known and
+implementable pattern, but it is per-scheme work, and it is the difference
+between "one substitution table" and "a project". Bearer, Basic and
+API-key-in-header are the easy majority; signing schemes are each their own
+adapter.
+
+**Not everything is HTTP.** `git` over SSH, and anything on port 22, is not
+proxy-shaped. The answer there is `ssh-agent` forwarding to an agent held
+outside the container — which is *exactly this design*, twenty-five years early:
+the key never enters the session, the session gets a socket that will sign on
+request, and forwarding can be revoked. It is a second mechanism rather than a
+gap, and its existence is decent evidence the shape is right.
+
+**Pinned clients break.** Rare in CLIs, common in mobile SDKs. They fail
+visibly rather than silently, which is survivable.
+
+#### Where 1Password fits, and why this is not the thing I argued against
+
+The proxy needs somewhere to keep the real credentials, and a vault with a
+service account is the right answer: better custody than a file, a real audit
+log, and rotation that propagates on the next fetch if the proxy caches on a
+short TTL rather than at boot.
+
+This is not the MCP-in-the-session idea. **The objection was never to using a
+vault; it was to putting one inside the model's context.** An MCP vault tool
+gives the agent standing read access to everything in scope, for the session,
+decided once at configuration time, with the values landing in context. Here the
+vault is read by one component the session cannot address, and what the session
+receives is a token that is worthless outside its own network namespace. Same
+vendor, opposite blast radius.
+
+The service account token then becomes the one durable secret on the box — which
+is the whole point of the recursion note above. It is the thing TPM sealing has
+to protect, and now it is the *only* thing.
+
+#### What is still not solved
+
+A session can still *use* everything it is allowed to use. It is authenticated
+as us for as long as it runs, and the proxy will faithfully sign whatever policy
+permits. The gain is that nothing survives the session, nothing works off the
+box, and there is exactly one place that saw every request. That is a real and
+large improvement over a token in an environment variable, and it is not the
+same as a session being unable to do harm.
 
 ### Worked example: `gh` in every session
 
