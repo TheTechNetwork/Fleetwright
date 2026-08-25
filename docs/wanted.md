@@ -209,11 +209,24 @@ argument.
 
 ### Serving secrets into a session without the session holding them
 
-Designed in [`trust.md`](./trust.md), now with `gh` worked through end to end
-as the concrete case — a GitHub App rather than a token, its private key sealed
-to the host or held in a vault, installation tokens minted per request, and
-delivered through `credential.helper` for git and a PATH shim for `gh` so the
-value lives in one process's environment for the life of one command. — a per-session broker on the socket the
+Designed in [`trust.md`](./trust.md) — as a general broker with a small adapter
+per service, not as a GitHub feature, because every service a session touches
+has this problem and it does not go away.
+
+The part of that design worth knowing before starting: services fall into three
+categories and only the first gets the good property. **Mintable** (GitHub Apps,
+AWS STS, Google service accounts) yields a short-lived scoped credential per
+request. **Storable only** — most SaaS, most registries — means the broker holds
+one durable value and hands it over, which bounds reach and revocability but not
+time, and a session that receives it is holding a durable secret however it
+arrived. **Unnecessary** is the row people skip: where the session needs the
+outcome rather than the credential, the host performs the operation and the
+credential never enters the container.
+
+What gets built once is the socket, the request protocol, the policy, the audit
+line, and about four delivery adapters — which are per-TOOL rather than
+per-service. `gh` is worked through end to end in `trust.md` as the concrete
+example. — a per-session broker on the socket the
 sandbox already bind-mounts, protocol hooks (`credential.helper`, `GIT_ASKPASS`,
 a metadata endpoint) wherever the tool has one, and a credential-injecting proxy
 only for the tools that have none.

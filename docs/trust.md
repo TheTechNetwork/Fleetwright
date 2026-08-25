@@ -393,7 +393,68 @@ it is the one to reach for last. It is a large new trusted component that sees
 everything, introduced to solve a problem the first row already solves for git,
 for cloud SDKs and for Claude Code.
 
-#### Worked example: `gh` in every session
+#### The general shape, because GitHub is one of many
+
+Every service a session touches has this problem, and it does not go away: npm,
+Cloudflare, AWS, a container registry, a package index, whatever the work needs
+this month. So the thing to build is not a GitHub broker. It is **the broker**,
+with a small adapter per service — and the honest part of the design is that the
+adapters are not equivalent, because the services are not.
+
+**Three categories, and most services are in the middle one.**
+
+| | what the broker can do | what that bounds |
+|---|---|---|
+| **Mintable** — GitHub Apps, AWS STS, Google service accounts, Cloudflare tokens with `expires_on` | mint a fresh short-lived credential per request, scoped at the moment of minting | time AND reach. The best case, and the only one where "nothing a session leaks outlives it by an hour" is true |
+| **Storable only** — most SaaS, most package registries | hold one durable value and hand it over | reach and revocability, **not time**. A session that receives it holds a durable secret, and no amount of socket plumbing changes that |
+| **Unnecessary** — anything where the session needs the EFFECT, not the credential | perform the operation on the session's behalf and return the result | everything, because the credential never moves |
+
+The middle row is the common case and the weakest, and pretending a uniform
+abstraction hides that would be the worst outcome of building this. When a
+provider cannot mint, the broker should say so — `expiresAt: null` is a fact the
+UI should show, not a detail to smooth over. What is still gained there is real
+but smaller: the value is not in the image, not in the environment of every
+session, not in a config file somebody copies to the next box, and it is
+revocable centrally with an audit trail of which session asked.
+
+**The third row is the one people skip, and it is often the right answer.**
+
+A session usually does not need a credential. It needs an outcome — open a pull
+request, publish a package, purge a cache. Where the operation is nameable, the
+host can perform it and hand back the result, and the credential never enters
+the container at all. That is the same move as `answer` taking an ordinal
+instead of text: narrow the interface rather than hand over the capability.
+
+It costs an operation to be designed for each case, which is why it will never
+cover everything. It should cover the destructive ones.
+
+**What is actually shared, and therefore what gets built once:**
+
+- the per-session socket, which already exists and is already unforgeable
+- a request protocol: a session names a reference, and gets a value, a refusal,
+  or an operation's result
+- policy: which session may reference what, decided host-side from what `start`
+  was given, never from what the session asks for
+- an audit line per grant — session, reference, time, and whether it was minted
+  or handed over
+- the delivery adapters, which are per-TOOL rather than per-service and there
+  are only about four: `credential.helper` for git, a PATH shim for a CLI that
+  reads an env var, a local metadata endpoint for SDKs that already expect one,
+  and a file the host rewrites before expiry for tools that re-read
+
+That last list is the argument for doing it properly once. The per-service
+adapter is then a small thing — "given this durable credential and this scope,
+produce a value and an expiry" — and a service that cannot mint implements the
+same interface and returns a null expiry.
+
+**The recursion, once, so nobody has to rediscover it.** Every one of these
+needs a durable credential somewhere: an App private key, a service account
+token, a vault token. There is no arrangement in which nothing durable exists.
+The whole game is moving the durable thing to the fewest, best-protected places
+and making everything downstream of it short-lived, scoped and attributable —
+not eliminating it, which is not available.
+
+### Worked example: `gh` in every session
 
 Every session should have `gh`. Working out what that means end to end is the
 clearest test of everything above, because it has all the awkward parts —
