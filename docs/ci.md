@@ -70,10 +70,10 @@ can sign in" and "anybody with a Google account can":
 
 ```sh
 cd worker
+# The three AGENT_FLEET_AUTH_* settings are NOT secrets and are NOT set here.
+# They are [vars] in worker/wrangler.toml and deploy with the code, so that
+# changing who can reach the fleet is a reviewable diff. See coordinator-deploy.md.
 npx wrangler secret put AGENT_FLEET_API_TOKEN
-npx wrangler secret put AGENT_FLEET_AUTH_ISSUERS
-npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
-npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
 npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
 ```
 
