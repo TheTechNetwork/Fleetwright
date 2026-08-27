@@ -20,6 +20,13 @@ import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } 
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
+import { loadEnvFile } from '../src/core/env-file.js';
+
+// Before loadSidecarConfig, so the CLI sees exactly what the service sees.
+// systemd supplies this file with EnvironmentFile=; a shell does not, which is
+// why `agent-fleet-sidecar enrol <pin>` used to insist the coordinator URL was
+// unset while it sat in that file.
+loadEnvFile(process.env.AGENT_FLEET_SIDECAR_ENV_FILE || '/etc/agent-fleet-sidecar.env');
 
 const cfg = loadSidecarConfig();
 setLogLevel(cfg.logLevel);

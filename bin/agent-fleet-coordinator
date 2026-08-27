@@ -15,6 +15,12 @@ import os from 'node:os';
 import { dirname } from 'node:path';
 import { Coordinator } from '../src/fleet/coordinator/server.js';
 import { log, setLogLevel } from '../src/log.js';
+import { loadEnvFile } from '../src/core/env-file.js';
+
+// systemd supplies this with EnvironmentFile=; a shell does not. Without it,
+// running this binary by hand binds with no admin token and refuses every
+// request, on a box whose /etc file has the token in it.
+loadEnvFile(process.env.AGENT_FLEET_COORDINATOR_ENV_FILE || '/etc/agent-fleet-coordinator.env');
 
 /** @param {string} name @param {string} [fallback] */
 const str = (name, fallback = '') => {
