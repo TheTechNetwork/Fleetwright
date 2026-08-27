@@ -32,6 +32,6 @@
     "typescript": "^7.0.0"
   },
   "dependencies": {
-    "jose": "6.2.9"
+    "jose": "6.2.10"
   }
 }
