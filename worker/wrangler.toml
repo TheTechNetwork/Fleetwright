@@ -58,6 +58,17 @@ routes = [
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
+# --- who is allowed to sign in ----------------------------------------------
+# Identifiers, not credentials: the issuer is public, the audience is the client
+# id an app ships anyway, and the allowlist is a list of colleagues. Keeping
+# them here means changing who can reach a fleet is a reviewable diff rather
+# than a value somebody edited in a web form at midnight.
+#
+# Empty ALLOW means nobody, deliberately — see src/fleet/coordinator/oidc.js.
+# AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+# AGENT_FLEET_AUTH_AUDIENCES = "<the OAuth client id the app uses>"
+# AGENT_FLEET_AUTH_ALLOW = "@thetech.network"
+
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per
 # client address is far more than a person tapping around an app and far less
@@ -69,6 +80,18 @@ AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 name = "DEMO_RATE_LIMIT"
 namespace_id = "1001"
 simple = { limit = 60, period = 60 }
+
+# Signing in is the other route reachable without a credential, and it does real
+# work for an anonymous caller: fetch a key set, verify a JWT, and on success
+# write a client record. Ten a minute per address is more than a person tapping
+# a button and less than anything worth doing with somebody else's CPU.
+#
+# A separate namespace from the demo budget on purpose: sharing one would mean a
+# script hammering the demo fleet could stop real people signing in.
+[[ratelimits]]
+name = "SIGNIN_RATE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
 
 [[durable_objects.bindings]]
 name = "FLEET"
@@ -87,8 +110,18 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_HOST_TOKEN            what a host presents to connect
-#   AGENT_FLEET_API_TOKEN             what a phone or Shortcut presents
+#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
+#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
+#                                     https://appleid.apple.com https://accounts.google.com
+#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
+#                                     iOS bundle id, the Android web client id
+#   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
+#                                     @domain. EMPTY ALLOWS NOBODY, on purpose
+#
+# THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
+# they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
+# was one string every machine presented — indistinguishable hosts, no way to
+# revoke one, replayable by anything that saw a single connection.
 #   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
 #                                     base64 of it), for push
 #   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
@@ -104,6 +137,7 @@ enabled = true
 # AGENT_FLEET_DEMO_TOKEN is NOT here: it is a [vars] entry below, because it
 # guards nothing worth guarding. See the comment on it.
 #
-# Without the first two the Worker refuses every request rather than running
-# open — see worker.js. Without the third, push is logged instead of sent, and
-# says so.
+# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
+# running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
+# says so, which leaves the admin token as the only way in. Without the FCM
+# service account, push is logged instead of sent, and says so.

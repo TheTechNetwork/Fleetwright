@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # agent-fleet installer — the whole thing, in one script.
 #
+#   curl -fsSL https://fleet.thetech.network/install | sudo sh
+#
+# ...which is install/bootstrap.sh fetching the repository and then running
+# this. By hand, which is the same thing:
+#
 #   git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 #   sudo /opt/agent-fleet/install/install.sh
 #
@@ -749,6 +754,48 @@ for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
 done
 ok "config readable by $RUN_USER"
 
+# --- 5b. runtime dependencies ------------------------------------------------
+# There is exactly ONE, and until recently there were none: `jose`, for
+# verifying the ID tokens the apps sign in with. node_modules is gitignored, so
+# a fresh checkout has no way to get it — and the Node coordinator does not
+# start without it. It dies with ERR_MODULE_NOT_FOUND, which names a package
+# nobody asked for and no fix at all.
+#
+# The sidecar and agent-hub are unaffected: neither imports it. That is why this
+# was invisible until a box tried to run its own coordinator.
+say "Runtime dependencies"
+NPM_BIN="$(command -v npm 2>/dev/null || true)"
+if [ -z "$NPM_BIN" ]; then
+  # Debian ships npm separately from nodejs, so a box that got node from
+  # `pkg_install nodejs` above very often has no npm at all.
+  pkg_install npm >/dev/null 2>&1 || true
+  NPM_BIN="$(command -v npm 2>/dev/null || true)"
+fi
+
+if [ "$CHECK_ONLY" = 1 ]; then
+  [ -n "$NPM_BIN" ] && ok "npm at $NPM_BIN" || warn "npm is not installed — the installer would install it"
+elif [ -z "$NPM_BIN" ]; then
+  warn "npm is not installed and could not be installed automatically ($(pkg_why)).
+       The sidecar and agent-hub are fine without it. A coordinator on this box is not:
+         cd $DIR && npm install --omit=dev"
+else
+  # ci first: it installs exactly the lockfile and is the reproducible one. It
+  # refuses when package.json and the lock disagree, which is a state a fork or
+  # a half-finished merge can be in, so `install` is the fallback rather than
+  # the failure.
+  if (cd "$DIR" && "$NPM_BIN" ci --omit=dev --no-audit --no-fund >/dev/null 2>&1) \
+     || (cd "$DIR" && "$NPM_BIN" install --omit=dev --no-audit --no-fund >/dev/null 2>&1); then
+    # Owned by the service user, so `/update` can rewrite it after a pull that
+    # changes a dependency. Root-owned node_modules is the same class of bug as
+    # the root-owned .git objects the block below exists for.
+    chown -R "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
+    ok "installed $(cd "$DIR" && "$NPM_BIN" ls --omit=dev --depth=0 2>/dev/null | grep -c '^[├└]' || echo '?') runtime dependencies"
+  else
+    warn "npm install failed in $DIR — a coordinator on this box will not start.
+       Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
+  fi
+fi
+
 # The checkout must belong to the user that runs the service, or /update cannot
 # pull: git refuses to operate on a repository owned by somebody else ("dubious
 # ownership"), and even past that, writing the objects needs the permission.
@@ -844,57 +891,51 @@ if [ "$WIZARD" = yes ]; then
     [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
   fi
 
-  # --- fleet secrets -------------------------------------------------------
-  # AFTER the coordinator question, because the answer changes what these are.
+  # --- fleet identity ------------------------------------------------------
+  # AFTER the coordinator question, because the answer changes what happens.
   #
-  # On the box that runs the coordinator they are generated: there is no
-  # decision in them, and a blank one is how a coordinator ends up reachable
-  # with no credential at all.
+  # There is no host token to generate or to ask for any more. This box makes a
+  # keypair, keeps the private half 0600, and presents the public half once with
+  # a six-digit pin. What that removes: a shared secret that had to be typed
+  # identically on every machine, could not tell two boxes apart, and could not
+  # be revoked for one of them.
   #
-  # On a box JOINING someone else's coordinator the host token is not a secret
-  # to invent — it has to MATCH what that coordinator was given, and a generated
-  # one produces a sidecar that connects, is rejected, and retries forever. So
-  # it is asked for. Generating it here and warning the operator to go and fix
-  # the file afterwards was the old behaviour, and it is exactly the class of
-  # thing this installer is supposed to remove.
+  # On the box that RUNS the coordinator, none of that needs a human: this
+  # script already holds the admin token, so it mints a pin and spends it. On a
+  # box joining somebody else's coordinator the pin comes from a person, so it
+  # is asked for — and blank is fine, because `agent-fleet-sidecar enrol` works
+  # perfectly well tomorrow.
   if [ "$FLEET_LOCAL" = 1 ]; then
-    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)" ]; then
-      FLEET_HOST_TOKEN="$(gen_secret)"
-      set_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
-      set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN "$FLEET_HOST_TOKEN"
-      ok "generated a host token, shared by the coordinator and this host"
-    fi
     if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
       set_env "$COORD_ENV" AGENT_FLEET_API_TOKEN "$(gen_secret)"
-      ok "generated an API token for phones and Shortcuts"
+      ok "generated an admin token for the coordinator"
     fi
-  elif [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ]; then
-    JOIN_TOKEN_NOW="$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_TOKEN)"
-    printf '\n  That coordinator has an AGENT_FLEET_HOST_TOKEN. This host has to present\n'
-    printf '  the same one or it will be refused on every reconnect.\n'
-    if [ -n "$JOIN_TOKEN_NOW" ]; then
-      printf '  One is already set here; blank keeps it.\n'
-    fi
-    ask JOIN_TOKEN "Host token for that coordinator"
-    if [ -n "$JOIN_TOKEN" ]; then
-      # Overwrites, unlike set_env: the whole point is to replace a value that
-      # is present and wrong.
-      ENVFILE="$SIDECAR_ENV" ENVKEY=AGENT_FLEET_HOST_TOKEN ENVVAL="$JOIN_TOKEN" "$NODE_BIN" -e '
-        const fs = require("fs");
-        const { ENVFILE, ENVKEY, ENVVAL } = process.env;
-        const line = `${ENVKEY}=${ENVVAL}`;
-        let text = fs.existsSync(ENVFILE) ? fs.readFileSync(ENVFILE, "utf8") : "";
-        text = new RegExp(`^${ENVKEY}=.*$`, "m").test(text)
-          ? text.replace(new RegExp(`^${ENVKEY}=.*$`, "m"), line)
-          : `${text.replace(/\n?$/, "\n")}${line}\n`;
-        fs.writeFileSync(ENVFILE, text, { mode: 0o600 });
-      '
-      ok "host token set for $(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
-    elif [ -z "$JOIN_TOKEN_NOW" ]; then
-      warn "no host token — the sidecar will be refused until one is in $SIDECAR_ENV"
-    fi
-    printf '\n'
   fi
+
+  # The key file, and the directory systemd will also create. Made here as well
+  # so `enrol` below can run before the service has ever started.
+  # No -g: a matching group usually exists but is not guaranteed, and the mode
+  # is 0700 so the group does not decide anything anyway. Same shape as the
+  # STATE_DIR line above.
+  install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
+  set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "/var/lib/agent-fleet/host-key.json"
+
+  # Sweep out the credential this replaced. It does nothing now — no coordinator
+  # reads it and no sidecar sends it — but a dead secret sitting in a config
+  # file still looks live to whoever finds it next, and the whole point of the
+  # change is that there is no shared string to leak.
+  for STALE_ENV in "$COORD_ENV" "$SIDECAR_ENV"; do
+    if [ -f "$STALE_ENV" ] && grep -q '^AGENT_FLEET_HOST_TOKEN=' "$STALE_ENV"; then
+      ENVFILE="$STALE_ENV" "$NODE_BIN" -e '
+        const fs = require("fs");
+        const f = process.env.ENVFILE;
+        fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^AGENT_FLEET_HOST_TOKEN=.*\n?/gm, ""));
+      '
+      ok "removed the old shared host token from $STALE_ENV — hosts hold a key now"
+    fi
+  done
+
+  ENROL_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
 
   # --- push notifications --------------------------------------------------
   # Only worth asking on the box that actually runs the coordinator: it is the
@@ -1022,14 +1063,129 @@ if [ "$WIZARD" = yes ]; then
     fi
   fi
 
+  # --- joining the fleet ---------------------------------------------------
+  # A pin, spent once, in exchange for this box's public key being known.
+  #
+  # On the box that runs its own coordinator this is silent: the admin token is
+  # right here, so minting the pin and spending it is bookkeeping, not a
+  # decision, and making somebody copy six digits from one terminal into the
+  # same terminal would be theatre.
+  enrol_host() {
+    [ -n "$ENROL_URL" ] || return 0
+
+    # Already enrolled? `doctor` is the one that asks the coordinator, because a
+    # key on disk looks identical whether it was ever presented or has since
+    # been revoked. Re-running the installer on a working box must not demand a
+    # new pin.
+    #
+    # Two things this line has to get right, and it got both wrong first:
+    #
+    #   CAPTURED, NOT PIPED. doctor exits non-zero when anything it checks is
+    #   unhappy, and on a fresh box something usually is — claude not being
+    #   logged in yet, most often. Under `set -o pipefail` that exit code sinks
+    #   the pipeline no matter what grep found.
+    #
+    #   MATCHED ON THE LEADING " ok ". doctor prints the same words on the
+    #   FAILING line, so grepping for the sentence reports every unenrolled box
+    #   as enrolled and skips the one step this function exists to do.
+    DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
+    if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
+      ok "this box is already enrolled at $ENROL_URL"
+      return 0
+    fi
+
+    local pin=""
+    if [ "$FLEET_LOCAL" = 1 ]; then
+      local admin
+      admin="$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
+      # Wait for the port. The coordinator was started seconds ago and binding
+      # is not instant; without this the first install on a slow box asks for a
+      # pin it could have minted itself.
+      local i=0
+      while [ "$i" -lt 20 ]; do
+        curl -fsS "$ENROL_URL/healthz" >/dev/null 2>&1 && break
+        i=$((i + 1))
+        sleep 0.5
+      done
+      # `|| true`, and it is load-bearing. Under `set -euo pipefail` a failing
+      # command substitution ABORTS THE SCRIPT — so when the coordinator did not
+      # answer, the installer exited 7 partway through rather than reaching the
+      # warning three lines below, which was therefore unreachable. The
+      # coordinator not answering is the ordinary case on a box where it failed
+      # to start, which is exactly when the operator needs the rest of the
+      # install to finish and tell them so.
+      pin="$(curl -fsS -X POST "$ENROL_URL/api/enroll" \
+               -H "authorization: Bearer $admin" -H 'content-type: application/json' \
+               -d '{"kind":"host","label":"installed on this box"}' 2>/dev/null \
+             | sed -n 's/.*"code":"\([0-9]*\)".*/\1/p' || true)"
+      if [ -z "$pin" ]; then
+        warn "could not mint an enrolment pin from the local coordinator — enrol by hand later"
+        return 0
+      fi
+    else
+      printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
+      printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
+      printf '  Blank is fine — run "agent-fleet-sidecar enrol <pin>" whenever you have one.\n'
+      ask pin "Enrolment pin"
+      [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
+    fi
+
+    # Six digits or nothing. A pin is not free text and never was.
+    pin="$(printf '%s' "$pin" | tr -cd '0-9')"
+    if [ ${#pin} -ne 6 ]; then
+      warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
+      return 0
+    fi
+    if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
+      ok "enrolled at $ENROL_URL"
+    else
+      warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
+    fi
+  }
+
+  # Run a sidecar subcommand as the service user, with the environment the unit
+  # would have given it. Running it as root would put a root-owned key file
+  # where the service expects its own, and the service would refuse to read it.
+  # $1 is a SUBCOMMAND, $2 an optional argument, and the argument is quoted
+  # before it reaches the shell.
+  #
+  # It used to be one string interpolated raw into `bash -lc`, and the only
+  # thing ever put in it was a pin the operator pasted at a prompt — running as
+  # root. `enrol 123 456` silently enrolled with the code "123"; anything with a
+  # $( ) in it did rather more than that. The pin is checked to be six digits
+  # first, and %q-quoted after, because either alone would be enough and neither
+  # costs anything.
+  sidecar_cli() {
+    local sub="$1" arg="${2:-}" quoted=""
+    [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
+    as_user "AGENT_FLEET_COORDINATOR_URL='$ENROL_URL' \
+             AGENT_FLEET_HOST_ID='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)' \
+             AGENT_FLEET_HOST_KEY='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY)' \
+             '$UNIT_NODE_BIN' '$DIR/bin/agent-fleet-sidecar' $sub$quoted"
+  }
+
   # --- start it ------------------------------------------------------------
   if [ "$HAVE_SYSTEMD" = 1 ]; then
     printf '\n'
     if confirm "Enable and start the services now?" Y; then
       # Print the reason rather than where to look for it. "failed to start,
       # go read the journal" is a round trip for information we already have.
+      # `enable --now` STARTS a stopped unit and does nothing at all to a
+      # running one. So re-running the installer over an existing deployment —
+      # which is the documented way to upgrade, and what `/update` tells people
+      # to do — left the old code running with the old environment, reported
+      # "running", and looked like a successful upgrade.
+      #
+      # An already-active unit is restarted. It is the same reload systemd would
+      # do anyway, and the unit files may have changed underneath it.
       start_service() {
-        if systemctl enable --now "$1" >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        if systemctl is-active --quiet "$1"; then
+          if systemctl restart "$1" >/dev/null 2>&1; then
+            ok "$1 restarted, on the new code"
+            return 0
+          fi
+        elif systemctl enable --now "$1" >/dev/null 2>&1; then
           ok "$1 running"
           return 0
         fi
@@ -1040,6 +1196,13 @@ if [ "$WIZARD" = yes ]; then
       }
       start_service agent-hub || true
       [ "$FLEET_LOCAL" = 1 ] && { start_service agent-fleet-coordinator || true; }
+
+      # Enrol BEFORE starting the sidecar. Not for correctness — the sidecar
+      # retries and would pick it up — but because a box that comes up refused
+      # writes "that host is not enrolled" into the journal every few seconds,
+      # and the first thing anyone does with that is assume it is broken.
+      enrol_host
+
       [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] && { start_service agent-fleet-sidecar || true; }
       STARTED=1
     fi
@@ -1120,6 +1283,15 @@ if [ "$WIZARD" = yes ]; then
     printf ' agent-fleet-sidecar\n'
   fi
 
+  # Enrolment only happens on the path where the services were started, because
+  # that is the only path where there is a coordinator up to enrol WITH. Say so
+  # on the other two rather than leaving a box that connects and is refused.
+  if [ -n "$ENROL_URL" ] && [ "${STARTED:-0}" != 1 ]; then
+    printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
+    printf '      sudo -u %s %s/bin/agent-fleet-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
+    printf '  or send /enroll <pin> to your bot. Until then the sidecar is refused on every try.\n'
+  fi
+
   # As the service user: root's ~/.claude is not where the credentials live, so
   # asking as root reports "not logged in" on a box that plainly is.
   if [ -n "$CLAUDE_BIN" ] && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
@@ -1133,11 +1305,36 @@ if [ "$WIZARD" = yes ]; then
   # the operator having no idea what to type into the app, and goes looking in a
   # 0600 file owned by root to find out.
   if [ "$FLEET_LOCAL" = 1 ] && [ -n "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
-    printf '\n  For the phone app or a Shortcut:\n'
-    printf '      URL    http://%s:8791   (or your Worker, if you deploy one)\n' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
-    printf '      Token  %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
-    printf '\n  Hosts joining this coordinator need its host token:\n'
-    printf '      %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_HOST_TOKEN)"
+    printf '\n  The coordinator on this box:\n'
+    printf '      URL          http://%s:8791   (or your Worker, if you deploy one)\n' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
+    printf '      Admin token  %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
+    printf '\n  That token is break-glass, not the everyday credential: it can stop every\n'
+    printf '  session and revoke every host. The app signs in instead and gets its own.\n'
+    printf '\n  To add another box, mint it a pin:\n'
+    printf "      curl -sX POST -H 'authorization: Bearer <admin token>' \\\n"
+    printf "           -H 'content-type: application/json' -d '{\"kind\":\"host\"}' \\\n"
+    printf '           http://127.0.0.1:8791/api/enroll\n'
+    printf '  then on that box:  sudo -u %s agent-fleet-sidecar enrol <pin>\n' "$RUN_USER"
+    # The app does not want the admin token. It signs in — which this box can
+    # only accept if it has been told who is allowed, so say so here rather than
+    # letting somebody discover it from a 503 on a phone.
+    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_AUTH_ALLOW)" ]; then
+      printf '\n  For the app to SIGN IN to this coordinator, add to %s:\n' "$COORD_ENV"
+      printf '      AGENT_FLEET_AUTH_ISSUERS=https://appleid.apple.com https://accounts.google.com\n'
+      printf '      AGENT_FLEET_AUTH_AUDIENCES=<the iOS bundle id> <the Android web client id>\n'
+      printf '      AGENT_FLEET_AUTH_ALLOW=@yourdomain.com\n'
+      printf '  Empty ALLOW lets nobody in, on purpose. Until then the app can use the admin\n'
+      printf '  token above, under "use a credential instead".\n'
+    fi
+  fi
+
+  # This box's own identity, printed because it is the thing to compare against
+  # /hosts when something does not line up.
+  if [ -n "$ENROL_URL" ]; then
+    # Same trap as the pin above: this is a summary line, and a summary line
+    # must not be able to end the install it is summarising.
+    FP="$(sidecar_cli identity 2>/dev/null | sed -n 's/^fingerprint  *//p' || true)"
+    [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)" "$FP"
   fi
 
   cat <<EOF
@@ -1146,7 +1343,7 @@ if [ "$WIZARD" = yes ]; then
       agent-hub list
       journalctl -u agent-hub -f
 
-  Read a token again any time:
+  Read the admin token again any time:
       sudo grep AGENT_FLEET_API_TOKEN $COORD_ENV
 
   Config: $ENV_FILE
@@ -1175,13 +1372,14 @@ Next:
 
   If claude is not logged in yet, send your bot /login and follow the link.
 
-  For the fleet: put the SAME AGENT_FLEET_HOST_TOKEN in $COORD_ENV and
-     $SIDECAR_ENV — a host presenting a different one is refused — and an
-     AGENT_FLEET_API_TOKEN in $COORD_ENV for phones. Then:
+  For the fleet: put an AGENT_FLEET_API_TOKEN in $COORD_ENV (break-glass
+     admin; phones sign in and get their own), then:
        systemctl enable --now agent-fleet-coordinator agent-fleet-sidecar
+     Hosts have no token. Mint a pin and spend it on the box:
+       agent-fleet-sidecar enrol <pin>
 
   Or re-run this installer with a terminal and it will ask instead — it
-  generates the tokens and starts the services for you.
+  generates the admin token, enrols this box and starts the services for you.
 
 EOF
 fi

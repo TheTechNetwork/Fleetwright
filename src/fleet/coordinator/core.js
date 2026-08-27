@@ -13,8 +13,11 @@
 // build breaks, which is the check that keeps it honest.
 
 import { HostRegistry } from './registry.js';
+import { ClientRegistry } from './clients.js';
+import { HostIdentities } from './hosts.js';
+import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, buildIntent } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -24,6 +27,10 @@ const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
  * @property {'ios'|'android'|'web'} platform
  * @property {string} token         APNs/FCM token
  * @property {string} [actor]       who this device belongs to
+ * @property {string} [clientId]    the credential this registration belongs to,
+ *                                  so revoking a phone stops the fleet talking
+ *                                  to it. Optional only for registrations made
+ *                                  before it existed.
  * @property {number} registeredAt
  */
 
@@ -56,6 +63,13 @@ export class CoordinatorCore {
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
     this.registry = new HostRegistry({ now });
+    // Credentials issued to devices, one per phone, each revocable alone.
+    this.clients = new ClientRegistry({ now });
+    // Which machines are in the fleet. The authority, unlike `registry` above,
+    // which is a cache of what those machines say about themselves.
+    this.hostIds = new HostIdentities({ now });
+    // Codes that admit a new host or device, once.
+    this.enrollment = new Enrollment({ now });
     /** @type {Map<string, { resolve: (reply: any) => void, timer: any }>} */
     this.pending = new Map();
     /** @type {Map<string, Device>} */
@@ -63,6 +77,14 @@ export class CoordinatorCore {
     /** Recent events, so a phone that was asleep can catch up on open. */
     /** @type {Array<Record<string, any>>} */
     this.events = [];
+    /**
+     * Called after the ring changes, so whoever owns storage can persist it —
+     * a file on a box, Durable Object storage in the Worker. The core does not
+     * know which, and must not: it is shared by both and imports nothing from
+     * `node:`.
+     * @type {(() => void)|null}
+     */
+    this.onEvents = null;
   }
 
   // --- hosts ---------------------------------------------------------------
@@ -139,14 +161,55 @@ export class CoordinatorCore {
     // Durable Object is a memory leak with a long fuse.
     this.events.push(event);
     if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
+    // Persisted by whoever owns storage — a file on a box, DO storage in the
+    // Worker. The ring used to be RAM only, so "a phone that was asleep can
+    // catch up" was false the moment anything restarted.
+    this.onEvents?.();
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
   }
 
+  /**
+   * Record something the coordinator itself did, as opposed to something a
+   * host reported.
+   *
+   * Enrolment and revocation belong in the same stream as sessions starting
+   * and stopping: when somebody asks "how did that machine get in", the answer
+   * should be in one place and not in a log nobody kept.
+   *
+   * @param {{ event: string, hostId?: string|null, name?: string|null, text?: string|null, fingerprint?: string, actor?: string|null, verb?: string|null, url?: string|null }} entry
+   */
+  record(entry) {
+    const event = {
+      hostId: entry.hostId ?? 'coordinator',
+      event: String(entry.event),
+      name: entry.name ?? null,
+      text: entry.text ?? (entry.fingerprint ? `fingerprint ${entry.fingerprint}` : null),
+      // WHO, and WHAT THEY ASKED FOR. Both were already in hand and both were
+      // thrown away: every intent arrives carrying a verified email since
+      // sign-in, and it was forwarded to a host and forgotten. So the fleet
+      // could tell you a session stopped and never who stopped it.
+      actor: entry.actor ?? null,
+      verb: entry.verb ?? null,
+      url: entry.url ?? null,
+      at: this.now(),
+    };
+    this.events.push(event);
+    if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
+    this.log.info(`coordinator: ${event.event}${event.hostId !== 'coordinator' ? ` ${event.hostId}` : ''}`);
+    this.onEvents?.();
+    return event;
+  }
+
   /** @param {Record<string, any>} event */
   async #notify(event) {
-    const devices = [...this.devices.values()];
+    // Filtered here as well as on revocation. The cascade above is the fix; this
+    // is the belt — a registration that somehow outlives its credential must
+    // not be told what a session is asking.
+    const devices = [...this.devices.values()].filter(
+      (d) => !d.clientId || !this.clients.clients.get(d.clientId)?.revokedAt,
+    );
     if (!devices.length) return;
     const body = describeEvent(event);
     try {
@@ -220,6 +283,39 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * Turn a verified identity into a credential for this device.
+   *
+   * The ID token is spent here and never stored: everything afterwards uses the
+   * client token, so revoking a phone is a local act and no request needs the
+   * identity provider to be reachable.
+   *
+   * @param {{ email: string, name?: string|null }} who
+   * @param {string} [deviceName]
+   */
+  async issueClient(who, deviceName) {
+    const label = String(deviceName || '').trim() || who.name || who.email;
+    // THE FIRST PERSON INTO A FRESH FLEET IS ITS ADMIN.
+    //
+    // Not a role system — there are two levels and this is the top one. Until
+    // now every allowed address could do everything: revoke every machine,
+    // revoke every other person's phone, mint pins. On a fleet whose allowlist
+    // is a domain, that is every colleague.
+    //
+    // Written down where docs/identity.md can point at it: this is a guardrail
+    // against mistakes and against a colleague having a bad day. It is NOT a
+    // security control, because it is enforced inside the coordinator — the
+    // component docs/trust.md assumes compromised.
+    const admin = !this.clients.hasAdmin();
+    const { client, token } = await this.clients.issue(`${label} (${who.email})`, { admin });
+    // Recorded on the client so an intent can say who sent it without another
+    // lookup, and so a revocation list reads as people rather than ids.
+    client.email = who.email;
+    this.log.info(`coordinator: issued a credential to ${who.email} for ${label}${admin ? ' (admin — first in)' : ''}`);
+    if (admin) this.record({ event: 'client.admin', actor: who.email, text: `${who.email} is the first person in, and is this fleet's admin` });
+    return { token, client: { id: client.id, name: client.name, createdAt: client.createdAt, admin: client.admin } };
+  }
+
   // --- devices -------------------------------------------------------------
 
   /**
@@ -228,9 +324,9 @@ export class CoordinatorCore {
    * target — and a reinstall gives the same phone a new one, which should not
    * accumulate as a second registration that fails forever.
    *
-   * @param {{ platform: string, token: string, actor?: string }} reg
+   * @param {{ platform: string, token: string, actor?: string, clientId?: string }} reg
    */
-  registerDevice({ platform, token, actor }) {
+  registerDevice({ platform, token, actor, clientId }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
@@ -243,6 +339,12 @@ export class CoordinatorCore {
       platform: /** @type {any} */ (platform),
       token,
       ...(actor ? { actor } : {}),
+      // WHICH CREDENTIAL THIS BELONGS TO, so revoking a phone can stop the
+      // fleet talking to it. Without this a revoked device kept receiving
+      // session names — and since prompts started carrying the question, the
+      // questions themselves. Revoking a lost phone removed its ability to ASK
+      // and left its ability to be TOLD, which is the wrong half.
+      ...(clientId ? { clientId } : {}),
       registeredAt: existing?.registeredAt ?? this.now(),
     };
     this.devices.set(token, device);
@@ -253,6 +355,64 @@ export class CoordinatorCore {
   /** @param {string} token */
   unregisterDevice(token) {
     return { ok: this.devices.delete(token) };
+  }
+
+  /**
+   * Revoke everything belonging to one person.
+   *
+   * For when the person themselves withdraws consent — revoking this app from
+   * their Apple ID settings, or deleting their Apple Account. An admin removing
+   * a lost phone revokes one credential; this revokes all of them, because the
+   * subject is the person rather than the device.
+   *
+   * @param {string} email
+   * @param {string} why
+   */
+  revokePerson(email, why) {
+    const address = String(email || '').toLowerCase();
+    if (!address) return { revoked: 0, devices: 0 };
+    let revoked = 0;
+    let devices = 0;
+    for (const client of [...this.clients.clients.values()]) {
+      if (String(client.email || '').toLowerCase() !== address || client.revokedAt) continue;
+      const r = this.revokeClient(client.id);
+      if (r.revoked) revoked++;
+      devices += r.devices;
+    }
+    if (revoked) {
+      this.record({
+        event: 'client.withdrawn',
+        actor: address,
+        text: `${address} ${why}; ${revoked} credential${revoked === 1 ? '' : 's'} revoked`,
+      });
+    }
+    return { revoked, devices };
+  }
+
+  /**
+   * Revoke a credential AND stop notifying the device that held it.
+   *
+   * Two halves of one act. Revoking used to do only the first, so a stolen
+   * phone lost the ability to ask the fleet anything and kept the ability to be
+   * told everything — every session name, every host, and now every question a
+   * session asks.
+   *
+   * @param {string} clientId
+   * @returns {{ revoked: boolean, devices: number }}
+   */
+  revokeClient(clientId) {
+    const revoked = this.clients.revoke(clientId);
+    let devices = 0;
+    for (const [token, device] of this.devices) {
+      if (device.clientId === clientId) {
+        this.devices.delete(token);
+        devices++;
+      }
+    }
+    if (revoked || devices) {
+      this.record({ event: 'client.revoked', text: `a device credential was revoked, and ${devices} push registration${devices === 1 ? '' : 's'} with it` });
+    }
+    return { revoked, devices };
   }
 
   /** Drop a token the provider told us is dead. */
@@ -304,10 +464,32 @@ export class CoordinatorCore {
       return { ok: false, error: { code: 'unknown_verb' }, text: `unknown verb ${JSON.stringify(spec.verb)}` };
     }
 
+    // Recorded BEFORE placement, and only for verbs that change something.
+    //
+    // Before placement, not after the work: an intent that was REFUSED — no
+    // hosts, ambiguous name, a box that had just gone — is exactly the one an
+    // audit wants, and recording on the way back loses every one of them. "Who
+    // tried to stop everything at 3am" is a better question to be able to
+    // answer than "what succeeded".
+    //
+    // Mutating only: a `list` every fifteen seconds from three phones would
+    // push everything else out of a 200-entry ring inside an hour, and that
+    // ring is the only memory this coordinator has.
+    if (isMutating(spec.verb) && spec.actor) {
+      this.record({
+        event: 'intent',
+        verb: spec.verb,
+        actor: spec.actor,
+        name: spec.params?.name ?? null,
+        text: `${spec.actor} asked for ${spec.verb}${spec.params?.name ? ` ${spec.params.name}` : ''}`,
+      });
+    }
+
     const placement = place(this.registry, spec);
     if (placement.kind === 'refused') {
       return { ok: false, error: { code: placement.code }, text: placement.reason };
     }
+
 
     if (placement.kind === 'fanout') {
       const results = await Promise.all(
@@ -336,6 +518,17 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * What a phone asks for when it opens, having been asleep while things
+   * happened. Push wakes it; this tells it what it missed.
+   *
+   * On the core rather than in each coordinator's route, because the two had
+   * already drifted — the Worker served 50 and the Node one served none at all.
+   */
+  recentEvents() {
+    return this.events.slice(-EVENT_PAGE);
+  }
+
   /** Everything a client can see about the fleet. */
   snapshot() {
     return {
@@ -346,6 +539,9 @@ export class CoordinatorCore {
     };
   }
 }
+
+/** How many events a catch-up returns. One number, two coordinators. */
+const EVENT_PAGE = 50;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set(['session.awaiting-input', 'session.ended', 'session.error', 'session.rc-online']);

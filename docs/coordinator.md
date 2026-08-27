@@ -89,7 +89,6 @@ boring.
 
 ## Not done yet
 
-Deploying to Cloudflare; per-host enrollment (there is one shared host token);
-host → coordinator **events**, so a session that hits a prompt or finishes can
+Deploying to Cloudflare; host → coordinator **events**, so a session that hits a prompt or finishes can
 push rather than be polled — §3's third meaning of "wake", and the one that
 makes the phone app worth having.

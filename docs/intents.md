@@ -76,7 +76,7 @@ Coordinator → host:
 | `verb` | one of the eight below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
 | `params` | object. **Unknown keys are refused, not ignored** — see below. |
 | `issuedAt` | epoch ms. Bounds replay when the host passes `maxSkewMs`. |
-| `actor` | optional, `[A-Za-z0-9._:@-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
+| `actor` | optional, `[A-Za-z0-9._:@+-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
 
 Host → coordinator:
 

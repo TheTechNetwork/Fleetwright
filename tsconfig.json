@@ -1,16 +1,28 @@
 {
-  "//": "Type-checking only — this project ships plain ESM JavaScript and has NO build step. `npm run typecheck` (and CI) run tsc with noEmit over the JSDoc annotations; nothing here is required to run anything.",
+  "//": "Type-checking only \u2014 this project ships plain ESM JavaScript. `npm run typecheck` (and CI) run tsc with noEmit over the JSDoc annotations; nothing here is required to run anything. The ONE exception is src/web/console/, which is JSX and is compiled by scripts/build-web.mjs \u2014 its generated output is excluded below, because type-checking a minified bundle reports its own mangled variable names as errors.",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
     "strict": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.js", "bin/agent-hub", "bin/agent-fleet-sidecar"]
+  "include": [
+    "src/**/*.js",
+    "bin/agent-hub",
+    "bin/agent-fleet-sidecar"
+  ],
+  "exclude": [
+    "src/web/console.js",
+    "build/**"
+  ]
 }

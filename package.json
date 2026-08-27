@@ -15,11 +15,23 @@
   "scripts": {
     "start": "node src/index.js",
     "sidecar": "node bin/agent-fleet-sidecar",
-    "test": "node --test test/*.test.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "test": "node --test test/*.test.js build/*.test.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "build:web": "node scripts/build-web.mjs",
+    "pretest": "node scripts/build-web.mjs",
+    "browse": "node scripts/browse.mjs",
+    "nojs": "node scripts/nojs.mjs",
+    "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.62.1",
+    "preact": "^10.29.8",
+    "preact-render-to-string": "^6.7.0",
     "typescript": "^7.0.0"
+  },
+  "dependencies": {
+    "jose": "6.2.9"
   }
 }

@@ -33,7 +33,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -102,14 +101,14 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             MaterialTheme(
                 colorScheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
-            ) { FleetScreen() }
+            ) { FleetScreen(onSignedIn = ::registerForPush) }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetScreen() {
+fun FleetScreen(onSignedIn: () -> Unit = {}) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val fleet = remember { Fleet(settings) }
@@ -184,6 +183,12 @@ fun FleetScreen() {
             if (showSettings) {
                 SettingsPanel(settings) {
                     showSettings = false
+                    // Signing in is what makes push registration possible at
+                    // all — before it there is no credential to POST with — so
+                    // this runs on the way out of settings rather than only at
+                    // launch, which would leave a phone that signed in on its
+                    // first run unregistered until its second.
+                    onSignedIn()
                     refresh()
                 }
                 return@Column
@@ -301,19 +306,64 @@ private fun SessionCard(
     }
 }
 
+/**
+ * The enrolled hosts, or nothing when this device has no credential.
+ *
+ * A top-level function rather than a local one inside the composable: local
+ * suspend functions that capture composable state are the kind of thing that
+ * compiles until the Compose compiler decides otherwise, and there is nothing
+ * here that needs to be inside.
+ */
+private suspend fun enrolledHosts(settings: Settings): List<Fleet.Host> =
+    if (settings.credential.isNotBlank()) Fleet(settings).enrolledHosts() else emptyList()
+
 @Composable
 private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
-    // Saved, so a rotation mid-typing does not silently reset both fields to
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Saved, so a rotation mid-typing does not silently reset the field to
     // whatever was last persisted.
     var url by rememberSaveable { mutableStateOf(settings.coordinatorUrl) }
-    var token by rememberSaveable { mutableStateOf(settings.apiToken) }
+    var signedIn by rememberSaveable { mutableStateOf(settings.credential.isNotBlank()) }
+    var identity by rememberSaveable { mutableStateOf(settings.signedInAs) }
+    var signInResult by rememberSaveable { mutableStateOf("") }
+    var busy by rememberSaveable { mutableStateOf(false) }
+    var pin by rememberSaveable { mutableStateOf("") }
+    var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
+    var confirming by rememberSaveable { mutableStateOf<String?>(null) }
+
+    confirming?.let { hostId ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text("Revoke $hostId?") },
+            text = {
+                Text(
+                    "It is disconnected immediately, and its sessions keep running without it. " +
+                        "Getting it back means a new pin, typed on that box.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = null
+                    scope.launch {
+                        busy = true
+                        signInResult = Fleet(settings).revokeHost(hostId).text
+                        hosts = enrolledHosts(settings)
+                        busy = false
+                    }
+                }) { Text("Revoke") }
+            },
+            dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
+        )
+    }
+
+    LaunchedEffect(signedIn) { hosts = enrolledHosts(settings) }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Coordinator", style = MaterialTheme.typography.titleMedium)
         Text(
-            "The origin this app talks to, and the API token from " +
-                "/etc/agent-fleet-coordinator.env. Nothing is baked into the app — a " +
-                "credential in an APK is public the moment somebody unzips it.",
+            "The one origin this app will talk to.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(
@@ -322,37 +372,192 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             label = { Text("Coordinator URL") },
             placeholder = { Text("https://fleet.thetech.network") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        // Masked, like the iOS SecureField. This is the credential that can
-        // start and stop every session in the fleet, and in plain text it is
-        // readable over a shoulder and captured by any screenshot or screen
-        // recording of this panel. `reveal` is there because a mistyped token
-        // otherwise fails as an indistinguishable "rejected the token".
-        var reveal by rememberSaveable { mutableStateOf(false) }
-        OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            label = { Text("API token") },
-            singleLine = true,
-            visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                autoCorrectEnabled = false,
-            ),
-            trailingIcon = {
-                TextButton(onClick = { reveal = !reveal }) { Text(if (reveal) "Hide" else "Show") }
-            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
             onClick = {
                 settings.coordinatorUrl = url
-                settings.apiToken = token
+                if (!signedIn) signInResult = "Now sign in."
                 onDone()
             },
             enabled = url.isNotBlank(),
         ) { Text("Save") }
+
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+        // Signing in. There is no password here and no account to make: the
+        // phone proves who its owner is to Google, and the coordinator issues
+        // this device a credential of its own — revocable without disturbing
+        // any other phone, and named after the person holding it.
+        Text("You", style = MaterialTheme.typography.titleMedium)
+        if (signedIn) {
+            Text(
+                "Signed in as ${identity.ifBlank { "this device" }}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(onClick = {
+                settings.credential = ""
+                settings.signedInAs = ""
+                signedIn = false
+                identity = ""
+                hosts = emptyList()
+            }) { Text("Sign out") }
+        } else {
+            Text(
+                "This device gets a credential of its own, kept encrypted with a key that never leaves " +
+                    "the phone's keystore. A fleet allows people by email address.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                enabled = url.isNotBlank() && !busy,
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        signInResult = "signing in…"
+                        // Save first: signing in against a URL that has been
+                        // typed but not saved would sign in to the wrong fleet.
+                        settings.coordinatorUrl = url
+                        try {
+                            val idToken = SignIn.googleIdToken(context)
+                            val (token, email) = Fleet(settings).signIn(
+                                idToken = idToken,
+                                deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
+                            )
+                            settings.credential = token
+                            settings.signedInAs = email
+                            signedIn = true
+                            identity = email
+                            signInResult = ""
+                            hosts = enrolledHosts(settings)
+                        } catch (e: SignIn.Cancelled) {
+                            signInResult = ""
+                        } catch (e: Exception) {
+                            signInResult = e.message ?: "sign-in failed"
+                        }
+                        busy = false
+                    }
+                },
+            ) { Text("Sign in with Google") }
+        }
+        if (signInResult.isNotBlank()) {
+            Text(signInResult, style = MaterialTheme.typography.bodySmall)
+        }
+
+        if (signedIn) {
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+            // Adding a machine. This is the second thing anybody does after
+            // signing in, and the pin is the whole of how a host joins now —
+            // there is no shared token to copy onto the box.
+            Text("Hosts", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        pin = runCatching { Fleet(settings).mintHostPin() }
+                            .getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
+                        busy = false
+                    }
+                },
+            ) { Text("Mint a pin for a new host") }
+
+            if (pin.isNotBlank()) {
+                // 123 456 — read down a phone, typed into a terminal.
+                Text(
+                    if (pin.length == 6) "${pin.take(3)} ${pin.takeLast(3)}" else pin,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    "On that box:  agent-fleet-sidecar enrol $pin\nGood for ten minutes, once.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            for (host in hosts) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(host.hostId, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.weight(1f))
+                            if (host.revoked) {
+                                Text("revoked", style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                // Asked first. Revoking is one tap next to a
+                                // name in a list, it disconnects a machine
+                                // mid-session, and the only way back is a new
+                                // pin typed on the box — which is exactly the
+                                // errand this app exists to avoid.
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = { confirming = host.hostId },
+                                ) { Text("Revoke") }
+                            }
+                        }
+                        // The fingerprint is here so it can be compared with
+                        // what the box itself prints. Two machines claiming one
+                        // name is exactly when you need to know which key is
+                        // which.
+                        Text(
+                            host.fingerprint,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            }
+        }
+
+        // The way in that does not involve an identity provider.
+        //
+        // Two real needs, neither of which sign-in covers. Play's reviewers
+        // have to be able to run the app, and no reviewer's address is on
+        // anybody's allowlist — the public demo credential exists for exactly
+        // that and reaches a coordinator with no hosts on it. And when sign-in
+        // itself is what is broken, the admin credential is how an operator
+        // gets back in.
+        //
+        // Behind a toggle, and labelled for what it is: a token field in front
+        // of everybody is how the shared-secret habit comes back.
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        var showAdvanced by rememberSaveable { mutableStateOf(false) }
+        var pasted by rememberSaveable { mutableStateOf("") }
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "Hide" else "Use a credential instead")
+        }
+        if (showAdvanced) {
+            Text(
+                "For a demo fleet, and for getting back in when sign-in is what is broken.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            // Masked. It is a credential, and in plain text it is readable over
+            // a shoulder and captured by any screenshot or screen recording of
+            // this panel.
+            OutlinedTextField(
+                value = pasted,
+                onValueChange = { pasted = it },
+                label = { Text("Credential") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                enabled = pasted.isNotBlank() && url.isNotBlank(),
+                onClick = {
+                    settings.coordinatorUrl = url
+                    settings.credential = pasted.trim()
+                    settings.signedInAs = ""
+                    signedIn = true
+                    pasted = ""
+                    showAdvanced = false
+                    onDone()
+                },
+            ) { Text("Use it") }
+        }
 
         // Push is the one feature that fails silently: a registration that
         // never arrived and a coordinator with no sender configured look
@@ -361,19 +566,14 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // so the answer arrives before the notification that matters does.
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
         var pushResult by rememberSaveable { mutableStateOf("") }
-        val scope = rememberCoroutineScope()
         OutlinedButton(
             onClick = {
                 scope.launch {
                     pushResult = "sending…"
-                    // Save first: testing against a token the user has typed
-                    // but not saved would test the wrong coordinator.
-                    settings.coordinatorUrl = url
-                    settings.apiToken = token
                     pushResult = Fleet(settings).testPush(null).text
                 }
             },
-            enabled = url.isNotBlank(),
+            enabled = signedIn,
         ) { Text("Send a test notification") }
         if (pushResult.isNotBlank()) {
             Text(pushResult, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))

@@ -37,6 +37,7 @@ import { describe } from '../core/login.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
+import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
@@ -393,7 +394,13 @@ export const COMMANDS = {
   },
 
   update: {
-    aliases: ['upgrade', 'pull'],
+    // NOT 'upgrade': that is a command of its own, further down, and having it
+    // as an alias here too means the lookup table is decided by declaration
+    // order. It happens to resolve the right way today — `upgrade` is defined
+    // after `update`, so it overwrites — and if anybody reordered this object,
+    // /upgrade would quietly start restarting the service instead of
+    // installing system packages.
+    aliases: ['pull'],
     usage: '/update [--restart]',
     short: 'Pull the latest code',
     help:
@@ -475,6 +482,34 @@ export const COMMANDS = {
     run: async (ctx, args) => {
       const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
       const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running });
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  enroll: {
+    aliases: ['enrol', 'join'],
+    usage: '/enroll <pin>',
+    short: 'Join this box to a fleet',
+    help:
+      'Join this box to its coordinator with a six-digit pin. Mint the pin in ' +
+      'the app; it is good for ten minutes and works once. The pin buys one ' +
+      'exchange — this box generates its own key and never sends the private half.',
+    run: async (ctx, args) => {
+      const r = await fleetEnrol(args[0] || '', { actor: ctx.actor });
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  identity: {
+    aliases: ['fleet'],
+    usage: '/identity',
+    short: "Show this box's fleet identity",
+    help:
+      "Show this box's host id, its key fingerprint, and whether the " +
+      'coordinator currently accepts it. The fingerprint is what you compare ' +
+      'against the one the app shows for this host.',
+    run: async () => {
+      const r = await fleetIdentity();
       return { ok: r.ok, text: r.text };
     },
   },

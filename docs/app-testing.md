@@ -14,8 +14,8 @@ Precisely:
 | Android | Builds, installs, **launches**. Driven through the whole checklist below on an API 37 AVD. |
 | iOS | Builds, installs, **launches**, lists sessions over HTTPS and over plain HTTP. Never signed for a device. |
 | Push — server | Sender, encoding, device registry, event fan-out: built and unit-tested. Nothing has ever reached a phone. |
-| Push — Android | **Not wired.** Needs a Firebase project; see below. |
-| Push — iOS | Registers with APNs and posts the token. **The only sender cannot use that token — see below.** |
+| Push — Android | **Wired.** FCM, registered on launch; see below. |
+| Push — iOS | **Wired.** Direct APNs, not FCM — registers with APNs and posts the token the sender now knows how to use; see below. |
 
 Both apps have now been run. What that turned up is in the git history; what it
 did *not* cover is Siri (no way to speak to it or tap Shortcuts headlessly) and
@@ -25,17 +25,15 @@ So the first person to run either of these should expect to find things. The
 first *compile* of the iOS app already turned up a `Section` initialiser that
 does not exist — that is the level of unverified this is.
 
-**iOS push cannot work as it currently stands, and the failure is silent.**
-`pusherFromEnv` only ever builds `fcmPusher`, which passes `device.token`
-straight to FCM's `messages:send` as an *FCM registration token*. But
-`FleetwrightApp.swift` registers with APNs directly and `Fleet.swift` posts the
-raw **APNs** device token — a different kind of token entirely. FCM rejects it,
-and `push.js` treats `INVALID_ARGUMENT`/404 as a dead token and *deletes the
-registration*, so the phone quietly unregisters itself and nothing in the log
-says why. `docs/push.md` describes both fixes — add the Firebase iOS SDK and
-post `Messaging.messaging().token` instead, or write the direct-APNs sender —
-and neither is wired. The hex encoding in `Fleet.swift` is correct for the
-*direct APNs* path; it is not a substitute for having that path.
+**iOS push now goes over direct APNs, not FCM.** `pusherFromEnv` builds a
+`routingPusher` (`src/fleet/push.js`) that sends iOS tokens to `apnsPusher` and
+everything else to `fcmPusher`, so the raw **APNs** device token
+`FleetwrightApp.swift` registers with and `Fleet.swift` posts never reaches
+FCM's `messages:send`. `push.js` also no longer treats an `INVALID_ARGUMENT`
+as a dead token — that response means the token is not an FCM token at all,
+not that it is gone, so the registration is logged and kept rather than
+deleted. `docs/push.md` documents the live path, including the
+`AGENT_FLEET_APNS_KEY_ID`/`_TEAM_ID`/`_KEY` variables it needs.
 
 ## The one thing to do first: have a coordinator to point at
 
@@ -49,13 +47,31 @@ misconfigured one. Pick one:
 | **A box on the LAN** | `http://<box>:8791` after `install.sh` | Android; see the ATS note before trying it on iOS |
 | **Local Node coordinator** | `node bin/agent-fleet-coordinator` on the Mac | fastest loop, no fleet — but with no host connected, `list` is legitimately empty |
 
-The **API token** is what both apps authenticate with — `Bearer <token>` on every
-request. Get it from whichever coordinator you chose:
+**Both apps sign in.** There is no token to type: the app hands the coordinator
+an Apple or Google ID token, and gets back a credential issued to that device.
+So the coordinator has to have sign-in configured before either app can get
+past its settings screen — `AGENT_FLEET_AUTH_ISSUERS`,
+`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your own address
+on the allowlist. See [`identity.md`](./identity.md).
 
-```sh
-sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env   # a box
-# for the Worker it is the AGENT_FLEET_API_TOKEN GitHub Actions secret
-```
+Two shortcuts while testing:
+
+- The collapsed **"use a credential instead"** field takes the public demo
+  credential (two invented hosts and three invented sessions, for App Review)
+  or the admin token from
+  `AGENT_FLEET_API_TOKEN`. That is the way to test everything downstream of
+  sign-in without sign-in working yet.
+- `sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env` on a box;
+  for the Worker it is the `AGENT_FLEET_API_TOKEN` GitHub Actions secret.
+
+Two things that will stop a real sign-in, both worth checking before debugging
+the app:
+
+- **iOS**: the App ID needs the *Sign In with Apple* capability enabled in the
+  developer portal, or the archive will not sign at all.
+- **Android**: the Firebase project needs a **web** OAuth client, and
+  `google-services.json` has to carry it — the app looks up
+  `default_web_client_id` at runtime and says so plainly when it is absent.
 
 Sanity-check the coordinator from the same machine **before** blaming an app:
 
@@ -71,18 +87,15 @@ that *first*: the Worker was answering with `"hosts":[]` for the whole first
 part of this exercise, which makes both apps look broken when they are being
 exactly honest.
 
-Note that the two coordinators answer `/api/hosts` in **different shapes**. The
-Worker returns the `snapshot()` form, the Node one returns the registry:
+Both coordinators answer `/api/hosts` in the **same shape** — `{ok, ...snapshot()}`
+on the Node side too now, deliberately kept in step with the Worker:
 
 ```jsonc
-// Worker
 {"ok":true,"protocol":1,"hosts":[],"devices":0,"events":[]}
-// Node
-{"ok":true,"hosts":[…]}
 ```
 
-Neither app reads this endpoint — they only POST `/api/intent` — so it costs
-nothing today, but do not write anything against it assuming one shape.
+Neither app reads this endpoint today — they only POST `/api/intent` — but
+that is no longer a reason to assume either shape if one starts.
 
 ## Emulator specifics that will cost you an hour each
 
@@ -159,8 +172,14 @@ and confirm what actually went out rather than what `defaults read` reports.
 
 Every action in both apps is one intent to the coordinator, so this is the list:
 
-- [ ] **Settings** accept a URL and token, and persist across a relaunch
-- [ ] **A wrong token** produces "The coordinator rejected the token", not a crash or a silent empty list
+- [ ] **Settings** accept a URL, and it persists across a relaunch
+- [ ] **Sign in** — the system sheet appears, and the app shows the address afterwards
+- [ ] **Hide My Email** (iOS) is refused with "choose Share My Email", not "not on the list"
+- [ ] **An address not on the allowlist** is refused, and says so
+- [ ] **Revoking this device** from another signed-in device logs it out on the next call, rather than failing forever
+- [ ] **Mint a pin**, and it enrols a real box — `agent-fleet-sidecar enrol <pin>` or `/enroll <pin>` in Telegram
+- [ ] **The fingerprint** shown for that host matches what `agent-fleet-sidecar identity` prints on the box
+- [ ] **A bad credential** produces a readable refusal, not a crash or a silent empty list
 - [ ] **An unreachable URL** produces a readable error
 - [ ] **list** — sessions appear, each attributed to a host
 - [ ] **start** — with a name, and without one (the coordinator generates `cc-brave-otter`)

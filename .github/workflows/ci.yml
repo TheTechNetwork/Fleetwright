@@ -51,12 +51,45 @@ jobs:
       # No runtime dependencies and no build step. The only install is the
       # typescript devDependency used to check the JSDoc annotations.
       - run: npm install --no-audit --no-fund
+      # `npm test` builds the console first (pretest), because node cannot
+      # import JSX and the component tests render the compiled output. A UI that
+      # cannot be rendered in a test is a UI that ships broken — which is
+      # exactly how the hand-rolled version of this page shipped.
       - run: npm test
       - run: npm run typecheck
 
       # The installer is the thing a new operator runs first, so a syntax error
       # in it is a worse bug than one in the service.
       - run: bash -n install/install.sh
+
+      # And the bootstrap is checked as SH, not bash. It is the one file here
+      # that strangers execute out of a pipe under whatever /bin/sh is, and a
+      # bashism in it fails on their box with "Bad substitution" and nothing
+      # else. test/bootstrap.test.js runs it for real; this catches the typo
+      # before that gets as far as cloning anything.
+      - run: sh -n install/bootstrap.sh
+
+      # The Worker inlines openapi.json at edit time rather than reading it at
+      # runtime, because it ships no files. So the copy in worker/src/worker.js
+      # can drift from the one in the repository root, and the drift would be
+      # invisible: both coordinators would serve a document, and they would be
+      # different documents. test/openapi.test.js asserts they match, and this
+      # is the second line of that defence for anyone editing by hand.
+      - name: The served contract matches the committed one
+        run: |
+          node -e '
+            const fs = require("fs");
+            const spec = fs.readFileSync("openapi.json", "utf8");
+            const worker = fs.readFileSync("worker/src/worker.js", "utf8");
+            const paths = Object.keys(JSON.parse(spec).paths).sort();
+            const inlined = worker.slice(worker.indexOf("const OPENAPI = JSON.stringify("));
+            const missing = paths.filter((p) => !inlined.includes(JSON.stringify(p)));
+            if (missing.length) {
+              console.log("::error::worker.js has not been rebuilt from openapi.json — missing " + missing.join(", "));
+              process.exit(1);
+            }
+            console.log("ok   " + paths.length + " paths, both copies agree");
+          '
 
       # An unparseable workflow does not fail a check — it shows up as a run
       # named after the FILE PATH, with no jobs, which is easy to miss entirely.

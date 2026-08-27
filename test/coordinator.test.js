@@ -15,6 +15,7 @@ import { place } from '../src/fleet/coordinator/scheduler.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
+import { generateKeyPair, sign, signingInput } from '../src/fleet/crypto.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 
 // --- the registry: `unknown` is a state, not a default ----------------------
@@ -216,6 +217,38 @@ test('list fans out to every host', () => {
 // --- end to end -------------------------------------------------------------
 
 /**
+ * Enrol a fresh key the way a real box does — mint a pin, spend it over HTTP —
+ * and hand back the proof function the transport calls on every dial.
+ *
+ * Going through the actual endpoint rather than poking core.hostIds keeps the
+ * enrolment path itself under test in every end-to-end case.
+ *
+ * @param {import('../src/fleet/coordinator/server.js').Coordinator} coordinator
+ * @param {number} port
+ * @param {string} hostId
+ */
+async function enrolledProof(coordinator, port, hostId) {
+  const keys = await generateKeyPair();
+  const { code } = coordinator.core.enrollment.mint({ purpose: 'host' });
+  const res = await fetch(`http://127.0.0.1:${port}/api/enroll/host`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, hostId, publicJwk: keys.publicJwk }),
+  });
+  assert.equal(res.status, 200, 'enrolment succeeded');
+
+  return async () => {
+    const chal = await fetch(`http://127.0.0.1:${port}/api/host/challenge`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hostId }),
+    });
+    const { nonce } = await chal.json();
+    return { nonce, proof: await sign(keys.privateJwk, signingInput('host-connect', { hostId, nonce })) };
+  };
+}
+
+/**
  * A coordinator, a stub agent-hub, and a sidecar joined over a real WebSocket.
  * @param {import('node:test').TestContext} t
  * @param {object} [hubOpts]
@@ -228,6 +261,7 @@ async function fleet(t, hubOpts = {}) {
   const transport = new WebSocketTransport({
     origin: `http://127.0.0.1:${port}`,
     hostId: 'unabandoned',
+    proof: await enrolledProof(coordinator, port, 'unabandoned'),
   });
   const sidecar = new Sidecar({
     hub: new HubClient({ baseUrl: stub.baseUrl, readTimeoutMs: 2000 }),
@@ -386,22 +420,62 @@ test('an API token is enforced when set', async (t) => {
   assert.equal(ok.status, 200);
 });
 
-test('a host with the wrong token cannot connect at all', async (t) => {
-  const coordinator = new Coordinator({ hostToken: 'right-token-16chars' });
+test('a host that was never enrolled cannot connect at all', async (t) => {
+  const coordinator = new Coordinator();
+  const port = await coordinator.listen(0, '127.0.0.1');
+  t.after(() => coordinator.close());
+
+  // A well-formed proof from a key the coordinator has never seen. This is the
+  // interesting impostor: not a missing header, a real signature over a real
+  // nonce, made by the wrong key.
+  const keys = await generateKeyPair();
+  const transport = new WebSocketTransport({
+    origin: `http://127.0.0.1:${port}`,
+    hostId: 'imposter',
+    proof: async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/host/challenge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hostId: 'imposter' }),
+      });
+      const { nonce } = await res.json();
+      return { nonce, proof: await sign(keys.privateJwk, signingInput('host-connect', { hostId: 'imposter', nonce })) };
+    },
+    maxBackoffMs: 50,
+  });
+  t.after(() => transport.stop());
+  await transport.start();
+  await new Promise((r) => setTimeout(r, 300));
+
+  assert.equal(coordinator.registry.list().length, 0, 'a refused host never enters the registry');
+});
+
+test('a revoked host is disconnected and stays out', async (t) => {
+  const coordinator = new Coordinator({ apiToken: 'a-token-at-least-16ch' });
   const port = await coordinator.listen(0, '127.0.0.1');
   t.after(() => coordinator.close());
 
   const transport = new WebSocketTransport({
     origin: `http://127.0.0.1:${port}`,
-    hostId: 'imposter',
-    token: 'wrong',
+    hostId: 'condemned',
+    proof: await enrolledProof(coordinator, port, 'condemned'),
     maxBackoffMs: 50,
   });
+  t.after(() => transport.stop());
   await transport.start();
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(coordinator.registry.list().length, 1, 'enrolled host connected');
 
-  assert.equal(coordinator.registry.list().length, 0, 'a refused host never enters the registry');
-  await transport.stop();
+  const res = await fetch(`http://127.0.0.1:${port}/api/hosts/condemned`, {
+    method: 'DELETE',
+    headers: { authorization: 'Bearer a-token-at-least-16ch' },
+  });
+  assert.equal(res.status, 200);
+
+  // It will retry — that is what the transport does — and every retry must be
+  // refused. A revocation that only holds until the host reconnects is not one.
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(coordinator.registry.hosts.get('condemned')?.connected, false);
 });
 
 test('a host that drops is marked offline and its work is refused, not misrouted', async (t) => {
@@ -421,4 +495,66 @@ test('a host that drops is marked offline and its work is refused, not misrouted
   const reply = await coordinator.dispatch({ verb: 'resume', params: { name: 'bigjob' } });
   assert.equal(reply.ok, false);
   assert.equal(reply.error.code, 'host_unreachable');
+});
+
+test('losing the coordinator makes the sidecar reconnect, not exit', async (t) => {
+  // Every timer in the transport was unref'd. While a retry is pending it is
+  // the ONLY thing holding the event loop open — the socket is gone, that is
+  // why we are retrying — so node decided there was nothing left to do and
+  // exited. Under systemd that reads as a restart loop with no reason in it;
+  // run by hand, the process simply vanishes.
+  const transport = new WebSocketTransport({
+    origin: 'http://127.0.0.1:9',
+    hostId: 'persistent',
+    maxBackoffMs: 100,
+    proof: async () => ({ nonce: 'n', proof: 'p' }),
+  });
+  await transport.start();
+  t.after(() => transport.stop());
+
+  // If the loop were empty this would never resolve, because node would be
+  // gone. Asserting on a real wait rather than on the flag is the point.
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(transport.retryTimer, 'a retry is pending and holding the process up');
+});
+
+test('a box whose claude is logged out is still asked what it has', async (t) => {
+  // `list` fanned out over schedulable(), which requires state === 'healthy'.
+  // So a degraded box — agent-hub answering, sessions running, claude merely
+  // logged out — dropped out of the answer entirely. Not greyed out, not
+  // flagged: absent. The phone showed a shorter list and said nothing, and the
+  // sessions it hid were the ones on the box that needed attention.
+  //
+  // Asserted on which HOSTS were reached rather than on the sessions returned,
+  // because the stub hub answers /list without a session payload — the property
+  // under test is that the box is still asked, not what it says back.
+  const { coordinator, stub } = await fleet(t, { sessions: [sessionRecord('inherited')] });
+  await new Promise((r) => setTimeout(r, 600));
+
+  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const host = coordinator.registry.hosts.get('unabandoned');
+  assert.notEqual(host?.state, 'healthy', 'the box is degraded, which is the whole point');
+  assert.equal(host?.connected, true, 'and still on the end of a socket');
+
+  const reply = await coordinator.dispatch({ verb: 'list' });
+  assert.equal(reply.ok, true, 'not refused as no_hosts');
+  assert.ok(
+    (reply.hosts || []).some((h) => h.hostId === 'unabandoned'),
+    'the degraded box is still asked, because a read is not a placement',
+  );
+});
+
+test('a degraded host is still refused new work', async (t) => {
+  // The other half, and the reason the two selectors exist separately: placing
+  // a session on a box whose claude is logged out is placing it nowhere.
+  const { coordinator, stub } = await fleet(t);
+  await new Promise((r) => setTimeout(r, 600));
+  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const reply = await coordinator.dispatch({ verb: 'start', params: { name: 'nope' } });
+  assert.equal(reply.ok, false);
+  assert.match(String(reply.text || reply.error?.code), /no_hosts|not logged in|degraded/i);
 });

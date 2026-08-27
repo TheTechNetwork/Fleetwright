@@ -149,10 +149,34 @@ export class HostRegistry {
     return this.hosts.get(hostId) || null;
   }
 
-  /** Hosts that could accept work right now. */
+  /**
+   * Hosts that could accept NEW WORK right now.
+   *
+   * Healthy, because placing a session on a box whose agent-hub is unreachable
+   * or whose claude is logged out is placing it nowhere.
+   */
   schedulable() {
     this.sweep();
     return [...this.hosts.values()].filter((h) => h.connected && h.state === 'healthy' && h.health);
+  }
+
+  /**
+   * Hosts worth ASKING A QUESTION of. A strictly wider set, and the difference
+   * matters more than it looks.
+   *
+   * `list` used to fan out over schedulable(), which meant a box whose claude
+   * was merely logged out — degraded, not gone, still holding every one of its
+   * running sessions — dropped out of the answer entirely. Not greyed out, not
+   * flagged: absent. The phone showed a shorter list and said nothing, and the
+   * sessions it stopped showing were exactly the ones on the box that needed
+   * attention.
+   *
+   * Schedulability is a question about writes. A read should reach anything
+   * that is on the end of a socket.
+   */
+  reachable() {
+    this.sweep();
+    return [...this.hosts.values()].filter((h) => h.connected);
   }
 
   /**
@@ -167,19 +191,40 @@ export class HostRegistry {
    * @returns {{ host: HostEntry, status: string, ageMs: number }|null}
    */
   findSession(name) {
+    const all = this.findSessions(name);
+    return all.length ? all[0] : null;
+  }
+
+  /**
+   * EVERY host claiming a session of this name.
+   *
+   * findSession returned the first match in Map order, and this codebase says
+   * elsewhere — in dispatch(), in as many words — that two hosts can hold
+   * sessions with the same name. So `stop bigjob` picked whichever box the
+   * iterator happened to reach first and killed it, silently, with no
+   * indication that a choice had been made at all.
+   *
+   * The scheduler refuses on more than one rather than guessing. A stop that
+   * lands on the wrong box is not recoverable by retrying.
+   *
+   * @param {string} name
+   */
+  findSessions(name) {
     this.sweep();
+    const out = [];
     for (const host of this.hosts.values()) {
       const sessions = host.health?.sessions;
       const found = sessions?.find((s) => s.name === name);
       if (found) {
-        return { host, status: found.status, ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt };
+        out.push({ host, status: found.status, ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt });
+        continue;
       }
       // Older sidecars report only the resumable names.
       if (host.health?.resumable?.includes(name)) {
-        return { host, status: 'stopped', ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt };
+        out.push({ host, status: 'stopped', ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt });
       }
     }
-    return null;
+    return out;
   }
 
   /** Next tie-break index, for the scheduler. */

@@ -1,4 +1,6 @@
+import AuthenticationServices
 import SwiftUI
+import UIKit
 
 /// The whole app: what is running, and the three things you would want to do
 /// about it from a phone.
@@ -133,6 +135,58 @@ private struct SettingsView: View {
     let onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var pushResult = ""
+    @State private var signInResult = ""
+    @State private var signingIn = false
+    @State private var pin = ""
+    @State private var hosts: [Fleet.Host] = []
+    @State private var showingAdvanced = false
+    @State private var pastedCredential = ""
+    @State private var confirmingRevoke: String?
+
+    @MainActor
+    private func loadHosts() async {
+        guard !settings.credential.isEmpty else { return }
+        hosts = (try? await Fleet(settings: settings).enrolledHosts()) ?? []
+    }
+
+    /// 123 456 — read down a phone, typed into a terminal.
+    private var formattedPin: String {
+        pin.count == 6 ? "\(pin.prefix(3)) \(pin.suffix(3))" : pin
+    }
+
+    /// Deliberately NOT `@MainActor` on the function itself.
+    ///
+    /// It is handed to `SignInWithAppleButton` as a plain closure, and a
+    /// global-actor-isolated function converted to a non-isolated one loses its
+    /// isolation — a warning today and an error under Swift 6. `Task { @MainActor in }`
+    /// says the same thing where it is actually needed, which is every line
+    /// below: the state, the settings object and `UIDevice` are all main-actor.
+    private func signIn(_ result: Result<ASAuthorization, Error>) {
+        Task { @MainActor in
+            signingIn = true
+            signInResult = "signing in…"
+            defer { signingIn = false }
+            do {
+                let idToken = try SignIn.identityToken(from: result)
+                let issued = try await Fleet(settings: settings).signIn(
+                    idToken: idToken,
+                    // Names the credential in the fleet's device list, and it is
+                    // the difference between "revoke the right phone" and
+                    // "revoke one of three called iPhone".
+                    deviceName: UIDevice.current.name
+                )
+                settings.credential = issued.token
+                settings.signedInAs = issued.email
+                signInResult = ""
+                await loadHosts()
+                onDone()
+            } catch SignIn.Failure.cancelled {
+                signInResult = ""
+            } catch {
+                signInResult = error.localizedDescription
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -144,12 +198,126 @@ private struct SettingsView: View {
                     TextField("https://fleet.thetech.network", text: Bindable(settings).coordinatorURL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    SecureField("API token", text: Bindable(settings).apiToken)
+                        .keyboardType(.URL)
                 } header: {
                     Text("Coordinator")
                 } footer: {
-                    Text("From /etc/agent-fleet-coordinator.env. Nothing is baked into the app — "
-                         + "a credential in an IPA is public the moment somebody unzips it.")
+                    Text("The one origin this app will talk to.")
+                }
+
+                Section {
+                    if settings.credential.isEmpty {
+                        SignInWithAppleButton(.signIn, onRequest: SignIn.configure, onCompletion: signIn)
+                            .signInWithAppleButtonStyle(.black)
+                            .frame(height: 44)
+                            .disabled(settings.coordinatorURL.isEmpty || signingIn)
+                    } else {
+                        LabeledContent("Signed in") {
+                            Text(settings.signedInAs.isEmpty ? "this device" : settings.signedInAs)
+                        }
+                        Button("Sign out", role: .destructive) { settings.signOut() }
+                    }
+                    if !signInResult.isEmpty {
+                        Text(signInResult).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("You")
+                } footer: {
+                    // Two things worth saying before somebody hits the button
+                    // and gets a refusal they cannot interpret: the fleet is a
+                    // list of allowed addresses, and Hide My Email can never be
+                    // on it.
+                    Text("This device gets a credential of its own, kept in the keychain and revocable on its own. "
+                         + "Choose \"Share My Email\" — a fleet allows people by address, and a hidden one matches nothing.")
+                }
+
+                // Adding a machine. Deliberately here rather than buried: it is
+                // the second thing anybody does after signing in, and the pin
+                // is the whole of how a host joins now.
+                if !settings.credential.isEmpty {
+                    Section {
+                        Button("Mint a pin for a new host") {
+                            Task {
+                                pin = ""
+                                do {
+                                    pin = try await Fleet(settings: settings).mintHostPin()
+                                } catch {
+                                    signInResult = error.localizedDescription
+                                }
+                            }
+                        }
+                        if !pin.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(formattedPin).font(.system(.title, design: .monospaced))
+                                    .textSelection(.enabled)
+                                Text("On that box:  agent-fleet-sidecar enrol \(pin)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(hosts) { host in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(host.hostId).font(.headline)
+                                    if host.isRevoked {
+                                        Text("revoked").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                // The fingerprint is here so it can be compared
+                                // with what the box itself prints. Two machines
+                                // claiming one name is exactly the situation
+                                // where you need to know which key is which.
+                                Text(host.fingerprint)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .swipeActions {
+                                if !host.isRevoked {
+                                    // Asked first. A swipe and a tap is not a
+                                    // deliberate enough gesture for something
+                                    // that disconnects a machine mid-session
+                                    // and can only be undone by typing a new
+                                    // pin on the box — which is the errand this
+                                    // app exists to avoid.
+                                    Button("Revoke", role: .destructive) { confirmingRevoke = host.hostId }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Hosts")
+                    } footer: {
+                        Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
+                    }
+                }
+
+                // The way in that does not involve an identity provider.
+                //
+                // Two real needs, neither of which sign-in covers. App Review
+                // has to be able to run the app, and no reviewer's address is
+                // on anybody's allowlist — the public demo credential exists
+                // for exactly that and reaches a coordinator with no hosts on
+                // it. And when sign-in itself is what is broken, the admin
+                // credential is how an operator gets back in.
+                //
+                // Collapsed, and it says what it is: a field labelled "token"
+                // in front of everybody is how the shared-secret habit comes
+                // back.
+                Section {
+                    DisclosureGroup("Use a credential instead", isExpanded: $showingAdvanced) {
+                        SecureField("fwk_… or a demo credential", text: $pastedCredential)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Button("Use it") {
+                            settings.credential = pastedCredential.trimmingCharacters(in: .whitespacesAndNewlines)
+                            settings.signedInAs = ""
+                            pastedCredential = ""
+                            showingAdvanced = false
+                            onDone()
+                        }
+                        .disabled(pastedCredential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                } footer: {
+                    Text("For App Review's demo fleet, and for getting back in when sign-in is what is broken.")
                 }
 
                 // Push is the one feature that fails silently. A registration
@@ -169,7 +337,7 @@ private struct SettingsView: View {
                             }
                         }
                     }
-                    .disabled(settings.coordinatorURL.isEmpty)
+                    .disabled(!settings.configured)
                     if !pushResult.isEmpty {
                         Text(pushResult).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -178,6 +346,24 @@ private struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .task { await loadHosts() }
+            .alert(
+                "Revoke \(confirmingRevoke ?? "")?",
+                isPresented: Binding(get: { confirmingRevoke != nil }, set: { if !$0 { confirmingRevoke = nil } })
+            ) {
+                Button("Cancel", role: .cancel) { confirmingRevoke = nil }
+                Button("Revoke", role: .destructive) {
+                    guard let hostId = confirmingRevoke else { return }
+                    confirmingRevoke = nil
+                    Task {
+                        _ = try? await Fleet(settings: settings).revokeHost(hostId)
+                        await loadHosts()
+                    }
+                }
+            } message: {
+                Text("It is disconnected immediately, and its sessions keep running without it. "
+                     + "Getting it back means a new pin, typed on that box.")
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { onDone(); dismiss() }

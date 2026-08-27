@@ -34,15 +34,34 @@ the per-session sandbox plumbing.
 installer, what it asks, what is deployable today and what is not.
 
 ```sh
+curl -fsSL https://fleet.thetech.network/install | sudo sh
+```
+
+It installs what is missing, generates the admin token, asks about Telegram, the
+coordinator, push and the sandbox, enrols the box in its fleet, and starts the
+services. Re-running it is how you upgrade.
+
+The one-liner fetches the repository to `/opt/agent-fleet` and runs the
+installer from there, so the clone is still what ends up on the box and
+`git -C /opt/agent-fleet log` still answers "what is this running". To do those
+two steps yourself, or to see what the prerequisites are first:
+
+```sh
 git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
+sudo /opt/agent-fleet/install/install.sh --check    # changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```
 
-It installs what is missing, generates the tokens, asks about Telegram, the
-coordinator, push and the sandbox, and starts the services.
-
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
 what has been validated on hardware. Start there for the why.
+[`docs/wanted.md`](./docs/wanted.md) is what is not built yet, and what makes
+each of those hard. [`docs/psychology.md`](./docs/psychology.md) is why the interfaces are shaped
+the way they are — interruption cost, what may be decided from a lock screen,
+and why "nothing needs you" is the most important state in the system.
+[`docs/plan.md`](./docs/plan.md) is the sequenced plan that
+came out of reviewing all of it, including the argument that the obvious next
+step — letting the app type a reply into a session — is the one thing that must
+never be built.
 
 ## Layout
 
@@ -63,16 +82,17 @@ what has been validated on hardware. Start there for the why.
 | `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
 | `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [naming](./docs/naming.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
-Still to come: host enrollment (one shared token today), rootless podman
-(the sandbox has only run as root), Wake-on-LAN, and Telegram on the Worker.
+Still to come: rootless podman (the sandbox has only run as root), Wake-on-LAN,
+and Telegram on the Worker.
 The apps and the Cloudflare deployment exist — see
 [`docs/deployment.md`](./docs/deployment.md) for what is proven and what is
 merely built.
 
 ## Running things
 
-No runtime dependencies and no build step. The only install is the TypeScript
-devDependency used to check the JSDoc annotations.
+One runtime dependency — `jose`, for verifying the ID tokens sign-in relies on
+— and no build step. `npm install` also pulls in the TypeScript devDependency
+used to check the JSDoc annotations.
 
 ```sh
 npm install

@@ -58,9 +58,12 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
  * echoed back in replies. */
 const ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
-/** Actor ids, e.g. "telegram:12345". Recorded as `createdBy` on the host, so it
- * ends up in a state file and in logs. */
-const ACTOR_RE = /^[A-Za-z0-9._:@-]{1,128}$/;
+/** Actor ids, e.g. "telegram:12345" — or, since sign-in, a verified email
+ * address, which is what makes `+` load-bearing: plus-addressing is ordinary
+ * (eli+fleet@thetech.network) and without it every intent from that person's
+ * phone was refused as a bad envelope. The set stays a deliberate allowlist
+ * rather than "anything", because this ends up in a state file and in logs. */
+const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
 
 /**
  * @typedef {object} ParamSpec

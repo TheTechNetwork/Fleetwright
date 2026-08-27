@@ -13,7 +13,7 @@ standable-up yet.
 | **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
 | **Cloudflare deployment** (Worker + Durable Objects) | ✅ deployed by CI to `fleet.thetech.network` |
 | **Push notifications** | ⚠️ server side done; needs a Firebase project, and untested against real FCM |
-| **Android app** | ⚠️ builds, signs, installs; push not wired (needs Firebase) |
+| **Android app** | ⚠️ builds, signs, installs; push wired to FCM, untested against a real device |
 | **iOS app** | ⚠️ compiles in CI on macOS; never run on a device |
 
 A box you set up today runs the whole loop: a coordinator, this box as a fleet
@@ -46,10 +46,38 @@ works and sessions run directly on the box.
 ## 1. Install the session manager
 
 ```sh
-git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet   # the repo is Fleetwright; the install path is not
+curl -fsSL https://fleet.thetech.network/install | sudo sh
+```
+
+That fetches the repository to `/opt/agent-fleet` — the repo is Fleetwright,
+the install path is not — and runs `install/install.sh` from it. Arguments go
+after `-s --`, which is how `sh` is told the rest belongs to the script:
+
+```sh
+curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check
+```
+
+`/install` is a redirect to `install/bootstrap.sh` in this repository, served by
+the coordinator so the URL is short and the script has exactly one home. Read it
+before you run it; it is forty lines and it does three things — get git, clone,
+hand over.
+
+The same thing by hand, which is all the one-liner does:
+
+```sh
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
 ```
+
+Three environment variables change where it comes from and where it goes, which
+is what you want for a fork or a branch under test:
+
+| | |
+|---|---|
+| `FLEETWRIGHT_REPO` | default `https://github.com/TheTechNetwork/Fleetwright` |
+| `FLEETWRIGHT_REF` | default `main` |
+| `FLEETWRIGHT_DIR` | default `/opt/agent-fleet` |
 
 > **If it says node was not found but `node -v` works for you**, that is `sudo`.
 > It replaces `PATH` with sudoers' `secure_path` — usually just `/usr/*` and
@@ -92,7 +120,7 @@ order:
 | Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | no Telegram; web UI and CLI still work |
 | Telegram user ids | leave blank if you do not know yours | nobody allowlisted yet — see below |
 | Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
-| Host token — **only when joining** someone else's coordinator | that coordinator's `AGENT_FLEET_HOST_TOKEN` | the sidecar will be refused until one is set |
+| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `agent-fleet-sidecar enrol <pin>` or send `/enroll <pin>` later |
 | Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
@@ -113,25 +141,37 @@ Two of those are worth planning for before you start:
   into the coordinator's env itself — see [`push.md`](./push.md) for why pasting
   the JSON cannot work.
 
-### Tokens
+### Credentials
 
-On the box that **runs the coordinator**, they are generated rather than asked:
-`AGENT_FLEET_HOST_TOKEN` (shared by the coordinator and this host),
-`AGENT_FLEET_API_TOKEN` (what a phone or Shortcut presents), and the hub token.
-There is no decision in any of them, and a blank one is how a coordinator ends
-up reachable with no credential at all. Both are **printed when the install
-finishes**, because the API token is what you type into the app:
+**Hosts do not have a token.** This box generates a keypair on first run, keeps
+the private half at `/var/lib/agent-fleet/host-key.json` (0600), and signs a
+nonce on every connection. Joining is a six-digit pin, spent once.
+
+On the box that **runs the coordinator**, that enrolment is silent: the
+installer holds the admin token, so it mints a pin and spends it rather than
+making you copy six digits from one terminal into the same terminal.
+
+`AGENT_FLEET_API_TOKEN` is generated rather than asked, and **printed when the
+install finishes** — it is break-glass, not the everyday credential:
 
 ```
-  For the phone app or a Shortcut:
-      URL    http://10.0.0.5:8791   (or your Worker, if you deploy one)
-      Token  623ad69f979bdf7a7b5253d94fde3202ea1dd1438a06868e
+  The coordinator on this box:
+      URL          http://10.0.0.5:8791   (or your Worker, if you deploy one)
+      Admin token  623ad69f979bdf7a7b5253d94fde3202ea1dd1438a06868e
 ```
+
+The app does not want that token. It signs in — Sign in with Apple, or the
+system account picker on Android — and is issued a credential of its own, which
+can be revoked without disturbing any other device. Sign-in needs
+`AGENT_FLEET_AUTH_ISSUERS`, `AGENT_FLEET_AUTH_AUDIENCES` and
+`AGENT_FLEET_AUTH_ALLOW`; see [`identity.md`](./identity.md).
 
 On a box **joining a coordinator that already exists** — the Worker, or another
-machine — the host token is *asked for*, because it has to match what that
-coordinator was given. A generated one produces a sidecar that connects, is
-rejected, and retries forever.
+machine — the enrolment pin is *asked for*, because it has to come from that
+coordinator: minted with the admin token, handed out by the app (Fleet → Add
+a host), or sent as `/enroll <pin>` in Telegram. Leave it blank and the box
+stays unenrolled — the sidecar keeps connecting and getting refused until
+someone runs `agent-fleet-sidecar enrol <pin>`, as the service user.
 
 Either way, to read one back later:
 
@@ -158,8 +198,9 @@ comment is there.
 ## 2. Run the fleet
 
 If you answered the wizard, this is already done: both env files are written,
-the tokens are generated and shared, and the services are running as
-`agent-fleet-coordinator` and `agent-fleet-sidecar`. Skip to the check below.
+the admin token is generated, this box is enrolled, and the services are
+running as `agent-fleet-coordinator` and `agent-fleet-sidecar`. Skip to the
+check below.
 
 ```sh
 systemctl status agent-fleet-coordinator agent-fleet-sidecar
@@ -173,9 +214,17 @@ AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network   # or http://127.0.0.
 AGENT_FLEET_TRANSPORT=websocket
 ```
 
-plus the same `AGENT_FLEET_HOST_TOKEN` the coordinator has. The sidecar refuses
-to start without a pinned origin — §5: the agent pins the coordinator it will
-talk to, so a compromised coordinator cannot redirect it.
+There is no token to add. The sidecar refuses to start without a pinned origin
+— §5: the agent pins the coordinator it will talk to, so a compromised
+coordinator cannot redirect it — and it refuses to *connect* until it has been
+enrolled:
+
+```sh
+agent-fleet-sidecar enrol 123456     # a pin from the app
+agent-fleet-sidecar doctor           # says whether the coordinator accepts it
+```
+
+or, without an SSH session, send `/enroll 123456` to this box's bot.
 
 **Where the coordinator runs is a real choice**, and both are supported:
 
@@ -229,9 +278,11 @@ installer. The sidecar's unit only became possible with the websocket transport:
 under `stdio` the process ends when stdin does, so a unit would have
 crash-looped.
 
-The credential they carry is still the shared `AGENT_FLEET_HOST_TOKEN` — every
-host presents the same one. §5 wants a per-host key so revoking one host does
-not mean rotating all of them. That is the gap, not the unit.
+The sidecar's unit carries `StateDirectory=agent-fleet`, which is what creates
+`/var/lib/agent-fleet` 0700 owned by the service user before the process
+starts. That is where this box's private key lives — the whole of its identity
+in the fleet. Deliberately not under `/etc` with the env file: an env file is a
+config file people copy between boxes, and this must never be copied.
 
 ### Hook socket directory
 
@@ -317,10 +368,16 @@ means the Worker, since a phone on mobile data cannot see a box on your LAN.
 2. **Install an app** — [Android](../apps/android/README.md) (build the APK, or
    take it from a GitHub release) or [iOS](../apps/ios/README.md) (Xcode, or
    TestFlight once the App Store Connect record exists).
-3. **Settings → coordinator URL and API token.** The token is
-   `AGENT_FLEET_API_TOKEN` from `/etc/agent-fleet-coordinator.env`, or whatever
-   you set as the Worker secret. Nothing is baked into the binary: §5, a
-   credential in an APK is public the moment somebody unzips it.
+3. **Settings → coordinator URL, then sign in.** There is no token to type: the
+   app hands the coordinator an Apple or Google ID token and is issued a
+   credential for that device, kept in the keychain or behind a keystore key.
+   Nothing is baked into the binary — §5, a credential in an APK is public the
+   moment somebody unzips it — and nothing is shared between phones either, so
+   losing one is a single revocation.
+
+   This needs `AGENT_FLEET_AUTH_ISSUERS`, `AGENT_FLEET_AUTH_AUDIENCES` and
+   `AGENT_FLEET_AUTH_ALLOW` set on the coordinator, with your address on the
+   allowlist. See [`identity.md`](./identity.md).
 4. **Push** needs a Firebase project and, on Android, `google-services.json`.
    [`push.md`](./push.md) and the app READMEs have the steps.
 
@@ -331,8 +388,10 @@ Shortcut could call it directly.
 
 ```sh
 agent-hub doctor                      # can this box run sessions at all
-agent-fleet-sidecar doctor            # can the sidecar drive it
+SVC="$(stat -c %U /opt/agent-fleet/bin/agent-hub)"
+sudo -u "$SVC" agent-fleet-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
 agent-hub list                        # the session manager answers
+sudo -u "$SVC" agent-fleet-sidecar identity  # this box's key and fingerprint
 curl -s localhost:8791/api/hosts      # the coordinator sees this box
 systemctl status agent-hub
 journalctl -u agent-hub -f
@@ -415,8 +474,12 @@ charset-checked values and never received from the wire. See
 
 **Two env files, two modes `0600`, on purpose.** `/etc/agent-hub.env` holds the
 Telegram token and the hub token; `/etc/agent-fleet-sidecar.env` holds the hub
-token and (later) the coordinator credential. Merging them would put the
-coordinator credential in the session manager's environment for no reason.
+token and which coordinator this box belongs to. Merging them would put the
+fleet's configuration in the session manager's environment for no reason.
+
+**The host key is in neither of them.** It lives in `/var/lib/agent-fleet`,
+because an env file is a thing people copy to the next box and an identity is
+the one thing that must not be copied.
 
 **Containers do not fix credential scope.** Egress stays open — `claude` needs the API and the work needs npm and GitHub. A
 contained agent can still push with whatever credential it holds. Containers
@@ -427,9 +490,6 @@ one.
 
 Not "undocumented" — not built, or built and never proven:
 
-- **Enrollment.** One shared `AGENT_FLEET_HOST_TOKEN` for every host. §5 wants a
-  per-host key and a short-lived signed assertion, so revoking one host does not
-  mean rotating all of them.
 - **Rootless podman.** The sandbox has only ever run as root. That is the wrong
   posture and it is stated again under §3 above, because it is the one item here
   with a security consequence rather than a convenience one.

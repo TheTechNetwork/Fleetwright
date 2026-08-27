@@ -54,12 +54,69 @@ with no keystore still builds debug. CI does the same thing from the four
 
 ## First run
 
-Settings → the coordinator URL and the API token from
-`/etc/agent-fleet-coordinator.env`.
+Settings → the coordinator URL, then **Sign in with Google**. The app hands the
+coordinator the resulting ID token and is issued a credential for this device,
+kept encrypted with a key that never leaves the phone's keystore. There is no
+token to type: §5 is explicit that a credential in an APK is public the moment
+somebody unzips it, and a credential shared between phones is one that cannot be
+revoked for one of them.
 
-Nothing is baked into the binary. §5 is explicit about this: a credential in an
-APK is public the moment somebody unzips it, so it is entered once and kept on
-the device.
+The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
+`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your address on
+the allowlist. See [`../../docs/identity.md`](../../docs/identity.md).
+
+### Google sign-in needs a web OAuth client — four steps
+
+The committed `google-services.json` has `"oauth_client": []` for both package
+names. Until that changes, the app builds, runs, and says plainly that this
+build has no Google sign-in configured.
+
+**1. Enable Google as a sign-in provider.** Firebase console → Authentication →
+Sign-in method → Google → Enable. This is what creates the OAuth clients,
+including the **web** one, which is the one that matters.
+
+**2. Register SHA-1 fingerprints, for every keystore that will ever build.**
+Project settings → your Android app → Add fingerprint. Google Sign-In checks the
+signing certificate, so a missing fingerprint fails at the account picker with a
+message that does not say why.
+
+```sh
+# the debug keystore, for local builds — password is literally "android"
+keytool -list -v -alias androiddebugkey -keystore ~/.android/debug.keystore \
+  -storepass android -keypass android | grep SHA1
+
+# your release keystore, the one ANDROID_KEYSTORE_FILE points at
+keytool -list -v -alias fleetwright -keystore ~/fleetwright-release.jks | grep SHA1
+```
+
+Do it for **both package names** — `network.thetech.fleetwright` and
+`network.thetech.fleetwright.debug`, which the debug build appends.
+
+**THE ONE THAT CATCHES PEOPLE: Play App Signing.** If Play re-signs your app —
+and it does by default — then the certificate a user's device sees is Google's,
+not yours. Sign-in works perfectly in an APK you built and fails for every
+install from Play, which is the worst possible order to discover it in. Take the
+SHA-1 from **Play Console → your app → Setup → App integrity → App signing key
+certificate** and add that one too.
+
+**3. Download `google-services.json` again and commit it.** One file carries
+every client. With a web client present, the Google Services plugin generates
+the `default_web_client_id` string resource that `SignIn.kt` looks up at runtime.
+
+**4. Put the WEB client id in `AGENT_FLEET_AUTH_AUDIENCES`** on the coordinator
+— not the Android one. `setServerClientId` names the web client, so the web
+client is what appears as `aud` on the ID token, and the coordinator checks
+`aud`. It sits alongside the iOS bundle id; the list holds both because Apple
+and Google issue for different audiences.
+
+```sh
+npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
+#   network.thetech.fleetwright  654943059314-....apps.googleusercontent.com
+```
+
+Until then, the collapsed **"use a credential instead"** field takes the demo
+credential or the admin token, which is enough to exercise everything
+downstream of sign-in.
 
 ## Push notifications
 
@@ -89,25 +146,14 @@ The **server side is finished** — the sidecar detects that a session needs a
 person, the coordinator fans it out, and `POST /api/devices` is where a phone
 registers. See [`../../docs/push.md`](../../docs/push.md).
 
-The app side needs a Firebase project, because the FCM token has to come from
-somewhere. It is deliberately **not** wired up yet: the Google Services Gradle
-plugin *fails the build* when `google-services.json` is absent, so adding it
-before there is a Firebase project would mean nobody could build the app at all.
-
-To turn it on:
-
-1. Firebase console → add an Android app with the id `network.thetech.fleetwright.debug`
-   (note the `.debug` suffix the debug build applies), download
-   `google-services.json` into `apps/android/app/`.
-2. `apps/android/build.gradle.kts` → add
-   `id("com.google.gms.google-services") version "4.4.2" apply false`
-3. `apps/android/app/build.gradle.kts` → add `id("com.google.gms.google-services")`
-   to the plugins block, and
-   `implementation(platform("com.google.firebase:firebase-bom:33.1.2"))` plus
-   `implementation("com.google.firebase:firebase-messaging")` to dependencies.
-4. Call `Fleet.registerDevice(token)` with the token from
-   `FirebaseMessaging.getInstance().token`. That method already exists and
-   already posts to the coordinator.
+The app side needed a Firebase project, because the FCM token has to come from
+somewhere — that is done, not pending. Both `network.thetech.fleetwright` and
+`network.thetech.fleetwright.debug` are registered, `google-services.json`
+above is the result, the Google Services plugin is applied
+(`apps/android/build.gradle.kts`), and `firebase-bom` plus `firebase-messaging`
+are on the classpath (`app/build.gradle.kts`). A fork that wants its own
+Firebase project repeats those same steps with its own console and its own
+`google-services.json`.
 
 The same Firebase project delivers to iOS through FCM's APNs bridge, which is
 why it is one integration rather than two.

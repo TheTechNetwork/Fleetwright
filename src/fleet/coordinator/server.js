@@ -23,6 +23,8 @@
 // sessions. It cannot run anything.
 
 import { createServer } from 'node:http';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { attachWebSocketServer } from '../ws.js';
@@ -30,6 +32,8 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
+import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { credentialFrom, isClientCredential } from './credential.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -41,22 +45,26 @@ const HEALTH_INTERVAL_MS = 15_000;
 export class Coordinator {
   /**
    * @param {{
-   *   hostToken?: string|null,
    *   apiToken?: string|null,
+   *   stateFile?: string|null,
    *   intentTimeoutMs?: number,
    *   healthIntervalMs?: number,
    *   logger?: typeof import('../../log.js').log,
    * }} [opts]
    */
   constructor({
-    hostToken = null,
     apiToken = null,
+    stateFile = null,
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
     healthIntervalMs = HEALTH_INTERVAL_MS,
     logger,
   } = {}) {
-    this.hostToken = hostToken;
     this.apiToken = apiToken;
+    // Enrolled host keys ARE the authority — the registry is the cache, they
+    // are not. Losing them on restart means every box in the fleet is refused
+    // until somebody walks round re-enrolling them, so unlike everything else
+    // in this process, this goes to disk.
+    this.stateFile = stateFile;
     this.intentTimeoutMs = intentTimeoutMs;
     this.healthIntervalMs = healthIntervalMs;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
@@ -82,6 +90,19 @@ export class Coordinator {
     // its connection table into that response — see the comment on close().
     /** @type {Map<string, import('../ws.js').WsConnection>} */
     this.connections = new Map();
+    // Debounced: a busy fleet records several events a second and this is a
+    // file write. Losing the last 2s of history to a hard kill is a fair price
+    // for not writing the ring on every line.
+    /** @type {any} */
+    this.eventSaveTimer = null;
+    this.core.onEvents = () => {
+      if (this.eventSaveTimer) return;
+      this.eventSaveTimer = setTimeout(() => {
+        this.eventSaveTimer = null;
+        this.saveEvents();
+      }, 2000);
+      this.eventSaveTimer.unref?.();
+    };
   }
 
   /** The host registry, for tests and for anything that wants to look. */
@@ -91,6 +112,133 @@ export class Coordinator {
 
   get pending() {
     return this.core.pending;
+  }
+
+  /**
+   * Read back what was enrolled.
+   *
+   * A missing file is a new coordinator, not an error. A CORRUPT one is an
+   * error and is left alone rather than overwritten: the recovery for "the
+   * file got truncated" is restoring it, and a coordinator that silently
+   * starts empty makes that impossible to notice.
+   */
+  loadState() {
+    if (!this.stateFile) return;
+    let raw;
+    try {
+      raw = readFileSync(this.stateFile, 'utf8');
+    } catch (e) {
+      // ONLY a missing file means "new coordinator". This caught everything —
+      // a permission error, an EISDIR, a failing disk — and returned quietly,
+      // after which assertStateWritable() wrote an empty state over the top and
+      // the fleet's entire membership list was gone. Permanently, and with a
+      // healthy-looking startup line saying "0 enrolled hosts".
+      //
+      // That is the failure this file already refuses to have for a CORRUPT
+      // file. Guarding JSON.parse and not the read that feeds it was half a
+      // guard. A root-owned state file left by somebody running the coordinator
+      // under sudo once is the ordinary way to get here.
+      if (/** @type {any} */ (e)?.code === 'ENOENT') return;
+      throw e;
+    }
+    const state = JSON.parse(raw);
+    this.core.hostIds.restore(state.hosts || []);
+    this.core.clients.restore(state.clients || []);
+    this.core.enrollment.restore(state.enrollment || []);
+    // Push registrations too. The Worker has always kept these in Durable
+    // Object storage; the Node coordinator held them in a Map and lost them on
+    // every restart, so push worked until the service bounced and then stopped
+    // — silently, because a coordinator with no registrations has nothing to
+    // report and a phone has no way to know it was forgotten.
+    for (const device of state.devices || []) if (device?.token) this.core.devices.set(device.token, device);
+    const hosts = this.core.hostIds.list().filter((h) => !h.revokedAt).length;
+    this.log.info(`coordinator: ${hosts} enrolled host${hosts === 1 ? '' : 's'} from ${this.stateFile}`);
+  }
+
+  /**
+   * Prove the state file can be written, before anything depends on it.
+   *
+   * Called once at startup and allowed to throw. An upgraded box is the case
+   * that needs it: the unit gained StateDirectory=agent-fleet-coordinator, but
+   * the copy in /etc/systemd/system is only refreshed by the installer, and
+   * ProtectSystem=strict makes /var/lib read-only to the service — so the
+   * directory does not exist and cannot be created. Everything would then work
+   * perfectly until the first restart, at which point the whole fleet is
+   * refused. A coordinator that cannot remember who is in the fleet should say
+   * so while somebody is still looking at it.
+   */
+  assertStateWritable() {
+    if (!this.stateFile) return;
+    this.#writeState();
+  }
+
+  /**
+   * The event ring, in a SEPARATE file from the membership list.
+   *
+   * Separate on purpose. loadState() deliberately throws on anything but
+   * ENOENT, because a coordinator that starts with no members refuses the whole
+   * fleet while looking healthy — and events are appended far more often than
+   * hosts are, so a truncated event write must never be able to take the host
+   * list down with it.
+   *
+   * "A phone that was asleep can catch up" was false until this existed: the
+   * ring was RAM, so a restart lost every record of who did what.
+   */
+  #eventsFile() {
+    return this.stateFile ? `${this.stateFile}.events` : null;
+  }
+
+  loadEvents() {
+    const f = this.#eventsFile();
+    if (!f) return;
+    try {
+      const events = JSON.parse(readFileSync(f, 'utf8'));
+      if (Array.isArray(events)) this.core.events.push(...events);
+    } catch (e) {
+      // NOT fatal, unlike the membership list. Losing the history is a shame;
+      // refusing to start over it would be worse than the thing it protects.
+      if (/** @type {any} */ (e)?.code !== 'ENOENT') {
+        this.log.warn(`coordinator: could not read ${f}, starting with no history`);
+      }
+    }
+  }
+
+  saveEvents() {
+    const f = this.#eventsFile();
+    if (!f) return;
+    try {
+      writeFileSync(f, JSON.stringify(this.core.events.slice(-500)), { mode: 0o600 });
+    } catch (e) {
+      this.log.warn(`coordinator: could not save events: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /** Write it back. Through a temp file, because a half-written host list is
+   *  a fleet that cannot connect. */
+  saveState() {
+    if (!this.stateFile) return;
+    try {
+      this.#writeState();
+    } catch (e) {
+      this.log.error(`coordinator: could not save state to ${this.stateFile}: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  #writeState() {
+    const body = JSON.stringify(
+      {
+        hosts: this.core.hostIds.serialise(),
+        clients: this.core.clients.serialise(),
+        enrollment: this.core.enrollment.serialise(),
+        devices: [...this.core.devices.values()],
+      },
+      null,
+      2,
+    );
+    mkdirSync(path.dirname(String(this.stateFile)), { recursive: true, mode: 0o700 });
+    const tmp = `${this.stateFile}.tmp`;
+    writeFileSync(tmp, `${body}\n`, { mode: 0o600 });
+    renameSync(tmp, String(this.stateFile));
   }
 
   /** @param {number} port @param {string} host */
@@ -104,10 +252,20 @@ export class Coordinator {
 
     attachWebSocketServer(this.server, {
       path: '/host/connect',
-      authorise: (req) => {
-        if (!this.hostToken) return true; // loopback dev; see validateCoordinatorConfig
-        const bearer = bearerOf(req.headers.authorization);
-        return safeEqual(bearer, this.hostToken) || 'Unauthorized';
+      // The same handshake the Worker makes, for the same reason: a host proves
+      // it holds the enrolled private key by signing a nonce issued moments
+      // ago. There is no shared host token to fall back to, not even on
+      // loopback — "it's only dev" is how a shared secret ends up in
+      // production, and the sidecar generates its key without being asked.
+      authorise: async (req) => {
+        const url = new URL(req.url || '/', 'http://placeholder');
+        const hostId = url.searchParams.get('hostId') || '';
+        const proof = String(req.headers['x-fleet-proof'] || '');
+        const nonce = String(req.headers['x-fleet-nonce'] || '');
+        const outcome = await this.core.hostIds.prove(hostId, proof, nonce);
+        if (outcome.ok) return true;
+        this.core.record({ event: 'host.refused', hostId, text: outcome.reason });
+        return outcome.reason;
       },
       onConnection: (conn, req) => this.#onHost(conn, req),
     });
@@ -125,6 +283,8 @@ export class Coordinator {
   }
 
   async close() {
+    if (this.eventSaveTimer) clearTimeout(this.eventSaveTimer);
+    this.saveEvents();
     if (this.healthTimer) clearInterval(this.healthTimer);
     for (const [, waiter] of this.pending) clearTimeout(waiter.timer);
     this.pending.clear();
@@ -221,8 +381,177 @@ export class Coordinator {
     // nothing else — no host names, no counts.
     if (p === '/healthz') return json(res, 200, { ok: true, protocol: PROTOCOL_VERSION });
 
-    if (this.apiToken && !safeEqual(bearerOf(req.headers.authorization) || url.searchParams.get('token') || '', this.apiToken)) {
+    // The same contract the Worker serves, read from the file rather than
+    // inlined, because this process has a filesystem and the Worker does not.
+    if (p === '/openapi.json') {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(readFileSync(new URL('../../../openapi.json', import.meta.url), 'utf8'));
+    }
+
+    // --- enrolment, before the token gate ------------------------------------
+    //
+    // These three are what an UNAUTHENTICATED machine uses to become an
+    // authenticated one, so requiring the API token here would mean every host
+    // needed the fleet-wide admin credential to join — exactly the shared
+    // secret this rework removes. The pin is the authorisation for the first;
+    // a signature is the authorisation for the other two.
+    if (p === '/api/enroll/host' && req.method === 'POST') {
+      const body = await readJson(req);
+      const wanted = String(body?.hostId || '');
+      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
+      if (!spent.ok) {
+        this.saveState(); // a spent code must not survive a restart
+        return json(res, 403, { ok: false, error: { code: 'bad_code' }, text: spent.reason });
+      }
+
+      const result = await this.core.hostIds.enrol({
+        hostId: wanted,
+        publicJwk: body?.publicJwk,
+        enrolledBy: spent.entry.actor,
+        readmit: spent.entry.readmit,
+        boundToThisHost: Boolean(spent.entry.hostId),
+      });
+      // Saved either way: the code was spent above whether or not the key that
+      // arrived with it was any good, and a spent code that comes back after a
+      // restart is a second host nobody minted.
+      this.saveState();
+      if (!result.ok || !result.host) {
+        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+      }
+      this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
+
+      // A re-enrolment REPLACES the key, and the machine holding the old one may
+      // still be connected on this name. Two machines as one host is the worst
+      // shape this can take: the old one keeps answering intents addressed to a
+      // name whose key it no longer holds. Same close the Worker does.
+      if (result.replaced) this.connections.get(result.host.hostId)?.close(1008, 're-enrolled');
+      return json(res, 200, {
+        ok: true,
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        replaced: result.replaced,
+        text: result.readmitted
+          ? `Readmitted ${result.host.hostId}, which had been revoked.`
+          : result.replaced
+            ? `Re-enrolled ${result.host.hostId}. The previous key no longer works.`
+            : `Enrolled ${result.host.hostId}.`,
+      });
+    }
+
+    // Signing in: the one route that takes an identity token rather than a
+    // fleet credential, because it is where a fleet credential comes from.
+    // Identical in shape to the Worker's — the apps must not be able to tell
+    // which coordinator they are talking to.
+    if (p === '/api/session' && req.method === 'POST') {
+      const body = await readJson(req);
+      const issuers = splitList(process.env.AGENT_FLEET_AUTH_ISSUERS);
+      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+      const allow = splitList(process.env.AGENT_FLEET_AUTH_ALLOW);
+      if (!issuers.length || !audiences.length) {
+        return json(res, 503, { ok: false, error: { code: 'not_configured' }, text: 'This coordinator has no sign-in configured.' });
+      }
+
+      let who;
+      try {
+        who = await verifyIdToken(String(body?.idToken || ''), { issuers, audiences });
+      } catch (e) {
+        return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: String(/** @type {Error} */ (e).message) });
+      }
+      if (isPrivateRelay(who.email)) {
+        return json(res, 403, {
+          ok: false,
+          error: { code: 'private_relay' },
+          text:
+            'Sign in again and choose "Share My Email". This coordinator allows people by email domain, ' +
+            'and a hidden Apple address can never match one.',
+        });
+      }
+      if (!isAllowed(who.email, allow)) {
+        return json(res, 403, { ok: false, error: { code: 'not_allowed' }, text: `${who.email} is not on this fleet's list.` });
+      }
+
+      const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
+      this.saveState();
+      return json(res, 200, { ok: true, ...issued });
+    }
+
+    // Apple's server-to-server notification.
+    //
+    // PUBLIC BY NECESSITY — Apple has no credential of ours, and the signature
+    // on the JWT is the whole authentication. Anyone can POST here; only a
+    // message signed by Apple, for our audience, does anything.
+    //
+    // It answers 200 to everything it can parse, including notifications it
+    // ignores, because Apple retries on failure and there is nothing to gain
+    // from making it retry a message we understood and did not act on.
+    if (p === '/apple/notifications' && req.method === 'POST') {
+      const body = await readJson(req);
+      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+      if (!audiences.length) return json(res, 503, { ok: false, text: 'no audience configured' });
+      try {
+        const note = await verifyAppleNotification(String(body?.payload || ''), { audiences });
+        if (isWithdrawal(note.type) && note.email) {
+          const r = this.core.revokePerson(note.email, `withdrew consent at Apple (${note.type})`);
+          if (r.revoked) this.saveState();
+        }
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        this.log.warn(`apple notification refused: ${/** @type {Error} */ (e).message}`);
+        return json(res, 401, { ok: false, text: 'that notification did not verify' });
+      }
+    }
+
+    if (p === '/api/host/challenge' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, 200, { ok: true, nonce: await this.core.hostIds.challenge(String(body?.hostId || '')) });
+    }
+
+    if (p === '/api/host/verify' && req.method === 'POST') {
+      const body = await readJson(req);
+      const outcome = await this.core.hostIds.prove(
+        String(body?.hostId || ''),
+        String(body?.proof || ''),
+        String(body?.nonce || ''),
+      );
+      if (!outcome.ok) return json(res, 401, { ok: false, text: outcome.reason });
+      return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
+    }
+
+    // Two ways to be allowed past here, and they are not the same thing.
+    //
+    // A per-device credential is the everyday one: issued at sign-in, named
+    // after the person who holds it, revocable on its own. The admin token is
+    // break-glass — it can stop every session in the fleet — and exists to mint
+    // the first pin and to get back in when nothing else works.
+    const presented = credentialFrom(req.headers.authorization, url);
+    let client = null;
+    if (isClientCredential(presented)) {
+      client = await this.core.clients.verify(presented);
+      if (!client) {
+        return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'That device credential is not valid.' });
+      }
+    } else if (this.apiToken && !safeEqual(presented, this.apiToken)) {
       return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'a token is required' });
+    } else if (!this.apiToken && presented) {
+      // Nothing configured and something presented: refuse rather than wave it
+      // through, or a fleet that forgot to set a token looks authenticated.
+      return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: 'this coordinator has no admin token set' });
+    }
+
+    // The destructive routes, checked BEFORE any of them run. The first version
+    // of this sat further down the file, after the /api/hosts/ DELETE handler
+    // it was supposed to guard, so it never fired — a check placed after the
+    // thing it guards, which is on this project's own review checklist.
+    //
+    // A device credential needs the admin bit; the
+    // break-glass token always passes, because it is what you use when the
+    // admin's phone is the thing that got lost.
+    if (DESTRUCTIVE.test(p) && req.method === 'DELETE' && client && !client.admin) {
+      return json(res, 403, {
+        ok: false,
+        error: { code: 'not_admin' },
+        text: 'Removing machines and other people\u2019s devices needs an admin credential on this fleet.',
+      });
     }
 
     if (p === '/api/hosts' && req.method === 'GET') {
@@ -233,6 +562,98 @@ export class Coordinator {
       // "the same code runs in both places" false in the only place a client
       // can see — and the apps have to hold both shapes in their head.
       return json(res, 200, { ok: true, ...this.core.snapshot() });
+    }
+
+    // The event ring. The Worker has had this since push was built and the Node
+    // coordinator never did — the fifth parity gap on this branch, and the one
+    // that made the case for openapi.json: it was found by listing both route
+    // tables side by side, in about ten seconds, after four others had been
+    // found the hard way.
+    if (p === '/api/events' && req.method === 'GET') {
+      return json(res, 200, { ok: true, events: this.core.recentEvents() });
+    }
+
+    if (p === '/api/hosts/enrolled' && req.method === 'GET') {
+      return json(res, 200, { ok: true, hosts: this.core.hostIds.list() });
+    }
+
+    if (p.startsWith('/api/hosts/') && req.method === 'DELETE') {
+      const hostId = decodeURIComponent(p.slice('/api/hosts/'.length));
+      const gone = this.core.hostIds.revoke(hostId);
+      if (gone) {
+        // Revoked AND disconnected. A revoked host holding a live socket is
+        // still in the fleet until something closes it.
+        this.connections.get(hostId)?.close(1008, 'revoked');
+        this.core.record({ event: 'host.revoked', hostId });
+        this.saveState();
+      }
+      return json(res, gone ? 200 : 404, {
+        ok: gone,
+        text: gone ? `${hostId} is revoked and disconnected.` : `${hostId} is not enrolled.`,
+      });
+    }
+
+
+    if (p === '/api/clients' && req.method === 'GET') {
+      return json(res, 200, { ok: true, clients: this.core.clients.list() });
+    }
+
+    if (p.startsWith('/api/clients/') && req.method === 'DELETE') {
+      const id = p.slice('/api/clients/'.length);
+      const { revoked, devices } = this.core.revokeClient(id);
+      if (revoked || devices) this.saveState();
+      return json(res, revoked ? 200 : 404, {
+        ok: revoked,
+        text: revoked
+          ? `Revoked${devices ? `, and stopped ${devices} push registration${devices === 1 ? '' : 's'}` : ''}.`
+          : 'No such client, or already revoked.',
+      });
+    }
+
+    if (p === '/api/enroll' && req.method === 'GET') {
+      return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
+    }
+
+    if (p === '/api/enroll' && req.method === 'POST') {
+      const body = await readJson(req);
+      const kind = body?.kind === 'device' ? 'device' : 'host';
+      // Six digits is small enough to read down a phone and small enough to
+      // guess, so the guessing is what has to be bounded — see enrollment.js.
+      const issued = this.core.enrollment.mint({
+        purpose: kind,
+        label: body?.label ? String(body.label) : '',
+        actor: client?.email || (body?.actor ? String(body.actor) : null),
+        hostId: body?.hostId ? String(body.hostId) : null,
+        readmit: Boolean(body?.readmit),
+      });
+      this.saveState();
+      return json(res, 200, { ok: true, ...issued });
+    }
+
+    // Push registration. The Worker has had these since push was built; the
+    // Node coordinator never did, so a phone pointed at a box registered
+    // against a 404 and then waited for notifications that had nowhere to come
+    // from. Both apps call this on every launch.
+    if (p === '/api/devices' && req.method === 'POST') {
+      const body = await readJson(req);
+      const r = this.core.registerDevice({
+        platform: String(body?.platform || ''),
+        token: String(body?.token || ''),
+        actor: client?.email || (body?.actor ? String(body.actor) : undefined),
+        clientId: client?.id,
+      });
+      if (r.ok) this.saveState();
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    if (p === '/api/devices' && req.method === 'DELETE') {
+      const body = await readJson(req);
+      const { ok: gone } = this.core.unregisterDevice(String(body?.token || ''));
+      if (gone) this.saveState();
+      return json(res, gone ? 200 : 404, {
+        ok: gone,
+        text: gone ? 'This device will not be notified again.' : 'That device was not registered.',
+      });
     }
 
     if (p === '/api/devices/test' && req.method === 'POST') {
@@ -249,7 +670,11 @@ export class Coordinator {
       const reply = await this.dispatch({
         verb: body.verb,
         params: body.params && typeof body.params === 'object' ? body.params : {},
-        actor: typeof body.actor === 'string' ? body.actor : undefined,
+        // The client's own identity wins over anything the request claims: an
+        // actor a caller can choose is a label, not an attribution. Same rule
+        // as the Worker's, because a session record that means one thing on one
+        // coordinator and another thing on the other means nothing.
+        actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
         // An idempotency key supplied by the caller is honoured, so a phone that
         // retries a `start` gets the original outcome rather than a second
         // session. One we mint is unique per call, which is right for a first
@@ -269,7 +694,11 @@ export class Coordinator {
       const params = name ? { name } : {};
       const choice = url.searchParams.get('choice');
       if (verb === 'resume' && choice) params.choice = choice;
-      return json(res, 200, await this.dispatch({ verb, params, actor: url.searchParams.get('actor') || undefined }));
+      return json(res, 200, await this.dispatch({
+        verb,
+        params,
+        actor: client?.email || url.searchParams.get('actor') || undefined,
+      }));
     }
 
     return json(res, 404, { ok: false, error: { code: 'not_found' } });
@@ -278,11 +707,18 @@ export class Coordinator {
 
 // --- helpers ----------------------------------------------------------------
 
-/** @param {string|undefined} header */
-function bearerOf(header) {
-  const h = header || '';
-  return h.startsWith('Bearer ') ? h.slice(7) : '';
+/** The routes that remove something somebody else depends on. */
+const DESTRUCTIVE = /^\/api\/(hosts|clients)\//;
+
+/** Comma or whitespace separated, the same shape the Worker reads from its env. */
+/** @param {string|undefined} value */
+function splitList(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
+
 
 /** @param {unknown} a @param {unknown} b */
 function safeEqual(a, b) {

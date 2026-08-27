@@ -209,12 +209,51 @@ echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(d
 Replies go to **stdout**, logs to **stderr**. That split is enforced: an `info`
 line landing on stdout would not be noise, it would be a corrupted message.
 
+## Identity
+
+This box has a **keypair**, not a token. The private half lives at
+`/var/lib/agent-fleet/host-key.json` — 0600, in a directory systemd creates
+0700 for this service — and is generated the first time anything needs it, not
+only by `run`. Connecting means asking the coordinator for a nonce and signing
+it:
+
+```
+POST /api/host/challenge   {hostId}            -> {nonce}
+GET  /host/connect?hostId=…  x-fleet-nonce: <the nonce>  x-fleet-proof: <signature over it>
+```
+
+Both headers travel back, not just the proof: a nonce is `<issuedAt>.<random>.<HMAC>`
+and nothing is stored server-side, so the coordinator keeps no record of what
+it issued and needs the nonce back to check the signature against it.
+
+Nothing reusable crosses the wire. A captured connection yields a signature
+over a value that will never be accepted again.
+
+**A challenge, not a self-issued JWT** — which is a deliberate departure from
+design.md §5, and the cheaper of the two. A JWT the host signs for itself is
+replayable for as long as it is valid, so its window has to be short; and a
+short window means the two clocks have to agree, on boxes that may have been
+asleep. A nonce the coordinator issued is replayable for exactly zero seconds
+and needs no clock at all. The cost is one extra round trip per connection,
+which happens on the order of minutes at worst.
+
+Joining, once:
+
+```sh
+agent-fleet-sidecar enrol 123456     # a pin from the app, or /enroll in Telegram
+agent-fleet-sidecar identity         # host id, key fingerprint, coordinator
+agent-fleet-sidecar doctor           # ...and whether the coordinator accepts it
+```
+
+`doctor` asks the coordinator rather than reading the file, because a key that
+was never presented and one that has since been revoked look identical on disk.
+
+Do not copy the key file to another machine. Two boxes with one identity is the
+problem this replaced — the whole point is that they are distinguishable and
+revocable one at a time.
+
 ## Still to build
 
-- **Enrollment.** Every host presents the same `AGENT_FLEET_HOST_TOKEN` today.
-  §5 wants a per-host key, so revoking one host does not mean rotating all of
-  them, and a short-lived signed assertion rather than the durable secret on the
-  wire.
 - **Rootless podman.** The sandbox has only ever run as root, which is the wrong
   posture: an escape currently lands as root on the host.
 - **Wake-on-LAN.** §3's second meaning of "wake" — a box that is asleep cannot

@@ -2,6 +2,8 @@
 // The sidecar entrypoint.
 //
 //   agent-fleet-sidecar            run it (systemd calls this)
+//   agent-fleet-sidecar enrol 123456   present this box to a coordinator, once
+//   agent-fleet-sidecar identity   show this box's key fingerprint
 //   agent-fleet-sidecar doctor     check this box can actually drive its agent-hub
 //
 // Config comes from the environment — see src/fleet/host/config.js. This process
@@ -14,6 +16,7 @@ import { updateAvailable } from '../src/core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
+import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
@@ -26,6 +29,8 @@ setLogStream(process.stderr);
 
 const sub = process.argv[2] || 'run';
 if (sub === 'doctor') await doctor();
+else if (sub === 'enrol' || sub === 'enroll') await doEnrol(process.argv[3]);
+else if (sub === 'identity') await identity();
 else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
 else await run();
 
@@ -33,6 +38,8 @@ function usage() {
   console.log(`agent-fleet-sidecar — drives a stock agent-hub on behalf of the fleet coordinator
 
   agent-fleet-sidecar            run
+  agent-fleet-sidecar enrol PIN  present this box to the coordinator (six-digit pin from /enroll)
+  agent-fleet-sidecar identity   print this box's key fingerprint
   agent-fleet-sidecar doctor     check this box can drive its agent-hub
 
 Environment:
@@ -42,7 +49,7 @@ Environment:
   AGENT_FLEET_HOST_ID            default: this hostname
   AGENT_FLEET_LABELS             comma-separated scheduler constraints
   AGENT_FLEET_TRANSPORT          websocket (default) or stdio
-  AGENT_FLEET_HOST_TOKEN         this host's credential at the coordinator
+  AGENT_FLEET_HOST_KEY           this host's private key file (default /var/lib/agent-fleet/host-key.json)
   AGENT_FLEET_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip`);
 }
 
@@ -68,12 +75,31 @@ async function run() {
     log.warn(`agent-hub at ${cfg.hubUrl} is not answering yet — carrying on, health will report it`);
   }
 
+  // The key is loaded once and stays in this process's memory. If the file is
+  // missing we make one — a box that has never enrolled still needs a key to
+  // enrol with, and generating it here means `enrol` and `run` cannot disagree
+  // about which key this host has.
+  let key = null;
+  if (cfg.transport === 'websocket') {
+    try {
+      key = await loadOrCreateKey(cfg.hostKeyFile);
+      log.info(`host identity ${await keyFingerprint(key.publicJwk)}`);
+      if (key.created) {
+        log.warn('this box has no identity at the coordinator yet — run: agent-fleet-sidecar enrol <pin>');
+      }
+    } catch (e) {
+      log.error(`host key: ${/** @type {Error} */ (e).message}`);
+      process.exit(1);
+    }
+  }
+
   const transport =
     cfg.transport === 'websocket'
       ? new WebSocketTransport({
           origin: cfg.coordinatorUrl,
           hostId: cfg.hostId,
-          token: cfg.hostToken,
+          proof: () =>
+            proveIdentity({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk }),
           logger: log,
         })
       : new StdioTransport({ origin: cfg.coordinatorUrl });
@@ -83,6 +109,7 @@ async function run() {
     hostId: cfg.hostId,
     labels: cfg.labels,
     maxSkewMs: cfg.maxSkewMs,
+    promptText: cfg.promptText,
     logger: log,
     // Reported with health, so a phone can say "this box is 3 commits behind
     // and has 12 packages waiting" without anybody logging in to look.
@@ -140,6 +167,51 @@ async function run() {
   }
 }
 
+/**
+ * Spend a six-digit pin to register this box's public key.
+ *
+ * Deliberately separate from `run`: enrolling is a thing an operator does once,
+ * with a code that lives ten minutes, and a service that could enrol itself on
+ * restart would be a service that could be tricked into re-enrolling elsewhere.
+ *
+ * @param {string|undefined} pin
+ */
+async function doEnrol(pin) {
+  if (!pin) {
+    console.error('usage: agent-fleet-sidecar enrol <six-digit pin>\n\nGet a pin with /enroll in Telegram or from the app.');
+    process.exit(2);
+  }
+  if (!cfg.coordinatorUrl) {
+    console.error('AGENT_FLEET_COORDINATOR_URL is not set — there is nothing to enrol with.');
+    process.exit(2);
+  }
+  try {
+    const key = await loadOrCreateKey(cfg.hostKeyFile);
+    const fp = await keyFingerprint(key.publicJwk);
+    const res = await enrol({
+      origin: cfg.coordinatorUrl,
+      code: pin,
+      hostId: cfg.hostId,
+      publicJwk: key.publicJwk,
+    });
+    console.log(`enrolled ${cfg.hostId} at ${cfg.coordinatorUrl}`);
+    console.log(`  fingerprint ${fp}`);
+    if (res.replaced) console.log('  (replaced the key this host had registered before)');
+    console.log('\nStart the sidecar:  sudo systemctl restart agent-fleet-sidecar');
+  } catch (e) {
+    console.error(`enrolment failed: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
+}
+
+async function identity() {
+  const key = await loadOrCreateKey(cfg.hostKeyFile);
+  console.log(`host id      ${cfg.hostId}`);
+  console.log(`key file     ${cfg.hostKeyFile}`);
+  console.log(`fingerprint  ${await keyFingerprint(key.publicJwk)}`);
+  console.log(`coordinator  ${cfg.coordinatorUrl || '(unset)'}`);
+}
+
 async function doctor() {
   let bad = 0;
   /** @param {string} label @param {boolean} good @param {string} [detail] */
@@ -167,5 +239,23 @@ async function doctor() {
   }
 
   ok(`host id ${cfg.hostId}`, true, cfg.labels.length ? `labels: ${cfg.labels.join(', ')}` : 'no labels');
+
+  if (cfg.transport === 'websocket') {
+    try {
+      const key = await loadOrCreateKey(cfg.hostKeyFile);
+      ok(`host key ${cfg.hostKeyFile}`, true, `fingerprint ${await keyFingerprint(key.publicJwk)}`);
+      // Enrolment is the coordinator's opinion, not ours — so ask it. A key that
+      // exists locally but was never presented, or was revoked, looks identical
+      // on disk and completely different on the wire.
+      try {
+        const known = await checkEnrolled({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk });
+        ok('coordinator knows this host', known.ok, known.ok ? cfg.coordinatorUrl : `${known.reason} — agent-fleet-sidecar enrol <pin>`);
+      } catch (e) {
+        ok('coordinator knows this host', false, /** @type {Error} */ (e).message);
+      }
+    } catch (e) {
+      ok('host key', false, /** @type {Error} */ (e).message);
+    }
+  }
   process.exit(bad ? 1 : 0);
 }

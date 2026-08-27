@@ -29,11 +29,14 @@ export async function startStubHub({
   token = null,
   sessions = [],
   panes = {},
-  auth = { loggedIn: true, email: 'box@example.com', summary: 'Logged in as box@example.com' },
+  auth: initialAuth = { loggedIn: true, email: 'box@example.com', summary: 'Logged in as box@example.com' },
   maxSessions = 5,
   host = 'unabandoned',
   onCommand,
 } = {}) {
+  // Mutable, so a test can take a healthy box and make it degraded — which is
+  // the state that used to hide a host's sessions entirely.
+  let auth = initialAuth;
   /** @type {string[]} */
   const commands = [];
   /** @type {Array<{name: string, cwd: string|null, uuid: string}>} */
@@ -104,6 +107,10 @@ export async function startStubHub({
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    /** @param {Record<string, unknown>} next */
+    setAuth: (next) => {
+      auth = next;
+    },
     commands,
     hookReports,
     sessions,
