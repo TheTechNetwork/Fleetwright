@@ -65,9 +65,26 @@ AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 # than a value somebody edited in a web form at midnight.
 #
 # Empty ALLOW means nobody, deliberately — see src/fleet/coordinator/oidc.js.
-# AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
-# AGENT_FLEET_AUTH_AUDIENCES = "<the OAuth client id the app uses>"
-# AGENT_FLEET_AUTH_ALLOW = "@thetech.network"
+AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+
+# TWO audiences, because the two providers issue for different things. Apple
+# issues for the iOS BUNDLE ID; Google issues for the OAuth WEB client id
+# (client_type 3 in google-services.json) that the Android app names as its
+# server client — NOT for either of the Android client ids sitting next to it
+# in that file, which are what the request is authorised by rather than what
+# the token is issued for. `aud` is what gets verified.
+AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+
+# Matched against the VERIFIED EMAIL in the ID token, so it must be the address
+# actually signed in with, not the one that ought to work. A bare `@domain`
+# entry matches the whole domain; anything else must match in full.
+#
+# `@thetech.network` alone would refuse the person who owns this fleet — the
+# Google account here is a gmail one, and the refusal reads "… is not on this
+# fleet's list", which is accurate and sounds like a bug. Sign in with Apple
+# will present whatever address that Apple ID uses, which may be a third one
+# again; add it when it is known rather than guessing at it now.
+AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com"
 
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per

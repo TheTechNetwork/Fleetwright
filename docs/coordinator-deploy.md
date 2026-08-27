@@ -31,28 +31,46 @@ never have it at all.
 
 ### Sign-in
 
-Three more, and none of them is a secret — they are the difference between
-"nobody can sign in" and "anybody with a Google account can".
+Three more — and unlike the token above, **none of them is a secret and none of
+them is `secret put`**. They live in `[vars]` in `worker/wrangler.toml` and
+deploy with the code. This page used to say `secret put` for all three, which
+was wrong twice over: it hides who can reach the fleet in a place nobody
+reviews, and setting a secret whose name is already a `[vars]` key collides at
+deploy time.
 
-```sh
-npx wrangler secret put AGENT_FLEET_AUTH_ISSUERS
-#   https://appleid.apple.com https://accounts.google.com
+They are already filled in there. Changing them means editing that file and
+running `npx wrangler deploy`:
 
-npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
-#   network.thetech.fleetwright                  (the iOS bundle id)
-#   654943059314-....apps.googleusercontent.com  (the Android WEB client id)
-
-npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
-#   @thetech.network someone@example.com
+```toml
+AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com"
 ```
+
+Which is the point of keeping them there: **who can reach a fleet is a
+reviewable diff**, not a value somebody typed into a prompt at midnight and
+cannot later account for.
+
+**The audience is two values, and they are not symmetrical.** Apple issues its
+ID tokens for the **iOS bundle id**. Google issues them for the OAuth **web**
+client id — `client_type: 3` in `google-services.json` — which the Android app
+names as its server client. It is *not* either of the Android client ids in
+that same file; those are what the request is authorised by, while the web
+client is what the token is issued *for*, and `aud` is what gets verified.
+
+**The allowlist is matched against the verified email in the ID token**, so it
+has to be the address actually signed in with rather than the one that ought to
+work. A bare `@domain` matches the whole domain; anything else must match in
+full, case-insensitively. `@thetech.network` on its own would refuse the person
+who owns this fleet, whose Google account is a gmail one — and the refusal reads
+"… is not on this fleet's list", which is accurate and sounds like a bug.
+
+Sign in with Apple will present whatever address that Apple ID uses, which may
+be a third address again. Add it once it is known.
 
 `AGENT_FLEET_AUTH_ALLOW` empty allows **nobody**. That is deliberate: a
 coordinator that has not been told who is allowed should refuse everyone rather
 than everyone.
-
-The audience is not one value. Apple issues its ID tokens for the iOS bundle
-id; Google issues them for the OAuth **web** client id the Android app names as
-its server client. Both are listed, and a token is checked against the list.
 
 ### Hosts
 
