@@ -133,7 +133,7 @@ Configure with three settings; the sample is commented in `worker/wrangler.toml`
 
 ```
 AGENT_FLEET_AUTH_ISSUERS    https://appleid.apple.com https://accounts.google.com
-AGENT_FLEET_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-….apps.googleusercontent.com
+AGENT_FLEET_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com
 AGENT_FLEET_AUTH_ALLOW      @thetech.network
 ```
 
@@ -154,6 +154,34 @@ Two things that will refuse a sign-in for reasons worth stating in advance:
   issues them for the OAuth **web** client id the Android app names as its
   server client. `AGENT_FLEET_AUTH_AUDIENCES` needs both, and a token for
   another application is refused.
+
+  The Google half is the **web** client (`client_type: 3`) from
+  `google-services.json` — *not* either of the Android clients listed beside it.
+  This trips people because the Android client is the one that looks like it
+  belongs to the app. It is the one the request is authorised *by*; the web
+  client is the one the token is issued *for*, and `aud` is what gets checked.
+
+### The signing certificate has to match, and this is where it fails silently
+
+Google ties each Android OAuth client to a package name **and a signing
+certificate SHA-1**. Present an ID token request from a build signed with a
+different key and Credential Manager refuses — with a generic failure, not a
+sentence naming the certificate.
+
+So each build type needs its own registered fingerprint: the debug keystore's
+for `network.thetech.fleetwright.debug`, and the release keystore's
+(`ANDROID_KEYSTORE_BASE64` in CI) for `network.thetech.fleetwright`. **If both
+entries in `google-services.json` carry the same hash, one of them is wrong**,
+and the build type it belongs to is the one that will fail. Check with:
+
+```
+python3 -c "import json;[print(c['client_info']['android_client_info']['package_name'], o.get('android_info',{}).get('certificate_hash')) for c in json.load(open('apps/android/app/google-services.json'))['client'] for o in c['oauth_client'] if o['client_type']==1]"
+keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep SHA1
+```
+
+If the app is ever distributed through Play, the fingerprint that matters is the
+**app signing certificate** from the Play Console rather than the upload key —
+Play re-signs, so the key that built the artefact is not the key that ships.
 
 Both apps also have a collapsed **"use a credential instead"** field. It exists
 for two things sign-in cannot cover: App Review, whose reviewers are on nobody's
