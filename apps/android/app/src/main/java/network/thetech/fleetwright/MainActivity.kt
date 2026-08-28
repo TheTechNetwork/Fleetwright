@@ -498,8 +498,17 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // status on the app — and this is it: whether that box is logged in,
         // on what plan, running what code, without SSH.
         var fleetHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
+        var busyHost by remember { mutableStateOf<String?>(null) }
+        var hostActionResult by remember { mutableStateOf("") }
+        var rebootTarget by remember { mutableStateOf<String?>(null) }
+        var rebootPin by remember { mutableStateOf("") }
+        var rebootConfirm by remember { mutableStateOf("") }
+        var credentialsFor by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(settings.configured) {
             if (settings.configured) fleetHosts = Fleet(settings).fleetHosts()
+        }
+        credentialsFor?.let { target ->
+            CredentialsSheet(settings, target, onDismiss = { credentialsFor = null })
         }
         if (fleetHosts.isNotEmpty()) {
             Text("Fleet", style = MaterialTheme.typography.titleMedium)
@@ -540,7 +549,97 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     if (host.rebootRequired) {
                         Text("reboot required", style = MaterialTheme.typography.bodySmall)
                     }
+                    // MAINTENANCE, which used to need SSH. Update is safe and
+                    // idempotent so it is one tap; reboot is two steps and asks
+                    // for the hostname, exactly as it does in chat — a remote
+                    // reboot should be harder than a local one, not easier.
+                    //
+                    // This is the half of #171 that shipped to iOS and not to
+                    // here. Both phones now carry the same six verbs, which was
+                    // the point of that round.
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = busyHost == null,
+                            onClick = {
+                                scope.launch {
+                                    busyHost = host.hostId
+                                    hostActionResult = Fleet(settings).update(host.hostId, restart = true).text
+                                    busyHost = null
+                                }
+                            },
+                        ) { Text("Update") }
+                        TextButton(
+                            enabled = busyHost == null,
+                            onClick = {
+                                scope.launch {
+                                    busyHost = host.hostId
+                                    hostActionResult = Fleet(settings).upgrade(host.hostId).text
+                                    busyHost = null
+                                }
+                            },
+                        ) { Text("Upgrade") }
+                        TextButton(
+                            enabled = busyHost == null,
+                            onClick = { rebootTarget = host.hostId; rebootPin = ""; rebootConfirm = "" },
+                        ) { Text("Reboot") }
+                        TextButton(onClick = { credentialsFor = host.hostId }) { Text("Credentials") }
+                    }
                 }
+            }
+            // TWO STEPS, and the second one asks for the hostname typed out.
+            // The pin is issued by the BOX: a coordinator that could mint it
+            // could reboot the fleet. The button stays disabled until the typed
+            // name matches, which is the only guard that survives being remote.
+            rebootTarget?.let { target ->
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Reboot $target", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Every session on this box dies — a reboot takes the tmux server with it.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = rebootPin,
+                        onValueChange = { rebootPin = it },
+                        singleLine = true,
+                        label = { Text("Pin from the box") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = rebootConfirm,
+                        onValueChange = { rebootConfirm = it },
+                        singleLine = true,
+                        label = { Text("Type $target to confirm") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = busyHost == null,
+                            onClick = {
+                                scope.launch {
+                                    busyHost = target
+                                    hostActionResult = Fleet(settings).reboot(target).text
+                                    busyHost = null
+                                }
+                            },
+                        ) { Text("Ask for a pin") }
+                        TextButton(
+                            enabled = rebootPin.isNotBlank() && rebootConfirm == target && busyHost == null,
+                            onClick = {
+                                scope.launch {
+                                    busyHost = target
+                                    hostActionResult =
+                                        Fleet(settings).reboot(target, rebootPin, rebootConfirm).text
+                                    rebootTarget = null
+                                    busyHost = null
+                                }
+                            },
+                        ) { Text("Reboot") }
+                        TextButton(onClick = { rebootTarget = null }) { Text("Cancel") }
+                    }
+                }
+            }
+            if (hostActionResult.isNotBlank()) {
+                Text(hostActionResult, style = MaterialTheme.typography.bodySmall)
             }
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
         }
