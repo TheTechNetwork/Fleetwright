@@ -73,6 +73,40 @@ sudo /opt/agent-fleet/install/uninstall.sh         # take this box out of the fl
 sudo /opt/agent-fleet/install/uninstall.sh --purge # and remove /opt/agent-fleet
 ```
 
+### Updating
+
+`/update --restart` from chat or the app, or `agent-hub update --restart` on the
+box. **It restarts all three services, and none of it needs a terminal.**
+
+The hub restarts itself by exiting — systemd's `Restart=always` brings it back
+on the new code, which needs no privilege the service user does not already
+have. It cannot restart the sidecar or the coordinator: those are system units
+and it has no rights over them.
+
+So the updater leaves a marker in the state directory after a successful pull,
+and both watch for it. A marker newer than a service's own start means that
+service is running code older than the tree it was launched from, so it exits —
+the same mechanism as the hub, arrived at from the other end. All three run as
+the same user from the same directory, so the marker needs no permission that is
+not already held.
+
+Three decisions worth knowing:
+
+- **A sudoers rule would also have worked**, and the installer already writes
+  two. It is the wrong tool here: a standing privilege escalation, granted for
+  the life of the box, to solve a problem that lasts one second.
+- **The marker is written after the pull, not by watching git.** A pull is not
+  atomic, and a service that notices the tree moved can wake up halfway through
+  one and load half an update. "There is a complete new tree" is a different and
+  much safer claim than "something changed".
+- **A service compares the marker against its own start time.** Without that,
+  the service coming back up reads the marker that restarted it and exits again,
+  for ever — a restart loop built out of the mechanism meant to end one.
+
+Sessions are untouched throughout: `KillMode=process` in the hub's unit is what
+makes that true, and hosts reconnect to a restarted coordinator with the backoff
+the transport already has.
+
 ### Cloning a box that is already installed
 
 **Do not, without reading this.** `/var/lib/agent-fleet/host-key.json` is the
