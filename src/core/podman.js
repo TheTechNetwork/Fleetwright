@@ -21,6 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import path from 'node:path';
 import { log } from '../log.js';
 import { Accounts, emailFromActor, extractOauthAccount } from './accounts.js';
+import { Connections } from './connectors.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -318,6 +319,15 @@ function seedCredentials(cfg, volume, actor = null) {
     mounts.push('-v', `${picked.accountMeta}:/seed/.oauth-account.json:ro`);
     copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
   }
+  // The other credentials — GitHub, Cloudflare, whatever gets added. Seeded on
+  // the same terms as the Claude credential and for the same reason: a resume
+  // never re-seeds, so a session keeps the tokens it began with and a rotation
+  // reaches the next session rather than reaching backwards into a running one.
+  const secrets = pickSecretsFile(cfg, actor);
+  if (secrets) {
+    mounts.push('-v', `${secrets}:/seed/.secrets.env:ro`);
+    copy += ' && cp /seed/.secrets.env /dest/.secrets.env && chmod 600 /dest/.secrets.env';
+  }
   const r = podman(cfg, ['run', '--rm', ...mounts, cfg.sandboxImage, 'sh', '-c', copy]);
   if (r.status !== 0) {
     return {
@@ -356,6 +366,34 @@ export function pickCredentialSource(cfg, actor) {
     accountMeta: sharedAccountMetaFile(cfg),
     account: 'shared',
   };
+}
+
+/**
+ * Which connected tokens a session gets — GitHub, Cloudflare, and whatever
+ * else is in the catalogue.
+ *
+ * DELIBERATELY NOT THE SAME RULE AS THE CLAUDE CREDENTIAL, and the difference
+ * is the point. A person with no linked Claude account falls back to the
+ * shared one, because a shared org plan is a licence somebody chose to share.
+ * A GitHub token is not: it is one person's access to their own repositories,
+ * and handing it to a guest because they happen not to have connected their
+ * own would be exactly the thing that was ruled out — "the guests will be
+ * bringing their own GitHub, Cloudflare, Claude creds, no shared creds to
+ * them."
+ *
+ * So: an actor with a verified email gets THEIR tokens or none. The box's own
+ * row is for actors that have no email — the CLI, Telegram, the web UI, all of
+ * which are somebody operating the box itself.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string|null} actor
+ * @returns {string|null}
+ */
+export function pickSecretsFile(cfg, actor) {
+  const store = new Connections(cfg.stateDir);
+  const email = emailFromActor(actor);
+  const file = store.envPathFor(email);
+  return file && existsSync(file) ? file : null;
 }
 
 /**
