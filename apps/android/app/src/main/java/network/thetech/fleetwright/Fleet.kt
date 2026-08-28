@@ -86,6 +86,26 @@ class Fleet(private val settings: Settings) {
      * sends none of it, and the app must show a host with less information
      * rather than no host at all.
      */
+    /**
+     * A session that was forgotten and is still recoverable.
+     *
+     * `expiresAt` is a timestamp rather than a rendered string so the phone
+     * does the arithmetic — "two days left" stays right while the screen is
+     * open, and a server-rendered string would freeze the moment it was sent.
+     */
+    data class Binned(val name: String, val title: String?, val expiresAt: Long) {
+        val remaining: String?
+            get() {
+                if (expiresAt <= 0L) return null
+                val left = expiresAt - System.currentTimeMillis()
+                if (left <= 0L) return "gone"
+                if (left < 3_600_000L) return "goes within the hour"
+                if (left < 86_400_000L) return "${left / 3_600_000L}h left"
+                val days = left / 86_400_000L
+                return "$days day${if (days == 1L) "" else "s"} left"
+            }
+    }
+
     data class FleetHost(
         val hostId: String,
         val state: String?,
@@ -97,6 +117,12 @@ class Fleet(private val settings: Settings) {
         val version: String?,
         val behind: Int?,
         val rebootRequired: Boolean,
+        /**
+         * Forgotten, still recoverable. Empty on a host that has not been
+         * updated — which renders as no section at all, the correct answer for
+         * a box where forget still deletes.
+         */
+        val bin: List<Binned> = emptyList(),
     )
 
     data class Reply(
@@ -253,7 +279,20 @@ class Fleet(private val settings: Settings) {
     suspend fun peek(name: String): Reply = intent("peek", mapOf("name" to name))
 
     /** Forget a session and delete its volumes. Not undoable — the UI asks first. */
+    /** Stop a session and put it in the bin. Recoverable — see [restore]. */
     suspend fun forget(name: String): Reply = intent("forget", mapOf("name" to name))
+
+    /**
+     * Take a forgotten session back out of the bin.
+     *
+     * The volumes were never deleted, so this is a record move: the
+     * conversation and the workspace come back exactly as they were. Pinned to
+     * the box still holding them, which the coordinator resolves.
+     */
+    suspend fun restore(name: String): Reply = intent("restore", mapOf("name" to name))
+
+    /** Delete for good. What [forget] used to do, kept as its own word. */
+    suspend fun purge(name: String): Reply = intent("purge", mapOf("name" to name))
 
     /**
      * Ask the coordinator to send this device a notification now.
@@ -458,6 +497,19 @@ class Fleet(private val settings: Settings) {
                     version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
+                    bin = health?.optJSONArray("bin")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.let { b ->
+                                val n = b.optString("name")
+                                if (n.isBlank()) null
+                                else Binned(
+                                    name = n,
+                                    title = b.optString("title").takeIf { it.isNotBlank() && it != "null" },
+                                    expiresAt = b.optLong("expiresAt", 0L),
+                                )
+                            }
+                        }
+                    } ?: emptyList(),
                 )
             }
         }.getOrDefault(emptyList())

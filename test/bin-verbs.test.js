@@ -11,6 +11,7 @@ import { validateIntent, PROTOCOL_VERSION, VERBS, isMutating } from '../src/flee
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { readFileSync } from 'node:fs';
 
 const quiet = { info() {}, warn() {}, error() {} };
 const intent = (verb, params) => ({
@@ -116,4 +117,30 @@ test('an old host’s refusal explains itself, and names the way out', () => {
     assert.match(reply.text, /agent-hub update --restart/);
     assert.match(reply.text, /\/update --restart/);
   });
+});
+
+test('both apps carry the bin, and neither renders it for an old host', () => {
+  // PARITY, checked rather than intended. The maintenance row shipped to iOS
+  // and not to Android two rounds ago while I reported it done on both, and
+  // docs/app-parity.md exists because a gap one commit wide is invisible in a
+  // summary.
+  const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const ios = read('apps/ios/Fleetwright/Fleet.swift') + read('apps/ios/Fleetwright/FleetView.swift');
+  const android =
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt') +
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+
+  for (const [name, src] of [['iOS', ios], ['Android', android]]) {
+    assert.match(src, /\brestore\b/, `${name} cannot restore`);
+    assert.match(src, /\bpurge\b/, `${name} cannot purge`);
+    assert.match(src, /Restore/, `${name} has no restore button`);
+    assert.match(src, /Delete now/, `${name} has no purge button`);
+    // The permanent action confirms; the reversible one does not. A
+    // confirmation on the reversible action and none on the permanent one is
+    // how people learn to tap through both.
+    assert.match(src, /for good\?/, `${name} deletes without asking`);
+    // The deadline is computed on the phone from a timestamp. A rendered
+    // string would freeze the moment it was sent.
+    assert.match(src, /remaining/, `${name} does not show how long is left`);
+  }
 });
