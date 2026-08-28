@@ -49,6 +49,7 @@ import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
 import { SessionWatcher } from './watcher.js';
 import { promptId, describePrompt } from './prompt.js';
+import { redactCommandLine } from '../../core/redact.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -276,7 +277,7 @@ export class Sidecar {
       // own work, and there is no reason for it to be in a log a whole box can
       // read.
       const meta = commandMeta(intent.verb, intent.params, intent.actor);
-      this.log.info(`sidecar: ${actor} → ${line}`);
+      this.log.info(`sidecar: ${actor} → ${redactCommandLine(line)}`);
       const r = await this.hub.command(line, meta);
 
       const sessions = Array.isArray(r.sessions) ? await this.#enrich(r.sessions) : undefined;
