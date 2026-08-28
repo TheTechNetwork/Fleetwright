@@ -7,8 +7,30 @@ name: Worker
 # Worker and not find out until a deploy. The check is a dry-run bundle: seconds,
 # and no account needed.
 on:
+  # DEPLOYS on a push to main, so the filter is the difference between shipping
+  # a change and redeploying a README. It had none: every commit to main
+  # redeployed the Worker, including documentation.
+  #
+  # The list is what actually ends up in the bundle, which is more than
+  # `worker/`. worker/src/fleet-do.js imports CoordinatorCore, the push
+  # senders and the OIDC verifier straight out of src/fleet — the whole point
+  # of that arrangement is that the same code runs in both coordinators, and
+  # the cost is that changing it changes the Worker. A filter naming only
+  # `worker/**` would quietly stop deploying the half of the Worker that lives
+  # somewhere else, which is far worse than deploying too often.
   push:
     branches: [main]
+    paths:
+      - 'worker/**'
+      - 'src/fleet/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/worker.yml'
+      - '!**/*.md'
+  # NOT filtered on pull requests. `check` is a required status, and a check
+  # that skips itself reports nothing, which reads as "nothing found" rather
+  # than "not run" — the same reasoning codeql.yml gives for having no filters
+  # at all.
   pull_request:
   workflow_dispatch:
 

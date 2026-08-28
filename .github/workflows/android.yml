@@ -3,9 +3,19 @@ name: Android
 on:
   push:
     branches: [main]
-    paths: ['apps/android/**', '.github/workflows/android.yml']
+    # Negative patterns after the positive ones, which is how GitHub resolves
+    # them: last match wins. A README or a comment-only markdown file under
+    # apps/android used to build, sign, upload and spend a build number to give
+    # testers a byte-identical app.
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      - '!apps/android/**/*.md'
   pull_request:
-    paths: ['apps/android/**', '.github/workflows/android.yml']
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      - '!apps/android/**/*.md'
   workflow_dispatch:
   release:
     types: [published]
@@ -182,13 +192,27 @@ jobs:
   internal:
     name: publish to Play
     needs: release
-    # workflow_dispatch is included deliberately. It used to build and sign and
-    # then NOT publish, so dispatching the workflow by hand produced artifacts
-    # and no upload, with nothing saying why.
+    # NOT on `release`, and that is the fix rather than an omission.
+    #
+    # Every merge to main already publishes to PLAY_TRACK. Publishing again on
+    # `release: published` sends the same app to the same track a second time
+    # with a different version code, so testers get a duplicate and the version
+    # code sequence has a hole in it that means nothing.
+    #
+    # iOS is not the same shape and keeps its release trigger: there, a merge
+    # goes to INTERNAL TestFlight and a release goes to EXTERNAL, which is two
+    # audiences and a review boundary between them. Play has one track variable
+    # here, so the two events would land in the same place.
+    #
+    # What a release still does on Android is attach the signed APK to the
+    # GitHub release, in the `release` job above — the thing a person
+    # sideloads, which the store upload does not provide.
+    #
+    # workflow_dispatch stays: it used to build and sign and then NOT publish,
+    # so dispatching by hand produced artifacts and no upload, saying nothing.
     if: >-
       needs.release.outputs.built == 'true' &&
-      (github.event_name == 'release' ||
-       github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     environment: production
