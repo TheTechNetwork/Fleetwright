@@ -74,6 +74,43 @@ Google's published keys rather than trusted because the SDK said so. A
 malicious version could produce a token the coordinator would reject; it could
 not produce one it would accept.
 
+## Checking that the manifest and the lock agree
+
+There is an obvious way to do this and it is destructive:
+
+```sh
+npm ci --dry-run          # DON'T
+```
+
+**`npm ci` deletes `node_modules` before it does anything, and `--dry-run` does
+not stop it.** So the command that looks like "tell me whether these two files
+agree" is in fact "empty both dependency trees, then tell me". It reports
+success, exits 0, and every tool the project uses is gone — `tsc`, `esbuild`,
+`wrangler`. The next thing you run fails with an error about TypeScript not
+being installed, which points at nothing.
+
+Learned the direct way, mid-task, in this repo.
+
+The non-destructive answer is already a test, and `verify.sh` runs it:
+
+```sh
+node --test test/pinned-dependencies.test.js
+```
+
+It reads the JSON and compares it — no install, no network, nothing removed.
+It checks three separate properties, because each can break on its own and
+only the first is visible in a review:
+
+1. no dependency is declared as a range,
+2. what the manifest claims is what the lock installs,
+3. the lock's own copy of the root declarations matches the manifest — which
+   is the one `npm ci` would otherwise refuse over.
+
+If a tree really does need rebuilding, `npm ci` is the right command for that
+job. Just know that rebuilding is what it does, and that the worker's tree may
+need the network even when the root's does not: a lockfile bump merged by a bot
+is a version nothing has ever fetched onto this machine.
+
 ## What was deliberately NOT taken
 
 **A JOSE library for our own signing.** `src/fleet/crypto.js` calls
