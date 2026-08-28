@@ -591,9 +591,22 @@ class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("agent-fleet", Context.MODE_PRIVATE)
 
     /** Not sensitive: an origin, and the app talks to no other. */
+    /**
+     * Normalised on BOTH sides of the store: on write so nothing malformed is
+     * ever persisted, and on read so a value written by an older build — which
+     * predates the tidying — cannot reach an HTTP client unrepaired.
+     */
     var coordinatorUrl: String
-        get() = prefs.getString("coordinatorUrl", "") ?: ""
-        set(value) = prefs.edit().putString("coordinatorUrl", value.trim()).apply()
+        get() = CoordinatorUrl.normalise(prefs.getString("coordinatorUrl", "") ?: "")
+        set(value) = prefs.edit().putString("coordinatorUrl", CoordinatorUrl.normalise(value)).apply()
+
+    /**
+     * Where this app was pointed before somebody tapped into the demo, so that
+     * leaving puts them back rather than making them re-type a URL to undo a tap.
+     */
+    var urlBeforeDemo: String
+        get() = prefs.getString("urlBeforeDemo", "") ?: ""
+        set(value) = prefs.edit().putString("urlBeforeDemo", value.trim()).apply()
 
     /**
      * This device's own credential, encrypted with a key held in the Android

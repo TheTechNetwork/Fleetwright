@@ -231,8 +231,6 @@ private struct SettingsView: View {
     @State private var pin = ""
     @State private var hosts: [Fleet.Host] = []
     @State private var fleetHosts: [Fleet.FleetHost] = []
-    @State private var showingAdvanced = false
-    @State private var pastedCredential = ""
     @State private var confirmingRevoke: String?
     @State private var hostActionResult = ""
     @State private var busyHost: String?
@@ -339,6 +337,45 @@ private struct SettingsView: View {
                             .signInWithAppleButtonStyle(.black)
                             .frame(height: 44)
                             .disabled(settings.coordinatorURL.isEmpty || signingIn)
+                        // ONE TAP INTO A FLEET THAT ISN'T REAL.
+                        //
+                        // The demo credential has existed since App Review
+                        // needed one, and reaching it meant finding a token in
+                        // a deployment document and pasting it into a
+                        // collapsed field labelled "credential" — which is a
+                        // fair description of "no demo at all" for anybody who
+                        // is not already reading the repo.
+                        //
+                        // It fills an EMPTY coordinator field rather than
+                        // overwriting one: somebody who has already pointed
+                        // this app at their own fleet and taps the wrong row
+                        // must not lose it.
+                        Button("Look around the demo fleet") {
+                            // The real coordinator is REMEMBERED, not
+                            // discarded. Somebody who has already pointed this
+                            // app at their own fleet and taps out of curiosity
+                            // must get it back when they leave — losing it
+                            // would mean re-typing a URL to undo a tap.
+                            if !settings.coordinatorURL.isEmpty
+                                && !Demo.isActive(settings.coordinatorURL) {
+                                settings.urlBeforeDemo = settings.coordinatorURL
+                            }
+                            settings.coordinatorURL = Demo.coordinatorURL
+                            settings.signedInAs = Demo.label
+                            settings.credential = Demo.credential
+                            onDone()
+                        }
+                    } else if Demo.isActive(settings.coordinatorURL) {
+                        // Said plainly, and never as "signed in". Every reply
+                        // from this fleet carries `demo: true`, and a person
+                        // wondering why their machines are missing deserves the
+                        // answer on the screen rather than in a support thread.
+                        LabeledContent("Demo") { Text("invented hosts and sessions") }
+                        Button("Leave the demo") {
+                            settings.signOut()
+                            settings.coordinatorURL = settings.urlBeforeDemo
+                            settings.urlBeforeDemo = ""
+                        }
                     } else {
                         LabeledContent("Signed in") {
                             Text(settings.signedInAs.isEmpty ? "this device" : settings.signedInAs)
@@ -356,7 +393,8 @@ private struct SettingsView: View {
                     // list of allowed addresses, and Hide My Email can never be
                     // on it.
                     Text("This device gets a credential of its own, kept in the keychain and revocable on its own. "
-                         + "Choose \"Share My Email\" — a fleet allows people by address, and a hidden one matches nothing.")
+                         + "Choose \"Share My Email\" — a fleet allows people by address, and a hidden one matches nothing. "
+                         + "No account? The demo is two invented machines and needs nothing.")
                 }
 
                 // Adding a machine. Deliberately here rather than buried: it is
@@ -444,35 +482,22 @@ private struct SettingsView: View {
                     }
                 }
 
-                // The way in that does not involve an identity provider.
+                // "Use a credential instead" WAS HERE, and is gone.
                 //
-                // Two real needs, neither of which sign-in covers. App Review
-                // has to be able to run the app, and no reviewer's address is
-                // on anybody's allowlist — the public demo credential exists
-                // for exactly that and reaches a coordinator with no hosts on
-                // it. And when sign-in itself is what is broken, the admin
-                // credential is how an operator gets back in.
+                // It existed for two things. The first was App Review, which
+                // needed a way in that no allowlist could grant — now a button
+                // in the section above, because asking a reviewer to find a
+                // token in a deployment document and paste it into a field
+                // labelled "credential" is a fair description of no demo at
+                // all.
                 //
-                // Collapsed, and it says what it is: a field labelled "token"
-                // in front of everybody is how the shared-secret habit comes
-                // back.
-                Section {
-                    DisclosureGroup("Use a credential instead", isExpanded: $showingAdvanced) {
-                        SecureField("fwk_… or a demo credential", text: $pastedCredential)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Button("Use it") {
-                            settings.credential = pastedCredential.trimmingCharacters(in: .whitespacesAndNewlines)
-                            settings.signedInAs = ""
-                            pastedCredential = ""
-                            showingAdvanced = false
-                            onDone()
-                        }
-                        .disabled(pastedCredential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                } footer: {
-                    Text("For App Review's demo fleet, and for getting back in when sign-in is what is broken.")
-                }
+                // The second was getting back in when sign-in itself is
+                // broken. That is a real need and it is now served by curl with
+                // the API token rather than by a field in everybody's settings.
+                // A box that asks for a token, in front of every user, is how
+                // the shared-secret habit comes back — and a recovery path only
+                // the operator needs does not belong on the operator's users'
+                // screens.
 
                 // Push is the one feature that fails silently. A registration
                 // that never arrived and a coordinator with no sender
