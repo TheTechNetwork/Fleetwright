@@ -45,7 +45,8 @@ yet designed).
 | Sign-in status per host in the app: signed in as, plan, org, or NOT signed in | **done** | the first half of "sign-in status and logs on the app"; logs need the v2 `logs` verb |
 | Host version info: what it runs, how far behind, reboot required | **done** | the Fleet section in settings, both apps |
 | Context-window usage per session | wanted | the one fact of this group the host does not yet know — it lives in the transcript, not in any status the CLI exposes |
-| Session detail screen; notification actions | designed | `docs/plan.md` |
+| Session detail screen; notification actions | **partial** | the `answer` verb exists; the notification action and detail screen are the app layers |
+| Forget moves to a 7-day recycle bin, restorable | wanted | today `/forget` deletes the conversation and workspace immediately — irreversible, and the one action in the product with no undo |
 | TG settings setup / removal from the app | wanted | config, not protocol |
 | Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
 
@@ -62,10 +63,11 @@ as an option and no longer sets the ceiling. (`docs/app-parity.md`)
 
 ## 5. Protocol v2-era verbs
 
-`PROTOCOL_VERSION` is exact-match, so these ship together, once. (`docs/plan.md` §4–5, `docs/app-parity.md`)
+**They do NOT have to ship together, and that correction is worth more than the verbs.** An older host answers an unknown verb with `unknown_verb` — a named refusal that strands nothing. It is adding a PARAMETER to an existing verb that forces a bump, because `bad_params` arrives *after* the version check has already agreed. So verbs ship one at a time; only parameter changes are a flag day. (`docs/plan.md` §4–5, `docs/intents.md`)
 
-- `answer` — ordinal into a host-published list (never free text; `send-keys` reaches a root shell)
-- `logs`, `update`, `upgrade`, `reboot` — with a host parameter, making the app a strict superset of per-box TG
+- `answer` — **done**. Ordinal into a host-published list, `promptId` closing the temporal hole
+- `logs` — **done**. Service journals by enum, plus a session's own output (container stderr, which outlives the pane)
+- `update`, `upgrade`, `reboot` — with a host parameter, making the app a strict superset of per-box TG
 - `login` / `code` — the Claude account flow from the app, the one step that still wants SSH today
 
 ## 6. Hosts and the dev-environment goal

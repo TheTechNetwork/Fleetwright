@@ -51,6 +51,40 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
   }
 
+  // LOGS GO TO ONE NAMED BOX.
+  //
+  // Not a fan-out: three journals merged into one stream is something nobody
+  // can read. Not "new work" either, which is where an unhandled verb would
+  // fall through — that path filters on free capacity, and a full box can
+  // still answer questions about itself.
+  //
+  // With one host there is no choice to make. With several, asking is
+  // ambiguous and picking one silently would be guessing at which box somebody
+  // meant — so it refuses and names them, the same way an ambiguous session
+  // name is refused rather than resolved by iteration order.
+  if (verb === 'logs') {
+    const reachable = registry.reachable();
+    if (!reachable.length) {
+      return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+    }
+    if (preferHost) {
+      const chosen = reachable.find((h) => h.hostId === preferHost);
+      return chosen
+        ? { kind: 'host', host: chosen }
+        : {
+            kind: 'refused',
+            code: 'host_unavailable',
+            reason: `${preferHost} is not connected. Reachable: ${reachable.map((h) => h.hostId).join(', ')}.`,
+          };
+    }
+    if (reachable.length === 1) return { kind: 'host', host: reachable[0] };
+    return {
+      kind: 'refused',
+      code: 'ambiguous_host',
+      reason: `Which box? ${reachable.map((h) => h.hostId).join(', ')}.`,
+    };
+  }
+
   // `status` with no name is a fleet-wide question, not a session one.
   if (verb === 'status' && !name) {
     const hosts = registry.reachable();

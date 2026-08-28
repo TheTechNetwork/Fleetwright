@@ -44,6 +44,7 @@ test('the verb set is exactly what is documented', () => {
     'forget',
     'health',
     'list',
+    'logs',
     'peek',
     'resume',
     'start',

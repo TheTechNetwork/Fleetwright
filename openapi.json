@@ -907,7 +907,8 @@
                       "resume",
                       "stop",
                       "forget",
-                      "answer"
+                      "answer",
+                      "logs"
                     ]
                   },
                   "params": {

@@ -163,6 +163,30 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Stop a running session, keeping its conversation resumable.',
   },
+  logs: {
+    params: {
+      // A SESSION's logs, which are a different question from a service's.
+      // `peek` shows the live pane; this is what the session SAID — the
+      // container's stderr, which outlives the pane. That difference matters
+      // most exactly when it is hardest to get at: a session that died has no
+      // pane left, and the reason it died is in the container's output.
+      //
+      // Mutually exclusive with `service` in practice; the host prefers this
+      // one when both arrive, because naming a session is the more specific
+      // request.
+      name: { type: 'name', required: false },
+      // A FIXED SET, not a service name. The host runs `journalctl -u <x>`,
+      // and an enum is the difference between naming three units this project
+      // installed and handing a remote caller the unit namespace of the box.
+      service: { type: 'enum', required: false, values: ['hub', 'coordinator', 'sidecar'] },
+      lines: { type: 'int', required: false, min: 1, max: 200 },
+    },
+    // READ-ONLY, but not a fan-out: logs are per-box by nature and merging
+    // three journals into one stream would produce something nobody can read.
+    // A caller names the host with the placement preference instead.
+    mutating: false,
+    summary: 'The last lines of a service log on one host.',
+  },
   answer: {
     params: {
       name: { type: 'name', required: true },

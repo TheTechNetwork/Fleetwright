@@ -16,6 +16,10 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { isValidName } from './names.js';
+import { hasSession, capturePane } from './tmux.js';
+import { podman, sandboxNames } from './podman.js';
+
 /**
  * The services this can read, by the name someone would actually type.
  * A fixed list, not a pattern.
@@ -25,6 +29,48 @@ export const LOG_SOURCES = Object.freeze({
   coordinator: { unit: 'agent-fleet-coordinator', what: 'the fleet coordinator' },
   sidecar: { unit: 'agent-fleet-sidecar', what: 'this box as a fleet host' },
 });
+
+/**
+ * A SESSION's own logs, which are a different question from a service's.
+ *
+ * `peek` shows the live pane — what the session looks like right now. This is
+ * what it SAID: the container's stderr for a sandboxed session, and the pane
+ * tail otherwise. The distinction matters most exactly when it is hardest to
+ * get at: a session that died has no pane left to peek, and the reason it died
+ * is in the container's output.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} name
+ * @param {number} lines
+ * @returns {{ ok: boolean, text: string }}
+ */
+export function readSessionLogs(cfg, name, lines = 60) {
+  if (!isValidName(name)) return { ok: false, text: `"${name}" is not a valid session name.` };
+
+  // The container first: it outlives the pane. A crashed session's tmux window
+  // is gone, and podman still has what it printed on the way out.
+  if (cfg.sandbox) {
+    const { container } = sandboxNames(name);
+    const r = podman(cfg, ['logs', '--tail', String(lines), container]);
+    // status 125 is "no such container", which is not an error worth showing
+    // when a live pane can answer instead.
+    if (r.status === 0) {
+      const text = `${r.stdout}${r.stderr}`.trim();
+      if (text) return { ok: true, text: `Container output for ${name}:\n${text}` };
+      return { ok: true, text: `The container for ${name} has printed nothing.` };
+    }
+  }
+
+  if (hasSession(name)) {
+    return { ok: true, text: `Pane for ${name}:\n${capturePane(name, lines)}` };
+  }
+  return {
+    ok: false,
+    text:
+      `Nothing left to read for "${name}" — no container and no pane.\n` +
+      'A stopped session keeps its conversation; its output is gone with the container.',
+  };
+}
 
 /** Aliases people reach for. @type {Record<string, keyof typeof LOG_SOURCES>} */
 const ALIASES = {
