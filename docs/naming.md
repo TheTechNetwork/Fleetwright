@@ -163,6 +163,34 @@ dangerous, a title template — so *"start a dev session"* is a whole
 configuration, not a name. That is the difference between a shortcut and a
 macro, and it is why this is worth building rather than aliasing.
 
+### Opening the app after a spoken start, which cannot be a setting
+
+Asked for as a toggle: when a session starts through an App Intent, let the user
+turn on auto-open. It cannot be one, and the compiler is what says so:
+
+> `openAppWhenRun` must have a compile-time static value and cannot be computed
+> or dynamic
+
+That is the AppIntents metadata processor, not Swift. Shortcut metadata is
+extracted from the binary at **build** time, so there is no run in which to
+consult a setting — a computed property there fails the build rather than being
+quietly ignored, which is the good version of this error.
+
+So the choice moved from a hidden toggle to **two phrases**, as two intents
+differing only in that constant:
+
+> "start a session on my fleet" — does not take you there
+> "start a session on my fleet **and open it**" — does
+
+Arguably where it belonged. An intent fired from an automation often runs when
+nobody is looking at the phone, and which of those two somebody meant is clearer
+at the moment they say it than in a screen they visited last month. A phrase you
+can say is also more discoverable than a switch you have to know exists.
+
+The shared work lives in one `StartSession.run()`. Two intents differing only in
+a build-time constant are otherwise two implementations that drift, and the copy
+is exactly the one that quietly stops applying the title prefix.
+
 ### Voice makes the design honest
 
 Anything unsayable in one sentence does not work here, which is a useful
