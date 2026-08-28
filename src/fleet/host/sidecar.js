@@ -467,6 +467,22 @@ export class Sidecar {
         // rather than shelling out from here: the sidecar has no business
         // knowing it was installed from git.
         version: this.version?.() ?? null,
+        // WHAT IS STILL RECOVERABLE. Additive, so an older client ignores it
+        // and a newer one can offer an undo — which is the whole point of a
+        // bin that nobody can see is not a bin, it is a delay.
+        // The recycle bin: names, titles, owners and when each one goes.
+        // Never the conversation. `createdBy` travels because the coordinator
+        // filters on it — a member must not see, or restore, somebody else's
+        // forgotten work any more than their live work.
+        bin: Array.isArray(state.bin)
+          ? state.bin.map((/** @type {any} */ b) => ({
+              name: b.name,
+              title: b.title ?? null,
+              createdBy: b.createdBy ?? null,
+              deletedAt: b.deletedAt ?? null,
+              expiresAt: b.expiresAt ?? null,
+            }))
+          : [],
         // What is out of date on this box, so a phone can say so without
         // anybody logging in to look. Both are cheap: the app check is cached
         // for fifteen minutes, and the system one reads what apt already knows

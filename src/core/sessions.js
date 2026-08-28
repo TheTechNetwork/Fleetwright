@@ -191,10 +191,30 @@ export class SessionManager {
     if (name === this.cfg.loginSessionName) {
       return { ok: false, message: `"${name}" is reserved for the login flow. Pick another name.` };
     }
-    const sessionName = name || generateName((n) => this.registry.has(n) || hasSession(n));
+    // A GENERATED name avoids the bin too. The volumes are keyed by name, so
+    // `claude-<name>` for a binned session is the same volume a new session of
+    // that name would get — reusing it would either resurrect somebody else's
+    // conversation or destroy a recoverable one, depending on which way the
+    // race fell.
+    this.sweepBin();
+    const sessionName = name || generateName((n) => this.registry.taken(n) || hasSession(n));
 
     if (hasSession(sessionName)) {
       return { ok: false, message: `"${sessionName}" is already running. Use /stop first, or pick another name.` };
+    }
+    // A CHOSEN name that is sitting in the bin is refused, and says both ways
+    // out. Silently taking the name would mean starting a session on top of a
+    // forgotten one's conversation and workspace; silently purging it would
+    // destroy the thing the bin exists to protect, as a side effect of typing
+    // a name.
+    if (this.registry.bin.has(sessionName)) {
+      return {
+        ok: false,
+        message:
+          `"${sessionName}" is in the bin — forgotten, but still recoverable, and its workspace is ` +
+          `still on disk under that name.\n/restore ${sessionName} brings it back, or /purge ${sessionName} ` +
+          `frees the name for good.`,
+      };
     }
     if (this.inFlight.has(sessionName)) {
       return { ok: false, message: `"${sessionName}" is already starting — give it a moment.` };
@@ -610,11 +630,87 @@ export class SessionManager {
    */
   forget({ name }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
+    this.sweepBin();
+
+    // FORGETTING IS NOW RECOVERABLE, and this was the one action in the
+    // product that was not. It killed the session, dropped the record and
+    // deleted both volumes, so a name typed one word wrong destroyed a
+    // conversation and a workspace with no way back — while every other
+    // mistake here is fixed by trying again.
+    //
+    // The session still stops and still disappears from every list. What
+    // changes is that the volumes stay, for cfg.binTtlMs, and `restore` can
+    // put the record back on top of them.
+    if (this.cfg.binTtlMs > 0) {
+      if (hasSession(name)) killSession(name);
+      if (this.cfg.sandbox) {
+        void this.hooks?.close(name);
+        // The CONTAINER stops; the VOLUMES stay. That is the whole
+        // distinction: a stopped container costs nothing and a kept volume is
+        // what makes the undo real.
+        stopSandboxContainer(this.cfg, name);
+      }
+      const binned = this.registry.bin_(name);
+      if (!binned) return { ok: false, message: `No session named "${name}".` };
+      const days = Math.round(this.cfg.binTtlMs / 86_400_000);
+      return {
+        ok: true,
+        message:
+          `Forgot "${name}". It is out of the list and stopped, and its conversation and workspace ` +
+          `are kept for ${days} day${days === 1 ? '' : 's'} — /restore ${name} brings it back.\n` +
+          `/purge ${name} deletes it now, for good.`,
+      };
+    }
+
+    return this.purge({ name });
+  }
+
+  /**
+   * Take a forgotten session back out of the bin.
+   *
+   * The volumes were never deleted, so this is a record move and nothing else
+   * — which is why it can be honest about what comes back: the conversation
+   * and the workspace exactly as they were, resumable.
+   *
+   * NAMED `restoreFromBin` and not `restore`: this class already has a
+   * `restore()`, which is the boot-time one that brings back everything marked
+   * resumeOnBoot. Two different questions, and one of them runs unattended at
+   * start-up — the last place to discover a name collision.
+   *
+   * @param {{ name: string }} args
+   */
+  restoreFromBin({ name }) {
+    if (!isValidName(name)) return { ok: false, message: nameError(name) };
+    this.sweepBin();
+    if (this.registry.get(name)) {
+      return { ok: false, message: `"${name}" is not in the bin — it is a live session.` };
+    }
+    const rec = this.registry.unbin(name);
+    if (!rec) {
+      return {
+        ok: false,
+        message: `Nothing named "${name}" is in the bin. /bin lists what is still recoverable.`,
+      };
+    }
+    return {
+      ok: true,
+      message: `Restored "${name}". Resume it with /resume ${name}.`,
+    };
+  }
+
+  /**
+   * Delete for good — the old `/forget`, kept as its own word.
+   *
+   * Works on a live session and on a binned one, because the two cases are the
+   * same intent ("I mean it") and making somebody forget first would be a step
+   * that exists only to satisfy the model.
+   *
+   * @param {{ name: string }} args
+   */
+  purge({ name }) {
+    if (!isValidName(name)) return { ok: false, message: nameError(name) };
     if (hasSession(name)) killSession(name);
 
-    // /forget already meant "no longer resumable". In sandbox mode that was
-    // only true of the record: the conversation and the workspace both lived on
-    // in named volumes indefinitely. Make it true on disk too (design.md §2).
     let volumes = '';
     if (this.cfg.sandbox) {
       void this.hooks?.close(name);
@@ -629,10 +725,35 @@ export class SessionManager {
       }
     }
 
-    const had = this.registry.remove(name);
+    const had = this.registry.remove(name) || this.registry.dropBinned(name);
     return had
-      ? { ok: true, message: `Forgot "${name}". Its conversation can no longer be resumed from here.${volumes}` }
+      ? { ok: true, message: `Deleted "${name}" for good. Its conversation cannot be resumed.${volumes}` }
       : { ok: false, message: `No session named "${name}".${volumes}` };
+  }
+
+  /** What is still recoverable, soonest to expire first. */
+  binned() {
+    this.sweepBin();
+    return this.registry.binned(this.cfg.binTtlMs);
+  }
+
+  /**
+   * Delete whatever has outstayed the window.
+   *
+   * Called from every path that touches the bin rather than only from a timer,
+   * because a bin that is swept on a schedule the process may not live long
+   * enough to reach is a bin that grows for ever. A timer runs it too, for the
+   * box that is simply idle.
+   */
+  sweepBin() {
+    if (this.cfg.binTtlMs <= 0) return 0;
+    const expired = this.registry.expiredFromBin(this.cfg.binTtlMs);
+    for (const name of expired) {
+      if (this.cfg.sandbox) removeSandboxVolumes(this.cfg, name);
+      this.registry.dropBinned(name);
+      log.info(`bin: ${name} passed its recovery window and was deleted`);
+    }
+    return expired.length;
   }
 
   /**

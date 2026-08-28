@@ -116,6 +116,23 @@ export async function main() {
       log.warn('reconcile failed', e);
     }
   }, 30_000).unref?.();
+
+  // The bin, on an hour.
+  //
+  // Every path that touches the bin sweeps it too, so this is for the box that
+  // is simply idle — nobody forgets anything for a fortnight and the volumes
+  // of something forgotten a fortnight ago are still on the disk. Hourly is
+  // plenty: the window is measured in days, and being an hour late to delete
+  // something has no consequence, while being a week late is a bin that is
+  // really just a slower leak.
+  setInterval(() => {
+    try {
+      const gone = sessions.sweepBin();
+      if (gone) log.info(`bin: swept ${gone} expired session(s)`);
+    } catch (e) {
+      log.warn('bin sweep failed', e);
+    }
+  }, 3_600_000).unref?.();
 }
 
 /** @param {SessionManager} sessions */
