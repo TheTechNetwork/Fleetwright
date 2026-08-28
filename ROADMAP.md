@@ -45,7 +45,9 @@ yet designed).
 | Sign-in status per host in the app: signed in as, plan, org, or NOT signed in | **done** | the first half of "sign-in status and logs on the app"; logs need the v2 `logs` verb |
 | Host version info: what it runs, how far behind, reboot required | **done** | the Fleet section in settings, both apps |
 | Context-window usage per session | wanted | the one fact of this group the host does not yet know — it lives in the transcript, not in any status the CLI exposes |
-| Session detail screen; notification actions | **partial** | the `answer` verb exists; the notification action and detail screen are the app layers |
+| Answer a waiting prompt from the app | **done** | both apps render the host's options as buttons and send an ordinal with the `promptId` |
+| Read logs, update / upgrade / reboot a box from the app | **done** | both apps; reboot keeps the pin-plus-typed-hostname guard |
+| Session detail screen; notification actions | **partial** | answering works in-app; the notification *action* (answer without opening the app) is still to build |
 | Forget moves to a 7-day recycle bin, restorable | wanted | today `/forget` deletes the conversation and workspace immediately — irreversible, and the one action in the product with no undo |
 | TG settings setup / removal from the app | wanted | config, not protocol |
 | Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
@@ -57,7 +59,7 @@ as an option and no longer sets the ceiling. (`docs/app-parity.md`)
 
 | feature | status | where |
 |---|---|---|
-| Speakable replies, ordinal answers, parameters nameable out loud | **partial** | principles applied in naming/intents; `answer` verb still to ship |
+| Speakable replies, ordinal answers, parameters nameable out loud | **partial** | `answer` ships and takes an ordinal, which is the speakable form; the spoken *phrase* for it is not wired to Siri/Assistant yet |
 | **Coordinator-level Telegram bot** — one bot for the whole fleet, `/list` spans hosts | wanted | today's bot is per-box by Telegram's one-poller rule; per-box bot keeps `/enroll` |
 | Browser control surface / PWA | wanted | after the app surfaces stabilise; console groundwork exists (`docs/console-design.md`) |
 | **An MCP server, so the Claude app can drive the fleet** — launch a session on a Mac (later Windows) as effectively a subagent | wanted | Smaller than it sounds: the intent protocol is *already* MCP-shaped — fixed verbs, typed parameters, structured replies, refusals that name a reason. An MCP server is a thin adapter over `/api/intent`, not new architecture. The real questions are auth (the server holds a device credential, so it is a member with that person's visibility — which the accounts work already makes meaningful) and which verbs to expose: `list`/`status`/`peek`/`start` read naturally as tools; `answer` is the interesting one, because a subagent answering another agent's prompt wants a policy, not just a permission. Depends on Mac hosts (item 7) for the case that motivates it |
@@ -68,8 +70,11 @@ as an option and no longer sets the ceiling. (`docs/app-parity.md`)
 
 - `answer` — **done**. Ordinal into a host-published list, `promptId` closing the temporal hole
 - `logs` — **done**. Service journals by enum, plus a session's own output (container stderr, which outlives the pane)
-- `update`, `upgrade`, `reboot` — with a host parameter, making the app a strict superset of per-box TG
-- `login` / `code` — the Claude account flow from the app, the one step that still wants SSH today
+- `status` — **done**. One session in detail, or the fleet
+- `update`, `upgrade`, `reboot` — **done**. Each takes a host, which is what makes the app a strict superset of per-box Telegram rather than a copy of it
+- `login` / `code` — the last one, and the only one still open. It is what [guests](docs/accounts.md) need: someone who brings their own Claude credential and has no shell on the box cannot "just SSH in" — for them that is not a smaller inconvenience, it is the feature missing
+
+**Shipped 2026-08-28**, all five on coordinator, Worker, host, iOS and Android in one stacked round. `PROTOCOL_VERSION` is `2`. The note above is still the rule going forward: verbs are cheap, parameters are the flag day.
 
 ## 6. Hosts and the dev-environment goal
 
@@ -109,7 +114,7 @@ anything. (`docs/wanted.md` has the full table.)
 1. **App polish that tonight paid for**: surface refusals; forget in both UIs; host picker end-to-end. Small, independent, all asked for.
 2. **Accounts**: link → seed → visibility. The design is done and attribution is merged; this unlocks the invite flow.
 3. **Additive reporting**: workspace dir, context usage, plan limits, host versions. No protocol bump.
-4. **Protocol v2 verbs, together**: `answer`, `logs`, `update`, `reboot`, `login`. One flag day.
+4. ~~**Protocol v2 verbs, together**~~ — **done** except `login`, which earned its own step: it is the guest blocker, and it wants a design pass rather than a table row.
 5. **Coordinator-level TG bot** — needs the accounts identity-linking from (2).
 6. **The proxy** (`trust.md`) — its own project, highest long-term value.
 7. **Mac host completion, then Windows-as-WSL2** — the dev-environment goal.

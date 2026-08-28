@@ -40,6 +40,13 @@ not through the fleet. An app talking to a coordinator has no such path, and
 adding one is a coordinated release of coordinator, Worker, host and both apps
 at once.
 
+> **Closed, 2026-08-28.** Rows one and two are done, in one coordinated release
+> — `PROTOCOL_VERSION` is now `2` with thirteen verbs, and everything below
+> except `login`/`code` and the filesystem is shipped on **all** of coordinator,
+> Worker, host, iOS and Android. The scoreboard above is left as written because
+> the shape of the diagnosis is what made the fix cheap: three problems wearing
+> one coat, priced separately. See "What actually shipped" at the end.
+
 That is the design working, not a bug in it. But it means "add all the features
 to the app" is a protocol decision before it is an app decision, and pretending
 otherwise would produce five verbs designed one at a time.
@@ -151,3 +158,47 @@ enrolled yet — which is how `/enroll` joins a machine without an SSH session.
 What changes is that it stops setting the ceiling. A capability is not "done"
 because it works in chat, and a capability that is awkward to express in chat is
 no longer thereby postponed — that is chat's problem to solve or skip.
+
+## What actually shipped
+
+Written after the round, from the merged code rather than the plan — a parity
+document that only ever describes a gap is a document nobody trusts once the gap
+closes.
+
+**Thirteen verbs, one bump.** `answer logs update upgrade reboot` joined
+`list status peek health start resume stop forget`, all in `v2`, all designed
+together for the reason step 3 gave: the version is exact-match, so five
+separate bumps would have been five coordinated fleet releases.
+
+**Both apps, same round, field for field.** This is the part the round was
+actually about. The rule that came out of it, now in `CONTRIBUTING.md`: a
+feature round ships as stacked PRs by layer — worker → host → iOS → Android →
+docs — every layer committed before any PR is opened. A verb that reaches one
+phone and not the other is the state this document was written to describe, and
+it is very easy to re-enter one merge at a time.
+
+**What each surface got:**
+
+| | iOS | Android | Telegram |
+|---|---|---|---|
+| answer a waiting prompt | buttons from the host's options | buttons from the host's options | `/answer` |
+| session and fleet status | ✅ | ✅ | ✅ |
+| journals and session output | ✅ | ✅ | ✅ |
+| update / upgrade a box | one tap | one tap | ✅ |
+| reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
+
+**The two things that stayed hard, and stayed correct:**
+
+- **`answer` sends an ordinal into a list the host published**, with the
+  `promptId` attached — so a notification tapped four minutes later is refused
+  rather than answered against a different question. Free text into a pane
+  reaches a root shell; that has not become acceptable because the surface is
+  prettier.
+- **`reboot` is still two steps** — the box mints the pin, and the hostname must
+  be typed. Both apps disable the button until the typed name matches. A
+  coordinator that could mint the pin itself could reboot the fleet, which is
+  the whole reason the pin comes from the box.
+
+**Still open, in order:** `login`/`code` (which [guest onboarding](./accounts.md)
+now needs), the reporting in step 2, and the filesystem — still last, still for
+the reasons in step 4.
