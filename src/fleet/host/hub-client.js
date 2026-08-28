@@ -96,8 +96,13 @@ export class HubClient {
    * @param {string} line
    * @returns {Promise<HubReply>}
    */
-  async command(line) {
-    return this.#json('POST', '/api/command', { command: line }, this.commandTimeoutMs);
+  async command(line, meta = {}) {
+    // `meta` carries prose — a title, a brief — as FIELDS beside the command.
+    // Never appended to `line`: everything in there is split on whitespace, so
+    // a title with spaces would arrive as arguments and a title that looks like
+    // a flag would arrive as a flag. The hub validates them again on arrival,
+    // because this is not the only caller that can reach that route.
+    return this.#json('POST', '/api/command', { command: line, ...meta }, this.commandTimeoutMs);
   }
 
   /** Everything the hub knows: sessions, cap, auth. @returns {Promise<any>} */

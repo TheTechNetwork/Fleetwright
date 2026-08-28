@@ -175,12 +175,15 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null }} opts
    *   skipPermissions overrides AGENT_HUB_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
+   *   title is prose a PERSON wrote; supplying it pins the title so nothing
+   *   derived later — the transcript hook, the cwd guess — overwrites it.
+   *   brief is a sentence of context, kept for the moment of re-entry.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -227,6 +230,12 @@ export class SessionManager {
       resumeUuid: null,
       verb: 'started',
       skipPermissions,
+      // Only on a fresh start. A resume must never carry these: the record
+      // already holds whatever was written the first time, and re-supplying
+      // them on every resume would let a later caller quietly rewrite a title
+      // somebody set deliberately.
+      title,
+      brief,
     });
   }
 
@@ -307,10 +316,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null }) {
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
@@ -363,7 +372,12 @@ export class SessionManager {
       const rec = this.registry.upsert(name, {
         status: 'running',
         cwd,
-        ...(existing?.title ? {} : { title: titleFromCwd(cwd) }),
+        // A title somebody WROTE beats anything derived, and is pinned so that
+        // nothing later — the transcript hook, the cwd guess — overwrites what
+        // they said. Without the pin the hook replaces it a few seconds later
+        // and the field looks like it silently did not save.
+        ...(title ? { title, titlePinned: true } : existing?.title ? {} : { title: titleFromCwd(cwd) }),
+        ...(brief ? { brief } : {}),
         detail: `${verb}`,
         stoppedAt: null,
         ...(actor ? { createdBy: actor } : {}),

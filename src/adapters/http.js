@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+
+import { cleanText, TITLE_MAX, BRIEF_MAX } from '../core/text.js';
 import { dispatch } from './commands.js';
 import { describe } from '../core/login.js';
 import { log } from '../log.js';
@@ -139,9 +141,33 @@ export class HttpAdapter {
     if (p === '/api/command' && method === 'POST') {
       const body = await readJson(req);
       const line = String(body.command || '');
+
+      // Prose travels beside the command, never inside it. Everything in `line`
+      // gets split on whitespace, so a title with spaces would arrive as
+      // arguments — and a title containing something that looks like a flag
+      // would arrive as a flag. Same reasoning as the ordinal in `answer`.
+      //
+      // Validated with the same cleanText the fleet protocol uses. Two doors
+      // into one store must not disagree about what is acceptable, and this
+      // door is reachable by anything holding the hub token, not only by the
+      // sidecar that already validated.
+      /** @type {Record<string, string>} */
+      const meta = {};
+      /** @type {Array<['title'|'brief', number]>} */
+      const FIELDS = [
+        ['title', TITLE_MAX],
+        ['brief', BRIEF_MAX],
+      ];
+      for (const [field, max] of FIELDS) {
+        if (body[field] === undefined || body[field] === null) continue;
+        const r = cleanText(body[field], { max, label: field });
+        if (!r.ok) return json(res, 400, { ok: false, text: r.error });
+        meta[field] = r.value;
+      }
+
       log.info(`http: ${clientLabel(req)} → ${line.slice(0, 120)}`);
       const reply = await dispatch(
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor: 'web' },
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor: 'web', ...meta },
         line,
       );
       return json(res, 200, reply);
