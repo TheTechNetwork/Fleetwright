@@ -44,8 +44,10 @@ struct ShortcutSetupView: View {
                 } header: {
                     Text("Your phrase")
                 } footer: {
-                    Text("Anything you like. It does not have to mention this app — that rule only "
-                         + "applies to the phrases we ship, not to a shortcut you make.")
+                    Text("""
+                    Anything you like. It does not have to mention this app — that rule only \
+                    applies to the phrases we ship, not to a shortcut you make.
+                    """)
                 }
 
                 if phrase.isEmpty {

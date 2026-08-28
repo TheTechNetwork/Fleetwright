@@ -1,3 +1,4 @@
+import AppIntents
 import AuthenticationServices
 import SwiftUI
 import UIKit
@@ -359,12 +360,22 @@ private struct SettingsView: View {
                 } header: {
                     Text("Siri and Shortcuts")
                 } footer: {
-                    Text("Say \"start a dev session on my fleet\" — \"my fleet\", \"my agents\" and "
-                         + "\"remote sessions\" all work, so there is no product name to remember. "
-                         + "For a phrase of your own — \"Debbie\", or anything else you call this — "
-                         + "add a shortcut above and name it whatever you like.\n\n"
-                         + "Opening the app is off by default: an intent from an automation often runs "
-                         + "when nobody is looking at the phone.")
+                    // A multi-line literal, not a chain of `+`. Five string
+                    // literals joined with + is enough to make Swift's type
+                    // checker give up — "unable to type-check this expression
+                    // in reasonable time" — because each + is an overloaded
+                    // operator it has to resolve against every candidate. This
+                    // is one literal and one expression.
+                    Text("""
+                    Say "start a dev session on my fleet". "my fleet", "my agents" and \
+                    "remote sessions" all work, so there is no product name to remember.
+
+                    For a phrase of your own — "Debbie", or anything else you call this — \
+                    tap "Say it your way" above.
+
+                    Opening the app is off by default: an intent from an automation often \
+                    runs when nobody is looking at the phone.
+                    """)
                 }
 
                 Section {
@@ -500,8 +511,10 @@ struct SessionKindsView: View {
             } footer: {
                 // Said, because otherwise the first thing anybody does is add a
                 // word and then wonder why Siri has not heard of it.
-                Text("Say \"start a dev session in Fleetwright\". A new word can take a moment "
-                     + "before Siri recognises it. A prefix groups sessions in the list: \"dev: refactor auth\".")
+                Text("""
+                Say "start a dev session on my fleet". A new word can take a moment before \
+                Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth".
+                """)
             }
         }
         .navigationTitle("Session kinds")
