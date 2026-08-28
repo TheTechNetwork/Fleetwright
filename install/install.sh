@@ -27,39 +27,25 @@ ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
-# --- what this script can actually install on ------------------------------
+# --- what this script is installing onto -----------------------------------
 #
-# Checked FIRST, before anything is read, written or installed. Without it the
-# first thing a Mac hits is `getent: command not found` on the line that looks
-# up a home directory — a tool nobody has heard of, failing under `set -e`,
-# naming nothing about the real problem. And getent is only the first of them:
-# apt-get, useradd, subuid ranges and systemd units are all a few steps behind
-# it, so making getent portable on its own would just move the wreck later,
-# after /etc files had been written.
+# Checked FIRST, because the first thing a Mac used to hit was `getent:
+# command not found` on the line that looks up a home directory — a tool
+# nobody has heard of, failing under `set -e`, naming nothing about the cause.
 #
-# Refusing early is the honest behaviour. A half-installed box with config in
-# /etc and no service to read it is worse than a box this never touched.
-OS="$(uname -s 2>/dev/null || echo unknown)"
-case "$OS" in
-  Linux) ;;
-  Darwin)
-    die "macOS is not supported yet.
-
-  This installer needs systemd units, a Linux package manager and rootless
-  podman with subuid ranges. macOS has launchd and none of the rest, so this
-  would fail four steps from now having already written to /etc.
-
-  A Mac as a fleet HOST is wanted and tracked — see docs/wanted.md. What it
-  needs is a launchd plist per service, Homebrew instead of apt/dnf, and a
-  decision about sandboxing, since podman on macOS runs a Linux VM rather
-  than containers on the host.
-
-  A Mac works fine as a CLIENT today: the iOS app, or a browser."
-    ;;
-  *)
-    die "$OS is not supported. This installer targets Linux with systemd."
-    ;;
+# NOT a refusal. A Mac as a fleet host is intended, so this installs what it
+# can and says exactly where it stops, rather than putting up a wall that has
+# to be taken down again later. What it cannot do yet is listed at the end of
+# the run, not hidden in a comment here.
+PLATFORM=linux
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  Linux) PLATFORM=linux ;;
+  Darwin) PLATFORM=macos ;;
+  *) PLATFORM=unknown ;;
 esac
+# Collected as they are skipped, and printed together at the end. One warning
+# in the middle of two hundred lines of output is a warning nobody read.
+MISSING=()
 
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
 
@@ -77,6 +63,12 @@ user_home() {
   fi
   if [ -z "$home" ] && [ -r /etc/passwd ]; then
     home="$(awk -F: -v u="$u" '$1 == u { print $6; exit }' /etc/passwd || true)"
+  fi
+  # macOS keeps real accounts in Directory Services, not /etc/passwd — that
+  # file exists there but lists only system users, so the lookup above finds
+  # nothing for a person and finds it silently.
+  if [ -z "$home" ] && command -v dscl >/dev/null 2>&1; then
+    home="$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
   fi
   printf '%s' "$home"
 }
@@ -201,6 +193,14 @@ as_user() {
 PKG_UPDATED=0
 pkg_install() {
   [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ] && return 1
+  # Homebrew REFUSES to run as root, which is the opposite of every package
+  # manager below it — so this branch comes before the root check, and runs as
+  # the invoking user rather than the one this script became.
+  if [ "$PLATFORM" = macos ]; then
+    command -v brew >/dev/null || return 1
+    as_user "brew install $*" >/dev/null 2>&1
+    return $?
+  fi
   [ "$(id -u)" = "0" ] || return 1
   if command -v apt-get >/dev/null; then
     if [ "$PKG_UPDATED" = 0 ]; then
@@ -219,6 +219,7 @@ pkg_install() {
 # Why it could not be installed, phrased for whoever has to fix it.
 pkg_why() {
   if [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ]; then printf 'AGENT_HUB_NO_INSTALL_DEPS=1 is set'
+  elif [ "$PLATFORM" = macos ]; then printf 'Homebrew is not installed — see https://brew.sh'
   elif [ "$(id -u)" != "0" ]; then printf 'not running as root — re-run with sudo'
   else printf 'no supported package manager found (apt, dnf, pacman, zypper, apk)'
   fi
@@ -423,7 +424,15 @@ fi
 # because "sandboxed sessions" is not much use as a feature you have to go and
 # enable the prerequisites for yourself.
 HAVE_PODMAN=0
-if ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
+# Rootless podman on macOS is not rootless podman. There is no user namespace
+# to be root in, so podman runs a Linux VM (`podman machine`) and every step
+# the sandbox setup takes below — newuidmap, /etc/subuid, usermod — is
+# meaningless there. Skipping is the honest outcome: allocating nothing and
+# then starting sessions that report themselves sandboxed would be worse.
+if [ "$PLATFORM" = macos ]; then
+  warn "sandboxing is off — podman on macOS needs a Linux VM, which this does not set up"
+  MISSING+=("sandboxed sessions: run 'podman machine init && podman machine start', then re-run this")
+elif ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
   say "Installing podman (for sandboxed sessions)"
   if pkg_install podman && command -v podman >/dev/null; then
     ok "installed podman"
@@ -432,7 +441,9 @@ if ! command -v podman >/dev/null && [ "$CHECK_ONLY" = 0 ]; then
     warn "  install it yourself and re-run to build the sandbox image"
   fi
 fi
-if command -v podman >/dev/null; then
+if [ "$PLATFORM" = macos ]; then
+  : # already reported above; HAVE_PODMAN stays 0 so nothing downstream runs
+elif command -v podman >/dev/null; then
   ok "podman $(podman --version | awk '{print $3}') — the sandbox is available"
   HAVE_PODMAN=1
 elif [ "$CHECK_ONLY" = 1 ]; then
@@ -586,21 +597,37 @@ if (fs.existsSync(SIDECAR_ENV)) {
 }
 NODE
 
-# --- 4. systemd units -------------------------------------------------------
-say "Installing the systemd units"
+# --- 4. service units -------------------------------------------------------
+say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd units")"
 
 # All three, not just agent-hub. Installing only the hub was a real bug with a
 # quiet symptom: the installer went on to call `systemctl enable --now
 # agent-fleet-sidecar` on a unit that did not exist, warned once, and finished
 # looking successful — so the box never joined a fleet, and the coordinator it
 # was meant to join reported that no host had ever connected.
+# The same substitution either way; only the template and the destination
+# differ. Kept as one function so a service can never be installed on one
+# platform and forgotten on the other — which is exactly the bug described
+# above, in a different coat.
 install_unit() { # install_unit NAME
+  local src dest
+  if [ "$PLATFORM" = macos ]; then
+    src="$DIR/install/$1.plist"
+    dest="/Library/LaunchDaemons/network.thetech.$1.plist"
+  else
+    src="$DIR/install/$1.service"
+    dest="/etc/systemd/system/$1.service"
+  fi
   sed -e "s|__USER__|$RUN_USER|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
-      "$DIR/install/$1.service" > "/etc/systemd/system/$1.service"
-  chmod 0644 "/etc/systemd/system/$1.service"
-  ok "/etc/systemd/system/$1.service"
+      "$src" > "$dest"
+  # root-owned, because launchd REFUSES to load a daemon that is writable by
+  # anyone else, and does so with a message about permissions rather than
+  # about the file it means.
+  chown root:wheel "$dest" 2>/dev/null || true
+  chmod 0644 "$dest"
+  ok "$dest"
 }
 
 install_unit agent-hub
@@ -611,7 +638,7 @@ install_unit agent-fleet-coordinator
 # plain user only their own logs. Without this /logs returns "no entries" for a
 # service that is logging perfectly well — a silence that reads as a broken
 # service rather than a permissions one.
-if [ "$RUN_USER" != root ] && command -v usermod >/dev/null; then
+if [ "$PLATFORM" != macos ] && [ "$RUN_USER" != root ] && command -v usermod >/dev/null; then
   if id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal; then
     ok "$RUN_USER can already read the service journal"
   elif getent group systemd-journal >/dev/null && usermod -aG systemd-journal "$RUN_USER" 2>/dev/null; then
@@ -628,7 +655,12 @@ if command -v loginctl >/dev/null; then
     || warn "could not enable lingering for $RUN_USER — sessions may not survive logout"
 fi
 
-if systemctl daemon-reload >/dev/null 2>&1; then
+if [ "$PLATFORM" = macos ]; then
+  # launchd has no daemon-reload: bootstrapping the plist IS the load, and that
+  # happens where the services are started. Nothing to do here.
+  ok "launchd daemons written"
+  HAVE_SYSTEMD=1
+elif systemctl daemon-reload >/dev/null 2>&1; then
   ok "systemd reloaded"
   HAVE_SYSTEMD=1
 else
@@ -1230,6 +1262,22 @@ if [ "$WIZARD" = yes ]; then
       # An already-active unit is restarted. It is the same reload systemd would
       # do anyway, and the unit files may have changed underneath it.
       start_service() {
+        if [ "$PLATFORM" = macos ]; then
+          local label="system/network.thetech.$1" plist="/Library/LaunchDaemons/network.thetech.$1.plist"
+          # bootout then bootstrap, because bootstrap on an already-loaded
+          # label fails rather than replacing it — the launchd equivalent of
+          # the restart-an-active-unit case below, and the same bug it fixes:
+          # an upgrade that leaves the old code running while reporting success.
+          launchctl bootout "$label" >/dev/null 2>&1 || true
+          if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+            ok "$1 running"
+            return 0
+          fi
+          warn "$1 failed to start:"
+          tail -n 12 "/var/log/$1.log" 2>/dev/null | sed 's/^/       /' \
+            || warn "       /var/log/$1.log"
+          return 1
+        fi
         systemctl daemon-reload >/dev/null 2>&1 || true
         if systemctl is-active --quiet "$1"; then
           if systemctl restart "$1" >/dev/null 2>&1; then
@@ -1301,6 +1349,17 @@ if [ "$WIZARD" = yes ]; then
 fi
 
 # --- done -------------------------------------------------------------------
+# Everything that was skipped, together, at the end. One warning in the middle
+# of two hundred lines is a warning nobody read — and on a platform this only
+# partly supports, the list IS the useful output.
+if [ ${#MISSING[@]} -gt 0 ]; then
+  say "Not set up on this platform"
+  printf '  This is a %s box, and parts of this are still Linux-only:\n\n' "$PLATFORM"
+  for m in "${MISSING[@]}"; do printf '    - %s\n' "$m"; done
+  printf '\n  Everything else above is installed and working. Mac host support is\n'
+  printf '  being filled in — see docs/wanted.md.\n'
+fi
+
 say "Installed."
 
 # What is genuinely left, which is not the same as what the checklist used to
