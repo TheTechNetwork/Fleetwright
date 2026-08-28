@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 
-import { runUpdate, updateStatus, canSelfRestart, looksLikeOwnershipProblem } from '../src/core/update.js';
+import { runUpdate, updateStatus, canSelfRestart, looksLikeOwnershipProblem, updateAvailable } from '../src/core/update.js';
 
 /** @param {string} cwd @param {string[]} args */
 const git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -40,14 +40,32 @@ function deployment(t) {
   git(clone, ['config', 'user.email', 'test@example.com']);
   git(clone, ['config', 'user.name', 'Test']);
 
-  /** @param {string} message */
+  /**
+   * A commit that REACHES A HOST — it touches bin/, which is in HOST_PATHS.
+   *
+   * It used to write README.md, which stopped representing a host update the
+   * moment "behind" became path-scoped: a docs commit is exactly the thing a
+   * host should now ignore. The fixture said "the upstream moved"; what these
+   * tests mean is "the upstream moved in a way this box runs".
+   *
+   * @param {string} message
+   */
   const pushUpstream = (message) => {
-    writeFileSync(path.join(origin, 'README.md'), `${message}\n`);
+    mkdirSync(path.join(origin, 'bin'), { recursive: true });
+    writeFileSync(path.join(origin, 'bin', 'agent-hub'), `#!/usr/bin/env node\n// ${message}\n`);
     git(origin, ['add', '-A']);
     git(origin, ['commit', '-qm', message]);
   };
 
-  return { root, origin, clone, pushUpstream, cfg: /** @type {any} */ ({ installDir: clone }) };
+  /** A commit that does NOT: docs only. @param {string} message */
+  const pushDocsOnly = (message) => {
+    mkdirSync(path.join(origin, 'docs'), { recursive: true });
+    writeFileSync(path.join(origin, 'docs', 'notes.md'), `${message}\n`);
+    git(origin, ['add', '-A']);
+    git(origin, ['commit', '-qm', message]);
+  };
+
+  return { root, origin, clone, pushUpstream, pushDocsOnly, cfg: /** @type {any} */ ({ installDir: clone }) };
 }
 
 // --- reading the state ------------------------------------------------------
@@ -360,4 +378,50 @@ test('nothing pulled and packages present is not worth running npm for', (t) => 
   // Not a timing assertion so much as a shape one: turning a five-second
   // command into a thirty-second one on every /update is its own bug.
   assert.ok(Date.now() - started < 10_000);
+});
+
+
+// --- what actually reaches a host -------------------------------------------
+
+test('a docs-only commit does not make a host say it is behind', (t) => {
+  // The repository is a monorepo; a host runs a fraction of it. Unscoped, a
+  // README edit made every box report "1 commit behind" — and somebody who
+  // believes that number restarts three services to deliver a paragraph.
+  const { cfg, pushDocsOnly } = deployment(t);
+  pushDocsOnly('write some documentation');
+  const r = updateAvailable(cfg, { force: true });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.behind, 0, 'docs are not something this box runs');
+});
+
+test('a commit touching host code does', (t) => {
+  const { cfg, pushUpstream } = deployment(t);
+  pushUpstream('change the hub');
+  const r = updateAvailable(cfg, { force: true });
+  assert.equal(r.behind, 1);
+});
+
+test('mixed history counts only the host commits', (t) => {
+  const { cfg, pushDocsOnly, pushUpstream } = deployment(t);
+  pushDocsOnly('docs one');
+  pushUpstream('host one');
+  pushDocsOnly('docs two');
+  const r = updateAvailable(cfg, { force: true });
+  assert.equal(r.behind, 1, 'three commits upstream, one of them for this box');
+});
+
+test('pulling docs-only changes updates the checkout but does not restart', (t) => {
+  // The checkout must still move — a box whose tree drifts from its upstream
+  // is a box whose next real update has to reconcile two things at once. What
+  // changes is that nothing is restarted for it.
+  const { cfg, clone, pushDocsOnly } = deployment(t);
+  pushDocsOnly('more documentation');
+  const r = runUpdate(cfg);
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.changed, false, 'nothing that runs on this box changed');
+  assert.match(r.message, /Nothing in that runs on this box/);
+  assert.ok(
+    existsSync(path.join(clone, 'docs', 'notes.md')),
+    'the checkout still fast-forwarded — only the restart was skipped',
+  );
 });

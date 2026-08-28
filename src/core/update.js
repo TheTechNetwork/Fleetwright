@@ -123,7 +123,10 @@ export function updateAvailable(cfg, { now = () => Date.now(), force = false } =
     return result;
   }
 
-  const counted = git(dir, ['rev-list', '--count', 'HEAD..@{upstream}']);
+  // SCOPED TO WHAT A HOST RUNS. Unscoped, this counted docs and app commits,
+  // and a box that is "3 commits behind" for three README edits will be
+  // updated and restarted by somebody who believes the number.
+  const counted = git(dir, ['rev-list', '--count', 'HEAD..@{upstream}', '--', ...HOST_PATHS]);
   if (counted.status !== 0) {
     const result = { ok: false, behind: 0, checkedAt: now(), message: 'this branch has no upstream to compare against' };
     cached = result;
@@ -163,6 +166,34 @@ export function looksLikeOwnershipProblem(output) {
     output,
   );
 }
+
+/**
+ * What a HOST actually runs.
+ *
+ * The repository is a monorepo: two apps, a Worker, a coordinator, docs, and
+ * the host. A host runs a fraction of it — and `rev-list HEAD..@{upstream}`
+ * counted all of it, so a README commit made every box report "1 commit
+ * behind" and `/update --restart` then bounced three services to deliver a
+ * paragraph.
+ *
+ * This list IS the package boundary, expressed in the only place that can act
+ * on it today. When host code is published as a versioned artifact
+ * (docs/packaging.md), this is the manifest that artifact is built from — so
+ * getting it right now is work that carries forward rather than work thrown
+ * away.
+ *
+ * `worker/` is deliberately absent: it is deployed by CI to Cloudflare and no
+ * host runs it. `src/fleet/coordinator` IS present, because a box can run the
+ * Node coordinator.
+ */
+export const HOST_PATHS = Object.freeze([
+  'bin',
+  'src',
+  'install',
+  'sandbox',
+  'package.json',
+  'package-lock.json',
+]);
 
 const STEPS = [
   {
@@ -215,11 +246,24 @@ const STEPS = [
       const lines = shortlog.stdout ? shortlog.stdout.split('\n') : [];
       const shown = lines.slice(0, 10);
       const more = lines.length > shown.length ? `\n…and ${lines.length - shown.length} more` : '';
-      return {
-        ok: true,
-        changed: true,
-        text: `Updated ${before.slice(0, 7)} → ${after.slice(0, 7)}:\n${shown.map((l) => `  ${l}`).join('\n')}${more}`,
-      };
+      const summary = `Updated ${before.slice(0, 7)} → ${after.slice(0, 7)}:\n${shown.map((l) => `  ${l}`).join('\n')}${more}`;
+
+      // DID ANY OF IT REACH THIS BOX? The checkout moved, but a host runs a
+      // fraction of this repository. When the pull was all docs, apps or
+      // Worker, `changed: false` means the caller does not restart — three
+      // services bounced to deliver a paragraph is a real cost, and the
+      // sessions that survive a restart are surviving something that did not
+      // need to happen.
+      const forHost = git(dir, ['rev-list', '--count', `${before}..${after}`, '--', ...HOST_PATHS]);
+      const hostCommits = Number(forHost.stdout) || 0;
+      if (forHost.status === 0 && hostCommits === 0) {
+        return {
+          ok: true,
+          changed: false,
+          text: `${summary}\n\nNothing in that runs on this box — docs, apps or the Worker. Not restarting.`,
+        };
+      }
+      return { ok: true, changed: true, text: summary };
     },
   },
 
