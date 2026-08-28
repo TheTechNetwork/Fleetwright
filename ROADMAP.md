@@ -28,6 +28,9 @@ yet designed).
 | Credential-terminating proxy: sessions hold creds issued by us, proxy substitutes real ones on egress; default-deny egress | **designed** | `docs/trust.md` — the build order is written there (proxy + netns + substitution table first) |
 | 1Password as custody for the proxy's real credentials | **designed** | `docs/trust.md` — explicitly not a vault-MCP in sessions |
 | `gh` in every session (GitHub App, installation tokens, PATH shim) | **designed** | `docs/trust.md`, worked example |
+| **Connect GitHub / Cloudflare / Claude from the app** — provider's own page, scopes pre-filled, token verified before storing | **done** | `docs/connectors.md`. Deliberately NOT the proxy and does not delay it: the token is a real token on the box, minted and revocable by the person. What it buys is that a guest never holds anybody else's credential and never needs a shell. A provider is a row in `src/core/connectors.js` — adding one costs no verb, no version and no app release |
+| A member gets their OWN tokens or none — no shared fallback for GitHub/Cloudflare | **done** | `docs/connectors.md`. Different from the Claude rule on purpose: a shared org plan is a licence somebody chose to share; a GitHub token is one person's access to their own repositories |
+| The authorization code stops appearing in the journal | **done** | `src/core/redact.js`. It had been logged by three surfaces since login shipped — `login.js` was careful and three files above it were not. Matters more since `logs` made a journal readable from a phone |
 | SigV4 re-signing for AWS | designed, deferred until something needs AWS | `docs/trust.md` |
 
 ## 3. The apps (iOS / Android)
@@ -72,7 +75,7 @@ as an option and no longer sets the ceiling. (`docs/app-parity.md`)
 - `logs` — **done**. Service journals by enum, plus a session's own output (container stderr, which outlives the pane)
 - `status` — **done**. One session in detail, or the fleet
 - `update`, `upgrade`, `reboot` — **done**. Each takes a host, which is what makes the app a strict superset of per-box Telegram rather than a copy of it
-- `login` / `code` — the last one, and the only one still open. It is what [guests](docs/accounts.md) need: someone who brings their own Claude credential and has no shell on the box cannot "just SSH in" — for them that is not a smaller inconvenience, it is the feature missing
+- `login` / `code` — **done**, and not as `login`/`code`. It shipped as `connect`/`link`/`unlink`, three generic verbs over a table of providers, because the ask was never only Claude: *"Cloudflare api can be generated via a custom url so created in app, same with GitHub, same with many others."* Adding a provider is now a row in `src/core/connectors.js` — no verb, no version, no App Store or Play release, since both apps render their picker from the catalogue the HOST publishes. See `docs/connectors.md`
 
 **Shipped 2026-08-28**, all five on coordinator, Worker, host, iOS and Android in one stacked round. `PROTOCOL_VERSION` is `2`. The note above is still the rule going forward: verbs are cheap, parameters are the flag day.
 
@@ -114,7 +117,8 @@ anything. (`docs/wanted.md` has the full table.)
 1. **App polish that tonight paid for**: surface refusals; forget in both UIs; host picker end-to-end. Small, independent, all asked for.
 2. **Accounts**: link → seed → visibility. The design is done and attribution is merged; this unlocks the invite flow.
 3. **Additive reporting**: workspace dir, context usage, plan limits, host versions. No protocol bump.
-4. ~~**Protocol v2 verbs, together**~~ — **done** except `login`, which earned its own step: it is the guest blocker, and it wants a design pass rather than a table row.
+4. ~~**Protocol v2 verbs, together**~~ — **done**, `login` included. It got the design pass it earned and came out as `connect`/`link`/`unlink` over a provider table, which is why GitHub and Cloudflare arrived in the same round rather than as three more.
+4b. **Guest onboarding** — now unblocked. Every piece it needed exists: sign-in, per-person credentials, per-person visibility, and a credential flow that never asks anybody for a shell.
 5. **Coordinator-level TG bot** — needs the accounts identity-linking from (2).
 6. **The proxy** (`trust.md`) — its own project, highest long-term value.
 7. **Mac host completion, then Windows-as-WSL2** — the dev-environment goal.

@@ -73,7 +73,7 @@ Coordinator → host:
 | `v` | must equal `2`. A mismatch is refused, never guessed at. |
 | `kind` | `"intent"`. |
 | `id` | **idempotency key**, `[A-Za-z0-9._:-]{8,128}`. Required on every intent. |
-| `verb` | one of the thirteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
+| `verb` | one of the sixteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
 | `params` | object. **Unknown keys are refused, not ignored** — see below. |
 | `issuedAt` | epoch ms. Bounds replay when the host passes `maxSkewMs`. |
 | `actor` | optional, `[A-Za-z0-9._:@+-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
@@ -107,6 +107,9 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
+| `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
+| `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
+| `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 
 **`answer` is an ordinal and never text**, and that is the whole of its design.
 `send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a
@@ -196,10 +199,29 @@ protocol types an `int` produces `bad_params` too, from a host that is on the
 right version. Both apps convert `option` and `lines` to JSON numbers
 explicitly, for that reason and no other.
 
-### One remaining deliberate exclusion
+### The exclusion that got answered
 
-It looks like an oversight. It is not — though it is now on the clock, because
-[guest onboarding](./accounts.md) needs it and a guest cannot SSH anywhere.
+This section used to say there was no `login`/`code` verb, on the grounds
+below. It is kept rather than deleted, because **half of the reasoning was
+answered and half of it is still true**, and a document that quietly rewrites
+its own conclusions teaches nobody which half was which. The verbs shipped as
+`connect`/`link`/`unlink` — see [connectors.md](./connectors.md).
+
+**ANSWERED: the aiming.** There is no email, account, user or owner parameter
+anywhere in the verb set. `scope: me` means the verified actor, an identity the
+HOST derives from the actor string the coordinator resolved against an ID
+token. A caller can say what to connect and never whose. A test refuses any
+identity-shaped parameter name on any verb, because that is the innocent
+convenience that would take the property away.
+
+**STILL TRUE: the page.** A compromised coordinator can show somebody a
+different authorization page and harvest what they paste into it. What bounds
+it is that the same coordinator can already `start` a session on that box in
+dangerous mode and read the credential file out of it — `connect` is inside
+that blast radius, not outside it. The proxy in [trust.md](./trust.md) is what
+removes this, and it has not been built.
+
+The original text follows.
 
 **No `login` / `code`, yet.** agent-hub can authenticate its own box from chat, which
 is genuinely useful there — it is what lets a coworker stand up an instance
