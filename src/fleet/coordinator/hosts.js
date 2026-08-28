@@ -302,9 +302,19 @@ export class HostIdentities {
     return true;
   }
 
-  /** Without keys — this is what a person reads. */
+  /**
+   * Without keys, and WITHOUT the revoked — this is what a person reads.
+   *
+   * Revoked entries are kept in the map so a reconnecting host is told "you
+   * were revoked" rather than "never enrolled" (see prove()). But keeping them
+   * is storage, not display: the app renders this list under "Hosts", and a
+   * revoked host that stays in it looks exactly like the removal not working.
+   * Which is how it was reported — "removing a host in the app, it comes right
+   * back". It never came back; it never left this list.
+   */
   list() {
     return [...this.hosts.values()]
+      .filter((h) => !h.revokedAt)
       .map(({ publicJwk, ...rest }) => rest)
       .sort((a, b) => b.enrolledAt - a.enrolledAt);
   }

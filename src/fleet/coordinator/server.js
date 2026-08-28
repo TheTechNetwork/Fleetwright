@@ -579,6 +579,14 @@ export class Coordinator {
 
     if (p.startsWith('/api/hosts/') && req.method === 'DELETE') {
       const hostId = decodeURIComponent(p.slice('/api/hosts/'.length));
+      // Revoking twice is agreement, not an error. This used to answer 404
+      // "is not enrolled" for a host that IS enrolled and revoked — so a person
+      // whose first tap seemed not to work (the list bug in hosts.js) tapped
+      // again and was told the host did not exist, while still looking at it.
+      const existing = this.core.hostIds.hosts.get(hostId);
+      if (existing?.revokedAt) {
+        return json(res, 200, { ok: true, text: `${hostId} was already revoked.` });
+      }
       const gone = this.core.hostIds.revoke(hostId);
       if (gone) {
         // Revoked AND disconnected. A revoked host holding a live socket is
