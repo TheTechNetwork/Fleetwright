@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../src/core/connectors.js';
-import { Accounts } from '../src/core/accounts.js';
+import { Accounts, HOST_ROW, rowForActor } from '../src/core/accounts.js';
 import { pickSecretsFile } from '../src/core/podman.js';
 import { loadEnvFile } from '../src/core/env-file.js';
 
@@ -139,8 +139,9 @@ test('a member gets their own tokens or none — never somebody else’s', () =>
   const store = new Connections(state);
   const cfg = /** @type {any} */ ({ stateDir: state });
 
-  // The box's own row, as an operator would set it from the CLI.
-  store.save(null, 'github', 'the-admins-token', 'admin');
+  // The box's own row, as an operator would set it from the CLI. HOST_ROW,
+  // not null — see the next test for why that distinction is the fix.
+  store.save(HOST_ROW, 'github', 'the-admins-token', 'admin');
 
   // A guest who has connected nothing gets NOTHING. This is the difference
   // from the Claude credential, which falls back to the shared org account: a
@@ -154,8 +155,8 @@ test('a member gets their own tokens or none — never somebody else’s', () =>
   assert.ok(readFileSync(theirs, 'utf8').includes('the-guests-token'));
   assert.equal(readFileSync(theirs, 'utf8').includes('the-admins-token'), false);
 
-  // An actor with no email is somebody operating the box itself — the CLI,
-  // Telegram, the web UI — and gets the box's row.
+  // An actor with no fleet identity is somebody operating the box itself —
+  // the CLI, Telegram, the web UI — and gets the box's row.
   for (const actor of ['telegram:12345', 'web', 'cli', null]) {
     const file = pickSecretsFile(cfg, actor);
     assert.ok(file && readFileSync(file, 'utf8').includes('the-admins-token'), String(actor));
@@ -257,4 +258,34 @@ test('a linked Claude account shows as connected for the person who linked it', 
     reply.connections.connected.filter((c) => c.provider === 'claude').map((c) => c.account),
     ['me@example.com'],
   );
+});
+
+test('an identity that cannot be resolved gets NO row, not the shared one', () => {
+  // THE FIX FOR THE REAL DEFECT. `emailFromActor` returns null for two
+  // completely different situations — "a local operator, use the shared row"
+  // and "a fleet identity I could not parse" — and the store used to give
+  // both the same answer: the box's row, which every session on the machine
+  // reads. So an unresolvable member's live GitHub token was written over the
+  // operator's, and handed to everybody else's sessions.
+  //
+  // Three inputs, three answers, and the third one is a refusal.
+  assert.equal(rowForActor('fleet:guest@example.com'), 'guest@example.com');
+  assert.equal(rowForActor('telegram:12345'), HOST_ROW, 'no fleet identity → the box itself');
+  assert.equal(rowForActor('web'), HOST_ROW);
+  assert.equal(rowForActor('fleet:not-an-email'), null, 'a fleet actor we cannot name is a refusal');
+
+  const store = new Connections(dir());
+  const refused = store.save(null, 'github', GH, 'octocat');
+  assert.equal(refused.ok, false);
+  assert.equal(existsSync(store.envPathFor(HOST_ROW)), false, 'nothing was written to the shared row');
+});
+
+test('the box row and a person row are different files', () => {
+  const store = new Connections(dir());
+  store.save(HOST_ROW, 'github', 'the-boxes-token', 'org');
+  store.save('guest@example.com', 'github', 'the-guests-token', 'guest');
+
+  assert.notEqual(store.envPathFor(HOST_ROW), store.envPathFor('guest@example.com'));
+  assert.equal(readFileSync(store.envPathFor(HOST_ROW), 'utf8').includes('the-guests-token'), false);
+  assert.equal(readFileSync(store.envPathFor('guest@example.com'), 'utf8').includes('the-boxes-token'), false);
 });

@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
-import { Accounts, emailFromActor, extractOauthAccount } from './accounts.js';
+import { Accounts, emailFromActor, extractOauthAccount, rowForActor } from './accounts.js';
 import { Connections } from './connectors.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
@@ -390,9 +390,14 @@ export function pickCredentialSource(cfg, actor) {
  * @returns {string|null}
  */
 export function pickSecretsFile(cfg, actor) {
-  const store = new Connections(cfg.stateDir);
-  const email = emailFromActor(actor);
-  const file = store.envPathFor(email);
+  // rowForActor, not emailFromActor: this used to read `emailFromActor(actor)`
+  // and hand `null` straight to the store, where null MEANT THE BOX'S SHARED
+  // ROW. So a fleet actor that failed to parse did not fail — it silently
+  // selected the row every session on the machine reads. Now the three cases
+  // are three answers, and the unparseable one is a refusal.
+  const row = rowForActor(actor);
+  if (row === null) return null;
+  const file = new Connections(cfg.stateDir).envPathFor(row);
   return file && existsSync(file) ? file : null;
 }
 

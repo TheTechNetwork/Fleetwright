@@ -143,3 +143,38 @@ test('a member cannot change the account the box itself runs on', async (t) => {
   const allowed = await core.dispatch({ verb: 'connect', params: { provider: 'claude' }, actor: 'guest@example.com', requester: member });
   assert.notEqual(allowed.error?.code, 'not_admin');
 });
+
+test('scope reaches the host, so the admin gate is not a no-op', () => {
+  // THE GATE WAS BYPASSABLE BY OMITTING A PARAMETER THAT CHANGED NOTHING.
+  // `scope: host` is admin-only at the coordinator, but for token providers
+  // the scope was never placed on the command line — so `scope: host` and no
+  // scope produced the identical `/link github <tok>`, and the host performed
+  // the host-scoped effect either way. A permission check on a value the
+  // enforcing end never sees is not a permission check.
+  const as = 'me@example.com';
+  assert.equal(
+    toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'ghp_x', scope: 'host' }, actor: as }),
+    '/link github ghp_x --host',
+  );
+  assert.equal(
+    toCommandLine({ verb: 'link', params: { provider: 'github', secret: 'ghp_x' }, actor: as }),
+    '/link github ghp_x',
+  );
+  assert.equal(
+    toCommandLine({ verb: 'unlink', params: { provider: 'cloudflare', scope: 'host' }, actor: as }),
+    '/unlink cloudflare --host',
+  );
+  assert.equal(toCommandLine({ verb: 'connect', params: { scope: 'host' }, actor: as }), '/connect --host');
+});
+
+test('a credential cannot be smuggled in as a flag', () => {
+  // agent-hub's parser reads `-word` as a flag, so a secret beginning with a
+  // dash would stop being an argument — and `--host` specifically would be
+  // read as the flag that selects the box's SHARED row, which is the thing the
+  // admin gate exists to protect. No provider issues such a token.
+  for (const secret of ['--host', '-x', '—host', '–host']) {
+    const r = validateIntent(intent('link', { provider: 'github', secret }));
+    assert.equal(r.ok, false, secret);
+    assert.equal(r.code, 'bad_params');
+  }
+});

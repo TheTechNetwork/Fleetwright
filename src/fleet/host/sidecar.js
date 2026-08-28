@@ -277,7 +277,23 @@ export class Sidecar {
       // title never lands in the journal — it is a person's words about their
       // own work, and there is no reason for it to be in a log a whole box can
       // read.
-      const meta = commandMeta(intent.verb, intent.params, intent.actor);
+      // THE PREFIXED ACTOR, not the bare one. This line read `intent.actor`
+      // and that was a real vulnerability, not a tidiness point.
+      //
+      // `emailFromActor` answers only for `fleet:<email>` — the prefix is the
+      // marker of "the coordinator verified this against an ID token", and
+      // `/api/command` accepts a caller-supplied actor otherwise, so a bare
+      // email there is a claim rather than a fact. The prefix was being built
+      // four lines up and spent only on the log string, so everything
+      // downstream that asked "who is this" got `null`: per-person Claude
+      // credentials never resolved, the ownership filters in the coordinator
+      // could never match, and — once connectors landed — a member's pasted
+      // GitHub token was written to the box's shared row and seeded into
+      // every other member's sessions.
+      //
+      // Deliberately not `actor` (which is 'fleet' when there is none): an
+      // intent with no actor must still record NO actor, exactly as before.
+      const meta = commandMeta(intent.verb, intent.params, intent.actor ? `fleet:${intent.actor}` : '');
       this.log.info(`sidecar: ${actor} → ${redactCommandLine(line)}`);
       const r = await this.hub.command(line, meta);
 
@@ -615,28 +631,35 @@ export function toCommandLine({ verb, params, actor }) {
       // no email: an unattributed caller asking to link "their" account has
       // not named anybody, and picking the box for them would silently do the
       // admin-only thing.
-      if (!p.provider) return '/connect';
+      if (!p.provider) return p.scope === 'host' ? '/connect --host' : '/connect';
       if (p.provider === 'claude') {
         if (p.scope === 'host') return '/login force';
         if (!mine) throw new Error('connect me needs a signed-in identity — this caller has no email');
         return `/login for ${mine}`;
       }
-      return `/connect ${p.provider}`;
+      return `/connect ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
     case 'link':
       // The secret is protocol-constrained to printable ASCII with no
-      // whitespace, quote or backslash, so it is one token on this line and
-      // cannot become two. It is masked in every log between here and the
-      // pane by src/core/redact.js — which is the reason `/code` and `/link`
-      // are the two command words in that table.
+      // whitespace, quote or backslash, and cannot begin with a dash, so it is
+      // one token on this line and can be neither split in two nor read as a
+      // flag by the registry's parser. It is masked in every log between here
+      // and the pane by src/core/redact.js — which is the reason `/code` and
+      // `/link` are the two command words in that table.
       if (p.provider === 'claude') return `/code ${p.secret}`;
-      return `/link ${p.provider} ${p.secret}`;
+      // SCOPE HAS TO REACH THE HOST. It did not, and that made the
+      // coordinator's admin gate a no-op for token providers: `scope: host`
+      // and no scope at all produced the identical line, so the gate could be
+      // stepped around by omitting a parameter that changed nothing. A
+      // permission check on a value the enforcing end never sees is not a
+      // permission check.
+      return `/link ${p.provider} ${p.secret}${p.scope === 'host' ? ' --host' : ''}`;
     case 'unlink':
       if (p.provider === 'claude') {
         if (p.scope === 'host') return '/login logout';
         if (!mine) throw new Error('unlink me needs a signed-in identity — this caller has no email');
         return `/accounts remove ${mine}`;
       }
-      return `/unlink ${p.provider}`;
+      return `/unlink ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
     default:
       // Unreachable: validateIntent has already refused anything not in VERBS,
       // and peek/health never get here. Throwing rather than returning a

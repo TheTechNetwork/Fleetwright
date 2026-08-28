@@ -55,11 +55,54 @@ export function normaliseEmail(value) {
  * `fleet:person@example.com` is the sidecar's prefix on a coordinator-verified
  * identity. Everything else — telegram ids, `web`, `cli`, absent — has no
  * email and gets the shared credential.
+ *
+ * THE PREFIX IS THE WHOLE POINT and must not be relaxed into "anything that
+ * looks like an email". `POST /api/command` accepts a caller-supplied `actor`
+ * when there is no fleet identity behind the request, so a bare email in that
+ * field is a CLAIM. The prefix is applied by the sidecar, and only ever to an
+ * actor the coordinator resolved against an ID token — it is the marker of
+ * "verified", not a formatting convention.
  */
 /** @param {unknown} actor */
 export function emailFromActor(actor) {
   const s = String(actor || '');
   return s.startsWith('fleet:') ? normaliseEmail(s.slice('fleet:'.length)) : null;
+}
+
+/**
+ * The box's own credential row, as opposed to a person's.
+ *
+ * A distinct value rather than `null`, and that is the entire reason it
+ * exists. Storage keyed on `emailFromActor(...) ?? THE_BOX` cannot tell
+ * "nobody is asking, use the shared row" from "somebody IS asking and I could
+ * not work out who" — and those two must not have the same answer, because
+ * one of them writes a person's live credential into a file every session on
+ * the machine reads.
+ */
+export const HOST_ROW = Symbol('host-row');
+
+/**
+ * Which credential row an actor gets, with the failure case separated out.
+ *
+ * Three outcomes, deliberately, where there used to be two:
+ *
+ *  - a **verified fleet identity** → that person's row, and only theirs
+ *  - **no fleet identity at all** (telegram, the CLI, the web UI) → the box's
+ *    own row, because that is somebody operating the machine directly
+ *  - a **fleet identity that cannot be named** → `null`, which every caller
+ *    must treat as a refusal
+ *
+ * The third case is the one this function was written for. It should be
+ * unreachable — the coordinator only ever sends a verified email — and
+ * "unreachable" is exactly the assumption that had already broken once.
+ *
+ * @param {unknown} actor
+ * @returns {string | typeof HOST_ROW | null}
+ */
+export function rowForActor(actor) {
+  const s = String(actor || '');
+  if (!s.startsWith('fleet:')) return HOST_ROW;
+  return normaliseEmail(s.slice('fleet:'.length));
 }
 
 export class Accounts {
