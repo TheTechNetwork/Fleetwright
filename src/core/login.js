@@ -55,6 +55,39 @@ const FAILURE_RE = /Login failed|Invalid code|authentication failed|Error: /i;
 // The pane is waiting for the pasted code.
 const AWAITING_CODE_RE = /paste (?:the |it |code)|enter the code|authorization code|Paste code here/i;
 
+/**
+ * May this actor finish that flow?
+ *
+ * The rule is not "the same string", and the difference is what keeps a
+ * security fix from breaking the installer.
+ *
+ * FLEET IDENTITIES ARE INDIVIDUALS and must match exactly. `fleet:a@x` cannot
+ * finish `fleet:b@x`'s login, and neither can finish a login the box started
+ * for itself. That is the case this function exists for: it only became
+ * reachable when `link` let any member send `/code`.
+ *
+ * EVERYTHING ELSE IS THE BOX. `web`, `cli`, `telegram:12345` — all of them are
+ * somebody operating the machine directly, through a door that already
+ * required the hub token or the Telegram allowlist. Treating them as one
+ * identity is not a weakening; it is naming who they already are. It also
+ * keeps a real flow working: the installer starts a login as `web`, and the
+ * operator may well finish it from Telegram twenty minutes later.
+ *
+ * A flow with no recorded starter stays open, because that is what a flow
+ * started before this existed looks like.
+ *
+ * @param {string|null|undefined} actor
+ * @param {string|null|undefined} startedBy
+ */
+function sameActor(actor, startedBy) {
+  if (!startedBy) return true;
+  const a = String(actor || '').toLowerCase();
+  const b = String(startedBy).toLowerCase();
+  if (a === b) return true;
+  // Neither is a verified fleet identity → both are the box itself.
+  return !a.startsWith('fleet:') && !b.startsWith('fleet:');
+}
+
 export class LoginFlow {
   /** @param {import('../config.js').Config} cfg */
   constructor(cfg) {
@@ -113,11 +146,22 @@ export class LoginFlow {
       return { ok: false, message: 'Login from agent-hub is disabled (AGENT_HUB_LOGIN=0).' };
     }
     if (this.isPending()) {
+      // THE URL GOES BACK ONLY TO WHOEVER STARTED THE FLOW.
+      //
+      // It used to be returned to anybody who asked, which turned a refusal
+      // into a disclosure: a second person could ask for a login, be told
+      // "one is already waiting", receive the FIRST person's authorization
+      // URL, open it, authorize with their own Claude account, and hand the
+      // resulting code back. The code is bound by PKCE to the pane on this
+      // box, so without the URL there is nothing an outsider can produce —
+      // handing it over was the whole attack.
+      const same = sameActor(actor, this.pending?.startedBy);
       return {
         ok: false,
-        message:
-          `A login is already waiting for its code${this.pending?.url ? `:\n${this.pending.url}` : '.'}\n` +
-          'Send the code with /code <value>, or /login cancel to start over.',
+        message: same
+          ? `A login is already waiting for its code${this.pending?.url ? `:\n${this.pending.url}` : '.'}\n` +
+            'Send the code with /code <value>, or /login cancel to start over.'
+          : 'A login is already in progress on this box. Wait for it to finish, or ask whoever started it to /login cancel.',
       };
     }
 
@@ -203,12 +247,35 @@ export class LoginFlow {
    * The code is never logged: it is a live credential for the account being
    * attached, for the seconds before it is exchanged.
    *
+   * WHO MAY FINISH A FLOW: only whoever started it.
+   *
+   * There is one pending flow per box, and this used to complete whichever one
+   * was open regardless of who sent the code. That was survivable while `/code`
+   * could only be reached from surfaces that already had the box — Telegram,
+   * the CLI, the web UI. It stopped being survivable when `link` made it
+   * reachable by any fleet member: an admin starts a login for the BOX, a
+   * member sends a code for their own account, and every session on that
+   * machine afterwards runs on an account the member controls. The reverse is
+   * just as bad — a code landing in somebody else's `linkFor` slot puts the
+   * sender's credential under the recipient's name.
+   *
+   * `startedBy` was already being recorded and simply never read.
+   *
    * @param {string} code
+   * @param {string|null} [actor]  who is sending it, as the caller knows them
    * @returns {Promise<{ ok: boolean, message: string, status?: AuthStatus }>}
    */
-  async submitCode(code) {
-    if (!this.isPending()) {
-      return { ok: false, message: 'No login is waiting for a code. Start one with /login.' };
+  async submitCode(code, actor = null) {
+    // ONE MESSAGE FOR BOTH REFUSALS, byte-identical and deliberately so. A
+    // distinct "that is not your login" would tell a member that somebody
+    // else's flow is open right now, and when — which is the timing half of
+    // the attack, handed over for free. Same discipline as the scheduler's
+    // unknown_session refusal.
+    const nothingWaiting = { ok: false, message: 'No login is waiting for a code. Start one with /login.' };
+    if (!this.isPending()) return nothingWaiting;
+    if (!sameActor(actor, this.pending?.startedBy)) {
+      log.warn('login: a code arrived from somebody who did not start this login — refused');
+      return nothingWaiting;
     }
     const trimmed = String(code || '').trim();
     // Codes are opaque, but they are one token — anything with whitespace or a

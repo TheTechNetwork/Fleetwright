@@ -34,7 +34,7 @@
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
-import { normaliseEmail } from './accounts.js';
+import { normaliseEmail, HOST_ROW } from './accounts.js';
 
 /** How long a provider gets to answer before we call the token unverifiable. */
 const VERIFY_TIMEOUT_MS = 10_000;
@@ -190,7 +190,16 @@ export async function verifyToken(provider, secret) {
 /** @param {unknown} secret */
 export function looksLikeToken(secret) {
   const s = String(secret ?? '');
-  return s.length > 0 && s.length <= 4096 && /^[\x21-\x7e]+$/.test(s) && !/['"\\]/.test(s);
+  // The leading-dash rule mirrors src/fleet/protocol/intents.js: agent-hub's
+  // parser reads `-word` as a flag, so a token starting with one would be read
+  // as an option rather than a value — `--host` most dangerously of all.
+  return (
+    s.length > 0 &&
+    s.length <= 4096 &&
+    /^[\x21-\x7e]+$/.test(s) &&
+    !/['"\\]/.test(s) &&
+    !/^[-\u2013\u2014]/.test(s)
+  );
 }
 
 /**
@@ -221,31 +230,43 @@ export class Connections {
     this.dir = path.join(stateDir, 'accounts');
   }
 
-  /** @param {string|null} email @returns {string|null} */
-  #stem(email) {
-    if (email === null) return '.host';
-    return normaliseEmail(email);
+  /**
+   * The filename stem for a row, or null when there is no such row.
+   *
+   * `null` USED TO MEAN THE BOX. It now means nothing at all, and that change
+   * is the fix for a real defect: `emailFromActor` returns null both for "a
+   * local operator, use the shared row" and for "a fleet identity I could not
+   * parse", and those two had the same effect — the second one writing a
+   * person's live token into the file every session on the machine reads.
+   *
+   * The box is `HOST_ROW`, a symbol, which nothing can arrive at by accident.
+   *
+   * @param {string|symbol|null} row @returns {string|null}
+   */
+  #stem(row) {
+    if (row === HOST_ROW) return '.host';
+    return typeof row === 'string' ? normaliseEmail(row) : null;
   }
 
-  /** The one file a secret is ever in. @param {string|null} email */
-  envPathFor(email) {
-    const stem = this.#stem(email);
+  /** The one file a secret is ever in. @param {string|symbol|null} row */
+  envPathFor(row) {
+    const stem = this.#stem(row);
     return stem ? path.join(this.dir, `${stem}.env`) : null;
   }
 
-  /** Metadata only — safe to read anywhere. @param {string|null} email */
-  metaPathFor(email) {
-    const stem = this.#stem(email);
+  /** Metadata only — safe to read anywhere. @param {string|symbol|null} row */
+  metaPathFor(row) {
+    const stem = this.#stem(row);
     return stem ? path.join(this.dir, `${stem}.connections.json`) : null;
   }
 
   /**
    * What is connected, and to which account. Never the token.
-   * @param {string|null} email
+   * @param {string|symbol|null} row
    * @returns {Array<{ provider: string, label: string, account: string|null, updatedAt: number }>}
    */
-  list(email) {
-    const file = this.metaPathFor(email);
+  list(row) {
+    const file = this.metaPathFor(row);
     if (!file || !existsSync(file)) return [];
     try {
       const meta = JSON.parse(readFileSync(file, 'utf8'));
@@ -263,9 +284,9 @@ export class Connections {
     }
   }
 
-  /** The tokens themselves, read back to rewrite the file. @param {string|null} email */
-  #secrets(email) {
-    const file = this.envPathFor(email);
+  /** The tokens themselves, read back to rewrite the file. @param {string|symbol|null} row */
+  #secrets(row) {
+    const file = this.envPathFor(row);
     /** @type {Record<string, string>} */
     const out = {};
     if (!file || !existsSync(file)) return out;
@@ -286,15 +307,17 @@ export class Connections {
    * provider's variables, so removing a provider from the catalogue cannot
    * strand its variable in a file forever.
    *
-   * @param {string|null} email @param {string} provider @param {string} secret
+   * @param {string|symbol|null} row @param {string} provider @param {string} secret
    * @param {string|null} [account]
    */
-  save(email, provider, secret, account = null) {
+  save(row, provider, secret, account = null) {
     const p = PROVIDERS[provider];
-    const envFile = this.envPathFor(email);
-    const metaFile = this.metaPathFor(email);
+    const envFile = this.envPathFor(row);
+    const metaFile = this.metaPathFor(row);
     if (!p) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
-    if (!envFile || !metaFile) return { ok: false, message: 'that does not look like an email address' };
+    // FAILS CLOSED. There is no row to write to, so nothing is written —
+    // rather than falling back to a shared one that other people read.
+    if (!envFile || !metaFile) return { ok: false, message: 'there is no credential row for that identity' };
     if (!looksLikeToken(secret)) {
       return {
         ok: false,
@@ -303,7 +326,7 @@ export class Connections {
       };
     }
 
-    const secrets = this.#secrets(email);
+    const secrets = this.#secrets(row);
     for (const key of p.env) secrets[key] = secret;
 
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -338,15 +361,15 @@ export class Connections {
    * alone. And this cannot revoke anything at the provider, so it says so:
    * the token is still live on their account until they revoke it there.
    *
-   * @param {string|null} email @param {string} provider
+   * @param {string|symbol|null} row @param {string} provider
    */
-  remove(email, provider) {
+  remove(row, provider) {
     const p = PROVIDERS[provider];
-    const envFile = this.envPathFor(email);
-    const metaFile = this.metaPathFor(email);
+    const envFile = this.envPathFor(row);
+    const metaFile = this.metaPathFor(row);
     if (!p || !envFile || !metaFile) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
 
-    const secrets = this.#secrets(email);
+    const secrets = this.#secrets(row);
     let had = false;
     for (const key of p.env) {
       if (key in secrets) had = true;

@@ -40,7 +40,7 @@
 import { describe } from '../core/login.js';
 import { Connections, catalogue, isProvider, verifyToken } from '../core/connectors.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
-import { Accounts, normaliseEmail, emailFromActor } from '../core/accounts.js';
+import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
@@ -169,15 +169,19 @@ function parseResumeChoice(word) {
  * @param {Ctx} ctx
  * @param {{ url?: string|null }} [pending]  a Claude login waiting for its code
  */
-function connectionsPayload(ctx, pending = {}) {
+function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
   const email = emailFromActor(ctx.actor);
+  // Which row is being ASKED about. `--host` is the box's own; otherwise it is
+  // whoever is asking, and `rowForActor` is what keeps "I cannot tell who this
+  // is" from resolving to the shared row.
+  const row = host ? HOST_ROW : rowForActor(ctx.actor);
   const store = new Connections(ctx.cfg.stateDir);
-  const connected = store.list(email);
+  const connected = row === null ? [] : store.list(row);
 
   // Claude's row. For a member it is "have you linked your own account"; for
   // an actor with no email it is the box's own login, which is the same
   // question asked of the same box.
-  const claudeAccount = email
+  const claudeAccount = email && !host
     ? (new Accounts(ctx.cfg.stateDir).credentialPathFor(email) ? email : null)
     : (ctx.login.status().loggedIn ? (ctx.login.status().email ?? 'this box') : null);
   if (claudeAccount) {
@@ -486,22 +490,23 @@ export const COMMANDS = {
   // --- Other credentials ---------------------------------------------------
 
   connect: {
-    usage: '/connect [github|cloudflare]',
+    usage: '/connect [github|cloudflare] [--host]',
     short: 'Connect a GitHub or Cloudflare token',
     help:
       'Opens the provider\u2019s own token page with the right scopes pre-ticked. You create the token, ' +
       'on your account, and paste it back with /link. Nothing of ours sits in the middle of that page, ' +
       'and you can revoke it from the same place at any time.',
-    run: async (ctx, args) => {
+    run: async (ctx, args, flags) => {
       const host = ctx.cfg.hostname;
       const which = (args[0] || '').toLowerCase();
+      const boxRow = flags?.has('host') === true;
       // THE SAME ANSWER FOR BOTH SURFACES. Chat reads the prose; an app reads
       // `connections` and renders a picker from it — which is why the
       // catalogue travels rather than being hardcoded in two mobile clients.
       // A provider added to the table appears in both apps with no app change,
       // which is the entire reason the verbs are connect/link/unlink and not
       // github/cloudflare.
-      const structured = connectionsPayload(ctx);
+      const structured = connectionsPayload(ctx, {}, { host: boxRow });
       if (!which) {
         const have = new Map(structured.connected.map((c) => [c.provider, c]));
         return {
@@ -531,10 +536,11 @@ export const COMMANDS = {
   },
 
   link: {
-    usage: '/link <provider> <token>',
+    usage: '/link <provider> <token> [--host]',
     short: 'Store a token from /connect',
-    help: 'Verifies the token with the provider before storing it, so a typo fails here rather than four hours into a session.',
-    run: async (ctx, args) => {
+    help: 'Verifies the token with the provider before storing it, so a typo fails here rather than four hours into a session. ' +
+      '--host stores it as the BOX\u2019s token, which every session on this machine gets; without it the token is yours alone.',
+    run: async (ctx, args, flags) => {
       const provider = (args[0] || '').toLowerCase();
       // args[1] and nothing else. A token has no spaces, and joining the rest
       // would silently accept a paste that picked up half the page.
@@ -549,30 +555,38 @@ export const COMMANDS = {
       const checked = await verifyToken(provider, secret);
       if (!checked.ok) return { ok: false, text: checked.message };
       const store = new Connections(ctx.cfg.stateDir);
-      const email = emailFromActor(ctx.actor);
-      const saved = store.save(email, provider, secret, checked.account ?? null);
+      // WHOSE ROW. `--host` is the box's shared one, which the coordinator
+      // gates on admin; anything else is the caller's own, and an actor whose
+      // identity cannot be resolved gets a refusal rather than the shared row.
+      const boxRow = flags?.has('host') === true;
+      const row = boxRow ? HOST_ROW : rowForActor(ctx.actor);
+      if (row === null) {
+        return { ok: false, text: 'Could not tell whose credential this is, so nothing was stored.' };
+      }
+      const saved = store.save(row, provider, secret, checked.account ?? null);
       return {
         ok: saved.ok,
         text: `${checked.message}\n${saved.message}`,
         // §7: one round trip per action. A client that has to ask again to
         // find out whether the thing it just did worked is a client that
         // shows a stale screen for one refresh interval.
-        connections: connectionsPayload(ctx),
+        connections: connectionsPayload(ctx, {}, { host: boxRow }),
       };
     },
   },
 
   unlink: {
-    usage: '/unlink <provider>',
+    usage: '/unlink <provider> [--host]',
     short: 'Forget a stored token',
     help: 'Removes it from this box. It stays live on your account until you revoke it with the provider.',
-    run: async (ctx, args) => {
+    run: async (ctx, args, flags) => {
       const provider = (args[0] || '').toLowerCase();
       if (!provider) return { ok: false, text: 'Usage: /unlink <provider>' };
-      const store = new Connections(ctx.cfg.stateDir);
-      const email = emailFromActor(ctx.actor);
-      const r = store.remove(email, provider);
-      return { ok: r.ok, text: r.message, connections: connectionsPayload(ctx) };
+      const boxRow = flags?.has('host') === true;
+      const row = boxRow ? HOST_ROW : rowForActor(ctx.actor);
+      if (row === null) return { ok: false, text: 'Could not tell whose credential this is, so nothing was removed.' };
+      const r = new Connections(ctx.cfg.stateDir).remove(row, provider);
+      return { ok: r.ok, text: r.message, connections: connectionsPayload(ctx, {}, { host: boxRow }) };
     },
   },
 
@@ -582,7 +596,11 @@ export const COMMANDS = {
     help: 'Send back the authorization code from the /login page.',
     run: async (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Paste the code: /code <value>' };
-      const r = await ctx.login.submitCode(args.join(''));
+      // WHO is sending it. Only the actor that started the flow may finish it
+      // — otherwise a fleet member can complete the admin's box login with
+      // their own authorization code, and every session on this machine
+      // afterwards runs on an account they control.
+      const r = await ctx.login.submitCode(args.join(''), ctx.actor);
       return { ok: r.ok, text: r.message, connections: connectionsPayload(ctx) };
     },
   },

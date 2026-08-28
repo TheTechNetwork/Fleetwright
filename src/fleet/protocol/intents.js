@@ -454,6 +454,15 @@ function checkParam(verb, key, ps, value) {
     if (!/^[\x21-\x7e]+$/.test(value) || /['"\\]/.test(value)) {
       return bad(`${verb}.${key} does not look like a credential — send just the token or code itself`);
     }
+    // AND IT MAY NOT BEGIN WITH A DASH. agent-hub's parser reads any token
+    // matching `-word` as a FLAG, so a credential starting with one would stop
+    // being an argument at all — and, worse, a value like `--host` would be
+    // read as the flag that selects the box's shared row. No provider issues a
+    // token that starts with a dash; a caller sending one is not pasting a
+    // credential.
+    if (/^[-\u2013\u2014]/.test(value)) {
+      return bad(`${verb}.${key} does not look like a credential — send just the token or code itself`);
+    }
     return { ok: true, value };
   }
   // 'int'

@@ -111,6 +111,56 @@ out:
 The box's own row exists and is used by actors with **no email** — the CLI,
 Telegram, the web UI — all of which are somebody operating the box itself.
 
+## What the first audit found, and what changed
+
+Two real defects, both authorization rather than injection, both found by a
+security review of the merged round. Written down because the *shape* of each
+recurs.
+
+**1. The host could not tell who was asking.** `emailFromActor` answers only
+for `fleet:<email>` — the prefix is the marker of *"the coordinator verified
+this against an ID token"*, and `/api/command` accepts a caller-supplied actor
+otherwise, so a bare email there is a claim rather than a fact. The sidecar
+built that prefixed form and spent it **only on a log string**, passing the
+bare value to everything downstream. So every consumer that asked "who is
+this" got `null`.
+
+That had been quietly true for a while and had failed *safe* every time: a
+member's linked Claude account silently fell back to the shared one, and the
+coordinator's ownership filters simply never matched. Connectors was the first
+consumer where the same `null` failed **open** — the store read `null` as *"the
+box's shared row"*, so a member's pasted GitHub token overwrote the operator's
+and was seeded into every other member's sessions.
+
+The fix is one line at the sidecar. The *defence* is that `null` no longer
+means the box: `rowForActor` returns three answers — a person, `HOST_ROW`, or
+`null` meaning **refuse** — so "I could not tell who this is" can never again
+resolve to a row other people read.
+
+**2. A pending login could be finished by anyone.** `/code` completes whichever
+flow is open on the box, and `startedBy` was recorded and never read. Survivable
+while `/code` was reachable only from surfaces that already had the machine;
+not survivable once `link` made it reachable by any member. An admin starts a
+box login, a member sends their own authorization code, and every session on
+that machine afterwards runs on an account the member controls.
+
+Worse, `start()` refused a second login *with the first one's authorization URL
+in the message* — which is what turned a race into a plan, since PKCE binds the
+code to the pane on that box and without the URL there is nothing an outsider
+can produce.
+
+Both are now bound to the actor that started the flow, and the refusal is
+**byte-identical** to "nothing is waiting" — a distinct "not your login" would
+tell a member that somebody else's flow is open right now, which is the timing
+half of the attack given away for free.
+
+**And one gate that was not a gate.** `scope: host` is admin-only at the
+coordinator, but the scope was never placed on the command line for token
+providers — so `scope: host` and no scope produced an identical `/link github
+<token>`, and the gate could be stepped around by omitting a parameter that
+changed nothing. A permission check on a value the enforcing end never sees is
+not a permission check.
+
 ## Where a secret lives
 
 Exactly one file, `${stateDir}/accounts/<email>.env`, mode 0600.
