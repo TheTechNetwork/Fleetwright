@@ -342,10 +342,6 @@ private struct SettingsView: View {
                 // to your screen.
                 Section {
                     NavigationLink("Session kinds") { SessionKindsView() }
-                    Toggle("Open the app after starting", isOn: Binding(
-                        get: { settings.autoOpenAfterStart },
-                        set: { settings.autoOpenAfterStart = $0 }
-                    ))
                     // Two taps to a phrase with no app name in it at all.
                     //
                     // Apple requires the app name in the phrases WE ship, which
@@ -373,8 +369,10 @@ private struct SettingsView: View {
                     For a phrase of your own — "Debbie", or anything else you call this — \
                     tap "Say it your way" above.
 
-                    Opening the app is off by default: an intent from an automation often \
-                    runs when nobody is looking at the phone.
+                    Saying "and open it" brings the app forward; plain "start a session" does \
+                    not. Two phrases rather than a setting, because an intent from an \
+                    automation often runs when nobody is looking at the phone — and which of \
+                    those you meant is clearer as you say it.
                     """)
                 }
 

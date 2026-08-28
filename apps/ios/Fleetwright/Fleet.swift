@@ -270,18 +270,6 @@ final class Settings {
         didSet { UserDefaults.standard.set(signedInAs, forKey: "signedInAs") }
     }
 
-    /// Whether starting a session from an intent should bring the app forward.
-    ///
-    /// OFF by default, and that default is the whole design decision. An intent
-    /// fired from a Shortcut, an automation or the Action button very often
-    /// runs when nobody is looking at the phone, and launching an app then is
-    /// an interruption nobody asked for. Only the person who set it knows
-    /// whether they meant "start this and get out of my way" or "start this and
-    /// take me there".
-    var autoOpenAfterStart: Bool {
-        didSet { UserDefaults.standard.set(autoOpenAfterStart, forKey: "autoOpenAfterStart") }
-    }
-
     /// The phrase somebody chose for themselves.
     ///
     /// Stored even though iOS will not let us register it: the app shows it
@@ -298,7 +286,6 @@ final class Settings {
         coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
-        autoOpenAfterStart = UserDefaults.standard.bool(forKey: "autoOpenAfterStart")
         customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""
 
         // Nothing is carried over from the build that asked for an admin token.
