@@ -271,7 +271,18 @@ struct Fleet {
 
     /// Forget a session and delete its volumes. Not undoable, which is why the
     /// UI asks first.
+    /// Stop a session and put it in the bin. Recoverable — see `restore`.
     func forget(_ name: String) async throws -> Reply { try await intent("forget", params: ["name": name]) }
+
+    /// Take a forgotten session back out of the bin.
+    ///
+    /// The volumes were never deleted, so this is a record move: the
+    /// conversation and the workspace come back exactly as they were. Pinned
+    /// to the box still holding them, which the coordinator resolves.
+    func restore(_ name: String) async throws -> Reply { try await intent("restore", params: ["name": name]) }
+
+    /// Delete for good. What `forget` used to do, kept as its own word.
+    func purge(_ name: String) async throws -> Reply { try await intent("purge", params: ["name": name]) }
 
     /// Ask the coordinator to send this device a notification now.
     ///
@@ -364,6 +375,29 @@ struct Fleet {
     /// What a box says about itself. Every field optional: an older sidecar
     /// sends none of them, and the app must show a host with less information
     /// rather than no host at all.
+    /// A session that was forgotten and is still recoverable.
+    struct Binned: Codable, Hashable, Identifiable {
+        let name: String
+        let title: String?
+        /// When it goes. Sent as a timestamp so the phone does the arithmetic
+        /// — "two days left" computed here stays right while the screen is
+        /// open, and a server-rendered string would freeze the moment it was
+        /// sent.
+        let expiresAt: Double?
+        var id: String { name }
+
+        /// "2 days left", "5h left", or "goes within the hour".
+        var remaining: String? {
+            guard let expiresAt else { return nil }
+            let left = expiresAt / 1000 - Date().timeIntervalSince1970
+            if left <= 0 { return "gone" }
+            if left < 3600 { return "goes within the hour" }
+            if left < 86_400 { return "\(Int(left / 3600))h left" }
+            let days = Int(left / 86_400)
+            return "\(days) day\(days == 1 ? "" : "s") left"
+        }
+    }
+
     struct HostHealth: Codable, Hashable {
         struct Account: Codable, Hashable {
             let email: String?
@@ -385,6 +419,10 @@ struct Fleet {
         let loggedIn: Bool?
         let running: Int?
         let maxSessions: Int?
+        /// Forgotten, still recoverable. Absent on a host that has not been
+        /// updated, which decodes as nil and renders as no section at all —
+        /// the correct answer for a box where forget still deletes.
+        let bin: [Binned]?
     }
 
     /// A host as the fleet snapshot describes it — state, reason, and whatever

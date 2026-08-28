@@ -235,6 +235,10 @@ private struct SettingsView: View {
     @State private var hostActionResult = ""
     @State private var busyHost: String?
     @State private var rebootTarget: String?
+    /// Deleting for good is the one action here with no undo left, so it asks
+    /// once — a confirmation nobody can tap through by accident on a phone in
+    /// a pocket. `forget` deliberately does not ask, because it is reversible.
+    @State private var purgeTarget: String?
     @State private var rebootPin = ""
     @State private var rebootConfirm = ""
 
@@ -263,6 +267,23 @@ private struct SettingsView: View {
         } catch {
             hostActionResult = error.localizedDescription
         }
+        await loadHosts()
+    }
+
+    /// Restore or purge, in one place so the busy flag and the result text
+    /// cannot drift apart — the same reason `maintain` exists.
+    @MainActor
+    private func binAction(_ name: String, restore: Bool) async {
+        busyHost = name
+        defer { busyHost = nil }
+        do {
+            let fleet = Fleet(settings: settings)
+            let reply = restore ? try await fleet.restore(name) : try await fleet.purge(name)
+            hostActionResult = reply.text ?? ""
+        } catch {
+            hostActionResult = error.localizedDescription
+        }
+        purgeTarget = nil
         await loadHosts()
     }
 
@@ -452,6 +473,19 @@ private struct SettingsView: View {
                     } header: {
                         Text("Hosts")
                     } footer: {
+                        if let target = purgeTarget {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Delete \(target) for good?").font(.callout)
+                                Text("The conversation and the workspace go with it. This is the only step here that cannot be undone — forgetting was reversible, this is not.")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Button("Delete", role: .destructive) { Task { await binAction(target, restore: false) } }
+                                    Button("Cancel") { purgeTarget = nil }
+                                }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                            }
+                        }
                         if let target = rebootTarget {
                         // Step two, in the app: the pin the host issued and
                         // the hostname typed out. Both come from the person,
@@ -577,6 +611,31 @@ private struct SettingsView: View {
                             .font(.caption)
                         }
                         .padding(.vertical, 2)
+                    }
+                    // THE BIN, under the host holding it. Placed here and not
+                    // beside the live sessions on purpose: this is not work in
+                    // progress, it is work somebody stopped — and a recycle
+                    // bin mixed into a list of running things reads as clutter
+                    // rather than as a safety net.
+                    if let bin = host.health?.bin, !bin.isEmpty {
+                        ForEach(bin) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title ?? item.name).font(.caption)
+                                Text(describeBinned(item))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Button("Restore") { Task { await binAction(item.name, restore: true) } }
+                                    Button("Delete now", role: .destructive) {
+                                        purgeTarget = item.name
+                                    }
+                                }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                                .disabled(busyHost != nil)
+                            }
+                            .padding(.leading, 12)
+                        }
                     }
                 } header: {
                     Text("Fleet")
@@ -791,6 +850,16 @@ private func describeAccount(_ account: Fleet.HostHealth.Account) -> String {
     var parts: [String] = ["signed in as \(account.email ?? "unknown")"]
     if let plan = account.plan, !plan.isEmpty { parts.append(plan) }
     if let org = account.org, !org.isEmpty { parts.append(org) }
+    return parts.joined(separator: " · ")
+}
+
+/// "forgotten · 3 days left", built a piece at a time rather than inline: a
+/// chain of `+` over optionals is what made the Swift type checker give up in
+/// #125, and that failure only shows up on CI.
+private func describeBinned(_ item: Fleet.Binned) -> String {
+    var parts: [String] = ["forgotten"]
+    if item.title != nil { parts.append(item.name) }
+    if let remaining = item.remaining { parts.append(remaining) }
     return parts.joined(separator: " · ")
 }
 
