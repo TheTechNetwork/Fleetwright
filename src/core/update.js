@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { requestRestart } from './restart-watch.js';
 
 /** Long enough for a slow network, short enough that chat does not time out. */
 const GIT_TIMEOUT_MS = 60_000;
@@ -402,17 +403,22 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   // straight back, and it needs no privilege an unprivileged service user does
   // not already have. Sessions are untouched — KillMode=process is what makes
   // that true, and is why that line in the unit is load-bearing.
+  // Tell the siblings BEFORE exiting. After would be too late — this process
+  // is about to stop, and a marker written from a dead process is not written
+  // at all.
+  requestRestart({ head: status.head, actor, stateDir: cfg?.stateDir });
+
   parts.push('Restarting now. Sessions are left running; this reconnects to them on the way back up.');
 
   // Only this process restarts. Anything else shipped from the same directory
-  // keeps running the code that was there before the pull, and saying
-  // "Restarting now" without this reads as though the update were finished.
+  // keeps running the code that was there before the pull. It used to say so
+  // and then hand over a `sudo systemctl restart` line, which is the one thing
+  // this product exists so that nobody has to do — an update that needs a
+  // terminal to finish is not an update. They watch for the marker now.
   const stale = staleSiblings();
   if (stale.length) {
     parts.push(
-      `Still on the old code: ${stale.join(', ')}.\n` +
-        `This cannot restart ${stale.length === 1 ? 'it' : 'them'} — ${stale.length === 1 ? 'it is a system unit' : 'they are system units'} and this service has no privilege over ${stale.length === 1 ? 'it' : 'them'}.\n` +
-        `  sudo systemctl restart ${stale.join(' ')}`,
+      `${stale.join(' and ')} will pick this up within a minute — nothing to run, and nothing to ssh into.`,
     );
   }
   log.warn(`update: restarting to apply ${status.head} → new code${actor ? ` (asked by ${actor})` : ''}`);

@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
+import { watchForRestart } from '../src/core/restart-watch.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
@@ -65,6 +66,13 @@ Environment:
 }
 
 async function run() {
+  // Pick up an update without anybody opening a terminal.
+  //
+  // `/update --restart` restarts the hub by exiting; this does the same when
+  // the updater says a complete new tree is on disk. Only in `run` — the
+  // one-shot subcommands finish in under a second and have nothing to pick up.
+  watchForRestart({ name: 'sidecar' });
+
   const { errors, warnings } = validateSidecarConfig(cfg);
   for (const w of warnings) log.warn(`config: ${w}`);
   if (errors.length) {

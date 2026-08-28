@@ -308,23 +308,30 @@ test('a pull that changes dependencies installs them', (t) => {
   const { cfg, origin, clone, pushUpstream } = deployment(t);
   // A real package.json with a real lockfile, and no dependencies — so this
   // exercises the whole path, npm included, without a network.
-  for (const dir of [origin, clone]) {
-    // Mirrors the real deployment: node_modules is gitignored. Without that it
-    // shows up as untracked, /update calls the tree dirty and refuses to pull —
-    // which is exactly what would happen on a box if it were ever un-ignored.
-    writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n');
-    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
-    writeFileSync(
-      path.join(dir, 'package-lock.json'),
-      JSON.stringify({ name: 'x', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'x', version: '1.0.0' } } }),
-    );
-  }
+  // Committed ONCE, in the origin, and pulled down.
+  //
+  // It used to be written and committed independently in BOTH repos, which is
+  // only the same history when the two commits land in the same second — a
+  // commit hash covers its own timestamp. A slow machine gave the clone a
+  // divergent commit, and /update then refused to fast-forward, correctly. So
+  // the test passed on anything quick and failed on CI, which is the worst way
+  // for a test to be wrong: it accuses the code of a bug the test invented.
+  //
+  // Mirrors the real deployment: node_modules is gitignored. Without that it
+  // shows up as untracked, /update calls the tree dirty and refuses to pull —
+  // which is exactly what would happen on a box if it were ever un-ignored.
+  writeFileSync(path.join(origin, '.gitignore'), 'node_modules/\n');
+  writeFileSync(path.join(origin, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
+  writeFileSync(
+    path.join(origin, 'package-lock.json'),
+    JSON.stringify({ name: 'x', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'x', version: '1.0.0' } } }),
+  );
   git(origin, ['add', '-A']);
   git(origin, ['commit', '-qm', 'add a manifest']);
-  git(clone, ['add', '-A']);
-  git(clone, ['commit', '-qm', 'add a manifest']);
-  git(clone, ['reset', '-q', '--hard', 'HEAD']);
-  git(clone, ['pull', '-q', '--ff-only']);
+  // fetch + hard reset, not a second commit and a pull: identical history by
+  // construction, with no commit of its own to have a timestamp.
+  git(clone, ['fetch', '-q', 'origin']);
+  git(clone, ['reset', '-q', '--hard', 'origin/main']);
   pushUpstream('later');
 
   // `npm ci` empties node_modules before installing, so a file left in there is
