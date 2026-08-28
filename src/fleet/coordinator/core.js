@@ -521,6 +521,10 @@ export class CoordinatorCore {
       // The caller's chosen host, when they chose one. Beside the spec rather
       // than in params, so it can never leak into the intent a host validates.
       preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '',
+      // And who is asking, so pinned verbs can refuse a member acting on work
+      // that is not theirs — with the same words as "unknown", so an access
+      // control never becomes an existence oracle.
+      requester: spec.requester ?? null,
     });
     if (placement.kind === 'refused') {
       return { ok: false, error: { code: placement.code }, text: placement.reason };

@@ -386,6 +386,12 @@ export class Sidecar {
             title: s.title ?? null,
             status: s.status,
             resumable: Boolean(s.uuid),
+            // WHO STARTED IT, so the coordinator can refuse a member acting on
+            // a session that is not theirs. Without this, visibility filtering
+            // hides other people's sessions from a member's LIST while a
+            // guessed name still stops them — privacy against reading with no
+            // authorisation against acting.
+            createdBy: s.createdBy ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
         // What is out of date on this box, so a phone can say so without
