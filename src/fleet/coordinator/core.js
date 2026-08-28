@@ -120,6 +120,11 @@ export class CoordinatorCore {
 
     if (msg.kind === 'health' && msg.health) {
       this.registry.recordHealth(hostId, msg.health);
+      // The outcome, not just the input: recordHealth silently ignores a host
+      // the registry does not know, and during the outage that silence was
+      // indistinguishable from the frame never arriving.
+      const known = this.registry.list().find((h) => h.hostId === hostId);
+      this.log.info(`coordinator: health from ${hostId} → ${known ? `${known.state}` : 'IGNORED — not in registry'}`);
       return;
     }
 
@@ -131,8 +136,11 @@ export class CoordinatorCore {
     }
     const waiter = this.pending.get(msg.id);
     if (!waiter) {
-      // A reply to something already given up on. The host was slow, not wrong.
-      this.log.debug(`coordinator: late reply from ${hostId} for ${msg.id}`);
+      // WARN, not debug. In the Worker, debug is a no-op — so when every reply
+      // in an outage was somehow "late", the one line that said so was being
+      // thrown away. A late reply is rare and interesting; a debug level that
+      // eats it in production is how that stops being true.
+      this.log.warn(`coordinator: late reply from ${hostId} for ${msg.id} — nothing was waiting`);
       return;
     }
     this.pending.delete(msg.id);

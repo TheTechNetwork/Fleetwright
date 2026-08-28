@@ -539,6 +539,13 @@ export class Fleet {
   /** @param {WebSocket} socket @param {string|ArrayBuffer} message */
   async webSocketMessage(socket, message) {
     const hostId = this.#hostIdOf(socket);
+    // LOGGED, because for one whole outage this handler was invisible: a
+    // health frame that registered logged nothing, a frame dropped for a
+    // missing tag logged nothing, and a reply that resolved logged nothing —
+    // so a tail full of "Ok" could not say whether host frames were arriving
+    // at all. One line per frame, and hosts send one health frame per 15s, so
+    // the cost is four log lines a minute per fleet.
+    console.log(`fleet: frame from ${hostId || 'UNTAGGED-SOCKET'}: ${String(message).slice(0, 80)}`);
     if (!hostId) return;
     let parsed;
     try {
