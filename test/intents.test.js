@@ -46,10 +46,13 @@ test('the verb set is exactly what is documented', () => {
     'list',
     'logs',
     'peek',
+    'reboot',
     'resume',
     'start',
     'status',
     'stop',
+    'update',
+    'upgrade',
   ]);
 });
 
@@ -76,7 +79,9 @@ test('only state-changing verbs are marked mutating', () => {
   assert.deepEqual(
     Object.keys(VERBS).filter(isMutating).sort(),
     // answer sends a keystroke into a live session: as mutating as it gets.
-    ['answer', 'forget', 'resume', 'start', 'stop'],
+    // update/upgrade/reboot change the box itself, which is as mutating as a
+    // verb gets — a reboot ends every session on it.
+    ['answer', 'forget', 'reboot', 'resume', 'start', 'stop', 'update', 'upgrade'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

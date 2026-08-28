@@ -62,7 +62,12 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // ambiguous and picking one silently would be guessing at which box somebody
   // meant — so it refuses and names them, the same way an ambiguous session
   // name is refused rather than resolved by iteration order.
-  if (verb === 'logs') {
+  // logs, update, upgrade and reboot are all questions about ONE BOX. None of
+  // them is a fan-out (four journals, four apt runs and four reboots merged
+  // into one reply is nobody's idea of an answer), and none belongs in the
+  // new-work path, which filters on free capacity — a full box can still be
+  // asked about itself, updated, or rebooted.
+  if (verb === 'logs' || verb === 'update' || verb === 'upgrade' || verb === 'reboot') {
     const reachable = registry.reachable();
     if (!reachable.length) {
       return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };

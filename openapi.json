@@ -908,7 +908,10 @@
                       "stop",
                       "forget",
                       "answer",
-                      "logs"
+                      "logs",
+                      "update",
+                      "upgrade",
+                      "reboot"
                     ]
                   },
                   "params": {

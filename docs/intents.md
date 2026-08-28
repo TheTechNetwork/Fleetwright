@@ -104,6 +104,9 @@ and "dead host" is the one it retries.
 | `forget` | `name` | ✅ | `/forget <name>` |
 | `answer` | `name`, `option` (1–9), `promptId?` | ✅ | `/answer <name> <1-9> [promptId]` |
 | `logs` | `name?`, `service?` (`hub`\|`coordinator`\|`sidecar`), `lines?` (1–200) | | `/logs [name\|service] [lines]` |
+| `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
+| `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
+| `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
 
 **`answer` is an ordinal and never text**, and that is the whole of its design.
 `send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a
@@ -134,6 +137,20 @@ the container's stderr, which outlives the pane. That distinction matters most
 exactly when it is hardest to get at, because a session that died has no pane
 left to peek and the reason it died is in the container's output. A name beats a
 service when both arrive, since naming a session is the more specific request.
+
+**`reboot` keeps all three of the chat flow's confirmations, unchanged.** Sending
+it bare is step one: the host says what will be lost — every running session, by
+name — and issues a six-digit pin. Sending it again with the pin *and* the
+hostname is step two. Two round trips, deliberately: a remote reboot should be
+**harder** than a local one, not easier.
+
+A boolean `confirm: true` would be one tap from a phone in a pocket, and a token
+the coordinator minted would let a compromised coordinator mint its own. The pin
+is issued by the **host**, which is the party that would be rebooted.
+
+`update`, `upgrade` and `reboot` join `logs` in going to one named box, for the
+same two reasons: merging four apt runs into one reply answers nobody, and the
+new-work path filters on free capacity — a full box can still be updated.
 
 It is also the one read that is **not** a fan-out: three journals merged into one
 stream is something nobody can read. It goes to one named box — with a single

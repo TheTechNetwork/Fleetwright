@@ -533,6 +533,15 @@ export function toCommandLine({ verb, params }) {
       // request. Every token is protocol-constrained — a name, an enum, or a
       // bounded integer.
       return ['/logs', p.name || p.service, p.lines].filter((x) => x !== undefined && x !== null).join(' ');
+    case 'update':
+      return p.restart === 'yes' ? '/update --restart' : '/update';
+    case 'upgrade':
+      return p.apply === 'yes' ? '/upgrade apply' : '/upgrade';
+    case 'reboot':
+      // Bare `/reboot` is step one and returns the pin; pin + hostname is
+      // step two. Both are `name`-typed, so neither can carry anything but
+      // the characters a pin or a hostname has.
+      return ['/reboot', p.pin, p.confirm].filter(Boolean).join(' ');
     case 'answer':
       // A digit and a hex id — both safe in a command line, unlike the free
       // text this verb exists to refuse. commandMeta carries nothing extra.
