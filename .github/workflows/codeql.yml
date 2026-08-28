@@ -91,7 +91,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       wf: ${{ steps.filter.outputs.wf }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           # Enough history to diff against the base, not the whole repo.
           fetch-depth: 0
@@ -158,9 +158,9 @@ jobs:
           - { language: javascript-typescript, gate: code }
           - { language: actions, gate: wf }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.37.9
         with:
           languages: ${{ matrix.language }}
           # `none` means "extract the source directly". This is what autobuild
@@ -168,7 +168,7 @@ jobs:
           # future language addition cannot silently fall back to guessing.
           build-mode: none
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.37.9
         with:
           category: /language:${{ matrix.language }}
 
@@ -189,23 +189,23 @@ jobs:
     env:
       GRADLE_OPTS: --enable-native-access=ALL-UNNAMED
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v6.0.0
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@v4.0.1
         with:
           # Pinned to the same packages android.yml installs. A missing platform
           # fails here with an obvious message instead of halfway through a
           # Gradle task — and under CodeQL a half-finished build is worse than a
           # failed one, because it uploads a database with holes in it.
           packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@v6.3.0
 
       # init BEFORE the build: the extractor works by watching the compiler, so
       # anything compiled before this step is invisible to it.
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.37.9
         with:
           languages: java-kotlin
           build-mode: manual
@@ -219,7 +219,7 @@ jobs:
         # look identical from the outside: a green run and an empty database.
         run: ./gradlew --no-daemon --no-build-cache assembleDebug
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.37.9
         with:
           category: /language:java-kotlin
 
@@ -250,7 +250,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Install XcodeGen
         # Without this, brew refreshes its entire formula index before
@@ -267,7 +267,7 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.37.9
         with:
           languages: swift
           build-mode: manual
@@ -291,6 +291,6 @@ jobs:
             ONLY_ACTIVE_ARCH=YES \
             ARCHS=arm64
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.37.9
         with:
           category: /language:swift
