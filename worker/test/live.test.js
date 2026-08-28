@@ -183,6 +183,12 @@ test('an intent round-trips: phone in, host out, reply back', async () => {
       // for these; if the DO builds a v1 intent or drops the params, this is
       // where it shows.
       params: { title: 'refactor auth', brief: 'split the token check out' },
+      // PINNED to this test's own host. Unpinned, the scheduler may place on
+      // an earlier test's host whose socket closed a beat ago but whose
+      // disconnect has not landed — nobody answers, and the test spends 60s
+      // failing about placement when its subject is the wire. Placement has
+      // its own test; this one is about what crosses the socket.
+      host: 'roundtrip-box',
       id: 'live-roundtrip-0001',
     }),
   }).then((r) => r.json());
