@@ -106,7 +106,16 @@ AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4g
 # fleet's list", which is accurate and sounds like a bug. Sign in with Apple
 # will present whatever address that Apple ID uses, which may be a third one
 # again; add it when it is known rather than guessing at it now.
-AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com"
+#
+# THE TWO GUESTS. Added now because the thing that made a guest safe finally
+# exists: a member sees only the sessions their own verified identity created
+# (#182), and brings their own Claude, GitHub and Cloudflare credentials rather
+# than inheriting anybody's (#175, #181). Before those, "invite somebody" meant
+# handing over the fleet.
+#
+# Whole addresses, never a domain: gmail.com as a domain entry would allow
+# every Google account on earth.
+AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gmail.com,e6591050@gmail.com"
 
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per
