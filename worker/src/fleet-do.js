@@ -453,6 +453,9 @@ export class Fleet {
           // retries a `start` gets the original outcome rather than a second
           // session.
           id: typeof body.id === 'string' ? body.id : undefined,
+          // Which host, when the person picked one in the app. A placement
+          // preference, never an intent parameter — see scheduler.js.
+          preferHost: typeof body.host === 'string' ? body.host : undefined,
         }),
       );
     }

@@ -452,7 +452,7 @@ export class CoordinatorCore {
 
   /**
    * @param {any} host
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string }} spec
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
@@ -489,7 +489,7 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string }} spec
    */
   async dispatch(spec) {
     if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
@@ -517,7 +517,11 @@ export class CoordinatorCore {
       });
     }
 
-    const placement = place(this.registry, spec);
+    const placement = place(this.registry, spec, {
+      // The caller's chosen host, when they chose one. Beside the spec rather
+      // than in params, so it can never leak into the intent a host validates.
+      preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '',
+    });
     if (placement.kind === 'refused') {
       return { ok: false, error: { code: placement.code }, text: placement.reason };
     }

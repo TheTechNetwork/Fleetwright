@@ -34,10 +34,10 @@ const FANOUT = new Set(['list']);
 /**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
- * @param {{ maxPinAgeMs?: number }} [opts]
+ * @param {{ maxPinAgeMs?: number, preferHost?: string }} [opts]
  * @returns {Placement}
  */
-export function place(registry, intent, { maxPinAgeMs = 120_000 } = {}) {
+export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '' } = {}) {
   const verb = intent.verb;
   const name = intent.params?.name;
 
@@ -115,6 +115,40 @@ export function place(registry, intent, { maxPinAgeMs = 120_000 } = {}) {
   const candidates = registry.schedulable();
   if (!candidates.length) {
     return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+  }
+
+  // A host the caller CHOSE. A preference, not a parameter: it rides beside
+  // the intent and never inside it, because `start` deliberately takes no host
+  // — the protocol cannot express "run this THERE", only the coordinator can
+  // decide it, and this is the caller weighing in on that decision.
+  //
+  // It applies to new work only. Pinned verbs go where the session lives —
+  // a preference cannot move a resume off the box that holds its volume — and
+  // fan-out reads go everywhere by definition.
+  //
+  // Refusals name the actual obstacle. "deb132: claude is not logged in" sends
+  // somebody to fix the box; "no host matches" sends them to stare at a picker
+  // that looked perfectly healthy when they used it.
+  if (preferHost) {
+    const chosen = candidates.find((h) => h.hostId === preferHost);
+    if (!chosen) {
+      const known = registry.list().find((h) => h.hostId === preferHost);
+      return {
+        kind: 'refused',
+        code: 'host_unavailable',
+        reason: known
+          ? `${preferHost} is ${known.state}: ${known.reason}`
+          : `${preferHost} is not a host this fleet knows.`,
+      };
+    }
+    if ((chosen.health?.free ?? 0) <= 0) {
+      return {
+        kind: 'refused',
+        code: 'at_capacity',
+        reason: `${preferHost} is full: ${chosen.health?.running}/${chosen.health?.maxSessions} sessions.`,
+      };
+    }
+    return { kind: 'host', host: chosen };
   }
 
   const required = normaliseLabels(intent.params?.labels);
