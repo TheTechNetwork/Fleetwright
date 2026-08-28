@@ -30,9 +30,15 @@ import { createRequire } from 'node:module';
 
 import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
 
-const requireRoot = createRequire(new URL('../../package.json', import.meta.url));
 const requireWorker = createRequire(new URL('../package.json', import.meta.url));
-const { WebSocket } = requireRoot('ws');
+
+// The project's own WebSocket client — the one the sidecar ships with. Not the
+// `ws` package: that resolved on the machine this was written on from a Debian
+// SYSTEM package (/usr/share/nodejs/ws), passed every local run, and then
+// failed on CI with MODULE_NOT_FOUND — a dependency that was never declared
+// anywhere and worked by coincidence. Using the in-repo client also means the
+// handshake below exercises the exact frames a real host sends.
+import { connectWebSocket } from '../../src/fleet/ws.js';
 
 const ADMIN = 'live-test-admin-token-0123456789';
 let worker;
@@ -76,12 +82,8 @@ async function connectHost(hostId) {
   await enrol({ origin, code: minted.code, hostId, publicJwk });
   const { nonce, proof } = await proveIdentity({ origin, hostId, privateJwk });
 
-  const ws = new WebSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
+  const ws = await connectWebSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
     headers: { 'x-fleet-nonce': nonce, 'x-fleet-proof': proof },
-  });
-  await new Promise((resolve, reject) => {
-    ws.once('open', resolve);
-    ws.once('error', reject);
   });
 
   // Volunteer health, as the real sidecar does on connect. Load-bearing, and
@@ -159,8 +161,8 @@ test('an intent round-trips: phone in, host out, reply back', async () => {
 
   // The fake host answers like the sidecar does: echo the id, claim success.
   const seen = [];
-  ws.on('message', (buf) => {
-    const intent = JSON.parse(buf.toString());
+  ws.on('message', (text) => {
+    const intent = JSON.parse(text);
     seen.push(intent);
     ws.send(JSON.stringify({
       v: intent.v,
