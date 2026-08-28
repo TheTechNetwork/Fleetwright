@@ -33,6 +33,7 @@
  * @property {number[]} loadavg
  * @property {boolean|null} loggedIn
  * @property {{reachable: boolean, reason?: string}} [hub]
+ * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
  */
 
 /**
@@ -253,6 +254,26 @@ export class HostRegistry {
           // For ownership checks. Older sidecars report no createdBy; null
           // means "unattributed", which the scheduler treats as fleet-owned.
           createdBy: found.createdBy ?? null,
+          ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt,
+        });
+        continue;
+      }
+      // THE BIN COUNTS AS A CLAIM. `restore` is pinned for the same reason
+      // `resume` is, and harder: the conversation and the workspace are
+      // host-local volumes, so the only box that can bring a session back is
+      // the one still holding them. Without this the coordinator would refuse
+      // every restore with unknown_session — the session is real, it is just
+      // not in the live list any more.
+      //
+      // createdBy travels, so the ownership check one layer up works on a
+      // forgotten session exactly as it does on a live one: a member must not
+      // restore somebody else's work.
+      const binned = host.health?.bin?.find((/** @type {any} */ b) => b.name === name);
+      if (binned) {
+        out.push({
+          host,
+          status: 'binned',
+          createdBy: binned.createdBy ?? null,
           ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt,
         });
         continue;

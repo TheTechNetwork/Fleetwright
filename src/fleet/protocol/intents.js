@@ -264,6 +264,23 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Stop a session and erase its record, so it can no longer be resumed.',
   },
+  restore: {
+    params: { name: { type: 'name', required: true } },
+    mutating: true,
+    summary: 'Take a forgotten session back out of the bin, conversation and workspace intact.',
+  },
+  purge: {
+    params: { name: { type: 'name', required: true } },
+    // NO CONFIRMATION PARAMETER, deliberately, and this is the one place it
+    // would be tempting. `reboot` asks for a pin because a coordinator that
+    // could mint one could reboot the fleet — the guard exists because the
+    // ACTOR might be the attacker. Here the risk is a person mistyping, and
+    // the answer to that is not a second parameter on the same request: it is
+    // that `forget` no longer destroys anything, so the destructive verb is a
+    // separate word somebody has to reach for on purpose.
+    mutating: true,
+    summary: 'Delete a session for good. This is what forget used to do.',
+  },
   connect: {
     params: {
       // A FIXED SET, and the same argument as `logs.service`: the host runs a

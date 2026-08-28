@@ -656,7 +656,7 @@ export class CoordinatorCore {
     }
 
     try {
-      return await this.send(placement.host, spec);
+      return explainUnknownVerb(await this.send(placement.host, spec), placement.host);
     } catch (e) {
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }
@@ -702,6 +702,45 @@ export class CoordinatorCore {
       events: visibleEvents(this.events.slice(-20), requester),
     };
   }
+}
+
+/**
+ * Turn `unknown_verb` from a host into the sentence somebody can act on.
+ *
+ * This refusal is the protocol working exactly as designed — adding a verb
+ * costs no version bump precisely BECAUSE an older host answers `unknown_verb`
+ * rather than misbehaving. What was missing is that the answer, as it reached
+ * a phone, was the bare word: the verb exists on the coordinator, so the
+ * request looked valid, and the failure named a thing rather than a remedy.
+ *
+ * The remedy is also the awkward part, and saying it out loud is the whole
+ * point: THE VERB THAT FIXES THIS IS OFTEN THE ONE THAT IS UNKNOWN. `update`
+ * over the fleet cannot update a box too old to have `update`. What works is
+ * that box's own Telegram bot, or a shell on it — both of which talk to
+ * agent-hub directly rather than through this protocol.
+ *
+ * A pull that did not restart looks identical from here, and is at least as
+ * common: the files are new and the running process still holds the old verb
+ * table. So the message names both, in the order they are likely.
+ *
+ * @param {any} reply
+ * @param {{ hostId: string, health?: any }|undefined} host
+ */
+function explainUnknownVerb(reply, host) {
+  if (reply?.error?.code !== 'unknown_verb' || !host) return reply;
+  const behind = host.health?.updates?.appBehind ?? 0;
+  const head = host.health?.version?.head;
+  return {
+    ...reply,
+    text:
+      `${host.hostId} does not know that command — it is running older code than this coordinator` +
+      `${head ? ` (${head}${behind > 0 ? `, ${behind} behind` : ''})` : ''}.\n` +
+      'This is the protocol refusing cleanly rather than guessing, and it is fixed on that box:\n' +
+      `  agent-hub update --restart      (a shell on ${host.hostId})\n` +
+      `  /update --restart               (that box's own Telegram bot)\n` +
+      'A pull without a restart looks the same from here — the files are new and the running ' +
+      'service still holds the old command list, which is why both lines say --restart.',
+  };
 }
 
 /**
