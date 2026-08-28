@@ -20,6 +20,7 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../core/text.js';
 import { dispatch } from './commands.js';
 import { describe } from '../core/login.js';
 import { log } from '../log.js';
+import { redactCommandLine } from '../core/redact.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,7 +186,9 @@ export class HttpAdapter {
       const claimed = typeof body.actor === 'string' ? body.actor.trim() : '';
       const actor = /^[A-Za-z0-9._:@+-]{1,120}$/.test(claimed) ? claimed : 'web';
 
-      log.info(`http: ${clientLabel(req)} → ${line.slice(0, 120)}`);
+      // Redact BEFORE truncating: slicing a secret to 120 characters logs a
+      // shorter secret, not a safer one.
+      log.info(`http: ${clientLabel(req)} → ${redactCommandLine(line).slice(0, 120)}`);
       const reply = await dispatch(
         { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta },
         line,

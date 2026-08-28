@@ -12,6 +12,7 @@
 
 import { dispatch, commandMenu } from './commands.js';
 import { log } from '../log.js';
+import { redactCommandLine } from '../core/redact.js';
 
 // Telegram's hard cap on a message body.
 const MAX_MESSAGE = 4096;
@@ -162,7 +163,10 @@ export class TelegramAdapter {
       return;
     }
 
-    log.info(`telegram: ${who} (${userId}) → ${text.slice(0, 120)}`);
+    // Redact BEFORE truncating — see src/core/redact.js. The message itself
+    // still sits in the Telegram chat, which is Telegram's copy and not ours;
+    // what this controls is the copy on the box, which `logs` now reaches.
+    log.info(`telegram: ${who} (${userId}) → ${redactCommandLine(text).slice(0, 120)}`);
     const reply = await dispatch(
       { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, actorLabel: who },
       text,
@@ -191,7 +195,7 @@ export class TelegramAdapter {
     const line = String(query.data || '');
     if (!line || !chatId) return;
 
-    log.info(`telegram: ${who} (${userId}) tapped → ${line.slice(0, 120)}`);
+    log.info(`telegram: ${who} (${userId}) tapped → ${redactCommandLine(line).slice(0, 120)}`);
     const reply = await dispatch(
       { sessions: this.sessions, login: this.login, cfg: this.cfg, actor: `telegram:${userId}`, actorLabel: who },
       line,
