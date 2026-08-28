@@ -68,7 +68,38 @@ The same thing by hand, which is all the one-liner does:
 git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
+
+sudo /opt/agent-fleet/install/uninstall.sh         # take this box out of the fleet
+sudo /opt/agent-fleet/install/uninstall.sh --purge # and remove /opt/agent-fleet
 ```
+
+### Cloning a box that is already installed
+
+**Do not, without reading this.** `/var/lib/agent-fleet/host-key.json` is the
+machine's identity in the fleet — whoever holds it *is* that host. Clone the
+disk and two machines hold the same private key, so the coordinator sees one
+host: they take turns proving the same identity and disconnecting each other,
+for ever, with nothing in either box's logs to explain it.
+
+The installer detects this now. It fingerprints the machine next to the key
+(`/etc/machine-id`, or the IOPlatformUUID on macOS) and if the key turns up on
+different hardware it sets the key aside, says so, and makes a new one — so the
+clone needs enrolling again, which is the correct outcome.
+
+It sets the key aside rather than deleting it because there is one case where
+the clone is meant to *replace* the original: move the file back, and then
+destroy the original rather than leaving it running.
+
+Either way, remove the stale entry from the coordinator:
+
+```sh
+curl -sX DELETE -H "Authorization: Bearer $TOKEN" https://COORDINATOR/api/hosts/HOSTID
+```
+
+To take a box out properly, `install/uninstall.sh` removes the services, the
+config, the sudoers rules, the CLIs, the `SessionStart` hook and the identity —
+and deliberately leaves `~/agent-runs`, running tmux sessions, and
+node/tmux/podman/claude alone. Those are work and dependencies, not this.
 
 Three environment variables change where it comes from and where it goes, which
 is what you want for a fork or a branch under test:
