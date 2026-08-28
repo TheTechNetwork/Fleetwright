@@ -17,6 +17,9 @@
  * @property {import('../config.js').Config} cfg
  * @property {string} actor        stable id of who is asking, e.g. "telegram:12345"
  * @property {string} [actorLabel] human name for logs/records
+ * @property {string} [title]      prose a person wrote, carried as a FIELD rather
+ *   than parsed out of the command line — see adapters/http.js
+ * @property {string} [brief]      a sentence of context for the same reason
  */
 
 /**
@@ -175,7 +178,18 @@ export const COMMANDS = {
     run: async (ctx, args, flags) => {
       const [name, cwd] = args;
       const skipPermissions = permissionOverride(flags);
-      const r = await ctx.sessions.start({ name, cwd, actor: ctx.actor, skipPermissions });
+      // title and brief arrive as FIELDS on the context, never parsed out of
+      // the command line. A title is prose with spaces in it, and putting prose
+      // into a line that is then split is the same mistake `answer` taking an
+      // ordinal exists to avoid — it looks bounded and is not.
+      const r = await ctx.sessions.start({
+        name,
+        cwd,
+        actor: ctx.actor,
+        skipPermissions,
+        title: ctx.title ?? null,
+        brief: ctx.brief ?? null,
+      });
       let text = r.message;
       if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
       if (r.ok && skipPermissions === true && !ctx.cfg.skipPermissions) {

@@ -39,6 +39,8 @@
 //
 // See docs/intents.md for the wire format and the reasoning in full.
 
+import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
+
 export const PROTOCOL_VERSION = 2;
 
 /**
@@ -53,24 +55,9 @@ export const PROTOCOL_VERSION = 2;
  */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
-// Text a PERSON wrote, which is a different thing from a name and needs
-// different rules. A name is an identifier the protocol routes on; text is
-// prose that ends up rendered on a phone, in a console, in a notification and
-// read aloud by an assistant.
-//
-// Validated HERE rather than left to each renderer. There is already a scrub()
-// in the console doing this, and relying on it means the rule holds only where
-// somebody remembered it — the notification path, the speakable reply and any
-// future surface each get their own chance to forget. Rejecting at the boundary
-// means the bad value never reaches storage, so nothing downstream has to be
-// careful.
-const CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/;
-// Bidi overrides, and not theoretically: an RLO inside a session title makes it
-// render as something else entirely in every list it appears in. Unlike the
-// console, which substitutes so a hostile label LOOKS wrong, the protocol
-// refuses — the console is displaying something that already exists, while this
-// is the door.
-const BIDI_RE = /[\u202A-\u202E\u2066-\u2069\u200E\u200F]/;
+// Text a PERSON wrote is cleaned by src/core/text.js, which agent-hub's HTTP
+// API also uses. Two doors into the same storage validating separately is the
+// shape of a bug this project has already paid for once.
 
 /** Idempotency keys. Opaque to us — a uuid, a ULID, whatever the coordinator
  * mints — but bounded and charset-checked, because it is used as a map key and
@@ -155,10 +142,10 @@ export const VERBS = Object.freeze({
       // changes; the title is a label and can. Separating them is what makes
       // renaming safe, and a rename that cannot break anything is what stops
       // somebody hesitating over the first one. See docs/naming.md.
-      title: { type: 'text', required: false, max: 60 },
+      title: { type: 'text', required: false, max: TITLE_MAX },
       // A sentence or two of context, so that opening a list in a week is
       // recognition rather than recall. Not passed to the model and not run.
-      brief: { type: 'text', required: false, max: 500 },
+      brief: { type: 'text', required: false, max: BRIEF_MAX },
     },
     mutating: true,
     summary: 'Start a new session. No path — see the note above.',
@@ -309,19 +296,8 @@ function checkParam(verb, key, ps, value) {
     return { ok: true, value };
   }
   if (ps.type === 'text') {
-    if (typeof value !== 'string') return bad(`${verb}.${key} must be a string`);
-    // Collapsed before measuring, so a title that is 200 spaces and a word is
-    // not "too long", and one made only of whitespace is empty rather than valid.
-    const text = value.replace(/\s+/g, ' ').trim();
-    if (!text) return bad(`${verb}.${key} must not be empty`);
-    const max = ps.max ?? 200;
-    // Array.from, not .length: JS string length counts UTF-16 code units, so an
-    // emoji costs two and a limit measured that way cuts a title in half
-    // through the middle of a character.
-    if (Array.from(text).length > max) return bad(`${verb}.${key} must be at most ${max} characters`);
-    if (CONTROL_RE.test(text)) return bad(`${verb}.${key} must not contain control characters`);
-    if (BIDI_RE.test(text)) return bad(`${verb}.${key} must not contain bidirectional overrides`);
-    return { ok: true, value: text };
+    const r = cleanText(value, { max: ps.max, label: `${verb}.${key}` });
+    return r.ok ? { ok: true, value: r.value } : bad(r.error);
   }
   // 'int'
   if (!Number.isSafeInteger(value)) return bad(`${verb}.${key} must be an integer`);

@@ -265,8 +265,13 @@ export class Sidecar {
       // web UI and the CLI use, so a fleet command cannot behave differently
       // from the same command typed into chat — or exist when that one does not.
       const line = toCommandLine(intent);
+      // Prose beside the line, never in it. The log prints only the line, so a
+      // title never lands in the journal — it is a person's words about their
+      // own work, and there is no reason for it to be in a log a whole box can
+      // read.
+      const meta = commandMeta(intent.verb, intent.params);
       this.log.info(`sidecar: ${actor} → ${line}`);
-      const r = await this.hub.command(line);
+      const r = await this.hub.command(line, meta);
 
       const sessions = Array.isArray(r.sessions) ? await this.#enrich(r.sessions) : undefined;
       // A single-session reply gets the URL hoisted to the top level: §7 asks
@@ -465,7 +470,9 @@ export function toCommandLine({ verb, params }) {
       return p.name ? `/status ${p.name}` : '/status';
     case 'start':
       // `mode` becomes a flag rather than passing through as text; the only two
-      // values it can hold are the two literals below.
+      // values it can hold are the two literals below. `title` and `brief` are
+      // deliberately NOT here — they are prose, they travel as fields on the
+      // request, and commandMeta() below is what picks them up.
       return ['/new', p.name, p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null]
         .filter(Boolean)
         .join(' ');
@@ -481,4 +488,24 @@ export function toCommandLine({ verb, params }) {
       // plausible string keeps a future verb from silently doing nothing.
       throw new Error(`no command mapping for verb "${verb}"`);
   }
+}
+
+/**
+ * The parts of an intent that are prose rather than command.
+ *
+ * Kept beside commandFor() on purpose: the two together are the whole
+ * translation, and splitting them across the file is how one of them acquires a
+ * parameter the other has never heard of.
+ *
+ * @param {string} verb
+ * @param {Record<string, string|number>} [params]
+ * @returns {Record<string, string>}
+ */
+export function commandMeta(verb, params) {
+  if (verb !== 'start') return {};
+  const p = params || {};
+  return {
+    ...(typeof p.title === 'string' ? { title: p.title } : {}),
+    ...(typeof p.brief === 'string' ? { brief: p.brief } : {}),
+  };
 }

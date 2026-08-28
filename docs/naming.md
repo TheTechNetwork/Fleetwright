@@ -129,17 +129,40 @@ already has a `scrub()` — but leaning on it means the rule holds only where
 somebody remembered it, and the notification path, the speakable reply and every
 future surface each get their own chance to forget.
 
-## Not built yet, and why
+## How prose reaches the host
 
-**Free text cannot ride in a command line.** The sidecar translates intents into
-chat command strings for `POST /api/command {command}` — so `start` becomes
-`/new name --safe`. A title with spaces in it cannot go there without
-re-introducing exactly the parsing problem that `answer`-as-an-ordinal exists to
-avoid.
+The sidecar turns intents into chat command strings — `start` becomes
+`/new name --safe` — and everything in that string is split on whitespace. A
+title with spaces would arrive as arguments; a title reading
+`refactor auth --dangerous` would arrive as a **flag**. That is the same mistake
+`answer`-as-an-ordinal exists to avoid: a string that looks bounded and is not.
 
-So the host bridge needs `title` and `brief` as **fields alongside** the command,
-never inside it. That is a change to agent-hub's HTTP surface and it deserves
-its own pass rather than being smuggled in with a protocol bump.
+So prose travels **beside** the command, never inside it:
 
-Also outstanding: the app UI, the kind editor, and the on-device generation
-calls themselves.
+```
+POST /api/command  { command: "/new job", title: "refactor auth", brief: "…" }
+```
+
+`toCommandLine()` builds the line and `commandMeta()` picks out the prose, and
+they sit next to each other in the file on purpose — split across a module is
+how one of them acquires a parameter the other has never heard of. There is a
+test asserting the line is **byte-identical** with and without a title.
+
+**Validated on arrival as well as on the way out.** `src/core/text.js` is one
+`cleanText()` used by the protocol validator and by the HTTP route, because that
+route is reachable by anything holding the hub token and not only by the sidecar
+that already checked. Two doors into one store validating separately is the
+shape of the `?token=fwk_` bug: two extraction sites disagreed and the
+disagreement failed open.
+
+**A supplied title is pinned.** Without `titlePinned`, the transcript hook
+replaces it a few seconds later and the field looks like it silently did not
+save.
+
+**The title is not logged.** The sidecar logs the command line, which by
+construction no longer contains it. A person's sentence about their own work has
+no reason to be in a journal the whole box can read.
+
+## Not built yet
+
+The app UI, the kind editor, and the on-device generation calls themselves.
