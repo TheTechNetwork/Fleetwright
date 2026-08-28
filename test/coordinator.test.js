@@ -9,6 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+
 import { Coordinator } from '../src/fleet/coordinator/server.js';
 import { HostRegistry, HEALTH_STALE_MS } from '../src/fleet/coordinator/registry.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
@@ -399,7 +401,10 @@ test('both coordinators answer /api/hosts in the same shape', async (t) => {
     ['devices', 'events', 'hosts', 'ok', 'protocol'],
     'same keys the Worker sends',
   );
-  assert.equal(body.protocol, 1);
+  // From the constant, not a literal. A hardcoded 1 here means the day the
+  // protocol is bumped this test fails for a reason that has nothing to do
+  // with what it is checking — that BOTH coordinators say the same thing.
+  assert.equal(body.protocol, PROTOCOL_VERSION);
   assert.equal(typeof body.devices, 'number');
   assert.ok(Array.isArray(body.events));
 });

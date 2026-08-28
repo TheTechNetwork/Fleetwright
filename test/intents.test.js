@@ -80,7 +80,12 @@ test('a well-formed intent validates and is returned normalised', () => {
 });
 
 test('a different protocol version is refused, not guessed at', () => {
-  for (const v of [0, 2, '1', null, undefined]) {
+  // Every value here must be something that is NOT PROTOCOL_VERSION, and the
+  // list used to hardcode the neighbours of 1. Bumping to 2 quietly turned one
+  // of them into the version we speak, so the test asserted that the current
+  // version is rejected — and passed, because it was written when it wasn't.
+  // Derived from the constant now, so the next bump cannot do the same.
+  for (const v of [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1, String(PROTOCOL_VERSION), null, undefined]) {
     const r = validateIntent(intent({ v }));
     assert.equal(r.ok, false);
     assert.equal(r.code, 'unsupported_version');
