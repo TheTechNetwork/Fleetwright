@@ -243,6 +243,17 @@ struct Fleet {
         return try await intent("link", params: params, host: host)
     }
 
+    /// Store a token on EVERY box, because it is the person's and not any one
+    /// machine's. No host is named, so the coordinator fans it out.
+    func linkEverywhere(provider: String, secret: String) async throws -> Reply {
+        try await intent("link", params: ["provider": provider, "secret": secret])
+    }
+
+    /// Forget a token everywhere it was stored.
+    func unlinkEverywhere(provider: String) async throws -> Reply {
+        try await intent("unlink", params: ["provider": provider])
+    }
+
     /// Forget a stored credential. Does NOT revoke it at the provider.
     func unlink(host: String, provider: String, scope: Scope = .me) async throws -> Reply {
         var params = ["provider": provider]

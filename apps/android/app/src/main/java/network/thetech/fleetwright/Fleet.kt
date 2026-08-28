@@ -306,6 +306,16 @@ class Fleet(private val settings: Settings) {
             host = host,
         )
 
+    /**
+     * Store a token on EVERY box, because it is the person's and not any one
+     * machine's. No host is named, so the coordinator fans it out.
+     */
+    suspend fun linkEverywhere(provider: String, secret: String): Reply =
+        intent("link", mapOf("provider" to provider, "secret" to secret))
+
+    /** Forget a token everywhere it was stored. */
+    suspend fun unlinkEverywhere(provider: String): Reply = intent("unlink", mapOf("provider" to provider))
+
     /** Forget a stored credential. Does NOT revoke it at the provider. */
     suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
         intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)

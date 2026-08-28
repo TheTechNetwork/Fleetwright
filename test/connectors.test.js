@@ -289,3 +289,33 @@ test('the box row and a person row are different files', () => {
   assert.equal(readFileSync(store.envPathFor(HOST_ROW), 'utf8').includes('the-guests-token'), false);
   assert.equal(readFileSync(store.envPathFor('guest@example.com'), 'utf8').includes('the-boxes-token'), false);
 });
+
+test('the pre-ticked permissions cover the work, not the first thing that came to mind', () => {
+  // The first pass pre-ticked `repo,workflow,read:org` and
+  // `workers_scripts,workers_kv_storage` — and that set would not have let a
+  // session do the week it was written in. Creating a custom domain needs DNS
+  // on the zone; deploying the Worker needs routes; `wrangler tail`, which is
+  // how this fleet gets debugged, needs its own read.
+  //
+  // A missing permission fails INSIDE a session, hours later, with a provider
+  // error nobody reading it has the context to interpret.
+  const links = Object.fromEntries(catalogue('box').map((c) => [c.provider, decodeURIComponent(c.url)]));
+
+  for (const scope of ['repo', 'workflow', 'read:org']) {
+    assert.ok(links.github.includes(scope), `github lost ${scope}`);
+  }
+  for (const group of ['workers_scripts', 'workers_routes', 'dns_records', 'workers_tail', 'account_settings']) {
+    assert.ok(links.cloudflare.includes(group), `cloudflare is missing ${group}`);
+  }
+
+  // Still a URL the dashboard can parse after all that.
+  for (const url of Object.values(links)) void new URL(url);
+});
+
+test('the screen says the list can be narrowed', () => {
+  // Erring toward "the work succeeds" is a trade, and an unstated trade is
+  // just a broad token. Both hints say it can be cut down.
+  for (const c of catalogue('box')) {
+    assert.match(c.hint, /untick|narrow|revoke/i, `${c.provider} does not say the token can be reduced`);
+  }
+});

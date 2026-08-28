@@ -14,11 +14,18 @@ import SwiftUI
 /// vendor — and it is why this view has no `switch provider` in it.
 struct CredentialsView: View {
     let settings: Settings
-    /// Which box. Not optional and not inferred: the two halves of a
-    /// connection are a pair — `connect` starts a login in a pane on ONE host
-    /// and `link` types the code into that same pane. A second step that
-    /// landed elsewhere would type a live credential into a box that never
-    /// asked for one.
+    /// Which box to ASK. Still needed, and no longer the whole story.
+    ///
+    /// `connect` is a question — what could I connect, and what have I — and
+    /// one box answers it for the fleet, since the catalogue is identical
+    /// everywhere. A CLAUDE sign-in is genuinely per machine: it is a login
+    /// the box performs in a pane, so both halves must reach the same one.
+    ///
+    /// A TOKEN is not. It belongs to the person, so `link` fans out to every
+    /// host and this value is not sent — which is why the screen no longer
+    /// says "credentials on <box>". Connecting a GitHub token again on every
+    /// machine, and again on each one enrolled later, is bookkeeping the fleet
+    /// exists to remove.
     let host: String
 
     @State private var connections = Fleet.Connections()
@@ -35,11 +42,13 @@ struct CredentialsView: View {
                     row(provider)
                 }
             } header: {
-                Text("Credentials on \(host)")
+                Text("Your credentials")
             } footer: {
                 Text("Each one is created on the provider's own page, on your account, and can be "
-                     + "revoked there at any time. Sessions you start on this box get them; nobody "
-                     + "else's sessions do.")
+                     + "revoked there at any time. A token goes to every machine in the fleet, because "
+                     + "it is yours rather than any one box's — sessions you start get it, and nobody "
+                     + "else's do. Signing in to Claude is per machine: that one is a login the box "
+                     + "performs, not a token you paste.")
             }
 
             if let pending {
@@ -141,8 +150,11 @@ struct CredentialsView: View {
         let sending = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         secret = ""
         do {
-            let reply = try await Fleet(settings: settings).link(
-                host: host, provider: provider.provider, secret: sending)
+            // A token goes fleet-wide; a Claude code goes to the box whose
+            // pane is waiting for it.
+            let reply = provider.isSignIn
+                ? try await Fleet(settings: settings).link(host: host, provider: provider.provider, secret: sending)
+                : try await Fleet(settings: settings).linkEverywhere(provider: provider.provider, secret: sending)
             result = reply.text ?? ""
             if let fresh = reply.connections { connections = fresh }
             if reply.ok != false { pending = nil }
@@ -156,7 +168,9 @@ struct CredentialsView: View {
         busy = true
         defer { busy = false }
         do {
-            let reply = try await Fleet(settings: settings).unlink(host: host, provider: provider.provider)
+            let reply = provider.isSignIn
+                ? try await Fleet(settings: settings).unlink(host: host, provider: provider.provider)
+                : try await Fleet(settings: settings).unlinkEverywhere(provider: provider.provider)
             result = reply.text ?? ""
             if let fresh = reply.connections { connections = fresh }
         } catch {

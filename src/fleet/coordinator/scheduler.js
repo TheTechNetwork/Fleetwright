@@ -67,7 +67,37 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // into one reply is nobody's idea of an answer), and none belongs in the
   // new-work path, which filters on free capacity — a full box can still be
   // asked about itself, updated, or rebooted.
+  // A TOKEN IS THE PERSON'S, NOT THE BOX'S — so linking one goes to EVERY
+  // host they can reach, not to whichever box happened to be on screen.
   //
+  // The first version pinned all three, and the screen it produced said
+  // "Credentials on deb13-staging". That was an honest description of what the
+  // code did and the wrong model: a GitHub token belongs to a person, and
+  // having to connect it again on every box — and again on each box enrolled
+  // later — is bookkeeping the fleet exists to remove.
+  //
+  // CLAUDE STAYS PINNED, and the difference is not a preference. Claude's flow
+  // is an OAuth login the CLI drives in a PANE ON ONE BOX: `connect` starts it
+  // there and `link` types the code into that same pane, so a second step
+  // landing elsewhere would type a live credential into a box that never asked
+  // for one. GitHub and Cloudflare have no such state — the token is minted on
+  // the provider's page and the host only stores it — so the same paste is
+  // correct on every box at once.
+  if (
+    (verb === 'link' || verb === 'unlink') &&
+    intent.params?.provider &&
+    intent.params.provider !== 'claude' &&
+    // An explicitly named host still wins. Fanning out is the DEFAULT, not a
+    // rule — somebody who says "this box" means it, and the placement
+    // preference is the existing way to say so.
+    !preferHost
+  ) {
+    const hosts = registry.reachable();
+    return hosts.length
+      ? { kind: 'fanout', hosts }
+      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+  }
+
   // connect/link/unlink join them, and for a stronger reason than the others:
   // the two halves of a connection are a PAIR. `connect` starts a login in a
   // pane on one box and `link` types the code into that same pane, so a second

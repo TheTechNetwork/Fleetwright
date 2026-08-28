@@ -52,6 +52,57 @@ const VERIFY_TIMEOUT_MS = 10_000;
 const enc = (s) => encodeURIComponent(s);
 
 /**
+ * What a session doing this project's work actually needs.
+ *
+ * The first pass pre-ticked the minimum that came to mind, and the minimum was
+ * wrong in a way that only shows up hours later: `repo,workflow,read:org` on
+ * GitHub and `workers_scripts,workers_kv_storage` on Cloudflare would not have
+ * let a session do the last week's work. Creating `fleetdemo.thetech.network`
+ * needs DNS on the zone; deploying the Worker needs routes; reading a
+ * deployment's own settings needs account read.
+ *
+ * A token that is missing a permission fails INSIDE a session, four hours in,
+ * with a provider error nobody reading it has the context to interpret. A
+ * token with a permission it never uses costs nothing until it leaks — and it
+ * is the person's own token, on their own account, revocable by them, which is
+ * the whole reason this design was chosen over holding credentials ourselves.
+ *
+ * So this errs toward "the work succeeds", and says plainly on screen that the
+ * list can be narrowed. That is the honest trade rather than a silent one.
+ */
+const GITHUB_SCOPES = [
+  'repo', // code, issues, PRs, releases — the bulk of it
+  'workflow', // editing anything under .github/workflows, which this project does constantly
+  'read:org', // org membership, so `gh` can resolve teams and org repos
+  'gist', // sharing a snippet out of a session
+  'read:packages', // pulling a private package in a build
+  'admin:repo_hook', // webhooks a deploy sets up
+];
+
+/**
+ * Cloudflare permission groups, as the dashboard's custom-token deep link
+ * expects them.
+ *
+ * Account-level and zone-level in one list; the dashboard sorts them into the
+ * right rows itself. `accountId=*&zoneId=all` in the URL is what makes both
+ * sections appear.
+ */
+const CLOUDFLARE_PERMISSIONS = [
+  { key: 'workers_scripts', type: 'edit' }, // deploy the Worker
+  { key: 'workers_kv_storage', type: 'edit' }, // its KV
+  { key: 'workers_routes', type: 'edit' }, // and the routes it answers on
+  { key: 'workers_r2', type: 'edit' },
+  { key: 'd1', type: 'edit' },
+  { key: 'workers_tail', type: 'read' }, // `wrangler tail`, which is how the fleet gets debugged
+  { key: 'account_settings', type: 'read' }, // resolve the account id without being told it
+  { key: 'dns_records', type: 'edit' }, // custom domains — fleetdemo.thetech.network needed this
+  { key: 'zone_settings', type: 'read' },
+  { key: 'zone', type: 'read' },
+  { key: 'ssl_and_certificates', type: 'edit' }, // a custom domain's certificate
+  { key: 'page_rules', type: 'edit' },
+];
+
+/**
  * @param {Response} res
  * @param {string} what
  */
@@ -76,8 +127,8 @@ export const PROVIDERS = Object.freeze({
     // a bare settings page and a list of instructions to follow by hand. When
     // GitHub supports pre-filling those, this row changes and nothing else does.
     url: (host) =>
-      `https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&description=${enc(`Fleetwright (${host})`)}`,
-    hint: 'The scopes are pre-ticked. Set whatever expiry you are happy with — this is your token, on your account, and you can revoke it there at any time.',
+      `https://github.com/settings/tokens/new?scopes=${GITHUB_SCOPES.join(',')}&description=${enc(`Fleetwright (${host})`)}`,
+    hint: 'The scopes are pre-ticked for the work a session usually does — untick anything you would rather it could not do. Set whatever expiry you are happy with: this is your token, on your account, and you can revoke it there at any time.',
     async verify(secret) {
       const res = await fetch('https://api.github.com/user', {
         headers: {
@@ -107,9 +158,9 @@ export const PROVIDERS = Object.freeze({
     url: (host) =>
       'https://dash.cloudflare.com/profile/api-tokens?' +
       `name=${enc(`Fleetwright (${host})`)}&` +
-      `permissionGroupKeys=${enc('[{"key":"workers_scripts","type":"edit"},{"key":"workers_kv_storage","type":"edit"}]')}&` +
+      `permissionGroupKeys=${enc(JSON.stringify(CLOUDFLARE_PERMISSIONS))}&` +
       'accountId=*&zoneId=all',
-    hint: 'Use "Create Custom Token" — the permissions arrive pre-selected. Add any others you want; you can narrow or revoke it from the same page later.',
+    hint: 'Use "Create Custom Token" — the permissions arrive pre-selected, covering Workers, KV, R2, D1, DNS and certificates, because a custom domain and a deploy both need more than Workers alone. Untick anything you would rather it could not do; you can narrow or revoke it from the same page later.',
     async verify(secret) {
       const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
         headers: { authorization: `Bearer ${secret}` },
