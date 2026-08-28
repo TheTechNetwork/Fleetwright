@@ -1158,7 +1158,8 @@ if [ "$WIZARD" = yes ]; then
   sidecar_cli() {
     local sub="$1" arg="${2:-}" quoted=""
     [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
-    as_user "AGENT_FLEET_COORDINATOR_URL='$ENROL_URL' \
+    as_user "AGENT_FLEET_ENROL_QUIET=1 \
+             AGENT_FLEET_COORDINATOR_URL='$ENROL_URL' \
              AGENT_FLEET_HOST_ID='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)' \
              AGENT_FLEET_HOST_KEY='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY)' \
              '$UNIT_NODE_BIN' '$DIR/bin/agent-fleet-sidecar' $sub$quoted"

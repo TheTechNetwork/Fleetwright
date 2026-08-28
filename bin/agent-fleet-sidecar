@@ -18,9 +18,13 @@ import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
-import { WebSocketTransport } from '../src/fleet/host/transports/websocket.js';
+import { WebSocketTransport, MAX_BACKOFF_MS } from '../src/fleet/host/transports/websocket.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
+import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
 // systemd supplies this file with EnvironmentFile=; a shell does not, which is
@@ -204,11 +208,49 @@ async function doEnrol(pin) {
     console.log(`enrolled ${cfg.hostId} at ${cfg.coordinatorUrl}`);
     console.log(`  fingerprint ${fp}`);
     if (res.replaced) console.log('  (replaced the key this host had registered before)');
-    console.log('\nStart the sidecar:  sudo systemctl restart agent-fleet-sidecar');
+    await afterEnrol();
   } catch (e) {
     console.error(`enrolment failed: ${/** @type {Error} */ (e).message}`);
     process.exit(1);
   }
+}
+
+/** Print what actually needs doing, and do it if asked. See enrol-next.js. */
+async function afterEnrol() {
+  const unit = 'agent-fleet-sidecar';
+  const unitInstalled = ['/etc/systemd/system', '/lib/systemd/system', '/usr/lib/systemd/system']
+    .some((d) => existsSync(`${d}/${unit}.service`));
+  const probe = spawnSync('systemctl', ['is-active', unit], { encoding: 'utf8' });
+  const step = enrolNextStep({
+    unitInstalled: unitInstalled && !probe.error,
+    state: (probe.stdout || '').trim(),
+    tty: Boolean(process.stdin.isTTY),
+    quiet: process.env.AGENT_FLEET_ENROL_QUIET === '1',
+    maxBackoffMs: MAX_BACKOFF_MS,
+  });
+
+  console.log(`\n${step.text}`);
+  if (step.kind === 'connects-itself') console.log(`Watch it:  journalctl -u ${unit} -f`);
+  if (step.kind !== 'offer-start') return;
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let answer = '';
+  try {
+    answer = (await rl.question('[Y/n]: ')).trim().toLowerCase();
+  } finally {
+    rl.close();
+  }
+  if (answer && !['y', 'yes'].includes(answer)) {
+    console.log(`Left alone.  sudo systemctl start ${unit}  when you want it.`);
+    return;
+  }
+
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  // inherit, so a sudo password prompt is visible and answerable.
+  const started = asRoot
+    ? spawnSync('systemctl', ['start', unit], { stdio: 'inherit' })
+    : spawnSync('sudo', ['systemctl', 'start', unit], { stdio: 'inherit' });
+  console.log(started.status === 0 ? `started — journalctl -u ${unit} -f` : `could not start it.  sudo systemctl start ${unit}`);
 }
 
 async function identity() {
