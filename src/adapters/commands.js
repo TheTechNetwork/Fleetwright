@@ -42,7 +42,7 @@ import { Accounts, normaliseEmail } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
-import { readLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
+import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -435,14 +435,24 @@ export const COMMANDS = {
 
   logs: {
     aliases: ['log', 'journal'],
-    usage: '/logs [hub|coordinator|sidecar] [lines]',
-    short: 'Recent service logs',
-    help: 'The last lines of a service log. Defaults to the session manager, 40 lines.',
+    usage: '/logs [hub|coordinator|sidecar|<session>] [lines]',
+    short: 'Recent service or session logs',
+    help: 'The last lines of a service log, or of a session — /logs <name> shows what that session printed. '
+      + 'Defaults to the session manager, 40 lines.',
     run: (ctx, args) => {
       // Either order, because nobody remembers which comes first.
       const words = args.filter(Boolean);
       const lines = words.map(Number).find((n) => Number.isFinite(n) && n > 0) ?? null;
       const source = words.find((w) => resolveSource(w)) ?? null;
+
+      // A SESSION NAME beats a service name, and is checked against the
+      // registry rather than guessed at: "is this a service word" already has
+      // an answer, so anything else that names a real session is a session.
+      const sessionWord = words.find((w) => !resolveSource(w) && !Number.isFinite(Number(w)) && ctx.sessions.get?.(w));
+      if (sessionWord) {
+        const r = readSessionLogs(ctx.cfg, sessionWord, lines ?? 60);
+        return { ok: r.ok, text: r.text };
+      }
 
       const unknown = words.find((w) => !resolveSource(w) && !Number.isFinite(Number(w)));
       if (unknown) {

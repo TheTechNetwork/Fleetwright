@@ -526,6 +526,13 @@ export function toCommandLine({ verb, params }) {
       return `/stop ${p.name}`;
     case 'forget':
       return `/forget ${p.name}`;
+    case 'logs':
+      // Both tokens are constrained by the protocol — an enum and a bounded
+      // integer — so nothing here can carry a space or a metacharacter.
+      // `name` wins when both arrive: naming a session is the more specific
+      // request. Every token is protocol-constrained — a name, an enum, or a
+      // bounded integer.
+      return ['/logs', p.name || p.service, p.lines].filter((x) => x !== undefined && x !== null).join(' ');
     case 'answer':
       // A digit and a hex id — both safe in a command line, unlike the free
       // text this verb exists to refuse. commandMeta carries nothing extra.

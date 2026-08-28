@@ -103,6 +103,7 @@ and "dead host" is the one it retries.
 | `stop` | `name` | ✅ | `/stop <name>` |
 | `forget` | `name` | ✅ | `/forget <name>` |
 | `answer` | `name`, `option` (1–9), `promptId?` | ✅ | `/answer <name> <1-9> [promptId]` |
+| `logs` | `name?`, `service?` (`hub`\|`coordinator`\|`sidecar`), `lines?` (1–200) | | `/logs [name\|service] [lines]` |
 
 **`answer` is an ordinal and never text**, and that is the whole of its design.
 `send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a
@@ -121,6 +122,24 @@ unknown verb with `unknown_verb`, which is a named refusal rather than a silent
 failure. Adding a PARAMETER to an existing verb is the thing that strands a
 fleet — `bad_params` arrives after the version check has already agreed — which
 is why `title`/`brief` cost a version and this did not.
+
+**`logs` takes an enum, not a service name.** The host runs `journalctl -u <x>`,
+and the difference between an enum and a string is the difference between naming
+the three units this project installs and handing a remote caller the unit
+namespace of the box.
+
+**A session's logs are a different question from a service's.** `peek` shows the
+live pane — what a session looks like *now*. `logs <name>` shows what it *said*:
+the container's stderr, which outlives the pane. That distinction matters most
+exactly when it is hardest to get at, because a session that died has no pane
+left to peek and the reason it died is in the container's output. A name beats a
+service when both arrive, since naming a session is the more specific request.
+
+It is also the one read that is **not** a fan-out: three journals merged into one
+stream is something nobody can read. It goes to one named box — with a single
+host there is no choice to make, and with several it refuses and names them,
+exactly as an ambiguous session name is refused rather than resolved by
+iteration order.
 
 `peek` and `health` are the only two that do not go through `POST /api/command`:
 they read host state rather than acting on a session, so they use `GET /api/peek`
