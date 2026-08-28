@@ -22,16 +22,66 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE=/etc/agent-hub.env
 SIDECAR_ENV=/etc/agent-fleet-sidecar.env
 COORD_ENV=/etc/agent-fleet-coordinator.env
-RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
-# Resolved once, up here, because finding node depends on it — sudo hides
-# anything a version manager put in this directory.
-USER_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
-USER_HOME="${USER_HOME:-$HOME}"
-
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
+
+# --- what this script can actually install on ------------------------------
+#
+# Checked FIRST, before anything is read, written or installed. Without it the
+# first thing a Mac hits is `getent: command not found` on the line that looks
+# up a home directory — a tool nobody has heard of, failing under `set -e`,
+# naming nothing about the real problem. And getent is only the first of them:
+# apt-get, useradd, subuid ranges and systemd units are all a few steps behind
+# it, so making getent portable on its own would just move the wreck later,
+# after /etc files had been written.
+#
+# Refusing early is the honest behaviour. A half-installed box with config in
+# /etc and no service to read it is worse than a box this never touched.
+OS="$(uname -s 2>/dev/null || echo unknown)"
+case "$OS" in
+  Linux) ;;
+  Darwin)
+    die "macOS is not supported yet.
+
+  This installer needs systemd units, a Linux package manager and rootless
+  podman with subuid ranges. macOS has launchd and none of the rest, so this
+  would fail four steps from now having already written to /etc.
+
+  A Mac as a fleet HOST is wanted and tracked — see docs/wanted.md. What it
+  needs is a launchd plist per service, Homebrew instead of apt/dnf, and a
+  decision about sandboxing, since podman on macOS runs a Linux VM rather
+  than containers on the host.
+
+  A Mac works fine as a CLIENT today: the iOS app, or a browser."
+    ;;
+  *)
+    die "$OS is not supported. This installer targets Linux with systemd."
+    ;;
+esac
+
+RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
+
+# Resolved once, up here, because finding node depends on it — sudo hides
+# anything a version manager put in this directory.
+#
+# Not plain getent: it is glibc's, so it is absent on macOS and on musl images
+# such as Alpine, where this used to abort on line 28 under `set -e` naming a
+# command rather than a cause. The tilde form is what bash consults the
+# password database with, and works wherever bash does.
+user_home() {
+  local u="$1" home=""
+  if command -v getent >/dev/null 2>&1; then
+    home="$(getent passwd "$u" 2>/dev/null | cut -d: -f6 || true)"
+  fi
+  if [ -z "$home" ] && [ -r /etc/passwd ]; then
+    home="$(awk -F: -v u="$u" '$1 == u { print $6; exit }' /etc/passwd || true)"
+  fi
+  printf '%s' "$home"
+}
+USER_HOME="$(user_home "$RUN_USER")"
+USER_HOME="${USER_HOME:-$HOME}"
 
 # --check verifies the prerequisites and changes nothing. Worth having as a
 # first step on a box you are not sure about, rather than finding out halfway
