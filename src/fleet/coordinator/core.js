@@ -120,6 +120,11 @@ export class CoordinatorCore {
 
     if (msg.kind === 'health' && msg.health) {
       this.registry.recordHealth(hostId, msg.health);
+      // The outcome, not just the input: recordHealth silently ignores a host
+      // the registry does not know, and during the outage that silence was
+      // indistinguishable from the frame never arriving.
+      const known = this.registry.list().find((h) => h.hostId === hostId);
+      this.log.info(`coordinator: health from ${hostId} → ${known ? `${known.state}` : 'IGNORED — not in registry'}`);
       return;
     }
 
@@ -131,8 +136,11 @@ export class CoordinatorCore {
     }
     const waiter = this.pending.get(msg.id);
     if (!waiter) {
-      // A reply to something already given up on. The host was slow, not wrong.
-      this.log.debug(`coordinator: late reply from ${hostId} for ${msg.id}`);
+      // WARN, not debug. In the Worker, debug is a no-op — so when every reply
+      // in an outage was somehow "late", the one line that said so was being
+      // thrown away. A late reply is rare and interesting; a debug level that
+      // eats it in production is how that stops being true.
+      this.log.warn(`coordinator: late reply from ${hostId} for ${msg.id} — nothing was waiting`);
       return;
     }
     this.pending.delete(msg.id);
@@ -306,7 +314,23 @@ export class CoordinatorCore {
     // against mistakes and against a colleague having a bad day. It is NOT a
     // security control, because it is enforced inside the coordinator — the
     // component docs/trust.md assumes compromised.
-    const admin = !this.clients.hasAdmin();
+    //
+    // AND ADMIN FOLLOWS THE PERSON, NOT THE CREDENTIAL ROW. It was granted to
+    // the first credential ever issued and then stuck to that row — so signing
+    // out and back in on the same phone DEMOTED THE FLEET'S OWNER: the old row
+    // still held admin, hasAdmin() said "taken", and the new credential came
+    // out a plain member whose every host removal answered 403. Silently, in
+    // the app's case.
+    //
+    // The email on a credential is verified by the identity provider before it
+    // is ever stored, which is exactly what makes it usable as the thing role
+    // attaches to. And it deliberately follows across REVOKED rows: revocation
+    // exists for lost devices, not demotion — removing a person is taking them
+    // off the allowlist, after which they cannot sign in at all.
+    // everHadAdmin, not hasAdmin: the founding of a fleet happens once.
+    // Checking live admins reopened it — revoke the owner's lost phone and the
+    // next person to sign in, whoever they were, inherited the fleet.
+    const admin = !this.clients.everHadAdmin() || this.clients.emailHasAdmin(who.email);
     const { client, token } = await this.clients.issue(`${label} (${who.email})`, { admin });
     // Recorded on the client so an intent can say who sent it without another
     // lookup, and so a revocation list reads as people rather than ids.
@@ -439,6 +463,14 @@ export class CoordinatorCore {
       ...(spec.actor ? { actor: spec.actor } : {}),
     });
 
+    // A waiter already holds this id: refuse loudly rather than clobber it.
+    // The silent overwrite was a fleet-wide outage — the fan-out above used to
+    // send one id to every host, and the last set() won while the first
+    // waiter starved to timeout. The fan-out now mints per-host ids, and this
+    // makes the invariant structural instead of a habit.
+    if (this.pending.has(intent.id)) {
+      return Promise.reject(new Error(`an intent with id ${intent.id} is already in flight`));
+    }
     return new Promise((resolve, reject) => {
       const timer = this.setTimer(() => {
         this.pending.delete(intent.id);
@@ -492,10 +524,40 @@ export class CoordinatorCore {
 
 
     if (placement.kind === 'fanout') {
+      // A SHORT deadline of its own, not the intent timeout. This was the full
+      // 60 seconds per host under Promise.all — so one connected-but-mute host
+      // (a half-open socket from a reconnect storm, a host mid-death, a probe
+      // that reads and does not reply) stalled EVERY fan-out for a minute, and
+      // every phone gave up first. The whole fleet looked down because one
+      // member would not answer a question.
+      //
+      // Ten seconds is generous for "list what you are running": a healthy
+      // host answers in tens of milliseconds, and a host that needs longer
+      // than ten seconds to enumerate its sessions has news the per-host
+      // error slot below is designed to carry. The slow host degrades ITS
+      // OWN entry, never the fleet.
+      // A FRESH id per host, never the caller's. send() keys the reply-waiter
+      // by intent id, so fanning one id to N hosts made the second set()
+      // CLOBBER the first waiter: whichever host replied first resolved the
+      // survivor — attributed to the wrong slot — the clobbered slot waited
+      // out its entire timeout, and every other honest reply arrived as
+      // "late, nothing waiting" and was discarded.
+      //
+      // The apps supply an idempotency id on every intent, which is right for
+      // a mutating verb aimed at one host and catastrophic here: THE FLEET
+      // BROKE THE MOMENT IT GAINED ITS SECOND HOST, in exactly this line. One
+      // host is one waiter and works forever; two hosts is a 60-second stall
+      // and a mislabeled answer, per tap, while every host and every log
+      // looks perfect. Reads are not idempotency-protected — a retried list
+      // is just a list — so a minted id per host loses nothing.
+      //
+      // And ...r BEFORE hostId: a reply carries the hostId the responding
+      // host was resolved under, and spreading it after the attribution let
+      // it overwrite the one fact the comment below says must never be lost.
       const results = await Promise.all(
         (placement.hosts || []).map((h) =>
-          this.send(h, spec)
-            .then((r) => ({ hostId: h.hostId, ...r }))
+          this.send(h, { ...spec, id: this.newId() }, FANOUT_TIMEOUT_MS)
+            .then((r) => ({ ...r, hostId: h.hostId }))
             .catch((e) => ({ hostId: h.hostId, ok: false, text: e.message, error: { code: 'host_timeout' } })),
         ),
       );
@@ -542,6 +604,14 @@ export class CoordinatorCore {
 
 /** How many events a catch-up returns. One number, two coordinators. */
 const EVENT_PAGE = 50;
+
+/**
+ * How long a fan-out read waits for any single host. Deliberately much shorter
+ * than the intent timeout: a mutating intent addressed to one host is worth
+ * waiting a minute for, but a read fanned to everyone must not let its slowest
+ * member set the price for the whole fleet.
+ */
+const FANOUT_TIMEOUT_MS = 10_000;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set(['session.awaiting-input', 'session.ended', 'session.error', 'session.rc-online']);
