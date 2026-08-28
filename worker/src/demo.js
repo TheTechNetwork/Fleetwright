@@ -17,6 +17,8 @@
 // is the rejection this exists to avoid. The host names say demo so nobody
 // reading a support question is misled.
 
+import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
+
 const NOW = 1787100000000;
 
 const SESSIONS = [
@@ -68,7 +70,7 @@ function hostEntry(hostId) {
     healthAt: NOW - 4_000,
     health: {
       hostId,
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       labels: host.labels,
       loadavg: [0.2, 0.1, 0.05],
       freeMemBytes: 6_000_000_000,
@@ -124,7 +126,7 @@ export function demoReply(url, method, body) {
   if (p === '/api/hosts' && method === 'GET') {
     return {
       ok: true,
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       hosts: HOSTS.map((h) => hostEntry(h.hostId)),
       devices: 1,
       events: events(),
