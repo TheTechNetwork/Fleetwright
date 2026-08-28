@@ -17,9 +17,10 @@
 // reason tmux.js is: a session name must never be able to become a command.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { Accounts, emailFromActor, extractOauthAccount } from './accounts.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -149,9 +150,10 @@ function volumeExists(cfg, volume) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} name
- * @returns {{ ok: boolean, message?: string }}
+ * @param {string|null} [actor]
+ * @returns {{ ok: boolean, message?: string, account?: string|null }}
  */
-export function ensureSandboxVolumes(cfg, name) {
+export function ensureSandboxVolumes(cfg, name, actor = null) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
@@ -159,6 +161,10 @@ export function ensureSandboxVolumes(cfg, name) {
   if (!image.ok) return { ok: false, message: image.message };
 
   const { claude, work } = sandboxNames(name);
+  // null = the volumes already existed, so whatever was seeded on FIRST start
+  // still applies — a resume never re-seeds, which is what keeps a session on
+  // the account it began with.
+  let account = null;
 
   for (const volume of [claude, work]) {
     if (volumeExists(cfg, volume)) continue;
@@ -169,10 +175,11 @@ export function ensureSandboxVolumes(cfg, name) {
     log.info(`sandbox: created volume ${volume}`);
 
     if (volume !== claude) continue;
-    const seeded = seedCredentials(cfg, claude);
+    const seeded = seedCredentials(cfg, claude, actor);
     if (!seeded.ok) return seeded;
+    account = seeded.account ?? 'shared';
   }
-  return { ok: true };
+  return { ok: true, account };
 }
 
 /**
@@ -184,25 +191,89 @@ export function ensureSandboxVolumes(cfg, name) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
+ * @param {string|null} [actor]
+ * @returns {{ ok: boolean, message?: string, account?: string }}
  */
-function seedCredentials(cfg, volume) {
-  const source = cfg.sandboxCredentialsFile;
+function seedCredentials(cfg, volume, actor = null) {
+  // WHOSE account this session runs as. A person who has linked their own
+  // Claude account gets it seeded; everyone else — telegram, the CLI, people
+  // who never linked — gets the shared org credential, exactly as before.
+  // Decided by pickCredentialSource so it can be tested without podman.
+  const picked = pickCredentialSource(cfg, actor);
+  const source = picked.source;
   if (!source) return { ok: true }; // deliberately disabled
-  const r = podman(cfg, [
-    'run', '--rm',
-    '-v', `${volume}:/dest`,
-    '-v', `${source}:/seed/.credentials.json:ro`,
-    cfg.sandboxImage,
-    'sh', '-c', 'cp /seed/.credentials.json /dest/.credentials.json && chmod 600 /dest/.credentials.json',
-  ]);
+  // The identity rides with the credential when there is one. The entrypoint
+  // merges .oauth-account.json into the container's /root/.claude.json on
+  // every start — the newer CLI reads logged-in-ness off the PAIR, and a
+  // credential without its oauthAccount is a login that fails while every
+  // file involved is genuine.
+  const mounts = ['-v', `${volume}:/dest`, '-v', `${source}:/seed/.credentials.json:ro`];
+  let copy = 'cp /seed/.credentials.json /dest/.credentials.json && chmod 600 /dest/.credentials.json';
+  if (picked.accountMeta) {
+    mounts.push('-v', `${picked.accountMeta}:/seed/.oauth-account.json:ro`);
+    copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
+  }
+  const r = podman(cfg, ['run', '--rm', ...mounts, cfg.sandboxImage, 'sh', '-c', copy]);
   if (r.status !== 0) {
     return {
       ok: false,
       message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}\n(is ${source} readable?)`,
     };
   }
-  log.info(`sandbox: seeded credentials into ${volume}`);
-  return { ok: true };
+  log.info(`sandbox: seeded ${picked.account} credentials into ${volume}`);
+  return { ok: true, account: picked.account };
+}
+
+/**
+ * Which credential file a session gets, and whose it is.
+ *
+ * Exported for tests: the selection is the whole feature and podman is not.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string|null} actor
+ * @returns {{ source: string|null, accountMeta?: string|null, account: string }}
+ */
+export function pickCredentialSource(cfg, actor) {
+  const email = emailFromActor(actor);
+  if (email) {
+    const store = new Accounts(cfg.stateDir);
+    const linked = store.credentialPathFor(email);
+    // Linked or shared, never an error: a member who has not linked simply
+    // works on the org account, which is the promised default — not a wall.
+    if (linked) return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
+  }
+  return {
+    source: cfg.sandboxCredentialsFile || null,
+    // The shared identity, derived from the same home the shared credential
+    // comes from: ~/.claude/.credentials.json sits inside ~/.claude, and the
+    // state file sits beside that directory as ~/.claude.json. Null when it
+    // is not there — an old box degrades to exactly the old behaviour.
+    accountMeta: sharedAccountMetaFile(cfg),
+    account: 'shared',
+  };
+}
+
+/**
+ * Extract the shared account's identity into a seedable file, refreshed on
+ * every call so a re-login on the box propagates to the next session.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {string|null}
+ */
+export function sharedAccountMetaFile(cfg) {
+  try {
+    if (!cfg.sandboxCredentialsFile) return null;
+    const home = path.dirname(path.dirname(cfg.sandboxCredentialsFile));
+    const meta = extractOauthAccount(readFileSync(path.join(home, '.claude.json'), 'utf8'));
+    if (!meta) return null;
+    const dir = path.join(cfg.stateDir, 'accounts');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, '.shared.account.json');
+    writeFileSync(file, meta, { mode: 0o600 });
+    return file;
+  } catch {
+    return null; // no state file, unreadable, no oauthAccount — all mean "seed without it"
+  }
 }
 
 /**

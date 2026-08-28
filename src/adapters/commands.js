@@ -38,6 +38,7 @@
 
 import { describe } from '../core/login.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
+import { Accounts, normaliseEmail } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
@@ -341,14 +342,50 @@ export const COMMANDS = {
 
   // --- Claude account ------------------------------------------------------
 
+  accounts: {
+    aliases: ['account'],
+    usage: '/accounts [remove <email>]',
+    short: 'Which people have linked their own Claude account',
+    help: 'Linked accounts are seeded into the sessions that person starts; everyone else uses the shared one. Link with /login for <email>.',
+    run: async (ctx, args) => {
+      const store = new Accounts(ctx.cfg.stateDir);
+      if ((args[0] || '').toLowerCase() === 'remove') {
+        const email = normaliseEmail(args[1]);
+        if (!email) return { ok: false, text: 'Usage: /accounts remove <email>' };
+        return store.remove(email)
+          ? { ok: true, text: `Unlinked ${email}. Sessions they start now use the shared account; running ones keep what they were seeded with.` }
+          : { ok: false, text: `${email} has no linked account.` };
+      }
+      const linked = store.list();
+      return {
+        ok: true,
+        text: linked.length
+          ? `Linked accounts:\n${linked.map((e) => `  ${e}`).join('\n')}\n\nEveryone else uses the shared account.`
+          : 'Nobody has linked a personal account \u2014 every session uses the shared one. Link with /login for <email>.',
+      };
+    },
+  },
+
   login: {
     aliases: ['auth'],
-    usage: '/login [console|status|cancel|logout]',
+    usage: '/login [console|status|cancel|logout|for <email>]',
     short: 'Log this box into Claude',
-    help: 'Log this box into a Claude account without SSH. Bare /login starts the subscription flow.',
+    help: 'Log this box into a Claude account without SSH. Bare /login starts the subscription flow. ' +
+      '/login for <email> links THAT PERSON\u2019S account instead \u2014 the box stays on its own login, ' +
+      'and sessions they start run on theirs.',
     run: async (ctx, args) => {
       const sub = (args[0] || '').toLowerCase();
       if (sub === 'status') return { ok: true, text: describe(ctx.login.status()) };
+      if (sub === 'for') {
+        // Linking a person, not logging in the box. Same OAuth, same pasted
+        // code \u2014 but the credential lands in the accounts store under their
+        // email, in an isolated CLAUDE_CONFIG_DIR, and the box login is never
+        // touched. docs/accounts.md.
+        const email = normaliseEmail(args[1]);
+        if (!email) return { ok: false, text: 'Usage: /login for <email> \u2014 the address they sign the FLEET in with.' };
+        const r = await ctx.login.start({ actor: ctx.actor, linkFor: email });
+        return { ok: r.ok, text: r.ok ? `Linking a Claude account for ${email}.\n${r.message ?? ''}` : r.message };
+      }
       if (sub === 'cancel') return { ok: true, text: ctx.login.cancel().message };
       if (sub === 'logout') {
         const r = ctx.login.logout();

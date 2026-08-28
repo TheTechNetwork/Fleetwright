@@ -320,6 +320,11 @@ export class SessionManager {
    * @returns {Promise<Result>}
    */
   async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null }) {
+    // Whose Claude account got seeded, when THIS start created the volumes.
+    // Stays null on resume and on non-sandboxed sessions: null on the record
+    // means "whatever was already there".
+    /** @type {string|null} */
+    let seededAccount = null;
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
@@ -333,11 +338,12 @@ export class SessionManager {
       // What DOES have to happen first is the volumes existing and the
       // conversation volume having credentials in it — without that the
       // session comes up unauthenticated and hangs at a login prompt.
-      const volumes = ensureSandboxVolumes(this.cfg, name);
+      const volumes = ensureSandboxVolumes(this.cfg, name, actor);
       if (!volumes.ok) {
         this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, createdBy: actor });
         return { ok: false, message: `Could not prepare the sandbox for "${name}": ${volumes.message}` };
       }
+      seededAccount = volumes.account ?? null;
     } else {
       ensureWorkdirTrusted(this.cfg);
       // A session in any OTHER directory needs that directory trusted too, or it
@@ -378,6 +384,10 @@ export class SessionManager {
         // and the field looks like it silently did not save.
         ...(title ? { title, titlePinned: true } : existing?.title ? {} : { title: titleFromCwd(cwd) }),
         ...(brief ? { brief } : {}),
+        // Whose Claude account this session runs on. Only set when this start
+        // created the volumes — a resume keeps the account it began with, and
+        // null on the record means "whatever was there already".
+        ...(typeof seededAccount === 'string' ? { account: seededAccount } : {}),
         detail: `${verb}`,
         stoppedAt: null,
         ...(actor ? { createdBy: actor } : {}),
