@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { refreshSandboxImage, podmanAvailable } from './podman.js';
 import { requestRestart } from './restart-watch.js';
 
 /** Long enough for a slow network, short enough that chat does not time out. */
@@ -285,6 +286,48 @@ const STEPS = [
       return installed
         ? { ok: true, changed: true, text: 'Packages are up to date.' }
         : { ok: true, changed: true, text: 'Installed the packages that were missing.' };
+    },
+  },
+
+  {
+    // THE SANDBOX IMAGE, which /update never touched.
+    //
+    // ensureSandboxImage returned on its first line for the entire life of a
+    // box — `if (sandboxImageExists) return` — because the image was written
+    // as a one-time install. It is a moving dependency: the session
+    // entrypoint, the credential seeding and the trust flags all live inside
+    // it, so shipping a fix there reached nobody until somebody ran `podman
+    // pull` by hand. An update that leaves half the product on old code is the
+    // same failure as a green CI run that deployed nothing.
+    //
+    // Sessions already running keep the image they started with — a container
+    // does not swap its filesystem underneath itself — so this changes what
+    // the NEXT session gets, which is exactly when it matters.
+    name: 'sandbox image',
+    /**
+     * @param {import('../config.js').Config} cfg
+     * @param {{ changed: boolean }} [_state] unused; the signature is shared
+     *   across STEPS so the union stays inferable
+     * @returns {{ ok: boolean, changed: boolean, text?: string }}
+     */
+    run(cfg, _state) {
+      if (!cfg.sandbox) return { ok: true, changed: false };
+      // Local builds are not pullable, and a box that builds its own image is
+      // saying it wants that one.
+      if (String(cfg.sandboxImage || '').startsWith('localhost/')) {
+        return { ok: true, changed: false, text: 'Sandbox image is built locally — not refreshed.' };
+      }
+      if (!podmanAvailable(cfg)) return { ok: true, changed: false };
+      const r = refreshSandboxImage(cfg);
+      if (!r.ok) {
+        // NOT a failure of the update. The box has a working image and the
+        // registry is what went wrong; saying so and carrying on beats
+        // failing an update over a network hiccup.
+        return { ok: true, changed: false, text: `Could not refresh the sandbox image: ${r.message}` };
+      }
+      return r.changed
+        ? { ok: true, changed: true, text: 'Sandbox image updated — new sessions will use it.' }
+        : { ok: true, changed: false, text: 'Sandbox image is up to date.' };
     },
   },
 ];

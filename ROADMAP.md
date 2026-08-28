@@ -89,7 +89,7 @@ anything. (`docs/wanted.md` has the full table.)
 | feature | status | where |
 |---|---|---|
 | `/update --restart` restarts every service, no SSH | **done** | #127 |
-| Sandbox image refresh on update — boxes keep their pulled image until someone `podman pull`s | wanted | found shipping the entrypoint identity-merge: an image fix does not reach a box by itself |
+| Sandbox image refresh on update | **done** | `/update` now pulls and reports whether the digest moved; `ensureSandboxImage` returned on its first line for the life of a box |
 | Installer detects clones, offers clean vs update, uninstaller | **done** | #121 |
 | Scheduled system/app update checks, so the answer is ready when asked | wanted | pairs with host-version-in-app |
 | CI runs the Worker in workerd; tail workflow; frame logging | **done** | born in the Aug-28 outage |

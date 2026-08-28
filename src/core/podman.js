@@ -87,7 +87,22 @@ export function sandboxImageExists(cfg) {
  * @param {import('../config.js').Config} cfg
  * @returns {{ ok: boolean, built?: boolean, message?: string }}
  */
-export function ensureSandboxImage(cfg) {
+export function ensureSandboxImage(cfg, { refresh = false } = {}) {
+  // `refresh` is what /update passes. Without it this returns on the first
+  // line for the entire life of a box: the image was treated as a one-time
+  // install, and it is a moving dependency — the session entrypoint, the
+  // credential seeding, the trust flags all live inside it. Shipping a fix
+  // there reached nobody until somebody pulled by hand, which is the same
+  // shape as a deploy filter that names the wrong directory: true when
+  // written, quietly false later.
+  if (refresh && !cfg.sandboxImage.startsWith('localhost/')) {
+    const pulled = refreshSandboxImage(cfg);
+    // A failed refresh is NOT fatal. The box has a working image; the network
+    // is what failed. Falling through to the existence check leaves it running
+    // on what it has rather than breaking an update over a registry hiccup.
+    if (pulled.ok) return { ok: true, built: pulled.changed };
+    log.warn(`sandbox: could not refresh ${cfg.sandboxImage}: ${pulled.message}`);
+  }
   if (sandboxImageExists(cfg)) return { ok: true, built: false };
 
   const manual =
@@ -135,6 +150,33 @@ export function ensureSandboxImage(cfg) {
 /** @param {import('../config.js').Config} cfg @param {string} volume */
 function volumeExists(cfg, volume) {
   return podman(cfg, ['volume', 'exists', volume]).status === 0;
+}
+
+/**
+ * Pull the sandbox image again, and say whether it actually moved.
+ *
+ * The digest before and after is the only honest way to answer "did anything
+ * change": `podman pull` on an up-to-date image succeeds and prints almost
+ * nothing, and parsing its output for "Already exists" would be reading
+ * someone else's prose as an API.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ ok: boolean, changed: boolean, message?: string }}
+ */
+export function refreshSandboxImage(cfg) {
+  const digest = () => {
+    const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', cfg.sandboxImage]);
+    return r.status === 0 ? String(r.stdout).trim() : null;
+  };
+  const before = digest();
+  const pulled = podman(cfg, ['pull', cfg.sandboxImage]);
+  if (pulled.status !== 0) {
+    return { ok: false, changed: false, message: pulled.stderr.trim().slice(0, 200) };
+  }
+  const after = digest();
+  const changed = Boolean(after) && after !== before;
+  if (changed) log.info(`sandbox: image updated (${(before || 'none').slice(0, 19)} → ${(after || '').slice(0, 19)})`);
+  return { ok: true, changed };
 }
 
 /**
