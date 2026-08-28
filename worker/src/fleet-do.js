@@ -53,10 +53,21 @@ export class Fleet {
     let pending = null;
     this.core.onEvents = () => {
       if (pending) return;
-      pending = Promise.resolve().then(() => {
-        pending = null;
-        return this.#saveEvents();
-      });
+      pending = Promise.resolve()
+        .then(() => {
+          pending = null;
+          return this.#saveEvents();
+        })
+        // CAUGHT, and this line is load-bearing. `state.waitUntil?.()` below
+        // guards itself into doing nothing when waitUntil is absent, so this
+        // promise floats — and an unhandled rejection ABORTS THE WHOLE DURABLE
+        // OBJECT: every WebSocket resets (hosts see 1006 read ECONNRESET),
+        // every in-flight request dies (phones see "the network connection was
+        // lost"), on every action that records an event. A fleet-wide outage,
+        // caused by failing to persist a log line. The event ring is a
+        // convenience; losing one write of it must never cost more than a
+        // warning.
+        .catch((e) => console.warn(`fleet: could not persist the event ring: ${e?.message || e}`));
       this.state.waitUntil?.(pending);
     };
 
@@ -500,8 +511,14 @@ export class Fleet {
     }
     await this.core.onHostMessage(hostId, parsed);
     // A push that reported dead tokens is the only chance to drop them; the
-    // provider will not tell us again.
-    await this.#saveDevices();
+    // provider will not tell us again. But it is bookkeeping: a throw escaping
+    // webSocketMessage resets the socket that delivered a perfectly good
+    // message, so the host pays for our storage problem.
+    try {
+      await this.#saveDevices();
+    } catch (e) {
+      console.warn(`fleet: could not persist devices: ${e?.message || e}`);
+    }
   }
 
   /** @param {WebSocket} socket @param {number} code @param {string} reason */
@@ -542,7 +559,22 @@ export class Fleet {
   }
 
   async #saveEvents() {
-    await this.state.storage.put('events', this.core.events.slice(-500));
+    // Bounded by SERIALISED SIZE, not by count. DO storage refuses values over
+    // 128KiB, and a count cap cannot promise a size: 200 events carrying 500
+    // chars of text and 500 of url each is ~220KB. The ring fills slowly and
+    // crosses the limit weeks after the code shipped, on a box where nothing
+    // changed — which is exactly how it presented.
+    //
+    // (This also wrote slice(-500) while core caps the ring at 200 — a stale
+    // copy of an older bound. One number, owned by the serialiser.)
+    let events = this.core.events.slice(-200);
+    while (events.length > 1 && JSON.stringify(events).length > 100_000) {
+      // Oldest half first: the recent events are the ones a waking phone asks
+      // for, and half-steps reach a fit in a few iterations rather than
+      // re-serialising once per dropped event.
+      events = events.slice(Math.ceil(events.length / 2));
+    }
+    await this.state.storage.put('events', events);
   }
 
   async #saveEnrollment() {
