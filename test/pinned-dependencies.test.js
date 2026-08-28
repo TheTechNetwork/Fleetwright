@@ -71,6 +71,11 @@ test('what the manifest claims is what the lock installs', () => {
 });
 
 test('the lock repeats the manifest exactly, so npm ci cannot refuse', () => {
+  // This assertion is the reason the file exists in this form. The obvious way
+  // to check it is `npm ci --dry-run`, which DELETES node_modules before it
+  // runs — `--dry-run` does not stop that — so the command that looks like a
+  // question is an action, and the answer arrives with the toolchain gone.
+  // Reading the JSON costs nothing and removes nothing. See docs/dependencies.md.
   // package-lock.json carries its own copy of the root package's declarations.
   // If the two drift, `npm ci` exits rather than installing — which is correct
   // of it, and is a CI failure that reads as an npm problem rather than as a
