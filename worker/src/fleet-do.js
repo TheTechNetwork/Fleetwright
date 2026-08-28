@@ -255,6 +255,14 @@ export class Fleet {
 
     if (url.pathname.startsWith('/api/hosts/') && request.method === 'DELETE') {
       const hostId = decodeURIComponent(url.pathname.slice('/api/hosts/'.length));
+      // Revoking twice is agreement, not an error. This used to answer 404
+      // "is not enrolled" for a host that IS enrolled and revoked — so a person
+      // whose first tap seemed not to work (the list bug in hosts.js) tapped
+      // again and was told the host did not exist, while still looking at it.
+      const existing = this.core.hostIds.hosts.get(hostId);
+      if (existing?.revokedAt) {
+        return json({ ok: true, text: `${hostId} was already revoked.` });
+      }
       const gone = this.core.hostIds.revoke(hostId);
       if (gone) {
         await this.#saveHosts();
