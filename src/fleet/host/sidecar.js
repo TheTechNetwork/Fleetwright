@@ -50,6 +50,7 @@ import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
 import { SessionWatcher } from './watcher.js';
 import { promptId, describePrompt } from './prompt.js';
 import { redactCommandLine } from '../../core/redact.js';
+import { emailFromActor } from '../../core/accounts.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -291,6 +292,10 @@ export class Sidecar {
         ...(sessions ? { sessions } : {}),
         ...(single?.rcUrl ? { rcUrl: single.rcUrl } : {}),
         ...(r.buttons ? { buttons: r.buttons } : {}),
+        // What is connected, and what could be. Never a token — the shape of
+        // the object is what guarantees that, and test/connectors.test.js
+        // pins its keys for exactly this reason.
+        ...(r.connections ? { connections: r.connections } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {
@@ -544,10 +549,18 @@ export class Sidecar {
  * than it would in-process, because `/api/command` will run whatever line it is
  * handed.
  *
- * @param {{ verb: string, params: Record<string, any> }} intent
+ * @param {{ verb: string, params: Record<string, any>, actor?: string }} intent
  */
-export function toCommandLine({ verb, params }) {
+export function toCommandLine({ verb, params, actor }) {
   const p = params || {};
+  // WHOSE credential, resolved HERE and never from a parameter.
+  //
+  // `scope: me` means the verified actor, whose email this host derives from
+  // the actor string the coordinator resolved against an ID token. There is no
+  // `email` parameter in this protocol and there must not be one: the moment
+  // the caller can name the account row, "link my account" becomes "link an
+  // account", and a compromised coordinator can aim it.
+  const mine = emailFromActor(actor ? `fleet:${actor}` : null);
   switch (verb) {
     case 'list':
       return '/list';
@@ -587,6 +600,43 @@ export function toCommandLine({ verb, params }) {
       // A digit and a hex id — both safe in a command line, unlike the free
       // text this verb exists to refuse. commandMeta carries nothing extra.
       return ['/answer', p.name, p.option, p.promptId].filter((x) => x !== undefined && x !== null).join(' ');
+    case 'connect':
+      // Claude's flow is not a token to paste — it is an OAuth login the CLI
+      // drives in a pane on this box, and the URL comes back from that pane.
+      // So `connect claude` is `/login`, and the two scopes are the two
+      // commands that already existed:
+      //
+      //   me   → /login for <email>   the requester's own account, isolated in
+      //                               its own CLAUDE_CONFIG_DIR, box untouched
+      //   host → /login force         THE BOX itself, which is the original
+      //                               no-SSH promise and is admin-only
+      //
+      // Refusing rather than defaulting when scope is `me` and the actor has
+      // no email: an unattributed caller asking to link "their" account has
+      // not named anybody, and picking the box for them would silently do the
+      // admin-only thing.
+      if (!p.provider) return '/connect';
+      if (p.provider === 'claude') {
+        if (p.scope === 'host') return '/login force';
+        if (!mine) throw new Error('connect me needs a signed-in identity — this caller has no email');
+        return `/login for ${mine}`;
+      }
+      return `/connect ${p.provider}`;
+    case 'link':
+      // The secret is protocol-constrained to printable ASCII with no
+      // whitespace, quote or backslash, so it is one token on this line and
+      // cannot become two. It is masked in every log between here and the
+      // pane by src/core/redact.js — which is the reason `/code` and `/link`
+      // are the two command words in that table.
+      if (p.provider === 'claude') return `/code ${p.secret}`;
+      return `/link ${p.provider} ${p.secret}`;
+    case 'unlink':
+      if (p.provider === 'claude') {
+        if (p.scope === 'host') return '/login logout';
+        if (!mine) throw new Error('unlink me needs a signed-in identity — this caller has no email');
+        return `/accounts remove ${mine}`;
+      }
+      return `/unlink ${p.provider}`;
     default:
       // Unreachable: validateIntent has already refused anything not in VERBS,
       // and peek/health never get here. Throwing rather than returning a

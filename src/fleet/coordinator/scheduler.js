@@ -67,7 +67,22 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // into one reply is nobody's idea of an answer), and none belongs in the
   // new-work path, which filters on free capacity — a full box can still be
   // asked about itself, updated, or rebooted.
-  if (verb === 'logs' || verb === 'update' || verb === 'upgrade' || verb === 'reboot') {
+  //
+  // connect/link/unlink join them, and for a stronger reason than the others:
+  // the two halves of a connection are a PAIR. `connect` starts a login in a
+  // pane on one box and `link` types the code into that same pane, so a second
+  // step that landed elsewhere would type a live credential into a box that
+  // never asked for one. Fanning them out would be worse still — one paste,
+  // copied to every host in the fleet.
+  if (
+    verb === 'logs' ||
+    verb === 'update' ||
+    verb === 'upgrade' ||
+    verb === 'reboot' ||
+    verb === 'connect' ||
+    verb === 'link' ||
+    verb === 'unlink'
+  ) {
     const reachable = registry.reachable();
     if (!reachable.length) {
       return { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };

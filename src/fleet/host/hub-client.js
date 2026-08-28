@@ -57,6 +57,7 @@ export class HubError extends Error {
  * @property {string} [text]
  * @property {any[]} [sessions]
  * @property {any[]} [buttons]
+ * @property {{ catalogue: any[], connected: any[] }} [connections]
  */
 
 export class HubClient {

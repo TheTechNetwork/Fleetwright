@@ -41,8 +41,10 @@ test('the verb set is exactly what is documented', () => {
   // not.
   assert.deepEqual(Object.keys(VERBS).sort(), [
     'answer',
+    'connect',
     'forget',
     'health',
+    'link',
     'list',
     'logs',
     'peek',
@@ -51,17 +53,52 @@ test('the verb set is exactly what is documented', () => {
     'start',
     'status',
     'stop',
+    'unlink',
     'update',
     'upgrade',
   ]);
 });
 
-test('login and code are not reachable from the coordinator', () => {
-  // A compromised Worker being able to point a box at an attacker's Claude
-  // account, or to harvest an authorization code mid-flow, is far outside
-  // "someone started and stopped some sessions".
-  assert.ok(!('login' in VERBS));
-  assert.ok(!('code' in VERBS));
+test('a credential cannot be aimed at somebody else', () => {
+  // This test used to assert `login` and `code` were absent, on the grounds
+  // that a compromised Worker could point a box at an attacker's Claude
+  // account. Half of that reasoning survives and half of it was answered.
+  //
+  // ANSWERED: the aiming. There is no email, account or user parameter
+  // anywhere in the verb set, so `connect` can only ever mean "the verified
+  // actor" — an identity the HOST derives from the actor string, and which no
+  // caller can name. That is the property this test now pins, because it is
+  // the one an innocent-looking convenience parameter would take away.
+  //
+  // STILL TRUE: a compromised coordinator can show somebody a different
+  // authorization page. It cannot do that with more authority than `start`
+  // already gives it on the same box. docs/trust.md says so plainly.
+  for (const [verb, spec] of Object.entries(VERBS)) {
+    for (const key of Object.keys(spec.params)) {
+      assert.ok(
+        !/email|account|user|owner|as$/i.test(key),
+        `${verb} exposes an identity-shaped parameter "${key}" — whose credential must never be a parameter`,
+      );
+    }
+  }
+});
+
+test('the credential parameter is not text, and refusals never quote it', () => {
+  const link = (secret) => validateIntent(intent({ verb: 'link', params: { provider: 'github', secret } }));
+
+  // cleanText would collapse whitespace and strip control characters, which
+  // silently hands a MODIFIED credential to a provider — turning "your token
+  // is wrong" into a mystery. A credential is exactly what was minted or it
+  // is refused.
+  assert.equal(link('ghp_aB3.xY-_~9/z=Q:1').ok, true);
+  for (const bad of ['tok en', "tok'en", 'tok"en', 'tok\\en', '', 'x'.repeat(5000), 42, null]) {
+    const r = link(bad);
+    assert.equal(r.ok, false, JSON.stringify(bad));
+    // The error travels back to the caller and past every log line on the way.
+    if (typeof bad === 'string' && bad.length > 4) {
+      assert.equal(r.error.includes(bad.slice(0, 5)), false, 'a refusal quoted the credential back');
+    }
+  }
 });
 
 test('no verb accepts a path', () => {
@@ -81,7 +118,10 @@ test('only state-changing verbs are marked mutating', () => {
     // answer sends a keystroke into a live session: as mutating as it gets.
     // update/upgrade/reboot change the box itself, which is as mutating as a
     // verb gets — a reboot ends every session on it.
-    ['answer', 'forget', 'reboot', 'resume', 'start', 'stop', 'update', 'upgrade'],
+    // connect/link/unlink write a credential to disk on that box, which is
+    // state-changing by any reading — and being mutating is what gets their
+    // idempotency key honoured, so a retried paste cannot start two logins.
+    ['answer', 'connect', 'forget', 'link', 'reboot', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

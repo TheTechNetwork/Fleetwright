@@ -532,8 +532,41 @@ export class CoordinatorCore {
         verb: spec.verb,
         actor: spec.actor,
         name: spec.params?.name ?? null,
-        text: `${spec.actor} asked for ${spec.verb}${spec.params?.name ? ` ${spec.params.name}` : ''}`,
+        // The provider, when there is one — "asked for link" tells an audit
+        // nothing, and `params.secret` must never come near this ring, which
+        // is why this names the two safe fields rather than serialising params.
+        text:
+          `${spec.actor} asked for ${spec.verb}` +
+          `${spec.params?.name ? ` ${spec.params.name}` : ''}` +
+          `${spec.params?.provider ? ` ${spec.params.provider}` : ''}` +
+          `${spec.params?.scope === 'host' ? ' for the box itself' : ''}`,
       });
+    }
+
+    // LOGGING THE BOX IN IS ADMIN-ONLY, and this is the only place that can
+    // say so — the host receives an actor, not a role, and a role it cannot
+    // verify is a role it must not act on.
+    //
+    // Be precise about what this defends against, because overclaiming here is
+    // how a control stops being maintained: it stops a MEMBER from replacing
+    // the shared Claude account every other session on that box runs on. It is
+    // not a defence against a compromised coordinator, which is the party
+    // performing the check. `scope: me` needs no gate at all — the host
+    // derives that email from the verified actor and no parameter can name
+    // somebody else.
+    if (
+      (spec.verb === 'connect' || spec.verb === 'link' || spec.verb === 'unlink') &&
+      spec.params?.scope === 'host' &&
+      spec.requester &&
+      !spec.requester.admin
+    ) {
+      return {
+        ok: false,
+        error: { code: 'not_admin' },
+        text:
+          'Only this fleet\u2019s admin can change the account a box itself runs on. ' +
+          'Connecting your OWN credential needs no permission \u2014 leave the scope off.',
+      };
     }
 
     const placement = place(this.registry, spec, {
