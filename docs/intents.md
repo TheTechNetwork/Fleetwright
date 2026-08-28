@@ -1,4 +1,4 @@
-# The intent protocol, v1
+# The intent protocol, v2
 
 The contract between the coordinator and a fleet host. This is the first thing
 built, ahead of anything that would use it, because §5 of `design.md` flags it as
@@ -58,7 +58,7 @@ Coordinator → host:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "kind": "intent",
   "id": "01J8ZK3QH4",
   "verb": "resume",
@@ -70,10 +70,10 @@ Coordinator → host:
 
 | Field | Rule |
 |---|---|
-| `v` | must equal `1`. A mismatch is refused, never guessed at. |
+| `v` | must equal `2`. A mismatch is refused, never guessed at. |
 | `kind` | `"intent"`. |
 | `id` | **idempotency key**, `[A-Za-z0-9._:-]{8,128}`. Required on every intent. |
-| `verb` | one of the eight below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
+| `verb` | one of the thirteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
 | `params` | object. **Unknown keys are refused, not ignored** — see below. |
 | `issuedAt` | epoch ms. Bounds replay when the host passes `maxSkewMs`. |
 | `actor` | optional, `[A-Za-z0-9._:@+-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
@@ -81,7 +81,7 @@ Coordinator → host:
 Host → coordinator:
 
 ```json
-{ "v": 1, "kind": "reply", "id": "01J8ZK3QH4", "ok": true, "text": "…", "sessions": [] }
+{ "v": 2, "kind": "reply", "id": "01J8ZK3QH4", "ok": true, "text": "…", "sessions": [] }
 ```
 
 `replayed: true` marks a reply served from the idempotency cache. A refused
@@ -170,17 +170,53 @@ Two limits the host imposes on this table, both covered in
 serves a fixed 60), and `actor` cannot reach agent-hub's `createdBy` at all
 (it hardcodes `web` for every HTTP caller).
 
-### Two deliberate exclusions
+### Why v2, and what a v3 would cost
 
-Both look like oversights. Neither is.
+The jump from eight verbs to thirteen was **one** version bump, and that was
+the whole reason they were designed together rather than shipped as they were
+asked for.
 
-**No `login` / `code`.** agent-hub can authenticate its own box from chat, which
+The asymmetry is worth knowing by heart, because it decides how much a change
+costs:
+
+- **Adding a VERB costs no bump.** An old host refuses it with `unknown_verb`,
+  which is a clean, specific, correctly-attributed failure. A new client talking
+  to a host that has not been updated gets told exactly that.
+- **Adding a PARAM to an existing verb costs a bump.** `validateIntent` refuses
+  unknown keys rather than ignoring them, so an old host answers `bad_params` —
+  and that answer arrives *after* the version handshake has already agreed. A
+  client that looks compatible and then fails one verb at a time is a far worse
+  failure than one that is refused at the door.
+
+So the rule is: new capability, new verb. Reach for a new parameter on an
+existing verb only when the whole fleet is going to move at once anyway.
+
+The corollary is the one that bit here — a **client** that sends `"2"` where the
+protocol types an `int` produces `bad_params` too, from a host that is on the
+right version. Both apps convert `option` and `lines` to JSON numbers
+explicitly, for that reason and no other.
+
+### One remaining deliberate exclusion
+
+It looks like an oversight. It is not — though it is now on the clock, because
+[guest onboarding](./accounts.md) needs it and a guest cannot SSH anywhere.
+
+**No `login` / `code`, yet.** agent-hub can authenticate its own box from chat, which
 is genuinely useful there — it is what lets a coworker stand up an instance
 without SSH. Reachable from the coordinator, it means a compromised coordinator
 can point a box at an attacker's Claude account, or harvest an authorization
 code mid-flow. That is far outside "started and stopped some sessions", and it
 is not worth the blast radius to save one SSH session on a box that needs
 re-authenticating.
+
+That reasoning holds for a *shared* account and stops holding for a guest one.
+A guest brings their own Claude credential and has no shell on the box, so
+"just SSH in" is not a smaller inconvenience for them — it is the whole feature
+missing. When `login` does ship it will not be this verb with the guard rails
+removed: the authorization URL is opened by the *person*, the code goes to the
+box that minted the request, and a coordinator that never sees either cannot
+redirect the flow. That is a design pass, not a table row, which is why it is
+last.
 
 **No path parameter anywhere.** agent-hub's `/new <name> <path>` accepts any path
 with no validation (a known gap, §1), and a sandboxed session's working
