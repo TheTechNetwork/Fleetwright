@@ -16,6 +16,7 @@ import { dirname } from 'node:path';
 import { Coordinator } from '../src/fleet/coordinator/server.js';
 import { log, setLogLevel } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
+import { watchForRestart } from '../src/core/restart-watch.js';
 
 // systemd supplies this with EnvironmentFile=; a shell does not. Without it,
 // running this binary by hand binds with no admin token and refuses every
@@ -29,6 +30,12 @@ const str = (name, fallback = '') => {
 };
 
 setLogLevel(str('AGENT_FLEET_LOG_LEVEL', 'info'));
+
+// Pick up an update without anybody opening a terminal. Same mechanism as the
+// hub's own restart: exit, and let systemd's Restart=always bring this back on
+// the new code. Hosts reconnect with backoff, so a coordinator that vanishes
+// for a second is a case the transport already handles.
+watchForRestart({ name: 'coordinator' });
 
 const bind = str('AGENT_FLEET_COORDINATOR_BIND', '127.0.0.1');
 const port = Number(str('AGENT_FLEET_COORDINATOR_PORT', '8791'));
