@@ -14,6 +14,7 @@
 import { Fleet } from './fleet-do.js';
 import { demoReply } from './demo.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 
 export { Fleet };
 
@@ -28,7 +29,12 @@ export default {
     // Liveness only, and the one deliberately unauthenticated surface (§5). It
     // says nothing about hosts, sessions or counts.
     if (url.pathname === '/healthz') {
-      return json({ ok: true, protocol: 1 });
+      // From the constant, NEVER a literal. This is the first thing anybody
+      // curls when the fleet stops answering, and a hardcoded 1 makes it lie
+      // in exactly that moment: a Worker running v2 code would report v1, and
+      // send whoever is debugging a protocol mismatch off to look at the one
+      // thing that is not wrong.
+      return json({ ok: true, protocol: PROTOCOL_VERSION });
     }
 
     // The second deliberately unauthenticated surface, and it exists for a
