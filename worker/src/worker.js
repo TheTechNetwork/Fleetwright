@@ -18,10 +18,31 @@ import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 
 export { Fleet };
 
+/**
+ * Is this request on the demo hostname?
+ *
+ * Configured rather than hardcoded, because a second deployment of this Worker
+ * is entitled to a different demo domain, and because a literal here would be
+ * one more place to forget when the hostname changes. Absent means "no demo
+ * domain" — the correct answer for local dev and for anybody who has not set
+ * one up, where the token path further down still works.
+ *
+ * EXACT MATCH, never a suffix test. `endsWith('fleetdemo.thetech.network')`
+ * would also accept `notfleetdemo.thetech.network`, and a hostname check that
+ * can be widened by prefixing it is not a check.
+ *
+ * @param {URL} url
+ * @param {{ AGENT_FLEET_DEMO_HOST?: string }} env
+ */
+function isDemoHost(url, env) {
+  const configured = String(env.AGENT_FLEET_DEMO_HOST || '').trim().toLowerCase();
+  return configured !== '' && url.hostname.toLowerCase() === configured;
+}
+
 export default {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, AGENT_FLEET_DEMO_HOST?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -102,6 +123,43 @@ export default {
         },
         503,
       );
+    }
+
+    // THE DEMO LIVES ON ITS OWN HOSTNAME, and that is the whole security
+    // property restated in a stronger form.
+    //
+    // It used to be only a token: hold `AGENT_FLEET_DEMO_TOKEN` and get
+    // invented data. That worked, but it meant every real route had to be
+    // reached and then not taken, and the argument for safety was "this branch
+    // runs first". On the demo hostname the argument is shorter — a request
+    // here NEVER REACHES THE ROUTES AT ALL. No host enrolment, no websocket,
+    // no sign-in, no Durable Object, and no credential that could change the
+    // answer.
+    //
+    // Note the position: ABOVE the host routes. If this sat where the token
+    // check sits, `/host/connect` on the demo domain would have returned
+    // earlier and joined the real fleet. "Demo" must not become a way in, and
+    // the way to guarantee that is to answer before the door exists rather
+    // than to remember not to open it.
+    //
+    // No credential is checked and none is needed: the data is three invented
+    // sessions on two invented machines, identical for everybody.
+    if (isDemoHost(url, env)) {
+      if (env.DEMO_RATE_LIMIT) {
+        const key = request.headers.get('cf-connecting-ip') || 'unknown';
+        const { success } = await env.DEMO_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json(
+            { ok: false, error: { code: 'rate_limited' }, demo: true, text: 'Too many demo requests. Try again in a minute.' },
+            429,
+          );
+        }
+      }
+      const demoBody = request.method === 'POST' ? await readJsonSafely(request) : null;
+      const demoAnswer = demoReply(url, request.method, demoBody);
+      return demoAnswer
+        ? json({ ...demoAnswer, demo: true })
+        : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
     }
 
     // A host authenticates by SIGNATURE, inside the Durable Object, which is

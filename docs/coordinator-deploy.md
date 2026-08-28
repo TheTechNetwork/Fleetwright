@@ -102,6 +102,36 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
+## A demo fleet, on its own domain
+
+**`fleetdemo.thetech.network`**, same Worker, same deploy. `custom_domain =
+true` in `routes` means wrangler creates the DNS record and the domain binding
+itself — adding it was one line and nothing manual.
+
+The domain is the boundary, and that is a stronger claim than the token ever
+supported. `worker.js` matches `AGENT_FLEET_DEMO_HOST` **above the host
+routes**, so a request there never reaches enrolment, a websocket, sign-in, or
+the Durable Object. Not "the demo branch runs first" — the routes are not
+reached at all, and no credential presented on that hostname can change the
+answer.
+
+The position matters and is the reason the check is where it is: if it sat
+where the token check sits, `/host/connect` on the demo domain would have
+returned earlier and joined the real fleet. **Demo must not become a way in**,
+and the way to guarantee that is to answer before the door exists rather than
+to remember not to open it.
+
+Both apps have a **"Look around the demo fleet"** button that points at it.
+There is no longer a paste-a-credential field in either app: asking somebody to
+find a token in this document and paste it into a field labelled "credential"
+is a fair description of no demo at all. The constants are pinned to this file
+by `test/demo-button.test.js`, so changing the host or the token without
+shipping both apps fails CI rather than silently leaving installed builds
+pointed at a domain that answers nothing.
+
+Getting back in when sign-in itself is broken is now curl with
+`AGENT_FLEET_API_TOKEN`, not a field on every user's settings screen.
+
 ## A demo token, for App Store review
 
 App Store review needs credentials that work, and no reviewer's address is on

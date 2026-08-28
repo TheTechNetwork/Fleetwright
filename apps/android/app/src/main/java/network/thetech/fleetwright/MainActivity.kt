@@ -32,7 +32,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
@@ -659,7 +658,23 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
 
         Text("You", style = MaterialTheme.typography.titleMedium)
-        if (signedIn) {
+        if (signedIn && Demo.isActive(settings.coordinatorUrl)) {
+            // Said plainly, and never as "signed in". Every reply from this
+            // fleet carries `demo: true`, and somebody wondering why their
+            // machines are missing deserves the answer on the screen rather
+            // than in a support thread.
+            Text("Demo — invented hosts and sessions", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = {
+                settings.credential = ""
+                settings.signedInAs = ""
+                settings.coordinatorUrl = settings.urlBeforeDemo
+                url = settings.urlBeforeDemo
+                settings.urlBeforeDemo = ""
+                signedIn = false
+                identity = ""
+                hosts = emptyList()
+            }) { Text("Leave the demo") }
+        } else if (signedIn) {
             Text(
                 "Signed in as ${identity.ifBlank { "this device" }}",
                 style = MaterialTheme.typography.bodyMedium,
@@ -719,6 +734,30 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+
+            // ONE TAP INTO A FLEET THAT ISN'T REAL.
+            //
+            // The demo credential has existed since store review needed one,
+            // and reaching it meant finding a token in a deployment document
+            // and pasting it into a field labelled "credential" — which is a
+            // fair description of no demo at all for anybody not already
+            // reading the repo.
+            //
+            // The real coordinator is REMEMBERED rather than discarded:
+            // somebody who has already pointed this app at their own fleet and
+            // taps out of curiosity gets it back when they leave.
+            TextButton(onClick = {
+                if (settings.coordinatorUrl.isNotBlank() && !Demo.isActive(settings.coordinatorUrl)) {
+                    settings.urlBeforeDemo = settings.coordinatorUrl
+                }
+                settings.coordinatorUrl = Demo.COORDINATOR_URL
+                url = Demo.COORDINATOR_URL
+                settings.signedInAs = Demo.LABEL
+                settings.credential = Demo.CREDENTIAL
+                identity = Demo.LABEL
+                signedIn = true
+                onDone()
+            }) { Text("Look around the demo fleet") }
         }
         if (signInResult.isNotBlank()) {
             Text(signInResult, style = MaterialTheme.typography.bodySmall)
@@ -791,53 +830,20 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             }
         }
 
-        // The way in that does not involve an identity provider.
+        // "Use a credential instead" WAS HERE, and is gone.
         //
-        // Two real needs, neither of which sign-in covers. Play's reviewers
-        // have to be able to run the app, and no reviewer's address is on
-        // anybody's allowlist — the public demo credential exists for exactly
-        // that and reaches a coordinator with no hosts on it. And when sign-in
-        // itself is what is broken, the admin credential is how an operator
-        // gets back in.
+        // It existed for two things. The first was store review, which needed
+        // a way in that no allowlist could grant — now a button in the section
+        // above, because asking a reviewer to find a token in a deployment
+        // document and paste it into a field labelled "credential" is a fair
+        // description of no demo at all.
         //
-        // Behind a toggle, and labelled for what it is: a token field in front
-        // of everybody is how the shared-secret habit comes back.
-        HorizontalDivider(Modifier.padding(vertical = 12.dp))
-        var showAdvanced by rememberSaveable { mutableStateOf(false) }
-        var pasted by rememberSaveable { mutableStateOf("") }
-        TextButton(onClick = { showAdvanced = !showAdvanced }) {
-            Text(if (showAdvanced) "Hide" else "Use a credential instead")
-        }
-        if (showAdvanced) {
-            Text(
-                "For a demo fleet, and for getting back in when sign-in is what is broken.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            // Masked. It is a credential, and in plain text it is readable over
-            // a shoulder and captured by any screenshot or screen recording of
-            // this panel.
-            OutlinedTextField(
-                value = pasted,
-                onValueChange = { pasted = it },
-                label = { Text("Credential") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                enabled = pasted.isNotBlank() && url.isNotBlank(),
-                onClick = {
-                    settings.coordinatorUrl = url
-                    settings.credential = pasted.trim()
-                    settings.signedInAs = ""
-                    signedIn = true
-                    pasted = ""
-                    showAdvanced = false
-                    onDone()
-                },
-            ) { Text("Use it") }
-        }
+        // The second was getting back in when sign-in itself is broken. That
+        // is a real need and it is now served by curl with the API token
+        // rather than by a field in everybody's settings. A box that asks for
+        // a token, in front of every user, is how the shared-secret habit
+        // comes back — and a recovery path only the operator needs does not
+        // belong on the operator's users' screens.
 
         // Push is the one feature that fails silently: a registration that
         // never arrived and a coordinator with no sender configured look

@@ -455,7 +455,9 @@ struct Fleet {
         body: [String: Any]?,
         authenticated: Bool = true
     ) async throws -> Data {
-        guard let url = URL(string: settings.coordinatorURL.trimmingCharacters(in: ["/"]) + path) else {
+        // Already normalised by Settings — scheme present, no whitespace, no
+        // trailing slash — so this is a parse, not a repair.
+        guard let url = URL(string: settings.coordinatorURL + path) else {
             throw FleetError.message("That coordinator URL is not a URL")
         }
         var request = URLRequest(url: url)
@@ -500,8 +502,20 @@ enum FleetError: LocalizedError {
 @Observable
 final class Settings {
     /// Not sensitive: an origin, and the app refuses to talk to any other.
+    /// Normalised ON WRITE, so every reader gets something usable and no
+    /// caller has to remember. Assigning inside `didSet` does not re-enter it.
     var coordinatorURL: String {
-        didSet { UserDefaults.standard.set(coordinatorURL, forKey: "coordinatorURL") }
+        didSet {
+            let tidy = CoordinatorURL.normalise(coordinatorURL)
+            if tidy != coordinatorURL { coordinatorURL = tidy }
+            UserDefaults.standard.set(coordinatorURL, forKey: "coordinatorURL")
+        }
+    }
+
+    /// Where this app was pointed before somebody tapped into the demo, so
+    /// leaving it puts them back rather than making them re-type a URL.
+    var urlBeforeDemo: String {
+        didSet { UserDefaults.standard.set(urlBeforeDemo, forKey: "urlBeforeDemo") }
     }
 
     /// The keychain, not UserDefaults.
@@ -535,7 +549,12 @@ final class Settings {
     private static let credentialKey = "credential"
 
     init() {
-        coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
+        // Normalised on the way IN as well as on the way out: a value stored by
+        // an older build predates the tidying, and the first thing that happens
+        // to it should not be a request to a URL that cannot parse.
+        // `didSet` does not run during init, so this is explicit.
+        coordinatorURL = CoordinatorURL.normalise(UserDefaults.standard.string(forKey: "coordinatorURL") ?? "")
+        urlBeforeDemo = UserDefaults.standard.string(forKey: "urlBeforeDemo") ?? ""
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
         customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""

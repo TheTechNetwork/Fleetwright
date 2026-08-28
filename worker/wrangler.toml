@@ -38,8 +38,20 @@ compatibility_date = "2026-01-15"
 # The hostname matters more here than it looks: §5 has the host agent PIN the
 # coordinator origin, so changing it means editing every host's
 # /etc/agent-fleet-sidecar.env. It is not a value to churn.
+#
+# TWO CUSTOM DOMAINS, ONE WORKER, and the second one is a boundary rather than
+# a convenience. `fleetdemo` answers only from the invented fleet in
+# worker/src/demo.js: worker.js checks the hostname ABOVE the host routes, so a
+# request there never reaches enrolment, a websocket, sign-in, or the Durable
+# Object. Same code, same deploy, and no credential that can cross between
+# them — which is a much shorter thing to verify than "the demo branch runs
+# first".
+#
+# `custom_domain = true` makes wrangler create the DNS record and the domain
+# binding on deploy, so adding a demo host is this line and nothing manual.
 routes = [
-  { pattern = "fleet.thetech.network", custom_domain = true }
+  { pattern = "fleet.thetech.network", custom_domain = true },
+  { pattern = "fleetdemo.thetech.network", custom_domain = true }
 ]
 
 # --- plain configuration, deployed with the code -----------------------------
@@ -57,6 +69,16 @@ routes = [
 # It is prefixed `demo-` so that a request carrying it is obvious in a log at a
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+
+# Which hostname IS the demo. Named here rather than hardcoded in worker.js so
+# there is one place to change it, and so a second deployment of this Worker can
+# have its own — or none, which is what local dev and any fork gets by default.
+#
+# Setting this is what makes the demo structural instead of careful: on this
+# hostname there is no route to a host, a session or the Durable Object, so the
+# credential above stops being the thing standing between a curious person and
+# somebody's real work.
+AGENT_FLEET_DEMO_HOST = "fleetdemo.thetech.network"
 
 # --- who is allowed to sign in ----------------------------------------------
 # Identifiers, not credentials: the issuer is public, the audience is the client
