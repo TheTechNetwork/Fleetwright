@@ -7,9 +7,19 @@ on:
   # number to give testers the same app twice.
   push:
     branches: [main]
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+    # Negative patterns after the positive ones, which is how GitHub resolves
+    # them: last match wins. A README or a comment-only markdown file under
+    # apps/ios used to build, sign, upload and spend a build number to give
+    # testers a byte-identical app.
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+      - '!apps/ios/**/*.md'
   pull_request:
-    paths: ['apps/ios/**', '.github/workflows/ios.yml']
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+      - '!apps/ios/**/*.md'
   workflow_dispatch:
   release:
     types: [published]
