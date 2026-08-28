@@ -21,11 +21,11 @@ struct SessionKind: Codable, Identifiable, Hashable {
     /// What you say, and what you see. "dev", "orgi", "triage".
     var word: String
 
-    /// Where it lands. STORED BUT NOT YET SENT: the coordinator's dispatch()
-    /// has no placement preference to give it to, so wiring it now would mean a
-    /// field that is accepted, ignored, and looks like it worked. Kept in the
-    /// model so the editor and the migration exist when the scheduler does, and
-    /// deliberately not shown in the UI until then.
+    /// Where it lands. Wired now that the coordinator takes a placement
+    /// preference: a kind naming a host pre-fills the start sheet's picker, so
+    /// "start a dev session" can mean "on the dev box" without saying so.
+    /// Empty means "wherever the scheduler puts it", which is the right
+    /// default — most people have one host and should never meet this field.
     var host: String = ""
 
     /// nil leaves the fleet default alone. Stored as a string because that is

@@ -62,6 +62,7 @@ class Fleet(private val settings: Settings) {
         title: String? = null,
         brief: String? = null,
         mode: String? = null,
+        host: String? = null,
     ): Reply = intent(
         "start",
         buildMap {
@@ -70,6 +71,10 @@ class Fleet(private val settings: Settings) {
             if (!brief.isNullOrBlank()) put("brief", brief)
             if (!mode.isNullOrBlank()) put("mode", mode)
         },
+        // A placement PREFERENCE, beside the intent and never inside it —
+        // `start` declares no host parameter, and a host receiving one would
+        // refuse the whole intent. The coordinator refuses a bad pick by name.
+        host = host,
     )
 
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
@@ -188,7 +193,7 @@ class Fleet(private val settings: Settings) {
      * on — an app that picked the host would have to know which box holds which
      * session, which is exactly the thing the coordinator exists to know.
      */
-    private suspend fun intent(verb: String, params: Map<String, String> = emptyMap()): Reply =
+    private suspend fun intent(verb: String, params: Map<String, String> = emptyMap(), host: String? = null): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
                 .put("verb", verb)
@@ -197,6 +202,7 @@ class Fleet(private val settings: Settings) {
                 // An idempotency key the SERVER honours: a retry of `start`
                 // returns the original outcome instead of a second session.
                 .put("id", "app-" + java.util.UUID.randomUUID().toString())
+            if (!host.isNullOrBlank()) body.put("host", host)
             try {
                 val json = post("/api/intent", body)
                 Reply(

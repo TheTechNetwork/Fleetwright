@@ -55,6 +55,8 @@ fun StartSheet(
     var kind by remember {
         mutableStateOf(preselectedKindId?.let { id -> kinds.firstOrNull { it.id == id } })
     }
+    var host by remember { mutableStateOf("") }
+    var hosts by remember { mutableStateOf(listOf<String>()) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
@@ -73,6 +75,12 @@ fun StartSheet(
             lastSuggested = suggested
             title = suggested
         }
+    }
+
+    LaunchedEffect(Unit) {
+        // The enrolled list the settings screen already uses. Loaded here so
+        // the sheet works from every entry point, launcher shortcuts included.
+        hosts = runCatching { Fleet(settings).enrolledHosts().map { it.hostId } }.getOrDefault(emptyList())
     }
 
     AlertDialog(
@@ -116,6 +124,23 @@ fun StartSheet(
                         }
                     }
                 }
+                // Only when there is a choice. One host is not a decision,
+                // and a picker with one entry is furniture.
+                if (hosts.size > 1) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Where", style = MaterialTheme.typography.labelMedium)
+                        AssistChip(
+                            onClick = { host = "" },
+                            label = { Text(if (host.isEmpty()) "Wherever fits \u2713" else "Wherever fits") },
+                        )
+                        hosts.forEach { h ->
+                            AssistChip(
+                                onClick = { host = if (host == h) "" else h },
+                                label = { Text(if (host == h) "$h \u2713" else h) },
+                            )
+                        }
+                    }
+                }
                 if (error.isNotBlank()) {
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -138,6 +163,7 @@ fun StartSheet(
                                 title = finalTitle.ifBlank { null },
                                 brief = brief.trim().ifBlank { null },
                                 mode = kind?.mode,
+                                host = host.ifBlank { null },
                             )
                             onStarted(reply.text ?: "Started a session")
                             onDismiss()

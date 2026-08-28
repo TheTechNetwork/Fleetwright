@@ -258,6 +258,14 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                                 refresh(keepStatus = true)
                             }
                         },
+                        onForget = {
+                            scope.launch {
+                                busy = true
+                                status = fleet.forget(session.name).text
+                                busy = false
+                                refresh(keepStatus = true)
+                            }
+                        },
                         // Peek deliberately does NOT refresh afterwards: the
                         // pane output IS the answer, and a refresh a moment
                         // later would wipe it off the screen.
@@ -292,9 +300,25 @@ private fun SessionCard(
     busy: Boolean,
     onStop: () -> Unit,
     onResume: () -> Unit,
+    onForget: () -> Unit,
     onPeek: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
+    var confirmingForget by remember { mutableStateOf(false) }
+    if (confirmingForget) {
+        AlertDialog(
+            onDismissRequest = { confirmingForget = false },
+            title = { Text("Forget ${session.label}?") },
+            // Confirmed where stop is not, because stop is reversible by
+            // resume and forget is reversible by nothing: the conversation and
+            // the workspace are both deleted.
+            text = { Text("This deletes its conversation and workspace. It cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = { confirmingForget = false; onForget() }) { Text("Forget") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
+        )
+    }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -335,6 +359,9 @@ private fun SessionCard(
                     }
                 } else if (session.resumable) {
                     TextButton(onClick = onResume, enabled = !busy) { Text("Resume") }
+                }
+                if (session.status != "running") {
+                    TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Forget") }
                 }
             }
         }

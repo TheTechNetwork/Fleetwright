@@ -26,6 +26,8 @@ struct StartSheet: View {
     @State private var brief = ""
     @State private var title = ""
     @State private var kind: SessionKind?
+    @State private var host = ""
+    @State private var hosts: [String] = []
     @State private var busy = false
     @State private var suggesting = false
     @State private var error = ""
@@ -81,12 +83,35 @@ struct StartSheet: View {
                             Text("None").tag(SessionKind?.none)
                             ForEach(kinds) { k in Text(k.displayName).tag(SessionKind?.some(k)) }
                         }
+                        // A kind that names a host fills the picker below, and
+                        // the picker stays editable: the kind is a default, not
+                        // a decision made last month that cannot be revisited.
+                        .onChange(of: kind) { _, now in
+                            if let kindHost = now?.host, !kindHost.isEmpty { host = kindHost }
+                        }
+                    }
+                }
+
+                // Only shown when there is a choice to make. One host is not a
+                // decision, and a picker with one entry is furniture.
+                if hosts.count > 1 {
+                    Section("Where") {
+                        Picker("Host", selection: $host) {
+                            Text("Wherever fits").tag("")
+                            ForEach(hosts, id: \.self) { h in Text(h).tag(h) }
+                        }
                     }
                 }
 
                 if !error.isEmpty {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
+            }
+            .task {
+                // The enrolled list, which the settings screen already uses.
+                // Loaded here rather than passed in so the sheet works from
+                // every place that presents it, App Intents included.
+                hosts = (try? await Fleet(settings: settings).enrolledHosts().map(\.hostId)) ?? []
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
@@ -152,7 +177,8 @@ struct StartSheet: View {
                 name: nil,
                 title: finalTitle.isEmpty ? nil : finalTitle,
                 brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
-                mode: kind?.mode
+                mode: kind?.mode,
+                host: host.isEmpty ? nil : host
             )
             onStarted(reply.text ?? "Started a session")
             dismiss()
