@@ -202,3 +202,59 @@ test('an unknown provider is refused by name', async () => {
   assert.equal((await verifyToken('nonesuch', 'x')).ok, false);
   assert.deepEqual(Object.keys(PROVIDERS).sort(), ['cloudflare', 'github']);
 });
+
+test('the payload a picker is built from carries both kinds of credential', async () => {
+  // Claude is an OAuth login the CLI drives in a pane; GitHub and Cloudflare
+  // are tokens a person mints on a page. connectors.js knows only about the
+  // second kind, on purpose — so the merge is tested here, at the one place
+  // that sees both.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const state = dir();
+  new Connections(state).save('me@example.com', 'github', GH, 'octocat');
+
+  const ctx = /** @type {any} */ ({
+    cfg: { stateDir: state, hostname: 'deb13-prod', loginEnabled: true },
+    actor: 'fleet:me@example.com',
+    login: { status: () => ({ loggedIn: false }) },
+  });
+  const reply = await dispatch(ctx, '/connect');
+  assert.equal(reply.ok, true);
+
+  const providers = reply.connections.catalogue.map((c) => c.provider);
+  assert.deepEqual(providers, ['claude', 'github', 'cloudflare']);
+
+  // Claude has no static page to send anybody to: the authorization URL is
+  // minted per attempt in a pane on that box. `null` is the honest answer
+  // there, and a missing field would not be.
+  assert.equal(reply.connections.catalogue[0].url, null);
+  assert.deepEqual(
+    reply.connections.connected.map((c) => [c.provider, c.account]),
+    [['github', 'octocat']],
+  );
+
+  // NOTHING IN THIS PAYLOAD IS A TOKEN. It is rendered on a phone and it
+  // travels through the coordinator to get there.
+  assert.equal(JSON.stringify(reply.connections).includes(GH), false);
+});
+
+test('a linked Claude account shows as connected for the person who linked it', async () => {
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const { Accounts } = await import('../src/core/accounts.js');
+  const state = dir();
+  mkdirSync(join(state, 'accounts'), { recursive: true });
+  new Accounts(state).save('me@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+
+  const ctx = /** @type {any} */ ({
+    cfg: { stateDir: state, hostname: 'box', loginEnabled: true },
+    actor: 'fleet:me@example.com',
+    login: { status: () => ({ loggedIn: true, email: 'the-box@example.com' }) },
+  });
+  const reply = await dispatch(ctx, '/connect');
+  // THEIRS, not the box's. A member asking "am I connected" is not asking
+  // what account the machine runs on — that distinction is the whole of
+  // docs/accounts.md.
+  assert.deepEqual(
+    reply.connections.connected.filter((c) => c.provider === 'claude').map((c) => c.account),
+    ['me@example.com'],
+  );
+});
