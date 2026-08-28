@@ -699,6 +699,69 @@ are in and what code they run stays visible to everyone: a member needs the
 host picker to work, and the existence of a box is not somebody's private
 information. What is running on it is.
 
+## Asked: should sandboxes pull from a central vault at startup?
+
+Cloudflare Secrets Store is the obvious candidate, and the question is a good
+one because it names the real gap in the current design — a token is at rest on
+**every host in the fleet**, three boxes means three copies, and a host enrolled
+later has none.
+
+**No to that shape, and the reason is not about Cloudflare.** Three costs, in
+descending order of how much they matter:
+
+**1. It makes the coordinator hold credentials.** Everything above is built on
+the coordinator being treated as compromised: the fixed verb set exists so that
+a compromised Worker can do no more than start and stop some sessions. A vault
+the coordinator can read turns it into the single highest-value target in the
+system — one breach yielding every member's GitHub and Cloudflare tokens rather
+than a bounded amount of session mischief. That is not a small trade for a
+convenience gain; it is the trade this document exists to refuse.
+
+**2. Pulling AT STARTUP is not better than seeding, it is the same exposure
+with a dependency added.** A secret fetched at container start lands in the
+container's environment or filesystem exactly as a seeded one does — the same
+core dump, the same `env`, the same leak — and now a session cannot start when
+the network or the vault is down. Today a host starts sessions with no
+coordinator at all, which is a property worth keeping.
+
+**3. Something must authenticate to get the credentials**, and a credential to
+fetch credentials is where this kind of design usually quietly ends up back at
+a shared secret.
+
+### The version worth taking
+
+The right answer is already in this document and is the one to spend a vault
+on: **the broker, and behind it the proxy.** The per-session unix socket is
+already built and already authenticated by the bind-mount. A session asks its
+own socket for `github`; something on the other side decides whether that
+session may have it and returns a value good for minutes. Nothing is stored in
+the container, nothing is in the environment, and rotation is invisible because
+the next ask returns the next value.
+
+**That** is where a central vault belongs — as custody for what the broker or
+the proxy hands out, alongside the 1Password option already listed here. The
+distinction is the whole point: with a vault behind a broker the credential
+never reaches a session or sits on a host; with a vault read at startup it
+reaches both, and the coordinator now holds it too.
+
+So: not "pull at startup" instead of the current model, but "ask on demand"
+instead of holding at all — and a vault is a fine backend for the thing being
+asked. Which reorders nothing on the list below; it is an argument for item 4
+rather than a new item.
+
+### And the narrower gap, meanwhile
+
+A host enrolled later has no copy of a token connected before it joined.
+Envelope custody would fix it — the coordinator holding a copy encrypted to
+each host's public key, which the P-256 host keys already make possible — but
+note the honest limit: **nothing can encrypt to a key that did not exist yet.**
+A host that joins tomorrow cannot be handed an envelope sealed today by a
+device that has since forgotten the secret. Either something central holds
+plaintext, or somebody re-links.
+
+Until the broker exists, re-linking is one tap, and it is one tap per new
+machine rather than one per machine per credential.
+
 ## What this does not solve, and should be said out loud
 
 An agent that can make authorised requests can make bad ones. Moving the
