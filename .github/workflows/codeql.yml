@@ -138,31 +138,40 @@ jobs:
           echo "wf=$wf"       >> "$GITHUB_OUTPUT"
 
   # No compiler involved, so no build steps and no runner cost worth managing.
-  interpreted:
-    name: analyze (${{ matrix.language }})
+  # TWO JOBS RATHER THAN A MATRIX, and the reason is a rule worth knowing:
+  # THE `matrix` CONTEXT IS NOT AVAILABLE IN A JOB-LEVEL `if:`.
+  #
+  # This was a matrix of two languages gated by `needs.changes.outputs[matrix.gate]`,
+  # which reads perfectly and is rejected before anything runs. GitHub reports
+  # it as "This run likely failed because of a workflow file issue" with ZERO
+  # jobs and no annotation naming the line — and the workflow's own name in the
+  # UI degrades to its path, because the file could not be parsed far enough to
+  # read `name:`. Every run since it was written failed that way.
+  #
+  # `matrix` is available in a STEP-level `if:` and in `strategy`, which is why
+  # this looks like it should work. Gating at the step level would run the job
+  # and skip its steps — reporting green for work that did not happen, which is
+  # worse than either alternative.
+  #
+  # So: one job per language. A skipped job reports a VISIBLE "skipping" on the
+  # pull request, which is the whole reason the gate lives on the job rather
+  # than on the trigger, where a filtered run reports nothing at all.
+  javascript:
+    name: analyze (javascript-typescript)
     needs: changes
-    # Indexed by the matrix leg's own gate: js answers to "any non-prose
-    # change", actions to "a workflow changed". A skip here is a VISIBLE
-    # "skipping" on the pull request — the reason the gate lives on the job
-    # and not on the trigger, where a filtered run reports nothing at all.
-    if: ${{ needs.changes.outputs[matrix.gate] == 'true' }}
+    # Any non-prose change. This is the part of the repo that faces the network.
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     permissions:
       security-events: write
       actions: read
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { language: javascript-typescript, gate: code }
-          - { language: actions, gate: wf }
     steps:
       - uses: actions/checkout@v7.0.1
 
       - uses: github/codeql-action/init@v4.37.9
         with:
-          languages: ${{ matrix.language }}
+          languages: javascript-typescript
           # `none` means "extract the source directly". This is what autobuild
           # would have done for these two anyway; saying it explicitly means a
           # future language addition cannot silently fall back to guessing.
@@ -170,7 +179,29 @@ jobs:
 
       - uses: github/codeql-action/analyze@v4.37.9
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:javascript-typescript
+
+  actions:
+    name: analyze (actions)
+    needs: changes
+    # A workflow changed — which is exactly the change that broke this file.
+    if: needs.changes.outputs.wf == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: github/codeql-action/init@v4.37.9
+        with:
+          languages: actions
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4.37.9
+        with:
+          category: /language:actions
 
   # The one the java error was about. Everything here mirrors android.yml's
   # debug job — if that job builds, this one extracts.
