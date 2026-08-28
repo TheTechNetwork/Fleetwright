@@ -27,7 +27,7 @@
  * @property {number|null} running
  * @property {number|null} free
  * @property {string[]|null} resumable
- * @property {Array<{name: string, status: string}>|null} [sessions]
+ * @property {Array<{name: string, status: string, createdBy?: string|null}>|null} [sessions]
  * @property {number[]} loadavg
  * @property {boolean|null} loggedIn
  * @property {{reachable: boolean, reason?: string}} [hub]
@@ -216,7 +216,14 @@ export class HostRegistry {
       const sessions = host.health?.sessions;
       const found = sessions?.find((s) => s.name === name);
       if (found) {
-        out.push({ host, status: found.status, ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt });
+        out.push({
+          host,
+          status: found.status,
+          // For ownership checks. Older sidecars report no createdBy; null
+          // means "unattributed", which the scheduler treats as fleet-owned.
+          createdBy: found.createdBy ?? null,
+          ageMs: host.healthAt === null ? Infinity : this.now() - host.healthAt,
+        });
         continue;
       }
       // Older sidecars report only the resumable names.

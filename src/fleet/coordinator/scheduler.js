@@ -34,10 +34,10 @@ const FANOUT = new Set(['list']);
 /**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
- * @param {{ maxPinAgeMs?: number, preferHost?: string }} [opts]
+ * @param {{ maxPinAgeMs?: number, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
  * @returns {Placement}
  */
-export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '' } = {}) {
+export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', requester = null } = {}) {
   const verb = intent.verb;
   const name = intent.params?.name;
 
@@ -78,7 +78,21 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
           'recoverable by trying again. Rename one, or stop it from the box itself.',
       };
     }
-    const found = claims[0] || null;
+    /** @type {(typeof claims)[number]|null} */
+    let found = claims[0] || null;
+    // OWNERSHIP, checked before anything is revealed. A member may act only on
+    // sessions their verified identity created; unattributed sessions belong
+    // to the fleet, exactly as in the visibility filter one layer down.
+    //
+    // The refusal is BYTE-IDENTICAL to unknown_session, deliberately. A
+    // distinct "not yours" answer would confirm to a member that a guessed
+    // name exists on somebody else's work — an existence oracle built out of
+    // an access control. To a member, a session they cannot touch and a
+    // session that does not exist must be the same fact.
+    if (found && requester && !requester.admin) {
+      const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+      if (String(found.createdBy || '').toLowerCase() !== mine) found = null;
+    }
     if (!found) {
       return {
         kind: 'refused',
