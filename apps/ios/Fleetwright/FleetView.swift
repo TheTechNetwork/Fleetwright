@@ -123,9 +123,22 @@ private struct SessionRow: View {
             if session.label != session.name {
                 Text(session.name).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
             }
-            if let host = session.hostId {
-                Text("on \(host)").font(.caption2).foregroundStyle(.secondary)
+            // Where, how long, and whose account — the three questions about a
+            // session somebody started yesterday. One line, secondary, because
+            // they are context rather than the point.
+            HStack(spacing: 6) {
+                if let host = session.hostId { Text("on \(host)") }
+                if let workspace = session.workspace { Text("· \(workspace)") }
+                if let age = session.age { Text("· \(age)") }
+                if let account = session.account, account != "shared" {
+                    // Only when it is NOT the shared account: on a fleet where
+                    // nobody has linked one, this line would say the same
+                    // thing on every row and mean nothing.
+                    Text("· \(account)")
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
             HStack(spacing: 16) {
                 if session.isRunning {
                     Button("Stop") { Task { await stop() } }.disabled(busy)
@@ -172,6 +185,7 @@ private struct SettingsView: View {
     @State private var signingIn = false
     @State private var pin = ""
     @State private var hosts: [Fleet.Host] = []
+    @State private var fleetHosts: [Fleet.FleetHost] = []
     @State private var showingAdvanced = false
     @State private var pastedCredential = ""
     @State private var confirmingRevoke: String?
@@ -180,6 +194,9 @@ private struct SettingsView: View {
     @MainActor
     private func loadHosts() async {
         guard !settings.credential.isEmpty else { return }
+        // Both lists: enrolled is the membership (fingerprints, revocation),
+        // fleet is what they are saying right now. Different questions.
+        fleetHosts = (try? await Fleet(settings: settings).fleetHosts()) ?? []
         hosts = (try? await Fleet(settings: settings).enrolledHosts()) ?? []
     }
 
@@ -363,6 +380,65 @@ private struct SettingsView: View {
                 // look like nothing at all. This asks for one now and reports
                 // what happened, so the answer arrives before the notification
                 // that matters does.
+                // WHAT EACH BOX SAYS ABOUT ITSELF. Asked for directly — "we
+                // need the sign-in status and logs available on the app" —
+                // and this is the first half: the answer to "is that box
+                // logged in, on what plan, running what code" without SSH.
+                Section {
+                    if fleetHosts.isEmpty {
+                        Text("No hosts reporting yet.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    ForEach(fleetHosts) { host in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(host.hostId).font(.system(.body, design: .monospaced))
+                                Spacer()
+                                Text(host.state ?? "unknown")
+                                    .font(.caption)
+                                    // Colour reinforces the word; it never
+                                    // carries the meaning alone.
+                                    .foregroundStyle(host.state == "healthy" ? .green : .orange)
+                            }
+                            // The registry works to make "we don't know"
+                            // unrepresentable as a benign value. Rendering the
+                            // reason verbatim is what makes that work visible.
+                            if let reason = host.reason, !reason.isEmpty {
+                                Text(reason).font(.caption2).foregroundStyle(.secondary)
+                            }
+                            if let account = host.health?.account {
+                                // Built in a function, not as a chain of `+`
+                                // with optional maps inside it: that shape is
+                                // what made the Swift type checker give up in
+                                // #125, and it fails at BUILD time on CI
+                                // rather than anywhere I can see it.
+                                Text(describeAccount(account))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else if host.health?.loggedIn == false {
+                                // Said plainly, because this is the single
+                                // most common cause of a session that starts
+                                // and then does nothing.
+                                Text("NOT signed in — sessions will not start")
+                                    .font(.caption2).foregroundStyle(.red)
+                            }
+                            if let version = host.health?.version?.head {
+                                let behind = host.health?.updates?.appBehind ?? 0
+                                Text(describeVersion(version, behind: behind))
+                                    .font(.caption2)
+                                    .foregroundStyle(behind > 0 ? .orange : .secondary)
+                            }
+                            if host.health?.updates?.rebootRequired == true {
+                                Text("reboot required").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } header: {
+                    Text("Fleet")
+                } footer: {
+                    Text("What each machine reports about itself: whether it is signed in, which plan, "
+                         + "and whether its code is behind.")
+                }
+
                 // Kinds, and the toggle that decides what a spoken start does
                 // to your screen.
                 Section {
@@ -557,4 +633,24 @@ struct SessionKindsView: View {
         // times while somebody types one word.
         .onDisappear { SessionKinds.save(kinds) }
     }
+}
+
+
+/// "signed in as a@b.com · max · Example Org", built a piece at a time.
+///
+/// A plain function rather than an expression in the view: a chain of `+`
+/// with optional maps inside it is what made the Swift type checker give up
+/// in #125, and that failure only appears on CI.
+private func describeAccount(_ account: Fleet.HostHealth.Account) -> String {
+    var parts: [String] = ["signed in as \(account.email ?? "unknown")"]
+    if let plan = account.plan, !plan.isEmpty { parts.append(plan) }
+    if let org = account.org, !org.isEmpty { parts.append(org) }
+    return parts.joined(separator: " · ")
+}
+
+/// "running abc1234 · 3 commits behind", or "· up to date".
+private func describeVersion(_ head: String, behind: Int) -> String {
+    if behind <= 0 { return "running \(head) · up to date" }
+    let plural = behind == 1 ? "commit" : "commits"
+    return "running \(head) · \(behind) \(plural) behind"
 }
