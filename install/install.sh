@@ -895,16 +895,32 @@ fi
 
 # --- 6. CLIs on PATH --------------------------------------------------------
 say "Linking the CLIs"
+
+# /usr/local/bin is NOT guaranteed to exist. On Apple Silicon it usually does
+# not: Homebrew lives in /opt/homebrew there, and nothing else creates the
+# directory — so a clean Mac ends this script with
+#
+#   ln: /usr/local/bin/agent-hub: No such file or directory
+#
+# after everything else has already been installed. It is on the default PATH
+# regardless (/etc/paths ships it), so creating it is the right fix rather than
+# picking a different directory that a shell might not search.
+BIN_DIR=/usr/local/bin
+if [ ! -d "$BIN_DIR" ]; then
+  install -d -m 0755 "$BIN_DIR" || die "could not create $BIN_DIR"
+  ok "created $BIN_DIR"
+fi
+
 for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   [ -f "$DIR/bin/$cli" ] || continue
-  ln -sf "$DIR/bin/$cli" "/usr/local/bin/$cli"
+  ln -sf "$DIR/bin/$cli" "$BIN_DIR/$cli"
   # Belt-and-braces: git already records the executable bit, so this only
   # matters for a checkout that lost it. Never fatal — the repo may legitimately
   # be on a read-only mount, or owned by someone else, and the symlink above is
   # the part that matters.
   [ -x "$DIR/bin/$cli" ] || chmod +x "$DIR/bin/$cli" 2>/dev/null || \
     warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
-  ok "/usr/local/bin/$cli -> $DIR/bin/$cli"
+  ok "$BIN_DIR/$cli -> $DIR/bin/$cli"
 done
 
 # --- 7. the wizard ----------------------------------------------------------
