@@ -79,6 +79,8 @@ USER_HOME="${USER_HOME:-$HOME}"
 # first step on a box you are not sure about, rather than finding out halfway
 # through that node is invisible to sudo.
 CHECK_ONLY=0
+# ask = report what is here and do nothing; yes = offer to remove it.
+CLEAN=ask
 # The wizard asks the handful of questions that otherwise become a checklist at
 # the end. It runs when there is a terminal to ask on, and never otherwise — a
 # piped or scripted install must behave exactly as it always has.
@@ -86,10 +88,11 @@ WIZARD=auto
 while [ $# -gt 0 ]; do
   case "$1" in
     --check|-n) CHECK_ONLY=1 ;;
+    --clean|--reinstall) CLEAN=yes ;;
     --wizard) WIZARD=yes ;;
     --no-wizard|--yes|-y) WIZARD=no ;;
     -h|--help)
-      printf 'usage: install.sh [--check] [--wizard|--no-wizard]\n\n'
+      printf 'usage: install.sh [--check] [--clean] [--wizard|--no-wizard]\n\n'
       printf '  --check       verify prerequisites and change nothing\n'
       printf '  --wizard      force the interactive setup even without a terminal\n'
       printf '  --no-wizard   never ask; write templates and print the next steps\n'
@@ -228,6 +231,151 @@ pkg_why() {
 say "agent-fleet installer${CHECK_ONLY:+}"
 printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
 [ "$CHECK_ONLY" = 1 ] && printf '  mode   : --check (nothing will be changed)\n'
+
+# --- 0. what is already here -------------------------------------------------
+#
+# A separate uninstall script is no use to somebody who does not know it exists,
+# and no use at all on a box where the checkout is the thing that is wrong. The
+# installer already has to look at every one of these paths, so it can say what
+# it found and offer to clear it.
+#
+# NOT offered on an ordinary re-run. Re-running this to upgrade is the
+# documented path and must stay non-destructive — a prompt every time is a
+# prompt somebody eventually answers wrong, and the answer costs them the host
+# identity. So it asks only when there is a reason: --clean was passed, or the
+# key belongs to different hardware.
+previous_install() {
+  FOUND=()
+  for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
+    [ -f "$f" ] && FOUND+=("config    $f")
+  done
+  if [ -f /var/lib/agent-fleet/host-key.json ]; then
+    local fp=""
+    fp="$(sudo -u "$RUN_USER" "$DIR/bin/agent-fleet-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+    FOUND+=("IDENTITY  /var/lib/agent-fleet/host-key.json${fp:+  fingerprint $fp}")
+  fi
+  for d in /var/lib/agent-hub /var/lib/agent-fleet-coordinator; do
+    [ -d "$d" ] && FOUND+=("state     $d")
+  done
+  for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+    if [ "$PLATFORM" = macos ]; then
+      [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] && FOUND+=("service   $u")
+    else
+      [ -f "/etc/systemd/system/$u.service" ] && FOUND+=("service   $u")
+    fi
+  done
+  for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot; do
+    [ -f "$f" ] && FOUND+=("sudoers   $f")
+  done
+}
+
+# A key that belongs to different hardware is the one case where continuing
+# quietly is actively wrong: two boxes proving the same identity disconnect each
+# other for ever. So a clone escalates from "reporting" to "asking", without
+# --clean having to be passed by somebody who does not yet know anything is
+# wrong. Read-only here; the rotation itself happens with the rest of the
+# identity work further down.
+CLONE=0
+if [ -f /var/lib/agent-fleet/host-key.json ] && [ -f /var/lib/agent-fleet/machine-id ]; then
+  NOW_ID=""
+  if [ -r /etc/machine-id ]; then NOW_ID="$(cat /etc/machine-id)"
+  elif [ -r /var/lib/dbus/machine-id ]; then NOW_ID="$(cat /var/lib/dbus/machine-id)"
+  elif command -v ioreg >/dev/null 2>&1; then
+    NOW_ID="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/ {print $4}')"
+  fi
+  if [ -n "$NOW_ID" ] && [ "$(cat /var/lib/agent-fleet/machine-id 2>/dev/null)" != "$NOW_ID" ]; then
+    CLONE=1
+    [ "$CLEAN" = ask ] && CLEAN=yes
+  fi
+fi
+
+previous_install
+if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
+  say "A previous install is already here"
+  for f in "${FOUND[@]}"; do printf '  %s\n' "$f"; done
+
+  # The identity is called out separately because it is the one thing here that
+  # cannot be recreated: removing it means this box is no longer the host the
+  # coordinator knows, and has to be enrolled again.
+  if [ -f /var/lib/agent-fleet/host-key.json ]; then
+    printf '\n  The IDENTITY line is this box'"'"'s place in the fleet. Clearing it means\n'
+    printf '  enrolling again, and removing the old entry from the coordinator.\n'
+  fi
+
+  if [ "$CLONE" = 1 ]; then
+    printf '\n  THIS BOX IS A CLONE. That identity was made on different hardware,\n'
+    printf '  so the machine it came from still holds the same private key. The\n'
+    printf '  coordinator cannot tell the two apart: they will take turns\n'
+    printf '  connecting and disconnecting each other, for ever, and neither box\n'
+    printf '  will log anything that explains it.\n'
+  fi
+
+  # A choice, not a yes/no. "Do you want to clean up?" is ambiguous about what
+  # happens if you say no, and this is the one prompt in the script where the
+  # wrong answer costs something that cannot be recovered.
+  #
+  # 1 is the default and is what re-running this has always done. 2 is only the
+  # default when the identity provably belongs to another machine, because
+  # there "keep it" is not a conservative choice — it is the broken one.
+  printf '\n  1) Update      keep the config, the identity and running sessions\n'
+  printf '  2) Clean       remove everything above, then install fresh\n'
+  if [ "$CLONE" = 1 ]; then
+    printf '\n     2 is recommended here: this identity is not this machine'"'"'s.\n'
+    CHOICE_DEFAULT=2
+  else
+    CHOICE_DEFAULT=1
+  fi
+
+  # --clean is the same thing without a terminal, and no terminal means 1 —
+  # a piped install must never destroy an identity nobody was asked about.
+  if [ "$CLEAN" = yes ]; then
+    CHOICE=2
+  elif [ "$WIZARD" = no ] || ! [ -t 0 ]; then
+    CHOICE=1
+    printf '\n  No terminal to ask on — updating. Pass --clean to remove instead.\n'
+  else
+    ask CHOICE "Choose" "$CHOICE_DEFAULT"
+  fi
+
+  case "$CHOICE" in
+    2)
+      # Said BEFORE the gate, as what WOULD happen — "Removing." printed while
+      # still asking whether to remove is the script claiming an action it has
+      # not taken and might not take.
+      printf '\n  This would remove everything listed above. ~%s/agent-runs,\n' "$RUN_USER"
+      printf '  running sessions and node/tmux/claude are left alone.\n'
+
+      # A second gate, and deliberately not [y/N]. A single keystroke is the
+      # wrong weight for the one action in this script that destroys something
+      # unrecoverable — the identity is a private key, and there is no copy.
+      # Typing a word cannot be done by leaning on the return key.
+      if [ -t 0 ]; then
+        if [ -f /var/lib/agent-fleet/host-key.json ]; then
+          printf '\n  This deletes the host key. There is no copy, and the coordinator\n'
+          printf '  will not recognise this box again until it is enrolled afresh.\n'
+        fi
+        ask SURE "Are you sure you want to delete? Type YES"
+        if [ "$SURE" != YES ]; then
+          ok "not deleting — updating instead, nothing above was changed"
+          CHOICE=1
+        fi
+      fi
+
+      if [ "$CHOICE" = 2 ]; then
+        say "Removing the previous install"
+        # One implementation, called rather than copied: the uninstaller is the
+        # thing that knows how to take a box apart, and a second copy of that
+        # knowledge here is the copy that goes stale.
+        "$DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
+        ok "cleaned — installing fresh"
+      fi
+      ;;
+    *)
+      ok "updating — nothing above was changed"
+      [ "$CLONE" = 1 ] && warn "the cloned identity is still in place; this box and its original will fight over it"
+      ;;
+  esac
+fi
 
 # --- 1. prerequisites -------------------------------------------------------
 say "Checking prerequisites"
@@ -1016,7 +1164,54 @@ if [ "$WIZARD" = yes ]; then
   # is 0700 so the group does not decide anything anyway. Same shape as the
   # STATE_DIR line above.
   install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
-  set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "/var/lib/agent-fleet/host-key.json"
+  KEY_FILE_PATH=/var/lib/agent-fleet/host-key.json
+  set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "$KEY_FILE_PATH"
+
+  # --- is this box a clone of one that was already in the fleet? -----------
+  #
+  # /var/lib/agent-fleet/host-key.json IS this machine's identity — "whoever
+  # can read it can be this machine, and nothing else can". Clone a VM that has
+  # been installed and both boxes now hold the same private key, so the
+  # coordinator sees ONE host. They take turns proving the same identity and
+  # disconnecting each other, for ever, and the symptom is a host that flaps
+  # with nothing in either box's logs to explain it.
+  #
+  # Nothing detected this. The installer found a valid key, assumed this box
+  # was that host, and carried on.
+  #
+  # So the machine is fingerprinted next to the key, and a mismatch means the
+  # key travelled to hardware it was not made on.
+  machine_id() {
+    if [ -r /etc/machine-id ]; then cat /etc/machine-id
+    elif [ -r /var/lib/dbus/machine-id ]; then cat /var/lib/dbus/machine-id
+    elif command -v ioreg >/dev/null 2>&1; then
+      ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null \
+        | awk -F'"' '/IOPlatformUUID/ {print $4}'
+    fi
+  }
+  MACHINE_FILE=/var/lib/agent-fleet/machine-id
+  THIS_MACHINE="$(machine_id || true)"
+  if [ -n "$THIS_MACHINE" ]; then
+    if [ -f "$KEY_FILE_PATH" ] && [ -f "$MACHINE_FILE" ] \
+       && [ "$(cat "$MACHINE_FILE" 2>/dev/null)" != "$THIS_MACHINE" ]; then
+      # Rotating rather than reusing, because the alternative is not "maybe
+      # fine" — it is two machines authenticating as one, which is broken for
+      # both. Moved aside rather than deleted: if this clone was meant to
+      # REPLACE the original, the old key can be put back, and the original
+      # must then be destroyed rather than left running.
+      STAMP="$(date +%Y%m%d%H%M%S)"
+      mv "$KEY_FILE_PATH" "$KEY_FILE_PATH.clone-$STAMP"
+      warn "THIS BOX IS A CLONE. It carried another machine's fleet identity."
+      warn "  The key has been set aside as host-key.json.clone-$STAMP and a new"
+      warn "  one will be made, so this box needs enrolling again."
+      warn "  The ORIGINAL still holds that key — remove this box's old entry from"
+      warn "  the coordinator, or the two will disconnect each other for ever."
+      warn "  Meant to replace the original? Move the file back and destroy the original."
+    fi
+    printf '%s' "$THIS_MACHINE" > "$MACHINE_FILE"
+    chown "$RUN_USER" "$MACHINE_FILE" 2>/dev/null || true
+    chmod 0600 "$MACHINE_FILE"
+  fi
 
   # Sweep out the credential this replaced. It does nothing now — no coordinator
   # reads it and no sidecar sends it — but a dead secret sitting in a config
