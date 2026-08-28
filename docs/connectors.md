@@ -22,6 +22,20 @@ the middle of their consent screen. The cost of that simplicity is that the
 credential is a real token sitting on a real box — see "What this is not",
 below.
 
+**The pre-filled permissions err toward the work succeeding.** The first pass
+ticked the minimum that came to mind — `repo,workflow,read:org` and
+`workers_scripts,workers_kv_storage` — and that set would not have let a
+session do the week it was written in: a custom domain needs DNS on the zone,
+deploying the Worker needs routes, and `wrangler tail`, which is how this fleet
+gets debugged, needs its own read.
+
+A missing permission fails **inside a session, hours later**, with a provider
+error nobody reading it has the context to interpret. An unused permission
+costs nothing until it leaks — and it is the person's own token, on their own
+account, revocable by them, which is the whole reason this design was chosen
+over holding credentials ourselves. Both screens say the list can be unticked,
+because an unstated trade is just a broad token.
+
 ## Why three generic verbs and not `login`/`code`
 
 The roadmap called this "the `login`/`code` verb", after the two chat commands.
@@ -89,6 +103,37 @@ Being precise about what that buys: it stops a **member** from replacing the
 shared Claude account every other session on that box runs on. It is not a
 defence against a compromised coordinator, which is the party performing the
 check.
+
+## A token is the person's, not the box's
+
+The first version stored a token per person **on one host**, and the screen it
+produced said *"Credentials on deb13-staging"*. That was an honest description
+of what the code did and the wrong model — corrected in one line:
+
+> Creds should be per user not per host.
+
+A GitHub token belongs to a person. Connecting it again on every box, and again
+on each box enrolled later, is exactly the bookkeeping a fleet exists to
+remove. So `link` and `unlink` for a **token** provider now fan out to every
+reachable host, and the screen says *"Your credentials"*.
+
+**Claude stays per machine, and the difference is a fact rather than a
+preference.** Claude's flow is an OAuth login the CLI drives *in a pane on one
+box*: `connect` starts it there and `link` types the code into that same pane.
+A second step landing elsewhere would type a live credential into a box that
+never asked for one. GitHub and Cloudflare have no such state — the token is
+minted on the provider's page and the host only stores it — so the same paste
+is correct everywhere at once.
+
+An explicitly named host still wins. Fanning out is the default, not a rule.
+
+**Still open:** a host enrolled *later* does not get tokens connected before it
+joined, because nothing holds them centrally to replay — and nothing should,
+under the custody argument in [trust.md](./trust.md). The right fix is envelope
+custody: the coordinator holds a copy encrypted to each host's public key,
+which the host keys make possible and which is already on that document's list.
+Until then, connecting again after adding a box is the gap, and it is one tap
+rather than the old one-per-box.
 
 ## A member gets their own tokens or none
 

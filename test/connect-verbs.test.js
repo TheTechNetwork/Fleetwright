@@ -78,34 +78,66 @@ test('the credential is masked on the way to the pane', () => {
   }
 });
 
-test('a connection is pinned to one box, because its two halves are a pair', () => {
+const twoHosts = () => ({
+  reachable: () => [{ hostId: 'a' }, { hostId: 'b' }],
+  list: () => [{ hostId: 'a' }, { hostId: 'b' }],
+  findSessions: () => [],
+  schedulable: () => [{ hostId: 'a' }, { hostId: 'b' }],
+});
+
+test('a CLAUDE connection is pinned, because its two halves are a pair', () => {
   // `connect` starts a login in a pane on one host and `link` types the code
   // into that same pane. A second step landing elsewhere would type a live
-  // credential into a box that never asked for one — and a fan-out would copy
-  // one paste to every host in the fleet.
-  const two = {
-    reachable: () => [{ hostId: 'a' }, { hostId: 'b' }],
-    list: () => [{ hostId: 'a' }, { hostId: 'b' }],
-    findSessions: () => [],
-    schedulable: () => [{ hostId: 'a' }, { hostId: 'b' }],
-  };
+  // credential into a box that never asked for one.
+  //
+  // This is the case where pinning is not a preference but a fact about where
+  // the state lives.
+  const two = twoHosts();
   for (const verb of ['connect', 'link', 'unlink']) {
-    const p = place(/** @type {any} */ (two), intent(verb, { provider: 'github', secret: 'x' }));
+    const p = place(/** @type {any} */ (two), intent(verb, { provider: 'claude', secret: 'x' }));
     assert.equal(p.kind, 'refused', verb);
     assert.equal(p.code, 'ambiguous_host', verb);
   }
   const one = { ...two, reachable: () => [{ hostId: 'a' }] };
-  assert.equal(place(/** @type {any} */ (one), intent('link', { provider: 'github', secret: 'x' })).kind, 'host');
+  assert.equal(place(/** @type {any} */ (one), intent('link', { provider: 'claude', secret: 'x' })).kind, 'host');
 });
 
-test('a named host is honoured, so the second step reaches the first step', () => {
-  const two = {
-    reachable: () => [{ hostId: 'a' }, { hostId: 'b' }],
-    list: () => [{ hostId: 'a' }, { hostId: 'b' }],
-    findSessions: () => [],
-    schedulable: () => [],
-  };
-  const p = place(/** @type {any} */ (two), intent('link', { provider: 'github', secret: 'x' }), { preferHost: 'b' });
+test('a TOKEN is the person’s, so it reaches every box they can', () => {
+  // The correction: "credentials should be per user not per host". A GitHub
+  // token belongs to a person, and connecting it again on every box — and
+  // again on each box enrolled later — is bookkeeping the fleet exists to
+  // remove. Unlike Claude, there is no pane state to land in: the token is
+  // minted on the provider's page and the host only stores it.
+  const two = twoHosts();
+  for (const verb of ['link', 'unlink']) {
+    for (const provider of ['github', 'cloudflare']) {
+      const p = place(/** @type {any} */ (two), intent(verb, { provider, secret: 'ghp_x' }));
+      assert.equal(p.kind, 'fanout', `${verb} ${provider}`);
+      assert.deepEqual(p.hosts.map((h) => h.hostId), ['a', 'b']);
+    }
+  }
+});
+
+test('but a named host still wins, because saying "this box" means it', () => {
+  const p = place(/** @type {any} */ (twoHosts()), intent('link', { provider: 'github', secret: 'x' }), {
+    preferHost: 'b',
+  });
+  assert.equal(p.kind, 'host');
+  assert.equal(p.host.hostId, 'b');
+});
+
+test('connect still asks ONE box, even for a token', () => {
+  // `connect` returns a URL and the current state, which is a question rather
+  // than a change — fanning it out would mean N copies of one answer, and the
+  // catalogue is identical on every box anyway.
+  const p = place(/** @type {any} */ (twoHosts()), intent('connect', { provider: 'github' }));
+  assert.equal(p.kind, 'refused');
+  assert.equal(p.code, 'ambiguous_host');
+});
+
+test('a named host is honoured, so Claude’s second step reaches its first', () => {
+  const two = twoHosts();
+  const p = place(/** @type {any} */ (two), intent('link', { provider: 'claude', secret: 'x' }), { preferHost: 'b' });
   assert.equal(p.kind, 'host');
   assert.equal(p.host.hostId, 'b');
 });
