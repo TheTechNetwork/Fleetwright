@@ -19,6 +19,10 @@
 // allowlist — but it is worth knowing it is not a *lesser* permission.
 
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import path from 'node:path';
+
+import { Accounts } from './accounts.js';
 import { hasSession, newSession, killSession, capturePane, sendKeys } from './tmux.js';
 import { sleep } from './claude.js';
 import { dewrapPane } from './pane.js';
@@ -55,7 +59,7 @@ export class LoginFlow {
   /** @param {import('../config.js').Config} cfg */
   constructor(cfg) {
     this.cfg = cfg;
-    /** @type {{ startedAt: number, startedBy: string|null, url: string|null, mode: string }|null} */
+    /** @type {{ startedAt: number, startedBy: string|null, url: string|null, mode: string, linkFor?: string|null, linkDir?: string|null }|null} */
     this.pending = null;
   }
 
@@ -68,6 +72,7 @@ export class LoginFlow {
    */
   status() {
     const r = spawnSync(this.cfg.claudeBin, ['auth', 'status', '--json'], {
+      env: this.pending?.linkDir ? { ...process.env, CLAUDE_CONFIG_DIR: this.pending.linkDir } : process.env,
       encoding: 'utf8',
       timeout: 15_000,
     });
@@ -100,10 +105,10 @@ export class LoginFlow {
   /**
    * Begin a login and return the authorization URL to hand to the requester.
    *
-   * @param {{ actor?: string|null, mode?: 'claudeai'|'console', email?: string|null, sso?: boolean }} opts
+   * @param {{ actor?: string|null, mode?: 'claudeai'|'console', email?: string|null, sso?: boolean, linkFor?: string|null }} opts
    * @returns {Promise<{ ok: boolean, message: string, url?: string }>}
    */
-  async start({ actor = null, mode = 'claudeai', email = null, sso = false } = {}) {
+  async start({ actor = null, mode = 'claudeai', email = null, sso = false, linkFor = null } = {}) {
     if (!this.cfg.loginEnabled) {
       return { ok: false, message: 'Login from agent-hub is disabled (AGENT_HUB_LOGIN=0).' };
     }
@@ -127,15 +132,31 @@ export class LoginFlow {
     if (sso) args.push('--sso');
     if (email) args.push('--email', email);
 
+    // LINKING somebody's own account, as opposed to logging in THE BOX.
+    //
+    // The flow is identical — same OAuth, same pane, same pasted code. The
+    // difference is where the credential lands: an isolated CLAUDE_CONFIG_DIR,
+    // so the box's own login is never touched, and on success the file moves
+    // into the accounts store under that person's email. Without the
+    // isolation, linking a client's account would log the whole box out of
+    // the org account — the exact machine-wide blast radius accounts exist to
+    // end.
+    let linkDir = null;
+    if (linkFor) {
+      linkDir = path.join(this.cfg.stateDir, 'accounts', `pending-${linkFor}`);
+      mkdirSync(linkDir, { recursive: true, mode: 0o700 });
+    }
+
     const quoted = [this.cfg.claudeBin, ...args]
       .map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`)
       .join(' ');
-    const spawned = newSession({ name, cwd: this.cfg.workdir, command: `exec ${quoted}` });
+    const envPrefix = linkDir ? `env CLAUDE_CONFIG_DIR='${linkDir.replace(/'/g, `'\\''`)}' ` : '';
+    const spawned = newSession({ name, cwd: this.cfg.workdir, command: `exec ${envPrefix}${quoted}` });
     if (spawned.status !== 0) {
       return { ok: false, message: `Could not start the login: ${(spawned.stderr || 'tmux failed').trim().slice(0, 200)}` };
     }
 
-    this.pending = { startedAt: Date.now(), startedBy: actor, url: null, mode };
+    this.pending = { startedAt: Date.now(), startedBy: actor, url: null, mode, linkFor, linkDir };
 
     const url = await this.#waitForUrl();
     if (!url) {
@@ -209,7 +230,28 @@ export class LoginFlow {
       const text = alive ? capturePane(name, 80) : '';
       const st = this.status();
       if (st.loggedIn) {
+        const link = this.pending?.linkFor && this.pending.linkDir
+          ? { email: this.pending.linkFor, dir: this.pending.linkDir }
+          : null;
         this.finish();
+        if (link) {
+          // The credential moves into the store and the isolated dir goes
+          // away. The BOX is untouched: no markOnboardingComplete, because
+          // that writes to the box's own config and this login was never for
+          // the box.
+          try {
+            const raw = readFileSync(path.join(link.dir, '.credentials.json'), 'utf8');
+            const saved = new Accounts(this.cfg.stateDir).save(link.email, raw);
+            rmSync(link.dir, { recursive: true, force: true });
+            log.info(`login: linked a Claude account for ${link.email}`);
+            return saved.ok
+              ? { ok: true, status: st, message: `${saved.message}\nSessions ${link.email} starts now run on their own account.` }
+              : { ok: false, message: saved.message };
+          } catch (e) {
+            rmSync(link.dir, { recursive: true, force: true });
+            return { ok: false, message: `The login finished but the credential could not be stored: ${/** @type {Error} */ (e).message}` };
+          }
+        }
         // `claude auth login` writes credentials but does NOT mark the install
         // onboarded, so without this the very next session opens the first-run
         // wizard — "Select login method" — on an account that is already
@@ -237,6 +279,7 @@ export class LoginFlow {
     const name = this.cfg.loginSessionName;
     const had = hasSession(name);
     if (had) killSession(name);
+    if (this.pending?.linkDir) rmSync(this.pending.linkDir, { recursive: true, force: true });
     this.pending = null;
     return { ok: true, message: had ? 'Login cancelled.' : 'No login was in progress.' };
   }
