@@ -27,6 +27,20 @@ struct Fleet {
         let startedAt: Double?
         /// Whose Claude account it runs on: an email, or "shared".
         let account: String?
+        /// What it is asking, when it is asking. Present only while a prompt
+        /// is on screen — and the id is what makes answering it later safe.
+        let prompt: Prompt?
+
+        struct Prompt: Codable, Hashable {
+            let id: String?
+            let question: String?
+            let options: [Option]?
+            struct Option: Codable, Hashable, Identifiable {
+                let index: Int
+                let label: String
+                var id: Int { index }
+            }
+        }
 
         var id: String { "\(hostId ?? "?")/\(name)" }
         /// What to show. The name is the identity; the title is for people.
