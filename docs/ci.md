@@ -464,3 +464,71 @@ The floor is `contents: read`. Two jobs raise their own:
    the phone has something to talk to.
 3. **Firebase**, when you want notifications to actually arrive.
 4. **Apple and Android signing**, when you want TestFlight and a signed APK.
+
+## iOS signing: nothing is minted at build time
+
+An ephemeral runner has an empty keychain. `-allowProvisioningUpdates` reacts
+to that by asking Apple for whatever is missing — which is fine once and fatal
+on the fiftieth run:
+
+```
+error: Choose a certificate to revoke. Your account has reached the
+       maximum number of certificates.
+error: No profiles for 'network.thetech.fleetwright' were found:
+       ... any iOS App Development provisioning profiles ...
+```
+
+**The second line is the tell.** An archive should never be looking for a
+*development* profile. `CODE_SIGN_STYLE=Automatic` let Xcode choose the
+identity and it chose Apple Development, so the Apple **Distribution**
+certificate the workflow had just imported did not satisfy it — and the build
+went and asked Apple for a development certificate instead. Every run. Until
+the account filled up.
+
+Importing the certificate was a real fix for a real bug and it did not fix
+this one, because it addressed *which* assets exist rather than *whether the
+build is allowed to create them*.
+
+So both halves are now nailed down:
+
+| | |
+|---|---|
+| `CODE_SIGN_STYLE=Manual` | nothing is chosen at build time |
+| `CODE_SIGN_IDENTITY="Apple Distribution"` | and it is the identity we imported |
+| `PROVISIONING_PROFILE_SPECIFIER` | read out of the profile, never typed twice |
+| no `-allowProvisioningUpdates` | nothing **can** be minted, on archive or export |
+
+The worst case is now a build that fails, rather than a build that fails **and**
+leaves the account one certificate closer to unusable.
+
+### Three secrets, and the job skips without all three
+
+`APPSTORE_PRIVATE_KEY`, `APPLE_DISTRIBUTION_P12`, `APPLE_PROVISIONING_PROFILE`.
+The gate used to check only the first and fall back to automatic signing for
+the rest — which is precisely the fallback that burned the certificates.
+Skipping costs a release; minting costs the ability to release at all, and
+takes a trip to the developer portal to undo.
+
+### Making the profile
+
+Once, in the developer portal — Certificates, Identifiers & Profiles →
+Profiles → **App Store Connect** distribution, for `network.thetech.fleetwright`,
+signed by the same certificate that is in `APPLE_DISTRIBUTION_P12`. Download it
+and:
+
+```sh
+base64 -i Fleetwright_App_Store.mobileprovision | pbcopy   # → APPLE_PROVISIONING_PROFILE
+```
+
+The workflow prints the profile's name, app id and **expiry** on every run.
+Profiles expire after a year, and an expired one fails with a message about
+identities rather than about dates — so the date is printed where it will be
+read.
+
+### If the account is already full
+
+Revoke the surplus in the portal under Certificates. The ones CI created are
+useless anyway: their private keys were on runners that no longer exist, so
+nothing can sign with them and nothing is lost by revoking them. Keep the one
+whose `.p12` is in the secret.
+

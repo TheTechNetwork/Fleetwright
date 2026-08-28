@@ -120,9 +120,21 @@ jobs:
         id: creds
         env:
           KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          P12: ${{ secrets.APPLE_DISTRIBUTION_P12 }}
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
-          if [ -z "$KEY" ]; then
-            echo "::warning::APPSTORE_PRIVATE_KEY is not set — skipping TestFlight. See docs/ci.md."
+          # ALL THREE, or skip. This used to check only the API key, and the
+          # other two were treated as optional with a fallback to automatic
+          # signing — which is what burned a certificate per run until the
+          # account hit its cap. Skipping costs a release; minting costs the
+          # ability to release at all, and takes a trip to the developer portal
+          # to undo.
+          missing=""
+          [ -z "$KEY" ] && missing="$missing APPSTORE_PRIVATE_KEY"
+          [ -z "$P12" ] && missing="$missing APPLE_DISTRIBUTION_P12"
+          [ -z "$PROFILE" ] && missing="$missing APPLE_PROVISIONING_PROFILE"
+          if [ -n "$missing" ]; then
+            echo "::warning::Not set:$missing — skipping TestFlight rather than signing automatically. See docs/ci.md."
             echo "have=false" >> "$GITHUB_OUTPUT"
           else
             echo "have=true" >> "$GITHUB_OUTPUT"
@@ -171,6 +183,49 @@ jobs:
       #
       # One certificate, exported once, imported here. The API key still
       # handles the upload; only the identity stops being disposable.
+      # THE PROFILE, INSTALLED RATHER THAN REQUESTED.
+      #
+      # A provisioning profile is not capped and could safely be created on
+      # demand — but asking for one is what drags in automatic signing, and
+      # automatic signing is what decides it needs a certificate. Installing
+      # the profile means nothing has to be decided at build time.
+      #
+      # The SPECIFIER is read out of the profile rather than hardcoded, because
+      # a name typed into a workflow and a name chosen in the developer portal
+      # are two values that will eventually differ, and the failure reads as
+      # "no profiles were found" — which is the same sentence a missing
+      # certificate produces.
+      - name: Install the provisioning profile
+        if: steps.creds.outputs.have == 'true'
+        id: profile
+        env:
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          printf '%s' "$PROFILE" | base64 -d > "$RUNNER_TEMP/profile.mobileprovision"
+
+          # A .mobileprovision is a CMS-signed plist; `security cms -D` is what
+          # turns it back into something readable.
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+          EXPIRES=$(/usr/libexec/PlistBuddy -c 'Print :ExpirationDate' "$RUNNER_TEMP/profile.plist")
+
+          # Said out loud. A profile that expired last week produces a signing
+          # error about identities, and the date is the one fact that explains
+          # it in one line.
+          echo "profile: $NAME ($UUID)"
+          echo "app id:  $APPID"
+          echo "expires: $EXPIRES"
+
+          # Installed under its UUID, which is the filename Xcode looks for.
+          cp "$RUNNER_TEMP/profile.mobileprovision" \
+            ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/profile.plist"
+
       - name: Import the signing certificate
         if: steps.creds.outputs.have == 'true'
         env:
@@ -231,6 +286,7 @@ jobs:
           # would have allowed exactly one upload ever. run_number only
           # increases.
           BUILD_NUMBER: ${{ github.run_number }}
+          PROFILE_NAME: ${{ steps.profile.outputs.name }}
         # If this fails with "provisioning profile does not include the
         # com.apple.developer.applesignin entitlement", it is not a certificate
         # problem however much it reads like one. The app entitles Sign in with
@@ -241,17 +297,38 @@ jobs:
         # Identifiers -> network.thetech.fleetwright.
         run: |
           set -o pipefail
+          # MANUAL, AND NO -allowProvisioningUpdates. Both halves matter.
+          #
+          # What failed before: CODE_SIGN_STYLE=Automatic let Xcode choose the
+          # identity, and it chose Apple DEVELOPMENT — so the Apple
+          # Distribution certificate imported one step earlier did not satisfy
+          # it, -allowProvisioningUpdates dutifully asked Apple for a
+          # development certificate, and after enough runs the account hit its
+          # cap:
+          #
+          #   error: Choose a certificate to revoke. Your account has reached
+          #          the maximum number of certificates.
+          #   error: No profiles for 'network.thetech.fleetwright' were found:
+          #          ... any iOS App Development provisioning profiles ...
+          #
+          # The second line is the tell. An archive should never be looking for
+          # a DEVELOPMENT profile, and it was, because nothing had said which
+          # kind of build this is.
+          #
+          # Naming the identity and the profile removes every decision from
+          # build time. Dropping -allowProvisioningUpdates removes the ability
+          # to mint anything at all — so the worst case is now a build that
+          # fails, rather than a build that fails AND leaves the account one
+          # certificate closer to unusable.
           xcodebuild archive \
             -project Fleetwright.xcodeproj \
             -scheme Fleetwright \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Fleetwright.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
-            -authenticationKeyID "$APPSTORE_KEY_ID" \
-            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Upload to TestFlight
@@ -261,7 +338,16 @@ jobs:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUNDLE_ID: network.thetech.fleetwright
+          PROFILE_NAME: ${{ steps.profile.outputs.name }}
         run: |
+          # signingStyle manual, and the profile named per bundle id. Without
+          # these two keys the export re-decides the signing it was just given,
+          # and re-deciding is what asked Apple for certificates.
+          #
+          # The API key stays: it authenticates the UPLOAD, which is a
+          # different thing from minting signing assets and the only reason it
+          # is still here.
           cat > "$RUNNER_TEMP/export.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -271,6 +357,12 @@ jobs:
             <key>destination</key><string>upload</string>
             <key>teamID</key><string>${TEAM_ID}</string>
             <key>uploadSymbols</key><true/>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
+            </dict>
           </dict>
           </plist>
           PLIST
@@ -279,7 +371,6 @@ jobs:
             -archivePath "$RUNNER_TEMP/Fleetwright.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
             -authenticationKeyID "$APPSTORE_KEY_ID" \
             -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
