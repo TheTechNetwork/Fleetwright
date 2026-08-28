@@ -40,6 +40,11 @@ export class Fleet {
       error: (/** @type {any[]} */ ...a) => console.error(...a),
       debug: () => {},
     };
+    // The CURRENT socket per host. In-memory and rebuilt on wake, because it
+    // is derived state: the truth is the attachment tags, this is the dedupe.
+    /** @type {Map<string, WebSocket>} */
+    this.sockets = new Map();
+
     this.core = new CoordinatorCore({
       logger,
       push: pusherFromEnv(env, logger),
@@ -85,9 +90,23 @@ export class Fleet {
       if (Array.isArray(events)) this.core.events.push(...events);
       const devices = (await this.state.storage.get('devices')) || [];
       for (const device of /** @type {any[]} */ (devices)) this.core.devices.set(device.token, device);
+      // One socket per host, and only one. After a reconnect storm — which is
+      // what an outage is — getWebSockets() can hold SEVERAL sockets tagged
+      // with the same hostId: the live one and the half-open corpses of every
+      // previous connection. Registering them in a loop means last-one-wins,
+      // and the last may be a corpse: sends then go into a dead socket with no
+      // error and every intent waits out its full timeout. Everything logs
+      // "connected"; nothing routes. So duplicates are closed as they are
+      // found, and the survivor is the registered one.
       for (const socket of this.state.getWebSockets()) {
         const hostId = this.#hostIdOf(socket);
-        if (hostId) this.core.hostConnected(hostId, (msg) => socket.send(JSON.stringify(msg)));
+        if (!hostId) continue;
+        const previous = this.sockets.get(hostId);
+        if (previous && previous !== socket) {
+          try { previous.close(1012, 'superseded'); } catch { /* already gone */ }
+        }
+        this.sockets.set(hostId, socket);
+        this.core.hostConnected(hostId, (msg) => socket.send(JSON.stringify(msg)));
       }
     });
   }
@@ -500,6 +519,17 @@ export class Fleet {
     this.state.acceptWebSocket(server, [hostId]);
     server.serializeAttachment?.({ hostId });
 
+    // Retire the connection this one replaces. A sidecar that reconnects —
+    // after a network blip, a restart, an outage — arrives while its old
+    // socket may still look open from this side. Leaving both means two
+    // sockets race to be "the" connection, and the close of the loser used to
+    // clobber the winner's registration.
+    const previous = this.sockets.get(hostId);
+    if (previous && previous !== server) {
+      try { previous.close(1012, 'superseded'); } catch { /* already gone */ }
+    }
+    this.sockets.set(hostId, server);
+
     this.core.hostConnected(hostId, (msg) => server.send(JSON.stringify(msg)));
     await this.state.storage.setAlarm(Date.now() + ALARM_MS);
 
@@ -531,14 +561,28 @@ export class Fleet {
 
   /** @param {WebSocket} socket @param {number} code @param {string} reason */
   async webSocketClose(socket, code, reason) {
-    const hostId = this.#hostIdOf(socket);
-    if (hostId) this.core.hostDisconnected(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
+    this.#socketGone(socket, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
   }
 
   /** @param {WebSocket} socket @param {any} error */
   async webSocketError(socket, error) {
+    this.#socketGone(socket, `socket error: ${error?.message ?? error}`);
+  }
+
+  /**
+   * A socket ended. That is only news about the HOST if it was the host's
+   * current socket — the close of a superseded connection arriving after its
+   * replacement used to mark a freshly-connected host offline, which is how a
+   * fleet looks connected in every log while routing to nobody.
+   *
+   * @param {WebSocket} socket @param {string} why
+   */
+  #socketGone(socket, why) {
     const hostId = this.#hostIdOf(socket);
-    if (hostId) this.core.hostDisconnected(hostId, `socket error: ${error?.message ?? error}`);
+    if (!hostId) return;
+    if (this.sockets.get(hostId) !== socket) return; // a corpse, not the connection
+    this.sockets.delete(hostId);
+    this.core.hostDisconnected(hostId, why);
   }
 
   /**
