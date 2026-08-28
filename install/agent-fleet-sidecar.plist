@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  agent-fleet-sidecar, as a launchd daemon. The macOS counterpart of
+  install/agent-fleet-sidecar.service — kept beside it deliberately, so a
+  change to one is an obvious prompt to look at the other.
+
+  __USER__ / __DIR__ / __NODE__ are substituted by install.sh, exactly as in
+  the systemd unit.
+
+  THE DIFFERENCE THAT MATTERS: launchd has no EnvironmentFile. systemd reads
+  /etc/agent-fleet-sidecar.env as root and hands it to the process; launchd
+  will not, so the binary has to read that file itself. It does — see
+  src/core/env-file.js — and that is what makes running under launchd
+  possible at all rather than a rewrite of how these services are configured.
+
+  A LaunchDaemon rather than a LaunchAgent, with UserName: an agent runs only
+  while that user is logged in, which would take the fleet down when somebody
+  closes their laptop lid and logs out. This is the analogue of a systemd
+  SYSTEM unit with User=.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>network.thetech.agent-fleet-sidecar</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__DIR__/bin/agent-fleet-sidecar</string>
+  </array>
+
+  <key>UserName</key>
+  <string>__USER__</string>
+
+  <key>WorkingDirectory</key>
+  <string>__DIR__</string>
+
+  <!-- RunAtLoad + KeepAlive is systemd's Restart=always. It is also what lets
+       the restart flag on /update behave the same way it does on Linux: the
+       process exits and launchd brings it straight back with the new code. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- There is no journal on macOS, so the logs need somewhere to go or they
+       are discarded. `/logs` reads these. -->
+  <key>StandardOutPath</key>
+  <string>/var/log/agent-fleet-sidecar.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/agent-fleet-sidecar.log</string>
+</dict>
+</plist>

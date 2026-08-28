@@ -74,10 +74,22 @@ is how much of a host each platform can be:
 
 Two real pieces of work fall out of that table:
 
-- **launchd units and a macOS install path.** Everything the installer does with
-  systemd — the services, `StateDirectory`, `RuntimeDirectory` for the hook
-  sockets — needs a launchd equivalent. Sessions on a Mac would run
-  unsandboxed, which should be stated in the UI rather than assumed.
+- **launchd units and a macOS install path.** STARTED. The installer no longer
+  refuses a Mac — it detects the platform, installs what works, and prints what
+  it skipped. There are launchd plists for all three services in `install/`,
+  Homebrew is used for dependencies (as the invoking user, since brew refuses to
+  run as root), and the podman/subuid path is skipped with a reason.
+
+  What made this possible was unrelated: **launchd has no `EnvironmentFile`**,
+  so a service under it only works if the binary reads its own config file —
+  which the CLIs started doing when the enrol bug forced it. Without that, the
+  plists would load and every service would come up with an empty environment.
+
+  Still open: `StateDirectory` and `RuntimeDirectory` have no launchd
+  equivalent, so the state and hook-socket directories need creating and
+  chown-ing by the installer instead of by the service manager. Untested on real
+  hardware. Sessions on a Mac run unsandboxed, which should be said in the UI
+  rather than assumed.
 - **Windows is really WSL2.** agent-hub drives sessions through tmux
   `capture-pane` and `send-keys`; there is no tmux on Windows and no obvious
   substitute that keeps resume-dialog detection and `peek` working. A WSL2 host
