@@ -48,6 +48,7 @@ import { validateIntent, isMutating, PROTOCOL_VERSION } from '../protocol/intent
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
 import { SessionWatcher } from './watcher.js';
+import { promptId, describePrompt } from './prompt.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -118,6 +119,8 @@ export class Sidecar {
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null} */
     this.updates = updates;
     this.version = version;
+    // Whether a prompt that quotes the session may leave the box.
+    this.promptText = promptText;
     this.maxSkewMs = maxSkewMs;
     this.log = logger;
     this.healthIntervalMs = healthIntervalMs;
@@ -409,6 +412,16 @@ export class Sidecar {
             startedAt: s.createdAt ?? null,
             // Whose Claude account it was seeded with: an email, or "shared".
             account: s.account ?? null,
+            // WHAT IT IS ASKING, when it is asking. Without this the `answer`
+            // verb exists and nothing can call it: a phone cannot offer
+            // options it has never been told about, and asking the host again
+            // per session would be a peek per row per refresh.
+            //
+            // describePrompt() decides what may leave the box — it emits
+            // fields the host wrote, never pane text, and "don't ask me again"
+            // is filtered everywhere. The promptId is what makes an answer
+            // safe to act on later.
+            prompt: this.#promptFor(s),
           })),
         loggedIn: state.auth?.loggedIn === true,
         // The account this box runs on, for the app's settings screen: which
@@ -462,6 +475,33 @@ export class Sidecar {
    * could not reach a remote would take a working host out of the fleet over
    * something that stops no session running.
    */
+  /**
+   * The live prompt for a session, in the shape a phone can act on.
+   *
+   * Read from the pane rather than from the record: "waiting" is a fact about
+   * the screen, and the options are only meaningful if they are the ones
+   * currently rendered. Cheap because the watcher is already capturing panes
+   * on the same interval.
+   *
+   * @param {any} session
+   */
+  #promptFor(session) {
+    if (session?.status !== 'running') return null;
+    try {
+      // From the watcher's cache: it is already the one process reading every
+      // pane on an interval, and a peek per session per health tick would be
+      // the same text fetched twice.
+      const prompt = this.watcher?.promptFor?.(session.name);
+      if (!prompt) return null;
+      const shown = describePrompt(prompt, this.promptText);
+      return { id: promptId(session.name, prompt), ...shown };
+    } catch {
+      // A prompt we cannot read is a prompt we do not offer. Never a reason
+      // for health to fail.
+      return null;
+    }
+  }
+
   #updates() {
     try {
       return this.updates?.() ?? null;
