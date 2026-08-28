@@ -32,9 +32,21 @@ that changing `src/fleet` changes the Worker, so the filter has to say so. A
 filter naming only `worker/**` would quietly stop deploying the half of the
 Worker that lives somewhere else — much worse than deploying too often.
 
-**Required checks are never filtered.** `ci.yml` and `codeql.yml` have no paths
-filters, and `worker.yml` has none on pull requests. A check that skips itself
-reports no status, and no status reads as "nothing found" rather than "not run".
+**Everything is scoped, because nothing is required.** This repository has no
+branch protection and no required status checks (confirmed 2026-08-28), so
+trigger-level paths filters are safe everywhere: `ci.yml` ignores prose, apps
+and the sandbox; `worker.yml` runs only when something in its bundle changed —
+which includes `src/core/**`, because the protocol module imports from it;
+and CodeQL gates **every** language per pull request through its `changes`
+job — the compiled two by their app trees, `actions` by workflow changes, and
+`javascript-typescript` by "anything that is not purely prose".
+
+**The standing rule if protection is ever enabled:** a filtered trigger reports
+*no status*, which blocks a required check forever. The moment any of these
+becomes required, its filter moves from the trigger to an if-gated `changes`
+job (codeql.yml is the template), so a skip is a visible "skipping" instead of
+a missing answer. Main pushes and the weekly schedule always run CodeQL in
+full, so the alert baseline is never built from a partial view.
 
 **Two events, two audiences, on both platforms.**
 

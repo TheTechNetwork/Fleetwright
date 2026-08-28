@@ -73,11 +73,12 @@ jobs:
   # answer. That difference is the whole reason this is done here rather than
   # up there.
   #
-  # Only the two compiled languages are gated, and only on pull requests. They
-  # are the expensive ones — java-kotlin builds an APK (~140s), swift needs a
-  # macOS runner, Xcode and a queue. javascript-typescript and actions stay
-  # unconditional because they are cheap and because src/ is what most changes
-  # touch anyway.
+  # Every language is gated on pull requests, each by the files that could
+  # reach it: the compiled two because they are expensive (java-kotlin builds
+  # an APK, swift queues for a macOS runner), and the interpreted two because
+  # a docs-only pull request was still paying for a JavaScript analysis of
+  # code it did not touch. `actions` answers to workflow changes,
+  # `javascript-typescript` to anything that is not purely prose.
   #
   # main and the weekly schedule always run everything, so the alert baseline
   # is never built from a partial view. A PR gate cannot leave a gap: the merge
@@ -87,6 +88,8 @@ jobs:
     outputs:
       swift: ${{ steps.filter.outputs.swift }}
       java: ${{ steps.filter.outputs.java }}
+      code: ${{ steps.filter.outputs.code }}
+      wf: ${{ steps.filter.outputs.wf }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,6 +105,8 @@ jobs:
             echo "not a pull request — analysing everything"
             echo "swift=true" >> "$GITHUB_OUTPUT"
             echo "java=true"  >> "$GITHUB_OUTPUT"
+            echo "code=true"  >> "$GITHUB_OUTPUT"
+            echo "wf=true"    >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch -q --no-tags origin "$BASE"
@@ -111,12 +116,36 @@ jobs:
           # to be analysed by the job it changes.
           case "$files" in *apps/ios/*|*.github/workflows/codeql.yml*) swift=true ;; *) swift=false ;; esac
           case "$files" in *apps/android/*|*.github/workflows/codeql.yml*) java=true ;; *) java=false ;; esac
+          # `actions` scans workflow files, so it answers to workflow changes.
+          case "$files" in *.github/workflows/*) wf=true ;; *) wf=false ;; esac
+          # Anything that is not purely prose could reach the JavaScript
+          # analysis. Deciding what IS prose by allowlist, not by guessing at
+          # code: a change made only of .md files, docs/, LICENSE and images
+          # cannot alter a data flow.
+          # Plain word-splitting: no filename in this repo carries a space,
+          # and a heredoc's column-zero terminator cannot live inside a YAML
+          # block scalar.
+          code=false
+          for f in $files; do
+            case "$f" in
+              *.md|docs/*|LICENSE|*.png|*.jpg|*.svg|.gitignore) ;;
+              *) code=true; break ;;
+            esac
+          done
           echo "swift=$swift" >> "$GITHUB_OUTPUT"
           echo "java=$java"   >> "$GITHUB_OUTPUT"
+          echo "code=$code"   >> "$GITHUB_OUTPUT"
+          echo "wf=$wf"       >> "$GITHUB_OUTPUT"
 
   # No compiler involved, so no build steps and no runner cost worth managing.
   interpreted:
     name: analyze (${{ matrix.language }})
+    needs: changes
+    # Indexed by the matrix leg's own gate: js answers to "any non-prose
+    # change", actions to "a workflow changed". A skip here is a VISIBLE
+    # "skipping" on the pull request — the reason the gate lives on the job
+    # and not on the trigger, where a filtered run reports nothing at all.
+    if: ${{ needs.changes.outputs[matrix.gate] == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -125,7 +154,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [javascript-typescript, actions]
+        include:
+          - { language: javascript-typescript, gate: code }
+          - { language: actions, gate: wf }
     steps:
       - uses: actions/checkout@v7
 

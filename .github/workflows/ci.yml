@@ -1,9 +1,21 @@
 name: CI
 
 on:
+  # paths-ignore, not paths: everything runs unless the change provably cannot
+  # reach the root tests. The apps have their own workflows and their own
+  # compilers; prose has neither. worker/** stays IN — the root suite executes
+  # worker code directly (the openapi contract runs against both coordinators,
+  # and protocol-reported greps the worker source).
+  #
+  # Safe to filter at the trigger because this repository has no required
+  # status checks (confirmed 2026-08-28). If protection is ever enabled, these
+  # must move to an if-gated `changes` job like codeql.yml's, so a skip is a
+  # visible "skipping" rather than a missing status that blocks the merge.
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
 # branch pushed three times in a minute kept three builds alive and the answer

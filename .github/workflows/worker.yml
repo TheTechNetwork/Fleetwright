@@ -23,15 +23,32 @@ on:
     paths:
       - 'worker/**'
       - 'src/fleet/**'
+      # src/core is IN THE BUNDLE: the protocol module imports text.js and
+      # names.js from it, and env-file/restart-watch sit beside them. The
+      # original filter named only worker/** and src/fleet/**, which was true
+      # the day it was written and silently stopped being true when the text
+      # rules moved to src/core — a deploy filter has to name what the bundle
+      # holds, not what the directory layout implies.
+      - 'src/core/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/worker.yml'
       - '!**/*.md'
-  # NOT filtered on pull requests. `check` is a required status, and a check
-  # that skips itself reports nothing, which reads as "nothing found" rather
-  # than "not run" — the same reasoning codeql.yml gives for having no filters
-  # at all.
+  # Pull requests filter on the same inputs as the push. The old reasoning —
+  # "check is a required status and a skipped check reports nothing" — was
+  # written as though branch protection existed; it does not (confirmed
+  # 2026-08-28), and meanwhile every docs-only pull request was paying for a
+  # workerd boot. If protection is ever enabled, this moves to an if-gated
+  # `changes` job like codeql.yml's.
   pull_request:
+    paths:
+      - 'worker/**'
+      - 'src/fleet/**'
+      - 'src/core/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/worker.yml'
+      - '!**/*.md'
   workflow_dispatch:
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
