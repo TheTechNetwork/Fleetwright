@@ -15,9 +15,14 @@ bottom-up:
 
 Why this shape, learned the expensive way:
 
+- **Commit every layer first; open every PR together.** Branches are built,
+  verified and pushed as the round progresses, and the PRs for all of them
+  open in one batch when the round is complete. Opening them one at a time
+  invited the failure this rule replaced: a base merged mid-build, and half a
+  round stranded on a deleted branch.
 - **Each layer is deployable when it merges.** The layer above it is stacked,
-  visible, and reviewable from the moment the first PR opens — "the apps ride
-  in the next PR" with nothing visible reads as "not shipped", because it is
+  visible, and reviewable from the moment the batch opens — "the apps ride in
+  the next PR" with nothing visible reads as "not shipped", because it is
   indistinguishable from it.
 - **A PR branch is final the moment its link is posted.** Merges happen
   mid-conversation here. #138 was merged between two pushes and main silently

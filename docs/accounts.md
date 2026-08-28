@@ -68,11 +68,21 @@ is the flow that is wanted, pointed somewhere else.
 is one and the shared one when there is not. One `if`, in the place that already
 does this.
 
-**4. Visibility.** Admin sees every session; a member sees the ones their
-identity created. **Filtered at the coordinator, never at the host.** The host
-does not know who is asking — it has one token and answers it — so a host-side
-filter would be a check performed by the party with the least information. The
-coordinator knows the client, so the coordinator decides.
+**4. Visibility — done.** Admin sees every session; a member sees the ones
+their identity created. **Filtered at the coordinator, never at the host.** The
+host does not know who is asking — it has one token and answers it — so a
+host-side filter would be a check performed by the party with the least
+information. Unattributed sessions (telegram, the CLI, pre-attribution work)
+belong to the fleet, which is to say the admin — erring open would quietly
+break "my client must not read my org's other work".
+
+**5. Ownership — done.** Acting follows reading: a member's `stop`, `resume`
+and `peek` land only on sessions their identity created, checked in the
+scheduler against the `createdBy` the health lists now carry. The refusal is
+**byte-identical to "unknown session"**, with a test asserting the strings
+match: a distinct "not yours" would confirm that a guessed name exists on
+somebody else's work — an existence oracle built out of an access control. The
+two layers enforce one rule, not two similar ones.
 
 ## What this is NOT, said plainly
 

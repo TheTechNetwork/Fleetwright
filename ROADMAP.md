@@ -17,7 +17,7 @@ yet designed).
 | Admin follows the verified person, not a credential row | **done** | #139 |
 | Sign in with Apple server-to-server revocation notifications | **done** | `docs/identity.md` |
 | Session attribution — every record says who asked | **done** | `docs/accounts.md`, #132 |
-| **Per-user Claude accounts**: shared org account at the coordinator, members link their own; admin sees all sessions, members see theirs | **designed — next up** | `docs/accounts.md`. Remaining: `/login` writing to `accounts/<email>.json`, seeding from it, coordinator-side visibility filtering |
+| **Per-user Claude accounts**: shared org account at the coordinator, members link their own; admin sees all sessions, members see theirs | **partial** | `docs/accounts.md`. Visibility and ownership enforcement **done** (member sees and acts on only their own; refusals never become an existence oracle). Remaining: `/login` writing to `accounts/<email>.json` and seeding from it |
 | Invite flow: admin lets a friend/client use the fleet on their own Claude account | **designed** | falls out of the three `accounts.md` steps above |
 | Google RISC / Cross-Account Protection receiver | wanted | needs Google console setup first |
 
@@ -38,9 +38,9 @@ yet designed).
 | Session naming: brief-first start sheet, on-device title suggestion, title/brief on the wire | **done** (iOS suggestion via Apple Intelligence; Android deterministic — Gemini Nano slot-in deferred until one Play build proves the base) | `docs/naming.md`, #123–#125 |
 | Siri/Assistant session kinds — "start a dev session", user-defined words | **done** | #125. Android one-tap; iOS via alternative app names ("my fleet", "my agents", "remote sessions") + in-app "Say it your way" flow |
 | Start-and-open as a spoken variant (auto-open cannot be a setting — compiler-enforced) | **done** | `docs/naming.md` |
-| **Choose which host a session lands on** | **wanted — next up** | needs a placement preference beside the intent (not in it); the apps then offer a picker |
-| **Forget session from the app** | **wanted — next up** | client methods exist on both platforms; zero UI references |
-| **Surface refusals** — the app closed a confirmation sheet on a 403 without showing it | **wanted — next up** | cost an hour of the Aug-28 outage |
+| **Choose which host a session lands on** | **done** | #142/#143 — a preference beside the intent, refused by name; kinds can carry a host |
+| **Forget session from the app** | **done** | #143, confirmed because it deletes the conversation and workspace |
+| **Surface refusals** | **done** | #143 — the `_ = try?` that swallowed the 403 |
 | Show workspace dir; session length / context window; Claude plan limits in settings | wanted | additive fields on existing verbs — no protocol bump |
 | Host version info: is it behind, does it need an update | wanted | pairs with scheduled update checks below |
 | Session detail screen; notification actions | designed | `docs/plan.md` |
