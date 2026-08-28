@@ -1,0 +1,50 @@
+name: Tail the Worker
+
+# A debugger, not a pipeline. The Worker's exceptions are visible only in
+# Cloudflare's logs, and the credential that can read them lives in this
+# repository's secrets — so during tonight's outage the stack trace everybody
+# needed was readable by CI and by nobody in the conversation.
+#
+# Dispatch this, reproduce the failure (tap the app), and read the run's
+# output. It stops by itself.
+#
+# THE REPOSITORY IS PUBLIC AND SO IS THIS RUN'S LOG. wrangler tail prints
+# console output and exception stacks, which here can include host ids and the
+# email an intent was attributed to. Those already appear in commit metadata,
+# so the exposure is not new — but do not add secrets to console.log and then
+# run this.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'How long to listen'
+        default: '75'
+
+permissions:
+  contents: read
+
+jobs:
+  tail:
+    runs-on: ubuntu-latest
+    # Same environment as deploy, because that is where the Cloudflare secrets
+    # live. If the environment has required reviewers, a tail needs the same
+    # approval as a deploy — which is right for something that reads
+    # production logs.
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install the Worker toolchain
+        working-directory: worker
+        run: npm install --no-audit --no-fund
+      - name: Listen
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        # timeout's exit 124 is the SUCCESS case here — the listener ran its
+        # full window. Anything else is wrangler failing to attach.
+        run: |
+          timeout "${{ inputs.seconds }}" npx wrangler tail --format pretty 2>&1 || [ $? -eq 124 ]
