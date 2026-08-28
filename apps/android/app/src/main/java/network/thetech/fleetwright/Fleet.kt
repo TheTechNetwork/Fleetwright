@@ -44,6 +44,11 @@ class Fleet(private val settings: Settings) {
         val startedAt: Long? = null,
         /** Whose Claude account it runs on: an email, or "shared". */
         val account: String? = null,
+        /**
+         * What it is asking, when it is asking. Present only while a prompt is
+         * on screen; the id is what makes answering it later safe.
+         */
+        val prompt: Prompt? = null,
     ) {
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
@@ -66,6 +71,14 @@ class Fleet(private val settings: Settings) {
                 else -> "${seconds / 86_400}d"
             }
         }
+    }
+
+    data class Prompt(
+        val id: String?,
+        val question: String?,
+        val options: List<Option>,
+    ) {
+        data class Option(val index: Int, val label: String)
     }
 
     /**
@@ -125,6 +138,61 @@ class Fleet(private val settings: Settings) {
     )
 
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
+
+    /** One session in detail, or the fleet when no name is given. */
+    suspend fun status(name: String? = null): Reply =
+        intent("status", buildMap { if (!name.isNullOrBlank()) put("name", name) })
+
+    /**
+     * Answer a waiting prompt by selecting an option the HOST published.
+     *
+     * An ordinal, never text: send-keys into a pane reaches a root shell.
+     * `promptId` is what the host checks against the live pane, so a
+     * notification tapped four minutes late cannot answer a different question.
+     */
+    suspend fun answer(name: String, option: Int, promptId: String? = null): Reply =
+        intent(
+            "answer",
+            buildMap {
+                put("name", name)
+                if (!promptId.isNullOrBlank()) put("promptId", promptId)
+            },
+            numeric = mapOf("option" to option),
+        )
+
+    /** A service journal, or what a session printed. */
+    suspend fun logs(host: String? = null, session: String? = null, service: String? = null, lines: Int? = null): Reply =
+        intent(
+            "logs",
+            buildMap {
+                if (!session.isNullOrBlank()) put("name", session)
+                if (!service.isNullOrBlank()) put("service", service)
+            },
+            host = host,
+            numeric = buildMap { if (lines != null) put("lines", lines) },
+        )
+
+    /** Pull code on one box. Restarting is opt-in. */
+    suspend fun update(host: String, restart: Boolean = false): Reply =
+        intent("update", if (restart) mapOf("restart" to "yes") else emptyMap(), host = host)
+
+    /** What the OS has waiting, and optionally install it. */
+    suspend fun upgrade(host: String, apply: Boolean = false): Reply =
+        intent("upgrade", if (apply) mapOf("apply" to "yes") else emptyMap(), host = host)
+
+    /**
+     * Reboot a box. Two steps: bare asks for a pin and names what will die;
+     * pin plus hostname does it.
+     */
+    suspend fun reboot(host: String, pin: String? = null, confirm: String? = null): Reply =
+        intent(
+            "reboot",
+            buildMap {
+                if (!pin.isNullOrBlank()) put("pin", pin)
+                if (!confirm.isNullOrBlank()) put("confirm", confirm)
+            },
+            host = host,
+        )
 
     /**
      * The last lines of a session's pane — what it is actually doing.
@@ -240,11 +308,22 @@ class Fleet(private val settings: Settings) {
      * on — an app that picked the host would have to know which box holds which
      * session, which is exactly the thing the coordinator exists to know.
      */
-    private suspend fun intent(verb: String, params: Map<String, String> = emptyMap(), host: String? = null): Reply =
+    /**
+     * @param numeric keys the protocol types as `int`. They must be sent as
+     *   JSON NUMBERS — validateIntent requires a safe integer and refuses
+     *   `"2"`, and that refusal would arrive AFTER the version handshake had
+     *   already agreed, which is the worst-shaped failure this protocol has.
+     */
+    private suspend fun intent(
+        verb: String,
+        params: Map<String, String> = emptyMap(),
+        host: String? = null,
+        numeric: Map<String, Int> = emptyMap(),
+    ): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
                 .put("verb", verb)
-                .put("params", JSONObject(params.toMap()))
+                .put("params", JSONObject(params.toMap()).also { p -> numeric.forEach { (k, v) -> p.put(k, v) } })
                 .put("actor", "app:android")
                 // An idempotency key the SERVER honours: a retry of `start`
                 // returns the original outcome instead of a second session.
@@ -308,6 +387,16 @@ class Fleet(private val settings: Settings) {
                 cwd = o.optString("cwd").takeIf { it.isNotBlank() && it != "null" },
                 startedAt = o.optLong("startedAt").takeIf { it > 0 },
                 account = o.optString("account").takeIf { it.isNotBlank() && it != "null" },
+                prompt = o.optJSONObject("prompt")?.let { pr ->
+                    val opts = pr.optJSONArray("options")
+                    Prompt(
+                        id = pr.optString("id").takeIf { it.isNotBlank() },
+                        question = pr.optString("question").takeIf { it.isNotBlank() && it != "null" },
+                        options = if (opts == null) emptyList() else (0 until opts.length()).mapNotNull { k ->
+                            opts.optJSONObject(k)?.let { Prompt.Option(it.optInt("index"), it.optString("label")) }
+                        },
+                    )
+                },
             )
         }
     }

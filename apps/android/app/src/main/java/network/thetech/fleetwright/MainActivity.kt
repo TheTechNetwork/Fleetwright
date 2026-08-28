@@ -266,6 +266,14 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                                 refresh(keepStatus = true)
                             }
                         },
+                        onAnswer = { option ->
+                            scope.launch {
+                                busy = true
+                                status = fleet.answer(session.name, option, session.prompt?.id).text
+                                busy = false
+                                refresh(keepStatus = true)
+                            }
+                        },
                         // Peek deliberately does NOT refresh afterwards: the
                         // pane output IS the answer, and a refresh a moment
                         // later would wipe it off the screen.
@@ -301,6 +309,7 @@ private fun SessionCard(
     onStop: () -> Unit,
     onResume: () -> Unit,
     onForget: () -> Unit,
+    onAnswer: (Int) -> Unit,
     onPeek: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
@@ -358,6 +367,28 @@ private fun SessionCard(
             if (context.isNotEmpty()) {
                 Text(context.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             }
+            // WHAT IT IS ASKING, and the answer as buttons. Reading a
+            // question on a phone and being unable to answer it is the shape
+            // of the problem, not a smaller version of it. The options are the
+            // ones the HOST published; an ordinal is sent, never text.
+            session.prompt?.let { prompt ->
+                if (prompt.options.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        prompt.question?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                        prompt.options.forEach { option ->
+                            TextButton(onClick = { onAnswer(option.index) }, enabled = !busy) {
+                                Text("${option.index}  ${option.label}")
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        "Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
                 if (session.status == "running") {
