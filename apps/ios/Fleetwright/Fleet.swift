@@ -17,12 +17,41 @@ struct Fleet {
         let hostId: String?
         let rcUrl: String?
         let uuid: String?
+        /// Where the work is happening. Optional because an older sidecar does
+        /// not send it — every field added this round degrades to absent
+        /// rather than to an error.
+        let cwd: String?
+        /// When it started, as a timestamp in milliseconds. A DURATION would
+        /// be stale the moment it was serialised; the arithmetic belongs here,
+        /// where the clock is live.
+        let startedAt: Double?
+        /// Whose Claude account it runs on: an email, or "shared".
+        let account: String?
 
         var id: String { "\(hostId ?? "?")/\(name)" }
         /// What to show. The name is the identity; the title is for people.
         var label: String { (title?.isEmpty == false ? title! : name) }
         var isRunning: Bool { status == "running" }
         var isResumable: Bool { uuid?.isEmpty == false }
+
+        /// The last path component, which is what a person recognises. The
+        /// full path is long, and the part that identifies a checkout is at
+        /// the end of it.
+        var workspace: String? {
+            guard let cwd, !cwd.isEmpty else { return nil }
+            return URL(fileURLWithPath: cwd).lastPathComponent
+        }
+
+        /// "3h" — coarse on purpose. The exact age of a session is never the
+        /// question; "since this morning" or "still going after two days" is.
+        var age: String? {
+            guard let startedAt, startedAt > 0 else { return nil }
+            let seconds = Date().timeIntervalSince1970 - startedAt / 1000
+            guard seconds > 60 else { return "just now" }
+            if seconds < 3600 { return "\(Int(seconds / 60))m" }
+            if seconds < 86_400 { return "\(Int(seconds / 3600))h" }
+            return "\(Int(seconds / 86_400))d"
+        }
     }
 
     struct Reply: Codable {
@@ -140,6 +169,17 @@ struct Fleet {
         return inner.contains("@") ? inner : nil
     }
 
+    /// What every machine is reporting right now — state, account, version.
+    ///
+    /// /api/hosts, not /api/hosts/enrolled: enrolled is the membership list
+    /// (fingerprints, who added it), this is what they are SAYING. The
+    /// settings screen wants both and they answer different questions.
+    func fleetHosts() async throws -> [FleetHost] {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let hosts: [FleetHost]? }
+        return try JSONDecoder().decode(Reply.self, from: data).hosts ?? []
+    }
+
     /// The machines in this fleet, and their key fingerprints.
     func enrolledHosts() async throws -> [Host] {
         let data = try await get("/api/hosts/enrolled")
@@ -164,6 +204,42 @@ struct Fleet {
     func revokeHost(_ hostId: String) async throws -> Reply {
         let data = try await send("DELETE", "/api/hosts/\(hostId)", body: nil)
         return try JSONDecoder().decode(Reply.self, from: data)
+    }
+
+    /// What a box says about itself. Every field optional: an older sidecar
+    /// sends none of them, and the app must show a host with less information
+    /// rather than no host at all.
+    struct HostHealth: Codable, Hashable {
+        struct Account: Codable, Hashable {
+            let email: String?
+            let plan: String?
+            let org: String?
+        }
+        struct Version: Codable, Hashable {
+            let head: String?
+            let branch: String?
+        }
+        struct Updates: Codable, Hashable {
+            let appBehind: Int?
+            let system: String?
+            let rebootRequired: Bool?
+        }
+        let account: Account?
+        let version: Version?
+        let updates: Updates?
+        let loggedIn: Bool?
+        let running: Int?
+        let maxSessions: Int?
+    }
+
+    /// A host as the fleet snapshot describes it — state, reason, and whatever
+    /// the box last reported about itself.
+    struct FleetHost: Codable, Identifiable, Hashable {
+        let hostId: String
+        let state: String?
+        let reason: String?
+        let health: HostHealth?
+        var id: String { hostId }
     }
 
     struct Host: Codable, Identifiable, Hashable {
