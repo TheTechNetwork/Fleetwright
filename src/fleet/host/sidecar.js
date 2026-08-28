@@ -526,6 +526,10 @@ export function toCommandLine({ verb, params }) {
       return `/stop ${p.name}`;
     case 'forget':
       return `/forget ${p.name}`;
+    case 'answer':
+      // A digit and a hex id — both safe in a command line, unlike the free
+      // text this verb exists to refuse. commandMeta carries nothing extra.
+      return ['/answer', p.name, p.option, p.promptId].filter((x) => x !== undefined && x !== null).join(' ');
     default:
       // Unreachable: validateIntent has already refused anything not in VERBS,
       // and peek/health never get here. Throwing rather than returning a

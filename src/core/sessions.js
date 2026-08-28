@@ -8,7 +8,7 @@
 // protocol and no stale-row reaper, because there are no two planes that can
 // drift apart. tmux is asked directly, every time.
 
-import { hasSession, listSessions, newSession, killSession, capturePane } from './tmux.js';
+import { hasSession, listSessions, newSession, killSession, capturePane, sendKeys } from './tmux.js';
 import {
   buildCommand,
   verifyRemoteControl,
@@ -20,6 +20,7 @@ import {
 } from './claude.js';
 import { isValidName, nameError, generateName } from './names.js';
 import { titleFromCwd, cleanTitle } from './titles.js';
+import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -646,6 +647,63 @@ export class SessionManager {
   }
 
   /**
+   * Answer a prompt the session is showing, by ordinal.
+   *
+   * NEVER free text. `send-keys` into a Claude Code pane reaches `!` bash
+   * mode, slash commands, and a root shell after one Ctrl-C — so a reply that
+   * carried text would be strictly worse than the shell string design.md §5
+   * forbids, because it would look bounded and would not be. What crosses this
+   * boundary is a single digit, and it is only sent after the pane is read and
+   * confirmed to be offering that option right now.
+   *
+   * @param {string} name
+   * @param {number} option 1..9
+   * @param {string|null} [expectedPromptId] refuse if the screen has moved on
+   * @returns {{ ok: boolean, message: string }}
+   */
+  answer(name, option, expectedPromptId = null) {
+    const rec = this.registry.get(name);
+    if (!rec) return { ok: false, message: `No session called "${name}".` };
+    if (!hasSession(name)) return { ok: false, message: `"${name}" is not running.` };
+
+    const prompt = readPrompt(capturePane(name, 80));
+    if (!prompt) {
+      // Read the pane rather than trusting the record: "waiting" is a fact
+      // about the screen a fraction of a second ago, and answering a question
+      // that is no longer being asked is exactly what this guards.
+      return { ok: false, message: `"${name}" is not asking anything right now.` };
+    }
+
+    if (expectedPromptId) {
+      const live = promptId(name, prompt);
+      if (live !== expectedPromptId) {
+        // THE TEMPORAL HOLE. A notification tapped four minutes late would
+        // otherwise send "2" to whatever dialog is on screen now — a different
+        // question, answered confidently, by somebody who never saw it.
+        return {
+          ok: false,
+          message:
+            `"${name}" has moved on to a different question since that was sent. ` +
+            'Nothing was answered — look at it again.',
+        };
+      }
+    }
+
+    const offered = prompt.options.find((o) => o.index === option);
+    if (!offered) {
+      const list = prompt.options.map((o) => o.index).join(', ') || 'none';
+      return { ok: false, message: `Option ${option} is not on offer. Showing: ${list}.` };
+    }
+
+    // One digit, then Enter. `-l` is literal, so even a digit cannot be read
+    // as a key name.
+    sendKeys(name, ['-l', String(option)]);
+    sendKeys(name, ['Enter']);
+    log.info(`answer: ${name} option ${option}`);
+    return { ok: true, message: `Answered "${name}" with ${option}: ${offered.label}` };
+  }
+
+  /**
    * Record a conversation uuid reported by the SessionStart hook. This is what
    * makes resume reliable: claude hands the hook its own session_id and
    * transcript path, so the uuid is authoritative rather than scraped.
@@ -800,4 +858,6 @@ function renderDialogPrompt(name, dialog) {
     'The session is held at this prompt until you pick.',
   );
   return lines.join('\n');
+
+
 }

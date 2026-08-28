@@ -163,6 +163,28 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Stop a running session, keeping its conversation resumable.',
   },
+  answer: {
+    params: {
+      name: { type: 'name', required: true },
+      // AN ORDINAL, never text. `send-keys` into a Claude Code pane reaches
+      // `!` bash mode, slash commands, and a root shell after one Ctrl-C — so
+      // a `reply { text }` verb would be strictly worse than the shell string
+      // design.md §5 forbids, because it looks bounded and is not. An ordinal
+      // selects an option the host itself published; a compromised
+      // coordinator can pick one and can never originate one.
+      //
+      // 1..9 because the pane numbers them that way, and a dialog with ten
+      // options is not a dialog anybody should be answering from a phone.
+      option: { type: 'int', required: true, min: 1, max: 9 },
+      // WHICH QUESTION this answers. Without it, a notification tapped four
+      // minutes late sends "2" to whatever dialog is on screen NOW — the
+      // temporal hole. The host recomputes the id from the live pane and
+      // refuses if it moved.
+      promptId: { type: 'text', required: false, max: 32 },
+    },
+    mutating: true,
+    summary: 'Answer a waiting prompt by selecting one of the options the host published.',
+  },
   forget: {
     params: { name: { type: 'name', required: true } },
     mutating: true,

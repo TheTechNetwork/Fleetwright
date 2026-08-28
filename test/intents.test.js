@@ -27,9 +27,20 @@ const intent = (patch) => ({
 // --- the verb set itself ----------------------------------------------------
 
 test('the verb set is exactly what is documented', () => {
-  // Pinned deliberately. Adding a verb should be a visible edit to this list
-  // and a version bump, not something that arrives with a feature.
+  // Pinned deliberately. Adding a verb should be a visible edit to this list,
+  // not something that arrives with a feature — and this tripwire worked:
+  // `answer` could not land without editing it here.
+  //
+  // The original comment also said "and a version bump", which turned out to
+  // be wrong and is worth correcting rather than obeying. An older host
+  // answers an unknown verb with `unknown_verb` — a named refusal that
+  // strands nothing. It is adding a PARAMETER to an existing verb that
+  // requires the bump, because `bad_params` arrives AFTER the version check
+  // has already agreed: the handshake says "we understand each other" and
+  // then the work fails. That is why title/brief cost a version and this does
+  // not.
   assert.deepEqual(Object.keys(VERBS).sort(), [
+    'answer',
     'forget',
     'health',
     'list',
@@ -63,7 +74,8 @@ test('no verb accepts a path', () => {
 test('only state-changing verbs are marked mutating', () => {
   assert.deepEqual(
     Object.keys(VERBS).filter(isMutating).sort(),
-    ['forget', 'resume', 'start', 'stop'],
+    // answer sends a keystroke into a live session: as mutating as it gets.
+    ['answer', 'forget', 'resume', 'start', 'stop'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

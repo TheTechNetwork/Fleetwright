@@ -906,7 +906,8 @@
                       "start",
                       "resume",
                       "stop",
-                      "forget"
+                      "forget",
+                      "answer"
                     ]
                   },
                   "params": {
