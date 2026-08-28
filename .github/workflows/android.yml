@@ -73,7 +73,14 @@ jobs:
   # Signed, and only on a release. An unsigned release APK cannot be installed,
   # which makes producing one worse than useless.
   release:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Merging to main publishes. It did not, and a merge left this job SKIPPED
+    # while the run stayed green — so "Android: success" on main meant a debug
+    # APK was built and nothing shipped, which is the most expensive kind of
+    # green there is.
+    if: >-
+      github.event_name == 'release' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     environment: production
     outputs:
@@ -175,7 +182,14 @@ jobs:
   internal:
     name: publish to Play
     needs: release
-    if: github.event_name == 'release' && needs.release.outputs.built == 'true'
+    # workflow_dispatch is included deliberately. It used to build and sign and
+    # then NOT publish, so dispatching the workflow by hand produced artifacts
+    # and no upload, with nothing saying why.
+    if: >-
+      needs.release.outputs.built == 'true' &&
+      (github.event_name == 'release' ||
+       github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -192,7 +206,9 @@ jobs:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_PACKAGE_NAME: network.thetech.fleetwright
           PLAY_TRACK: ${{ vars.PLAY_TRACK || 'alpha' }}
-          RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name }}
+          # A push has no release to take notes from, so fall back to the commit
+          # subject. Empty notes are accepted by Play and tell a tester nothing.
+          RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name || github.event.head_commit.message }}
         run: |
           if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
             echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping Play. See docs/ci.md."
