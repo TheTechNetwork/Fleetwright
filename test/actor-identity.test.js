@@ -169,3 +169,36 @@ test('nothing else re-derives an identity from a bare actor', () => {
     'the connectors lookup must not key on emailFromActor, whose null means two different things',
   );
 });
+
+test('a long verified identity is not downgraded into “the box”', () => {
+  // FOUND BY THE SECOND SWEEP. The protocol accepts 128 characters of actor
+  // and the sidecar prepends `fleet:`, making 134 — while /api/command
+  // validated at 120 and, on failure, substituted `web`.
+  //
+  // `web` is not "unknown". It is THE BOX: rowForActor('web') is HOST_ROW. So
+  // a member whose verified address ran long had their credential written to
+  // the shared row, was seeded with the operator's tokens, and could finish a
+  // login the operator started. An identity check that degrades into a
+  // DIFFERENT VALID IDENTITY is worse than one that fails.
+  const email = `${'a'.repeat(60)}@${'b'.repeat(55)}.example.com`;
+  const prefixed = `fleet:${email}`;
+  assert.equal(prefixed.length, 134, 'the exact worst case the protocol permits');
+
+  const src = readFileSync(new URL('../src/adapters/http.js', import.meta.url), 'utf8');
+  const limit = /\/\^\[A-Za-z0-9\._:@\+-\]\{1,(\d+)\}\$\//.exec(src);
+  assert.ok(limit, 'the actor charset check moved — re-check the length bound');
+  assert.ok(
+    Number(limit[1]) >= 134,
+    `/api/command accepts only ${limit[1]} characters of actor; the protocol allows 134 once prefixed`,
+  );
+
+  // And the fallback is gone: a malformed actor is refused, not renamed.
+  assert.equal(/:\s*'web'\s*;/.test(src) && /\?\s*claimed\s*:\s*'web'/.test(src), false,
+    'a malformed actor must not silently become the box');
+  assert.match(src, /actor is not a well-formed identity/);
+
+  // The identity itself still resolves correctly at both ends.
+  assert.equal(emailFromActor(prefixed), email);
+  assert.equal(rowForActor(prefixed), email);
+  assert.notEqual(rowForActor(prefixed), HOST_ROW);
+});

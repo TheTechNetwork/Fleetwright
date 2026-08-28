@@ -183,8 +183,26 @@ export class HttpAdapter {
       // That is still strictly better than 'web': a value that is sometimes
       // right beats one that is never informative. It is not an audit trail,
       // and docs/accounts.md says so where somebody might rely on it.
+      //
+      // TWO THINGS THIS MUST NOT DO, both learned from the same audit.
+      //
+      // The limit is 134, not 120: the protocol accepts an actor of 128
+      // characters (ACTOR_RE) and the sidecar prepends `fleet:` before posting
+      // it here. At 120 a verified member whose address ran long failed this
+      // test — and fell through to `web`, which is not "unknown", it is THE
+      // BOX. That member's credential would then be written to the shared row
+      // every session on the machine reads, and they could finish a login the
+      // operator had started. An identity check that degrades into a DIFFERENT
+      // valid identity is worse than one that fails.
+      //
+      // So a supplied-but-malformed actor is now a REFUSAL rather than a
+      // substitution. `web` remains the answer only when nobody claimed to be
+      // anybody, which is the honest meaning of it.
       const claimed = typeof body.actor === 'string' ? body.actor.trim() : '';
-      const actor = /^[A-Za-z0-9._:@+-]{1,120}$/.test(claimed) ? claimed : 'web';
+      if (claimed && !/^[A-Za-z0-9._:@+-]{1,134}$/.test(claimed)) {
+        return json(res, 400, { ok: false, text: 'actor is not a well-formed identity' });
+      }
+      const actor = claimed || 'web';
 
       // Redact BEFORE truncating: slicing a secret to 120 characters logs a
       // shorter secret, not a safer one.
