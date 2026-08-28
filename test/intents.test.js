@@ -48,7 +48,9 @@ test('the verb set is exactly what is documented', () => {
     'list',
     'logs',
     'peek',
+    'purge',
     'reboot',
+    'restore',
     'resume',
     'start',
     'status',
@@ -121,7 +123,10 @@ test('only state-changing verbs are marked mutating', () => {
     // connect/link/unlink write a credential to disk on that box, which is
     // state-changing by any reading — and being mutating is what gets their
     // idempotency key honoured, so a retried paste cannot start two logins.
-    ['answer', 'connect', 'forget', 'link', 'reboot', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
+    // restore and purge both change what exists on the box, and being mutating
+    // is what gets their idempotency key honoured — a retried purge must not
+    // report "no session named that" for work it deleted a moment ago.
+    ['answer', 'connect', 'forget', 'link', 'purge', 'reboot', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

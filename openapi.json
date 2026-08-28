@@ -914,7 +914,9 @@
                       "reboot",
                       "connect",
                       "link",
-                      "unlink"
+                      "unlink",
+                      "restore",
+                      "purge"
                     ]
                   },
                   "params": {

@@ -632,6 +632,10 @@ export function toCommandLine({ verb, params, actor }) {
       // A digit and a hex id — both safe in a command line, unlike the free
       // text this verb exists to refuse. commandMeta carries nothing extra.
       return ['/answer', p.name, p.option, p.promptId].filter((x) => x !== undefined && x !== null).join(' ');
+    case 'restore':
+      return `/restore ${p.name}`;
+    case 'purge':
+      return `/purge ${p.name}`;
     case 'connect':
       // Claude's flow is not a token to paste — it is an OAuth login the CLI
       // drives in a pane on this box, and the URL comes back from that pane.

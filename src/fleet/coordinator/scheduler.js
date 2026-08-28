@@ -17,7 +17,11 @@
 // name someone believes is their long-running one.
 
 /** Verbs that must go to the host already holding the named session. */
-const PINNED = new Set(['resume', 'stop', 'forget', 'peek', 'status']);
+// restore and purge are pinned for the same reason resume is, and harder: the
+// conversation and the workspace are host-local volumes, so the only box that
+// can bring a session back is the one still holding them. A restore that
+// landed elsewhere would report success against nothing.
+const PINNED = new Set(['resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge']);
 
 /** Verbs answered by asking every host and merging. */
 const FANOUT = new Set(['list']);
