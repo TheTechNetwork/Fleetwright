@@ -41,8 +41,10 @@ yet designed).
 | **Choose which host a session lands on** | **done** | #142/#143 — a preference beside the intent, refused by name; kinds can carry a host |
 | **Forget session from the app** | **done** | #143, confirmed because it deletes the conversation and workspace |
 | **Surface refusals** | **done** | #143 — the `_ = try?` that swallowed the 403 |
-| Show workspace dir; session length / context window; Claude plan limits in settings | wanted | additive fields on existing verbs — no protocol bump |
-| Host version info: is it behind, does it need an update | wanted | pairs with scheduled update checks below |
+| Show workspace dir, session age, and the account each session runs on | **done** | additive fields on health — no protocol bump; an old client ignores them |
+| Sign-in status per host in the app: signed in as, plan, org, or NOT signed in | **done** | the first half of "sign-in status and logs on the app"; logs need the v2 `logs` verb |
+| Host version info: what it runs, how far behind, reboot required | **done** | the Fleet section in settings, both apps |
+| Context-window usage per session | wanted | the one fact of this group the host does not yet know — it lives in the transcript, not in any status the CLI exposes |
 | Session detail screen; notification actions | designed | `docs/plan.md` |
 | TG settings setup / removal from the app | wanted | config, not protocol |
 | Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
