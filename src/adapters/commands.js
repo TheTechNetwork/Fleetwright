@@ -34,6 +34,7 @@
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
+ * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
  */
 
 import { describe } from '../core/login.js';
@@ -435,27 +436,36 @@ export const COMMANDS = {
     run: async (ctx, args) => {
       const host = ctx.cfg.hostname;
       const which = (args[0] || '').toLowerCase();
+      const store = new Connections(ctx.cfg.stateDir);
+      const email = emailFromActor(ctx.actor);
+      const connected = store.list(email);
+      // THE SAME ANSWER FOR BOTH SURFACES. Chat reads the prose; an app reads
+      // `connections` and renders a picker from it — which is why the
+      // catalogue travels rather than being hardcoded in two mobile clients.
+      // A provider added to the table appears in both apps with no app change,
+      // which is the entire reason the verbs are connect/link/unlink and not
+      // github/cloudflare.
+      const structured = { catalogue: catalogue(host), connected };
       if (!which) {
-        const store = new Connections(ctx.cfg.stateDir);
-        const email = emailFromActor(ctx.actor);
-        const connected = new Map(store.list(email).map((c) => [c.provider, c]));
+        const have = new Map(connected.map((c) => [c.provider, c]));
         return {
           ok: true,
-          text:
-            `${catalogue(host)
-              .map((c) => {
-                const have = connected.get(c.provider);
-                return `${c.label}: ${have ? `connected${have.account ? ` as ${have.account}` : ''}` : 'not connected'}\n  /connect ${c.provider}`;
-              })
-              .join('\n')}`,
+          connections: structured,
+          text: catalogue(host)
+            .map((c) => {
+              const it = have.get(c.provider);
+              return `${c.label}: ${it ? `connected${it.account ? ` as ${it.account}` : ''}` : 'not connected'}\n  /connect ${c.provider}`;
+            })
+            .join('\n'),
         };
       }
-      const found = catalogue(host).find((c) => c.provider === which);
+      const found = structured.catalogue.find((c) => c.provider === which);
       if (!found) {
         return { ok: false, text: `No provider called "${which}". Try /connect on its own to see the list.` };
       }
       return {
         ok: true,
+        connections: structured,
         text:
           `Create a ${found.label} token here:\n${found.url}\n\n${found.hint}\n\n` +
           `Then send it back: /link ${found.provider} <token>\n` +
@@ -483,8 +493,16 @@ export const COMMANDS = {
       const checked = await verifyToken(provider, secret);
       if (!checked.ok) return { ok: false, text: checked.message };
       const store = new Connections(ctx.cfg.stateDir);
-      const saved = store.save(emailFromActor(ctx.actor), provider, secret, checked.account ?? null);
-      return { ok: saved.ok, text: `${checked.message}\n${saved.message}` };
+      const email = emailFromActor(ctx.actor);
+      const saved = store.save(email, provider, secret, checked.account ?? null);
+      return {
+        ok: saved.ok,
+        text: `${checked.message}\n${saved.message}`,
+        // §7: one round trip per action. A client that has to ask again to
+        // find out whether the thing it just did worked is a client that
+        // shows a stale screen for one refresh interval.
+        connections: { catalogue: catalogue(ctx.cfg.hostname), connected: store.list(email) },
+      };
     },
   },
 
@@ -495,8 +513,14 @@ export const COMMANDS = {
     run: async (ctx, args) => {
       const provider = (args[0] || '').toLowerCase();
       if (!provider) return { ok: false, text: 'Usage: /unlink <provider>' };
-      const r = new Connections(ctx.cfg.stateDir).remove(emailFromActor(ctx.actor), provider);
-      return { ok: r.ok, text: r.message };
+      const store = new Connections(ctx.cfg.stateDir);
+      const email = emailFromActor(ctx.actor);
+      const r = store.remove(email, provider);
+      return {
+        ok: r.ok,
+        text: r.message,
+        connections: { catalogue: catalogue(ctx.cfg.hostname), connected: store.list(email) },
+      };
     },
   },
 

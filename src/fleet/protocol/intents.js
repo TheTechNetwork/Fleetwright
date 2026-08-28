@@ -73,7 +73,7 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
 
 /**
  * @typedef {object} ParamSpec
- * @property {'name'|'enum'|'int'|'text'} type
+ * @property {'name'|'enum'|'int'|'text'|'secret'} type
  * @property {boolean} required
  * @property {string[]} [values]  for 'enum'
  * @property {number} [min]       for 'int'
@@ -94,12 +94,18 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * exclusions are deliberate and worth stating outright, because both look like
  * oversights:
  *
- *  - **No `login` / `code`.** agent-hub can authenticate its own box from chat,
- *    and that is genuinely useful there. Reachable from the coordinator it
- *    would mean a compromised Worker can point a box at an attacker's Claude
- *    account, or harvest the authorization code mid-flow. That is far outside
- *    "started and stopped some sessions", and it is not worth the blast radius
- *    to save an SSH session on a box that needs re-authenticating.
+ *  - **`connect` / `link` / `unlink`, which used to be "no `login`/`code`".**
+ *    The old note said a compromised coordinator could point a box at an
+ *    attacker's Claude account. Two things changed. The reasoning was written
+ *    for a SHARED account and does not hold for a guest, who brings their own
+ *    credential and has no shell on the box — for them "just SSH in" is the
+ *    feature missing, not a smaller inconvenience. And the aiming half of the
+ *    attack is now impossible by construction: `scope: me` links the account
+ *    of the VERIFIED ACTOR, whose email the host derives itself and which no
+ *    parameter can name. What remains is honest and written down in
+ *    docs/trust.md: a compromised coordinator can show a person a different
+ *    authorization page. It cannot do that with more authority than `start`
+ *    already gives it on the same box.
  *
  *  - **No path parameter anywhere.** agent-hub's `/new <name> <path>` takes any
  *    path with no validation (a known gap, §1), and a sandboxed session's
@@ -258,6 +264,48 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Stop a session and erase its record, so it can no longer be resumed.',
   },
+  connect: {
+    params: {
+      // A FIXED SET, and the same argument as `logs.service`: the host runs a
+      // provider's flow, and an enum is the difference between naming the
+      // providers this project supports and letting a caller nominate a URL
+      // for somebody to paste a credential into.
+      // Optional, and that is the listing: bare `connect` answers "what could
+      // I connect, and what have I connected already" in one round trip, so a
+      // picker on a phone is rendered from the HOST's catalogue rather than
+      // from a copy of it compiled into two mobile apps.
+      provider: { type: 'enum', required: false, values: ['claude', 'github', 'cloudflare'] },
+      // WHOSE credential. `me` links the requester's own — and the email is
+      // taken from the verified actor, never from a parameter, so this verb
+      // cannot be aimed at somebody else's account row. `host` logs THE BOX
+      // in, which is the original no-SSH promise and is admin-only.
+      scope: { type: 'enum', required: false, values: ['me', 'host'] },
+    },
+    mutating: true,
+    summary: 'Begin connecting a credential. Returns a URL to open — never a secret.',
+  },
+  link: {
+    params: {
+      provider: { type: 'enum', required: true, values: ['claude', 'github', 'cloudflare'] },
+      // THE ONLY PARAMETER IN THIS PROTOCOL THAT IS A LIVE CREDENTIAL. Typed
+      // separately from `text` for three reasons that all have to hold at
+      // once: cleanText would mangle it, a refusal must never quote it back,
+      // and every log site between here and the pane must know to mask it
+      // (src/core/redact.js).
+      secret: { type: 'secret', required: true, max: 4096 },
+      scope: { type: 'enum', required: false, values: ['me', 'host'] },
+    },
+    mutating: true,
+    summary: 'Finish a connection with the token or code the person pasted back.',
+  },
+  unlink: {
+    params: {
+      provider: { type: 'enum', required: true, values: ['claude', 'github', 'cloudflare'] },
+      scope: { type: 'enum', required: false, values: ['me', 'host'] },
+    },
+    mutating: true,
+    summary: 'Forget a stored credential on one host. Does not revoke it at the provider.',
+  },
 });
 
 /** @param {string} verb */
@@ -388,6 +436,25 @@ function checkParam(verb, key, ps, value) {
   if (ps.type === 'text') {
     const r = cleanText(value, { max: ps.max, label: `${verb}.${key}` });
     return r.ok ? { ok: true, value: r.value } : bad(r.error);
+  }
+  if (ps.type === 'secret') {
+    // NOT cleanText. That collapses whitespace and strips control characters,
+    // which would silently hand a MODIFIED credential to a provider and turn
+    // "your token is wrong" into a mystery. A credential is either exactly
+    // what was minted or it is refused.
+    //
+    // The refusal never quotes the value — not a prefix, not a length beyond
+    // "too long". This error string travels back to the caller and, on the
+    // way, past every log line between here and the pane.
+    if (typeof value !== 'string' || !value.length) return bad(`${verb}.${key} is required`);
+    if (value.length > (ps.max ?? 4096)) return bad(`${verb}.${key} is longer than a credential should be`);
+    // Printable ASCII, no whitespace, no quote or backslash — matching
+    // src/core/connectors.js. Anything else is a paste that caught half the
+    // page, which is what login.js already says about the authorization code.
+    if (!/^[\x21-\x7e]+$/.test(value) || /['"\\]/.test(value)) {
+      return bad(`${verb}.${key} does not look like a credential — send just the token or code itself`);
+    }
+    return { ok: true, value };
   }
   // 'int'
   if (!Number.isSafeInteger(value)) return bad(`${verb}.${key} must be an integer`);
