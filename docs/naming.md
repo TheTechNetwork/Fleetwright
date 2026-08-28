@@ -139,9 +139,24 @@ rules, and the app already has the `EntityQuery` scaffolding this needs. Anyone
 wanting a phrase with no app name in it can still build one in Shortcuts, which
 is the sanctioned route and costs us nothing.
 
-**Android.** The same shape through dynamic shortcuts: each kind is pushed as a
-`ShortcutInfoCompat` with a `shortLabel` the user chose, and Assistant matches
-on it. Capabilities in `shortcuts.xml` bind the built-in intent.
+**Android.** Each kind is pushed as a `ShortcutInfoCompat` whose `shortLabel`
+is the word the user chose, and that label is what Assistant matches on.
+
+**Which means the Android screen finishes the job.** Adding a word there is the
+whole setup — no second app, nothing to paste, no last tap held back by the
+platform. The `shortLabel` carries the user's word and nothing else: no product
+name, no `Fleetwright:` prefix. That prefix is exactly the tax iOS imposes, and
+adding it here voluntarily would be carrying a constraint across for no reason.
+
+The two platforms therefore look different, and that is the correct outcome
+rather than an inconsistency to iron out. Making Android match the iOS handoff
+so the screens resemble each other would be consistency serving us rather than
+the person holding the phone.
+
+A shortcut tap opens the start sheet with the kind chosen, rather than starting
+silently — a shortcut says what KIND of work, and the brief still says what the
+work is. Skipping to a started session would hand back precisely the unnamed
+session this feature exists to stop producing.
 
 **A kind is not just a phrase.** It carries defaults — which host, safe or
 dangerous, a title template — so *"start a dev session"* is a whole

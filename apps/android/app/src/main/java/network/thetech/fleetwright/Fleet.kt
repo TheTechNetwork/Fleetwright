@@ -43,8 +43,34 @@ class Fleet(private val settings: Settings) {
 
     suspend fun list(): Reply = intent("list")
 
-    suspend fun start(name: String?): Reply =
-        intent("start", buildMap { if (!name.isNullOrBlank()) put("name", name) })
+    /**
+     * Start a session.
+     *
+     * Everything past `name` is optional and stays optional: a spoken start
+     * cannot open a text field, so there has to be a good outcome when none of
+     * it is supplied.
+     *
+     * `title` and `brief` are prose and travel as intent PARAMETERS. On the far
+     * side the sidecar keeps them out of the command line for the same reason a
+     * title reading "refactor auth --dangerous" must never arrive as a flag.
+     *
+     * No `host`: the coordinator's dispatch() has no placement preference to
+     * hand one to, so it would be accepted, ignored, and look like it worked.
+     */
+    suspend fun start(
+        name: String? = null,
+        title: String? = null,
+        brief: String? = null,
+        mode: String? = null,
+    ): Reply = intent(
+        "start",
+        buildMap {
+            if (!name.isNullOrBlank()) put("name", name)
+            if (!title.isNullOrBlank()) put("title", title)
+            if (!brief.isNullOrBlank()) put("brief", brief)
+            if (!mode.isNullOrBlank()) put("mode", mode)
+        },
+    )
 
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
 
