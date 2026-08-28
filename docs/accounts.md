@@ -127,3 +127,21 @@ with Apple or Google and gets a device credential; they run `/login` and link
 their own Claude account; their sessions bill to them and only they and the
 admin can see them. Nothing in that sequence needs a new concept — it is the
 three layers above, used in order.
+
+**The `/login` step is no longer a shell step.** It was the last one that
+needed SSH, which made the whole sequence untrue for the people it was written
+for: a guest brings their own accounts and has no shell on any box. Both apps
+now carry it, along with GitHub and Cloudflare, via
+[connectors.md](./connectors.md).
+
+One rule there differs from this document on purpose, and it is the guest
+constraint made mechanical:
+
+> To clarify the guests will be bringing their own GitHub Cloudflare Claude
+> creds — no shared creds to them.
+
+A member with no linked **Claude** account falls back to the shared one,
+because a shared org plan is a licence somebody chose to share. A member with
+no connected **GitHub or Cloudflare** token gets nothing at all — those are one
+person's access to their own repositories and accounts, and inheriting them by
+default is precisely what that sentence rules out.

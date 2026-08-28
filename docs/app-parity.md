@@ -199,6 +199,13 @@ it is very easy to re-enter one merge at a time.
   coordinator that could mint the pin itself could reboot the fleet, which is
   the whole reason the pin comes from the box.
 
-**Still open, in order:** `login`/`code` (which [guest onboarding](./accounts.md)
-now needs), the reporting in step 2, and the filesystem — still last, still for
-the reasons in step 4.
+**Still open, in order:** the reporting in step 2, and the filesystem — still
+last, still for the reasons in step 4.
+
+`login`/`code` closed in the round after this one, as `connect`/`link`/`unlink`
+— see [connectors.md](./connectors.md). Worth recording one thing from it here,
+because this document exists to catch exactly this: **the maintenance row
+shipped to iOS and not to Android**, in the round above, while I reported it as
+done on both. The client methods were there; nothing was wired to a button. A
+parity gap can be one commit wide and still be invisible in a summary, which is
+the argument for the checklist rather than the intention.
