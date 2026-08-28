@@ -73,18 +73,155 @@ struct ResumeSessionIntent: AppIntent {
     }
 }
 
+/// A kind, as something Siri can say.
+///
+/// This entity is what makes user-defined phrases possible at all. An app
+/// cannot register arbitrary Siri phrases — `AppShortcut` phrases are compiled
+/// in and must contain the app name. But a PARAMETERISED phrase expands across
+/// an entity's `suggestedEntities()`, so every kind somebody creates becomes a
+/// spoken phrase without any of them being known at build time.
+struct SessionKindEntity: AppEntity, Identifiable {
+    let id: String
+    let word: String
+
+    static var typeDisplayRepresentation: TypeDisplayRepresentation { "Session kind" }
+    static var defaultQuery = SessionKindQuery()
+
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(word)") }
+}
+
+struct SessionKindQuery: EntityQuery {
+    func entities(for identifiers: [String]) async throws -> [SessionKindEntity] {
+        SessionKinds.all().filter { identifiers.contains($0.id) }.map { SessionKindEntity(id: $0.id, word: $0.word) }
+    }
+
+    /// What Siri offers, and what it matches a spoken word against. Reads from
+    /// UserDefaults rather than the fleet: this must answer instantly and it
+    /// must answer with the radio off, because it is consulted while somebody
+    /// is mid-sentence.
+    func suggestedEntities() async throws -> [SessionKindEntity] {
+        SessionKinds.all().map { SessionKindEntity(id: $0.id, word: $0.word) }
+    }
+}
+
 struct StartSessionIntent: AppIntent {
     static var title: LocalizedStringResource = "Start a session"
     static var description = IntentDescription("Start a new Claude Code session on the fleet.")
+
+    /// FALSE, and it must be a literal.
+    ///
+    /// This began as a computed property reading a setting, which is what the
+    /// feature wanted — and the AppIntents metadata processor refuses it
+    /// outright: "openAppWhenRun must have a compile-time static value and
+    /// cannot be computed or dynamic". Not a Swift restriction. The shortcut
+    /// metadata is extracted at BUILD time, so there is no run in which to ask.
+    ///
+    /// The choice moves to a second intent with its own phrase. See
+    /// StartSessionAndOpenIntent.
     static var openAppWhenRun = false
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let settings = Settings()
-        guard settings.configured else {
-            return .result(dialog: "Open Fleetwright and sign in first.")
+    /// OPTIONAL, and this is the one thing here I could not verify without
+    /// Xcode. It has to be optional for the bare "start a session" phrase to
+    /// work for somebody who has defined no kinds — which is everybody on day
+    /// one. If the compiler refuses an optional entity inside a parameterised
+    /// phrase, the fix is a second intent with a non-optional parameter rather
+    /// than making day one worse.
+    @Parameter(title: "Kind")
+    var kind: SessionKindEntity?
+
+    /// Optional, and it must stay optional: a spoken start cannot open a text
+    /// field, so there has to be a good answer when nobody supplies one. That
+    /// is the same conclusion docs/naming.md reaches from the psychology, by a
+    /// different route.
+    @Parameter(title: "Title")
+    var titleText: String?
+
+    @Parameter(title: "About")
+    var brief: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start a \(\.$kind) session") {
+            \.$titleText
+            \.$brief
         }
-        let reply = try await Fleet(settings: settings).start(name: nil)
-        return .result(dialog: IntentDialog(stringLiteral: reply.text ?? "Started a session"))
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: await StartSession.run(kind: kind, titleText: titleText, brief: brief)))
+    }
+}
+
+/// The same thing, and it brings the app forward.
+///
+/// A SEPARATE INTENT rather than a flag, because `openAppWhenRun` is read out
+/// of the binary at build time and cannot consult anything at run time. Two
+/// phrases instead of a setting — which is arguably where the choice belonged:
+/// whether you want to be taken there is clearer at the moment you ask than in
+/// a screen you visited last month.
+struct StartSessionAndOpenIntent: AppIntent {
+    static var title: LocalizedStringResource = "Start a session and open"
+    static var description = IntentDescription("Start a session and bring Fleetwright forward.")
+    static var openAppWhenRun = true
+
+    @Parameter(title: "Kind")
+    var kind: SessionKindEntity?
+
+    @Parameter(title: "Title")
+    var titleText: String?
+
+    @Parameter(title: "About")
+    var brief: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start a \(\.$kind) session and open") {
+            \.$titleText
+            \.$brief
+        }
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        .result(dialog: IntentDialog(stringLiteral: await StartSession.run(kind: kind, titleText: titleText, brief: brief)))
+    }
+}
+
+/// What both start intents do, written once.
+///
+/// Two intents that differ only in a build-time constant must not become two
+/// implementations that drift. The copy is exactly the one that would quietly
+/// stop applying the title prefix a month from now.
+enum StartSession {
+    static func run(kind: SessionKindEntity?, titleText: String?, brief: String?) async -> String {
+        let settings = Settings()
+        guard settings.configured else { return "Open Fleetwright and sign in first." }
+
+        let chosen = kind.flatMap { SessionKinds.find(word: $0.word) }
+        let about = brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // A title is not asked for out loud. If one was typed in a Shortcut it
+        // is used; otherwise a brief becomes one on this device; otherwise the
+        // host names it as it always has.
+        var title = titleText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if title.isEmpty, !about.isEmpty { title = await Naming.suggest(for: about) }
+        if !title.isEmpty, let prefix = chosen?.titlePrefix, !prefix.isEmpty {
+            title = "\(prefix): \(title)"
+        }
+
+        do {
+            let reply = try await Fleet(settings: settings).start(
+                name: nil,
+                title: title.isEmpty ? nil : title,
+                brief: about.isEmpty ? nil : about,
+                mode: chosen?.mode
+            )
+            // The spoken reply the host wrote, not a sentence invented here. A
+            // UI can ignore prose; an assistant cannot invent it.
+            return reply.text ?? "Started a session"
+        } catch {
+            // Spoken back rather than thrown. A thrown error from a voice
+            // intent becomes "something went wrong", which tells somebody
+            // driving a car nothing at all.
+            return "Could not start a session: \(error.localizedDescription)"
+        }
     }
 }
 
@@ -119,11 +256,36 @@ struct FleetwrightShortcuts: AppShortcutsProvider {
             shortTitle: "Resume",
             systemImageName: "play.circle"
         )
+        // Two entries for one intent on purpose. The parameterised one expands
+        // across every kind the user has defined — "start a dev session in
+        // Fleetwright" — and the bare one keeps working for somebody who has
+        // defined none, which is everybody on the first day.
+        AppShortcut(
+            intent: StartSessionIntent(),
+            phrases: [
+                "Start a \(\.$kind) session in \(.applicationName)",
+                "New \(\.$kind) session in \(.applicationName)",
+            ],
+            shortTitle: "Start a kind",
+            systemImageName: "plus.circle"
+        )
         AppShortcut(
             intent: StartSessionIntent(),
             phrases: ["Start a session in \(.applicationName)", "New \(.applicationName) session"],
             shortTitle: "Start",
             systemImageName: "plus.circle"
+        )
+        // The version that takes you there. A separate phrase because
+        // openAppWhenRun is baked in at build time and cannot read a setting —
+        // so "and open it" is said, not configured.
+        AppShortcut(
+            intent: StartSessionAndOpenIntent(),
+            phrases: [
+                "Start a session in \(.applicationName) and open it",
+                "Open a new session in \(.applicationName)",
+            ],
+            shortTitle: "Start and open",
+            systemImageName: "arrow.up.forward.app"
         )
         AppShortcut(
             intent: StopSessionIntent(),

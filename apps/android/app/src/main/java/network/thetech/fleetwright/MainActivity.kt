@@ -101,14 +101,21 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             MaterialTheme(
                 colorScheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
-            ) { FleetScreen(onSignedIn = ::registerForPush) }
+            ) {
+                FleetScreen(
+                    onSignedIn = ::registerForPush,
+                    // Read once, from the intent that started this activity. A
+                    // shortcut tap is the only thing that sets it.
+                    launchKindId = intent?.getStringExtra(SessionKinds.EXTRA_KIND_ID),
+                )
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetScreen(onSignedIn: () -> Unit = {}) {
+fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val fleet = remember { Fleet(settings) }
@@ -120,6 +127,11 @@ fun FleetScreen(onSignedIn: () -> Unit = {}) {
     // token you had typed — on the one screen where losing input costs the
     // most, because nothing is saved until you press Save.
     var showSettings by rememberSaveable { mutableStateOf(!settings.configured) }
+    var showStart by rememberSaveable { mutableStateOf(false) }
+    // The kind a launcher shortcut asked for, consumed once. Held here rather
+    // than read inside the sheet so that dismissing and reopening by hand does
+    // not silently re-apply a kind nobody chose the second time.
+    var pendingKindId by rememberSaveable { mutableStateOf<String?>(null) }
     var status by rememberSaveable { mutableStateOf("") }
     // The session list is deliberately NOT saved: it is a cache of what the
     // coordinator said, it is refetched on the way back, and a stale list
@@ -148,6 +160,33 @@ fun FleetScreen(onSignedIn: () -> Unit = {}) {
         }
     }
 
+    // Launched from a shortcut: open the sheet with that kind already chosen.
+    // The sheet, not a silent start — a shortcut says WHAT kind of work, and the
+    // brief still says what the work is. Skipping straight to a started session
+    // would give back exactly the unnamed session this whole feature exists to
+    // stop producing.
+    LaunchedEffect(launchKindId) {
+        if (launchKindId != null) {
+            pendingKindId = launchKindId
+            showStart = true
+        }
+    }
+
+    if (showStart) {
+        StartSheet(
+            settings = settings,
+            preselectedKindId = pendingKindId,
+            onDismiss = {
+                showStart = false
+                pendingKindId = null
+            },
+            onStarted = { text ->
+                status = text
+                refresh(keepStatus = true)
+            },
+        )
+    }
+
     LaunchedEffect(Unit) { refresh() }
 
     Scaffold(
@@ -165,15 +204,11 @@ fun FleetScreen(onSignedIn: () -> Unit = {}) {
                 ExtendedFloatingActionButton(
                     text = { Text("New session") },
                     icon = {},
-                    onClick = {
-                        scope.launch {
-                            busy = true
-                            val reply = fleet.start(null)
-                            status = reply.text
-                            busy = false
-                            refresh(keepStatus = true)
-                        }
-                    },
+                    // Opens the sheet rather than starting immediately. The
+                    // one-tap start is still there — leave it blank and press
+                    // Start — but a session nobody described is one nobody
+                    // recognises a week later.
+                    onClick = { showStart = true },
                 )
             }
         },
@@ -390,6 +425,20 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // phone proves who its owner is to Google, and the coordinator issues
         // this device a credential of its own — revocable without disturbing
         // any other phone, and named after the person holding it.
+        // Assistant setup, above the account section: this is the thing people
+        // come back to settings for, and sign-in is the thing they do once.
+        var showKinds by remember { mutableStateOf(false) }
+        Text("Siri and Assistant", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "A kind is a word you can say — \"start a dev session\" — carrying its own defaults. "
+                + "Adding one here is the whole setup: nothing else to install or paste.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedButton(onClick = { showKinds = true }) { Text("Session kinds") }
+        if (showKinds) KindsSheet(onDismiss = { showKinds = false })
+
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
         Text("You", style = MaterialTheme.typography.titleMedium)
         if (signedIn) {
             Text(

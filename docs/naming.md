@@ -68,8 +68,63 @@ words of the brief offered as the title. A feature that only works on an iPhone
 Asked for directly: a word the user sets, so *"start a new dev session"* or
 *"start an orgi"* works from Siri or Google Assistant.
 
+### The app name is the wrong thing to make somebody say
+
+Worth stating before the mechanics, because it changes what "good" looks like.
+
+*"Start a session in Fleetwright"* asks a person to hold four things in one
+sentence: the machine, Claude, the project — and our product name. **Ours is the
+only one of the four they do not care about.** They think *"another remote
+session"*, or they think of the agent by a name they gave it. Making them
+translate that into our brand every time is a tax we charge for our own benefit.
+
+So the target is a phrase with **no name to learn**, and there are two routes,
+because Apple's rule bites and Android's does not.
+
+**Route one, no setup: other names for the app.** `INAlternativeAppNames` in
+Info.plist is the escape hatch. Apple requires `\(.applicationName)` in an
+`AppShortcut` phrase, but that token matches any of the alternatives — so
+shipping *my fleet*, *my agents*, *remote sessions* means
+
+> "start a dev session on my fleet"
+
+satisfies the rule while containing nothing anybody had to be taught. This costs
+one plist key and is the single highest-value line in the whole feature.
+
+**Route two: a phrase they choose, set up from inside the app.** A shortcut the
+*user* creates carries no app-name requirement at all, so it can be called
+"Debbie", or anything else they already call this.
+
+The honest boundary, because a pretend version of this screen would be worse
+than none: **an app cannot register a Siri phrase programmatically.**
+`AppShortcut` phrases are compiled in, and the old
+`INUIAddVoiceShortcutViewController` — which really did let an app add one in
+place — belongs to the SiriKit intents that App Intents replaced. There is no
+supported call ending in "and now Siri knows *Debbie*".
+
+So `ShortcutSetupView` does everything up to that last tap rather than claiming
+it: takes the phrase, keeps it, puts it on the clipboard, opens Shortcuts. One
+paste and one Done. Three seconds instead of a paragraph, which is the
+difference between a feature and a support article.
+
+It also does **not** say "set up" afterwards. It says the phrase is saved and
+works once the steps are finished, because we cannot observe whether they were —
+and claiming success for something unobserved is the exact habit this codebase
+keeps finding in its own output.
+
+**Android does not have this problem.** A dynamic shortcut's `shortLabel` *is*
+the phrase, so the same screen finishes the job with no handoff. Same design,
+one platform needing a step the other does not.
+
+**Android has no equivalent constraint**, which is worth noticing rather than
+envying: a dynamic shortcut's `shortLabel` is the phrase. The design goal is the
+same on both, and only iOS needs the two routes.
+
+### The mechanics
+
 **iOS.** Fully free-form Siri phrases are not something an app can register —
-`AppShortcut` phrases are compiled in and must contain `\(.applicationName)`.
+`AppShortcut` phrases are compiled in and must contain `\(.applicationName)`,
+subject to the alternative names above.
 What *is* supported, and is what this wants, is a **parameterised phrase over an
 `AppEntity`**:
 
@@ -84,14 +139,57 @@ rules, and the app already has the `EntityQuery` scaffolding this needs. Anyone
 wanting a phrase with no app name in it can still build one in Shortcuts, which
 is the sanctioned route and costs us nothing.
 
-**Android.** The same shape through dynamic shortcuts: each kind is pushed as a
-`ShortcutInfoCompat` with a `shortLabel` the user chose, and Assistant matches
-on it. Capabilities in `shortcuts.xml` bind the built-in intent.
+**Android.** Each kind is pushed as a `ShortcutInfoCompat` whose `shortLabel`
+is the word the user chose, and that label is what Assistant matches on.
+
+**Which means the Android screen finishes the job.** Adding a word there is the
+whole setup — no second app, nothing to paste, no last tap held back by the
+platform. The `shortLabel` carries the user's word and nothing else: no product
+name, no `Fleetwright:` prefix. That prefix is exactly the tax iOS imposes, and
+adding it here voluntarily would be carrying a constraint across for no reason.
+
+The two platforms therefore look different, and that is the correct outcome
+rather than an inconsistency to iron out. Making Android match the iOS handoff
+so the screens resemble each other would be consistency serving us rather than
+the person holding the phone.
+
+A shortcut tap opens the start sheet with the kind chosen, rather than starting
+silently — a shortcut says what KIND of work, and the brief still says what the
+work is. Skipping to a started session would hand back precisely the unnamed
+session this feature exists to stop producing.
 
 **A kind is not just a phrase.** It carries defaults — which host, safe or
 dangerous, a title template — so *"start a dev session"* is a whole
 configuration, not a name. That is the difference between a shortcut and a
 macro, and it is why this is worth building rather than aliasing.
+
+### Opening the app after a spoken start, which cannot be a setting
+
+Asked for as a toggle: when a session starts through an App Intent, let the user
+turn on auto-open. It cannot be one, and the compiler is what says so:
+
+> `openAppWhenRun` must have a compile-time static value and cannot be computed
+> or dynamic
+
+That is the AppIntents metadata processor, not Swift. Shortcut metadata is
+extracted from the binary at **build** time, so there is no run in which to
+consult a setting — a computed property there fails the build rather than being
+quietly ignored, which is the good version of this error.
+
+So the choice moved from a hidden toggle to **two phrases**, as two intents
+differing only in that constant:
+
+> "start a session on my fleet" — does not take you there
+> "start a session on my fleet **and open it**" — does
+
+Arguably where it belonged. An intent fired from an automation often runs when
+nobody is looking at the phone, and which of those two somebody meant is clearer
+at the moment they say it than in a screen they visited last month. A phrase you
+can say is also more discoverable than a switch you have to know exists.
+
+The shared work lives in one `StartSession.run()`. Two intents differing only in
+a build-time constant are otherwise two implementations that drift, and the copy
+is exactly the one that quietly stops applying the title prefix.
 
 ### Voice makes the design honest
 

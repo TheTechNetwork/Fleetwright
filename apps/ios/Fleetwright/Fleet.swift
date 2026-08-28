@@ -32,8 +32,33 @@ struct Fleet {
     }
 
     func list() async throws -> Reply { try await intent("list") }
-    func start(name: String?) async throws -> Reply {
-        try await intent("start", params: name.map { ["name": $0] } ?? [:])
+    /// Start a session.
+    ///
+    /// Everything past `name` is optional and stays optional. A spoken start
+    /// cannot open a text field, so there has to be a good outcome when none of
+    /// it is supplied — see docs/naming.md.
+    ///
+    /// `title` and `brief` are prose, and they travel as intent PARAMETERS, not
+    /// glued into a name. On the far side the sidecar keeps them out of the
+    /// command line for the same reason: a title reading "refactor auth
+    /// --dangerous" must never arrive as a flag.
+    /// No `host` parameter yet, deliberately. The coordinator's `dispatch()`
+    /// has no placement preference to hand it to, so a host argument here would
+    /// be accepted, sent, ignored, and look like it worked — which is the
+    /// failure mode this project keeps paying for. Choosing a host is real work
+    /// in the scheduler and lands with that, not as a field that does nothing.
+    func start(
+        name: String?,
+        title: String? = nil,
+        brief: String? = nil,
+        mode: String? = nil
+    ) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let name { params["name"] = name }
+        if let title, !title.isEmpty { params["title"] = title }
+        if let brief, !brief.isEmpty { params["brief"] = brief }
+        if let mode, !mode.isEmpty { params["mode"] = mode }
+        return try await intent("start", params: params)
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
     func resume(_ name: String, choice: String? = nil) async throws -> Reply {
@@ -245,12 +270,23 @@ final class Settings {
         didSet { UserDefaults.standard.set(signedInAs, forKey: "signedInAs") }
     }
 
+    /// The phrase somebody chose for themselves.
+    ///
+    /// Stored even though iOS will not let us register it: the app shows it
+    /// back, so returning to that screen shows their choice rather than an
+    /// empty field that looks like it was forgotten. Not a claim that Siri
+    /// knows it — only that they told us.
+    var customPhrase: String {
+        didSet { UserDefaults.standard.set(customPhrase, forKey: "customPhrase") }
+    }
+
     private static let credentialKey = "credential"
 
     init() {
         coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
+        customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""
 
         // Nothing is carried over from the build that asked for an admin token.
         // That token is the fleet's break-glass credential and every phone had

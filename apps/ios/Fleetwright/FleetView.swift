@@ -1,3 +1,4 @@
+import AppIntents
 import AuthenticationServices
 import SwiftUI
 import UIKit
@@ -15,6 +16,7 @@ struct FleetView: View {
     @State private var status = ""
     @State private var busy = false
     @State private var showingSettings = false
+    @State private var showingStart = false
 
     var body: some View {
         NavigationStack {
@@ -40,12 +42,22 @@ struct FleetView: View {
                     Button("Settings") { showingSettings = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("New") { Task { await act { try await fleet.start(name: nil) } } }
+                    // Opens the sheet rather than starting immediately. The
+                    // one-tap start is still there — leaving the sheet blank
+                    // and pressing Start is the same thing — but a session
+                    // nobody described is one nobody recognises in a week.
+                    Button("New") { showingStart = true }
                         .disabled(busy || !settings.configured)
                 }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView(settings: settings) { Task { await refresh() } }
+            }
+            .sheet(isPresented: $showingStart) {
+                StartSheet(settings: settings) { text in
+                    status = text
+                    Task { await refresh(keepStatus: true) }
+                }
             }
             .task { await refresh() }
             .onAppear { if !settings.configured { showingSettings = true } }
@@ -326,6 +338,44 @@ private struct SettingsView: View {
                 // look like nothing at all. This asks for one now and reports
                 // what happened, so the answer arrives before the notification
                 // that matters does.
+                // Kinds, and the toggle that decides what a spoken start does
+                // to your screen.
+                Section {
+                    NavigationLink("Session kinds") { SessionKindsView() }
+                    // Two taps to a phrase with no app name in it at all.
+                    //
+                    // Apple requires the app name in the phrases WE ship, which
+                    // means the built-in ones make somebody say a brand to reach
+                    // their own work. A shortcut they make themselves has no
+                    // such rule: they can call it "Debbie", or "another remote
+                    // session", or whatever they already call this in their
+                    // head — and that is the name that will still be there in a
+                    // month, because it was theirs before we arrived.
+                    NavigationLink("Say it your way") { ShortcutSetupView(settings: settings) }
+                    ShortcutsLink()
+                } header: {
+                    Text("Siri and Shortcuts")
+                } footer: {
+                    // A multi-line literal, not a chain of `+`. Five string
+                    // literals joined with + is enough to make Swift's type
+                    // checker give up — "unable to type-check this expression
+                    // in reasonable time" — because each + is an overloaded
+                    // operator it has to resolve against every candidate. This
+                    // is one literal and one expression.
+                    Text("""
+                    Say "start a dev session on my fleet". "my fleet", "my agents" and \
+                    "remote sessions" all work, so there is no product name to remember.
+
+                    For a phrase of your own — "Debbie", or anything else you call this — \
+                    tap "Say it your way" above.
+
+                    Saying "and open it" brings the app forward; plain "start a session" does \
+                    not. Two phrases rather than a setting, because an intent from an \
+                    automation often runs when nobody is looking at the phone — and which of \
+                    those you meant is clearer as you say it.
+                    """)
+                }
+
                 Section {
                     Button("Send a test notification") {
                         Task {
@@ -411,5 +461,64 @@ private struct StatusBadge: View {
         }
         .font(.caption)
         .foregroundStyle(tint)
+    }
+}
+
+
+/// Editing the words Siri will recognise.
+///
+/// Deliberately plain. This is a list somebody visits twice — once to add
+/// "dev", once more a month later — and anything cleverer than a list and a
+/// text field is design nobody asked for on a screen nobody looks at.
+struct SessionKindsView: View {
+    @State private var kinds: [SessionKind] = SessionKinds.all()
+    @State private var newWord = ""
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach($kinds) { $kind in
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Word", text: $kind.word)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        TextField("Title prefix (optional)", text: $kind.titlePrefix)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onDelete { idx in
+                    idx.map { kinds[$0].id }.forEach(SessionKinds.remove)
+                    kinds.remove(atOffsets: idx)
+                }
+                HStack {
+                    TextField("Add a word", text: $newWord)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Add") {
+                        let word = newWord.trimmingCharacters(in: .whitespaces)
+                        guard !word.isEmpty else { return }
+                        kinds.append(SessionKind(word: word))
+                        newWord = ""
+                        SessionKinds.save(kinds)
+                    }
+                    .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("Words")
+            } footer: {
+                // Said, because otherwise the first thing anybody does is add a
+                // word and then wonder why Siri has not heard of it.
+                Text("""
+                Say "start a dev session on my fleet". A new word can take a moment before \
+                Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth".
+                """)
+            }
+        }
+        .navigationTitle("Session kinds")
+        // Saved on the way out rather than on every keystroke: this writes the
+        // whole list, and doing that per character would rewrite it a hundred
+        // times while somebody types one word.
+        .onDisappear { SessionKinds.save(kinds) }
     }
 }
