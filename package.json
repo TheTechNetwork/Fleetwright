@@ -24,7 +24,7 @@
     "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
-    "@types/node": "26.2.0",
+    "@types/node": "26.4.0",
     "esbuild": "0.28.2",
     "playwright": "1.62.1",
     "preact": "10.29.8",
