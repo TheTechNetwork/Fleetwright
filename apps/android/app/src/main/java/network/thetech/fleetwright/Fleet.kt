@@ -99,7 +99,57 @@ class Fleet(private val settings: Settings) {
         val rebootRequired: Boolean,
     )
 
-    data class Reply(val ok: Boolean, val text: String, val sessions: List<Session>)
+    data class Reply(
+        val ok: Boolean,
+        val text: String,
+        val sessions: List<Session>,
+        /**
+         * What could be connected and what is, when the reply is about
+         * credentials. Never a token — the host does not send one and there is
+         * no field here that could hold one.
+         */
+        val connections: Connections? = null,
+    )
+
+    /**
+     * The connector picker, rendered from what the HOST publishes.
+     *
+     * Deliberately not a hardcoded list of providers in the app. A provider
+     * added to the host's table appears here on the next refresh, with its real
+     * URL and its real scopes, without a Play release — which is the entire
+     * reason the verbs are connect/link/unlink and not github/cloudflare.
+     */
+    data class Connections(
+        val catalogue: List<Available> = emptyList(),
+        val connected: List<Linked> = emptyList(),
+    ) {
+        data class Available(
+            val provider: String,
+            val label: String,
+            /**
+             * The provider's OWN token page with the scopes pre-ticked — or,
+             * for Claude, the authorization URL this box just minted.
+             *
+             * Null for Claude until a flow has actually been started: there is
+             * no static page to send anybody to, and null is the honest answer
+             * rather than a missing field.
+             */
+            val url: String?,
+            val hint: String,
+            val env: List<String>,
+        ) {
+            /**
+             * Claude is a sign-in; the rest are tokens to paste. Which one
+             * decides the shape of the row, so it is asked once rather than at
+             * four places in the UI.
+             */
+            val isSignIn: Boolean get() = provider == "claude"
+        }
+
+        data class Linked(val provider: String, val label: String?, val account: String?, val updatedAt: Long)
+
+        fun linked(provider: String): Linked? = connected.firstOrNull { it.provider == provider }
+    }
 
     suspend fun list(): Reply = intent("list")
 
@@ -221,6 +271,45 @@ class Fleet(private val settings: Settings) {
         }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach the coordinator", sessions = emptyList()) }
     }
 
+    /**
+     * What can be connected on this box, and what already is.
+     *
+     * One round trip: the catalogue and the current state arrive together, so
+     * a picker never renders its provider list from one answer and its status
+     * from another.
+     */
+    suspend fun connections(host: String): Reply = intent("connect", emptyMap(), host = host)
+
+    /**
+     * Begin connecting a credential. Returns a URL to open — never a secret.
+     *
+     * `scope` is left off for a person's own credential, which needs no
+     * permission: the HOST derives whose account it is from the verified
+     * identity on the request, and there is no parameter that could name
+     * somebody else. "host" logs THE BOX in and is admin-only.
+     */
+    suspend fun connect(host: String, provider: String, scope: String? = null): Reply =
+        intent("connect", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
+
+    /**
+     * Hand back the token or the authorization code.
+     *
+     * Goes to the SAME host `connect` was asked of, which the caller carries.
+     * Claude's flow is a login waiting in a pane on that box; a code typed into
+     * a different one would be a live credential landing where nothing asked
+     * for it.
+     */
+    suspend fun link(host: String, provider: String, secret: String, scope: String? = null): Reply =
+        intent(
+            "link",
+            buildMap { put("provider", provider); put("secret", secret); if (scope != null) put("scope", scope) },
+            host = host,
+        )
+
+    /** Forget a stored credential. Does NOT revoke it at the provider. */
+    suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
+        intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
+
     suspend fun resume(name: String, choice: String? = null): Reply =
         intent("resume", buildMap {
             put("name", name)
@@ -335,6 +424,7 @@ class Fleet(private val settings: Settings) {
                     ok = json.optBoolean("ok", false),
                     text = json.optString("text", ""),
                     sessions = parseSessions(json.optJSONArray("sessions")),
+                    connections = parseConnections(json.optJSONObject("connections")),
                 )
             } catch (e: Exception) {
                 Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
@@ -371,6 +461,47 @@ class Fleet(private val settings: Settings) {
                 )
             }
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Never throws and never half-parses: a malformed row is dropped, because a
+     * picker missing one provider is recoverable and a crash on the settings
+     * screen is not.
+     */
+    private fun parseConnections(o: JSONObject?): Connections? {
+        if (o == null) return null
+        val catalogue = o.optJSONArray("catalogue")
+        val connected = o.optJSONArray("connected")
+        return Connections(
+            catalogue = (0 until (catalogue?.length() ?: 0)).mapNotNull { i ->
+                catalogue?.optJSONObject(i)?.let { c ->
+                    val provider = c.optString("provider")
+                    if (provider.isBlank()) return@let null
+                    val env = c.optJSONArray("env")
+                    Connections.Available(
+                        provider = provider,
+                        label = c.optString("label", provider),
+                        // optString turns a JSON null into the string "null",
+                        // which would be rendered as a link somebody could tap.
+                        url = c.optString("url").takeIf { it.isNotBlank() && it != "null" },
+                        hint = c.optString("hint", ""),
+                        env = (0 until (env?.length() ?: 0)).mapNotNull { k -> env?.optString(k) },
+                    )
+                }
+            },
+            connected = (0 until (connected?.length() ?: 0)).mapNotNull { i ->
+                connected?.optJSONObject(i)?.let { c ->
+                    val provider = c.optString("provider")
+                    if (provider.isBlank()) return@let null
+                    Connections.Linked(
+                        provider = provider,
+                        label = c.optString("label").takeIf { it.isNotBlank() && it != "null" },
+                        account = c.optString("account").takeIf { it.isNotBlank() && it != "null" },
+                        updatedAt = c.optLong("updatedAt", 0L),
+                    )
+                }
+            },
+        )
     }
 
     private fun parseSessions(array: JSONArray?): List<Session> {
