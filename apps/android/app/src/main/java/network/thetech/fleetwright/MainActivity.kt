@@ -439,6 +439,18 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     }
                 },
             ) { Text("Sign in with Google") }
+            // A disabled button that says nothing is "the button does nothing",
+            // which SignIn.kt takes trouble to avoid one file away and then this
+            // reproduced. Sign-in is per-fleet — the ID token is exchanged with a
+            // particular coordinator — so the URL genuinely has to come first;
+            // that is a thing to say, not a thing to grey out in silence.
+            if (url.isBlank()) {
+                Text(
+                    "Set the coordinator URL above first — signing in exchanges your Google " +
+                        "identity with one specific fleet.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
         if (signInResult.isNotBlank()) {
             Text(signInResult, style = MaterialTheme.typography.bodySmall)
