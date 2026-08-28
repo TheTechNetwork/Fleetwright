@@ -762,6 +762,100 @@ plaintext, or somebody re-links.
 Until the broker exists, re-linking is one tap, and it is one tap per new
 machine rather than one per machine per credential.
 
+## Minting instead of storing, and OAuth instead of a PAT
+
+The follow-up question, and the better one: rather than a vault holding a
+long-lived token, let something hold **permission to generate tokens** and mint
+a short one per session — seven days, or less. And use OAuth rather than a PAT
+or an API token.
+
+Both are right in direction. The thing to be precise about is that they change
+*which* credential is dangerous, not *whether* one is.
+
+### A minting credential is strictly more powerful than what it mints
+
+This is the sentence to keep. A stolen token is one token, with its scopes and
+its expiry. A stolen minting key is **every token that key can issue, for as
+long as nobody notices** — and it re-issues after each revocation.
+
+So "the Worker holds permission to generate Cloudflare tokens" is not a smaller
+version of "the Worker holds a Cloudflare token". It is a larger one. The same
+argument that refuses the vault refuses this harder: coordinator compromise
+currently buys start-and-stop-some-sessions, and this would upgrade it to
+mint-credentials-for-every-provider-for-every-member.
+
+**The minting key belongs where a compromise is already total for the things it
+affects** — the host, behind the per-session broker, or the proxy. A host
+compromise already owns that host's sessions; it should not also federate to
+the fleet. That is the same reasoning that gave hosts their own keypairs
+instead of one shared token.
+
+### GitHub is genuinely solved, and it is the case to build first
+
+A **GitHub App** issues *installation access tokens*: minted from the app's
+private key, scoped to selected repositories and permissions, and expiring in
+**one hour**. Not seven days — one hour, as the documented default path.
+
+That is the whole idea working, with the provider doing the hard part:
+
+| | PAT today | GitHub App installation token |
+|---|---|---|
+| lifetime | until it is revoked | 1 hour |
+| scope | account-wide by scope | chosen repositories |
+| revocation | the person, by hand | expiry, unattended |
+| attribution | one token, all sessions | mint per session |
+
+`ROADMAP` already lists "`gh` in every session (GitHub App, installation
+tokens, PATH shim)" as designed. This is the argument for promoting it: it is
+not an improvement on the paste-a-PAT flow, it replaces it.
+
+### Cloudflare is weaker, and worth saying so
+
+Cloudflare tokens do support `expires_on`, so a seven-day token is real. But
+minting one requires a parent with **API Tokens: Edit**, and there is no
+scoped-down minting primitive equivalent to a GitHub App installation — the
+parent that can mint is close to account-wide. The asymmetry is the point:
+GitHub gives us a minting authority that is *weaker* than an account
+credential; Cloudflare's is *stronger* than the token it produces.
+
+So Cloudflare stays pasted for now, or goes behind the proxy where the session
+never holds either. Pretending the two providers are the same shape is how the
+weaker one gets the stronger one's architecture by association.
+
+### OAuth versus a PAT: better, and not free
+
+OAuth buys consent the person can see and withdraw at the provider, scopes, and
+— with GitHub Apps' user-to-server tokens — an eight-hour access token with a
+refresh token behind it. All real.
+
+Two costs, stated rather than discovered:
+
+- **The refresh token becomes the long-lived secret.** OAuth moves the problem
+  down a layer; it does not remove it. What it changes is that the long-lived
+  thing is revocable from a screen the person already knows, which is worth
+  something.
+- **It puts a client secret of ours in the middle of their consent screen** —
+  the one property the current design deliberately bought by having people
+  paste their own tokens: no OAuth app, no client secret, no callback, and
+  nothing of ours between a person and their provider. Taking OAuth means
+  spending that, deliberately.
+
+For a GitHub App the trade is clearly worth it, because the same app is what
+issues the one-hour installation tokens. Elsewhere it is a judgement call per
+provider rather than a policy.
+
+### What this reorders
+
+Nothing on the list below moves, but item 4 gains a shape: **the broker first,
+then a GitHub App behind it.** The broker is what makes short-lived credentials
+usable at all — a token that expires in an hour is a liability if a session
+holds it in an environment variable, and unremarkable if the session asks a
+socket each time and gets the current one.
+
+Minting without the broker is a shorter fuse on the same bomb. The broker
+without minting is already an improvement. In that order they compose; in the
+other order the first half makes things worse.
+
 ## What this does not solve, and should be said out loud
 
 An agent that can make authorised requests can make bad ones. Moving the
