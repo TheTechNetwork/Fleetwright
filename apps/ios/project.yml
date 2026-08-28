@@ -50,13 +50,19 @@ targets:
         # It is not the whole answer — a phrase with NO app name in it has to be
         # a shortcut the user makes, which is what the Siri section of settings
         # is for. This is the part that needs no setup at all.
+        #
+        # ARRAY OF DICTIONARIES, not of strings. A plain list here builds and
+        # then fails at AppIntentsSSUTraining with "Unable to parse Info.plist"
+        # — the Siri language processor reads this key and a shape it does not
+        # expect stops the whole build rather than being ignored. Each entry is
+        # a dict with an INAlternativeAppName key.
         INAlternativeAppNames:
-          - my fleet
-          - the fleet
-          - my agents
-          - my sessions
-          - remote sessions
-          - agent fleet
+          - INAlternativeAppName: my fleet
+          - INAlternativeAppName: the fleet
+          - INAlternativeAppName: my agents
+          - INAlternativeAppName: my sessions
+          - INAlternativeAppName: remote sessions
+          - INAlternativeAppName: agent fleet
         # Bound to the build settings, not left to XcodeGen.
         #
         # XcodeGen fills these two in itself when they are absent, and it fills
