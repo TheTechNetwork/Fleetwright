@@ -15,6 +15,7 @@ struct FleetView: View {
     @State private var status = ""
     @State private var busy = false
     @State private var showingSettings = false
+    @State private var showingStart = false
 
     var body: some View {
         NavigationStack {
@@ -40,12 +41,22 @@ struct FleetView: View {
                     Button("Settings") { showingSettings = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("New") { Task { await act { try await fleet.start(name: nil) } } }
+                    // Opens the sheet rather than starting immediately. The
+                    // one-tap start is still there — leaving the sheet blank
+                    // and pressing Start is the same thing — but a session
+                    // nobody described is one nobody recognises in a week.
+                    Button("New") { showingStart = true }
                         .disabled(busy || !settings.configured)
                 }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView(settings: settings) { Task { await refresh() } }
+            }
+            .sheet(isPresented: $showingStart) {
+                StartSheet(settings: settings) { text in
+                    status = text
+                    Task { await refresh(keepStatus: true) }
+                }
             }
             .task { await refresh() }
             .onAppear { if !settings.configured { showingSettings = true } }
@@ -326,6 +337,22 @@ private struct SettingsView: View {
                 // look like nothing at all. This asks for one now and reports
                 // what happened, so the answer arrives before the notification
                 // that matters does.
+                // Kinds, and the toggle that decides what a spoken start does
+                // to your screen.
+                Section {
+                    NavigationLink("Session kinds") { SessionKindsView() }
+                    Toggle("Open the app after starting", isOn: Binding(
+                        get: { settings.autoOpenAfterStart },
+                        set: { settings.autoOpenAfterStart = $0 }
+                    ))
+                } header: {
+                    Text("Siri and Shortcuts")
+                } footer: {
+                    Text("A kind is a word you can say — \"start a dev session\" — carrying its own defaults. "
+                         + "Opening the app is off by default: an intent from an automation often runs when "
+                         + "nobody is looking at the phone.")
+                }
+
                 Section {
                     Button("Send a test notification") {
                         Task {
@@ -411,5 +438,62 @@ private struct StatusBadge: View {
         }
         .font(.caption)
         .foregroundStyle(tint)
+    }
+}
+
+
+/// Editing the words Siri will recognise.
+///
+/// Deliberately plain. This is a list somebody visits twice — once to add
+/// "dev", once more a month later — and anything cleverer than a list and a
+/// text field is design nobody asked for on a screen nobody looks at.
+struct SessionKindsView: View {
+    @State private var kinds: [SessionKind] = SessionKinds.all()
+    @State private var newWord = ""
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach($kinds) { $kind in
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Word", text: $kind.word)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        TextField("Title prefix (optional)", text: $kind.titlePrefix)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onDelete { idx in
+                    idx.map { kinds[$0].id }.forEach(SessionKinds.remove)
+                    kinds.remove(atOffsets: idx)
+                }
+                HStack {
+                    TextField("Add a word", text: $newWord)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Add") {
+                        let word = newWord.trimmingCharacters(in: .whitespaces)
+                        guard !word.isEmpty else { return }
+                        kinds.append(SessionKind(word: word))
+                        newWord = ""
+                        SessionKinds.save(kinds)
+                    }
+                    .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("Words")
+            } footer: {
+                // Said, because otherwise the first thing anybody does is add a
+                // word and then wonder why Siri has not heard of it.
+                Text("Say \"start a dev session in Fleetwright\". A new word can take a moment "
+                     + "before Siri recognises it. A prefix groups sessions in the list: \"dev: refactor auth\".")
+            }
+        }
+        .navigationTitle("Session kinds")
+        // Saved on the way out rather than on every keystroke: this writes the
+        // whole list, and doing that per character would rewrite it a hundred
+        // times while somebody types one word.
+        .onDisappear { SessionKinds.save(kinds) }
     }
 }

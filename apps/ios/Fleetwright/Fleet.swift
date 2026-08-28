@@ -32,8 +32,33 @@ struct Fleet {
     }
 
     func list() async throws -> Reply { try await intent("list") }
-    func start(name: String?) async throws -> Reply {
-        try await intent("start", params: name.map { ["name": $0] } ?? [:])
+    /// Start a session.
+    ///
+    /// Everything past `name` is optional and stays optional. A spoken start
+    /// cannot open a text field, so there has to be a good outcome when none of
+    /// it is supplied — see docs/naming.md.
+    ///
+    /// `title` and `brief` are prose, and they travel as intent PARAMETERS, not
+    /// glued into a name. On the far side the sidecar keeps them out of the
+    /// command line for the same reason: a title reading "refactor auth
+    /// --dangerous" must never arrive as a flag.
+    /// No `host` parameter yet, deliberately. The coordinator's `dispatch()`
+    /// has no placement preference to hand it to, so a host argument here would
+    /// be accepted, sent, ignored, and look like it worked — which is the
+    /// failure mode this project keeps paying for. Choosing a host is real work
+    /// in the scheduler and lands with that, not as a field that does nothing.
+    func start(
+        name: String?,
+        title: String? = nil,
+        brief: String? = nil,
+        mode: String? = nil
+    ) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let name { params["name"] = name }
+        if let title, !title.isEmpty { params["title"] = title }
+        if let brief, !brief.isEmpty { params["brief"] = brief }
+        if let mode, !mode.isEmpty { params["mode"] = mode }
+        return try await intent("start", params: params)
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
     func resume(_ name: String, choice: String? = nil) async throws -> Reply {
@@ -245,12 +270,25 @@ final class Settings {
         didSet { UserDefaults.standard.set(signedInAs, forKey: "signedInAs") }
     }
 
+    /// Whether starting a session from an intent should bring the app forward.
+    ///
+    /// OFF by default, and that default is the whole design decision. An intent
+    /// fired from a Shortcut, an automation or the Action button very often
+    /// runs when nobody is looking at the phone, and launching an app then is
+    /// an interruption nobody asked for. Only the person who set it knows
+    /// whether they meant "start this and get out of my way" or "start this and
+    /// take me there".
+    var autoOpenAfterStart: Bool {
+        didSet { UserDefaults.standard.set(autoOpenAfterStart, forKey: "autoOpenAfterStart") }
+    }
+
     private static let credentialKey = "credential"
 
     init() {
         coordinatorURL = UserDefaults.standard.string(forKey: "coordinatorURL") ?? ""
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
+        autoOpenAfterStart = UserDefaults.standard.bool(forKey: "autoOpenAfterStart")
 
         // Nothing is carried over from the build that asked for an admin token.
         // That token is the fleet's break-glass credential and every phone had
