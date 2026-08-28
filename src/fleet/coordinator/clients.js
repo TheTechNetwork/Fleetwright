@@ -146,6 +146,34 @@ export class ClientRegistry {
     return [...this.clients.values()].some((c) => c.admin && !c.revokedAt);
   }
 
+  /**
+   * Has the admin seat EVER been assigned, on any row, revoked or not?
+   *
+   * This is what the first-person-in rule must consult — not hasAdmin(). With
+   * hasAdmin(), revoking the owner's lost phone reopened the founding moment:
+   * the next person to sign in, whoever they were, inherited the fleet. The
+   * founding of a fleet happens once.
+   */
+  everHadAdmin() {
+    return [...this.clients.values()].some((c) => c.admin);
+  }
+
+  /**
+   * Does this verified email hold admin anywhere — on ANY row, revoked or not?
+   *
+   * Revoked rows count, deliberately: revocation is for lost devices, and a
+   * person whose every phone was revoked is still the person. Demotion is a
+   * different act — removal from the allowlist — after which they cannot sign
+   * in and this is never consulted.
+   *
+   * @param {string} email
+   */
+  emailHasAdmin(email) {
+    const wanted = String(email || '').toLowerCase().trim();
+    if (!wanted) return false;
+    return [...this.clients.values()].some((c) => c.admin && String(c.email || '').toLowerCase() === wanted);
+  }
+
   /** Without secrets, obviously — this is what an app renders. */
   list() {
     return [...this.clients.values()]

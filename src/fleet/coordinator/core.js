@@ -314,7 +314,23 @@ export class CoordinatorCore {
     // against mistakes and against a colleague having a bad day. It is NOT a
     // security control, because it is enforced inside the coordinator — the
     // component docs/trust.md assumes compromised.
-    const admin = !this.clients.hasAdmin();
+    //
+    // AND ADMIN FOLLOWS THE PERSON, NOT THE CREDENTIAL ROW. It was granted to
+    // the first credential ever issued and then stuck to that row — so signing
+    // out and back in on the same phone DEMOTED THE FLEET'S OWNER: the old row
+    // still held admin, hasAdmin() said "taken", and the new credential came
+    // out a plain member whose every host removal answered 403. Silently, in
+    // the app's case.
+    //
+    // The email on a credential is verified by the identity provider before it
+    // is ever stored, which is exactly what makes it usable as the thing role
+    // attaches to. And it deliberately follows across REVOKED rows: revocation
+    // exists for lost devices, not demotion — removing a person is taking them
+    // off the allowlist, after which they cannot sign in at all.
+    // everHadAdmin, not hasAdmin: the founding of a fleet happens once.
+    // Checking live admins reopened it — revoke the owner's lost phone and the
+    // next person to sign in, whoever they were, inherited the fleet.
+    const admin = !this.clients.everHadAdmin() || this.clients.emailHasAdmin(who.email);
     const { client, token } = await this.clients.issue(`${label} (${who.email})`, { admin });
     // Recorded on the client so an intent can say who sent it without another
     // lookup, and so a revocation list reads as people rather than ids.
