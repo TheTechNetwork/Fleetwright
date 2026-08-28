@@ -270,6 +270,37 @@ outside the container, which is this same design twenty-five years early.
 Prerequisite for the interesting version: hosts now have keypairs, which is what
 gives a secret something to be encrypted *to*.
 
+### The app, voice and the CLI as the hub — not Telegram
+
+Full plan in [`app-parity.md`](./app-parity.md). The short version, because the
+framing is the part worth carrying: **the app, Siri, Google Assistant and the
+CLI are what most people use. Telegram stays as an option and stops setting the
+ceiling.**
+
+Measured rather than guessed. Chat exposes 16 commands; both apps already carry
+clients for most of them. The gap is three different problems:
+
+- **built, not on screen** — `forget` exists in `Fleet.swift` and `Fleet.kt` and
+  appears nowhere in either UI. A button.
+- **needs a new verb** — `logs`, `update`, `upgrade`, `reboot`, `login`/`code`.
+  Telegram reaches these by talking to `agent-hub` on that box; an app talking
+  to a coordinator has no such path. `PROTOCOL_VERSION` is exact-match, so this
+  is one coordinated v2 designed together, not five verbs added one at a time.
+- **needs data nobody collects** — workspace path, context-window usage, plan
+  limits, host version and whether it is behind.
+
+Build order: no-protocol-change work first (forget, host picker, workspace path,
+Telegram setup from the app), then additive reporting on existing verbs, then
+protocol v2 once — with `answer` in the same bump — then the filesystem last,
+because an authenticated app that can read and write arbitrary paths on every
+host is the largest new attack surface in the product and wants its own design
+pass.
+
+Voice gets a vote on the protocol: parameters have to be nameable out loud, and
+replies need a short speakable sentence the host writes. Notably `answer` taking
+an ordinal — chosen in `plan.md` §4 because `send-keys` reaches a root shell —
+is also the only form a voice assistant can offer reliably.
+
 ### A browser control surface, and a PWA
 
 Same capability as the apps, from a PC. **Explicitly after identity lands**,
