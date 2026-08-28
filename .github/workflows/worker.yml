@@ -81,10 +81,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '26'
+          node-version: '26.8.1'
       # The dry-run IS the portability test, so there is no separate lint for
       # it. wrangler resolves every import the Worker actually pulls in: if
       # something in the shared coordinator code starts importing from `node:`
@@ -130,10 +130,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '26'
+          node-version: '26.8.1'
 
       # A step's own `env:` is not visible to that step's `if:` — the guard has
       # to be a separate step that writes an output. Doing it the other way is

@@ -57,7 +57,7 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Install XcodeGen
         # Skip brew's formula-index refresh, which regularly costs more than
@@ -114,7 +114,7 @@ jobs:
       # "skipped for want of a key". Both leave this job green.
       uploaded: ${{ steps.creds.outputs.have }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Check there are credentials to upload with
         id: creds
@@ -320,10 +320,10 @@ jobs:
     # notes are missing a line.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '24'
+          node-version: '24.20.0'
       - name: Assign the build to the internal group
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
@@ -353,10 +353,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '24'
+          node-version: '24.20.0'
       - name: Assign the build to the external group and submit it for review
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
