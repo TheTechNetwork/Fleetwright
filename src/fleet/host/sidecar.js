@@ -269,7 +269,7 @@ export class Sidecar {
       // title never lands in the journal — it is a person's words about their
       // own work, and there is no reason for it to be in a log a whole box can
       // read.
-      const meta = commandMeta(intent.verb, intent.params);
+      const meta = commandMeta(intent.verb, intent.params, intent.actor);
       this.log.info(`sidecar: ${actor} → ${line}`);
       const r = await this.hub.command(line, meta);
 
@@ -499,13 +499,22 @@ export function toCommandLine({ verb, params }) {
  *
  * @param {string} verb
  * @param {Record<string, string|number>} [params]
+ * @param {string} [actor]  the VERIFIED identity, as the coordinator resolved it
  * @returns {Record<string, string>}
  */
-export function commandMeta(verb, params) {
-  if (verb !== 'start') return {};
-  const p = params || {};
+export function commandMeta(verb, params = {}, actor = '') {
   return {
-    ...(typeof p.title === 'string' ? { title: p.title } : {}),
-    ...(typeof p.brief === 'string' ? { brief: p.brief } : {}),
+    // WHO, on every verb, not just start.
+    //
+    // agent-hub hardcoded `actor: 'web'` for every HTTP caller, so every
+    // session on every host recorded "web" as its creator — the coordinator
+    // knew the verified email, the sidecar knew it, and then it was thrown
+    // away one hop from the record that wanted it.
+    //
+    // This is the value that makes "whose session is this" answerable, which
+    // everything in docs/accounts.md depends on.
+    ...(typeof actor === 'string' && actor ? { actor } : {}),
+    ...(verb === 'start' && typeof params?.title === 'string' ? { title: params.title } : {}),
+    ...(verb === 'start' && typeof params?.brief === 'string' ? { brief: params.brief } : {}),
   };
 }

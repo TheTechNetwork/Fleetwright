@@ -165,9 +165,29 @@ export class HttpAdapter {
         meta[field] = r.value;
       }
 
+      // WHO ASKED, when the caller can say.
+      //
+      // This used to be the literal 'web' for every HTTP caller, so every
+      // session recorded "web" as its creator no matter who started it — the
+      // coordinator had verified an email, the sidecar was holding it, and the
+      // record one hop away could not have it.
+      //
+      // BE PRECISE ABOUT WHAT THIS IS WORTH. agent-hub does not verify the
+      // actor and cannot: it has one token, and whoever holds that token can
+      // already run any command as anyone. So this records what an
+      // ALREADY-TRUSTED caller says, and it is exactly as trustworthy as the
+      // hub token — no more. The verification happens at the coordinator,
+      // which checks an OIDC identity before it ever gets here.
+      //
+      // That is still strictly better than 'web': a value that is sometimes
+      // right beats one that is never informative. It is not an audit trail,
+      // and docs/accounts.md says so where somebody might rely on it.
+      const claimed = typeof body.actor === 'string' ? body.actor.trim() : '';
+      const actor = /^[A-Za-z0-9._:@+-]{1,120}$/.test(claimed) ? claimed : 'web';
+
       log.info(`http: ${clientLabel(req)} → ${line.slice(0, 120)}`);
       const reply = await dispatch(
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor: 'web', ...meta },
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta },
         line,
       );
       return json(res, 200, reply);
