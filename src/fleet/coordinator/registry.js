@@ -27,7 +27,9 @@
  * @property {number|null} running
  * @property {number|null} free
  * @property {string[]|null} resumable
- * @property {Array<{name: string, status: string, createdBy?: string|null}>|null} [sessions]
+ * @property {Array<{name: string, status: string, createdBy?: string|null, cwd?: string|null, startedAt?: number|null, account?: string|null}>|null} [sessions]
+ * @property {{ email: string|null, plan: string|null, org: string|null }|null} [account]
+ * @property {{ head: string|null, branch: string|null }|null} [version]
  * @property {number[]} loadavg
  * @property {boolean|null} loggedIn
  * @property {{reachable: boolean, reason?: string}} [hub]

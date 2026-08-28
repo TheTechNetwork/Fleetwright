@@ -12,7 +12,7 @@
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
-import { updateAvailable } from '../src/core/update.js';
+import { updateAvailable, updateStatus } from '../src/core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
@@ -145,6 +145,14 @@ async function run() {
         system: describeSystemUpdates(system),
         rebootRequired: system.rebootRequired,
       };
+    },
+    // The commit on disk right now. From updateStatus rather than a constant
+    // baked at build time: the restart watcher can put this process on new
+    // code without anything rebuilding, and what a person reading the app
+    // wants is what is running, not what was compiled.
+    version: () => {
+      const st = updateStatus(loadConfig());
+      return st.ok ? { head: st.head ?? null, branch: st.branch ?? null } : null;
     },
   });
 

@@ -90,9 +90,11 @@ export class Sidecar {
    *   promptText?: boolean,
    *   watch?: boolean,
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
+   *   version?: (() => { head: string|null, branch: string|null }|null)|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
+    version = null,
     promptText = false,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
@@ -115,6 +117,7 @@ export class Sidecar {
     // and an agent-hub, and nothing about git checkouts or package managers.
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null} */
     this.updates = updates;
+    this.version = version;
     this.maxSkewMs = maxSkewMs;
     this.log = logger;
     this.healthIntervalMs = healthIntervalMs;
@@ -392,8 +395,43 @@ export class Sidecar {
             // guessed name still stops them — privacy against reading with no
             // authorisation against acting.
             createdBy: s.createdBy ?? null,
+            // WHERE the work is happening. The app showed a session with no
+            // way to answer "which checkout is this?" — the commonest question
+            // about a session somebody started yesterday, and the answer was
+            // sitting in the registry the whole time.
+            cwd: s.cwd ?? null,
+            // HOW LONG it has been going. Sent as a timestamp rather than a
+            // duration: a duration is stale the moment it is serialised, and
+            // the phone doing the arithmetic is the only place it can be
+            // right. Same reason the console freezes age counters when the
+            // fleet is unreachable — a ticking clock over frozen data is the
+            // most convincing lie a stale UI tells.
+            startedAt: s.createdAt ?? null,
+            // Whose Claude account it was seeded with: an email, or "shared".
+            account: s.account ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
+        // The account this box runs on, for the app's settings screen: which
+        // plan, which org, which address. Not a secret — it is what
+        // `agent-hub login status` prints on the box — and it is the
+        // difference between "sessions are failing" and "sessions are failing
+        // because this box is on a plan that ran out".
+        account: state.auth?.loggedIn
+          ? {
+              email: state.auth.email ?? null,
+              plan: state.auth.subscriptionType ?? null,
+              org: state.auth.orgName ?? null,
+            }
+          : null,
+        // What code this box is running, so the app can say "three commits
+        // behind" without anybody opening a terminal. updates already computed
+        // whether it is behind; this says what it IS.
+        // What code this box is RUNNING, so the app can say "three commits
+        // behind" without anybody opening a terminal. `updates` already says
+        // whether it is behind; this says what it is. Injected like updates,
+        // rather than shelling out from here: the sidecar has no business
+        // knowing it was installed from git.
+        version: this.version?.() ?? null,
         // What is out of date on this box, so a phone can say so without
         // anybody logging in to look. Both are cheap: the app check is cached
         // for fifteen minutes, and the system one reads what apt already knows
