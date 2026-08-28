@@ -370,7 +370,7 @@ export class Coordinator {
    * fan-out and correlation are decisions, and a decision implemented twice is
    * a decision that will eventually be made two different ways.
    *
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
@@ -698,6 +698,9 @@ export class Coordinator {
         // session. One we mint is unique per call, which is right for a first
         // attempt and useless for a retry — that is the caller's to own.
         id: typeof body.id === 'string' ? body.id : undefined,
+        // Which host, when the person picked one in the app. A placement
+        // preference, never an intent parameter — see scheduler.js.
+        preferHost: typeof body.host === 'string' ? body.host : undefined,
       });
       return json(res, 200, reply);
     }

@@ -280,6 +280,47 @@ test('one mute host does not stall the fleet for everyone', async () => {
   mute.close();
 });
 
+
+test('a start with a chosen host lands on that host', async () => {
+  // End to end through the real runtime: the app names a host beside the
+  // intent, the DO places on exactly that host, and the intent that crosses
+  // the wire carries NO host parameter -- a host would refuse one, since
+  // `start` does not declare it.
+  const chosen = await connectHost('chosen-box');
+  const other = await connectHost('other-box');
+  const arrived = { chosen: [], other: [] };
+  const answer = (ws, bucket) => (text) => {
+    const intent = JSON.parse(String(text));
+    if (intent.kind !== 'intent') return;
+    bucket.push(intent);
+    ws.send(JSON.stringify({ v: intent.v, kind: 'reply', id: intent.id, ok: true, text: 'started here' }));
+  };
+  chosen.on('message', answer(chosen, arrived.chosen));
+  other.on('message', answer(other, arrived.other));
+
+  const reply = await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ verb: 'start', params: {}, host: 'chosen-box', id: 'live-pick-0001' }),
+  }).then((r) => r.json());
+
+  assert.equal(reply.ok, true, JSON.stringify(reply).slice(0, 160));
+  assert.equal(arrived.chosen.length, 1, 'the chosen host got the work');
+  assert.equal(arrived.other.length, 0, 'the other host got none of it');
+  assert.equal(arrived.chosen[0].params.host, undefined, 'the preference must never leak into the intent');
+
+  const refused = await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ verb: 'start', params: {}, host: 'no-such-box', id: 'live-pick-0002' }),
+  }).then((r) => r.json());
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /not a host this fleet knows/);
+
+  chosen.close();
+  other.close();
+});
+
 test('healthz reports the protocol version of the code that is running', async () => {
   // Asserted here as well as in the source grep, because this is the REAL
   // runtime answering — the hardcoded 1 this catches was live for two days

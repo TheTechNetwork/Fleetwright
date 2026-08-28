@@ -919,6 +919,10 @@
                   "id": {
                     "type": "string",
                     "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session."
+                  },
+                  "host": {
+                    "type": "string",
+                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
                   }
                 }
               }
