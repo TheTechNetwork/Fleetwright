@@ -132,6 +132,22 @@ gets, which is when it matters.
 A refresh that fails is reported and does not fail the update: the box has a
 working image and the registry is what went wrong.
 
+**And a session start checks too**, because `/update` only helps people who run
+it — while a stale image is discovered by *using* the product. Four constraints
+keep that off the critical path:
+
+- **stamped** — at most once every `AGENT_HUB_SANDBOX_REFRESH_MS` (six hours by
+  default, `0` to disable), read off a file mtime
+- **bounded** — a 60s timeout, so a slow registry costs seconds and a hung one
+  costs nothing
+- **never fatal** — no network, no podman, a timeout, an unwritable stamp: all
+  fall through to starting on the image already on disk
+- **only when a volume is about to be created**, because that is when the
+  image's contents are baked into a session. A resume keeps its own.
+
+The stamp is written even when the pull *fails*, so a box that is offline for a
+day does not retry on every single start.
+
 ### Cloning a box that is already installed
 
 **Do not, without reading this.** `/var/lib/agent-fleet/host-key.json` is the

@@ -17,7 +17,7 @@
 // reason tmux.js is: a session name must never be able to become a command.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import { Accounts, emailFromActor, extractOauthAccount } from './accounts.js';
@@ -31,8 +31,9 @@ const BUILD_TIMEOUT_MS = 15 * 60_000;
  * @param {import('../config.js').Config} cfg
  * @param {string[]} args
  */
-export function podman(cfg, args) {
-  const r = spawnSync(cfg.podmanBin, args, { encoding: 'utf8' });
+/** @param {import('../config.js').Config} cfg @param {string[]} args @param {{ timeout?: number }} [opts] */
+export function podman(cfg, args, { timeout } = {}) {
+  const r = spawnSync(cfg.podmanBin, args, { encoding: 'utf8', ...(timeout ? { timeout } : {}) });
   return {
     status: r.status === null ? 1 : r.status,
     stdout: r.stdout || '',
@@ -153,6 +154,60 @@ function volumeExists(cfg, volume) {
 }
 
 /**
+ * Refresh the image on the way into a session — cheaply, and never in the way.
+ *
+ * A session that starts on a stale image gets stale behaviour, and the fix
+ * living only in `/update` means it arrives when somebody remembers to run it.
+ * So a start checks too. THE CONSTRAINTS ARE WHAT MAKE THIS SAFE:
+ *
+ *  - **Stamped.** At most once per refreshEveryMs (six hours by default), read
+ *    off a file mtime. A pull per start would put a registry between a person
+ *    and their session, and this project has already measured what a
+ *    fifteen-second start feels like.
+ *  - **Bounded.** The pull gets a short timeout. A slow registry delays a
+ *    session by seconds, never by minutes, and a hung one delays it not at all.
+ *  - **Never fatal.** Every failure path — no network, no podman, a timeout,
+ *    an unwritable stamp — falls through to starting on the image already on
+ *    disk. A box with a working image must never fail to start a session
+ *    because a refresh could not happen.
+ *  - **Only for a NEW volume.** The caller only asks when it is about to seed,
+ *    because that is the moment the image's contents get baked into a session.
+ *    A resume keeps its own, as it must.
+ *
+ * The stamp is touched even when the pull FAILS. Otherwise an unreachable
+ * registry means every start retries, and a box offline for a day starts every
+ * session slowly for a day.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ changed: boolean }}
+ */
+export function refreshSandboxImageIfStale(cfg) {
+  const every = cfg.sandboxRefreshMs ?? 0;
+  if (!every || String(cfg.sandboxImage || '').startsWith('localhost/')) return { changed: false };
+  const stamp = path.join(cfg.stateDir, '.sandbox-image-checked');
+  try {
+    const age = Date.now() - statSync(stamp).mtimeMs;
+    if (age < every) return { changed: false };
+  } catch {
+    // No stamp yet: this is the first start since install, which is exactly
+    // when a check is most worth doing.
+  }
+  let changed = false;
+  try {
+    const r = refreshSandboxImage(cfg, { timeout: 60_000 });
+    changed = r.ok && r.changed;
+    if (!r.ok) log.warn(`sandbox: image check failed, starting on the image already here: ${r.message}`);
+  } catch (e) {
+    log.warn(`sandbox: image check failed: ${/** @type {Error} */ (e).message}`);
+  }
+  try {
+    mkdirSync(path.dirname(stamp), { recursive: true });
+    writeFileSync(stamp, new Date().toISOString());
+  } catch { /* unwritable state dir: check every start rather than never start */ }
+  return { changed };
+}
+
+/**
  * Pull the sandbox image again, and say whether it actually moved.
  *
  * The digest before and after is the only honest way to answer "did anything
@@ -161,15 +216,16 @@ function volumeExists(cfg, volume) {
  * someone else's prose as an API.
  *
  * @param {import('../config.js').Config} cfg
+ * @param {{ timeout?: number }} [opts]
  * @returns {{ ok: boolean, changed: boolean, message?: string }}
  */
-export function refreshSandboxImage(cfg) {
+export function refreshSandboxImage(cfg, { timeout } = {}) {
   const digest = () => {
     const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', cfg.sandboxImage]);
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
   const before = digest();
-  const pulled = podman(cfg, ['pull', cfg.sandboxImage]);
+  const pulled = podman(cfg, ['pull', cfg.sandboxImage], { timeout });
   if (pulled.status !== 0) {
     return { ok: false, changed: false, message: pulled.stderr.trim().slice(0, 200) };
   }
@@ -199,6 +255,13 @@ export function ensureSandboxVolumes(cfg, name, actor = null) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
+  // Only when a volume is missing — that is when the image's contents get
+  // baked into a session. A resume finds both volumes present, skips this
+  // entirely, and keeps the image it began with.
+  const { claude: claudeVol, work: workVol } = sandboxNames(name);
+  const creating = !volumeExists(cfg, claudeVol) || !volumeExists(cfg, workVol);
+  if (creating) refreshSandboxImageIfStale(cfg);
+
   const image = ensureSandboxImage(cfg);
   if (!image.ok) return { ok: false, message: image.message };
 
