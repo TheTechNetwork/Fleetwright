@@ -302,7 +302,10 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
   assert.equal(body.hosts.length, 1);
   assert.deepEqual(
     Object.keys(body.hosts[0]).sort(),
-    ['connected', 'connectedAt', 'health', 'healthAt', 'hostId', 'reason', 'state'],
+    // `ephemeral` is a description of the host — is it expected to vanish —
+    // so it belongs here. The pin exists to catch the OTHER kind of addition:
+    // a socket, a server, a process handle.
+    ['connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'reason', 'state'],
     'the entry is a description of the host, not a window onto the process serving it',
   );
 

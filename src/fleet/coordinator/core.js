@@ -63,6 +63,9 @@ export class CoordinatorCore {
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
     this.registry = new HostRegistry({ now });
+    // An ephemeral host that drops is retired by the registry; the key it
+    // enrolled with has to go with it, which only the core can do.
+    this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
     // Which machines are in the fleet. The authority, unlike `registry` above,
@@ -102,6 +105,22 @@ export class CoordinatorCore {
   hostDisconnected(hostId, reason) {
     this.registry.disconnect(hostId, reason);
     this.log.warn(`coordinator: ${hostId} disconnected (${reason})`);
+  }
+
+  /**
+   * An ephemeral host has gone for good: forget its key as well as its entry.
+   *
+   * Without this the registry is clean and `enrolled` fills up instead — one
+   * dead key per CI job, for ever, each of them a credential that would still
+   * be accepted if the private half ever leaked out of a build log. A
+   * throwaway host's key should not outlive the throwaway host.
+   *
+   * @param {string} hostId @param {string} reason
+   */
+  ephemeralHostRetired(hostId, reason) {
+    this.hostIds.revoke(hostId);
+    this.record({ event: 'host.retired', hostId, text: `temporary host went away (${reason})` });
+    this.log.info(`coordinator: retired temporary host ${hostId} (${reason})`);
   }
 
   /**
