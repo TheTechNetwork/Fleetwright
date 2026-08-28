@@ -97,6 +97,16 @@ jobs:
         working-directory: worker
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
 
+      # The Worker, RUNNING, in workerd — the runtime it ships to. The fleet
+      # went down on a bug that only exists in that runtime (a floating
+      # storage-write rejection aborts the Durable Object), and nothing here
+      # had ever executed the Worker at all: the coordinator logic was tested
+      # in Node and the bundle step proves it parses. This boots the real
+      # thing, enrols a real host over the real handshake, and floods it.
+      - name: Run the Worker in workerd and drive it
+        working-directory: worker
+        run: npm test
+
   deploy:
     needs: check
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
