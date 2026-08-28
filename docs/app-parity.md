@@ -86,17 +86,36 @@ fleet — so it wants its own design pass, a path model that cannot escape the
 workspace, and probably a capability a host can decline to offer. It is not a
 feature to bolt onto a release that is also changing authentication.
 
-## iOS App Intents: offer to open the session in Claude
+## iOS App Intents: opening the app after a spoken start
 
 Asked for specifically: when a session is started through an App Intent, let the
-user turn on **auto-open the session in the Claude app**.
+user turn on auto-open.
 
-Worth stating why it is a *setting* and not a default. An intent invoked from a
-Shortcut, an automation or the Action button often runs when nobody is looking
-at the phone, and launching an app then is an interruption nobody asked for. As
-an opt-in it is the difference between "start this and get out of my way" and
-"start this and take me there", and only the person running it knows which they
-meant.
+This section used to argue for it being **a setting rather than a default**, and
+that reasoning still holds — an intent invoked from a Shortcut, an automation or
+the Action button often runs when nobody is looking at the phone, and launching
+an app then is an interruption nobody asked for.
+
+**The mechanism does not.** It cannot be a setting at all, and the compiler is
+what says so:
+
+> `openAppWhenRun` must have a compile-time static value and cannot be computed
+> or dynamic
+
+That is the AppIntents metadata processor. Shortcut metadata is extracted from
+the binary at **build** time, so there is no run in which to consult a
+preference — a computed property there fails the build rather than being quietly
+ignored.
+
+So it shipped as **two phrases** instead, in `naming.md`: "start a session" and
+"start a session and open it", two intents differing only in that constant.
+Which is arguably where the choice belonged. Only the person running it knows
+which they meant, and they say so at the moment they ask rather than in a screen
+they visited last month.
+
+Left here as a correction rather than an edit, because the reasoning was right
+and only the mechanism was wrong — and a document that quietly rewrites its own
+conclusions teaches nobody anything.
 
 ## Voice is a surface, and it constrains the protocol
 
