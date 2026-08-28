@@ -226,13 +226,33 @@ async function main() {
     console.log(`what to test: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
   }
 
+  // AN INTERNAL GROUP IS NOT ASSIGNED A BUILD. It receives every build the
+  // moment processing finishes, and the API says so by refusing:
+  //
+  //   POST /v1/betaGroups/<id>/relationships/builds → 422
+  //     Builds cannot be assigned to this internal group.:
+  //     Cannot add internal group to a build.
+  //
+  // Which is a confusing sentence for a correct rule. It read as a permissions
+  // problem and was in fact "you are describing work that has already
+  // happened" — the build was VALID and in front of the internal testers
+  // before this call was made, and the job went red anyway.
+  //
+  // The group lookup above stays, because it is still worth failing loudly
+  // when the group named in the workflow does not exist. What goes is the
+  // assignment.
+  if (IS_INTERNAL) {
+    console.log(`build ${BUILD_NUMBER} is available to "${group.attributes.name}" — internal groups receive every build automatically`);
+    return;
+  }
+
+  // External is the opposite: nothing reaches anybody until the build is
+  // explicitly given to the group AND Apple has reviewed it.
   await api(`/v1/betaGroups/${group.id}/relationships/builds`, {
     method: 'POST',
     body: JSON.stringify({ data: [{ type: 'builds', id: build.id }] }),
   });
   console.log(`build ${BUILD_NUMBER} → "${group.attributes.name}"`);
-
-  if (IS_INTERNAL) return;
 
   // External testers are the public, so Apple reviews the build before any of
   // them see it. Submitting is all this can do — review takes hours to a day,
