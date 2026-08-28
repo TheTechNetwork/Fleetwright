@@ -295,6 +295,36 @@ const STEPS = [
  * exiting? INVOCATION_ID is set by systemd for every service it starts, and is
  * the cheapest reliable signal — far better than guessing from PPID.
  */
+/**
+ * The sibling services shipped from the same directory, and still running the
+ * code that was on disk before this pull.
+ *
+ * `/update --restart` restarts THIS process — the hub exits and systemd's
+ * Restart=always brings it back. It cannot restart the sidecar or the
+ * coordinator: those are system units, and the service user has no privilege
+ * over them. So on a box running more than one of them, an update applies to
+ * one service and quietly does not apply to the others, and the message said
+ * "Restarting now" as though it had covered everything.
+ *
+ * Says nothing when there is nothing to say — a single-service box, or one
+ * where the siblings are already stopped.
+ *
+ * @returns {string[]} unit names that are active and now running stale code
+ */
+export function staleSiblings() {
+  const units = ['agent-fleet-sidecar', 'agent-fleet-coordinator'];
+  const stale = [];
+  for (const unit of units) {
+    const r = spawnSync('systemctl', ['is-active', unit], { encoding: 'utf8' });
+    // is-active answers "inactive" for a unit it has never heard of, so a box
+    // without the sidecar installed is indistinguishable from one where it is
+    // stopped — and in both cases there is nothing to restart. Only "active"
+    // means somebody is running old code.
+    if (!r.error && (r.stdout || '').trim() === 'active') stale.push(unit);
+  }
+  return stale;
+}
+
 export function canSelfRestart() {
   return Boolean(process.env.INVOCATION_ID);
 }
@@ -373,6 +403,18 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   // not already have. Sessions are untouched — KillMode=process is what makes
   // that true, and is why that line in the unit is load-bearing.
   parts.push('Restarting now. Sessions are left running; this reconnects to them on the way back up.');
+
+  // Only this process restarts. Anything else shipped from the same directory
+  // keeps running the code that was there before the pull, and saying
+  // "Restarting now" without this reads as though the update were finished.
+  const stale = staleSiblings();
+  if (stale.length) {
+    parts.push(
+      `Still on the old code: ${stale.join(', ')}.\n` +
+        `This cannot restart ${stale.length === 1 ? 'it' : 'them'} — ${stale.length === 1 ? 'it is a system unit' : 'they are system units'} and this service has no privilege over ${stale.length === 1 ? 'it' : 'them'}.\n` +
+        `  sudo systemctl restart ${stale.join(' ')}`,
+    );
+  }
   log.warn(`update: restarting to apply ${status.head} → new code${actor ? ` (asked by ${actor})` : ''}`);
   const stop = exit || ((code) => process.exit(code));
   setTimeout(() => stop(0), RESTART_DELAY_MS);
