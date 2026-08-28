@@ -18,6 +18,29 @@
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
+/**
+ * The account identity that has to travel WITH a credential.
+ *
+ * Found the hard way, from a phone screenshot: a sandbox seeded with a valid
+ * .credentials.json came up "not logged in", because the newer CLI decides
+ * logged-in-ness from the PAIR — the token in .credentials.json and the
+ * `oauthAccount` block in .claude.json. Seeding one without the other is a
+ * login that fails while every file involved is genuine.
+ *
+ * @param {string} claudeJsonText  the raw text of a .claude.json
+ * @returns {string|null}          the oauthAccount block, serialised, or null
+ */
+export function extractOauthAccount(claudeJsonText) {
+  try {
+    const parsed = JSON.parse(String(claudeJsonText || ''));
+    const account = parsed?.oauthAccount;
+    if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
+    return JSON.stringify(account);
+  } catch {
+    return null;
+  }
+}
+
 /** A bare email, lowercased — or null for anything else. @param {unknown} value */
 export function normaliseEmail(value) {
   const email = String(value || '').toLowerCase().trim();
@@ -51,6 +74,14 @@ export class Accounts {
     return clean ? path.join(this.dir, `${clean}.json`) : null;
   }
 
+  /** `<email>.account.json` beside the credential: the oauthAccount block. @param {string} email */
+  accountMetaPathFor(email) {
+    const clean = normaliseEmail(email);
+    if (!clean) return null;
+    const file = path.join(this.dir, `${clean}.account.json`);
+    return existsSync(file) ? file : null;
+  }
+
   /** The linked file for this email, or null when they have not linked one. @param {string} email */
   credentialPathFor(email) {
     const file = this.fileFor(email);
@@ -61,9 +92,12 @@ export class Accounts {
    * Store a credential for this person. `contents` is the raw text of a
    * `.credentials.json` — stored verbatim, because this module has no business
    * understanding Anthropic's credential format, only custody of it.
-   * @param {string} email @param {string} contents
+   * `accountMeta` is the serialised oauthAccount block when the login produced
+   * one; without it the CLI inside a sandbox treats the credential as logged
+   * out.
+   * @param {string} email @param {string} contents @param {string|null} [accountMeta]
    */
-  save(email, contents) {
+  save(email, contents, accountMeta = null) {
     const file = this.fileFor(email);
     if (!file) return { ok: false, message: `"${email}" does not look like an email address` };
     let parsed;
@@ -77,6 +111,9 @@ export class Accounts {
     }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileSync(file, contents, { mode: 0o600 });
+    if (accountMeta) {
+      writeFileSync(path.join(this.dir, `${normaliseEmail(email)}.account.json`), accountMeta, { mode: 0o600 });
+    }
     return { ok: true, message: `Linked a Claude account for ${normaliseEmail(email)}.` };
   }
 
@@ -85,6 +122,8 @@ export class Accounts {
     const file = this.fileFor(email);
     if (!file || !existsSync(file)) return false;
     unlinkSync(file);
+    const meta = this.accountMetaPathFor(email);
+    if (meta) unlinkSync(meta);
     return true;
   }
 
@@ -93,7 +132,7 @@ export class Accounts {
   list() {
     try {
       return readdirSync(this.dir)
-        .filter((f) => f.endsWith('.json'))
+        .filter((f) => f.endsWith('.json') && !f.endsWith('.account.json') && !f.startsWith('.'))
         .map((f) => f.slice(0, -'.json'.length))
         .sort();
     } catch {

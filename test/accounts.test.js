@@ -10,8 +10,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Accounts, normaliseEmail, emailFromActor } from '../src/core/accounts.js';
-import { pickCredentialSource } from '../src/core/podman.js';
+import { createRequire } from 'node:module';
+
+import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount } from '../src/core/accounts.js';
+import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
+
+const require = createRequire(import.meta.url);
 
 const dir = () => mkdtempSync(join(tmpdir(), 'accounts-'));
 
@@ -69,4 +73,42 @@ test('a linked person gets their account, everyone else the shared one', () => {
 test('no shared credential configured means none seeded, exactly as before', () => {
   const picked = pickCredentialSource({ stateDir: dir(), sandboxCredentialsFile: '' }, 'telegram:1');
   assert.equal(picked.source, null);
+});
+
+test('the identity travels with the credential', () => {
+  const stateDir = dir();
+  const a = new Accounts(stateDir);
+  a.save('client@example.com', JSON.stringify({ token: 'x' }), JSON.stringify({ emailAddress: 'client@example.com' }));
+  assert.ok(a.accountMetaPathFor('client@example.com'), 'the account fragment is stored beside the credential');
+
+  const picked = pickCredentialSource({ stateDir, sandboxCredentialsFile: '/shared/.credentials.json' }, 'fleet:client@example.com');
+  assert.match(picked.accountMeta, /client@example\.com\.account\.json$/);
+
+  a.remove('client@example.com');
+  assert.equal(a.accountMetaPathFor('client@example.com'), null, 'unlink removes both files');
+  assert.deepEqual(a.list(), []);
+});
+
+test('extractOauthAccount takes the block and nothing else', () => {
+  assert.equal(JSON.parse(extractOauthAccount(JSON.stringify({ oauthAccount: { a: 1 }, junk: 2 }))).a, 1);
+  for (const bad of ['not json', '{}', JSON.stringify({ oauthAccount: null }), JSON.stringify({ oauthAccount: [1] })]) {
+    assert.equal(extractOauthAccount(bad), null, bad.slice(0, 20));
+  }
+});
+
+test('the shared identity is derived from the shared credential\'s home', () => {
+  // ~/.claude/.credentials.json implies ~/.claude.json one directory up.
+  // Absent, unreadable, or missing the block all degrade to seeding without
+  // it — exactly the old behaviour, never an error.
+  const home = dir();
+  const { mkdirSync, writeFileSync } = require('node:fs');
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  const cfg = { stateDir: dir(), sandboxCredentialsFile: join(home, '.claude', '.credentials.json') };
+
+  assert.equal(sharedAccountMetaFile(cfg), null, 'no state file yet');
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'org@example.com' } }));
+  const file = sharedAccountMetaFile(cfg);
+  assert.ok(file, 'extracted once the state file exists');
+  const { readFileSync } = require('node:fs');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).emailAddress, 'org@example.com');
 });

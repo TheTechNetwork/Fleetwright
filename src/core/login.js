@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
-import { Accounts } from './accounts.js';
+import { Accounts, extractOauthAccount } from './accounts.js';
 import { hasSession, newSession, killSession, capturePane, sendKeys } from './tmux.js';
 import { sleep } from './claude.js';
 import { dewrapPane } from './pane.js';
@@ -241,7 +241,16 @@ export class LoginFlow {
           // the box.
           try {
             const raw = readFileSync(path.join(link.dir, '.credentials.json'), 'utf8');
-            const saved = new Accounts(this.cfg.stateDir).save(link.email, raw);
+            // The identity travels with the credential. Under CLAUDE_CONFIG_DIR
+            // the state file lands at <dir>/.claude.json (verified empirically),
+            // and its oauthAccount block is what the CLI inside a sandbox reads
+            // logged-in-ness from — a credential stored without it seeds
+            // sessions that come up logged out.
+            let accountMeta = null;
+            try {
+              accountMeta = extractOauthAccount(readFileSync(path.join(link.dir, '.claude.json'), 'utf8'));
+            } catch { /* older CLI, no state file — store the credential alone */ }
+            const saved = new Accounts(this.cfg.stateDir).save(link.email, raw, accountMeta);
             rmSync(link.dir, { recursive: true, force: true });
             log.info(`login: linked a Claude account for ${link.email}`);
             return saved.ok

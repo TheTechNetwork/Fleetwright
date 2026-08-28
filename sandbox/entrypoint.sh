@@ -15,6 +15,29 @@ if [ ! -f /root/.claude/settings.json ] && [ -f /etc/agent-session/settings.json
   cp /etc/agent-session/settings.json /root/.claude/settings.json
 fi
 
+# The seeded account identity, merged into the container's state file on EVERY
+# start — /root/.claude.json is part of the ephemeral container filesystem and
+# is rebuilt from the image each time, so a one-off merge would survive exactly
+# one run. The newer CLI decides logged-in-ness from the PAIR of
+# .credentials.json and the oauthAccount block here; seeding one without the
+# other produced sessions that answered "not logged in" while holding a
+# perfectly valid token.
+if [ -f /root/.claude/.oauth-account.json ]; then
+  node <<'MERGE'
+const fs = require('fs');
+try {
+  const state = JSON.parse(fs.readFileSync('/root/.claude.json', 'utf8'));
+  state.oauthAccount = JSON.parse(fs.readFileSync('/root/.claude/.oauth-account.json', 'utf8'));
+  state.hasCompletedOnboarding = true;
+  fs.writeFileSync('/root/.claude.json', JSON.stringify(state, null, 2) + '\n');
+} catch (e) {
+  // A malformed fragment must not stop the session from starting at all —
+  // without the merge it is exactly as logged-out as it would have been.
+  console.error('could not merge the seeded account identity: ' + e.message);
+}
+MERGE
+fi
+
 # The SessionStart hook, registered the same way install.sh does it on a host,
 # but pointed at the unix socket. Merged with node rather than rewritten, so a
 # session that adds its own hooks keeps them across resumes.
