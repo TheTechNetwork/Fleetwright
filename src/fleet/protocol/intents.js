@@ -187,6 +187,50 @@ export const VERBS = Object.freeze({
     mutating: false,
     summary: 'The last lines of a service log on one host.',
   },
+  update: {
+    params: {
+      // Restart after pulling. Default false, and that default is the safe
+      // one: an update that does not restart leaves the box running old code
+      // and SAYS so, while an unasked-for restart interrupts whatever was
+      // happening because somebody typed a word.
+      restart: { type: 'enum', required: false, values: ['yes', 'no'] },
+    },
+    mutating: true,
+    summary: 'Pull code on one host, optionally restarting its services.',
+  },
+  upgrade: {
+    params: {
+      // Apply, as opposed to report. Reporting is the default because
+      // "what is waiting" is the question people ask, and installing packages
+      // on somebody else's box is not something to do by omission.
+      apply: { type: 'enum', required: false, values: ['yes', 'no'] },
+    },
+    mutating: true,
+    summary: 'What operating-system updates a host has waiting, and optionally install them.',
+  },
+  reboot: {
+    params: {
+      // THE SAME THREE CONFIRMATIONS THE CHAT FLOW ASKS FOR, unchanged.
+      //
+      // Sending `reboot` with neither parameter is step one: the host says
+      // what will be lost and issues a six-digit pin. Sending it again with
+      // the pin AND the hostname is step two. Two round trips, deliberately —
+      // a remote reboot should be HARDER than a local one, not easier, and
+      // the guard that survives being remote is the one that asks for
+      // something only a person who knows which box can produce.
+      //
+      // A boolean `confirm: true` would be one tap from a phone in a pocket,
+      // and a token the coordinator minted would let a compromised
+      // coordinator mint its own. The pin is issued by the HOST.
+      //
+      // EVERY RUNNING SESSION DIES — a reboot takes the tmux server with it,
+      // and the host says so in step one, by name.
+      pin: { type: 'name', required: false },
+      confirm: { type: 'name', required: false },
+    },
+    mutating: true,
+    summary: 'Reboot one host. Two steps: ask, then send back the pin and the hostname.',
+  },
   answer: {
     params: {
       name: { type: 'name', required: true },
