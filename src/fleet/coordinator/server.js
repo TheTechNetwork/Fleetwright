@@ -312,6 +312,13 @@ export class Coordinator {
       return;
     }
 
+    // Retire the connection this one replaces, before registering the new
+    // one — same rule as the Worker. Two sockets for one host means the
+    // loser's close clobbers the winner's registration.
+    const previous = this.connections.get(hostId);
+    if (previous && previous !== conn) {
+      try { previous.close(1012, 'superseded'); } catch { /* already gone */ }
+    }
     this.core.hostConnected(hostId, (msg) => conn.send(JSON.stringify(msg)));
     this.connections.set(hostId, conn);
 
@@ -326,10 +333,13 @@ export class Coordinator {
       void this.core.onHostMessage(hostId, msg);
     });
     conn.on('close', (code, reason) => {
-      // Only forget the socket if it is still the current one. A reconnect
-      // from the same host replaces the entry before the old socket's close
-      // event lands, and deleting unconditionally would drop the live one.
-      if (this.connections.get(hostId) === conn) this.connections.delete(hostId);
+      // Only the CURRENT socket's fate is the host's fate. The map delete was
+      // already guarded; the hostDisconnected beside it was NOT — so the close
+      // of a superseded socket, landing after its replacement connected, still
+      // marked a freshly-connected host offline in the registry. Connected in
+      // every log, routed to by nothing.
+      if (this.connections.get(hostId) !== conn) return;
+      this.connections.delete(hostId);
       this.core.hostDisconnected(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
     });
     conn.on('error', (e) => this.log.warn(`coordinator: ${hostId} socket error: ${e.message}`));
