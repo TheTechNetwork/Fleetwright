@@ -231,6 +231,55 @@ test('a host that answers with garbage does not take the object down', async () 
   ws.close();
 });
 
+
+test('one mute host does not stall the fleet for everyone', async () => {
+  // The question that unravelled the outage, asked by the person watching it:
+  // "is it possible that if not all hosts are reachable the app breaks?" Yes —
+  // the fan-out waited the FULL intent timeout (60s here) for every host under
+  // Promise.all, so one connected-but-mute socket made every /list take a
+  // minute, and every phone gave up first. One member refusing to answer a
+  // question priced the whole fleet.
+  const talker = await connectHost('talker-box');
+  const mute = await connectHost('mute-box');
+  let muteClosed = null;
+  mute.on('close', (code, reason) => { muteClosed = `${code} ${reason}`; });
+
+  talker.on('message', (text) => {
+    const intent = JSON.parse(String(text));
+    if (intent.kind !== 'intent') return;
+    talker.send(JSON.stringify({
+      v: intent.v, kind: 'reply', id: intent.id, ok: true,
+      text: 'talker answered', sessions: [{ name: 'from-the-talker', status: 'running' }],
+    }));
+  });
+  // The mute host receives and says nothing, exactly like a half-open socket
+  // from a reconnect storm — or the first probe run against production, which
+  // demonstrated this failure by accident on a real fleet.
+
+  const started = Date.now();
+  const reply = await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ verb: 'list', params: {}, id: 'live-fanout-mute-001' }),
+  }).then((r) => r.json());
+  const elapsed = Date.now() - started;
+
+  // The healthy host's answer arrives, attributed; the mute one degrades ITS
+  // OWN entry; and the whole thing costs the fan-out deadline, not the intent
+  // timeout. 15s of headroom over the 10s deadline, far under the old 60s.
+  assert.equal(reply.ok, true, JSON.stringify(reply).slice(0, 200));
+  assert.ok(elapsed < 15_000, `fan-out took ${elapsed}ms — the mute host set the price again`);
+  assert.ok(reply.sessions.some((s) => s.name === 'from-the-talker' && s.hostId === 'talker-box'));
+  const muteResult = reply.hosts.find((h) => h.hostId === 'mute-box');
+  assert.ok(muteResult, `mute-box missing from fan-out: ${JSON.stringify(reply.hosts)}`);
+  assert.equal(muteResult.ok, false);
+  assert.equal(muteResult.error?.code, 'host_timeout');
+
+  assert.equal(muteClosed, null, 'being slow must not get a host disconnected — only ignored');
+  talker.close();
+  mute.close();
+});
+
 test('healthz reports the protocol version of the code that is running', async () => {
   // Asserted here as well as in the source grep, because this is the REAL
   // runtime answering — the hardcoded 1 this catches was live for two days
