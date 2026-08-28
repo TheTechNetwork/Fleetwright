@@ -152,6 +152,12 @@ export function loadConfig(env = process.env) {
     // comes up unauthenticated and hangs at a login prompt nobody can answer.
     // Set empty to disable and manage credentials yourself.
     sandboxCredentialsFile: str('AGENT_HUB_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
+    // How often a session start may check the registry for a newer sandbox
+    // image. Six hours, matching the package-list refresh: often enough that a
+    // fix ships within a working day without anybody running /update, rare
+    // enough that the registry is never on the critical path of a start.
+    // 0 disables the check entirely — /update still refreshes.
+    sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 6 * 60 * 60 * 1000),
 
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.

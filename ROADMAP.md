@@ -91,7 +91,7 @@ anything. (`docs/wanted.md` has the full table.)
 | feature | status | where |
 |---|---|---|
 | `/update --restart` restarts every service, no SSH | **done** | #127 |
-| Sandbox image refresh on update | **done** | `/update` now pulls and reports whether the digest moved; `ensureSandboxImage` returned on its first line for the life of a box |
+| Sandbox image refresh | **done** | `/update` pulls and reports whether the digest moved; a session start also checks, stamped to six hours, bounded, never fatal, only when creating a volume |
 | Installer detects clones, offers clean vs update, uninstaller | **done** | #121 |
 | Scheduled system/app update checks, so the answer is ready when asked | wanted | pairs with host-version-in-app |
 | **Package the host** — versioned tarball + manifest instead of a monorepo checkout | **partial** | `docs/packaging.md`. Path-scoped "behind" **done** (a docs commit no longer makes a host say it is behind, or restart). Next: publish the tarball in CI, then teach `/update` the manifest with a git fallback |
