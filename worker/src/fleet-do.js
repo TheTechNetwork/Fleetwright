@@ -456,6 +456,9 @@ export class Fleet {
           // Which host, when the person picked one in the app. A placement
           // preference, never an intent parameter — see scheduler.js.
           preferHost: typeof body.host === 'string' ? body.host : undefined,
+          // The VERIFIED caller, for visibility. Null for the break-glass token,
+          // which sees everything — it is what you hold when identity is broken.
+          requester: client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null,
         }),
       );
     }
