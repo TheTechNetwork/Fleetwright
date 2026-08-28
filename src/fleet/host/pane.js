@@ -30,7 +30,7 @@
 // is where it lives and where the login flow uses it. Imported rather than
 // re-implemented — two copies of a rule this subtle is how they drift, and it is
 // subtle (see that file for the "Paste code here" bug that shaped it).
-import { dewrapPane } from '../../core/pane.js';
+import { dewrapPane, RC_URL_RE } from '../../core/pane.js';
 
 export { dewrapPane };
 
@@ -40,7 +40,7 @@ export { dewrapPane };
 // thing sitting on the next row is as likely to be a box-drawing character as a
 // real path segment. `\S+` would swallow it; this stops at the first character
 // that cannot appear in a URL.
-const RC_URL_RE = /https?:\/\/claude\.ai\/code\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/;
+
 
 /**
  * Pull the Remote Control URL out of a captured pane.
