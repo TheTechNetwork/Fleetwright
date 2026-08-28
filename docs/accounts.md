@@ -58,15 +58,24 @@ beside the command, the same way `title` and `brief` do, and for the same
 reason: an identity with an `@` in it must not be split on whitespace and read
 as arguments.
 
-**2. Linking an account.** `/login` already runs the Claude OAuth flow and lands
-a credential; today it logs in *the box*. The same flow, run by a person holding
-a device credential, writes to `accounts/<their-email>.json` instead. No new
-protocol, no new consent screen, no new secret handling — the flow that exists
-is the flow that is wanted, pointed somewhere else.
+**2. Linking an account — done.** `/login for <email>` runs the same OAuth flow
+in an **isolated `CLAUDE_CONFIG_DIR`**, so the box's own login is never
+touched — without the isolation, linking a client's account would log the whole
+box out of the org account, the exact machine-wide blast radius accounts exist
+to end. On success the credential moves into `accounts/<email>.json`; `/accounts`
+lists and unlinks.
 
-**3. Seeding from it.** `seedCredentials()` takes the per-person file when there
-is one and the shared one when there is not. One `if`, in the place that already
-does this.
+**3. Seeding from it — done, and it taught us something.** A credential alone is
+**half a login**: the newer CLI decides logged-in-ness from the *pair* of
+`.credentials.json` and the `oauthAccount` block in `.claude.json`. Seeding one
+without the other produced sandboxes answering "not logged in" while holding a
+perfectly valid token — diagnosed from a phone screenshot, because the RC
+timeout message carries the pane's own diagnosis now. So the identity travels
+with the credential everywhere: harvested at link time, derived from the shared
+login's home for everyone else, seeded into the volume, and merged into the
+container's state file **on every start** (that file is container-ephemeral;
+a one-off merge survives exactly one run). Each session records which account
+it was seeded with.
 
 **4. Visibility — done.** Admin sees every session; a member sees the ones
 their identity created. **Filtered at the coordinator, never at the host.** The
