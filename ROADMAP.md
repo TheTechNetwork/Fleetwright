@@ -94,6 +94,7 @@ anything. (`docs/wanted.md` has the full table.)
 | Sandbox image refresh on update | **done** | `/update` now pulls and reports whether the digest moved; `ensureSandboxImage` returned on its first line for the life of a box |
 | Installer detects clones, offers clean vs update, uninstaller | **done** | #121 |
 | Scheduled system/app update checks, so the answer is ready when asked | wanted | pairs with host-version-in-app |
+| **Package the host** — versioned tarball + manifest instead of a monorepo checkout | **partial** | `docs/packaging.md`. Path-scoped "behind" **done** (a docs commit no longer makes a host say it is behind, or restart). Next: publish the tarball in CI, then teach `/update` the manifest with a git fallback |
 | CI runs the Worker in workerd; tail workflow; frame logging | **done** | born in the Aug-28 outage |
 | Node-coordinator socket-leg parity tests (the ws analogue of the executed OpenAPI spec) | wanted | the one interface without an executable cross-implementation contract |
 
