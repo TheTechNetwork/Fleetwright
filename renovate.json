@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Two rules, and only two.",
+    "Three rules, and only three.",
     "",
     "GROUP WHAT ONLY WORKS TOGETHER. A bot bumped the Compose compiler alone",
     "and broke the build, because that version is only meaningful paired with",
@@ -12,9 +12,17 @@
     "",
     "STAY ON LATEST OTHERWISE. This project has no installed base to keep",
     "working and CI builds the APK, compiles the iOS app and bundles the Worker",
-    "on every PR — so a major that breaks something says so in minutes. Holding",
+    "on every PR \u2014 so a major that breaks something says so in minutes. Holding",
     "majors back for review would be buying safety CI already provides, and",
-    "paying for it in a permanent backlog of deferred upgrades."
+    "paying for it in a permanent backlog of deferred upgrades.",
+    "",
+    "PIN EVERYTHING; NO RANGES. rangeStrategy: pin, so package.json names an",
+    "exact version and every change to what we run is a diff somebody can read.",
+    "A caret hides the update inside the lock file: `wrangler: ^4.0.0` had",
+    "quietly become 4.127.1, and the manifest still claimed 4.0.0 \u2014 a hundred",
+    "and twenty-seven minor versions that no PR title ever mentioned. It also",
+    "makes the two files say the same thing, so `npm ci` and `npm install` can",
+    "no longer disagree about what this project depends on."
   ],
   "extends": [
     "config:recommended"
@@ -54,7 +62,7 @@
       ]
     },
     {
-      "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder — including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
+      "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder \u2014 including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
       "matchDepNames": [
         "compileSdk",
         "targetSdk",
@@ -105,5 +113,6 @@
     "schedule": [
       "at any time"
     ]
-  }
+  },
+  "rangeStrategy": "pin"
 }
