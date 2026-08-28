@@ -452,7 +452,7 @@ export class CoordinatorCore {
 
   /**
    * @param {any} host
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} spec
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
@@ -489,7 +489,7 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} spec
    */
   async dispatch(spec) {
     if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
@@ -565,13 +565,35 @@ export class CoordinatorCore {
             .catch((e) => ({ hostId: h.hostId, ok: false, text: e.message, error: { code: 'host_timeout' } })),
         ),
       );
+      let sessions = results.flatMap((r) => (r.sessions || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })));
+
+      // WHOSE sessions the caller may see — filtered HERE, never at the host.
+      // The host has one token and no idea who is asking; a host-side filter
+      // would be a check performed by the party with the least information.
+      //
+      // Admin sees everything (and so does the break-glass token, which
+      // arrives with no requester at all — it is what you hold when identity
+      // itself is broken). A member sees the sessions their verified identity
+      // created. Sessions with no attribution — telegram, the CLI on the box,
+      // anything from before attribution existed — belong to the fleet, which
+      // is to say the admin: the invited-client scenario this exists for is
+      // precisely "my client must not read my org's other work", and erring
+      // open would quietly break that promise.
+      //
+      // The hosts array is NOT filtered: which machines exist is fleet
+      // topology, and a member starting a session needs the picker to work.
+      if (spec.requester && !spec.requester.admin) {
+        const mine = `fleet:${String(spec.requester.email || '').toLowerCase()}`;
+        sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine);
+      }
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
-        sessions: results.flatMap((r) => (r.sessions || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId }))),
+        sessions,
         hosts: results.map(({ hostId, ok, text, error }) => ({ hostId, ok, text, error })),
         text: results.map((r) => `${r.hostId}: ${r.text ?? ''}`).join('\n'),
       };
