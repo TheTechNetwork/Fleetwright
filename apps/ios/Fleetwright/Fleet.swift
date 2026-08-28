@@ -27,6 +27,20 @@ struct Fleet {
         let startedAt: Double?
         /// Whose Claude account it runs on: an email, or "shared".
         let account: String?
+        /// What it is asking, when it is asking. Present only while a prompt
+        /// is on screen — and the id is what makes answering it later safe.
+        let prompt: Prompt?
+
+        struct Prompt: Codable, Hashable {
+            let id: String?
+            let question: String?
+            let options: [Option]?
+            struct Option: Codable, Hashable, Identifiable {
+                let index: Int
+                let label: String
+                var id: Int { index }
+            }
+        }
 
         var id: String { "\(hostId ?? "?")/\(name)" }
         /// What to show. The name is the identity; the title is for people.
@@ -97,6 +111,58 @@ struct Fleet {
         return try await intent("start", params: params, host: host)
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
+
+    /// One host in detail, or the fleet when no name is given.
+    func status(_ name: String? = nil) async throws -> Reply {
+        try await intent("status", params: name.map { ["name": $0] } ?? [:])
+    }
+
+    /// Answer a waiting prompt by selecting an option the HOST published.
+    ///
+    /// An ordinal, never text: `send-keys` into a pane reaches a root shell,
+    /// so what crosses this boundary is a digit. `promptId` is what the host
+    /// checks against the live pane — a notification tapped four minutes late
+    /// must not answer a different question.
+    func answer(_ name: String, option: Int, promptId: String? = nil) async throws -> Reply {
+        var params = ["name": name, "option": String(option)]
+        if let promptId, !promptId.isEmpty { params["promptId"] = promptId }
+        return try await intent("answer", params: params, numeric: ["option"])
+    }
+
+    /// A service journal, or what a session printed.
+    ///
+    /// `name` and `service` are alternatives — naming a session is the more
+    /// specific request and the host prefers it.
+    func logs(host: String? = nil, session: String? = nil, service: String? = nil, lines: Int? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let session, !session.isEmpty { params["name"] = session }
+        if let service, !service.isEmpty { params["service"] = service }
+        if let lines { params["lines"] = String(lines) }
+        return try await intent("logs", params: params, host: host, numeric: ["lines"])
+    }
+
+    /// Pull code on one box. `restart` is opt-in: an update that does not
+    /// restart leaves the box on old code and says so.
+    func update(host: String, restart: Bool = false) async throws -> Reply {
+        try await intent("update", params: restart ? ["restart": "yes"] : [:], host: host)
+    }
+
+    /// What the operating system has waiting, and optionally install it.
+    func upgrade(host: String, apply: Bool = false) async throws -> Reply {
+        try await intent("upgrade", params: apply ? ["apply": "yes"] : [:], host: host)
+    }
+
+    /// Reboot a box. TWO STEPS, and deliberately so.
+    ///
+    /// Bare is step one: the host names every session that will die and issues
+    /// a six-digit pin. Pin plus hostname is step two. A boolean confirmation
+    /// would be one tap from a phone in a pocket.
+    func reboot(host: String, pin: String? = nil, confirm: String? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let pin, !pin.isEmpty { params["pin"] = pin }
+        if let confirm, !confirm.isEmpty { params["confirm"] = confirm }
+        return try await intent("reboot", params: params, host: host)
+    }
     func resume(_ name: String, choice: String? = nil) async throws -> Reply {
         var params = ["name": name]
         if let choice { params["choice"] = choice }
@@ -259,10 +325,23 @@ struct Fleet {
         _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])
     }
 
-    private func intent(_ verb: String, params: [String: String] = [:], host: String? = nil) async throws -> Reply {
+    /// - Parameter numeric: keys the protocol types as `int`. They travel as
+    ///   Swift Strings for convenience and must be sent as JSON NUMBERS —
+    ///   `validateIntent` requires a safe integer and refuses `"2"`, which
+    ///   would be a rejection after the version handshake had already agreed.
+    private func intent(
+        _ verb: String,
+        params: [String: String] = [:],
+        host: String? = nil,
+        numeric: Set<String> = []
+    ) async throws -> Reply {
+        var typed: [String: Any] = [:]
+        for (key, value) in params {
+            typed[key] = numeric.contains(key) ? (Int(value) ?? 0) : value
+        }
         var body: [String: Any] = [
             "verb": verb,
-            "params": params,
+            "params": typed,
             "actor": "app:ios",
             // An idempotency key the SERVER honours: a retry of `start` returns
             // the original outcome rather than starting a second session.

@@ -42,6 +42,8 @@ export class SessionWatcher {
    * }} opts
    */
   constructor({ hub, emit, intervalMs = DEFAULT_INTERVAL_MS, allowSessionText = false, logger }) {
+    /** The last prompt read per session, so health need not peek again. */
+    this.prompts = new Map();
     this.hub = hub;
     this.emit = emit;
     // Whether a prompt that quotes the session — a path, a command line — may
@@ -116,6 +118,7 @@ export class SessionWatcher {
       /** @type {any} */
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
+      if (!running) this.prompts.delete(name);
       if (running) {
         const pane = await this.hub.peek(name).catch(() => null);
         if (pane) {
@@ -126,6 +129,11 @@ export class SessionWatcher {
           // says what is being asked.
           prompt = readPrompt(pane);
           rcUrl = extractRcUrl(pane) ?? rcUrl;
+          // Kept so health can report what a session is ASKING without a
+          // second peek per session per tick. The watcher is already the one
+          // process reading every pane on an interval; anything else wanting
+          // that text should take it from here rather than reading again.
+          this.prompts.set(name, prompt);
           if (!before?.rcUrl && isRemoteControlOnline(pane) && rcUrl) {
             this.#fire(quiet, { event: 'session.rc-online', name, url: rcUrl });
           }
@@ -161,6 +169,19 @@ export class SessionWatcher {
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */
+  /**
+   * The prompt this session was last seen showing, or null.
+   *
+   * Exposed so health can report what a session is ASKING without a second
+   * peek per session per tick — this watcher is already the one process
+   * reading every pane on an interval.
+   *
+   * @param {string} name
+   */
+  promptFor(name) {
+    return this.prompts.get(name) ?? null;
+  }
+
   /**
    * The event for "this one needs you".
    *

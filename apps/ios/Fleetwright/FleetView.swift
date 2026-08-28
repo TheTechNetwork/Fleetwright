@@ -32,7 +32,13 @@ struct FleetView: View {
                     ForEach(sessions) { session in
                         SessionRow(session: session, busy: busy, stop: { await act { try await fleet.stop(session.name) } },
                                    resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
-                                   forget: { await act { try await fleet.forget(session.name) } })
+                                   forget: { await act { try await fleet.forget(session.name) } },
+                                   answer: { option in
+                                       await act {
+                                           try await fleet.answer(session.name, option: option,
+                                                                  promptId: session.prompt?.id)
+                                       }
+                                   })
                     }
                 }
             }
@@ -109,6 +115,7 @@ private struct SessionRow: View {
     let stop: () async -> Void
     let resume: () async -> Void
     let forget: () async -> Void
+    let answer: (Int) async -> Void
     @State private var confirmingForget = false
 
     var body: some View {
@@ -139,6 +146,44 @@ private struct SessionRow: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+            // WHAT IT IS ASKING, and the answer as a row of buttons.
+            //
+            // This is the whole point of a notification that carries the
+            // question: reading it on a phone and being unable to answer is
+            // the shape of the problem, not a smaller version of it. The
+            // options are the ones the HOST published — an ordinal is sent,
+            // never text.
+            if let prompt = session.prompt, let options = prompt.options, !options.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let question = prompt.question, !question.isEmpty {
+                        Text(question).font(.callout)
+                    }
+                    ForEach(options) { option in
+                        Button {
+                            Task { await answer(option.index) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("\(option.index)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Text(option.label)
+                                Spacer()
+                            }
+                        }
+                        .disabled(busy)
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.vertical, 4)
+            } else if session.prompt != nil {
+                // A permission dialog names a command, so without the fleet
+                // switch its labels do not leave the box. Saying so beats
+                // showing nothing.
+                Text("Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 16) {
                 if session.isRunning {
                     Button("Stop") { Task { await stop() } }.disabled(busy)
@@ -190,6 +235,38 @@ private struct SettingsView: View {
     @State private var pastedCredential = ""
     @State private var confirmingRevoke: String?
     @State private var hostActionResult = ""
+    @State private var busyHost: String?
+    @State private var rebootTarget: String?
+    @State private var rebootPin = ""
+    @State private var rebootConfirm = ""
+
+    private enum Maintenance { case update, upgrade, rebootAsk, rebootDo }
+
+    /// One place for all four, so the busy flag and the result text cannot
+    /// drift apart between them.
+    @MainActor
+    private func maintain(_ host: String, _ what: Maintenance) async {
+        busyHost = host
+        defer { busyHost = nil }
+        do {
+            let fleet = Fleet(settings: settings)
+            let reply: Fleet.Reply
+            switch what {
+            case .update: reply = try await fleet.update(host: host, restart: true)
+            case .upgrade: reply = try await fleet.upgrade(host: host)
+            case .rebootAsk: reply = try await fleet.reboot(host: host)
+            case .rebootDo:
+                reply = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm)
+                rebootTarget = nil
+                rebootPin = ""
+                rebootConfirm = ""
+            }
+            hostActionResult = reply.text ?? ""
+        } catch {
+            hostActionResult = error.localizedDescription
+        }
+        await loadHosts()
+    }
 
     @MainActor
     private func loadHosts() async {
@@ -337,7 +414,30 @@ private struct SettingsView: View {
                     } header: {
                         Text("Hosts")
                     } footer: {
-                        if !hostActionResult.isEmpty {
+                        if let target = rebootTarget {
+                        // Step two, in the app: the pin the host issued and
+                        // the hostname typed out. Both come from the person,
+                        // and the pin comes from the box — a coordinator that
+                        // could mint it could reboot the fleet.
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Reboot \(target)").font(.callout)
+                            Text("Every running session on it dies.").font(.caption2).foregroundStyle(.secondary)
+                            TextField("Pin from the box", text: $rebootPin)
+                                .keyboardType(.numberPad)
+                            TextField("Type the hostname to confirm", text: $rebootConfirm)
+                                .autocorrectionDisabled()
+                            HStack {
+                                Button("Ask for a pin") { Task { await maintain(target, .rebootAsk) } }
+                                Spacer()
+                                Button("Reboot", role: .destructive) { Task { await maintain(target, .rebootDo) } }
+                                    .disabled(rebootPin.isEmpty || rebootConfirm != target)
+                                Button("Cancel") { rebootTarget = nil }
+                            }
+                            .font(.caption)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    if !hostActionResult.isEmpty {
                     Text(hostActionResult).font(.footnote).foregroundStyle(.secondary)
                 }
                 Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
@@ -429,6 +529,19 @@ private struct SettingsView: View {
                             if host.health?.updates?.rebootRequired == true {
                                 Text("reboot required").font(.caption2).foregroundStyle(.orange)
                             }
+                            // MAINTENANCE, which used to need SSH. Update is
+                            // safe and idempotent so it is one tap; reboot is
+                            // two steps and asks for the hostname, exactly as
+                            // it does in chat — a remote reboot should be
+                            // harder than a local one, not easier.
+                            HStack(spacing: 12) {
+                                Button("Update") { Task { await maintain(host.hostId, .update) } }
+                                Button("Upgrade") { Task { await maintain(host.hostId, .upgrade) } }
+                                Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                            .disabled(busyHost != nil)
                         }
                         .padding(.vertical, 2)
                     }
