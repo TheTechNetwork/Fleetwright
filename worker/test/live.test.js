@@ -83,6 +83,27 @@ async function connectHost(hostId) {
     ws.once('open', resolve);
     ws.once('error', reject);
   });
+
+  // Volunteer health, as the real sidecar does on connect. Load-bearing, and
+  // the first draft of the round-trip test proved it by omission: the
+  // scheduler refuses to place work on a host with no health report —
+  // "unknown (connected, no health report yet)" — so a connected-but-silent
+  // host is reachable for reads and unplaceable for work. Which is correct,
+  // and is itself worth having pinned by a test that had to learn it.
+  ws.send(JSON.stringify({
+    kind: 'health',
+    hostId,
+    health: {
+      hostId,
+      labels: [],
+      hub: { reachable: true, host: hostId },
+      maxSessions: 5,
+      running: 0,
+      free: 5,
+      resumable: [],
+      sessions: [],
+    },
+  }));
   return ws;
 }
 
@@ -122,6 +143,89 @@ test('flooding the event ring does not take down the fleet', async () => {
   await new Promise((r) => setTimeout(r, 400));
   assert.equal(closed, null, 'the socket died on the frame after the flood');
 
+  ws.close();
+});
+
+
+test('an intent round-trips: phone in, host out, reply back', async () => {
+  // The whole outage, as a test. The app POSTs an intent, the DO validates and
+  // places it, the frame crosses the real WebSocket, the host answers, and the
+  // reply comes back to the caller with the hostId attached. Tonight this path
+  // died in the middle — the app saw "network connection was lost" and the
+  // host saw ECONNRESET — and nothing in CI walked it end to end.
+  const ws = await connectHost('roundtrip-box');
+  let closed = null;
+  ws.on('close', (code, reason) => { closed = `${code} ${reason}`; });
+
+  // The fake host answers like the sidecar does: echo the id, claim success.
+  const seen = [];
+  ws.on('message', (buf) => {
+    const intent = JSON.parse(buf.toString());
+    seen.push(intent);
+    ws.send(JSON.stringify({
+      v: intent.v,
+      kind: 'reply',
+      id: intent.id,
+      ok: true,
+      text: `handled ${intent.verb}`,
+      sessions: [],
+    }));
+  });
+
+  const reply = await fetch(`${origin}/api/intent`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      verb: 'start',
+      // The v2 fields, through the REAL coordinator. The protocol bump exists
+      // for these; if the DO builds a v1 intent or drops the params, this is
+      // where it shows.
+      params: { title: 'refactor auth', brief: 'split the token check out' },
+      id: 'live-roundtrip-0001',
+    }),
+  }).then((r) => r.json());
+
+  assert.equal(reply.ok, true, JSON.stringify(reply).slice(0, 200));
+  assert.match(reply.text, /handled start/);
+  assert.equal(reply.hostId, 'roundtrip-box');
+
+  // What actually crossed the wire to the host.
+  assert.equal(seen.length, 1);
+  const intent = seen[0];
+  assert.equal(intent.kind, 'intent');
+  assert.equal(intent.verb, 'start');
+  assert.equal(intent.id, 'live-roundtrip-0001', 'the idempotency key must be the caller\'s, not a fresh one');
+  assert.equal(intent.params.title, 'refactor auth');
+  assert.equal(intent.params.brief, 'split the token check out');
+  // The version the DO sends is the version this build speaks — a literal here
+  // is the healthz bug on the write path.
+  const { PROTOCOL_VERSION } = await import('../../src/fleet/protocol/intents.js');
+  assert.equal(intent.v, PROTOCOL_VERSION);
+
+  assert.equal(closed, null, `the socket died during the round trip: ${closed}`);
+  ws.close();
+});
+
+test('a host that answers with garbage does not take the object down', async () => {
+  // The reply path is the DO parsing bytes a remote machine chose. Tonight
+  // proved what one uncaught throw in that position costs, so the hostile
+  // shapes get sent from a REAL socket: non-JSON, a reply with no id, a reply
+  // for an id nobody is waiting on, and a frame of a kind that does not exist.
+  const ws = await connectHost('garbage-box');
+  let closed = null;
+  ws.on('close', (code, reason) => { closed = `${code} ${reason}`; });
+
+  ws.send('not json at all {{{');
+  ws.send(JSON.stringify({ kind: 'reply' }));
+  ws.send(JSON.stringify({ kind: 'reply', id: 'nobody-waits-for-this-1' }));
+  ws.send(JSON.stringify({ kind: 'no-such-kind', id: 'x'.repeat(64) }));
+  await new Promise((r) => setTimeout(r, 600));
+
+  assert.equal(closed, null, `garbage from a host reset its socket: ${closed}`);
+
+  // And the coordinator still coordinates.
+  const health = await fetch(`${origin}/healthz`).then((r) => r.json());
+  assert.equal(health.ok, true);
   ws.close();
 });
 
