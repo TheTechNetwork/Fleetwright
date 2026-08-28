@@ -354,6 +354,7 @@ private struct SettingsView: View {
                     // session", or whatever they already call this in their
                     // head — and that is the name that will still be there in a
                     // month, because it was theirs before we arrived.
+                    NavigationLink("Say it your way") { ShortcutSetupView(settings: settings) }
                     ShortcutsLink()
                 } header: {
                     Text("Siri and Shortcuts")

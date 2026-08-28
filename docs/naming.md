@@ -91,12 +91,30 @@ shipping *my fleet*, *my agents*, *remote sessions* means
 satisfies the rule while containing nothing anybody had to be taught. This costs
 one plist key and is the single highest-value line in the whole feature.
 
-**Route two, two taps: a shortcut they name themselves.** A shortcut the *user*
-creates carries no app-name requirement at all, so it can be called "Debbie", or
-anything else they already call this. Settings has a `ShortcutsLink()` for
-exactly that, phrased as an invitation rather than a fallback — because for
-somebody who has named their agent, their name is better than any of ours and it
-was there before we arrived.
+**Route two: a phrase they choose, set up from inside the app.** A shortcut the
+*user* creates carries no app-name requirement at all, so it can be called
+"Debbie", or anything else they already call this.
+
+The honest boundary, because a pretend version of this screen would be worse
+than none: **an app cannot register a Siri phrase programmatically.**
+`AppShortcut` phrases are compiled in, and the old
+`INUIAddVoiceShortcutViewController` — which really did let an app add one in
+place — belongs to the SiriKit intents that App Intents replaced. There is no
+supported call ending in "and now Siri knows *Debbie*".
+
+So `ShortcutSetupView` does everything up to that last tap rather than claiming
+it: takes the phrase, keeps it, puts it on the clipboard, opens Shortcuts. One
+paste and one Done. Three seconds instead of a paragraph, which is the
+difference between a feature and a support article.
+
+It also does **not** say "set up" afterwards. It says the phrase is saved and
+works once the steps are finished, because we cannot observe whether they were —
+and claiming success for something unobserved is the exact habit this codebase
+keeps finding in its own output.
+
+**Android does not have this problem.** A dynamic shortcut's `shortLabel` *is*
+the phrase, so the same screen finishes the job with no handoff. Same design,
+one platform needing a step the other does not.
 
 **Android has no equivalent constraint**, which is worth noticing rather than
 envying: a dynamic shortcut's `shortLabel` is the phrase. The design goal is the

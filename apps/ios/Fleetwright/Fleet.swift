@@ -282,6 +282,16 @@ final class Settings {
         didSet { UserDefaults.standard.set(autoOpenAfterStart, forKey: "autoOpenAfterStart") }
     }
 
+    /// The phrase somebody chose for themselves.
+    ///
+    /// Stored even though iOS will not let us register it: the app shows it
+    /// back, so returning to that screen shows their choice rather than an
+    /// empty field that looks like it was forgotten. Not a claim that Siri
+    /// knows it — only that they told us.
+    var customPhrase: String {
+        didSet { UserDefaults.standard.set(customPhrase, forKey: "customPhrase") }
+    }
+
     private static let credentialKey = "credential"
 
     init() {
@@ -289,6 +299,7 @@ final class Settings {
         credential = Keychain.get(Self.credentialKey) ?? ""
         signedInAs = UserDefaults.standard.string(forKey: "signedInAs") ?? ""
         autoOpenAfterStart = UserDefaults.standard.bool(forKey: "autoOpenAfterStart")
+        customPhrase = UserDefaults.standard.string(forKey: "customPhrase") ?? ""
 
         // Nothing is carried over from the build that asked for an admin token.
         // That token is the fleet's break-glass credential and every phone had
