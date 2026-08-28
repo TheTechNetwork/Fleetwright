@@ -179,40 +179,46 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" apps/android/app/build/outputs/apk/release/*.apk --clobber
 
-  # Play's CLOSED testing track — alpha — rather than internal.
+  # Play, on whichever track the event means.
   #
-  # The difference that matters is review: an internal release is live in
-  # minutes and limited to 100 named testers, while a closed one goes through
-  # Google's review first and can take testers by email list or link. Slower,
-  # and the slowness is the point — a closed build is the first one seen by
-  # people who did not build it.
+  #   push to main       PLAY_TRACK       default alpha  — closed testing
+  #   release published  PLAY_OPEN_TRACK  default beta   — open testing
   #
-  # The track is a variable so moving between internal, alpha and beta is a
-  # setting rather than a pull request.
-  internal:
+  # The difference that matters is who is on the other side. Closed testing
+  # takes people by email list or link and they chose to be there. Open testing
+  # is anybody who finds the link, which is why it is the one a release should
+  # reach and a merge should not: a merge happens because a branch was ready,
+  # and "ready to merge" is not the same decision as "ready for strangers".
+  #
+  # Both go through Google review, so neither is instant. That is fine — the
+  # slowness is doing a job on the open track, and on the closed one it is the
+  # price of not maintaining a separate internal list.
+  #
+  # Both are repository VARIABLES so moving a track is a setting rather than a
+  # pull request:
+  #
+  #   gh variable set PLAY_TRACK --body internal
+  #   gh variable set PLAY_OPEN_TRACK --body production
+  publish:
     name: publish to Play
     needs: release
-    # NOT on `release`, and that is the fix rather than an omission.
+    # Both events publish, and they publish to DIFFERENT TRACKS. That is what
+    # makes them two shipments rather than one duplicate:
     #
-    # Every merge to main already publishes to PLAY_TRACK. Publishing again on
-    # `release: published` sends the same app to the same track a second time
-    # with a different version code, so testers get a duplicate and the version
-    # code sequence has a hole in it that means nothing.
+    #   push to main       closed testing  — the people who asked to be there
+    #   release published  open testing    — anybody with the link
     #
-    # iOS is not the same shape and keeps its release trigger: there, a merge
-    # goes to INTERNAL TestFlight and a release goes to EXTERNAL, which is two
-    # audiences and a review boundary between them. Play has one track variable
-    # here, so the two events would land in the same place.
+    # Exactly the shape iOS already had, where a merge goes to internal
+    # TestFlight and a release goes to external with Apple's review between
+    # them. Two audiences and a decision, not the same app sent twice.
     #
-    # What a release still does on Android is attach the signed APK to the
-    # GitHub release, in the `release` job above — the thing a person
-    # sideloads, which the store upload does not provide.
-    #
-    # workflow_dispatch stays: it used to build and sign and then NOT publish,
-    # so dispatching by hand produced artifacts and no upload, saying nothing.
+    # workflow_dispatch stays on the closed track: dispatching by hand is a
+    # test of the pipeline, and a pipeline test should not land in front of
+    # everybody with the link.
     if: >-
       needs.release.outputs.built == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' ||
+       github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     environment: production
@@ -225,11 +231,23 @@ jobs:
         with:
           name: fleetwright-release-bundle
           path: bundle
-      - name: Upload to the internal track
+      - name: Upload to Play
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_PACKAGE_NAME: network.thetech.fleetwright
-          PLAY_TRACK: ${{ vars.PLAY_TRACK || 'alpha' }}
+          # The track follows the EVENT, which is the whole point of this job
+          # running on two of them.
+          #
+          # `a && b || c` is GitHub's ternary. It is safe here only because the
+          # middle value cannot be falsy — both branches end in a non-empty
+          # string literal, so a missing repository variable falls through to
+          # the default rather than collapsing the expression. A bare
+          # `vars.X` in the middle would silently select the wrong track the
+          # day somebody cleared the variable.
+          PLAY_TRACK: >-
+            ${{ github.event_name == 'release'
+                && (vars.PLAY_OPEN_TRACK || 'beta')
+                || (vars.PLAY_TRACK || 'alpha') }}
           # A push has no release to take notes from, so fall back to the commit
           # subject. Empty notes are accepted by Play and tell a tester nothing.
           RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name || github.event.head_commit.message }}

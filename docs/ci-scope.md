@@ -11,9 +11,9 @@ five workflow files.
 | event | runs |
 |---|---|
 | **pull request** | tests, typecheck, CodeQL, worker `check`, iOS and Android builds if that app changed. Nothing publishes, ever. |
-| **push to main** | the above, plus: Worker deploy (if the Worker or `src/fleet` changed), TestFlight **internal** (if the iOS app changed), Play **testing track** (if the Android app changed) |
-| **release published** | TestFlight **external**, after review — and the signed APK attached to the GitHub release. **Not** a second Play upload. |
-| **workflow_dispatch** | build, sign and publish, the same as a push to main |
+| **push to main** | the above, plus: Worker deploy (if the Worker or `src/fleet` changed), TestFlight **internal** and Play **closed testing** (each if that app changed) |
+| **release published** | TestFlight **external** and Play **open testing**, both after review — plus the signed APK attached to the GitHub release |
+| **workflow_dispatch** | build, sign, and publish to the **closed** track — dispatching by hand is a test of the pipeline, and a pipeline test should not land in front of everybody with the link |
 | **schedule** | CodeQL, weekly |
 
 ## The rules underneath it
@@ -36,15 +36,34 @@ Worker that lives somewhere else — much worse than deploying too often.
 filters, and `worker.yml` has none on pull requests. A check that skips itself
 reports no status, and no status reads as "nothing found" rather than "not run".
 
-**One publish per shipment.** Android used to publish on a push to main *and* on
-`release: published`, both to the same track — so cutting a release sent testers
-the same app twice with a hole in the version-code sequence. Only the merge
-publishes now. A release still attaches the signed APK to the GitHub release,
-which is the thing somebody sideloads and the store upload does not provide.
+**Two events, two audiences, on both platforms.**
 
-iOS deliberately keeps both, because there the two events mean different things:
-a merge goes to **internal** TestFlight, a release goes to **external**, and
-Apple's review sits between them. Two audiences and a decision, not a duplicate.
+| | push to main | release published |
+|---|---|---|
+| iOS | TestFlight **internal** | TestFlight **external** |
+| Android | Play **closed** testing (`PLAY_TRACK`, default `alpha`) | Play **open** testing (`PLAY_OPEN_TRACK`, default `beta`) |
+
+Android used to publish on both events to the *same* track, which made the
+second one a duplicate: the same app to the same testers with a different
+version code and a hole in the sequence. The fix is not to remove a trigger but
+to make the two events mean different things, which is what iOS already did.
+
+**The distinction is who is on the other side.** Closed testing takes people by
+email list or link and they chose to be there. Open testing is anybody who finds
+the link. A merge happens because a branch was ready, and *"ready to merge"* is
+not the same decision as *"ready for strangers"* — so the wider audience needs
+an act with a person behind it, and publishing a release is that act.
+
+A release also attaches the signed APK to the GitHub release, which is the thing
+somebody sideloads and a store upload does not provide.
+
+Both tracks are repository variables, so moving one is a setting rather than a
+pull request:
+
+```sh
+gh variable set PLAY_TRACK --body internal        # closed side
+gh variable set PLAY_OPEN_TRACK --body production # open side
+```
 
 **Main runs are never cancelled.** `cancel-in-progress` is on for pull requests
 only. A cancelled PR run is waste; a cancelled main run is something that did
