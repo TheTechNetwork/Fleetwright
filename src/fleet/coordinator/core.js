@@ -669,19 +669,113 @@ export class CoordinatorCore {
    * On the core rather than in each coordinator's route, because the two had
    * already drifted — the Worker served 50 and the Node one served none at all.
    */
-  recentEvents() {
-    return this.events.slice(-EVENT_PAGE);
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} [requester]
+   */
+  recentEvents(requester = null) {
+    return visibleEvents(this.events.slice(-EVENT_PAGE), requester);
   }
 
-  /** Everything a client can see about the fleet. */
-  snapshot() {
+  /**
+   * Everything a client can see about the fleet.
+   *
+   * FILTERED FOR WHOEVER IS ASKING, which it was not. This route returned
+   * every host's health blob verbatim — and that blob carries, for every
+   * session on every box, the name, the title, the working directory, who
+   * created it, whose account it runs on, and the live prompt text
+   * (`sidecar.js` health). So the visibility filter on `list` was being
+   * enforced one route over while this one handed the whole fleet's work to
+   * any member who asked.
+   *
+   * Topology is NOT filtered — which machines exist, what state they are in,
+   * what code they run. A member needs the host picker to work, and the
+   * existence of a box is not somebody's private information. What is private
+   * is what is running on it.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} [requester]
+   */
+  snapshot(requester = null) {
     return {
       protocol: PROTOCOL_VERSION,
-      hosts: this.registry.list(),
+      hosts: this.registry.list().map((h) => visibleHost(h, requester)),
       devices: this.devices.size,
-      events: this.events.slice(-20),
+      events: visibleEvents(this.events.slice(-20), requester),
     };
   }
+}
+
+/**
+ * Whether a record belongs to the person asking.
+ *
+ * `fleet:<email>` is what the sidecar records as `createdBy`, and the
+ * comparison is made in that form on purpose — see src/core/accounts.js. An
+ * unattributed record belongs to the fleet, which is to say the admin: the
+ * scenario this exists for is "my client must not read my org's other work",
+ * and erring open would quietly break exactly that promise.
+ *
+ * @param {unknown} owner  a createdBy or an actor
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function ownedBy(owner, requester) {
+  if (!requester || requester.admin) return true;
+  const mine = String(requester.email || '').toLowerCase();
+  if (!mine) return false;
+  const theirs = String(owner || '').toLowerCase();
+  return theirs === `fleet:${mine}` || theirs === mine;
+}
+
+/**
+ * One host, with everything private to somebody else removed.
+ *
+ * The host keeps its identity, its state, its capacity and its version. It
+ * loses the per-session detail that is not the requester's, and `resumable`
+ * with it — a list of names somebody cannot act on is an existence oracle
+ * wearing a convenience.
+ *
+ * @param {any} host
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function visibleHost(host, requester) {
+  if (!requester || requester.admin || !host?.health) return host;
+  const sessions = Array.isArray(host.health.sessions)
+    ? host.health.sessions.filter((/** @type {any} */ s) => ownedBy(s?.createdBy, requester))
+    : host.health.sessions;
+  const mine = new Set((sessions || []).map((/** @type {any} */ s) => s?.name));
+  return {
+    ...host,
+    health: {
+      ...host.health,
+      sessions,
+      resumable: Array.isArray(host.health.resumable)
+        ? host.health.resumable.filter((/** @type {any} */ n) => mine.has(n))
+        : host.health.resumable,
+    },
+  };
+}
+
+/**
+ * The event ring, minus other people's work.
+ *
+ * An event with neither an actor nor a session name is fleet topology — a host
+ * connected, a credential was revoked — and stays. Anything naming a person or
+ * a session is theirs.
+ *
+ * This is not tidiness. The ring records "somebody asked for connect claude
+ * for the box itself" the moment an admin starts a box login, which is the
+ * timing half of a real attack: it tells a member exactly when a login is open
+ * to be finished. The login flow now refuses that, and the feed should not
+ * have been offering the schedule either.
+ *
+ * @param {any[]} events
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function visibleEvents(events, requester) {
+  if (!requester || requester.admin) return events;
+  return events.filter((e) => {
+    if (!e) return false;
+    if (!e.actor && !e.name) return true;
+    return ownedBy(e.actor, requester);
+  });
 }
 
 /** How many events a catch-up returns. One number, two coordinators. */

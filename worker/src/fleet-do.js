@@ -398,13 +398,17 @@ export class Fleet {
     }
 
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
-      return json({ ok: true, ...this.core.snapshot() });
+      // WHO IS ASKING. This returned every host's health blob verbatim —
+      // every session's name, title, working directory, owner and live prompt
+      // — to any member, while the visibility filter on `list` was being
+      // enforced one route over.
+      return json({ ok: true, ...this.core.snapshot(requesterFor(client)) });
     }
 
     if (url.pathname === '/api/events' && request.method === 'GET') {
       // What a phone asks for when it opens, having been asleep while things
       // happened. Push wakes it; this tells it what it missed.
-      return json({ ok: true, events: this.core.recentEvents() });
+      return json({ ok: true, events: this.core.recentEvents(requesterFor(client)) });
     }
 
     if (url.pathname === '/api/devices' && request.method === 'POST') {
@@ -458,7 +462,7 @@ export class Fleet {
           preferHost: typeof body.host === 'string' ? body.host : undefined,
           // The VERIFIED caller, for visibility. Null for the break-glass token,
           // which sees everything — it is what you hold when identity is broken.
-          requester: client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null,
+          requester: requesterFor(client),
         }),
       );
     }
@@ -475,7 +479,20 @@ export class Fleet {
       const params = name ? { name } : {};
       const choice = url.searchParams.get('choice');
       if (verb === 'resume' && choice) params.choice = choice;
-      return json(await this.core.dispatch({ verb, params, actor: url.searchParams.get('actor') || undefined }));
+      // THE SHORTHAND IS NOT A BACK DOOR, and this copy was the worse of the
+      // two: it omitted `requester` (so the ownership check had nothing to
+      // check against, and `stop`/`resume`/`peek` reached any member's session
+      // by name) AND it took the actor straight from the query string rather
+      // than preferring the verified client, so the attribution it recorded
+      // was whatever the caller typed.
+      return json(
+        await this.core.dispatch({
+          verb,
+          params,
+          actor: client?.email || url.searchParams.get('actor') || undefined,
+          requester: requesterFor(client),
+        }),
+      );
     }
 
     return json({ ok: false, error: { code: 'not_found' } }, 404);
@@ -652,6 +669,21 @@ export class Fleet {
 }
 
 /** @param {unknown} body @param {number} [status] */
+/**
+ * The identity an authorisation check is made against.
+ *
+ * `null` means "no client at all", which is the break-glass token — what you
+ * hold when identity itself is broken, and deliberately unfiltered. Every
+ * route must pass this rather than omitting it: a missing requester reads as
+ * "do not filter", so forgetting it is the fail-OPEN direction. Both
+ * coordinators carry the same helper for the same reason.
+ *
+ * @param {{ email?: string|null, admin?: boolean }|null|undefined} client
+ */
+function requesterFor(client) {
+  return client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null;
+}
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
