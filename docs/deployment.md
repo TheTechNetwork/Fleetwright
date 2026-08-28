@@ -107,6 +107,31 @@ Sessions are untouched throughout: `KillMode=process` in the hub's unit is what
 makes that true, and hosts reconnect to a restarted coordinator with the backoff
 the transport already has.
 
+### What an update actually updates
+
+`/update --restart` covers all four moving parts, and it took three separate
+bugs to get there:
+
+| | fixed in |
+|---|---|
+| the code | always did |
+| npm packages | always did |
+| **the other services** — sidecar, coordinator | #127: the hub restarted itself and told you to ssh in for the rest |
+| **the sandbox image** | this change: `ensureSandboxImage` returned on its first line for the life of a box |
+
+The image is the one people are surprised by, because it does not look like a
+dependency. It is: the session entrypoint, the credential seeding and the trust
+flags all live inside it, so a fix shipped there reached nobody until somebody
+ran `podman pull` by hand. **A locally-built image (`localhost/…`) is never
+refreshed** — a box that builds its own is saying it wants that one.
+
+Running sessions keep the image they started with; a container does not swap
+its filesystem underneath itself. The refresh changes what the *next* session
+gets, which is when it matters.
+
+A refresh that fails is reported and does not fail the update: the box has a
+working image and the registry is what went wrong.
+
 ### Cloning a box that is already installed
 
 **Do not, without reading this.** `/var/lib/agent-fleet/host-key.json` is the
