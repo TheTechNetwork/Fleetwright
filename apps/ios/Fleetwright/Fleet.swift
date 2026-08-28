@@ -51,14 +51,21 @@ struct Fleet {
         name: String?,
         title: String? = nil,
         brief: String? = nil,
-        mode: String? = nil
+        mode: String? = nil,
+        host: String? = nil
     ) async throws -> Reply {
         var params: [String: String] = [:]
         if let name { params["name"] = name }
         if let title, !title.isEmpty { params["title"] = title }
         if let brief, !brief.isEmpty { params["brief"] = brief }
         if let mode, !mode.isEmpty { params["mode"] = mode }
-        return try await intent("start", params: params)
+        // `host` is a placement PREFERENCE and rides beside the intent, never
+        // inside it — `start` declares no host parameter, and a host receiving
+        // one would refuse the whole intent. The coordinator refuses a bad
+        // choice by name ("small-box is full: 5/5"), and that text must reach
+        // the screen: a picker that looked healthy plus a silent failure is
+        // exactly the shape of the night this feature was built after.
+        return try await intent("start", params: params, host: host)
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
     func resume(_ name: String, choice: String? = nil) async throws -> Reply {
@@ -176,8 +183,8 @@ struct Fleet {
         _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])
     }
 
-    private func intent(_ verb: String, params: [String: String] = [:]) async throws -> Reply {
-        let body: [String: Any] = [
+    private func intent(_ verb: String, params: [String: String] = [:], host: String? = nil) async throws -> Reply {
+        var body: [String: Any] = [
             "verb": verb,
             "params": params,
             "actor": "app:ios",
@@ -185,6 +192,7 @@ struct Fleet {
             // the original outcome rather than starting a second session.
             "id": "app-\(UUID().uuidString)",
         ]
+        if let host, !host.isEmpty { body["host"] = host }
         let data = try await post("/api/intent", body: body)
         return try JSONDecoder().decode(Reply.self, from: data)
     }

@@ -31,7 +31,8 @@ struct FleetView: View {
                     }
                     ForEach(sessions) { session in
                         SessionRow(session: session, busy: busy, stop: { await act { try await fleet.stop(session.name) } },
-                                   resume: { await act { try await fleet.resume(session.name, choice: "summary") } })
+                                   resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
+                                   forget: { await act { try await fleet.forget(session.name) } })
                     }
                 }
             }
@@ -107,6 +108,8 @@ private struct SessionRow: View {
     let busy: Bool
     let stop: () async -> Void
     let resume: () async -> Void
+    let forget: () async -> Void
+    @State private var confirmingForget = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -134,6 +137,24 @@ private struct SessionRow: View {
                 } else if session.isResumable {
                     Button("Resume") { Task { await resume() } }.disabled(busy)
                 }
+                if !session.isRunning {
+                    // Forget deletes the conversation and the workspace, which
+                    // is why it is confirmed and stop is not: stop is
+                    // reversible by resume, forget is reversible by nothing.
+                    Button("Forget", role: .destructive) { confirmingForget = true }
+                        .disabled(busy)
+                }
+            }
+            .confirmationDialog(
+                "Forget \(session.label)?",
+                isPresented: $confirmingForget,
+                titleVisibility: .visible
+            ) {
+                Button("Forget — delete its conversation and workspace", role: .destructive) {
+                    Task { await forget() }
+                }
+            } message: {
+                Text("This cannot be undone. Stop keeps everything and can be resumed; forget keeps nothing.")
             }
             .font(.callout)
             .buttonStyle(.borderless)
@@ -154,6 +175,7 @@ private struct SettingsView: View {
     @State private var showingAdvanced = false
     @State private var pastedCredential = ""
     @State private var confirmingRevoke: String?
+    @State private var hostActionResult = ""
 
     @MainActor
     private func loadHosts() async {
@@ -298,7 +320,10 @@ private struct SettingsView: View {
                     } header: {
                         Text("Hosts")
                     } footer: {
-                        Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
+                        if !hostActionResult.isEmpty {
+                    Text(hostActionResult).font(.footnote).foregroundStyle(.secondary)
+                }
+                Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
                 }
 
@@ -406,7 +431,18 @@ private struct SettingsView: View {
                     guard let hostId = confirmingRevoke else { return }
                     confirmingRevoke = nil
                     Task {
-                        _ = try? await Fleet(settings: settings).revokeHost(hostId)
+                        // The refusal reaches the screen. This was `_ = try?`,
+                        // which discarded the error AND the reply — so a 403
+                        // ("removing machines needs an admin credential")
+                        // closed the sheet and showed nothing, and the symptom
+                        // was reported as "the host comes right back". A
+                        // refusal the user never sees costs a night; a
+                        // sentence costs a sentence.
+                        do {
+                            hostActionResult = try await Fleet(settings: settings).revokeHost(hostId).text ?? ""
+                        } catch {
+                            hostActionResult = error.localizedDescription
+                        }
                         await loadHosts()
                     }
                 }
