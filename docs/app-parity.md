@@ -209,3 +209,35 @@ shipped to iOS and not to Android**, in the round above, while I reported it as
 done on both. The client methods were there; nothing was wired to a button. A
 parity gap can be one commit wide and still be invisible in a summary, which is
 the argument for the checklist rather than the intention.
+
+## The recycle bin, and a refusal that explains itself
+
+Two things from the round after the connectors work, both worth keeping.
+
+**`/forget` was the only action in the product with no undo.** It killed the
+session, dropped the record and deleted both volumes, so a name typed one word
+wrong destroyed a conversation and a workspace. Everything else here is
+recoverable by trying again. It now bins for seven days; `restore` puts the
+record back on top of volumes that never went, and `purge` is the old behaviour
+kept as its own word.
+
+The subtle part is that **a name in the bin is taken**. Volumes are keyed by
+name, so `claude-<name>` for a binned session is the same volume a new session
+of that name would be handed — reusing it either resurrects somebody else's
+conversation or destroys a recoverable one, depending on which way the race
+fell. A chosen name is refused with both remedies named; a generated one skips
+the bin as well as the live list.
+
+**And an old host's refusal now says what to do.** Reported from the live
+fleet: *"unknown verb update or upgrade"*. That is the protocol working —
+adding a verb costs no version bump precisely because an older host answers
+`unknown_verb` rather than misbehaving — but what reached the phone was the
+bare word. The verb exists on the coordinator, so the request looked valid and
+the failure named a thing rather than a remedy.
+
+The remedy is the awkward part, and saying it out loud is the point: **the verb
+that fixes this is often the one that is unknown.** `update` over the fleet
+cannot update a box too old to have `update`. What works is that box's own
+Telegram bot or a shell on it, both of which reach agent-hub directly rather
+than through this protocol. A pull that did not restart looks identical from
+the coordinator, and is at least as common — so both routes say `--restart`.

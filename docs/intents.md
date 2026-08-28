@@ -73,7 +73,7 @@ Coordinator → host:
 | `v` | must equal `2`. A mismatch is refused, never guessed at. |
 | `kind` | `"intent"`. |
 | `id` | **idempotency key**, `[A-Za-z0-9._:-]{8,128}`. Required on every intent. |
-| `verb` | one of the sixteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
+| `verb` | one of the eighteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
 | `params` | object. **Unknown keys are refused, not ignored** — see below. |
 | `issuedAt` | epoch ms. Bounds replay when the host passes `maxSkewMs`. |
 | `actor` | optional, `[A-Za-z0-9._:@+-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
@@ -110,6 +110,8 @@ and "dead host" is the one it retries.
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
+| `restore` | `name` | ✅ | `/restore <name>` |
+| `purge` | `name` | ✅ | `/purge <name>` |
 
 **`answer` is an ordinal and never text**, and that is the whole of its design.
 `send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a

@@ -51,7 +51,7 @@ yet designed).
 | Answer a waiting prompt from the app | **done** | both apps render the host's options as buttons and send an ordinal with the `promptId` |
 | Read logs, update / upgrade / reboot a box from the app | **done** | both apps; reboot keeps the pin-plus-typed-hostname guard |
 | Session detail screen; notification actions | **partial** | answering works in-app; the notification *action* (answer without opening the app) is still to build |
-| Forget moves to a 7-day recycle bin, restorable | wanted | today `/forget` deletes the conversation and workspace immediately — irreversible, and the one action in the product with no undo |
+| Forget moves to a 7-day recycle bin, restorable | **done** | `/forget` bins, `/restore` brings it back, `/purge` is the old behaviour kept as its own word. The volumes stay, which is the feature and the cost — swept from every path that touches the bin and hourly besides. `AGENT_HUB_BIN_DAYS=0` restores the old behaviour for a box tight on disk |
 | TG settings setup / removal from the app | wanted | config, not protocol |
 | Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
 
