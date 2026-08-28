@@ -344,8 +344,19 @@ private fun SessionCard(
             if (session.label != session.name) {
                 Text(session.name, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
             }
-            session.hostId?.let {
-                Text("on $it", style = MaterialTheme.typography.bodySmall)
+            // Where, how long, and whose account — the three questions about a
+            // session somebody started yesterday. One line, secondary: context
+            // rather than the point. The account is hidden when it is
+            // "shared", because on a fleet where nobody has linked one it
+            // would say the same thing on every row and mean nothing.
+            val context = listOfNotNull(
+                session.hostId?.let { "on $it" },
+                session.workspace,
+                session.age,
+                session.account?.takeIf { it != "shared" },
+            )
+            if (context.isNotEmpty()) {
+                Text(context.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
@@ -452,6 +463,57 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // phone proves who its owner is to Google, and the coordinator issues
         // this device a credential of its own — revocable without disturbing
         // any other phone, and named after the person holding it.
+        // WHAT EACH BOX SAYS ABOUT ITSELF. Asked for directly — the sign-in
+        // status on the app — and this is it: whether that box is logged in,
+        // on what plan, running what code, without SSH.
+        var fleetHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
+        LaunchedEffect(settings.configured) {
+            if (settings.configured) fleetHosts = Fleet(settings).fleetHosts()
+        }
+        if (fleetHosts.isNotEmpty()) {
+            Text("Fleet", style = MaterialTheme.typography.titleMedium)
+            fleetHosts.forEach { host ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(host.hostId, fontFamily = FontFamily.Monospace)
+                        // Colour reinforces the word; it never carries the
+                        // meaning alone.
+                        Text(
+                            host.state ?: "unknown",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (host.state == "healthy") MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    // The registry works to make "we don't know"
+                    // unrepresentable as a benign value; rendering its
+                    // sentence verbatim is what makes that visible.
+                    host.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    if (host.accountEmail != null) {
+                        val bits = listOfNotNull("signed in as ${host.accountEmail}", host.accountPlan, host.accountOrg)
+                        Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    } else if (host.loggedIn == false) {
+                        // The single most common cause of a session that
+                        // starts and then does nothing.
+                        Text(
+                            "NOT signed in — sessions will not start",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    host.version?.let { head ->
+                        val behind = host.behind ?: 0
+                        val text = if (behind > 0) "running $head · $behind behind" else "running $head · up to date"
+                        Text(text, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (host.rebootRequired) {
+                        Text("reboot required", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        }
+
         // Assistant setup, above the account section: this is the thing people
         // come back to settings for, and sign-in is the thing they do once.
         var showKinds by remember { mutableStateOf(false) }

@@ -34,10 +34,57 @@ class Fleet(private val settings: Settings) {
         val hostId: String?,
         val rcUrl: String?,
         val resumable: Boolean,
+        /** Where the work is happening. Null from an older sidecar. */
+        val cwd: String? = null,
+        /**
+         * When it started, epoch millis. A DURATION would be stale the moment
+         * it was serialised; the arithmetic belongs here, where the clock is
+         * live.
+         */
+        val startedAt: Long? = null,
+        /** Whose Claude account it runs on: an email, or "shared". */
+        val account: String? = null,
     ) {
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
+
+        /** The last path component — what a person recognises about a checkout. */
+        val workspace: String? get() = cwd?.takeIf { it.isNotBlank() }?.trimEnd('/')?.substringAfterLast('/')
+
+        /**
+         * "3h" — coarse on purpose. The exact age of a session is never the
+         * question; "since this morning" or "still going after two days" is.
+         */
+        val age: String? get() {
+            val started = startedAt ?: return null
+            if (started <= 0) return null
+            val seconds = (System.currentTimeMillis() - started) / 1000
+            return when {
+                seconds < 60 -> "just now"
+                seconds < 3600 -> "${seconds / 60}m"
+                seconds < 86_400 -> "${seconds / 3600}h"
+                else -> "${seconds / 86_400}d"
+            }
+        }
     }
+
+    /**
+     * What a box says about itself. Everything optional: an older sidecar
+     * sends none of it, and the app must show a host with less information
+     * rather than no host at all.
+     */
+    data class FleetHost(
+        val hostId: String,
+        val state: String?,
+        val reason: String?,
+        val loggedIn: Boolean?,
+        val accountEmail: String?,
+        val accountPlan: String?,
+        val accountOrg: String?,
+        val version: String?,
+        val behind: Int?,
+        val rebootRequired: Boolean,
+    )
 
     data class Reply(val ok: Boolean, val text: String, val sessions: List<Session>)
 
@@ -215,6 +262,38 @@ class Fleet(private val settings: Settings) {
             }
         }
 
+    /**
+     * What every machine is reporting right now.
+     *
+     * /api/hosts, not /api/hosts/enrolled: enrolled is the membership list
+     * (fingerprints, who added it), this is what they are SAYING. Both are
+     * shown in settings; they answer different questions.
+     */
+    suspend fun fleetHosts(): List<FleetHost> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/hosts")
+            val arr = json.optJSONArray("hosts") ?: return@runCatching emptyList()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val health = o.optJSONObject("health")
+                val account = health?.optJSONObject("account")
+                val updates = health?.optJSONObject("updates")
+                FleetHost(
+                    hostId = o.optString("hostId"),
+                    state = o.optString("state").takeIf { it.isNotBlank() },
+                    reason = o.optString("reason").takeIf { it.isNotBlank() && it != "null" },
+                    loggedIn = if (health?.has("loggedIn") == true) health.optBoolean("loggedIn") else null,
+                    accountEmail = account?.optString("email")?.takeIf { it.isNotBlank() && it != "null" },
+                    accountPlan = account?.optString("plan")?.takeIf { it.isNotBlank() && it != "null" },
+                    accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },
+                    version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
+                    behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
+                    rebootRequired = updates?.optBoolean("rebootRequired") == true,
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
     private fun parseSessions(array: JSONArray?): List<Session> {
         if (array == null) return emptyList()
         return (0 until array.length()).mapNotNull { i ->
@@ -226,6 +305,9 @@ class Fleet(private val settings: Settings) {
                 hostId = o.optString("hostId").takeIf { it.isNotBlank() },
                 rcUrl = o.optString("rcUrl").takeIf { it.isNotBlank() && it != "null" },
                 resumable = o.optBoolean("resumable", o.optString("uuid").isNotBlank()),
+                cwd = o.optString("cwd").takeIf { it.isNotBlank() && it != "null" },
+                startedAt = o.optLong("startedAt").takeIf { it > 0 },
+                account = o.optString("account").takeIf { it.isNotBlank() && it != "null" },
             )
         }
     }
