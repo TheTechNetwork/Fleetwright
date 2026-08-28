@@ -46,6 +46,21 @@ export class Registry {
     this.spoolFile = spoolFile;
     /** @type {Map<string, SessionRecord>} */
     this.sessions = new Map();
+    /**
+     * Forgotten, but not yet gone.
+     *
+     * `/forget` was the only action in this product with no undo: it killed
+     * the session, dropped the record and deleted both volumes, so a name
+     * typed one word wrong destroyed a conversation and a workspace with no
+     * way back. Everything else here is recoverable by trying again.
+     *
+     * A binned record is the same SessionRecord with `deletedAt` on it. The
+     * VOLUMES ARE LEFT ON DISK — that is the whole feature, and it is also the
+     * cost: a bin holds real bytes for real days. sweepBin() is what makes
+     * that bounded, and it has to actually run rather than be intended.
+     * @type {Map<string, SessionRecord & { deletedAt: number }>}
+     */
+    this.bin = new Map();
     this.#load();
   }
 
@@ -55,7 +70,15 @@ export class Registry {
       for (const rec of raw.sessions || []) {
         if (rec && typeof rec.name === 'string') this.sessions.set(rec.name, rec);
       }
-      log.info(`registry: loaded ${this.sessions.size} session record(s) from ${this.stateFile}`);
+      // Absent in a file written by an older build, which is exactly right:
+      // nothing was ever binned, so the bin is empty.
+      for (const rec of raw.bin || []) {
+        if (rec && typeof rec.name === 'string') this.bin.set(rec.name, rec);
+      }
+      log.info(
+        `registry: loaded ${this.sessions.size} session record(s)` +
+          `${this.bin.size ? ` and ${this.bin.size} in the bin` : ''} from ${this.stateFile}`,
+      );
     } catch (e) {
       const err = /** @type {NodeJS.ErrnoException} */ (e);
       if (err.code === 'ENOENT') {
@@ -77,7 +100,7 @@ export class Registry {
     const dir = path.dirname(this.stateFile);
     mkdirSync(dir, { recursive: true });
     const body = JSON.stringify(
-      { version: VERSION, savedAt: Date.now(), sessions: [...this.sessions.values()] },
+      { version: VERSION, savedAt: Date.now(), sessions: [...this.sessions.values()], bin: [...this.bin.values()] },
       null,
       2,
     );
@@ -143,6 +166,76 @@ export class Registry {
     const had = this.sessions.delete(name);
     if (had) this.save();
     return had;
+  }
+
+  /**
+   * Move a record to the bin rather than deleting it.
+   *
+   * @param {string} name
+   * @returns {(SessionRecord & { deletedAt: number })|null}
+   */
+  bin_(name) {
+    const rec = this.sessions.get(name);
+    if (!rec) return null;
+    const binned = { ...rec, deletedAt: Date.now() };
+    this.sessions.delete(name);
+    // A name can only be in one place. Binning over an existing binned record
+    // of the same name replaces it — the volumes are keyed by NAME, so there
+    // was only ever one copy of the data to point at anyway.
+    this.bin.set(name, binned);
+    this.save();
+    return binned;
+  }
+
+  /**
+   * Take it back out. Returns the restored record, or null.
+   * @param {string} name
+   */
+  unbin(name) {
+    const rec = this.bin.get(name);
+    if (!rec) return null;
+    const { deletedAt, ...restored } = rec;
+    void deletedAt;
+    this.bin.delete(name);
+    this.sessions.set(name, /** @type {SessionRecord} */ (restored));
+    this.save();
+    return restored;
+  }
+
+  /** Drop a binned record without restoring it. @param {string} name */
+  dropBinned(name) {
+    const had = this.bin.delete(name);
+    if (had) this.save();
+    return had;
+  }
+
+  /**
+   * What is in the bin, soonest to expire first.
+   * @param {number} ttlMs
+   */
+  binned(ttlMs) {
+    return [...this.bin.values()]
+      .map((rec) => ({ ...rec, expiresAt: rec.deletedAt + ttlMs }))
+      .sort((a, b) => a.expiresAt - b.expiresAt);
+  }
+
+  /**
+   * Everything whose time is up.
+   *
+   * Returns the names rather than deleting anything itself: the volumes belong
+   * to sessions.js, and a registry that shells out to podman is a registry
+   * that cannot be tested without it.
+   *
+   * @param {number} ttlMs
+   * @param {number} [now]
+   */
+  expiredFromBin(ttlMs, now = Date.now()) {
+    return [...this.bin.values()].filter((rec) => now - rec.deletedAt >= ttlMs).map((rec) => rec.name);
+  }
+
+  /** Is this name spoken for, in either place? @param {string} name */
+  taken(name) {
+    return this.sessions.has(name) || this.bin.has(name);
   }
 
   /** Drop every record that is not currently running. Returns how many went. */

@@ -173,6 +173,17 @@ export function loadConfig(env = process.env) {
     loginEnabled: bool('AGENT_HUB_LOGIN', true),
     loginSessionName: str('AGENT_HUB_LOGIN_SESSION', 'agent-hub-login'),
     loginTimeoutMs: Math.max(30_000, int('AGENT_HUB_LOGIN_TIMEOUT_MS', 600_000)),
+    // HOW LONG A FORGOTTEN SESSION IS STILL RECOVERABLE.
+    //
+    // Seven days, because the mistake this exists for is usually noticed the
+    // next time somebody looks for the work — which is a day or two later, not
+    // a minute later. Shorter than that and the bin is decoration.
+    //
+    // It costs disk: a binned session's conversation and workspace volumes
+    // stay on the box for the whole window. Zero turns the bin off and
+    // restores the old behaviour, deleting immediately, which is the right
+    // setting for a box that is tight on space and the wrong default.
+    binTtlMs: Math.max(0, int('AGENT_HUB_BIN_DAYS', 7) * 86_400_000),
 
     // --- resume ------------------------------------------------------------
     // `claude --resume <uuid>` on a large or stale conversation shows a blocking

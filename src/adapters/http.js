@@ -133,6 +133,10 @@ export class HttpAdapter {
         auth: { ...this.login.status(), summary: describe(this.login.status()) },
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
         sessions,
+        // What has been forgotten but not yet deleted. Additive: an older
+        // sidecar or console ignores the field, and a newer one can offer the
+        // undo — a bin nobody can see is not a bin, it is a delay.
+        bin: this.sessions.binned(),
       });
     }
 

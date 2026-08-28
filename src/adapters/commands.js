@@ -208,6 +208,28 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
 }
 
 /**
+ * The bin, as a person reads it.
+ *
+ * Leads with WHEN IT GOES, not when it was forgotten: "three days left" is the
+ * fact somebody is deciding on, and "forgotten on Tuesday" makes them do the
+ * arithmetic themselves.
+ *
+ * @param {Array<{ name: string, title?: string|null, expiresAt: number }>} bin
+ */
+function describeBin(bin) {
+  const now = Date.now();
+  return bin
+    .map((rec) => {
+      const left = rec.expiresAt - now;
+      const days = Math.floor(left / 86_400_000);
+      const hours = Math.floor(left / 3_600_000);
+      const when = days >= 1 ? `${days} day${days === 1 ? '' : 's'} left` : hours >= 1 ? `${hours}h left` : 'goes within the hour';
+      return `  ${rec.name}${rec.title ? ` — ${rec.title}` : ''} (${when})`;
+    })
+    .join('\n');
+}
+
+/**
  * `short` is the one-line description registered with Telegram's setMyCommands,
  * which is what makes the client autocomplete these as you type "/". Telegram
  * caps it at 256 characters and shows it inline, so keep it to a few words —
@@ -403,12 +425,55 @@ export const COMMANDS = {
 
   forget: {
     usage: '/forget <name>',
-    short: 'Stop and erase a session',
-    help: 'Stop a session and erase its record, so it can no longer be resumed.',
+    short: 'Stop a session and put it in the bin',
+    help: 'Stop a session and take it out of the list. Recoverable with /restore for seven days, ' +
+      'because this used to be the one action here with no undo.',
     run: (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Which session? Try /forget <name>.' };
       const r = ctx.sessions.forget({ name: args[0] });
       return { ok: r.ok, text: r.message };
+    },
+  },
+
+  restore: {
+    usage: '/restore <name>',
+    short: 'Bring a forgotten session back',
+    help: 'Take a session out of the bin. Its conversation and workspace were never deleted, so it ' +
+      'comes back exactly as it was and can be resumed.',
+    run: (ctx, args) => {
+      if (!args[0]) {
+        // The list IS the answer to "which one?", so give it rather than a
+        // usage line somebody then has to go and satisfy.
+        const bin = ctx.sessions.binned();
+        if (!bin.length) return { ok: false, text: 'The bin is empty.' };
+        return { ok: false, text: `Which one?\n${describeBin(bin)}` };
+      }
+      const r = ctx.sessions.restoreFromBin({ name: args[0] });
+      return { ok: r.ok, text: r.message };
+    },
+  },
+
+  purge: {
+    usage: '/purge <name>',
+    short: 'Delete a session for good',
+    help: 'Delete the conversation and the workspace now, with no recovery. This is what /forget used to do.',
+    run: (ctx, args) => {
+      if (!args[0]) return { ok: false, text: 'Which session? Try /purge <name>.' };
+      const r = ctx.sessions.purge({ name: args[0] });
+      return { ok: r.ok, text: r.message };
+    },
+  },
+
+  bin: {
+    aliases: ['trash'],
+    usage: '/bin',
+    short: 'What is still recoverable',
+    help: 'Sessions that have been forgotten but not yet deleted, soonest to expire first.',
+    run: (ctx) => {
+      const bin = ctx.sessions.binned();
+      return bin.length
+        ? { ok: true, text: describeBin(bin) }
+        : { ok: true, text: 'The bin is empty. /forget puts a session here rather than deleting it.' };
     },
   },
 
