@@ -53,17 +53,47 @@ struct CredentialsView: View {
 
             if let pending {
                 Section {
+                    // NUMBERED, because this is a flow that leaves the app and
+                    // comes back, and "tap the link, then paste" was being
+                    // shown as two controls with no order between them. The
+                    // person is holding a phone, in a browser, on somebody
+                    // else's website, and has to know what they are coming
+                    // back to do.
                     if let url = pending.url, let link = URL(string: url) {
-                        Link(pending.isSignIn ? "Open the sign-in page" : "Create the token", destination: link)
+                        Link(destination: link) {
+                            Label(
+                                pending.isSignIn ? "1. Open the sign-in page" : "1. Open \(pending.label) and create the token",
+                                systemImage: "arrow.up.forward.app",
+                            )
+                        }
                     }
                     Text(pending.hint).font(.caption).foregroundStyle(.secondary)
-                    // The one field in this app that holds a live credential.
-                    // Never a TextField: iOS would offer to autocorrect it,
-                    // capitalise it and remember it in the keyboard cache.
-                    SecureField(pending.isSignIn ? "Paste the code" : "Paste the token", text: $secret)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button("Connect \(pending.label)") { Task { await link(pending) } }
+
+                    Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
+                        .font(.caption)
+                    HStack {
+                        // The one field in this app that holds a live
+                        // credential. Never a TextField: iOS would offer to
+                        // autocorrect it, capitalise it and remember it in the
+                        // keyboard cache.
+                        SecureField(pending.isSignIn ? "Code" : "Token", text: $secret)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        // ONE TAP INSTEAD OF A LONG PRESS. PasteButton is
+                        // user-initiated and consented by construction — it
+                        // reads the clipboard only when tapped, so nothing here
+                        // sees what was copied unless somebody asks it to.
+                        // Reading UIPasteboard directly would be the same
+                        // convenience and a silent clipboard read.
+                        PasteButton(payloadType: String.self) { items in
+                            guard let first = items.first else { return }
+                            Task { @MainActor in secret = first.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonBorderShape(.capsule)
+                    }
+
+                    Button("3. Connect \(pending.label)") { Task { await link(pending) } }
                         .disabled(secret.isEmpty || busy)
                     Button("Cancel", role: .cancel) { clear() }
                 } header: {
@@ -93,11 +123,20 @@ struct CredentialsView: View {
             Text(provider.label)
             if let linked = connections.linked(provider.provider) {
                 Text(describeLinked(linked)).font(.caption).foregroundStyle(.secondary)
+                // MISSING PERMISSIONS, said here rather than discovered in a
+                // session. The asked-for list grows; a token minted before it
+                // grew still verifies, still says "connected", and then fails
+                // at whatever step needs the scope it never had.
+                if let missing = linked.missing, !missing.isEmpty {
+                    Text("missing \(missing.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             } else {
                 Text("not connected").font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
-                Button(connections.linked(provider.provider) == nil ? "Connect" : "Replace") {
+                Button(actionLabel(provider, connections.linked(provider.provider))) {
                     Task { await begin(provider) }
                 }
                 if connections.linked(provider.provider) != nil {
@@ -205,4 +244,27 @@ struct CredentialsView: View {
 private func describeLinked(_ linked: Fleet.Connections.Linked) -> String {
     guard let account = linked.account, !account.isEmpty else { return "connected" }
     return "connected as \(account)"
+}
+
+/// What the button offers, which is not always "replace".
+///
+/// Three states, because they are three different jobs:
+///
+///  - **Connect** — nothing stored yet.
+///  - **Update permissions** — a token that is merely SHORT does not need
+///    replacing. Both providers let you edit an existing one, and editing
+///    keeps the value already pasted here working. Offering "Replace" here
+///    would send somebody to mint a second token and abandon the first, which
+///    is worse than what they had.
+///  - **Replace** — a new token, which means REVOKING THE OLD ONE FIRST.
+///    Neither GitHub nor Cloudflare lets this revoke on their behalf with the
+///    permissions being asked for, and a token that can manage tokens is
+///    stronger than the token itself — so asking for that would be the wrong
+///    trade. The provider's hint names the deletion as step zero instead of
+///    implying it is handled.
+private func actionLabel(_ provider: Fleet.Connections.Available, _ linked: Fleet.Connections.Linked?) -> String {
+    guard let linked else { return provider.isSignIn ? "Sign in" : "Connect" }
+    if provider.isSignIn { return "Sign in again" }
+    if let missing = linked.missing, !missing.isEmpty { return "Update permissions" }
+    return "Replace"
 }

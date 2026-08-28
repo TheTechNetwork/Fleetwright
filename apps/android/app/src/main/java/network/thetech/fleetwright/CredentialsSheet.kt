@@ -1,5 +1,6 @@
 package network.thetech.fleetwright
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -86,6 +87,18 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             else "connected as ${linked.account}",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        // MISSING PERMISSIONS, said here rather than discovered
+                        // in a session. The asked-for list grows; a token minted
+                        // before it grew still verifies, still says "connected",
+                        // and then fails at whatever step needs the scope it
+                        // never had.
+                        if (!linked?.missing.isNullOrEmpty()) {
+                            Text(
+                                "missing ${linked.missing.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(
                                 enabled = !busy,
@@ -114,7 +127,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                         }
                                     }
                                 },
-                            ) { Text(if (linked == null) "Connect" else "Replace") }
+                            ) { Text(actionLabel(provider, linked)) }
 
                             if (linked != null) {
                                 TextButton(
@@ -137,12 +150,26 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
 
                 pending?.let { p ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // NUMBERED, because this flow leaves the app and comes
+                        // back, and "tap the link, then paste" was two controls
+                        // with no order between them. The person is in a browser
+                        // on somebody else's website and has to know what they
+                        // are coming back to do.
                         p.url?.let { url ->
                             TextButton(onClick = {
                                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                            }) { Text(if (p.isSignIn) "Open the sign-in page" else "Create the token") }
+                            }) {
+                                Text(
+                                    if (p.isSignIn) "1. Open the sign-in page"
+                                    else "1. Open ${p.label} and create the token",
+                                )
+                            }
                         }
                         Text(p.hint, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (p.isSignIn) "2. Come back and paste the code" else "2. Come back and paste the token",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         // The one field in this app that holds a live
                         // credential. Password transformation and no
                         // autocapitalisation: Android would otherwise offer to
@@ -154,8 +181,18 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-                            label = { Text(if (p.isSignIn) "Paste the code" else "Paste the token") },
+                            label = { Text(if (p.isSignIn) "Code" else "Token") },
                             modifier = Modifier.fillMaxWidth(),
+                            // ONE TAP INSTEAD OF A LONG PRESS, and it reads the
+                            // clipboard only when tapped — nothing here sees
+                            // what was copied unless somebody asks it to.
+                            trailingIcon = {
+                                TextButton(onClick = {
+                                    val clip = context.getSystemService(ClipboardManager::class.java)
+                                    val text = clip?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                    if (!text.isNullOrBlank()) secret = text.trim()
+                                }) { Text("Paste") }
+                            },
                         )
                         Text(
                             if (p.isSignIn)
@@ -189,7 +226,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                         busy = false
                                     }
                                 },
-                            ) { Text("Connect ${p.label}") }
+                            ) { Text("3. Connect ${p.label}") }
                             TextButton(onClick = { pending = null; secret = "" }) { Text("Cancel") }
                         }
                     }
@@ -200,4 +237,28 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+}
+
+/**
+ * What the button offers, which is not always "replace".
+ *
+ * Three states, because they are three different jobs:
+ *
+ *  - **Connect** — nothing stored yet.
+ *  - **Update permissions** — a token that is merely SHORT does not need
+ *    replacing. Both providers let you edit an existing one, and editing keeps
+ *    the value already pasted here working. Offering "Replace" here would send
+ *    somebody to mint a second token and abandon the first, which is worse than
+ *    what they had.
+ *  - **Replace** — a new token, which means REVOKING THE OLD ONE FIRST. Neither
+ *    provider lets this revoke on their behalf with the permissions being asked
+ *    for, and a token that can manage tokens is stronger than the token itself,
+ *    so asking for that would be the wrong trade. The hint names the deletion
+ *    as step zero instead of implying it is handled.
+ */
+private fun actionLabel(provider: Fleet.Connections.Available, linked: Fleet.Connections.Linked?): String {
+    if (linked == null) return if (provider.isSignIn) "Sign in" else "Connect"
+    if (provider.isSignIn) return "Sign in again"
+    if (!linked.missing.isNullOrEmpty()) return "Update permissions"
+    return "Replace"
 }

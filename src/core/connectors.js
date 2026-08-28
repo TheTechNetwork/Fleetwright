@@ -45,7 +45,8 @@ const VERIFY_TIMEOUT_MS = 10_000;
  * @property {string[]} env            environment variables the token is exported as
  * @property {(host: string) => string} url  where to go to create one
  * @property {string} hint             said on screen, before they leave for that page
- * @property {(secret: string) => Promise<{ ok: boolean, account?: string, message: string }>} verify
+ * @property {(secret: string) => Promise<{ ok: boolean, account?: string, granted?: string[], message: string }>} verify
+ * @property {string[]} [wants]  permissions the catalogue currently asks for, when they are checkable
  */
 
 /** @param {string} s */
@@ -121,14 +122,20 @@ export const PROVIDERS = Object.freeze({
     // everything else does. Setting both costs nothing and saves a session
     // discovering the difference at the worst moment.
     env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    // Checkable, because GitHub returns the granted scopes on every request.
+    // Cloudflare has no equivalent that this token is allowed to read, so it
+    // has no `wants` and the app says what is asked for without claiming to
+    // know what was given — a difference worth keeping visible rather than
+    // papering over.
+    wants: GITHUB_SCOPES,
     // A CLASSIC token, deliberately: the query parameters that pre-tick scopes
     // only work on this page. Fine-grained tokens are the better credential and
     // cannot be pre-filled at all, so choosing them would mean handing somebody
     // a bare settings page and a list of instructions to follow by hand. When
     // GitHub supports pre-filling those, this row changes and nothing else does.
-    url: (host) =>
-      `https://github.com/settings/tokens/new?scopes=${GITHUB_SCOPES.join(',')}&description=${enc(`Fleetwright (${host})`)}`,
-    hint: 'The scopes are pre-ticked for the work a session usually does — untick anything you would rather it could not do. Set whatever expiry you are happy with: this is your token, on your account, and you can revoke it there at any time.',
+    url: (label) =>
+      `https://github.com/settings/tokens/new?scopes=${GITHUB_SCOPES.join(',')}&description=${enc(`Fleetwright — ${label}`)}`,
+    hint: 'The scopes are pre-ticked for the work a session usually does — untick anything you would rather it could not do. Replacing one? Delete the old "Fleetwright" token on that page first: GitHub has no API to revoke a personal token, so this cannot do it for you, and an abandoned token stays live until you remove it.',
     async verify(secret) {
       const res = await fetch('https://api.github.com/user', {
         headers: {
@@ -142,8 +149,22 @@ export const PROVIDERS = Object.freeze({
       if (!res.ok) return { ok: false, message: apiFailure(res, 'GitHub') };
       const body = /** @type {any} */ (await res.json());
       const login = typeof body?.login === 'string' ? body.login : null;
+      // WHAT THIS TOKEN CAN ACTUALLY DO, handed back on every request for
+      // free. Worth capturing because the expected list GROWS: the first
+      // version asked for three scopes and the work needed six, and the people
+      // who connected before that change had no way to find out — their token
+      // simply failed inside a session, hours later, at whichever step needed
+      // the missing one.
+      //
+      // Granted scopes are not a secret. They are the same list the person
+      // ticked, and storing them is what lets the app say "this one is missing
+      // workflow" instead of "connected".
+      const granted = (res.headers.get('x-oauth-scopes') || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
       return login
-        ? { ok: true, account: login, message: `GitHub token verified as @${login}.` }
+        ? { ok: true, account: login, granted, message: `GitHub token verified as @${login}.` }
         : { ok: false, message: 'GitHub accepted the token but did not say who it belongs to.' };
     },
   },
@@ -155,12 +176,12 @@ export const PROVIDERS = Object.freeze({
     // string. If that ever stops working the link still lands on the API
     // tokens page, which is the page they need — a deep link that degrades
     // into a shallow one is an acceptable failure; one that 404s is not.
-    url: (host) =>
+    url: (label) =>
       'https://dash.cloudflare.com/profile/api-tokens?' +
-      `name=${enc(`Fleetwright (${host})`)}&` +
+      `name=${enc(`Fleetwright — ${label}`)}&` +
       `permissionGroupKeys=${enc(JSON.stringify(CLOUDFLARE_PERMISSIONS))}&` +
       'accountId=*&zoneId=all',
-    hint: 'Use "Create Custom Token" — the permissions arrive pre-selected, covering Workers, KV, R2, D1, DNS and certificates, because a custom domain and a deploy both need more than Workers alone. Untick anything you would rather it could not do; you can narrow or revoke it from the same page later.',
+    hint: 'Use "Create Custom Token" — the permissions arrive pre-selected, covering Workers, KV, R2, D1, DNS and certificates, because a custom domain and a deploy both need more than Workers alone. Editing the existing "Fleetwright" token on that page also works, and keeps the value you already pasted. Untick anything you would rather it could not do.',
     async verify(secret) {
       const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
         headers: { authorization: `Bearer ${secret}` },
@@ -185,14 +206,27 @@ export function isProvider(name) {
   return Object.hasOwn(PROVIDERS, String(name ?? ''));
 }
 
-/** Providers, for a picker. Never includes anything secret. @param {string} host */
-export function catalogue(host) {
+/**
+ * Providers, for a picker. Never includes anything secret.
+ *
+ * `label` names the token on the provider's page. It used to be the hostname,
+ * which made sense when a token lived on one box — now that a token is the
+ * person's and goes to every host, the person is what identifies it, and
+ * identifying it is what makes the old one findable when they replace it.
+ *
+ * @param {string} label
+ */
+export function catalogue(label) {
   return Object.entries(PROVIDERS).map(([id, p]) => ({
     provider: id,
     label: p.label,
-    url: p.url(host),
+    url: p.url(label),
     hint: p.hint,
     env: p.env,
+    // What this asks for, so a screen can show the difference against what a
+    // stored token was actually granted. Absent where the provider will not
+    // tell us — see `wants`.
+    ...(p.wants ? { wants: p.wants } : {}),
   }));
 }
 
@@ -323,12 +357,21 @@ export class Connections {
       const meta = JSON.parse(readFileSync(file, 'utf8'));
       return Object.entries(meta)
         .filter(([id]) => isProvider(id))
-        .map(([id, v]) => ({
-          provider: id,
-          label: PROVIDERS[id].label,
-          account: typeof (/** @type {any} */ (v)?.account) === 'string' ? /** @type {any} */ (v).account : null,
-          updatedAt: Number(/** @type {any} */ (v)?.updatedAt) || 0,
-        }))
+        .map(([id, v]) => {
+          const granted = Array.isArray(/** @type {any} */ (v)?.granted) ? /** @type {any} */ (v).granted : null;
+          const wants = PROVIDERS[id].wants;
+          return {
+            provider: id,
+            label: PROVIDERS[id].label,
+            account: typeof (/** @type {any} */ (v)?.account) === 'string' ? /** @type {any} */ (v).account : null,
+            updatedAt: Number(/** @type {any} */ (v)?.updatedAt) || 0,
+            // WHAT IS MISSING, when that is knowable. Null means "cannot tell"
+            // — an older record with no granted list, or a provider that will
+            // not say — and null is deliberately different from an empty
+            // array, which means "checked, nothing missing".
+            missing: granted && wants ? wants.filter((w) => !granted.includes(w)) : null,
+          };
+        })
         .sort((a, b) => a.provider.localeCompare(b.provider));
     } catch {
       return []; // unreadable metadata is "nothing connected", never an error
@@ -360,8 +403,12 @@ export class Connections {
    *
    * @param {string|symbol|null} row @param {string} provider @param {string} secret
    * @param {string|null} [account]
+   * @param {string[]|null} [granted]  the permission names the provider says
+   *   this token actually carries, where it will say. Not a secret — the same
+   *   words the person ticked — and the only way to notice later that the
+   *   asked-for list has grown past what they granted.
    */
-  save(row, provider, secret, account = null) {
+  save(row, provider, secret, account = null, granted = null) {
     const p = PROVIDERS[provider];
     const envFile = this.envPathFor(row);
     const metaFile = this.metaPathFor(row);
@@ -395,12 +442,20 @@ export class Connections {
     /** @type {Record<string, unknown>} */
     let meta = {};
     try { meta = JSON.parse(readFileSync(metaFile, 'utf8')); } catch { /* first connection */ }
-    meta[provider] = { account, updatedAt: Date.now() };
+    // `granted` is a list of scope names, not a credential. Kept beside the
+    // metadata so the app can say "missing workflow" rather than "connected"
+    // when the asked-for list has grown since this token was made.
+    meta[provider] = { account, updatedAt: Date.now(), ...(granted ? { granted } : {}) };
     writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
 
+    const short = granted && p.wants ? p.wants.filter((w) => !granted.includes(w)) : [];
     return {
       ok: true,
-      message: `${p.label} connected${account ? ` as ${account}` : ''}. New sessions get it as ${p.env.join(' and ')}.`,
+      message:
+        `${p.label} connected${account ? ` as ${account}` : ''}. New sessions get it as ${p.env.join(' and ')}.` +
+        // Said at the moment of storing, because this is the last point where
+        // the person is still on the provider's page in another tab.
+        (short.length ? `\nIt is missing ${short.join(', ')} — sessions will fail at whatever needs those.` : ''),
     };
   }
 
