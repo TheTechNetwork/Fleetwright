@@ -74,6 +74,34 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // step that landed elsewhere would type a live credential into a box that
   // never asked for one. Fanning them out would be worse still — one paste,
   // copied to every host in the fleet.
+  // LOGS NAMING A SESSION IS A SESSION VERB, and has to be checked like one.
+  //
+  // `peek` is pinned and ownership-checked; `logs <name>` returns the same
+  // session's output — the container's stderr, which outlives the pane — and
+  // was routed as a plain one-box question, so `place()` never consulted the
+  // requester at all. A member could read any other member's session by name,
+  // through the verb that exists precisely because it survives the pane dying.
+  //
+  // The refusal is the SAME `unknown_session` the scheduler gives for a name
+  // that does not exist, for the same reason it is byte-identical there: a
+  // distinct "not yours" turns an access control into an existence oracle.
+  if (verb === 'logs' && name && requester && !requester.admin) {
+    const claims = registry.findSessions(name);
+    const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
+    const owned = claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
+    if (!owned.length) {
+      return {
+        kind: 'refused',
+        code: 'unknown_session',
+        reason:
+          `No host reports a session named "${name}". ` +
+          'It may exist on a host that is currently offline — this is deliberately not ' +
+          'redirected to another box, because a resume that lands on the wrong host starts ' +
+          'an empty conversation under a name you believe is your long-running one.',
+      };
+    }
+  }
+
   if (
     verb === 'logs' ||
     verb === 'update' ||

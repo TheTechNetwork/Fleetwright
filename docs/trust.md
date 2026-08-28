@@ -659,6 +659,46 @@ session leaks outlives the session by more than an hour.** That is a real and
 bounded claim. It is not "the session cannot misuse GitHub", which no mechanism
 on this list provides — see below.
 
+## The visibility rule, and the three routes that went around it
+
+Found by the second security sweep, and the timing is the interesting part.
+
+The rule was never in doubt: a member sees the sessions their verified identity
+created, and unattributed sessions belong to the fleet, which is to say the
+admin. It was enforced on `list` and on the pinned verbs. Three routes went
+around it:
+
+- **`GET /api/hosts`** returned every host's health blob verbatim — and that
+  blob carries, per session, the name, the title, the working directory, who
+  created it, whose account it runs on, and the live prompt text. The filter
+  was being enforced one route over.
+- **`GET /api/<verb>/<name>`**, the Shortcut-friendly shorthand, omitted
+  `requester` entirely on both coordinators, so `stop`, `resume` and `peek`
+  reached any member's session by name. A missing requester reads as "do not
+  filter" — forgetting it is the fail-open direction, which is why both
+  coordinators now build it through one named helper.
+- **`logs <session>`** was routed as a question about a box rather than about a
+  session, so it was never ownership-checked at all — while `peek`, which
+  returns less, was.
+
+**None of this had ever bitten, and the reason is the lesson.** `createdBy` was
+being stored bare while the comparison expected `fleet:<email>`, so the checks
+matched nothing and every member request failed closed. The model looked
+enforced because it was uniformly broken. Fixing the actor prefix is what made
+these routes matter: **an authorisation model that starts working is also an
+authorisation model whose gaps start counting**, and the two changes have to
+land together or the fix for one is the enabling condition for the other.
+
+Every refusal added here is byte-identical to the one for a session that does
+not exist, held constant on the name. A distinct "not yours" tells a member
+that a guessed name is real and belongs to somebody else — an existence oracle
+built out of an access control.
+
+Topology is deliberately not filtered. Which machines exist, what state they
+are in and what code they run stays visible to everyone: a member needs the
+host picker to work, and the existence of a box is not somebody's private
+information. What is running on it is.
+
 ## What this does not solve, and should be said out loud
 
 An agent that can make authorised requests can make bad ones. Moving the

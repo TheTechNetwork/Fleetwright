@@ -571,7 +571,10 @@ export class Coordinator {
       // events}. A client that works against one and not the other makes
       // "the same code runs in both places" false in the only place a client
       // can see — and the apps have to hold both shapes in their head.
-      return json(res, 200, { ok: true, ...this.core.snapshot() });
+      // WHO IS ASKING. This route used to answer the same for everybody,
+      // which meant the visibility filter on `list` was enforced one route
+      // over while this one returned every session on every box.
+      return json(res, 200, { ok: true, ...this.core.snapshot(requesterFor(client)) });
     }
 
     // The event ring. The Worker has had this since push was built and the Node
@@ -580,7 +583,7 @@ export class Coordinator {
     // tables side by side, in about ten seconds, after four others had been
     // found the hard way.
     if (p === '/api/events' && req.method === 'GET') {
-      return json(res, 200, { ok: true, events: this.core.recentEvents() });
+      return json(res, 200, { ok: true, events: this.core.recentEvents(requesterFor(client)) });
     }
 
     if (p === '/api/hosts/enrolled' && req.method === 'GET') {
@@ -703,7 +706,7 @@ export class Coordinator {
         preferHost: typeof body.host === 'string' ? body.host : undefined,
         // The VERIFIED caller, for visibility. Null for the break-glass token,
         // which sees everything — it is what you hold when identity is broken.
-        requester: client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null,
+        requester: requesterFor(client),
       });
       return json(res, 200, reply);
     }
@@ -722,6 +725,11 @@ export class Coordinator {
         verb,
         params,
         actor: client?.email || url.searchParams.get('actor') || undefined,
+        // THE SHORTHAND IS NOT A BACK DOOR. It omitted `requester` entirely,
+        // so `stop`, `resume` and `peek` reached any member's session by name
+        // — the ownership check in the scheduler is skipped when there is
+        // nobody to check against.
+        requester: requesterFor(client),
       }));
     }
 
@@ -750,6 +758,20 @@ function safeEqual(a, b) {
   const bb = Buffer.from(String(b));
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
+}
+
+/**
+ * The identity an authorisation check is made against.
+ *
+ * `null` means "no client at all", which is the break-glass token — what you
+ * hold when identity itself is broken, and deliberately unfiltered. Every
+ * other route must pass this rather than omitting it: a missing requester is
+ * read as "do not filter", so forgetting it is the fail-OPEN direction.
+ *
+ * @param {{ email?: string|null, admin?: boolean }|null|undefined} client
+ */
+function requesterFor(client) {
+  return client ? { email: client.email ?? null, admin: Boolean(client.admin) } : null;
 }
 
 /**
