@@ -428,8 +428,14 @@ export class SessionManager {
       return {
         ok: true,
         message:
-          `${cap(verb)} "${name}" in ${cwd}, but Remote Control did not come online.\n` +
-          `Reach it on the box with: tmux attach -t ${name}`,
+          `${cap(verb)} "${name}" in ${cwd}, but Remote Control did not come online.` +
+          // WHY, when the pane said why. The bare message sent someone to a
+          // terminal to find a reason the watcher had already read — and when
+          // the cause is systemic (a domain migration, a login prompt), the
+          // reason is the only thing distinguishing "this session" from
+          // "every session".
+          (rc.detail ? `\n${rc.detail}` : '') +
+          `\nReach it on the box with: tmux attach -t ${name}`,
         session: this.registry.get(name) ?? rec,
       };
     } finally {

@@ -5,7 +5,7 @@
 // text.
 
 import { capturePane, hasSession, sendKeys } from './tmux.js';
-import { dewrapPane } from './pane.js';
+import { dewrapPane, RC_URL_RE } from './pane.js';
 import { log } from '../log.js';
 
 /** @param {number} ms */
@@ -127,7 +127,7 @@ const RC_ONLINE_RE =
 // and the pane is a TUI: the thing sitting there is as likely to be a box-drawing
 // character as a real path segment. `\S+` would swallow it; this stops at the
 // first character that cannot appear in a URL.
-const RC_URL_RE = /https?:\/\/claude\.ai\/code\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/;
+
 
 /** Things the pane says that explain why Remote Control is not up. */
 const NOT_LOGGED_IN_RE = /Not logged in|Run \/login|Please run \/login|Invalid API key/i;

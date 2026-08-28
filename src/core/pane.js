@@ -39,3 +39,25 @@ export function dewrapPane(text) {
   }
   return out;
 }
+
+/**
+ * The Remote Control URL, wherever Claude Code prints it.
+ *
+ * BOTH domains, and that is the bug this line has already caused once:
+ * Anthropic is migrating claude.ai to claude.com, the login banner moved first
+ * (login.js widened its regex when it did), and the two copies of this pattern
+ * — one in core/claude.js, one in fleet/host/pane.js — kept matching only
+ * claude.ai. A new CLI printed claude.com, the extractor matched nothing,
+ * every start waited out the full Remote Control window (the "15 second hang"
+ * bug report), and every session came up with no Open button ("started, but
+ * Remote Control did not come online" — on every host at once).
+ *
+ * Defined ONCE, here, where both consumers already import from. Two copies of
+ * a pattern that must track someone else's output format is one copy too many:
+ * the second is the one that does not get updated.
+ *
+ * Bounded charset rather than \S+: de-wrapping can only ever join MORE text
+ * onto the end of the URL, and the neighbouring character in a TUI is as
+ * likely to be a box-drawing glyph as a path segment.
+ */
+export const RC_URL_RE = /https?:\/\/(?:claude\.ai|claude\.com)\/code\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/;
