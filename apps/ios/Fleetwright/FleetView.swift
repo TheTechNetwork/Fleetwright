@@ -609,33 +609,33 @@ private struct SettingsView: View {
                                 CredentialsView(settings: settings, host: host.hostId)
                             }
                             .font(.caption)
+                            // THE BIN, under the host holding it. Placed here and not
+                            // beside the live sessions on purpose: this is not work in
+                            // progress, it is work somebody stopped — and a recycle
+                            // bin mixed into a list of running things reads as clutter
+                            // rather than as a safety net.
+                            if let bin = host.health?.bin, !bin.isEmpty {
+                                ForEach(bin) { item in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.title ?? item.name).font(.caption)
+                                        Text(describeBinned(item))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        HStack(spacing: 12) {
+                                            Button("Restore") { Task { await binAction(item.name, restore: true) } }
+                                            Button("Delete now", role: .destructive) {
+                                                purgeTarget = item.name
+                                            }
+                                        }
+                                        .font(.caption)
+                                        .buttonStyle(.borderless)
+                                        .disabled(busyHost != nil)
+                                    }
+                                    .padding(.leading, 12)
+                                }
+                            }
                         }
                         .padding(.vertical, 2)
-                    }
-                    // THE BIN, under the host holding it. Placed here and not
-                    // beside the live sessions on purpose: this is not work in
-                    // progress, it is work somebody stopped — and a recycle
-                    // bin mixed into a list of running things reads as clutter
-                    // rather than as a safety net.
-                    if let bin = host.health?.bin, !bin.isEmpty {
-                        ForEach(bin) { item in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title ?? item.name).font(.caption)
-                                Text(describeBinned(item))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 12) {
-                                    Button("Restore") { Task { await binAction(item.name, restore: true) } }
-                                    Button("Delete now", role: .destructive) {
-                                        purgeTarget = item.name
-                                    }
-                                }
-                                .font(.caption)
-                                .buttonStyle(.borderless)
-                                .disabled(busyHost != nil)
-                            }
-                            .padding(.leading, 12)
-                        }
                     }
                 } header: {
                     Text("Fleet")
