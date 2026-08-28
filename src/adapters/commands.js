@@ -329,6 +329,22 @@ export const COMMANDS = {
     },
   },
 
+  answer: {
+    usage: '/answer <name> <1-9> [promptId]',
+    short: 'Answer a prompt a session is waiting on',
+    help: 'Select one of the numbered options the session is showing. Never free text — see docs/plan.md.',
+    run: async (ctx, args) => {
+      const [name, choice, promptRef] = args;
+      if (!name || !choice) return { ok: false, text: 'Usage: /answer <name> <1-9> [promptId]' };
+      const option = Number(choice);
+      if (!Number.isInteger(option) || option < 1 || option > 9) {
+        return { ok: false, text: 'The choice must be a number from 1 to 9 — one of the options shown.' };
+      }
+      const r = ctx.sessions.answer(name, option, promptRef || null);
+      return { ok: r.ok, text: r.message };
+    },
+  },
+
   forget: {
     usage: '/forget <name>',
     short: 'Stop and erase a session',

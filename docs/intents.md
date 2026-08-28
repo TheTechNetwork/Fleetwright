@@ -102,6 +102,25 @@ and "dead host" is the one it retries.
 | `resume` | `name`, `choice?` (`summary`\|`full`) | ✅ | `/resume <name> [summary\|full]` |
 | `stop` | `name` | ✅ | `/stop <name>` |
 | `forget` | `name` | ✅ | `/forget <name>` |
+| `answer` | `name`, `option` (1–9), `promptId?` | ✅ | `/answer <name> <1-9> [promptId]` |
+
+**`answer` is an ordinal and never text**, and that is the whole of its design.
+`send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a
+root shell after one Ctrl-C — so a `reply { text }` verb would be strictly worse
+than the shell string design.md §5 forbids, because it would look bounded and
+would not be. An ordinal selects an option the HOST published: a compromised
+coordinator can pick one and can never originate one.
+
+`promptId` closes the temporal hole. A notification tapped four minutes late
+would otherwise send `2` to whatever dialog is on screen now — a different
+question, answered confidently, by somebody who never saw it. The host
+recomputes the id from the live pane and refuses if it moved.
+
+Note that adding this verb needed **no protocol bump**: an older host answers an
+unknown verb with `unknown_verb`, which is a named refusal rather than a silent
+failure. Adding a PARAMETER to an existing verb is the thing that strands a
+fleet — `bad_params` arrives after the version check has already agreed — which
+is why `title`/`brief` cost a version and this did not.
 
 `peek` and `health` are the only two that do not go through `POST /api/command`:
 they read host state rather than acting on a session, so they use `GET /api/peek`
