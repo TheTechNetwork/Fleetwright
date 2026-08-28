@@ -60,6 +60,7 @@ const NONCE_SECRET_BYTES = 32;
  * @property {number} enrolledAt
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
+ * @property {boolean} [ephemeral]  expected to vanish; see docs/ephemeral-hosts.md
  */
 
 export class HostIdentities {
@@ -90,9 +91,9 @@ export class HostIdentities {
    * rebuilt machine should do; the alternative is a fleet slowly filling with
    * dead entries nobody dares delete.
    *
-   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean, boundToThisHost?: boolean }} spec
+   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean, boundToThisHost?: boolean, ephemeral?: boolean }} spec
    */
-  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false, boundToThisHost = false }) {
+  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false, boundToThisHost = false, ephemeral = false }) {
     const id = String(hostId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
       return { ok: false, error: 'a host id is letters, digits, dot, dash and underscore' };
@@ -147,6 +148,10 @@ export class HostIdentities {
       enrolledAt: this.now(),
       lastSeenAt: null,
       revokedAt: null,
+      // Expected to vanish. Everything downstream reads this: placement skips
+      // it unless asked for by name, and disconnection retires it instead of
+      // leaving a corpse in the list. See docs/ephemeral-hosts.md.
+      ephemeral: Boolean(ephemeral),
     };
     this.hosts.set(id, host);
     return {

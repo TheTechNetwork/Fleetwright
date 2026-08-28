@@ -44,6 +44,7 @@
  * @property {number|null} healthAt     when that report arrived
  * @property {number} connectedAt
  * @property {boolean} connected
+ * @property {boolean} [ephemeral]  expected to vanish
  */
 
 /** How stale a health report may be before the host becomes `unknown`. */
@@ -60,11 +61,18 @@ export class HostRegistry {
   }
 
   /**
+   * Called when an ephemeral host is retired, so its key can be revoked too.
+   * @type {((hostId: string, reason: string) => void)|null}
+   */
+  onRetired = null;
+
+  /**
    * A host has dialled in.
    * @param {string} hostId
    * @param {(msg: object) => void} send
+   * @param {{ ephemeral?: boolean }} [opts]
    */
-  connect(hostId, send) {
+  connect(hostId, send, { ephemeral = false } = {}) {
     const existing = this.hosts.get(hostId);
     // A reconnect from a host we already have replaces the old socket. The box
     // is the authority on itself, so the newest connection from it wins.
@@ -76,6 +84,10 @@ export class HostRegistry {
       healthAt: existing?.healthAt ?? null,
       connectedAt: this.now(),
       connected: true,
+      // Sticky across reconnects: a runner that drops and comes back is still
+      // a runner, and the enrolment is the authority on this rather than
+      // whatever the last connect happened to pass.
+      ephemeral: ephemeral || existing?.ephemeral || false,
       send,
     });
   }
@@ -90,6 +102,23 @@ export class HostRegistry {
     host.connected = false;
     host.state = 'offline';
     host.reason = reason;
+
+    // AN EPHEMERAL HOST THAT DROPS IS GONE, not offline.
+    //
+    // The comment above is right for a real box: it may come back, and its
+    // last known sessions are the best guess about where a resume would land.
+    // A CI runner will not come back — the job ended and the machine was
+    // destroyed — and keeping it would fill the registry with corpses, one per
+    // build, each of them a name the scheduler still considers and a row in
+    // somebody's app.
+    //
+    // Retired here rather than swept later, because the disconnect IS the
+    // event: there is nothing to wait for.
+    if (host.ephemeral) {
+      this.hosts.delete(hostId);
+      this.onRetired?.(hostId, reason);
+      return;
+    }
     host.send = () => {
       throw new Error(`${hostId} is not connected`);
     };

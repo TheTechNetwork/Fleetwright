@@ -216,7 +216,27 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
-  const withRoom = matching.filter((h) => (h.health?.free ?? 0) > 0);
+  // EPHEMERAL HOSTS ARE OPT-IN, NEVER A DEFAULT TARGET.
+  //
+  // A CI runner is a host that is about to disappear. Placing ordinary work on
+  // one by capacity — which it has plenty of, being empty — would start a
+  // session on a box that will be gone in minutes, taking the conversation and
+  // the workspace with it. The scheduler cannot know that; the enrolment does.
+  //
+  // Reachable for reads, listable, addressable BY NAME through the placement
+  // preference. Just never chosen for you.
+  const durable = matching.filter((h) => !h.ephemeral);
+  if (!durable.length && matching.length) {
+    return {
+      kind: 'refused',
+      code: 'only_ephemeral_hosts',
+      reason:
+        `The only hosts that match are temporary: ${matching.map((h) => h.hostId).join(', ')}. ` +
+        'Name one explicitly to use it — work started there is lost when it goes.',
+    };
+  }
+
+  const withRoom = durable.filter((h) => (h.health?.free ?? 0) > 0);
   if (!withRoom.length) {
     return {
       kind: 'refused',

@@ -42,6 +42,7 @@ const FAILURE_WINDOW_MS = 60_000;
  * @property {string|null} hostId if set, the ONLY host id this pin may enrol
  * @property {boolean} readmit   may this pin bring back a revoked host
  * @property {number} expiresAt
+ * @property {boolean} [ephemeral]  admits a host that is expected to vanish
  */
 
 export class Enrollment {
@@ -69,9 +70,9 @@ export class Enrollment {
    * the request, and the fleet now routes that name to a machine of their
    * choosing.
    *
-   * @param {{ purpose: Purpose, label?: string, actor?: string|null, hostId?: string|null, readmit?: boolean }} spec
+   * @param {{ purpose: Purpose, label?: string, actor?: string|null, hostId?: string|null, readmit?: boolean, ephemeral?: boolean }} spec
    */
-  mint({ purpose, label = '', actor = null, hostId = null, readmit = false }) {
+  mint({ purpose, label = '', actor = null, hostId = null, readmit = false, ephemeral = false }) {
     this.#sweep();
     // 6 digits, shown as two groups of three. randomInt over the whole range
     // rather than the modulo of random bytes, which is not uniform.
@@ -79,6 +80,11 @@ export class Enrollment {
     /** @type {Pending} */
     const entry = {
       code,
+      // EPHEMERAL: this pin enrols a host that is expected to VANISH — a CI
+      // runner, a throwaway VM. The property has to be decided when the pin is
+      // minted rather than claimed by the host, because a host that could
+      // declare itself permanent would be a host that never gets cleaned up.
+      ephemeral,
       purpose,
       label: String(label || '').slice(0, 60),
       actor,
