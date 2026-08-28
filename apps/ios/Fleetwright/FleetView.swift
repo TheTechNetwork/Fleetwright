@@ -542,6 +542,14 @@ private struct SettingsView: View {
                             .font(.caption)
                             .buttonStyle(.borderless)
                             .disabled(busyHost != nil)
+                            // CREDENTIALS, which is the last thing on this box
+                            // that needed a terminal. A guest brings their own
+                            // GitHub, Cloudflare and Claude accounts and has
+                            // no shell here at all.
+                            NavigationLink("Credentials") {
+                                CredentialsView(settings: settings, host: host.hostId)
+                            }
+                            .font(.caption)
                         }
                         .padding(.vertical, 2)
                     }

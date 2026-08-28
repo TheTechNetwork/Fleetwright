@@ -72,6 +72,53 @@ struct Fleet {
         let ok: Bool?
         let text: String?
         let sessions: [Session]?
+        /// What could be connected and what is, when the reply is about
+        /// credentials. Never a token — the host does not send one and there
+        /// is no field here that could hold one.
+        var connections: Connections?
+    }
+
+    /// The connector picker, rendered from what the HOST publishes.
+    ///
+    /// Deliberately not a hardcoded list of providers in the app. A provider
+    /// added to the host's table appears here on the next refresh, with its
+    /// real URL and its real scopes, without an App Store release — which is
+    /// the entire reason the verbs are connect/link/unlink and not
+    /// github/cloudflare.
+    struct Connections: Codable, Hashable {
+        var catalogue: [Available] = []
+        var connected: [Linked] = []
+
+        struct Available: Codable, Hashable, Identifiable {
+            let provider: String
+            let label: String
+            /// The provider's OWN token page, with the scopes pre-ticked —
+            /// or, for Claude, the authorization URL this box just minted.
+            ///
+            /// Optional because Claude has no static page to send anybody to:
+            /// its URL exists only once a flow has been started, and `null`
+            /// there is the honest answer rather than a missing field.
+            let url: String?
+            let hint: String
+            let env: [String]
+            var id: String { provider }
+            /// Claude is a sign-in; the rest are tokens to paste. Which one
+            /// decides the shape of the row, so it is asked once here rather
+            /// than at four places in the view.
+            var isSignIn: Bool { provider == "claude" }
+        }
+
+        struct Linked: Codable, Hashable, Identifiable {
+            let provider: String
+            let label: String?
+            /// Who the token belongs to at the provider — `@octocat`. Not a
+            /// token, and there is no field for one.
+            let account: String?
+            let updatedAt: Double?
+            var id: String { provider }
+        }
+
+        func linked(_ provider: String) -> Linked? { connected.first { $0.provider == provider } }
     }
 
     func list() async throws -> Reply { try await intent("list") }
@@ -163,6 +210,48 @@ struct Fleet {
         if let confirm, !confirm.isEmpty { params["confirm"] = confirm }
         return try await intent("reboot", params: params, host: host)
     }
+    /// What can be connected on this box, and what already is.
+    ///
+    /// One round trip: the catalogue and the current state arrive together, so
+    /// a picker never renders a provider list from one answer and its status
+    /// from another.
+    func connections(host: String) async throws -> Reply {
+        try await intent("connect", params: [:], host: host)
+    }
+
+    /// Begin connecting a credential. Returns a URL to open — never a secret.
+    ///
+    /// `scope` is left off for a person's own credential, which needs no
+    /// permission: the HOST derives whose account it is from the verified
+    /// identity on the request, and there is no parameter that could name
+    /// somebody else. `.host` logs the BOX in and is admin-only.
+    func connect(host: String, provider: String, scope: Scope = .me) async throws -> Reply {
+        var params = ["provider": provider]
+        if scope == .host { params["scope"] = "host" }
+        return try await intent("connect", params: params, host: host)
+    }
+
+    /// Hand back the token or the authorization code.
+    ///
+    /// Goes to the SAME host `connect` was asked of, which the caller carries.
+    /// Claude's flow is a login waiting in a pane on that box; a code typed
+    /// into a different one would be a live credential landing where nothing
+    /// asked for it.
+    func link(host: String, provider: String, secret: String, scope: Scope = .me) async throws -> Reply {
+        var params = ["provider": provider, "secret": secret]
+        if scope == .host { params["scope"] = "host" }
+        return try await intent("link", params: params, host: host)
+    }
+
+    /// Forget a stored credential. Does NOT revoke it at the provider.
+    func unlink(host: String, provider: String, scope: Scope = .me) async throws -> Reply {
+        var params = ["provider": provider]
+        if scope == .host { params["scope"] = "host" }
+        return try await intent("unlink", params: params, host: host)
+    }
+
+    enum Scope: String { case me, host }
+
     func resume(_ name: String, choice: String? = nil) async throws -> Reply {
         var params = ["name": name]
         if let choice { params["choice"] = choice }
