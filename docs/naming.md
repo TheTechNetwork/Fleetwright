@@ -88,8 +88,20 @@ shipping *my fleet*, *my agents*, *remote sessions* means
 
 > "start a dev session on my fleet"
 
-satisfies the rule while containing nothing anybody had to be taught. This costs
-one plist key and is the single highest-value line in the whole feature.
+satisfies the rule while containing nothing anybody had to be taught.
+
+**Three, and not more.** App Store Connect rejects an upload with more, and only
+App Store Connect will tell you:
+
+> ITMS-90626: Invalid Siri Support — There are too many name synonyms in the
+> 'en' language. There should be no more than 3 synonyms for this language.
+
+It builds, signs and uploads with six and is refused on the far side, so neither
+the compiler nor CI can catch it. Which makes the three a real budget: spend
+them on distinct ways of thinking about the thing — the machines, the agents,
+the work — rather than on near-synonyms of one of them.
+
+Three lines of plist, and the highest-value ones in the whole feature.
 
 **Route two: a phrase they choose, set up from inside the app.** A shortcut the
 *user* creates carries no app-name requirement at all, so it can be called

@@ -56,13 +56,26 @@ targets:
         # — the Siri language processor reads this key and a shape it does not
         # expect stops the whole build rather than being ignored. Each entry is
         # a dict with an INAlternativeAppName key.
+        # THREE, AND NOT MORE. App Store Connect rejects the upload:
+        #
+        #   ITMS-90626: Invalid Siri Support - There are too many name
+        #   synonyms in the 'en' language. There should be no more than 3
+        #   synonyms for this language.
+        #
+        # It builds, signs and uploads with six and is refused on the far side,
+        # so the compiler cannot help here and neither can CI. Adding a fourth
+        # costs a round trip through App Store Connect.
+        #
+        # These three, of the six that were here: "my fleet" for the machines,
+        # "my agents" for the things running on them, and "remote sessions" for
+        # people who think in terms of the work rather than either. Dropped:
+        # "the fleet" and "agent fleet" are near-duplicates of the first, and
+        # "my sessions" is close enough to the third to be worth less than the
+        # slot it takes.
         INAlternativeAppNames:
           - INAlternativeAppName: my fleet
-          - INAlternativeAppName: the fleet
           - INAlternativeAppName: my agents
-          - INAlternativeAppName: my sessions
           - INAlternativeAppName: remote sessions
-          - INAlternativeAppName: agent fleet
         # Bound to the build settings, not left to XcodeGen.
         #
         # XcodeGen fills these two in itself when they are absent, and it fills
