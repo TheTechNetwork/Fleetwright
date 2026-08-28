@@ -68,8 +68,45 @@ words of the brief offered as the title. A feature that only works on an iPhone
 Asked for directly: a word the user sets, so *"start a new dev session"* or
 *"start an orgi"* works from Siri or Google Assistant.
 
+### The app name is the wrong thing to make somebody say
+
+Worth stating before the mechanics, because it changes what "good" looks like.
+
+*"Start a session in Fleetwright"* asks a person to hold four things in one
+sentence: the machine, Claude, the project — and our product name. **Ours is the
+only one of the four they do not care about.** They think *"another remote
+session"*, or they think of the agent by a name they gave it. Making them
+translate that into our brand every time is a tax we charge for our own benefit.
+
+So the target is a phrase with **no name to learn**, and there are two routes,
+because Apple's rule bites and Android's does not.
+
+**Route one, no setup: other names for the app.** `INAlternativeAppNames` in
+Info.plist is the escape hatch. Apple requires `\(.applicationName)` in an
+`AppShortcut` phrase, but that token matches any of the alternatives — so
+shipping *my fleet*, *my agents*, *remote sessions* means
+
+> "start a dev session on my fleet"
+
+satisfies the rule while containing nothing anybody had to be taught. This costs
+one plist key and is the single highest-value line in the whole feature.
+
+**Route two, two taps: a shortcut they name themselves.** A shortcut the *user*
+creates carries no app-name requirement at all, so it can be called "Debbie", or
+anything else they already call this. Settings has a `ShortcutsLink()` for
+exactly that, phrased as an invitation rather than a fallback — because for
+somebody who has named their agent, their name is better than any of ours and it
+was there before we arrived.
+
+**Android has no equivalent constraint**, which is worth noticing rather than
+envying: a dynamic shortcut's `shortLabel` is the phrase. The design goal is the
+same on both, and only iOS needs the two routes.
+
+### The mechanics
+
 **iOS.** Fully free-form Siri phrases are not something an app can register —
-`AppShortcut` phrases are compiled in and must contain `\(.applicationName)`.
+`AppShortcut` phrases are compiled in and must contain `\(.applicationName)`,
+subject to the alternative names above.
 What *is* supported, and is what this wants, is a **parameterised phrase over an
 `AppEntity`**:
 

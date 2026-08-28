@@ -345,12 +345,25 @@ private struct SettingsView: View {
                         get: { settings.autoOpenAfterStart },
                         set: { settings.autoOpenAfterStart = $0 }
                     ))
+                    // Two taps to a phrase with no app name in it at all.
+                    //
+                    // Apple requires the app name in the phrases WE ship, which
+                    // means the built-in ones make somebody say a brand to reach
+                    // their own work. A shortcut they make themselves has no
+                    // such rule: they can call it "Debbie", or "another remote
+                    // session", or whatever they already call this in their
+                    // head — and that is the name that will still be there in a
+                    // month, because it was theirs before we arrived.
+                    ShortcutsLink()
                 } header: {
                     Text("Siri and Shortcuts")
                 } footer: {
-                    Text("A kind is a word you can say — \"start a dev session\" — carrying its own defaults. "
-                         + "Opening the app is off by default: an intent from an automation often runs when "
-                         + "nobody is looking at the phone.")
+                    Text("Say \"start a dev session on my fleet\" — \"my fleet\", \"my agents\" and "
+                         + "\"remote sessions\" all work, so there is no product name to remember. "
+                         + "For a phrase of your own — \"Debbie\", or anything else you call this — "
+                         + "add a shortcut above and name it whatever you like.\n\n"
+                         + "Opening the app is off by default: an intent from an automation often runs "
+                         + "when nobody is looking at the phone.")
                 }
 
                 Section {

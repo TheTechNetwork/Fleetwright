@@ -34,6 +34,29 @@ targets:
       path: Fleetwright/Info.plist
       properties:
         CFBundleDisplayName: Fleetwright
+        # OTHER NAMES SIRI WILL ACCEPT FOR THIS APP.
+        #
+        # Apple requires \(.applicationName) in every AppShortcut phrase, which
+        # by default forces somebody to say a brand name to reach their own
+        # work. "Start a session in Fleetwright" asks them to hold the server,
+        # Claude, the project AND our product name in one sentence — and ours is
+        # the only one of those four they do not care about.
+        #
+        # These are the words people actually use for the thing. Any of them
+        # satisfies Apple's rule, so "start a dev session on my fleet" and
+        # "start a dev session on my agents" both work without anybody being
+        # taught a name.
+        #
+        # It is not the whole answer — a phrase with NO app name in it has to be
+        # a shortcut the user makes, which is what the Siri section of settings
+        # is for. This is the part that needs no setup at all.
+        INAlternativeAppNames:
+          - my fleet
+          - the fleet
+          - my agents
+          - my sessions
+          - remote sessions
+          - agent fleet
         # Bound to the build settings, not left to XcodeGen.
         #
         # XcodeGen fills these two in itself when they are absent, and it fills
