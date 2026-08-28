@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,7 +75,11 @@ function pipeIntoSh(where, args = [], env = {}) {
 }
 
 function readBootstrap() {
-  return spawnSync('cat', [BOOTSTRAP], { encoding: 'utf8' }).stdout;
+  // readFileSync, not `cat`. Beyond being simpler: spawnSync returns undefined
+  // stdout when the binary is missing or the spawn fails, so every assertion
+  // over the text would have passed vacuously against undefined rather than
+  // failing. A test that cannot fail is worse than no test.
+  return readFileSync(BOOTSTRAP, 'utf8');
 }
 
 test('it is POSIX sh, because that is what it will be run by', () => {
