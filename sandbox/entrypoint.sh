@@ -38,6 +38,22 @@ try {
 MERGE
 fi
 
+# The other credentials — GitHub, Cloudflare, whatever else was connected.
+# Written by src/core/connectors.js as `KEY='value'` lines, which is both
+# shell-sourceable and what systemd's EnvironmentFile parser expects; one
+# quoting rule, two consumers, no second format to keep in step.
+#
+# `set -a` exports everything the file defines, so `gh` and `wrangler` find
+# their tokens without the session having to be told they exist. They are NOT
+# passed as `-e` flags on the podman command line, because that command line is
+# the tmux pane's process and readable from `ps` by anyone on the box.
+if [ -f /root/.claude/.secrets.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /root/.claude/.secrets.env
+  set +a
+fi
+
 # The SessionStart hook, registered the same way install.sh does it on a host,
 # but pointed at the unix socket. Merged with node rather than rewritten, so a
 # session that adds its own hooks keeps them across resumes.

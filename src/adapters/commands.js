@@ -37,8 +37,9 @@
  */
 
 import { describe } from '../core/login.js';
+import { Connections, catalogue, isProvider, verifyToken } from '../core/connectors.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
-import { Accounts, normaliseEmail } from '../core/accounts.js';
+import { Accounts, normaliseEmail, emailFromActor } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
@@ -418,6 +419,83 @@ export const COMMANDS = {
         actor: ctx.actor,
         mode: sub === 'console' ? 'console' : 'claudeai',
       });
+      return { ok: r.ok, text: r.message };
+    },
+  },
+
+  // --- Other credentials ---------------------------------------------------
+
+  connect: {
+    usage: '/connect [github|cloudflare]',
+    short: 'Connect a GitHub or Cloudflare token',
+    help:
+      'Opens the provider\u2019s own token page with the right scopes pre-ticked. You create the token, ' +
+      'on your account, and paste it back with /link. Nothing of ours sits in the middle of that page, ' +
+      'and you can revoke it from the same place at any time.',
+    run: async (ctx, args) => {
+      const host = ctx.cfg.hostname;
+      const which = (args[0] || '').toLowerCase();
+      if (!which) {
+        const store = new Connections(ctx.cfg.stateDir);
+        const email = emailFromActor(ctx.actor);
+        const connected = new Map(store.list(email).map((c) => [c.provider, c]));
+        return {
+          ok: true,
+          text:
+            `${catalogue(host)
+              .map((c) => {
+                const have = connected.get(c.provider);
+                return `${c.label}: ${have ? `connected${have.account ? ` as ${have.account}` : ''}` : 'not connected'}\n  /connect ${c.provider}`;
+              })
+              .join('\n')}`,
+        };
+      }
+      const found = catalogue(host).find((c) => c.provider === which);
+      if (!found) {
+        return { ok: false, text: `No provider called "${which}". Try /connect on its own to see the list.` };
+      }
+      return {
+        ok: true,
+        text:
+          `Create a ${found.label} token here:\n${found.url}\n\n${found.hint}\n\n` +
+          `Then send it back: /link ${found.provider} <token>\n` +
+          `It is checked against ${found.label} before it is stored, and exported to new sessions as ${found.env.join(' and ')}.`,
+      };
+    },
+  },
+
+  link: {
+    usage: '/link <provider> <token>',
+    short: 'Store a token from /connect',
+    help: 'Verifies the token with the provider before storing it, so a typo fails here rather than four hours into a session.',
+    run: async (ctx, args) => {
+      const provider = (args[0] || '').toLowerCase();
+      // args[1] and nothing else. A token has no spaces, and joining the rest
+      // would silently accept a paste that picked up half the page.
+      const secret = (args[1] || '').trim();
+      if (!provider || !secret) return { ok: false, text: 'Usage: /link <provider> <token>' };
+      if (args.length > 2) {
+        return { ok: false, text: 'That looks like more than a token \u2014 paste just the token itself.' };
+      }
+      if (!isProvider(provider)) {
+        return { ok: false, text: `No provider called "${provider}". Try /connect on its own to see the list.` };
+      }
+      const checked = await verifyToken(provider, secret);
+      if (!checked.ok) return { ok: false, text: checked.message };
+      const store = new Connections(ctx.cfg.stateDir);
+      const saved = store.save(emailFromActor(ctx.actor), provider, secret, checked.account ?? null);
+      return { ok: saved.ok, text: `${checked.message}\n${saved.message}` };
+    },
+  },
+
+  unlink: {
+    usage: '/unlink <provider>',
+    short: 'Forget a stored token',
+    help: 'Removes it from this box. It stays live on your account until you revoke it with the provider.',
+    run: async (ctx, args) => {
+      const provider = (args[0] || '').toLowerCase();
+      if (!provider) return { ok: false, text: 'Usage: /unlink <provider>' };
+      const r = new Connections(ctx.cfg.stateDir).remove(emailFromActor(ctx.actor), provider);
       return { ok: r.ok, text: r.message };
     },
   },

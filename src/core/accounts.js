@@ -132,7 +132,17 @@ export class Accounts {
   list() {
     try {
       return readdirSync(this.dir)
-        .filter((f) => f.endsWith('.json') && !f.endsWith('.account.json') && !f.startsWith('.'))
+        // Every sibling file this directory has grown has to be excluded by
+        // name, and each one was added by somebody who was not thinking about
+        // this function. `person@example.com.connections.json` would otherwise
+        // list a linked account called `person@example.com.connections`.
+        .filter(
+          (f) =>
+            f.endsWith('.json') &&
+            !f.endsWith('.account.json') &&
+            !f.endsWith('.connections.json') &&
+            !f.startsWith('.'),
+        )
         .map((f) => f.slice(0, -'.json'.length))
         .sort();
     } catch {

@@ -1,0 +1,384 @@
+// Credentials a session needs that are NOT Claude's.
+//
+// The ask that produced this: "Cloudflare api can be generated via a custom
+// url so created in app, same with GitHub, same with many others." That last
+// clause is the design. GitHub and Cloudflare are two providers; the shape
+// they share is the feature:
+//
+//   1. a URL that opens the provider's own token page, PRE-FILLED with the
+//      scopes this needs, so the page the person lands on is already narrowed
+//   2. they create the token, on their account, under their own eyes
+//   3. they paste it back, once
+//   4. it is verified against the provider's API before it is stored, so a
+//      typo fails HERE rather than four hours into a session
+//
+// No OAuth app, no client secret, no callback URL, and nothing of ours in the
+// middle of their consent screen. It also means adding a provider later is a
+// row in a table rather than a protocol change — which is the whole reason the
+// fleet verbs are `connect`/`link`/`unlink` and not `github`/`cloudflare`.
+//
+// WHERE THE SECRET LIVES: exactly one file, `<email>.env`, mode 0600. The
+// metadata that says a connection exists lives in a SEPARATE file with no
+// secret in it, so the status a phone can ask for is read from a file that has
+// nothing to leak. Two files is not tidiness — it is the difference between
+// "we are careful when we serialise" and "there is nothing there to serialise".
+//
+// This is deliberately not the credential-terminating proxy from docs/trust.md.
+// That is still the right long-term answer and this does not compete with it:
+// a token here is a real token on the box, minted by the person, scoped by the
+// person, revocable by the person. What it buys is that a guest never hands
+// anyone else's credential to anyone, which is the constraint that mattered:
+// "the guests will be bringing their own GitHub Cloudflare Claude creds, no
+// shared creds to them."
+
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import path from 'node:path';
+
+import { normaliseEmail } from './accounts.js';
+
+/** How long a provider gets to answer before we call the token unverifiable. */
+const VERIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * @typedef {object} Provider
+ * @property {string} label            what a person calls it
+ * @property {string[]} env            environment variables the token is exported as
+ * @property {(host: string) => string} url  where to go to create one
+ * @property {string} hint             said on screen, before they leave for that page
+ * @property {(secret: string) => Promise<{ ok: boolean, account?: string, message: string }>} verify
+ */
+
+/** @param {string} s */
+const enc = (s) => encodeURIComponent(s);
+
+/**
+ * @param {Response} res
+ * @param {string} what
+ */
+function apiFailure(res, what) {
+  if (res.status === 401 || res.status === 403) {
+    return `${what} rejected that token (${res.status}). Check it was copied whole, and that it has not expired.`;
+  }
+  return `${what} answered ${res.status}. The token was not stored.`;
+}
+
+/** @type {Readonly<Record<string, Provider>>} */
+export const PROVIDERS = Object.freeze({
+  github: {
+    label: 'GitHub',
+    // GH_TOKEN is what the `gh` CLI reads; GITHUB_TOKEN is what almost
+    // everything else does. Setting both costs nothing and saves a session
+    // discovering the difference at the worst moment.
+    env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    // A CLASSIC token, deliberately: the query parameters that pre-tick scopes
+    // only work on this page. Fine-grained tokens are the better credential and
+    // cannot be pre-filled at all, so choosing them would mean handing somebody
+    // a bare settings page and a list of instructions to follow by hand. When
+    // GitHub supports pre-filling those, this row changes and nothing else does.
+    url: (host) =>
+      `https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&description=${enc(`Fleetwright (${host})`)}`,
+    hint: 'The scopes are pre-ticked. Set whatever expiry you are happy with — this is your token, on your account, and you can revoke it there at any time.',
+    async verify(secret) {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          authorization: `Bearer ${secret}`,
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+          'user-agent': 'agent-hub',
+        },
+        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      });
+      if (!res.ok) return { ok: false, message: apiFailure(res, 'GitHub') };
+      const body = /** @type {any} */ (await res.json());
+      const login = typeof body?.login === 'string' ? body.login : null;
+      return login
+        ? { ok: true, account: login, message: `GitHub token verified as @${login}.` }
+        : { ok: false, message: 'GitHub accepted the token but did not say who it belongs to.' };
+    },
+  },
+
+  cloudflare: {
+    label: 'Cloudflare',
+    env: ['CLOUDFLARE_API_TOKEN'],
+    // Cloudflare's dashboard accepts a custom-token template in the query
+    // string. If that ever stops working the link still lands on the API
+    // tokens page, which is the page they need — a deep link that degrades
+    // into a shallow one is an acceptable failure; one that 404s is not.
+    url: (host) =>
+      'https://dash.cloudflare.com/profile/api-tokens?' +
+      `name=${enc(`Fleetwright (${host})`)}&` +
+      `permissionGroupKeys=${enc('[{"key":"workers_scripts","type":"edit"},{"key":"workers_kv_storage","type":"edit"}]')}&` +
+      'accountId=*&zoneId=all',
+    hint: 'Use "Create Custom Token" — the permissions arrive pre-selected. Add any others you want; you can narrow or revoke it from the same page later.',
+    async verify(secret) {
+      const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
+        headers: { authorization: `Bearer ${secret}` },
+        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+      });
+      // Cloudflare answers 401 with a JSON body that explains itself, so read
+      // the body before deciding — its message is better than our guess.
+      const body = /** @type {any} */ (await res.json().catch(() => null));
+      if (body?.success === true && body?.result?.status === 'active') {
+        return { ok: true, account: body?.result?.id ? String(body.result.id).slice(0, 8) : undefined, message: 'Cloudflare token verified and active.' };
+      }
+      const said = body?.errors?.[0]?.message;
+      if (said) return { ok: false, message: `Cloudflare rejected that token: ${said}` };
+      if (body?.result?.status) return { ok: false, message: `Cloudflare says that token is ${body.result.status}.` };
+      return { ok: false, message: apiFailure(res, 'Cloudflare') };
+    },
+  },
+});
+
+/** @param {unknown} name */
+export function isProvider(name) {
+  return Object.hasOwn(PROVIDERS, String(name ?? ''));
+}
+
+/** Providers, for a picker. Never includes anything secret. @param {string} host */
+export function catalogue(host) {
+  return Object.entries(PROVIDERS).map(([id, p]) => ({
+    provider: id,
+    label: p.label,
+    url: p.url(host),
+    hint: p.hint,
+    env: p.env,
+  }));
+}
+
+/**
+ * Verify a token with its provider, and never throw.
+ *
+ * A network failure is NOT a bad token, and saying so matters: "could not
+ * reach GitHub" sends somebody to check their connection, while "GitHub
+ * rejected that token" sends them to mint a new one. Collapsing the two wastes
+ * whichever of those two trips was the wrong one.
+ *
+ * @param {string} provider @param {string} secret
+ */
+export async function verifyToken(provider, secret) {
+  const p = PROVIDERS[provider];
+  if (!p) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
+  try {
+    return await p.verify(secret);
+  } catch (e) {
+    const err = /** @type {Error} */ (e);
+    const why = err.name === 'TimeoutError' ? `did not answer within ${VERIFY_TIMEOUT_MS / 1000}s` : err.message;
+    return { ok: false, message: `Could not reach ${p.label} to check the token — it ${why}. Nothing was stored.` };
+  }
+}
+
+/**
+ * What a credential is allowed to look like.
+ *
+ * Printable ASCII, no whitespace, and no quote or backslash. Two reasons, and
+ * the second one is why this is a hard refusal rather than an escape:
+ *
+ *  1. A token with whitespace in it is a paste that picked up half the page,
+ *     which `login.js` already refuses for the authorization code and for the
+ *     same reason.
+ *  2. The file this ends up in has TWO readers with DIFFERENT quoting rules —
+ *     the sandbox entrypoint sources it with `.`, and systemd's
+ *     EnvironmentFile parser (which `src/core/env-file.js` reproduces) strips
+ *     exactly one layer of surrounding quotes and knows nothing about `'\''`.
+ *     Escaping correctly for one is escaping wrongly for the other. Refusing
+ *     the characters that make them disagree means there is nothing to get
+ *     right twice.
+ *
+ * Every token shape these providers actually issue passes: `ghp_…`, base64url,
+ * JWTs, Cloudflare's alphanumerics.
+ */
+/** @param {unknown} secret */
+export function looksLikeToken(secret) {
+  const s = String(secret ?? '');
+  return s.length > 0 && s.length <= 4096 && /^[\x21-\x7e]+$/.test(s) && !/['"\\]/.test(s);
+}
+
+/**
+ * One assignment line, quoted so both readers of this file agree.
+ *
+ * Safe because `looksLikeToken` has already refused everything that would need
+ * escaping. The quotes are still there so a value can never be read as bare
+ * shell words if the charset rule is ever loosened.
+ *
+ * @param {string} key @param {string} value
+ */
+function assignment(key, value) {
+  return `${key}='${value}'`;
+}
+
+/**
+ * Per-person connected credentials.
+ *
+ * Keyed by the same normalised email as `Accounts`, and living in the same
+ * directory, because they are the same idea: what this person's sessions run
+ * with. `null` is the box itself — a solo install, or the shared org row —
+ * which is stored under a dot-prefixed name so `Accounts.list()` cannot mistake
+ * it for a person.
+ */
+export class Connections {
+  /** @param {string} stateDir */
+  constructor(stateDir) {
+    this.dir = path.join(stateDir, 'accounts');
+  }
+
+  /** @param {string|null} email @returns {string|null} */
+  #stem(email) {
+    if (email === null) return '.host';
+    return normaliseEmail(email);
+  }
+
+  /** The one file a secret is ever in. @param {string|null} email */
+  envPathFor(email) {
+    const stem = this.#stem(email);
+    return stem ? path.join(this.dir, `${stem}.env`) : null;
+  }
+
+  /** Metadata only — safe to read anywhere. @param {string|null} email */
+  metaPathFor(email) {
+    const stem = this.#stem(email);
+    return stem ? path.join(this.dir, `${stem}.connections.json`) : null;
+  }
+
+  /**
+   * What is connected, and to which account. Never the token.
+   * @param {string|null} email
+   * @returns {Array<{ provider: string, label: string, account: string|null, updatedAt: number }>}
+   */
+  list(email) {
+    const file = this.metaPathFor(email);
+    if (!file || !existsSync(file)) return [];
+    try {
+      const meta = JSON.parse(readFileSync(file, 'utf8'));
+      return Object.entries(meta)
+        .filter(([id]) => isProvider(id))
+        .map(([id, v]) => ({
+          provider: id,
+          label: PROVIDERS[id].label,
+          account: typeof (/** @type {any} */ (v)?.account) === 'string' ? /** @type {any} */ (v).account : null,
+          updatedAt: Number(/** @type {any} */ (v)?.updatedAt) || 0,
+        }))
+        .sort((a, b) => a.provider.localeCompare(b.provider));
+    } catch {
+      return []; // unreadable metadata is "nothing connected", never an error
+    }
+  }
+
+  /** The tokens themselves, read back to rewrite the file. @param {string|null} email */
+  #secrets(email) {
+    const file = this.envPathFor(email);
+    /** @type {Record<string, string>} */
+    const out = {};
+    if (!file || !existsSync(file)) return out;
+    for (const raw of readFileSync(file, 'utf8').split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
+    }
+    return out;
+  }
+
+  /**
+   * Store a verified token.
+   *
+   * The whole env file is rewritten from what is already there plus this
+   * provider's variables, so removing a provider from the catalogue cannot
+   * strand its variable in a file forever.
+   *
+   * @param {string|null} email @param {string} provider @param {string} secret
+   * @param {string|null} [account]
+   */
+  save(email, provider, secret, account = null) {
+    const p = PROVIDERS[provider];
+    const envFile = this.envPathFor(email);
+    const metaFile = this.metaPathFor(email);
+    if (!p) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
+    if (!envFile || !metaFile) return { ok: false, message: 'that does not look like an email address' };
+    if (!looksLikeToken(secret)) {
+      return {
+        ok: false,
+        message:
+          'That does not look like a token — paste just the token itself, with no spaces or quotes around it.',
+      };
+    }
+
+    const secrets = this.#secrets(email);
+    for (const key of p.env) secrets[key] = secret;
+
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      envFile,
+      `# Written by agent-hub. One line per credential; sourced into sessions.\n` +
+        Object.entries(secrets)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => assignment(k, v))
+          .join('\n') +
+        '\n',
+      { mode: 0o600 },
+    );
+
+    /** @type {Record<string, unknown>} */
+    let meta = {};
+    try { meta = JSON.parse(readFileSync(metaFile, 'utf8')); } catch { /* first connection */ }
+    meta[provider] = { account, updatedAt: Date.now() };
+    writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
+
+    return {
+      ok: true,
+      message: `${p.label} connected${account ? ` as ${account}` : ''}. New sessions get it as ${p.env.join(' and ')}.`,
+    };
+  }
+
+  /**
+   * Forget a token.
+   *
+   * Only ours — a session that is already running holds what it was seeded
+   * with and is not reached into, exactly as `logout` leaves running sessions
+   * alone. And this cannot revoke anything at the provider, so it says so:
+   * the token is still live on their account until they revoke it there.
+   *
+   * @param {string|null} email @param {string} provider
+   */
+  remove(email, provider) {
+    const p = PROVIDERS[provider];
+    const envFile = this.envPathFor(email);
+    const metaFile = this.metaPathFor(email);
+    if (!p || !envFile || !metaFile) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
+
+    const secrets = this.#secrets(email);
+    let had = false;
+    for (const key of p.env) {
+      if (key in secrets) had = true;
+      delete secrets[key];
+    }
+    const rest = Object.entries(secrets).sort(([a], [b]) => a.localeCompare(b));
+    if (rest.length) {
+      writeFileSync(
+        envFile,
+        `# Written by agent-hub. One line per credential; sourced into sessions.\n` +
+          rest.map(([k, v]) => assignment(k, v)).join('\n') +
+          '\n',
+        { mode: 0o600 },
+      );
+    } else if (existsSync(envFile)) {
+      unlinkSync(envFile);
+    }
+
+    try {
+      const meta = JSON.parse(readFileSync(metaFile, 'utf8'));
+      delete meta[provider];
+      if (Object.keys(meta).length) writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
+      else unlinkSync(metaFile);
+    } catch { /* nothing recorded — the env file was the whole story */ }
+
+    return had
+      ? {
+          ok: true,
+          message:
+            `Forgot the ${p.label} token. Sessions already running keep what they were seeded with.\n` +
+            `It is still live on your ${p.label} account — revoke it there if you want it dead.`,
+        }
+      : { ok: false, message: `No ${p.label} token was stored.` };
+  }
+}
