@@ -13,50 +13,16 @@
 //   agent-hub <command...>     any chat command, e.g. `agent-hub list`
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
+import { loadEnvFile } from '../src/core/env-file.js';
 import { Registry } from '../src/core/registry.js';
 import { titleFromTranscript } from '../src/core/titles.js';
-
-/**
- * Load /etc/agent-hub.env the way systemd's EnvironmentFile= does.
- *
- * Without this the CLI and the service disagree about their own configuration:
- * systemd reads that file, a shell does not. `agent-hub doctor` reported "web
- * only" on a box with Telegram plainly running, and — worse — with
- * AGENT_HUB_TOKEN set every CLI command would 401 against its own hub.
- *
- * Real environment variables win, so `AGENT_HUB_PORT=9999 agent-hub list`
- * still overrides the file.
- */
-function loadEnvFile(file = process.env.AGENT_HUB_ENV_FILE || '/etc/agent-hub.env') {
-  let text;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return; // not installed system-wide, or not readable by this user
-  }
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq < 1) continue;
-    const key = line.slice(0, eq).trim();
-    if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) continue;
-    if (process.env[key] !== undefined) continue; // the real environment wins
-    // systemd strips one layer of surrounding quotes; match that.
-    process.env[key] = line
-      .slice(eq + 1)
-      .trim()
-      .replace(/^(['"])(.*)\1$/, '$2');
-  }
-}
 
 const argv = process.argv.slice(2);
 const sub = argv[0] || 'serve';
 
 // Before loadConfig, so the CLI sees exactly what the service sees.
-loadEnvFile();
+loadEnvFile(process.env.AGENT_HUB_ENV_FILE || '/etc/agent-hub.env');
 const cfg = loadConfig();
 const base = `http://${cfg.bind === '0.0.0.0' || cfg.bind === '::' ? '127.0.0.1' : cfg.bind}:${cfg.port}`;
 

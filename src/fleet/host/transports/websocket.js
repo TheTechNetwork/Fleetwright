@@ -15,7 +15,9 @@
 import { connectWebSocket } from '../../ws.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
+// Exported so the enrol command can promise a reconnect window without
+// hardcoding a number that would drift the first time this changed.
+export const MAX_BACKOFF_MS = 30_000;
 
 // A dead TCP connection is indistinguishable from an idle healthy one until you
 // write to it. The coordinator polls health every 15s, which would usually be
