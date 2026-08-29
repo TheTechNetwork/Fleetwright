@@ -165,6 +165,54 @@ and the cost of not doing so is unbounded.
 Deleting it now is also free: nothing uses it, and the OAuth build does not
 need it.
 
+### Where the CLIENT SECRET goes, which is a different answer
+
+The secret is needed by whatever performs an OAuth exchange, and there are two
+of those:
+
+| exchange | who does it | needs the secret |
+|---|---|---|
+| `code` → access + refresh | the **coordinator**, because GitHub redirects the browser to its callback | yes |
+| `refresh` → a new access token, every eight hours | the **host**, because that is where the refresh token lives | yes |
+
+So it goes in two places, and both are deliberate:
+
+**1. Cloudflare, as an encrypted secret — never a `[vars]` entry.**
+
+```sh
+wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET
+```
+
+or Workers → Settings → Variables → **Encrypt**, which is the same thing from a
+phone. It must not be a `[vars]` entry for a reason this file already records
+about the APNs key: **Cloudflare keeps vars and secrets in one namespace, so a
+deploy carrying a var of that name CLOBBERS the secret.** One place per name.
+
+**2. Each host, in its environment file**, `AGENT_HUB_GITHUB_CLIENT_SECRET`,
+0600, beside the configuration it already keeps.
+
+That second one deserves its justification rather than a shrug, because "a
+secret on every host" is the shape this document keeps refusing:
+
+> The client secret authorises **nothing on its own**. It cannot read a
+> repository, mint a token, or name a person. It is useful only together with
+> an authorization code somebody just produced, or a refresh token they already
+> granted — and the host holding it already has that person's refresh token.
+
+So a host compromise yields what it already yielded: that host's refresh
+tokens. The secret adds no reach beyond them. Contrast the private key, which
+adds *every installation of the App* — that is the difference, and it is why
+one of these may be replicated and the other may not.
+
+The alternative would be hosts asking the coordinator to refresh for them,
+which sends a refresh token up through the coordinator every eight hours. That
+is worse: it makes the coordinator a credential path on a schedule, to avoid
+storing a value that grants nothing by itself.
+
+**And keep a copy in a password manager**, because GitHub shows a client secret
+exactly once. Losing it means generating another and updating both places —
+recoverable, and avoidable.
+
 ### What the key is actually for, which is one call
 
 There is exactly one thing a GitHub App's private key does here:
