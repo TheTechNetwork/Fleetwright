@@ -177,16 +177,18 @@ of those:
 
 So it goes in two places, and both are deliberate:
 
-**1. Cloudflare, as an encrypted secret — never a `[vars]` entry.**
+**1. A GitHub Actions secret, which the deploy pushes to Cloudflare.**
 
-```sh
-wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET
-```
+`AGENT_FLEET_GITHUB_CLIENT_SECRET`, exactly like the APNs key and the FCM
+service account before it. `worker.yml` already has a "Sync the Worker's
+runtime secrets" step whose entire purpose is that **GitHub is the one place
+these are managed** — adding a name to that list is the whole of it, and
+`wrangler secret put` by hand becomes the thing nobody has to remember.
 
-or Workers → Settings → Variables → **Encrypt**, which is the same thing from a
-phone. It must not be a `[vars]` entry for a reason this file already records
+It must not be a `[vars]` entry, for the reason `wrangler.toml` already records
 about the APNs key: **Cloudflare keeps vars and secrets in one namespace, so a
-deploy carrying a var of that name CLOBBERS the secret.** One place per name.
+deploy carrying a var of that name CLOBBERS the secret.** One place per name,
+and for this one the place is GitHub.
 
 **2. Nowhere on the host. The coordinator sends it down the socket.**
 
