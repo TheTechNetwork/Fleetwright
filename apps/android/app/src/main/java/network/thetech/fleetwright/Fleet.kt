@@ -61,6 +61,16 @@ class Fleet(private val settings: Settings) {
          * is the opposite of idle.
          */
         val idleSince: Long? = null,
+        /**
+         * Is the pane showing the session's own prompt — finished, or between
+         * things, and waiting for input?
+         *
+         * THE DIFFERENCE A TIMER CANNOT SEE. A finished session and a wedged
+         * one both stop changing, and this app rendered both as "quiet for
+         * 3h" — true of each, useful about neither, when which one it is is
+         * the whole question somebody opens the app to ask.
+         */
+        val atRest: Boolean = false,
     ) {
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
@@ -85,13 +95,25 @@ class Fleet(private val settings: Settings) {
             if (!isRunning || prompt != null) return null
             val since = idleSince?.takeIf { it > 0 } ?: return null
             val seconds = (System.currentTimeMillis() - since) / 1000
-            return when {
-                seconds < 300 -> null
-                seconds < 3600 -> "quiet for ${seconds / 60}m"
-                seconds < 86_400 -> "quiet for ${seconds / 3600}h"
-                else -> "quiet for ${seconds / 86_400}d"
+            if (seconds < 300) return null
+            val howLong = when {
+                seconds < 3600 -> "${seconds / 60}m"
+                seconds < 86_400 -> "${seconds / 3600}h"
+                else -> "${seconds / 86_400}d"
             }
+            // TWO SENTENCES, BECAUSE THEY ARE TWO SITUATIONS. A session at its
+            // own prompt finished, or is between things, and needs nothing —
+            // saying "quiet" about it invites a person to worry at the most
+            // common state in the fleet. A pane stopped mid-work with no
+            // prompt on it is the one worth a second look.
+            return if (atRest) "ready · idle $howLong" else "quiet for $howLong"
         }
+
+        /**
+         * Worth counting as "a session somebody might want to look at". A
+         * finished one is not.
+         */
+        val looksStalled: Boolean get() = quietFor != null && !atRest
 
         /** The last path component — what a person recognises about a checkout. */
         val workspace: String? get() = cwd?.takeIf { it.isNotBlank() }?.trimEnd('/')?.substringAfterLast('/')
@@ -764,6 +786,7 @@ class Fleet(private val settings: Settings) {
                     )
                 },
                 idleSince = o.optLong("idleSince").takeIf { it > 0 },
+                atRest = o.optBoolean("atRest"),
             )
         }
     }

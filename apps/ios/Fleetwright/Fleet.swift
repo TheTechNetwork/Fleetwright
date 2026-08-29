@@ -37,6 +37,14 @@ struct Fleet {
         /// prompt: that pane is still because somebody has to answer it, which
         /// is the opposite of idle.
         let idleSince: Double?
+        /// Is the pane showing the session's own prompt — finished, or between
+        /// things, and waiting for input?
+        ///
+        /// THE DIFFERENCE A TIMER CANNOT SEE. A finished session and a wedged
+        /// one both stop changing, and this app rendered both as "quiet for
+        /// 3h" — true of each, useful about neither, when which one it is is
+        /// the whole question somebody opens the app to ask.
+        let atRest: Bool?
         /// What it is asking, when it is asking. Present only while a prompt
         /// is on screen — and the id is what makes answering it later safe.
         let prompt: Prompt?
@@ -82,10 +90,20 @@ struct Fleet {
             guard isRunning, prompt == nil, let idleSince, idleSince > 0 else { return nil }
             let seconds = Date().timeIntervalSince1970 - idleSince / 1000
             guard seconds >= 300 else { return nil }
-            if seconds < 3600 { return "quiet for \(Int(seconds / 60))m" }
-            if seconds < 86_400 { return "quiet for \(Int(seconds / 3600))h" }
-            return "quiet for \(Int(seconds / 86_400))d"
+            let howLong = seconds < 3600 ? "\(Int(seconds / 60))m"
+                : seconds < 86_400 ? "\(Int(seconds / 3600))h"
+                : "\(Int(seconds / 86_400))d"
+            // TWO SENTENCES, BECAUSE THEY ARE TWO SITUATIONS. A session at its
+            // own prompt finished, or is between things, and needs nothing —
+            // saying "quiet" about it invites a person to worry at the most
+            // common state in the fleet. A pane stopped mid-work with no
+            // prompt on it is the one worth a second look.
+            return atRest == true ? "ready · idle \(howLong)" : "quiet for \(howLong)"
         }
+
+        /// Worth counting as "a session somebody might want to look at". A
+        /// finished one is not.
+        var looksStalled: Bool { quietFor != nil && atRest != true }
 
         /// "3h" — coarse on purpose. The exact age of a session is never the
         /// question; "since this morning" or "still going after two days" is.

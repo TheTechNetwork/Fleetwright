@@ -324,3 +324,124 @@ test('a restart that works resets the budget, so next week it may restart again'
   assert.equal(stub.commands.filter((c) => c.startsWith('/stop')).length, 3);
   assert.equal(watcher.restarts.get('flaky')?.count, 2, 'the budget started again, it did not carry over');
 });
+
+// --- the state that broke it in production ----------------------------------
+//
+// Reported from a phone within a day of auto-restart shipping, as three
+// notifications arriving together:
+//
+//   cc-brave-narwhal on deb132 — finished
+//   Restarted after 60 minutes with nothing happening. The conversation was kept.
+//   Restarted 2 times and it went straight back to idle. Not trying again.
+//
+// Every one of them was wrong in its own way, and the first is the one that
+// mattered: the session had FINISHED. A session that completed its work sits
+// at the input prompt forever, and a pane at an input prompt does not change —
+// so by the only measurement the watcher had, "done" and "wedged" were the
+// same thing. They are opposites.
+
+/** A pane showing Claude Code ready and waiting — the ordinary finished state. */
+const AT_REST = ['❯ ', '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents'].join('\n');
+
+test('a session that has finished is never restarted, however long it sits', async (t) => {
+  // THE PRODUCTION BUG. Done is the most common state in the fleet and needs
+  // nothing; wedged is rare and is the whole reason the feature exists.
+  // Restarting a finished session puts it back at the same prompt — which is
+  // exactly what "went straight back to idle" was reporting, the mechanism
+  // working perfectly on a question nobody asked.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('done', { status: 'running' })], panes: { done: AT_REST } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'done', 24 * 60 * 60_000);
+
+  await watcher.tick();
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, [], 'a finished session was restarted');
+  assert.deepEqual(events.filter((e) => e.event === 'session.restarted'), []);
+});
+
+test('a pane frozen mid-work, with no prompt on it, still restarts', async (t) => {
+  // The narrowing must not turn the feature off. What is left after excluding
+  // "waiting for an answer" and "waiting for you" is a pane stopped in the
+  // middle of something, which is the case worth acting on.
+  const { stub, watcher } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 90 * 60_000);
+
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, ['/stop wedged', '/resume wedged summary']);
+});
+
+test('our own stop is not announced as the session finishing', async (t) => {
+  // "cc-brave-narwhal on deb132 — finished". It had not finished; we ended it
+  // one second earlier, on purpose. Telling somebody their session finished
+  // when we stopped it ourselves is the kind of small lie that costs the whole
+  // surface its credibility.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 90 * 60_000);
+  await watcher.tick();
+
+  // The resume did not take, so the next tick sees it stopped — which is the
+  // path that produced the phantom "finished".
+  stub.sessions[0].status = 'stopped';
+  await watcher.tick();
+
+  assert.deepEqual(events.filter((e) => e.event === 'session.ended'), []);
+});
+
+test('an error still gets through, because that is not our doing', async (t) => {
+  // The suppression is about OUR action, not about silence. A session that
+  // errored while we were restarting it is a fact about the session.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 90 * 60_000);
+  await watcher.tick();
+
+  stub.sessions[0].status = 'error';
+  await watcher.tick();
+
+  assert.equal(events.filter((e) => e.event === 'session.error').length, 1);
+});
+
+test('hitting the cap is one notification, not two', async (t) => {
+  // These were separate events, so the last restart sent both "Restarted after
+  // 60 minutes with nothing happening" and "Restarted 2 times and it went
+  // straight back to idle" — together, the second contradicting the tone of
+  // the first, for one decision. An interruption costs far more than the time
+  // it takes to read; spending two on one event spends one against the person.
+  const { watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('broken', { status: 'running' })], panes: { broken: 'Running tests…' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+
+  for (let i = 0; i < 4; i++) {
+    frozenFor(watcher, 'broken', 90 * 60_000);
+    await watcher.tick();
+  }
+
+  const said = events.filter((e) => e.event === 'session.restarted' || e.event === 'session.stuck');
+  assert.equal(said.length, 2, 'two restarts, two messages — one each, never two for one');
+  assert.equal(said[0].event, 'session.restarted');
+  assert.equal(said[1].event, 'session.stuck');
+  assert.match(said[1].text, /Not trying again/);
+});

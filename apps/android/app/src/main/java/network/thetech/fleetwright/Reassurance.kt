@@ -50,7 +50,10 @@ data class Reassurance(
             return Reassurance(
                 waiting = sessions.count { it.prompt != null },
                 running = sessions.count { it.isRunning },
-                quiet = sessions.count { it.quietFor != null },
+                // Only the ones that look STALLED. Counting finished sessions
+                // as "quiet a while" told somebody three things needed
+                // attention on a fleet where everything had gone perfectly.
+                quiet = sessions.count { it.looksStalled },
                 unwell = unwell,
                 blind = hosts.isEmpty(),
                 healthy = hosts.size - unwell.size,

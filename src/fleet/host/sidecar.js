@@ -388,6 +388,12 @@ export class Sidecar {
         // pane is still because somebody has to answer it, which is the
         // opposite of idle.
         idleSince: this.watcher?.idleSince?.(s.name) ?? null,
+        // WHY it is still, which a timestamp cannot say. A finished session
+        // and a wedged one both stop changing; they are opposites to the
+        // person looking at them, and the app was rendering both as "quiet
+        // for 3h". Additive — an older client ignores it and shows what it
+        // showed before.
+        atRest: this.watcher?.atRest?.(s.name) ?? false,
       };
     });
   }
