@@ -22,7 +22,9 @@ trip through a settings page.
 
 Every piece of the paste UI — numbered steps, the one-tap paste, "delete the
 old one first", the stored scope list — is scaffolding around a step this
-removes. It stays for Cloudflare, which has no equivalent program.
+removes. It stays for Cloudflare until an OAuth client is registered there —
+see the correction in connectors.md, which found that Cloudflare does publish
+one after this document claimed otherwise.
 
 ## Who creates it: once per DEPLOYMENT, not once per person
 
@@ -45,7 +47,7 @@ and it is why there are two routes rather than one.
 | | when |
 |---|---|
 | **GitHub App** | the deployment has one configured. No credential crosses a person, per-repository scope, uninstall is a revocation we are told about |
-| **Paste a token** | it does not. Also the only route for Cloudflare, which has no app program at all |
+| **Paste a token** | it does not — and, for now, Cloudflare, which has an OAuth client program this document originally said it lacked |
 
 The paste route is not a degraded mode kept for compatibility — it is the
 correct answer for a fleet whose operator has not registered an App, and the
@@ -323,7 +325,12 @@ against.
 
 ## What stays as it is
 
-Cloudflare. There is no third-party app program, `wrangler login` is OAuth
-against Cloudflare's own client, and that is not a door open to us. The paste
-flow is Cloudflare's end state, which is why it was worth making clear rather
-than treating as temporary.
+Cloudflare, **for now and not for ever**. This section originally said there was
+no third-party app program; there is one, and the correction lives in
+connectors.md. The paste flow is Cloudflare's route until a client is
+registered — private first, because public visibility requires domain
+verification and cannot be reversed.
+
+The work spent making the paste flow clear is not wasted either way: it is what
+every provider without a program uses, and what any provider uses before its
+client exists.

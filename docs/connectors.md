@@ -418,7 +418,54 @@ Which means the paste is not a wart waiting for a better mechanism. For Claude,
 where no app program exists, it is the correct end state — and the work worth
 doing is making it clear and quick, not removing it.
 
-### Cloudflare has no equivalent, and that keeps being the pattern
+### Correction: Cloudflare DOES have an equivalent
+
+This document said, in three places and with some confidence, that Cloudflare
+had no third-party app program and that `wrangler login` was OAuth against
+Cloudflare's own client with no door open to us. **That is wrong.** Cloudflare
+publishes [OAuth
+clients](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/),
+and anybody with Super Administrator, Administrator or *OAuth Client Write* on
+an account can create one.
+
+The wrong version is kept below rather than deleted, because the reasoning
+around it — the asymmetry argument in [trust.md](./trust.md), the ranking of
+app-over-paste-over-device — was built on it, and a document that silently
+rewrites a premise leaves the conclusions looking better supported than they
+were.
+
+What it actually offers:
+
+| | |
+|---|---|
+| flow | **Authorization Code**, with a client secret or with PKCE |
+| scopes | *"OAuth scope names correspond to Cloudflare API token permission names"* — the same permission groups already listed in `connectors.js` |
+| device flow | **not supported**, explicitly, for third-party clients |
+| visibility | clients are **private** by default — usable only by members of the account that created them |
+| going public | requires **domain verification**, and *"Setting a client's visibility to public is permanent. You cannot change the visibility back to private."* |
+
+Three things follow, and the third is the one that decides anything:
+
+**The GitHub shape transfers.** Authorization Code with a client secret, a
+callback at the coordinator, `state` binding host and person, the result
+relayed down the socket. That is the flow already built — Cloudflare would be
+a second provider through it rather than a second design.
+
+**Cloudflare independently refuses device flow**, for third-party clients, in
+its own documentation. That is a second party reaching the conclusion this
+document reached the hard way, and it is worth more than the argument was.
+
+**Private versus public is the real decision.** A private client works today
+and works only for members of the Cloudflare account that created it — which
+covers the operator and nobody else. Guests connecting *their own* Cloudflare
+accounts need a public client, which needs domain verification and **cannot be
+undone**. So: private first, because it is reversible and immediately useful;
+public only when a guest actually needs Cloudflare, and knowing it is one-way.
+
+Until a client is registered, the paste route is what Cloudflare uses — and
+that is now a "not yet" rather than a "never", which is a different sentence.
+
+### The old version: Cloudflare has no equivalent
 
 There is no public program for a third party to be a Cloudflare "app" the way
 there is for GitHub. `wrangler login` is OAuth against Cloudflare's *own*
