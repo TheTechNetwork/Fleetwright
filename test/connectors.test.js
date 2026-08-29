@@ -37,8 +37,13 @@ test('every provider offers a link that pre-fills its own token page', () => {
 test('the catalogue never carries a secret', () => {
   // A picker is rendered from this on a phone. Nothing here may be a token,
   // and the shape of the object is what guarantees it.
+  // `wants` is a list of scope NAMES the provider publishes — the same words
+  // the person ticks on that page — and is present only where the provider
+  // will tell us what a token was granted. Still nothing secret.
   for (const c of catalogue('box')) {
-    assert.deepEqual(Object.keys(c).sort(), ['env', 'hint', 'label', 'provider', 'url']);
+    const keys = Object.keys(c).sort();
+    assert.deepEqual(keys.filter((k) => k !== 'wants'), ['env', 'hint', 'label', 'provider', 'url']);
+    if (c.wants) assert.ok(Array.isArray(c.wants) && c.wants.every((w) => typeof w === 'string'));
   }
 });
 
@@ -167,9 +172,15 @@ test('a token is checked before it is stored, and the reasons stay apart', async
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
 
-  globalThis.fetch = async () => new Response(JSON.stringify({ login: 'octocat' }), { status: 200 });
+  // The granted scopes ride along on the same response — GitHub returns them
+  // in a header on every request, so knowing what a token can do costs nothing.
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ login: 'octocat' }), {
+      status: 200,
+      headers: { 'x-oauth-scopes': 'repo, workflow' },
+    });
   assert.deepEqual(await verifyToken('github', GH), {
-    ok: true, account: 'octocat', message: 'GitHub token verified as @octocat.',
+    ok: true, account: 'octocat', granted: ['repo', 'workflow'], message: 'GitHub token verified as @octocat.',
   });
 
   globalThis.fetch = async () => new Response('{}', { status: 401 });
@@ -317,5 +328,84 @@ test('the screen says the list can be narrowed', () => {
   // just a broad token. Both hints say it can be cut down.
   for (const c of catalogue('box')) {
     assert.match(c.hint, /untick|narrow|revoke/i, `${c.provider} does not say the token can be reduced`);
+  }
+});
+
+test('a token stored before the list grew is reported as short, not as fine', () => {
+  // THE CASE THIS EXISTS FOR. The asked-for list grows — it went from three
+  // GitHub scopes to six in one afternoon — and somebody who connected before
+  // that has a token that will fail inside a session, hours later, at whatever
+  // step needs the missing one.
+  const store = new Connections(dir());
+  store.save('a@b.com', 'github', GH, 'octocat', ['repo', 'workflow']);
+  const [row] = store.list('a@b.com');
+  assert.deepEqual(row.missing, ['read:org', 'gist', 'read:packages', 'admin:repo_hook']);
+
+  // Nothing missing reads as an empty array, which is a different fact from
+  // "cannot tell".
+  store.save('a@b.com', 'github', GH, 'octocat', PROVIDERS.github.wants);
+  assert.deepEqual(store.list('a@b.com')[0].missing, []);
+});
+
+test('“cannot tell” is null, and is not the same as “nothing missing”', () => {
+  const store = new Connections(dir());
+  // An older record, written before scopes were captured.
+  store.save('a@b.com', 'github', GH, 'octocat');
+  assert.equal(store.list('a@b.com')[0].missing, null);
+
+  // And a provider that will not say. Cloudflare has no permission this token
+  // is allowed to read, so the app states what is asked for without claiming
+  // to know what was given — a difference worth keeping visible.
+  store.save('a@b.com', 'cloudflare', 'cf_x', null, ['whatever']);
+  const cf = store.list('a@b.com').find((c) => c.provider === 'cloudflare');
+  assert.equal(cf.missing, null);
+  assert.equal(PROVIDERS.cloudflare.wants, undefined);
+});
+
+test('the token is named after the person, so the old one is findable', () => {
+  // It used to be named after the host, which made sense when a token lived on
+  // one box. Now it goes to every host, so the box does not identify it — and
+  // identifying it is the whole of what makes "replace" possible, since
+  // neither provider lets us revoke on somebody's behalf.
+  for (const c of catalogue('eli@example.com')) {
+    assert.match(decodeURIComponent(c.url), /Fleetwright — eli@example\.com/);
+  }
+});
+
+test('both hints say what the person has to do about the old token', () => {
+  // Neither GitHub nor Cloudflare will let this revoke a token with the
+  // permissions being asked for — and a token that can manage tokens is
+  // stronger than the token itself, so asking for that would be the wrong
+  // trade. Saying so is the honest alternative to implying it is handled.
+  const [github, cloudflare] = ['github', 'cloudflare'].map((id) =>
+    catalogue('x').find((c) => c.provider === id),
+  );
+  assert.match(github.hint, /delete the old|revoke/i);
+  assert.match(github.hint, /cannot do it for you|no API/i);
+  assert.match(cloudflare.hint, /editing the existing/i);
+});
+
+test('both apps offer three actions, not two', () => {
+  // "Replace" for a token that is merely SHORT is the wrong offer: both
+  // providers let you edit an existing one, and editing keeps the value
+  // already pasted here working. Replacing mints a second token and abandons
+  // the first — and neither provider lets this revoke on somebody's behalf, so
+  // the abandoned one stays live until they remove it by hand.
+  const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  for (const [name, path] of [
+    ['iOS', 'apps/ios/Fleetwright/Credentials.swift'],
+    ['Android', 'apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt'],
+  ]) {
+    const src = read(path);
+    for (const label of ['Connect', 'Update permissions', 'Replace']) {
+      assert.ok(src.includes(`"${label}"`), `${name} is missing the "${label}" action`);
+    }
+    // The steps are numbered, because the flow leaves the app and comes back.
+    assert.match(src, /1\. Open/, `${name} does not number the flow`);
+    assert.match(src, /2\. Come back and paste/, `${name} does not number the flow`);
+    // And there is a one-tap paste rather than a long press.
+    assert.match(src, /Paste/, `${name} has no paste affordance`);
+    // Missing permissions are surfaced, not swallowed.
+    assert.match(src, /missing /, `${name} does not surface missing permissions`);
   }
 });

@@ -101,6 +101,9 @@ struct Fleet {
             let url: String?
             let hint: String
             let env: [String]
+            /// What this asks for, when the provider will say what a token was
+            /// granted. Absent for Cloudflare, which will not.
+            let wants: [String]?
             var id: String { provider }
             /// Claude is a sign-in; the rest are tokens to paste. Which one
             /// decides the shape of the row, so it is asked once here rather
@@ -115,6 +118,14 @@ struct Fleet {
             /// token, and there is no field for one.
             let account: String?
             let updatedAt: Double?
+            /// Permissions this token does NOT have that are now asked for.
+            ///
+            /// Three states, and they are genuinely three: a list means "short
+            /// by these", empty means "checked, nothing missing", and **nil
+            /// means we cannot tell** — an older record, or a provider that
+            /// will not say. Rendering nil as "fine" is how somebody finds out
+            /// four hours into a session instead.
+            let missing: [String]?
             var id: String { provider }
         }
 

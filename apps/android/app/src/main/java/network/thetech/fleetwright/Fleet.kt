@@ -163,6 +163,11 @@ class Fleet(private val settings: Settings) {
             val url: String?,
             val hint: String,
             val env: List<String>,
+            /**
+             * What this asks for, when the provider will say what a token was
+             * granted. Empty for Cloudflare, which will not.
+             */
+            val wants: List<String> = emptyList(),
         ) {
             /**
              * Claude is a sign-in; the rest are tokens to paste. Which one
@@ -172,7 +177,21 @@ class Fleet(private val settings: Settings) {
             val isSignIn: Boolean get() = provider == "claude"
         }
 
-        data class Linked(val provider: String, val label: String?, val account: String?, val updatedAt: Long)
+        /**
+         * @property missing permissions this token does NOT have that are now
+         *   asked for. Three states, and they are genuinely three: a list means
+         *   "short by these", empty means "checked, nothing missing", and NULL
+         *   means we cannot tell — an older record, or a provider that will not
+         *   say. Rendering null as "fine" is how somebody finds out four hours
+         *   into a session instead.
+         */
+        data class Linked(
+            val provider: String,
+            val label: String?,
+            val account: String?,
+            val updatedAt: Long,
+            val missing: List<String>? = null,
+        )
 
         fun linked(provider: String): Linked? = connected.firstOrNull { it.provider == provider }
     }
@@ -548,6 +567,9 @@ class Fleet(private val settings: Settings) {
                         url = c.optString("url").takeIf { it.isNotBlank() && it != "null" },
                         hint = c.optString("hint", ""),
                         env = (0 until (env?.length() ?: 0)).mapNotNull { k -> env?.optString(k) },
+                        wants = c.optJSONArray("wants")?.let { w ->
+                            (0 until w.length()).mapNotNull { k -> w.optString(k).takeIf { it.isNotBlank() } }
+                        } ?: emptyList(),
                     )
                 }
             },
@@ -560,6 +582,13 @@ class Fleet(private val settings: Settings) {
                         label = c.optString("label").takeIf { it.isNotBlank() && it != "null" },
                         account = c.optString("account").takeIf { it.isNotBlank() && it != "null" },
                         updatedAt = c.optLong("updatedAt", 0L),
+                        // has("missing") distinguishes null — "cannot tell" —
+                        // from an empty array, which means "checked, nothing
+                        // missing". optJSONArray alone collapses the two.
+                        missing = if (!c.has("missing") || c.isNull("missing")) null
+                        else c.optJSONArray("missing")?.let { m ->
+                            (0 until m.length()).mapNotNull { k -> m.optString(k).takeIf { it.isNotBlank() } }
+                        } ?: emptyList(),
                     )
                 }
             },
