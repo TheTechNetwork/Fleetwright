@@ -670,6 +670,25 @@ private struct SettingsView: View {
                                 Text("NOT signed in — sessions will not start")
                                     .font(.caption2).foregroundStyle(.red)
                             }
+                            // THE SECOND WAY TO BE SIGNED OUT, and the one
+                            // that was invisible. The line above reports on
+                            // the box's own home directory; this reports on
+                            // the credential file a session is handed a copy
+                            // of. They came apart in production — a box saying
+                            // "signed in" while every session started on it
+                            // came up logged out — and the only visible
+                            // symptom was that a brand new session worked and
+                            // a resumed one did not.
+                            //
+                            // Shown only when it is DEAD. An expired token
+                            // that can renew itself is the ordinary state of a
+                            // box nobody has touched for an hour, and a
+                            // warning that fires on the ordinary case is one
+                            // people stop reading.
+                            if let credential = host.health?.credential, credential.isDead {
+                                Text(credential.summary ?? "Sessions started here will come up signed out.")
+                                    .font(.caption2).foregroundStyle(.red)
+                            }
                             if let version = host.health?.version?.head {
                                 let behind = host.health?.updates?.appBehind ?? 0
                                 Text(describeVersion(version, behind: behind))

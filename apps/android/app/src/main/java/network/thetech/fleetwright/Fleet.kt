@@ -130,10 +130,43 @@ class Fleet(private val settings: Settings) {
          * a box where forget still deletes.
          */
         val bin: List<Binned> = emptyList(),
+        /**
+         * What a session started on this box would actually be given.
+         *
+         * NOT THE SAME QUESTION AS [loggedIn], which is the distinction that
+         * cost an evening: `loggedIn` reports on the box's own home directory,
+         * while a sandboxed session runs on a copy of a credential file taken
+         * when its volume was made. A box can report itself signed in and hand
+         * every new session a token that expired hours ago.
+         *
+         * Null means the host could not tell — an older host, or one that does
+         * not sandbox. Never rendered as a fault.
+         */
+        val credential: Credential? = null,
     ) {
         /** Two separate answers, because they are two actions on two things. */
         val appPending: Boolean get() = (behind ?: 0) > 0
         val systemPending: Boolean get() = !systemUpdates.isNullOrBlank()
+    }
+
+    /**
+     * @property summary the host's own sentence, shown verbatim. It is written
+     *   for a person rather than for a terminal, and it is the only place that
+     *   knows which of the three states it is describing.
+     */
+    data class Credential(
+        val state: String?,
+        val expiresAt: Long?,
+        val refreshable: Boolean?,
+        val account: String?,
+        val summary: String?,
+    ) {
+        /**
+         * Worth interrupting somebody over. Deliberately narrow: an expired
+         * token that can renew itself is the ordinary state of a box nobody
+         * has touched for an hour.
+         */
+        val isDead: Boolean get() = state == "expired" && refreshable == false
     }
 
     data class Reply(
@@ -600,6 +633,15 @@ class Fleet(private val settings: Settings) {
                             }
                         }
                     } ?: emptyList(),
+                    credential = health?.optJSONObject("credential")?.let { c ->
+                        Credential(
+                            state = c.optString("state").takeIf { it.isNotBlank() && it != "null" },
+                            expiresAt = c.optLong("expiresAt", 0L).takeIf { it > 0L },
+                            refreshable = if (c.has("refreshable")) c.optBoolean("refreshable") else null,
+                            account = c.optString("account").takeIf { it.isNotBlank() && it != "null" },
+                            summary = c.optString("summary").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                 )
             }
         }.getOrDefault(emptyList())

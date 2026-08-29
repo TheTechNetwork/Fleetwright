@@ -34,6 +34,7 @@
  * @property {boolean|null} loggedIn
  * @property {{reachable: boolean, reason?: string}} [hub]
  * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
+ * @property {{ state: 'fresh'|'expired'|'unknown', expiresAt: number|null, refreshable: boolean, account: string|null, plan: string|null, summary: string }|null} [credential]
  */
 
 /**
@@ -140,6 +141,23 @@ export class HostRegistry {
     } else if (health.loggedIn === false) {
       host.state = 'degraded';
       host.reason = 'claude is not logged in on this host';
+    } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
+      // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
+      // invisible. `loggedIn` reports on the box's own home directory; this
+      // reports on the credential file a session gets a copy of. A box can be
+      // logged in and still hand every new session a dead token, which is
+      // what "deb13-staging wouldn't work until I clicked sign in again"
+      // was — and nothing here could say so, so the scheduler kept sending
+      // work to it.
+      //
+      // NARROW ON PURPOSE: only when the token has expired AND there is no
+      // refresh token to renew it with. An expired-but-refreshable token is
+      // the ordinary state of a box nobody has used for an hour, and the CLI
+      // inside the session renews it. Degrading on that would take a healthy
+      // fleet offline every night, and a warning that fires on the ordinary
+      // case is a warning people learn to ignore.
+      host.state = 'degraded';
+      host.reason = 'the credential a session would be given has expired on this host';
     } else {
       host.state = 'healthy';
       host.reason = 'reporting normally';

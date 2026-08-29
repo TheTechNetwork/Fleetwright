@@ -40,6 +40,8 @@
 
 import { describe } from '../core/login.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
+import { readCredentialState, describeCredential } from '../core/claude-credential.js';
+import { pickCredentialSource } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
@@ -209,6 +211,61 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
     ],
     connected,
   };
+}
+
+/**
+ * What a session started right now would actually get, and whether it works.
+ *
+ * This used to be `describe(ctx.login.status())`, which answers a DIFFERENT
+ * QUESTION than the one anybody asks it. `claude auth status` reports on the
+ * box's own home directory. A session does not run out of the box's home
+ * directory — it runs out of a copy taken at volume creation, possibly of a
+ * completely different account, and the report can say "logged in" while every
+ * session on the machine comes up logged out.
+ *
+ * That is the shape this repo keeps hitting: true where it was written,
+ * quietly false one layer up. Here it cost an evening of restarting sessions
+ * on a box whose status command said it was fine.
+ *
+ * So all three layers are reported, in the order they fail:
+ *
+ *   1. the box's own login, which is what a shared-account session inherits
+ *   2. the FILE that would be copied, and how long it has left
+ *   3. who it belongs to, because a linked account and the shared one fail
+ *      independently and only one of them is what `auth status` was reading
+ *
+ * @param {any} ctx
+ * @returns {string}
+ */
+function verifyClaude(ctx) {
+  const lines = [describe(ctx.login.status())];
+  const picked = pickCredentialSource(ctx.cfg, ctx.actor);
+  const mine = picked.account !== 'shared';
+  if (!picked.source) {
+    lines.push('\nSessions on this box are not sandboxed, so they use the login above directly.');
+    return lines.join('\n');
+  }
+  const state = readCredentialState(picked.source);
+  lines.push('');
+  lines.push(
+    mine
+      ? `A session you start would run on YOUR linked account (${picked.account}).`
+      : 'A session you start would run on the shared account for this box.',
+  );
+  lines.push(describeCredential(state, mine ? 'your linked account' : "this box's credential"));
+  if (state.state === 'expired' && !state.refreshable) {
+    lines.push(
+      mine
+        ? 'Connect Claude again to replace it — until then your sessions come up logged out.'
+        : 'Run /login on this box to replace it — until then new sessions come up logged out.',
+    );
+  }
+  // The resumed-session case, which is the one that went wrong: a session
+  // takes a copy at volume creation and used to keep it forever. It no longer
+  // does, and saying so is the difference between trusting a resume and
+  // forgetting a week of work to get a fresh one.
+  lines.push('\nResuming a session refreshes its copy from whichever account it began on.');
+  return lines.join('\n');
 }
 
 /**
@@ -654,11 +711,7 @@ export const COMMANDS = {
     run: async (ctx, args, flags) => {
       const provider = (args[0] || '').toLowerCase();
       if (!provider) return { ok: false, text: 'Usage: /verify <provider>' };
-      if (provider === 'claude') {
-        // Claude is a login, not a token — its own status command is the
-        // honest answer rather than a second thing that half-checks it.
-        return { ok: true, text: describe(ctx.login.status()) };
-      }
+      if (provider === 'claude') return { ok: true, text: verifyClaude(ctx) };
       const row = flags?.has('host') === true ? HOST_ROW : rowForActor(ctx.actor);
       if (row === null) return { ok: false, text: 'Could not tell whose credential to check.' };
       const r = await new Connections(ctx.cfg.stateDir).check(row, provider);

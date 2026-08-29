@@ -469,6 +469,17 @@ export class Sidecar {
               org: state.auth.orgName ?? null,
             }
           : null,
+        // WHAT A SESSION WOULD GET, which `loggedIn` above does not answer.
+        // `loggedIn` reports on the box's home directory; a sandboxed session
+        // runs on a copy taken at volume creation, and the two came apart in
+        // production — a box reporting itself logged in while every session
+        // started on it came up logged out.
+        //
+        // Additive, and null on a host that is not sandboxed or is one release
+        // behind. Null means CANNOT TELL and must not be rendered as a
+        // problem: a fleet that flags every older host as broken teaches
+        // people to ignore the flag.
+        credential: state.credential ?? null,
         // What code this box is running, so the app can say "three commits
         // behind" without anybody opening a terminal. updates already computed
         // whether it is behind; this says what it IS.
