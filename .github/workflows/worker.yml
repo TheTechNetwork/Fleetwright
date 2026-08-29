@@ -196,12 +196,18 @@ jobs:
           # the iOS build signs with, and two copies of one value is two chances
           # for them to disagree.
           AGENT_FLEET_APNS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # The GitHub App's client secret, for the OAuth code exchange. The
+          # App's PRIVATE KEY is deliberately not here and not anywhere — it
+          # mints installation tokens for every installation of the App, so it
+          # belongs to a broker that does not exist yet. See docs/github-app.md.
+          AGENT_FLEET_GITHUB_CLIENT_SECRET: ${{ secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
         run: |
           set -u
           missing=""
           for name in AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT \
                       AGENT_FLEET_APNS_KEY AGENT_FLEET_APNS_KEY_ID AGENT_FLEET_APNS_TEAM_ID \
-                      AGENT_FLEET_AUTH_ISSUERS AGENT_FLEET_AUTH_AUDIENCES AGENT_FLEET_AUTH_ALLOW; do
+                      AGENT_FLEET_AUTH_ISSUERS AGENT_FLEET_AUTH_AUDIENCES AGENT_FLEET_AUTH_ALLOW \
+                      AGENT_FLEET_GITHUB_CLIENT_SECRET; do
             value="$(printenv "$name" || true)"
             if [ -z "$value" ]; then
               missing="$missing $name"

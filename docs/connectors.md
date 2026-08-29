@@ -267,6 +267,172 @@ a fan-out would copy one paste to every host in the fleet. So they behave like
 `logs`, `update` and `reboot` — one named box, and `ambiguous_host` when the
 fleet has several and nobody said which. Both apps carry the host through.
 
+## A provider app would delete this flow rather than improve it
+
+Asked: with a GitHub App — or a Cloudflare equivalent — would this be more
+streamlined? Yes, and the size of the difference is worth being exact about,
+because it is not "fewer taps".
+
+| | pasting a token today | a GitHub App |
+|---|---|---|
+| 1 | open the token page | open the install page |
+| 2 | review scopes, set an expiry | pick repositories, Install |
+| 3 | generate, **copy** | — |
+| 4 | come back to the app | — |
+| 5 | **paste** | — |
+| 6 | we verify and store | GitHub redirects back; done |
+
+**The person never sees a credential.** Every piece of design in this document
+that exists because of the paste — the numbered steps, the one-tap paste
+button, "replace means delete the old one first", the stored scope list so we
+can say a token is short — is scaffolding around a step that an app removes.
+
+Three other problems go with it:
+
+- **Revocation becomes real.** Uninstalling the app, or changing which
+  repositories it can see, happens in one place on GitHub and we are *told*.
+  Today neither provider will let us revoke on somebody's behalf, so "replace"
+  is an instruction rather than an action.
+- **Permission drift becomes GitHub's job.** When the asked-for list grows,
+  GitHub prompts existing installations to approve the change. That is a
+  first-class mechanism replacing the `missing:` line this repo had to invent.
+- **Scope stops being account-wide.** A classic PAT with `repo` can reach every
+  repository the person can. An installation sees the ones they chose.
+
+### But the private key is the catch, and it is the same catch as before
+
+A GitHub App's private key mints installation tokens **for every installation of
+that app** — every member, every org that installed it. One key, everybody's
+repositories. Replicating that to each host would be strictly worse than the N
+copies of a per-person token we have today: a single host compromise would
+reach every member rather than that host's.
+
+So installation tokens want ONE holder, which under
+[trust.md](./trust.md) cannot be the coordinator and does not yet exist. That
+is the broker, again, and it is why the order there is broker first.
+
+**The shape that works before the broker exists is user-to-server OAuth on the
+App.** The person authorizes; what comes back is an eight-hour access token and
+a refresh token, and the refresh token is stored per person exactly where the
+PAT lives today. The blast radius is then the same as today's — one person's
+credential per host — while the access token is eight hours instead of
+indefinite, scoped to chosen repositories, and revocable from a screen they
+already know. The client secret required to refresh is not a credential to
+anything on its own, which is what makes it tolerable on a host in a way a
+minting private key is not.
+
+### Claude: redirecting to the HOST, checked rather than assumed
+
+The suggestion was sharper than the one answered below: not "redirect the token
+to the app", but **redirect it back to the host** — which is where it has to end
+up anyway, since the PKCE verifier lives in the pane there. That would remove
+the paste AND the round trip, which is the whole prize.
+
+It cannot be done, and the reason is now checked rather than reasoned about.
+On **Claude Code 2.1.234**:
+
+```
+$ claude auth login --help
+Options:
+  --claudeai       Use Claude subscription (default)
+  --console        Use Anthropic Console (API usage billing) instead
+  --email <email>  Pre-populate email address on the login page
+  --sso            Force SSO login flow
+```
+
+**There is no redirect flag.** And the URL the CLI mints, observed live, is
+`https://claude.com/cai/oauth/authorize?code=true&client_id=…` — `code=true` is
+the CLI asking for the out-of-band flow, which is *by definition* the one that
+ends in a code somebody carries back by hand.
+
+So there is nowhere to redirect to and no way to ask for one: the redirect
+target belongs to Claude Code's OAuth client, not to us. Worth re-running that
+`--help` after a CLI upgrade rather than trusting this paragraph — it is one
+command, and a flag appearing is exactly the kind of change that would make
+this section wrong.
+
+### Claude: the same idea, blocked by not owning the client
+
+Suggested: pass the token back to the app in a URL, the way the App flow does.
+That is exactly the right instinct — an OAuth redirect to a scheme the app
+registers is precisely what removes a paste, and it is what makes the GitHub
+flow above a two-step.
+
+**It does not work for Claude, and the reason is worth writing down so nobody
+re-derives it.** The authorize URL is not ours:
+
+```
+https://claude.com/cai/oauth/authorize?code=true&client_id=…
+```
+
+That `client_id` is Claude Code's. **A redirect target belongs to the OAuth
+client**, and we are not it — we cannot register `fleetwright://` against
+somebody else's client, and asking Anthropic's page to send a code to an app it
+has never heard of is the thing OAuth exists to prevent.
+
+The second half is harder still. The **PKCE verifier lives on the host**, in
+the pane the CLI is running in. Even if the app received the code by URL, it
+would still have to hand it to that host — which is what it does today after a
+paste. So the redirect would remove the copy, not the round trip.
+
+Removing the copy is a real win and worth having. It is just a smaller one than
+the GitHub App's, and it is gated on something Anthropic controls.
+
+**A device-authorization flow (RFC 8628) is the obvious next suggestion, and it
+is worse than the paste.** This document recommended it for about an hour;
+the correction is kept rather than edited away, because the reasoning that
+produced it is the reasoning somebody else will produce.
+
+The appeal is real: the page shows a short user code, the person confirms
+there, the CLI polls, and nobody copies anything back. What it costs is the
+property that makes the paste safe.
+
+**Device-code phishing is an active attack class, not a theoretical one.** An
+attacker starts the flow, sends the victim the genuine verification URL and the
+genuine user code, and the victim approves. Every signal anybody is taught to
+check passes — real domain, real TLS, real provider page — and the thing being
+approved is *an authorization somebody else initiated*. It has been used at
+scale against Entra and Google, and there is no version of the screen that
+fixes it, because the screen is not lying.
+
+A pasted token has no such step. The person navigates to the page themselves,
+creates a credential, sees the scopes, and hands it over deliberately. **Consent
+is bound to an action they started.** That is a stronger property than a shorter
+lifetime.
+
+And the premise does not even hold here. RFC 8628 exists for devices that
+*cannot show a browser* — a television, a CLI on a headless box. The person
+using this app is holding a phone with a browser in it. Adopting device flow
+would import its attack surface without needing the thing it was invented for.
+
+So the ranking, for this product:
+
+1. **A provider app** (GitHub). No credential crosses a person at all, and
+   consent is bound to an install they initiated.
+2. **A pasted token.** They created it, they saw the scopes, they chose to hand
+   it over.
+3. **Device flow.** Shorter-lived, and approvable by someone who was phished
+   into it.
+
+Which means the paste is not a wart waiting for a better mechanism. For Claude,
+where no app program exists, it is the correct end state — and the work worth
+doing is making it clear and quick, not removing it.
+
+### Cloudflare has no equivalent, and that keeps being the pattern
+
+There is no public program for a third party to be a Cloudflare "app" the way
+there is for GitHub. `wrangler login` is OAuth against Cloudflare's *own*
+client, which is not a door open to us. So Cloudflare stays paste-a-token —
+which is the same asymmetry [trust.md](./trust.md) already records for minting:
+GitHub hands out an authority weaker than an account credential, and Cloudflare
+does not hand one out at all.
+
+**Worth verifying before building rather than taking from here**, since a
+provider adding a program is exactly the kind of thing that changes quietly.
+
+So the paste flow is not wasted work: it is what Cloudflare keeps, and what
+GitHub uses until the App exists.
+
 ## What this is not, said plainly
 
 **It is not the proxy.** [trust.md](./trust.md) argues for terminating

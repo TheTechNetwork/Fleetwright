@@ -28,6 +28,8 @@ yet designed).
 | Credential-terminating proxy: sessions hold creds issued by us, proxy substitutes real ones on egress; default-deny egress | **designed** | `docs/trust.md` — the build order is written there (proxy + netns + substitution table first) |
 | 1Password as custody for the proxy's real credentials | **designed** | `docs/trust.md` — explicitly not a vault-MCP in sessions |
 | Cloudflare Secrets Store as an alternative custody backend | **designed** | `docs/trust.md` — asked directly, and the answer is where rather than whether: behind the BROKER, never read at session startup. A vault the coordinator can read makes the coordinator the highest-value target in the system, which is the trade the fixed verb set exists to refuse |
+| Device-authorization flow for Claude | **considered and rejected** | `docs/connectors.md`. Device-code phishing is an active attack class: the attacker starts the flow, the victim approves a genuine page showing a genuine code, and every signal anybody is taught to check passes. RFC 8628 exists for devices that cannot show a browser; ours is a phone. A pasted token binds consent to an action the person started, which beats a shorter lifetime |
+| **GitHub App instead of a pasted PAT** — no copy, no paste, per-repo scope, real revocation | **designed** | `docs/connectors.md`. It DELETES the paste flow rather than improving it: pick repositories, Install, done — the person never sees a credential, GitHub prompts for permission changes itself, and uninstalling is a revocation we are told about. The catch is the same as everywhere else: an App's private key mints for EVERY installation, so replicating it per host would be worse than today's per-person tokens. Before the broker exists, user-to-server OAuth is the shape that works — an 8-hour access token with a per-person refresh token stored where the PAT is now. **Cloudflare has no equivalent program**, which is the same asymmetry the minting note records |
 | **`gh` in every session via a GitHub App** — installation tokens, PATH shim | **designed, and promoted** | `docs/trust.md`. Not an improvement on pasting a PAT: a replacement for it. Installation tokens expire in ONE HOUR, are scoped to chosen repositories, and are minted per session — and GitHub's minting authority is WEAKER than an account credential, which is the property Cloudflare's equivalent does not have. Wants the broker first: a one-hour token is a liability in an environment variable and unremarkable behind a socket |
 | **Connect GitHub / Cloudflare / Claude from the app** — provider's own page, scopes pre-filled, token verified before storing | **done** | `docs/connectors.md`. Deliberately NOT the proxy and does not delay it: the token is a real token on the box, minted and revocable by the person. What it buys is that a guest never holds anybody else's credential and never needs a shell. A provider is a row in `src/core/connectors.js` — adding one costs no verb, no version and no app release |
 | A member gets their OWN tokens or none — no shared fallback for GitHub/Cloudflare | **done** | `docs/connectors.md`. Different from the Claude rule on purpose: a shared org plan is a licence somebody chose to share; a GitHub token is one person's access to their own repositories |
@@ -98,6 +100,28 @@ anything. (`docs/wanted.md` has the full table.)
 | Telnyx module (Inkbox-style) — own repo, published to npm, consumed here | wanted | `docs/wanted.md` |
 | Session config from app/TG | wanted | `docs/wanted.md` |
 | Prompt-efficiency helpers injected at session start (rules, helpers, our own tools) | **designed** | `docs/wanted.md` — host-side named profiles, then measure interruptions before arguing about contents |
+
+## 6b. The install should ask nothing
+
+Stated as the goal rather than a task, because it is the thing several other
+decisions are already serving: **spin up a box, install, register, go.** Every
+question the installer asks is a thing somebody has to know, get right, and
+repeat on the next machine — and a fleet is by definition the next machine.
+
+| what it asks today | what would remove it |
+|---|---|
+| coordinator URL | baked into the one-line install command, which already carries it |
+| enrolment pin | the pin *is* the answer; the command could carry it and enrol unattended |
+| Claude login | the last step that genuinely needs a human — and now reachable from the app, so it does not have to be answered during the install |
+| anything the deployment configures | **the config frame** — see `docs/github-app.md`. A value the coordinator can send down an authenticated socket is a value the installer never has to ask for, and a file nobody has to place |
+
+The last row is why the GitHub client secret is delivered over the socket
+rather than written to `/etc` on each host: *"needing to put files manually on
+the host is the part I don't want."* Every credential or setting that arrives
+this way is one fewer question, on every machine, for ever.
+
+Not today. But it decides the shape of anything new that needs configuring:
+**if a host needs a value, the coordinator should be able to send it.**
 
 ## 7. Operations
 
