@@ -116,6 +116,13 @@ class Fleet(private val settings: Settings) {
         val accountOrg: String?,
         val version: String?,
         val behind: Int?,
+        /**
+         * What the operating system has waiting, already in prose from the host
+         * — "4 packages (2 security)". Sent since maintenance shipped and shown
+         * nowhere until now, which is why upgrade looked like a verb that could
+         * only report and never act.
+         */
+        val systemUpdates: String?,
         val rebootRequired: Boolean,
         /**
          * Forgotten, still recoverable. Empty on a host that has not been
@@ -123,7 +130,11 @@ class Fleet(private val settings: Settings) {
          * a box where forget still deletes.
          */
         val bin: List<Binned> = emptyList(),
-    )
+    ) {
+        /** Two separate answers, because they are two actions on two things. */
+        val appPending: Boolean get() = (behind ?: 0) > 0
+        val systemPending: Boolean get() = !systemUpdates.isNullOrBlank()
+    }
 
     data class Reply(
         val ok: Boolean,
@@ -525,6 +536,7 @@ class Fleet(private val settings: Settings) {
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },
                     version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
+                    systemUpdates = updates?.optString("system")?.takeIf { it.isNotBlank() && it != "null" },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
                     bin = health?.optJSONArray("bin")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i ->

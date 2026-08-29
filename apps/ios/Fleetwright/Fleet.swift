@@ -432,8 +432,17 @@ struct Fleet {
         }
         struct Updates: Codable, Hashable {
             let appBehind: Int?
+            /// What the operating system has waiting, already in prose from the
+            /// host — "4 packages (2 security)". Sent since maintenance
+            /// shipped and shown nowhere until now, which is why upgrade
+            /// looked like it could only report and never act.
             let system: String?
             let rebootRequired: Bool?
+
+            /// Is there anything to apply? Two separate answers, because they
+            /// are two different actions on two different things.
+            var appPending: Bool { (appBehind ?? 0) > 0 }
+            var systemPending: Bool { !(system ?? "").isEmpty }
         }
         let account: Account?
         let version: Version?

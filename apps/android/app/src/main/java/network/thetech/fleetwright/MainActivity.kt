@@ -550,6 +550,12 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         val text = if (behind > 0) "running $head · $behind behind" else "running $head · up to date"
                         Text(text, style = MaterialTheme.typography.bodySmall)
                     }
+                    // WHAT THE OS HAS WAITING. The host has been sending this
+                    // since maintenance shipped and nothing displayed it, which
+                    // is why upgrade looked like a verb that could only report.
+                    host.systemUpdates?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
                     if (host.rebootRequired) {
                         Text("reboot required", style = MaterialTheme.typography.bodySmall)
                     }
@@ -596,27 +602,52 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     // This is the half of #171 that shipped to iOS and not to
                     // here. Both phones now carry the same six verbs, which was
                     // the point of that round.
+                    // CHECK ALWAYS; APPLY ONLY WHEN THERE IS SOMETHING TO
+                    // APPLY. The app had this backwards in two directions:
+                    // Update always restarted (apply with no check) and Upgrade
+                    // never applied (check with no apply). A button that is
+                    // always offered teaches people to press it without
+                    // reading, which is the opposite of what this screen is for.
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(
                             enabled = busyHost == null,
                             onClick = {
                                 scope.launch {
                                     busyHost = host.hostId
-                                    hostActionResult = Fleet(settings).update(host.hostId, restart = true).text
-                                    busyHost = null
-                                }
-                            },
-                        ) { Text("Update") }
-                        TextButton(
-                            enabled = busyHost == null,
-                            onClick = {
-                                scope.launch {
-                                    busyHost = host.hostId
+                                    // The check is `upgrade` with apply off —
+                                    // the verb's own reporting mode.
                                     hostActionResult = Fleet(settings).upgrade(host.hostId).text
                                     busyHost = null
+                                    fleetHosts = Fleet(settings).fleetHosts()
                                 }
                             },
-                        ) { Text("Upgrade") }
+                        ) { Text("Check") }
+                        if (host.appPending) {
+                            TextButton(
+                                enabled = busyHost == null,
+                                onClick = {
+                                    scope.launch {
+                                        busyHost = host.hostId
+                                        hostActionResult = Fleet(settings).update(host.hostId, restart = true).text
+                                        busyHost = null
+                                        fleetHosts = Fleet(settings).fleetHosts()
+                                    }
+                                },
+                            ) { Text("Apply update") }
+                        }
+                        if (host.systemPending) {
+                            TextButton(
+                                enabled = busyHost == null,
+                                onClick = {
+                                    scope.launch {
+                                        busyHost = host.hostId
+                                        hostActionResult = Fleet(settings).upgrade(host.hostId, apply = true).text
+                                        busyHost = null
+                                        fleetHosts = Fleet(settings).fleetHosts()
+                                    }
+                                },
+                            ) { Text("Apply upgrade") }
+                        }
                         TextButton(
                             enabled = busyHost == null,
                             onClick = { rebootTarget = host.hostId; rebootPin = ""; rebootConfirm = "" },
@@ -703,7 +734,17 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                 }
             }
             if (hostActionResult.isNotBlank()) {
-                Text(hostActionResult, style = MaterialTheme.typography.bodySmall)
+                // MONOSPACED AND ALLOWED TO BE TALL. This is a host's own
+                // output — several lines, with paths and commit ids in — and it
+                // was rendered as a squeezed caption that ran together into one
+                // paragraph.
+                Text(
+                    hostActionResult,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
             }
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
         }

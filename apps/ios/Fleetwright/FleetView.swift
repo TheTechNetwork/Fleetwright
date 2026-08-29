@@ -242,7 +242,11 @@ private struct SettingsView: View {
     @State private var rebootPin = ""
     @State private var rebootConfirm = ""
 
-    private enum Maintenance { case update, upgrade, rebootAsk, rebootDo }
+    // CHECK AND APPLY, SEPARATELY, FOR BOTH — which is what was asked for and
+    // what the verbs always supported. The app had it backwards in two
+    // different directions: Update always restarted (apply with no check) and
+    // Upgrade never applied (check with no apply).
+    private enum Maintenance { case check, applyUpdate, applyUpgrade, rebootAsk, rebootDo }
 
     /// One place for all four, so the busy flag and the result text cannot
     /// drift apart between them.
@@ -254,8 +258,12 @@ private struct SettingsView: View {
             let fleet = Fleet(settings: settings)
             let reply: Fleet.Reply
             switch what {
-            case .update: reply = try await fleet.update(host: host, restart: true)
-            case .upgrade: reply = try await fleet.upgrade(host: host)
+            // The check is `upgrade` with apply off — the verb's own reporting
+            // mode. It refreshes what the OS knows; the git side is already in
+            // health, recomputed when the host next reports.
+            case .check: reply = try await fleet.upgrade(host: host)
+            case .applyUpdate: reply = try await fleet.update(host: host, restart: true)
+            case .applyUpgrade: reply = try await fleet.upgrade(host: host, apply: true)
             case .rebootAsk: reply = try await fleet.reboot(host: host)
             case .rebootDo:
                 reply = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm)
@@ -510,7 +518,17 @@ private struct SettingsView: View {
                         .padding(.vertical, 4)
                     }
                     if !hostActionResult.isEmpty {
-                    Text(hostActionResult).font(.footnote).foregroundStyle(.secondary)
+                    // MONOSPACED, SELECTABLE, AND ALLOWED TO BE TALL. This is a
+                    // host's own output — several lines of it, with paths and
+                    // commit ids in — and it was being rendered as a squeezed
+                    // grey caption that ran together into one paragraph.
+                    ScrollView {
+                        Text(hostActionResult)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 220)
                 }
                 Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
@@ -585,6 +603,13 @@ private struct SettingsView: View {
                                     .font(.caption2)
                                     .foregroundStyle(behind > 0 ? .orange : .secondary)
                             }
+                            // WHAT THE OS HAS WAITING. The host has been
+                            // sending this since maintenance shipped and
+                            // nothing displayed it, which is why upgrade
+                            // looked like a verb that could only report.
+                            if let system = host.health?.updates?.system, !system.isEmpty {
+                                Text(system).font(.caption2).foregroundStyle(.orange)
+                            }
                             if host.health?.updates?.rebootRequired == true {
                                 Text("reboot required").font(.caption2).foregroundStyle(.orange)
                             }
@@ -593,9 +618,18 @@ private struct SettingsView: View {
                             // two steps and asks for the hostname, exactly as
                             // it does in chat — a remote reboot should be
                             // harder than a local one, not easier.
+                            // Check always; apply only when there is something
+                            // to apply. A button that is always offered teaches
+                            // people to press it without reading, which is the
+                            // opposite of what a maintenance screen is for.
                             HStack(spacing: 12) {
-                                Button("Update") { Task { await maintain(host.hostId, .update) } }
-                                Button("Upgrade") { Task { await maintain(host.hostId, .upgrade) } }
+                                Button("Check") { Task { await maintain(host.hostId, .check) } }
+                                if host.health?.updates?.appPending == true {
+                                    Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
+                                }
+                                if host.health?.updates?.systemPending == true {
+                                    Button("Apply upgrade") { Task { await maintain(host.hostId, .applyUpgrade) } }
+                                }
                                 Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
                             }
                             .font(.caption)
