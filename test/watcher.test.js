@@ -170,3 +170,157 @@ test('a forgotten session is dropped, so a reused name is not a stale ending', a
 
   assert.equal(watcher.seen.has('gone'), false);
 });
+
+// --- restarting a session that stopped moving -------------------------------
+//
+// "Auto restart sessions that are idle." The useful case is a session that
+// wedged overnight, where the fix is mechanical and nobody was awake to do it.
+// Every test below is about a case where it must NOT fire, because the cost of
+// the two mistakes is not symmetric: a wedged session recovers an hour later
+// than it might have, and a restarted one loses work that was happening.
+
+/**
+ * @param {import('node:test').TestContext} t
+ * @param {object} hubOpts
+ * @param {number} idleRestartMs
+ */
+async function restartingWatcherFor(t, hubOpts, idleRestartMs) {
+  const stub = await startStubHub(hubOpts);
+  t.after(() => stub.close());
+  /** @type {Record<string, any>[]} */
+  const events = [];
+  const watcher = new SessionWatcher({
+    hub: new HubClient({ baseUrl: stub.baseUrl, readTimeoutMs: 2000 }),
+    emit: (e) => events.push(e),
+    idleRestartMs,
+  });
+  return { stub, watcher, events };
+}
+
+/** Pretend the pane has been frozen for `ms`. @param {SessionWatcher} w @param {string} name @param {number} ms */
+function frozenFor(w, name, ms) {
+  const entry = w.idle.get(name);
+  if (entry) entry.since = Date.now() - ms;
+}
+
+test('a session frozen past the threshold is stopped and resumed', async (t) => {
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'nothing has happened for hours' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 90 * 60_000);
+
+  await watcher.tick();
+
+  // Stop then resume, rather than anything cleverer: resume is the path that
+  // keeps the conversation, and it is the one a person would use.
+  assert.deepEqual(stub.commands, ['/stop wedged', '/resume wedged summary']);
+  const said = events.filter((e) => e.event === 'session.restarted');
+  assert.equal(said.length, 1, 'a fleet that quietly restarts things is one nobody can debug');
+  assert.match(said[0].text, /conversation was kept/);
+});
+
+test('a session waiting at a prompt is never restarted, however long it waits', async (t) => {
+  // THE ONE THAT WOULD HURT. A pane waiting for an answer is perfectly still
+  // and is the most active thing in the fleet — somebody has to answer it.
+  // Restarting throws the question away, and the person about to answer never
+  // learns why.
+  const { stub, watcher } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('asking', { status: 'running' })], panes: { asking: RESUME_DIALOG } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'asking', 24 * 60 * 60_000);
+
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, [], 'the question was still there to answer');
+});
+
+test('a session that is still moving is left alone', async (t) => {
+  const { stub, watcher } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('busy', { status: 'running' })], panes: { busy: 'tick 1' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  stub.panes.busy = 'tick 2';
+
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, []);
+});
+
+test('zero minutes means off, which is a supported answer', async (t) => {
+  const { stub, watcher } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'frozen' } },
+    0,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 999 * 60_000);
+
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, []);
+});
+
+test('a session that goes straight back to idle is given up on, out loud', async (t) => {
+  // A session idle because it is BROKEN comes back broken. A restarter with no
+  // memory sits in that loop indefinitely — burning a slot, and doing it
+  // silently, which is worse.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('broken', { status: 'running' })], panes: { broken: 'same as it ever was' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+
+  for (let i = 0; i < 5; i++) {
+    frozenFor(watcher, 'broken', 90 * 60_000);
+    await watcher.tick();
+  }
+
+  const restarts = stub.commands.filter((c) => c.startsWith('/stop'));
+  assert.equal(restarts.length, 2, 'twice, then it stops — a third try only delays somebody finding out');
+  const gaveUp = events.filter((e) => e.event === 'session.stuck');
+  assert.equal(gaveUp.length, 1);
+  // Says what happens next, which is nothing. A message that only reports a
+  // failure leaves somebody waiting for a retry that is not coming.
+  assert.match(gaveUp[0].text, /Not trying again/);
+});
+
+test('a restart that works resets the budget, so next week it may restart again', async (t) => {
+  // The count is cleared when the pane MOVES, not on a timer, so the limit
+  // counts restarts that did not help rather than restarts. A long-lived
+  // session that wedges once a week is not the same problem as one that
+  // wedges every time it comes up.
+  const { stub, watcher } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('flaky', { status: 'running' })], panes: { flaky: 'frozen' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+
+  frozenFor(watcher, 'flaky', 90 * 60_000);
+  await watcher.tick();
+
+  // Moving again, a full idle window later — which is what recovery means
+  // here. A pane that moved one tick after the restart proves nothing: the
+  // restart is what moved it.
+  stub.panes.flaky = 'moving again after the restart';
+  const restarted = watcher.restarts.get('flaky');
+  if (restarted) restarted.at = Date.now() - 90 * 60_000;
+  await watcher.tick();
+
+  frozenFor(watcher, 'flaky', 90 * 60_000);
+  await watcher.tick();
+  frozenFor(watcher, 'flaky', 90 * 60_000);
+  await watcher.tick();
+
+  assert.equal(stub.commands.filter((c) => c.startsWith('/stop')).length, 3);
+  assert.equal(watcher.restarts.get('flaky')?.count, 2, 'the budget started again, it did not carry over');
+});

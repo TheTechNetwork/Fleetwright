@@ -31,6 +31,16 @@ const DEFAULT_INTERVAL_MS = 20_000;
  *  question is not one we know how to read. */
 const AWAITING_RE = /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files/i;
 
+/**
+ * How many times a session may be restarted for idleness before we stop.
+ *
+ * Two, and the second one is the point: once covers the ordinary wedge, and a
+ * session that goes straight back to idle after being restarted has a problem
+ * a restart does not fix. Trying a third time only delays somebody finding
+ * out.
+ */
+const DEFAULT_IDLE_RESTART_LIMIT = 2;
+
 export class SessionWatcher {
   /**
    * @param {{
@@ -38,10 +48,20 @@ export class SessionWatcher {
    *   emit: (event: Record<string, any>) => void,
    *   intervalMs?: number,
    *   allowSessionText?: boolean,
+   *   idleRestartMs?: number,
+   *   idleRestartLimit?: number,
    *   logger?: typeof import('../../log.js').log,
    * }} opts
    */
-  constructor({ hub, emit, intervalMs = DEFAULT_INTERVAL_MS, allowSessionText = false, logger }) {
+  constructor({
+    hub,
+    emit,
+    intervalMs = DEFAULT_INTERVAL_MS,
+    allowSessionText = false,
+    idleRestartMs = 0,
+    idleRestartLimit = DEFAULT_IDLE_RESTART_LIMIT,
+    logger,
+  }) {
     /** The last prompt read per session, so health need not peek again. */
     this.prompts = new Map();
     /**
@@ -59,6 +79,26 @@ export class SessionWatcher {
      * @type {Map<string, { hash: string, since: number }>}
      */
     this.idle = new Map();
+    /**
+     * How many times each session has been restarted for going idle, and when
+     * the last one was.
+     *
+     * The cap is the whole reason this map exists. A session that is idle
+     * because it is genuinely broken comes back and is idle again, and a
+     * restarter with no memory would sit in that loop indefinitely — burning
+     * a slot, and, worse, doing it silently.
+     *
+     * `at` is what makes the count clearable without clearing it instantly. A
+     * restart ALWAYS moves the pane — that is what stopping and resuming does
+     * — so "the pane changed" cannot on its own mean the restart worked, or
+     * the budget resets one tick after every attempt and the cap never binds.
+     * Recovery is the pane moving a full idle window LATER, which is the same
+     * thing as the session having run that long without needing another one.
+     * @type {Map<string, { count: number, at: number }>}
+     */
+    this.restarts = new Map();
+    this.idleRestartMs = idleRestartMs;
+    this.idleRestartLimit = idleRestartLimit;
     this.hub = hub;
     this.emit = emit;
     // Whether a prompt that quotes the session — a path, a command line — may
@@ -176,6 +216,11 @@ export class SessionWatcher {
         }
       }
 
+      // AUTO-RESTART, last, and only for a session that is running, not
+      // asking anything, and has been frozen longer than the threshold. Each
+      // of those three is load-bearing — see #maybeRestartIdle.
+      if (running && !awaiting) await this.#maybeRestartIdle(name, quiet);
+
       this.seen.set(name, { status: session.status, awaiting, rcUrl });
     }
 
@@ -183,6 +228,83 @@ export class SessionWatcher {
     // "ended" again if the name is ever reused.
     for (const name of [...this.seen.keys()]) if (!live.has(name)) this.seen.delete(name);
     for (const name of [...this.idle.keys()]) if (!live.has(name)) this.idle.delete(name);
+    for (const name of [...this.restarts.keys()]) if (!live.has(name)) this.restarts.delete(name);
+  }
+
+  /**
+   * Restart a session whose pane has stopped moving.
+   *
+   * "Auto restart sessions that are idle." The useful case is a session that
+   * wedged overnight — the agent stopped, or the CLI lost its connection —
+   * where the fix is mechanical and nobody was awake to do it.
+   *
+   * THREE THINGS IT MUST NOT DO, and each one is a condition somewhere:
+   *
+   *  - **Never a session at a prompt.** A pane waiting for an answer is
+   *    perfectly still and is the most active thing in the fleet: somebody has
+   *    to answer it. Restarting would throw the question away, and the person
+   *    who was about to answer it would never learn why. Excluded by the
+   *    caller, which has `awaiting` in hand from the same pane read.
+   *  - **Never forever.** A session that is idle because it is broken comes
+   *    back broken. The count is cleared only when the pane actually moves, so
+   *    the limit counts restarts THAT DID NOT WORK rather than restarts.
+   *  - **Never silently.** Both the restart and giving up are events, because
+   *    a fleet that quietly restarts things is one nobody can debug — and the
+   *    session's conversation history will not explain a gap it did not cause.
+   *
+   * Stop then resume, rather than anything cleverer: resume is the path that
+   * keeps the conversation, and it is the same one a person would use. Its
+   * volumes survive, so the credential is re-seeded on the way back up too.
+   *
+   * @param {string} name @param {boolean} quiet
+   */
+  async #maybeRestartIdle(name, quiet) {
+    if (!this.idleRestartMs) return; // off, which is a supported answer
+    const since = this.idle.get(name)?.since;
+    if (!since || Date.now() - since < this.idleRestartMs) return;
+
+    const already = this.restarts.get(name)?.count ?? 0;
+    if (already >= this.idleRestartLimit) return; // said once, below, when it hit the cap
+
+    const minutes = Math.round((Date.now() - since) / 60_000);
+    this.restarts.set(name, { count: already + 1, at: Date.now() });
+    // Restart the clock BEFORE the work, not after. Stopping and resuming
+    // takes tens of seconds, and a tick landing in the middle of it would read
+    // the same frozen pane and start a second restart of the same session.
+    // The hash is kept as it was: the next read is expected to differ, and it
+    // differing proves nothing on its own — see this.restarts.
+    this.idle.set(name, { hash: this.idle.get(name)?.hash ?? '', since: Date.now() });
+
+    try {
+      await this.hub.command(`/stop ${name}`);
+      const resumed = await this.hub.command(`/resume ${name} summary`);
+      const ok = /** @type {any} */ (resumed)?.ok !== false;
+      this.log.info(`watcher: ${name} was idle ${minutes}m — restarted (attempt ${already + 1})`);
+      this.#fire(quiet, {
+        event: 'session.restarted',
+        name,
+        text: ok
+          ? `Restarted after ${minutes} minutes with nothing happening. The conversation was kept.`
+          : `Tried to restart it after ${minutes} minutes idle and the resume did not take.`,
+      });
+    } catch (e) {
+      // A failed restart is not a reason to keep trying every tick — the
+      // attempt is already counted above, deliberately before the work.
+      this.log.warn(`watcher: could not restart ${name}: ${/** @type {Error} */ (e).message}`);
+    }
+
+    if (already + 1 >= this.idleRestartLimit) {
+      this.#fire(quiet, {
+        event: 'session.stuck',
+        name,
+        // Says what will happen next, which is nothing. A message that only
+        // reports a failure leaves somebody waiting for a retry that is not
+        // coming.
+        text:
+          `Restarted ${already + 1} time${already ? 's' : ''} and it went straight back to idle. ` +
+          'Not trying again — something is wrong that a restart does not fix.',
+      });
+    }
   }
 
   /**
@@ -201,7 +323,21 @@ export class SessionWatcher {
     for (let i = 0; i < pane.length; i++) h = ((h * 33) ^ pane.charCodeAt(i)) >>> 0;
     const hash = String(h);
     const before = this.idle.get(name);
-    if (!before || before.hash !== hash) this.idle.set(name, { hash, since: Date.now() });
+    if (before && before.hash === hash) return;
+    this.idle.set(name, { hash, since: Date.now() });
+    // RECOVERED, and only then. A restart always moves the pane, so "it moved"
+    // cannot mean "the restart worked" — that reset would fire one tick after
+    // every attempt and the cap would never bind. What does mean it: the pane
+    // still moving a full idle window after the last restart, which is the
+    // same thing as the session having run that long without needing another.
+    //
+    // The limit then counts restarts that did not help, which is the number
+    // worth capping. A long-lived session that wedges once a week is not the
+    // same problem as one that wedges every time it comes up.
+    const restarted = this.restarts.get(name);
+    if (restarted && this.idleRestartMs && Date.now() - restarted.at >= this.idleRestartMs) {
+      this.restarts.delete(name);
+    }
   }
 
   /**
