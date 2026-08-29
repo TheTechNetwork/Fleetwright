@@ -378,6 +378,49 @@ export class Connections {
     }
   }
 
+  /**
+   * Check a STORED credential against its provider, and report what it can do.
+   *
+   * Different from verifying at link time, which checks a value somebody just
+   * pasted. This checks the one actually in use — which is the question worth
+   * asking, because a token can be revoked, expire, or have its permissions
+   * narrowed at the provider long after it was stored, and nothing here would
+   * know until a session failed.
+   *
+   * The secret never leaves: it is read, sent to the provider, and the answer
+   * comes back as an account name and a list of scope NAMES.
+   *
+   * @param {string|symbol|null} row @param {string} provider
+   * @returns {Promise<{
+   *   ok: boolean,
+   *   message: string,
+   *   account?: string,
+   *   granted?: string[]|null,
+   *   wants?: string[]|null,
+   *   missing?: string[]|null,
+   * }>}
+   */
+  async check(row, provider) {
+    const p = PROVIDERS[provider];
+    if (!p) return { ok: false, message: `"${provider}" is not a provider this host knows.` };
+    const secret = this.#secrets(row)[p.env[0]];
+    if (!secret) return { ok: false, message: `No ${p.label} token is stored here.` };
+
+    const checked = await verifyToken(provider, secret);
+    if (!checked.ok) return checked;
+    const granted = checked.granted ?? null;
+    const wants = p.wants ?? null;
+    return {
+      ...checked,
+      granted,
+      wants,
+      // Null, not empty: "cannot tell" is a different fact from "nothing
+      // missing", and rendering the first as the second is how somebody finds
+      // out four hours into a session.
+      missing: granted && wants ? wants.filter((w) => !granted.includes(w)) : null,
+    };
+  }
+
   /** The tokens themselves, read back to rewrite the file. @param {string|symbol|null} row */
   #secrets(row) {
     const file = this.envPathFor(row);

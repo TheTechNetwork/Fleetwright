@@ -34,6 +34,10 @@ struct CredentialsView: View {
     @State private var result = ""
     @State private var busy = false
     @State private var loaded = false
+    /// The last answer per provider, kept so the detail can be reopened
+    /// without asking the provider again.
+    @State private var checks: [String: Fleet.Check] = [:]
+    @State private var expanded: Set<String> = []
 
     var body: some View {
         List {
@@ -152,12 +156,37 @@ struct CredentialsView: View {
                     Task { await begin(provider) }
                 }
                 if connections.linked(provider.provider) != nil {
+                    // TEST, because "connected" is a fact about storage and not
+                    // about the token. It can be revoked, expire, or have its
+                    // permissions narrowed at the provider long after it was
+                    // stored, and nothing here would know until a session
+                    // failed four hours in.
+                    Button("Test") { Task { await check(provider) } }
                     Button("Forget", role: .destructive) { Task { await forget(provider) } }
                 }
             }
             .font(.caption)
             .buttonStyle(.borderless)
             .disabled(busy)
+
+            // WHAT IT CAN DO, once somebody has asked. Collapsed by default:
+            // a list of scopes is the answer to a question, not something to
+            // read every time this screen opens.
+            if let result = checks[provider.provider] {
+                DisclosureGroup(describeCheck(result), isExpanded: bindingForDetail(provider.provider)) {
+                    if let granted = result.granted, !granted.isEmpty {
+                        Text("Has: \(granted.joined(separator: ", "))").font(.caption2)
+                    } else if result.granted == nil {
+                        Text("\(provider.label) does not report what a token was granted.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let missing = result.missing, !missing.isEmpty {
+                        Text("Asked for and not granted: \(missing.joined(separator: ", "))")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -229,6 +258,33 @@ struct CredentialsView: View {
         }
     }
 
+    /// Ask the provider what the stored token can do.
+    @MainActor
+    private func check(_ provider: Fleet.Connections.Available) async {
+        busy = true
+        defer { busy = false }
+        do {
+            let reply = try await Fleet(settings: settings).verify(host: host, provider: provider.provider)
+            if let check = reply.check {
+                checks[provider.provider] = check
+                expanded.insert(provider.provider)
+            } else {
+                result = reply.text ?? ""
+            }
+        } catch {
+            result = error.localizedDescription
+        }
+    }
+
+    private func bindingForDetail(_ provider: String) -> Binding<Bool> {
+        Binding(
+            get: { expanded.contains(provider) },
+            set: { open in
+                if open { expanded.insert(provider) } else { expanded.remove(provider) }
+            },
+        )
+    }
+
     @MainActor
     private func load() async {
         busy = true
@@ -253,6 +309,17 @@ struct CredentialsView: View {
 /// A function rather than an expression in the view: a chain of `+` with
 /// optional maps inside it is what made the Swift type checker give up in
 /// #125, and that failure only shows up on CI.
+/// "works · 6 scopes", or what went wrong. One line, because the detail is
+/// one tap away and this sits under a row that is already three lines tall.
+private func describeCheck(_ check: Fleet.Check) -> String {
+    guard check.ok == true else { return check.message ?? "could not be checked" }
+    var parts: [String] = ["works"]
+    if let account = check.account, !account.isEmpty { parts.append(account) }
+    if let granted = check.granted { parts.append("\(granted.count) scope\(granted.count == 1 ? "" : "s")") }
+    if let missing = check.missing, !missing.isEmpty { parts.append("\(missing.count) missing") }
+    return parts.joined(separator: " · ")
+}
+
 private func describeLinked(_ linked: Fleet.Connections.Linked) -> String {
     guard let account = linked.account, !account.isEmpty else { return "connected" }
     return "connected as \(account)"

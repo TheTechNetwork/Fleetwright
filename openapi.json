@@ -916,7 +916,8 @@
                       "link",
                       "unlink",
                       "restore",
-                      "purge"
+                      "purge",
+                      "verify"
                     ]
                   },
                   "params": {

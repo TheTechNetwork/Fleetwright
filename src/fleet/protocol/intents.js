@@ -315,6 +315,17 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Finish a connection with the token or code the person pasted back.',
   },
+  verify: {
+    params: {
+      provider: { type: 'enum', required: true, values: ['claude', 'github', 'cloudflare'] },
+      scope: { type: 'enum', required: false, values: ['me', 'host'] },
+    },
+    // READ-ONLY: it asks the provider what a stored token can do and stores
+    // nothing. Not mutating, so no idempotency key is honoured — asking twice
+    // is asking twice, which is what a "test" button should mean.
+    mutating: false,
+    summary: 'Check a stored credential with its provider, and report what it can actually do.',
+  },
   unlink: {
     params: {
       provider: { type: 'enum', required: true, values: ['claude', 'github', 'cloudflare'] },

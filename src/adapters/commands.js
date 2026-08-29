@@ -35,10 +35,11 @@
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
+ * @property {any} [check]                what a stored token can do, when asked
  */
 
 import { describe } from '../core/login.js';
-import { Connections, catalogue, isProvider, verifyToken } from '../core/connectors.js';
+import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
@@ -640,6 +641,34 @@ export const COMMANDS = {
         // shows a stale screen for one refresh interval.
         connections: connectionsPayload(ctx, {}, { host: boxRow }),
       };
+    },
+  },
+
+  verify: {
+    aliases: ['test'],
+    usage: '/verify <provider> [--host]',
+    short: 'Check a stored token still works',
+    help:
+      'Asks the provider what the stored token can actually do. A token can be revoked, expire, or have '
+      + 'its permissions narrowed long after it was stored, and nothing here would know until a session failed.',
+    run: async (ctx, args, flags) => {
+      const provider = (args[0] || '').toLowerCase();
+      if (!provider) return { ok: false, text: 'Usage: /verify <provider>' };
+      if (provider === 'claude') {
+        // Claude is a login, not a token — its own status command is the
+        // honest answer rather than a second thing that half-checks it.
+        return { ok: true, text: describe(ctx.login.status()) };
+      }
+      const row = flags?.has('host') === true ? HOST_ROW : rowForActor(ctx.actor);
+      if (row === null) return { ok: false, text: 'Could not tell whose credential to check.' };
+      const r = await new Connections(ctx.cfg.stateDir).check(row, provider);
+      if (!r.ok) return { ok: false, text: r.message };
+      const lines = [r.message];
+      if (r.granted?.length) lines.push(`\nIt has: ${r.granted.join(', ')}`);
+      if (r.missing?.length) lines.push(`It is missing: ${r.missing.join(', ')}`);
+      else if (r.missing) lines.push('Nothing it is asked for is missing.');
+      else if (!r.granted) lines.push(`\n${PROVIDERS[provider]?.label ?? provider} does not report what a token was granted.`);
+      return { ok: true, text: lines.join('\n'), check: r };
     },
   },
 

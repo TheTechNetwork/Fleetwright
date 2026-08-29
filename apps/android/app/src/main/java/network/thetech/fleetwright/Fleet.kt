@@ -146,6 +146,22 @@ class Fleet(private val settings: Settings) {
          * no field here that could hold one.
          */
         val connections: Connections? = null,
+        /** What a stored token can do, when it was just asked. Never the token. */
+        val check: Check? = null,
+    )
+
+    /**
+     * @property granted scope names it HAS. Null where the provider will not
+     *   say — a different fact from an empty list, and rendering it as "none"
+     *   would be a lie about Cloudflare in particular.
+     * @property missing asked for and not granted. Null means "cannot tell".
+     */
+    data class Check(
+        val ok: Boolean,
+        val account: String?,
+        val granted: List<String>?,
+        val missing: List<String>?,
+        val message: String?,
     )
 
     /**
@@ -393,6 +409,17 @@ class Fleet(private val settings: Settings) {
     /** Forget a token everywhere it was stored. */
     suspend fun unlinkEverywhere(provider: String): Reply = intent("unlink", mapOf("provider" to provider))
 
+    /**
+     * Ask the provider what a STORED credential can actually do.
+     *
+     * Different from checking at link time, which checks a value somebody just
+     * pasted. A token can be revoked, expire, or have its permissions narrowed
+     * at the provider long afterwards, and nothing here would know until a
+     * session failed.
+     */
+    suspend fun verify(host: String? = null, provider: String): Reply =
+        intent("verify", mapOf("provider" to provider), host = host)
+
     /** Forget a stored credential. Does NOT revoke it at the provider. */
     suspend fun unlink(host: String, provider: String, scope: String? = null): Reply =
         intent("unlink", buildMap { put("provider", provider); if (scope != null) put("scope", scope) }, host = host)
@@ -512,6 +539,20 @@ class Fleet(private val settings: Settings) {
                     text = json.optString("text", ""),
                     sessions = parseSessions(json.optJSONArray("sessions")),
                     connections = parseConnections(json.optJSONObject("connections")),
+                    check = json.optJSONObject("check")?.let { c ->
+                        fun list(key: String): List<String>? =
+                            if (!c.has(key) || c.isNull(key)) null
+                            else c.optJSONArray(key)?.let { a ->
+                                (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } }
+                            } ?: emptyList()
+                        Check(
+                            ok = c.optBoolean("ok", false),
+                            account = c.optString("account").takeIf { it.isNotBlank() && it != "null" },
+                            granted = list("granted"),
+                            missing = list("missing"),
+                            message = c.optString("message").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                 )
             } catch (e: Exception) {
                 Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())

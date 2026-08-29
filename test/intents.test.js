@@ -58,6 +58,7 @@ test('the verb set is exactly what is documented', () => {
     'unlink',
     'update',
     'upgrade',
+    'verify',
   ]);
 });
 
