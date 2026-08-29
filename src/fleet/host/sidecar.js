@@ -736,6 +736,12 @@ export function toCommandLine({ verb, params, actor }) {
         return `/accounts remove ${mine}`;
       }
       return `/unlink ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
+    case 'renew':
+      // Both are protocol-constrained the same way `link.secret` is — printable
+      // ASCII, no whitespace, no quote, no dash to start — so they are two
+      // tokens on this line that cannot be split or read as flags. Masked from
+      // the provider name onwards by src/core/redact.js.
+      return `/renew ${p.provider} ${p.clientId} ${p.refresh} ${p.client}`;
     default:
       // Unreachable: validateIntent has already refused anything not in VERBS,
       // and peek/health never get here. Throwing rather than returning a

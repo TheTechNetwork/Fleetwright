@@ -33,6 +33,21 @@ else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
+# The contract, and the copy of it the Worker ships. openapi.json is the source
+# and test/openapi.test.js executes it against BOTH coordinators — but the
+# Worker inlines its own copy, and a copy of a contract is a thing that drifts.
+# It did: a verb reached openapi.json and the protocol and not the bundle, so
+# the two coordinators would have disagreed about what they accept.
+printf 'contract   ... '
+if out=$(node scripts/sync-openapi.mjs --check 2>&1); then
+  printf 'in sync
+'
+else
+  printf 'FAILED
+%s
+' "$out"; fail=1
+fi
+
 printf 'installer  ... '
 if bash -n install/install.sh 2>/dev/null && sh -n install/bootstrap.sh 2>/dev/null; then
   printf 'parses\n'

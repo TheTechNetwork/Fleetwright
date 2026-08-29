@@ -725,6 +725,33 @@ export const COMMANDS = {
     },
   },
 
+  renew: {
+    usage: '/renew <provider> <client-id> <refresh-token> <client-secret>',
+    short: 'Let this box keep a connection alive by itself',
+    help:
+      'A GitHub App token lasts eight hours and is not renewed by being used — it is replaced by an '
+      + 'exchange that needs the App client secret. This stores what that exchange needs, in a file no '
+      + 'session is given, and the box renews on its own from then on.',
+    run: async (ctx, args) => {
+      const [provider, clientId, refresh, client] = args;
+      if (provider !== 'github' || !clientId || !refresh || !client) {
+        return { ok: false, text: 'Usage: /renew github <client-id> <refresh-token> <client-secret>' };
+      }
+      const row = rowForActor(ctx.actor);
+      // Fails closed. There is no row to write to, so nothing is written —
+      // rather than falling back to one other people read.
+      if (row === null) return { ok: false, text: 'Could not tell whose connection this is, so nothing was stored.' };
+      const store = new Connections(ctx.cfg.stateDir);
+      const saved = store.saveRenewal(row, provider, { clientId, refresh, client });
+      if (!saved.ok) return { ok: false, text: saved.message };
+      // NOT RENEWED HERE. The token that arrived with this connection is
+      // minutes old and has its full eight hours; spending an exchange now
+      // would rotate the refresh token for nothing. The timer picks it up when
+      // there is something to gain.
+      return { ok: true, text: saved.message, connections: connectionsPayload(ctx, {}, { host: false }) };
+    },
+  },
+
   unlink: {
     usage: '/unlink <provider> [--host]',
     short: 'Forget a stored token',

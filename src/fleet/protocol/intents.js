@@ -334,6 +334,60 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Forget a stored credential on one host. Does not revoke it at the provider.',
   },
+
+  // WHAT A HOST NEEDS TO KEEP A CONNECTION ALIVE BY ITSELF.
+  //
+  // A GitHub App user token lasts eight hours and is NOT renewed by being used
+  // — unlike Claude's, which is why the keepalive on the host does nothing for
+  // it. It is renewed by exchanging a refresh token, explicitly, and that
+  // exchange needs the App's client secret. Until this verb existed the
+  // coordinator received the refresh token at the end of the OAuth flow and
+  // threw it away, because there was nowhere for it to live: every GitHub App
+  // connection was dead eight hours after it was made.
+  //
+  // THE MINTING MATERIAL GOES TO THE HOST, which is docs/trust.md's rule
+  // rather than a convenience: "spreading minting keys across hosts means a
+  // compromised host costs that host's access; centralising them means a
+  // compromised coordinator costs everything." A host already holds the access
+  // token and already runs that person's sessions. The coordinator is
+  // internet-facing and holding every member's renewable GitHub credential
+  // there is the outcome that rule exists to refuse.
+  //
+  // So this is a DEPOSIT, not a request the coordinator repeats: it is sent
+  // once, when the connection is made, and the host renews on its own timer
+  // from then on. Nothing has to be scheduled anywhere it could be missed.
+  //
+  // A NEW VERB RATHER THAN TWO PARAMETERS ON `link`, and that is the protocol
+  // rule paying for itself again: an old host answers `unknown_verb` and its
+  // connections behave exactly as they do today, while adding `refresh` and
+  // `client` to `link` would be a flag day — `bad_params` arriving after the
+  // handshake had already agreed.
+  renew: {
+    params: {
+      provider: { type: 'enum', required: true, values: ['github'] },
+      // WHICH APP THIS WAS ISSUED BY, carried rather than configured. It is
+      // public — it is in every authorization URL the person has already seen
+      // — but it travels here so that a host needs NO configuration at all to
+      // renew. An install question is a thing somebody has to be told, and the
+      // standing goal is to have none of them.
+      //
+      // Typed `secret` despite not being one, because the type is about
+      // HANDLING rather than about sensitivity: it is the type that refuses
+      // whitespace, quotes and backslashes, which is exactly the property a
+      // value needs to survive onto a command line as one token. `text` would
+      // run it through cleanText, which is the wrong shape for anything that
+      // must arrive byte-identical.
+      clientId: { type: 'secret', required: true, max: 256 },
+      // Both of these ARE live credentials, and `secret` for the three reasons
+      // `link.secret` is: cleanText would mangle them, a refusal must never
+      // quote them back, and every log site between here and the pane has to
+      // know to mask them (src/core/redact.js).
+      refresh: { type: 'secret', required: true, max: 4096 },
+      client: { type: 'secret', required: true, max: 4096 },
+    },
+    mutating: true,
+    summary: 'Give a host what it needs to renew a connection without being asked again.',
+  },
 });
 
 /** @param {string} verb */

@@ -110,6 +110,21 @@ and "dead host" is the one it retries.
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
+| `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
+
+`renew` is the odd one and is worth a sentence. Every other verb here is
+somebody asking a host to do something; this one is the coordinator **handing a
+host what it needs to stop asking**. A GitHub App user token lasts eight hours
+and is not renewed by being used — only by an explicit exchange that needs the
+App's client secret — so without this the refresh token arrived at the
+coordinator and was discarded, and every App connection died overnight.
+
+It is sent **once**, at the end of the OAuth flow, and the host renews on its
+own timer from then on. The material lands in a third file that no session is
+ever given: an access token in a container expires in eight hours, and the
+thing that replaces it must not travel with it. See
+[accounts.md](./accounts.md) for the custody argument and `trust.md` for the
+rule it follows.
 | `restore` | `name` | ✅ | `/restore <name>` |
 | `purge` | `name` | ✅ | `/purge <name>` |
 

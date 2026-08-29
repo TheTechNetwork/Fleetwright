@@ -41,6 +41,7 @@ import path from 'node:path';
 import { log } from '../log.js';
 import { readCredentialState } from './claude-credential.js';
 import { Accounts } from './accounts.js';
+import { Connections, refreshGithubToken } from './connectors.js';
 
 /** How long a one-shot prompt gets. Generous: a cold CLI start is seconds. */
 const PROMPT_TIMEOUT_MS = 90_000;
@@ -170,6 +171,80 @@ export function renewAllCredentials(cfg, { within } = {}) {
     } catch (e) {
       // Never fatal. This runs on a timer beside everything else on the box.
       log.warn(`keepalive: ${account} could not be renewed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+  return results;
+}
+
+/**
+ * Renew every stored provider token on this box that can renew itself.
+ *
+ * DELIBERATELY A DIFFERENT MECHANISM FROM THE CLAUDE LADDER ABOVE, because the
+ * providers renew differently and pretending otherwise would build something
+ * that runs, reports success and achieves nothing:
+ *
+ *   Claude  a credential renews when it is USED. Exercising it is the fix.
+ *   GitHub  an App user token is NOT renewed by use. It lasts eight hours and
+ *           is replaced only by an explicit exchange, which needs the App's
+ *           client secret. A thousand API calls extend it by zero seconds.
+ *
+ * The material comes from the `renew` intent, deposited once when the
+ * connection is made — see src/fleet/protocol/intents.js. A box with no
+ * deposit does nothing here, which is every box that connected before this
+ * shipped and every connection made by pasting a token.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ within?: number, now?: () => number }} [opts]
+ * @returns {Promise<Array<{ row: string, provider: string, outcome: string, detail?: string }>>}
+ */
+export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = Date.now } = {}) {
+  /** @type {Array<{ row: string, provider: string, outcome: string, detail?: string }>} */
+  const results = [];
+  const store = new Connections(cfg.stateDir);
+
+  for (const row of store.renewableRows()) {
+    const label = typeof row === 'string' ? row : 'this box';
+    for (const provider of ['github']) {
+      const material = store.readRenewal(row, provider);
+      if (!material) continue;
+      // WHEN, from the metadata rather than from the token: the access token
+      // is opaque to us and GitHub does not publish an introspection endpoint
+      // we may call. `updatedAt` plus the lifetime GitHub told us at exchange
+      // time is what we have, and it is enough — being early costs one HTTPS
+      // request, and being late costs a session.
+      const due = store.renewalDueAt(row, provider);
+      if (due !== null && due - now() > within) {
+        results.push({ row: label, provider, outcome: 'not-due' });
+        continue;
+      }
+      try {
+        // Everything the exchange needs came with the deposit — nothing here
+        // is configured on the box, which is what keeps this off the list of
+        // questions an install has to ask.
+        const r = await refreshGithubToken(material);
+        if (!r.ok) {
+          log.warn(`keepalive: could not renew ${provider} for ${label} — ${r.message}`);
+          results.push({ row: label, provider, outcome: 'failed', detail: r.message });
+          continue;
+        }
+        // BOTH HALVES, OR NEITHER. GitHub rotates the refresh token on every
+        // exchange and invalidates the old one, so storing the access token
+        // without the new refresh token renews exactly once and breaks every
+        // renewal after it — eight hours later, with nothing to point at.
+        const stored = store.save(row, provider, /** @type {string} */ (r.accessToken));
+        if (!stored.ok) {
+          results.push({ row: label, provider, outcome: 'failed', detail: stored.message });
+          continue;
+        }
+        if (r.refreshToken) {
+          store.saveRenewal(row, provider, { ...material, refresh: r.refreshToken, expiresIn: r.expiresIn });
+        }
+        log.info(`keepalive: renewed ${provider} for ${label}`);
+        results.push({ row: label, provider, outcome: 'renewed' });
+      } catch (e) {
+        log.warn(`keepalive: ${provider} for ${label}: ${/** @type {Error} */ (e).message}`);
+        results.push({ row: label, provider, outcome: 'failed', detail: /** @type {Error} */ (e).message });
+      }
     }
   }
   return results;

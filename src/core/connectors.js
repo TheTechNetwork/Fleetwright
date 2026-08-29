@@ -31,7 +31,7 @@
 // "the guests will be bringing their own GitHub Cloudflare Claude creds, no
 // shared creds to them."
 
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { normaliseEmail, HOST_ROW } from './accounts.js';
@@ -259,6 +259,62 @@ export function catalogue(label) {
 }
 
 /**
+ * Trade a GitHub refresh token for a new access token.
+ *
+ * NOT THE SAME SHAPE AS CLAUDE'S RENEWAL, and the difference is why the host
+ * keepalive does nothing for this. A Claude credential renews when it is USED;
+ * exercising it is enough. A GitHub App user token is not renewed by use at
+ * all — it lasts eight hours and is replaced only by an explicit exchange
+ * against `POST /login/oauth/access_token`, which needs the App's client
+ * secret. Using the token more often does not extend it by a second.
+ *
+ * THE REFRESH TOKEN IS ROTATED BY THIS CALL. GitHub returns a new one and
+ * invalidates the old, so a caller that does not store what comes back has
+ * renewed once and broken every renewal after it. That is the failure mode
+ * worth naming here rather than discovering in eight hours' time.
+ *
+ * @param {{ refresh: string, client: string, clientId: string, fetchImpl?: typeof fetch }} opts
+ * @returns {Promise<{ ok: boolean, message: string, accessToken?: string, refreshToken?: string, expiresIn?: number|null }>}
+ */
+export async function refreshGithubToken({ refresh, client, clientId, fetchImpl = fetch }) {
+  /** @type {any} */
+  let body;
+  try {
+    const res = await fetchImpl('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: client,
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+      }),
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    });
+    body = await res.json();
+  } catch (e) {
+    // A network failure is not a dead refresh token, and the difference
+    // decides whether somebody has to go and reconnect. Keeping them apart is
+    // the same argument verifyToken makes below.
+    return { ok: false, message: `Could not reach GitHub to renew: ${/** @type {Error} */ (e).message}` };
+  }
+  // GitHub answers 200 with an `error` field rather than a status code.
+  if (!body || body.error) {
+    return { ok: false, message: `GitHub refused the renewal: ${body?.error_description || body?.error || 'no reason given'}` };
+  }
+  if (typeof body.access_token !== 'string' || !body.access_token) {
+    return { ok: false, message: 'GitHub returned no access token.' };
+  }
+  return {
+    ok: true,
+    accessToken: body.access_token,
+    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
+    expiresIn: Number(body.expires_in) || null,
+    message: 'GitHub renewed the token.',
+  };
+}
+
+/**
  * Verify a token with its provider, and never throw.
  *
  * A network failure is NOT a bad token, and saying so matters: "could not
@@ -371,6 +427,114 @@ export class Connections {
   metaPathFor(row) {
     const stem = this.#stem(row);
     return stem ? path.join(this.dir, `${stem}.connections.json`) : null;
+  }
+
+  /**
+   * The renewal material: a refresh token, and the App client secret needed to
+   * spend it. A THIRD FILE, and the split is the point.
+   *
+   *   `<row>.env`               what a SESSION gets — sourced into containers
+   *   `<row>.connections.json`  what a PHONE may see — no secret in it at all
+   *   `<row>.renewal.json`      what only the HOST may use — mounted nowhere
+   *
+   * A refresh token in the env file would be handed to every session on the
+   * box, and a session that leaked one would have leaked something that
+   * re-mints after every revocation — which is exactly the escalation
+   * docs/trust.md refuses. The access token a session holds expires in eight
+   * hours; the thing that replaces it must not travel with it.
+   *
+   * @param {string|symbol|null} row
+   */
+  renewalPathFor(row) {
+    const stem = this.#stem(row);
+    return stem ? path.join(this.dir, `${stem}.renewal.json`) : null;
+  }
+
+  /**
+   * Store what a host needs to renew a connection on its own.
+   *
+   * @param {string|symbol|null} row @param {string} provider
+   * @param {{ clientId: string, refresh: string, client: string, expiresIn?: number|null }} material
+   */
+  saveRenewal(row, provider, { clientId, refresh, client, expiresIn = null }) {
+    const file = this.renewalPathFor(row);
+    if (!file) return { ok: false, message: 'there is no credential row for that identity' };
+    if (!looksLikeToken(refresh) || !looksLikeToken(client) || !looksLikeToken(clientId)) {
+      return { ok: false, message: 'that does not look like renewal material' };
+    }
+    /** @type {Record<string, unknown>} */
+    let all = {};
+    try { all = JSON.parse(readFileSync(file, 'utf8')); } catch { /* first one */ }
+    // `expiresIn` is what GitHub said at the moment of exchange, kept beside
+    // the material because the access token itself is opaque to us — there is
+    // nothing to read an expiry out of, and no introspection endpoint we may
+    // call. When it is absent the renewal is simply always due, which is the
+    // safe direction: being early costs one HTTPS request and being late costs
+    // a session.
+    all[provider] = { clientId, refresh, client, updatedAt: Date.now(), expiresIn };
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+    return { ok: true, message: `${PROVIDERS[provider]?.label ?? provider} can now renew itself on this box.` };
+  }
+
+  /**
+   * @param {string|symbol|null} row @param {string} provider
+   * @returns {{ clientId: string, refresh: string, client: string }|null}
+   */
+  readRenewal(row, provider) {
+    const file = this.renewalPathFor(row);
+    if (!file || !existsSync(file)) return null;
+    try {
+      const entry = JSON.parse(readFileSync(file, 'utf8'))?.[provider];
+      // All three or nothing. A partial record is a renewal that will fail at
+      // the provider with an error nobody can act on, and there is nothing
+      // useful to do with two of the three.
+      return typeof entry?.refresh === 'string' && typeof entry?.client === 'string' && typeof entry?.clientId === 'string'
+        ? { clientId: entry.clientId, refresh: entry.refresh, client: entry.client }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * When this connection's access token runs out, as far as we can tell.
+   *
+   * Null means "we cannot tell, so treat it as due" — which is deliberately
+   * the eager direction. See saveRenewal.
+   *
+   * @param {string|symbol|null} row @param {string} provider
+   * @returns {number|null}
+   */
+  renewalDueAt(row, provider) {
+    const file = this.renewalPathFor(row);
+    if (!file || !existsSync(file)) return null;
+    try {
+      const entry = JSON.parse(readFileSync(file, 'utf8'))?.[provider];
+      const at = Number(entry?.updatedAt);
+      const life = Number(entry?.expiresIn);
+      if (!Number.isFinite(at) || !Number.isFinite(life) || life <= 0) return null;
+      return at + life * 1000;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Every row on this box that has renewal material, so a timer can find them
+   * without being told who exists.
+   * @returns {Array<string|symbol>}
+   */
+  renewableRows() {
+    if (!existsSync(this.dir)) return [];
+    /** @type {Array<string|symbol>} */
+    const rows = [];
+    for (const f of readdirSync(this.dir)) {
+      if (!f.endsWith('.renewal.json')) continue;
+      const stem = f.slice(0, -'.renewal.json'.length);
+      rows.push(stem === '.host' ? HOST_ROW : stem);
+    }
+    return rows;
   }
 
   /**

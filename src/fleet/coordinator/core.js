@@ -799,15 +799,53 @@ export class CoordinatorCore {
       requester: null,
     });
     if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };
+
+    // THE RENEWAL MATERIAL, DEPOSITED ONCE, and this is the piece the comment
+    // above used to say was next. The refresh token was received here and
+    // thrown away, because there was nowhere for it to live — so every GitHub
+    // App connection was dead eight hours after it was made, and reconnecting
+    // was the only remedy.
+    //
+    // IT GOES TO THE HOST, WITH THE CLIENT SECRET, which is docs/trust.md's
+    // rule and not a convenience: "spreading minting keys across hosts means a
+    // compromised host costs that host's access; centralising them means a
+    // compromised coordinator costs everything." Keeping refresh tokens here
+    // would make this internet-facing component hold every member's renewable
+    // GitHub credential, which is the outcome that rule exists to refuse.
+    //
+    // A separate verb rather than two more parameters on `link`, because
+    // adding a parameter is the flag day and adding a verb is free — an older
+    // host answers `unknown_verb` and simply keeps behaving as it does today.
+    let renewable = false;
+    if (exchanged.refreshToken) {
+      const deposited = await this.dispatch({
+        verb: 'renew',
+        params: { provider: 'github', clientId, refresh: exchanged.refreshToken, client: clientSecret },
+        actor: flow.email ?? undefined,
+        preferHost: flow.hostId,
+        requester: null,
+      });
+      renewable = deposited?.ok !== false;
+      // Not fatal. The connection works for eight hours either way, and
+      // failing the whole flow over the part that makes it last would throw
+      // away a credential the person just authorised.
+      if (!renewable) this.log?.warn?.(`github: ${flow.hostId} could not store renewal material: ${deposited?.text}`);
+    }
+
     return {
       ok: true,
-      // Honest about the eight hours rather than quiet about them. A token that
-      // stops working tomorrow, from a screen that said "connected", is worse
-      // than one that said so.
-      text: exchanged.expiresIn
-        ? `Your sessions can use GitHub now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours; ` +
-          'connecting again renews it, and automatic renewal is the next piece.'
-        : 'Your sessions can use GitHub now.',
+      // Honest about the eight hours rather than quiet about them, and honest
+      // about which of the two situations this is. A token that stops working
+      // tomorrow, from a screen that said "connected", is worse than one that
+      // said so — and a token that renews itself should not still be
+      // apologising for a limitation that no longer applies.
+      text: !exchanged.expiresIn
+        ? 'Your sessions can use GitHub now.'
+        : renewable
+          ? `Your sessions can use GitHub now. The token lasts ${Math.round(exchanged.expiresIn / 3600)} hours and ` +
+            'that machine renews it by itself from here on.'
+          : `Your sessions can use GitHub now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours, and ` +
+            'that machine could not store what it needs to renew it — connect again when it expires.',
     };
   }
 

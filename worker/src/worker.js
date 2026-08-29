@@ -1229,7 +1229,8 @@ const OPENAPI = JSON.stringify({
                       "unlink",
                       "restore",
                       "purge",
-                      "verify"
+                      "verify",
+                      "renew"
                     ]
                   },
                   "params": {

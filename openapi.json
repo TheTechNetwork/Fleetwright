@@ -917,7 +917,8 @@
                       "unlink",
                       "restore",
                       "purge",
-                      "verify"
+                      "verify",
+                      "renew"
                     ]
                   },
                   "params": {
