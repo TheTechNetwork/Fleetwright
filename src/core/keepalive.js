@@ -64,6 +64,8 @@ const PROBE_PROMPT = 'Reply with exactly: ok';
  * @property {string} account
  * @property {number|null} before   expiry before, epoch ms
  * @property {number|null} after    expiry after, epoch ms
+ * @property {number|null} [left]   how long was on it when we looked, ms
+ * @property {boolean} [pressing]   near enough to expiry that a failure matters
  * @property {string} [rung]        which step moved it
  * @property {string} [detail]
  */
@@ -71,26 +73,52 @@ const PROBE_PROMPT = 'Reply with exactly: ok';
 /**
  * Renew one account's credential if it needs it.
  *
+ * TWO WINDOWS, NOT ONE, and the second one was missing in the first version of
+ * this file. Found by testing it against a real box, which is the only place
+ * this could have been found:
+ *
+ *   `within` (4h)  start ASKING. The free rung runs from here down.
+ *   `urgent` (45m) start SPENDING. The paid rung runs only from here down.
+ *
+ * The reason they have to be different is that WE DO NOT DECIDE WHEN A TOKEN
+ * REFRESHES — the CLI does, and an OAuth client refreshes when a token is
+ * expired or nearly so, not whenever it is asked. So between 4h and 45m the
+ * honest expectation is that nothing happens: the credential is healthy and
+ * there is nothing to renew.
+ *
+ * With one window, that produced two bugs at once. The paid rung would fire
+ * every hour for four hours, buying nothing each time, and every one of those
+ * would log a warning saying the mechanism had failed. A warning that fires
+ * four times per token on a perfectly healthy box is one nobody reads by the
+ * second day — and it would have been the same warning that means something is
+ * genuinely wrong.
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ account?: string, within?: number, now?: () => number }} [opts]
- *   `within` — renew when this much or less is left. Default four hours, which
- *   is longer than the gap between health checks by a wide margin and shorter
- *   than a token's life, so a box is never found holding one that expires in
- *   minutes.
+ * @param {{ account?: string, within?: number, urgent?: number, now?: () => number }} [opts]
  * @returns {Renewal}
  */
-export function renewClaudeCredential(cfg, { account = 'shared', within = 4 * 3_600_000, now = Date.now } = {}) {
+export function renewClaudeCredential(cfg, {
+  account = 'shared',
+  within = 4 * 3_600_000,
+  urgent = 45 * 60_000,
+  now = Date.now,
+} = {}) {
   const file = credentialFileFor(cfg, account);
   if (!file || !existsSync(file)) {
     return { outcome: 'no-credential', account, before: null, after: null };
   }
 
   const before = readCredentialState(file, now());
-  // ALREADY FRESH IS A REASON NOT TO SPEND ANYTHING. The expensive rung costs
-  // quota, so it must only ever run when there is something to gain.
-  if (before.state === 'fresh' && before.expiresAt !== null && before.expiresAt - now() > within) {
-    return { outcome: 'already-fresh', account, before: before.expiresAt, after: before.expiresAt };
+  const left = before.expiresAt === null ? null : before.expiresAt - now();
+  // ALREADY FRESH IS A REASON NOT TO SPEND ANYTHING, and not to ask either.
+  // A token with most of its life left is not a problem to be solved; nothing
+  // renews it because there is nothing wrong with it.
+  if (before.state === 'fresh' && left !== null && left > within) {
+    return { outcome: 'already-fresh', account, before: before.expiresAt, after: before.expiresAt, left };
   }
+  // Is it close enough to justify spending quota? Expired counts, and so does
+  // an expiry we could read but that is nearly here.
+  const pressing = left === null || left <= urgent;
   // Unknown is not a licence to spend either. A shape this code does not read
   // is one where "did the expiry move" cannot be answered, so the measurement
   // that makes this safe is unavailable and the honest thing is to do nothing.
@@ -106,6 +134,10 @@ export function renewClaudeCredential(cfg, { account = 'shared', within = 4 * 3_
 
   return withCredentialDir(cfg, account, file, (dir) => {
     for (const rung of rungs(cfg)) {
+      // The paid rung waits for the tighter window. Asking costs nothing and
+      // may work; spending quota every hour for four hours to buy nothing is
+      // a bill for the privilege of being early.
+      if (rung.costsQuota && !pressing) continue;
       const r = spawnSync(cfg.claudeBin, rung.args, {
         env: dir ? { ...process.env, CLAUDE_CONFIG_DIR: dir } : process.env,
         encoding: 'utf8',
@@ -122,6 +154,7 @@ export function renewClaudeCredential(cfg, { account = 'shared', within = 4 * 3_
           account,
           before: before.expiresAt,
           after: after.expiresAt,
+          left,
           rung: rung.name,
         };
       }
@@ -132,7 +165,15 @@ export function renewClaudeCredential(cfg, { account = 'shared', within = 4 * 3_
       account,
       before: before.expiresAt,
       after: after.expiresAt,
-      detail: 'every step ran and the expiry did not move',
+      left,
+      // WHETHER THIS MATTERS, decided here and not at the log site. Nothing
+      // moving with three hours left is the expected answer; nothing moving
+      // with twenty minutes left is the mechanism failing, and they must not
+      // share a log level or the real one is invisible.
+      pressing,
+      detail: pressing
+        ? 'every step ran and the expiry did not move'
+        : 'nothing to renew yet — the CLI renews near expiry, not on request',
     };
   });
 }
@@ -161,12 +202,19 @@ export function renewAllCredentials(cfg, { within } = {}) {
       results.push(r);
       if (r.outcome === 'renewed') {
         log.info(`keepalive: renewed ${account}'s credential via ${r.rung}`);
-      } else if (r.outcome === 'unchanged') {
-        // WARN, not debug. This is the case where the mechanism has stopped
-        // working, and it is invisible from everywhere else — the credential
-        // simply expires later and a session comes up logged out, four hours
+      } else if (r.outcome === 'unchanged' && r.pressing) {
+        // WARN ONLY WHEN IT MATTERS. This is the case where the mechanism has
+        // stopped working and it is invisible from everywhere else — the
+        // credential simply expires and a session comes up logged out, hours
         // and one screen away from the cause.
+        //
+        // Not when there is still time, though: an OAuth client renews near
+        // expiry rather than on request, so "asked, nothing happened, three
+        // hours left" is the expected answer and warning about it would bury
+        // the case that is not.
         log.warn(`keepalive: ${account}'s credential did not renew — ${r.detail}`);
+      } else if (r.outcome === 'unchanged') {
+        log.debug(`keepalive: ${account} — ${r.detail}`);
       }
     } catch (e) {
       // Never fatal. This runs on a timer beside everything else on the box.
@@ -256,10 +304,10 @@ function rungs(cfg) {
     // Free. Whether it renews is a CLI implementation detail we do not control
     // and must not assume either way — which is exactly why the answer is
     // measured rather than believed.
-    { name: 'auth status', args: ['auth', 'status', '--json'], timeout: STATUS_TIMEOUT_MS },
+    { name: 'auth status', args: ['auth', 'status', '--json'], timeout: STATUS_TIMEOUT_MS, costsQuota: false },
     // Costs a few tokens and unambiguously exercises the credential against the
     // API. Only reached when the free rung did not move the expiry.
-    { name: 'a one-shot prompt', args: ['-p', PROBE_PROMPT], timeout: PROMPT_TIMEOUT_MS },
+    { name: 'a one-shot prompt', args: ['-p', PROBE_PROMPT], timeout: PROMPT_TIMEOUT_MS, costsQuota: true },
   ].filter(() => Boolean(cfg.claudeBin));
 }
 

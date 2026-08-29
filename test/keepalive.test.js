@@ -142,7 +142,9 @@ test('the paid step runs only when the free one did not move the expiry', (t) =>
   // twenty seconds by the watcher for weeks and credentials expired anyway, so
   // "it probably renews" is not something to build on.
   const s = stubClaude(t, { renewOn: '-p' });
-  s.write(s.shared, Date.now() + HOUR);
+  // Inside the URGENT window — see the two-window tests below for why the paid
+  // rung will not fire merely because the free one did nothing.
+  s.write(s.shared, Date.now() + 10 * 60_000);
 
   const r = renewClaudeCredential(s.cfg());
 
@@ -159,13 +161,74 @@ test('a CLI that renews nothing is reported as renewing nothing', (t) => {
   // read the exit code would report success forever while the credential
   // expired underneath it — which is the original bug, with a timer attached.
   const s = stubClaude(t, { renewOn: null });
-  s.write(s.shared, Date.now() + HOUR);
+  s.write(s.shared, Date.now() + 10 * 60_000);
 
   const r = renewClaudeCredential(s.cfg());
 
   assert.equal(r.outcome, 'unchanged');
+  assert.equal(r.pressing, true);
   assert.match(String(r.detail), /did not move/);
   assert.equal(s.calls().length, 2, 'it tried everything before saying so');
+});
+
+// --- two windows, which one window got wrong --------------------------------
+//
+// Found by testing against a real box: "one of the hosts only has 6 hours left,
+// want to see if it gets bumped to 8 — a test doesn't do it from the app."
+// Nothing was wrong. WE DO NOT DECIDE WHEN A TOKEN REFRESHES; the CLI does, and
+// an OAuth client renews near expiry rather than whenever it is asked. So a
+// healthy token cannot be topped up early, by us or by anybody.
+
+test('asking is free and starts early; spending waits for the tight window', (t) => {
+  // With one window the paid rung fired every hour from four hours out,
+  // bought nothing each time, and billed for the privilege of being early.
+  const s = stubClaude(t, { renewOn: null });
+  s.write(s.shared, Date.now() + 3 * HOUR);
+
+  const r = renewClaudeCredential(s.cfg());
+
+  assert.equal(s.calls().length, 1, 'only the free rung ran');
+  assert.match(s.calls()[0], /auth status/);
+  assert.equal(r.outcome, 'unchanged');
+  assert.equal(r.pressing, false);
+});
+
+test('nothing happening with hours left is the expected answer, not a fault', (t) => {
+  // And this is why it is a separate flag rather than a log level chosen at
+  // the call site. With one window this logged a warning saying the mechanism
+  // had failed — four times per token, on a perfectly healthy box. A warning
+  // that fires that often is one nobody reads by the second day, and it would
+  // have been the same warning that means something is genuinely wrong.
+  const s = stubClaude(t, { renewOn: null });
+  s.write(s.shared, Date.now() + 3 * HOUR);
+
+  const r = renewClaudeCredential(s.cfg());
+
+  assert.equal(r.pressing, false, 'a healthy credential must not raise the alarm');
+  assert.match(String(r.detail), /renews near expiry, not on request/);
+});
+
+test('an expired credential is always pressing, however unreadable the clock', (t) => {
+  const s = stubClaude(t, { renewOn: null });
+  s.write(s.shared, Date.now() - HOUR);
+
+  const r = renewClaudeCredential(s.cfg());
+
+  assert.equal(r.pressing, true);
+  assert.equal(s.calls().length, 2, 'both rungs, because there is nothing left to lose');
+});
+
+test('a credential six hours from expiry is left completely alone', (t) => {
+  // The exact case that was tested on a real box. Six hours left is a HEALTHY
+  // token two hours into an eight-hour life — there is nothing to renew, and
+  // no amount of asking will bump it back up.
+  const s = stubClaude(t);
+  s.write(s.shared, Date.now() + 6 * HOUR);
+
+  const r = renewClaudeCredential(s.cfg());
+
+  assert.equal(r.outcome, 'already-fresh');
+  assert.deepEqual(s.calls(), [], 'nothing was asked, because nothing was wrong');
 });
 
 test('a rewritten credential with no more life on it does not count as renewed', (t) => {
@@ -216,4 +279,42 @@ test('one account failing does not stop the others', (t) => {
 
   assert.equal(results.length, 2);
   assert.ok(results.every((r) => r.outcome === 'renewed'));
+});
+
+// --- what the app says about it ---------------------------------------------
+
+test('the app can say WHEN, not just what', async () => {
+  // The question the screen was actually being asked and could not answer:
+  // "one of the hosts only has 6 hours left, want to see if it gets bumped to
+  // 8." Nothing was wrong and nothing was going to happen, and a Test button
+  // sitting next to an expiry invites exactly the reading that asking harder
+  // will help.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'plan-'));
+  const file = path.join(dir, '.credentials.json');
+  // Six hours left: the exact case from the box, and a healthy token two hours
+  // into an eight-hour life.
+  writeFileSync(file, JSON.stringify({
+    claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 6 * HOUR },
+  }));
+  const ctx = {
+    cfg: { credentialKeepaliveMs: 3_600_000, sandbox: true, sandboxCredentialsFile: file, stateDir: dir },
+    actor: null,
+    login: { status: () => ({ loggedIn: true, email: 'box@example.com' }) },
+  };
+
+  const reply = await dispatch(/** @type {any} */ (ctx), '/verify claude');
+
+  assert.equal(reply.ok, true);
+  // WHEN, not just what. "Nothing to do yet" plus the hour it changes, because
+  // the alternative is a person watching a number that is never going to move.
+  assert.match(reply.text, /Nothing to do yet/);
+  assert.match(reply.text, /cannot be topped up early/);
+  // A SESSION CANNOT RENEW THE BOX'S CREDENTIAL, which is the other half of
+  // that report — "starting a new session doesn't renew Claude". It cannot: a
+  // sandboxed session works on a copy inside its own volume, so any refresh
+  // the CLI does in there updates the copy and never the original. Saying so
+  // is the difference between a person testing the right thing and the wrong
+  // one.
+  assert.match(reply.text, /copy in its volume/);
 });
