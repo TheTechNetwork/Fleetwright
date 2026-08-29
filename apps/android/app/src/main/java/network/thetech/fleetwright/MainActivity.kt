@@ -620,6 +620,26 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         val text = if (behind > 0) "running $head · $behind behind" else "running $head · up to date"
                         Text(text, style = MaterialTheme.typography.bodySmall)
                     }
+                    // THE SECOND WAY TO BE SIGNED OUT, and the one that was
+                    // invisible. `loggedIn` above reports on the box's own home
+                    // directory; this reports on the credential file a session
+                    // is handed a copy of. They came apart in production — a
+                    // box saying "signed in" while every session started on it
+                    // came up logged out — and the only visible symptom was
+                    // that a brand new session worked and a resumed one did
+                    // not.
+                    //
+                    // Shown only when it is DEAD. An expired token that can
+                    // renew itself is the ordinary state of a box nobody has
+                    // touched for an hour, and a warning that fires on the
+                    // ordinary case is one people stop reading.
+                    host.credential?.takeIf { it.isDead }?.let { credential ->
+                        Text(
+                            credential.summary ?: "Sessions started here will come up signed out.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     // WHAT THE OS HAS WAITING. The host has been sending this
                     // since maintenance shipped and nothing displayed it, which
                     // is why upgrade looked like a verb that could only report.

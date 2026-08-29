@@ -21,6 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import path from 'node:path';
 import { log } from '../log.js';
 import { Accounts, emailFromActor, extractOauthAccount, rowForActor } from './accounts.js';
+import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
@@ -250,9 +251,14 @@ export function refreshSandboxImage(cfg, { timeout } = {}) {
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {string|null} [actor]
+ * @param {{ account?: string|null, createdBy?: string|null }} [opts]  what the
+ *   registry already knows about this session, when it is a resume: the Claude
+ *   account its volume holds, and the actor who started it. See
+ *   refreshSeededCredentials for why both are needed and why neither is the
+ *   actor pressing resume.
  * @returns {{ ok: boolean, message?: string, account?: string|null }}
  */
-export function ensureSandboxVolumes(cfg, name, actor = null) {
+export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
@@ -267,10 +273,10 @@ export function ensureSandboxVolumes(cfg, name, actor = null) {
   if (!image.ok) return { ok: false, message: image.message };
 
   const { claude, work } = sandboxNames(name);
-  // null = the volumes already existed, so whatever was seeded on FIRST start
-  // still applies — a resume never re-seeds, which is what keeps a session on
-  // the account it began with.
+  // null = the volumes already existed and nothing identified whose account
+  // they hold, so they keep what they have.
   let account = null;
+  let fresh = false;
 
   for (const volume of [claude, work]) {
     if (volumeExists(cfg, volume)) continue;
@@ -281,31 +287,176 @@ export function ensureSandboxVolumes(cfg, name, actor = null) {
     log.info(`sandbox: created volume ${volume}`);
 
     if (volume !== claude) continue;
-    const seeded = seedCredentials(cfg, claude, actor);
+    const seeded = seedCredentials(cfg, claude, pickCredentialSource(cfg, actor), actor);
     if (!seeded.ok) return seeded;
     account = seeded.account ?? 'shared';
+    fresh = true;
+  }
+  // A RESUME REFRESHES THE CREDENTIAL IT ALREADY HAS. This used to be the one
+  // line of the file that was confidently wrong: "a resume never re-seeds,
+  // which is what keeps a session on the account it began with." The account
+  // is what had to be kept. The BYTES were never the account, and keeping them
+  // is what made a week-old session come back logged out while a new one on
+  // the same box worked — the difference being only that the new one got a
+  // snapshot taken today.
+  //
+  // An OAuth access token has hours on it and a refresh token gets rotated
+  // when the host renews. A copy taken on Tuesday is therefore not a
+  // credential by Thursday; it is a receipt for one.
+  //
+  // So the account is pinned and the credential is not: same person, current
+  // token. Failure here is NOT fatal — a session that resumes with the
+  // credential it had is exactly the old behaviour, and refusing to resume
+  // because a refresh could not happen would be a worse bug than the one this
+  // fixes.
+  if (!fresh) {
+    const again = refreshSeededCredentials(cfg, name, { account: recorded, actor: createdBy ?? actor });
+    if (again.account) account = again.account;
   }
   return { ok: true, account };
 }
 
 /**
- * Copy the host's Claude credentials into a fresh conversation volume.
+ * Put today's credential into a volume that already exists, for the account
+ * that volume already belongs to.
+ *
+ * WHOSE, in three cases and three answers — the same discipline `rowForActor`
+ * uses, and for the same reason:
+ *
+ *   the record says      → that account, whatever the actor is. A session
+ *                          resumed by somebody else keeps the account it began
+ *                          with; that invariant is real and this preserves it.
+ *   the record is silent → ask the VOLUME. `.oauth-account.json` is seeded
+ *                          beside the credential and carries the email, so the
+ *                          volume can identify itself without a record.
+ *   neither answers      → do nothing. Guessing here would silently move a
+ *                          session onto a different Claude account mid-flight,
+ *                          which is worse than the staleness being fixed.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} name
+ * The provider tokens — GitHub, Cloudflare — follow a SEPARATE key, and the
+ * separation is deliberate rather than an oversight. A person with no linked
+ * Claude account runs on the shared one but still gets their own GitHub token,
+ * so "whose Claude account" does not answer "whose GitHub token". The second
+ * question is answered by the actor who STARTED the session, off the registry
+ * record — never by the actor pressing resume, or a colleague resuming
+ * somebody else's work would quietly lend it their repositories.
+ *
+ * @param {{ account?: string|null, actor?: string|null }} [opts]  `actor` is
+ *   the session's original creator, for the provider tokens.
+ * @returns {{ refreshed: boolean, account: string|null, why?: string }}
+ */
+export function refreshSeededCredentials(cfg, name, { account = null, actor = null } = {}) {
+  const { claude } = sandboxNames(name);
+  const owner = account ?? volumeAccount(cfg, claude);
+  if (!owner) {
+    log.info(`sandbox: ${claude} does not say whose account it holds; leaving its credential alone`);
+    return { refreshed: false, account: null, why: 'unknown account' };
+  }
+  const picked = credentialSourceForAccount(cfg, owner);
+  if (!picked?.source) {
+    // The account was unlinked since this session started. Saying so beats
+    // seeding somebody else's credential, and beats silence.
+    log.warn(`sandbox: ${owner} has no credential on this box any more; ${claude} keeps the one it has`);
+    return { refreshed: false, account: owner, why: 'no credential for that account' };
+  }
+  const state = readCredentialState(picked.source);
+  if (state.state === 'expired') {
+    log.warn(`sandbox: ${owner}'s credential on this box is itself expired; ${claude} would gain nothing`);
+    return { refreshed: false, account: owner, why: 'the host credential is expired too' };
+  }
+  const seeded = seedCredentials(cfg, claude, picked, actor);
+  if (!seeded.ok) {
+    log.warn(`sandbox: could not refresh ${claude}: ${seeded.message}`);
+    return { refreshed: false, account: owner, why: seeded.message };
+  }
+  return { refreshed: true, account: owner };
+}
+
+/**
+ * Which credential file belongs to a named account.
+ *
+ * Deliberately keyed on the ACCOUNT rather than on an actor: a refresh has to
+ * reproduce a decision made at volume-creation time, possibly by a different
+ * person, and re-running the actor rule would answer a different question.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} account  an email, or "shared"
+ * @returns {{ source: string|null, accountMeta: string|null, account: string }|null}
+ */
+export function credentialSourceForAccount(cfg, account) {
+  if (account && account !== 'shared') {
+    const store = new Accounts(cfg.stateDir);
+    const linked = store.credentialPathFor(account);
+    if (!linked) return null;
+    return { source: linked, accountMeta: store.accountMetaPathFor(account), account };
+  }
+  return {
+    source: cfg.sandboxCredentialsFile || null,
+    accountMeta: sharedAccountMetaFile(cfg),
+    account: 'shared',
+  };
+}
+
+/**
+ * The email a conversation volume was seeded for, read out of the volume.
+ *
+ * The volume can identify itself because `.oauth-account.json` is seeded
+ * beside the credential — so this works for sessions that predate the account
+ * field on the registry record, which is most of the ones anybody has running
+ * when this ships.
+ *
+ * Returns "shared" for a volume with no email in it, because that is what the
+ * shared credential's metadata looks like when the box has one, and null when
+ * the read fails at all — cannot-tell, not shared.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} volume
+ * @returns {string|null}
+ */
+export function volumeAccount(cfg, volume) {
+  const r = podman(cfg, [
+    'run', '--rm', '-v', `${volume}:/dest:ro`, cfg.sandboxImage,
+    'sh', '-c', 'cat /dest/.oauth-account.json 2>/dev/null || true',
+  ]);
+  if (r.status !== 0) return null;
+  const text = String(r.stdout).trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    const email = parsed?.emailAddress ?? parsed?.email_address;
+    if (typeof email !== 'string' || !email) return null;
+    // Whether that email is a LINKED account or the shared one is answered by
+    // the store, not by the shape of the address: the shared credential has an
+    // email too, and it is not a per-person account.
+    return new Accounts(cfg.stateDir).credentialPathFor(email) ? email : 'shared';
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copy a Claude credential into a conversation volume.
  *
  * Done with a throwaway container rather than by writing into the volume's
  * host path directly: under rootless podman that path is inside a user
  * namespace, and the uid mapping is exactly the thing we must not hand-roll.
  *
+ * WHOSE credential is decided by the caller and handed in, not worked out
+ * here. There are two callers with two different questions — a fresh start
+ * asks "whose is this actor's" and a resume asks "whose was this volume's" —
+ * and a function that answered both would have to guess which one it was being
+ * asked, which is how a resume ends up on a different account.
+ *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
- * @param {string|null} [actor]
+ * @param {{ source: string|null, accountMeta?: string|null, account: string }} picked
+ * @param {string|null} [actor]  for the provider tokens, which key on the
+ *   person rather than on the Claude account — see pickSecretsFile.
  * @returns {{ ok: boolean, message?: string, account?: string }}
  */
-function seedCredentials(cfg, volume, actor = null) {
-  // WHOSE account this session runs as. A person who has linked their own
-  // Claude account gets it seeded; everyone else — telegram, the CLI, people
-  // who never linked — gets the shared org credential, exactly as before.
-  // Decided by pickCredentialSource so it can be tested without podman.
-  const picked = pickCredentialSource(cfg, actor);
+function seedCredentials(cfg, volume, picked, actor = null) {
   const source = picked.source;
   if (!source) return { ok: true }; // deliberately disabled
   // The identity rides with the credential when there is one. The entrypoint
@@ -320,9 +471,10 @@ function seedCredentials(cfg, volume, actor = null) {
     copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
   }
   // The other credentials — GitHub, Cloudflare, whatever gets added. Seeded on
-  // the same terms as the Claude credential and for the same reason: a resume
-  // never re-seeds, so a session keeps the tokens it began with and a rotation
-  // reaches the next session rather than reaching backwards into a running one.
+  // the same terms as the Claude credential: refreshed alongside it, so a
+  // rotated GitHub token reaches a resumed session rather than only a brand
+  // new one. Absent is not an error — a person with no connected providers is
+  // the ordinary case.
   const secrets = pickSecretsFile(cfg, actor);
   if (secrets) {
     mounts.push('-v', `${secrets}:/seed/.secrets.env:ro`);

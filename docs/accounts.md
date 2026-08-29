@@ -77,6 +77,42 @@ container's state file **on every start** (that file is container-ephemeral;
 a one-off merge survives exactly one run). Each session records which account
 it was seeded with.
 
+**And the copy goes stale, which is the second thing it taught us.** For a long
+time this file said a resume never re-seeds, "which is what keeps a session on
+the account it began with". The account had to be kept. **The bytes were never
+the account.** An OAuth access token has hours on it and its refresh token gets
+rotated when the host renews, so a copy taken on Tuesday is not a credential by
+Thursday — it is a receipt for one. The symptom was a box where a brand new
+session worked and a week-old one resumed logged out, on the same account, on
+the same machine, with the only difference being *when* the copy was taken.
+
+So the account is pinned and the credential is not: **a resume re-seeds, for
+the account the volume already holds.** Whose that is has three answers and not
+two — the registry record, or failing that the volume's own
+`.oauth-account.json`, or failing both, nothing at all. Guessing would silently
+move a session onto a different Claude subscription, which is worse than the
+staleness. Two refusals are deliberate: an account unlinked since the session
+started is *reported*, never substituted with the shared one; and a host
+credential that is itself expired is not copied over the session's, which might
+still hold a refresh token that works.
+
+The provider tokens — GitHub, Cloudflare — ride along on a **separate key**,
+because "whose Claude account" does not answer "whose GitHub token": a person
+with no linked Claude account runs on the shared one and still gets their own
+repositories. That key is the actor who *started* the session, off the record,
+never the actor pressing resume — otherwise a colleague resuming somebody's
+work quietly lends it their credentials.
+
+**Two ways to be signed out, and only one of them was visible.** `claude auth
+status` reports on the box's own home directory; a sandboxed session runs on a
+copy of a file. A box can report itself signed in and hand every new session a
+dead token. `/api/state` now publishes what a session *would* get beside what
+the box says about itself, health carries it, and the coordinator degrades a
+host on it — but only when the token has expired **and** there is no refresh
+token to renew it with. Expired-but-refreshable is the ordinary state of a box
+nobody has touched for an hour, and a warning that fires on the ordinary case
+is one people stop reading.
+
 **4. Visibility — done.** Admin sees every session; a member sees the ones
 their identity created. **Filtered at the coordinator, never at the host.** The
 host does not know who is asking — it has one token and answers it — so a

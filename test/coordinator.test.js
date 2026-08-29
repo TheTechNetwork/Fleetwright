@@ -83,6 +83,51 @@ test('a host that is not logged into Claude is degraded', () => {
   assert.equal(reg.get('box')?.state, 'degraded');
 });
 
+test('a host whose sessions would get a dead credential is degraded, though it is logged in', () => {
+  // A SECOND WAY TO BE UNUSABLE, and the one that was invisible. `loggedIn`
+  // reports on the box's own home directory; a sandboxed session runs on a
+  // copy of a file. A box can be logged in and hand every new session a token
+  // that expired hours ago — which is what "deb13-staging wouldn't work until
+  // I clicked sign in again" was — and the scheduler kept sending it work
+  // because the only question being asked was answered "yes".
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({
+    loggedIn: true,
+    credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' },
+  }));
+
+  assert.equal(reg.get('box')?.state, 'degraded');
+  assert.match(reg.get('box')?.reason || '', /credential/);
+  assert.equal(reg.schedulable().length, 0);
+});
+
+test('an expired credential that can renew itself does not degrade the host', () => {
+  // The ordinary state of a box nobody has touched for an hour: the CLI inside
+  // the session renews it on the way up. Degrading on this would take the
+  // whole fleet offline every night, and a warning that fires on the ordinary
+  // case is one people stop reading.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({
+    credential: { state: 'expired', refreshable: true, expiresAt: 1, account: null, plan: null, summary: '' },
+  }));
+
+  assert.equal(reg.get('box')?.state, 'healthy');
+});
+
+test('a host that does not report a credential at all stays healthy', () => {
+  // Every host running one release back, and every non-sandboxed one. Absent
+  // is cannot-tell, never a fault — a fleet that flags older hosts as broken
+  // teaches people to ignore the flag.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({ credential: null }));
+
+  assert.equal(reg.get('box')?.state, 'healthy');
+  assert.equal(reg.schedulable().length, 1);
+});
+
 test('a disconnected host is kept, marked offline, with its last known sessions', () => {
   // Deleting it would lose the only clue about where a resume would have to
   // land once it comes back.

@@ -497,7 +497,35 @@ struct Fleet {
             var appPending: Bool { (appBehind ?? 0) > 0 }
             var systemPending: Bool { !(system ?? "").isEmpty }
         }
+        /// What a session started on this box would actually be given.
+        ///
+        /// NOT THE SAME QUESTION AS `loggedIn`, which is the distinction that
+        /// cost an evening: `loggedIn` reports on the box's own home
+        /// directory, while a sandboxed session runs on a copy of a credential
+        /// file taken when its volume was made. A box can report itself signed
+        /// in and hand every new session a token that expired hours ago.
+        ///
+        /// `state` is one of fresh / expired / unknown, and UNKNOWN IS NOT A
+        /// PROBLEM — it means the host could not tell, which is what an older
+        /// host and an unsandboxed one both look like.
+        struct Credential: Codable, Hashable {
+            let state: String?
+            let expiresAt: Double?
+            let refreshable: Bool?
+            let account: String?
+            let plan: String?
+            /// The host's own sentence about it. Shown verbatim: this one is
+            /// written for a person rather than for a terminal, and it is the
+            /// only place that knows which of the three states it is in.
+            let summary: String?
+
+            /// Worth interrupting somebody over. Deliberately narrow: an
+            /// expired token that can renew itself is the ordinary state of a
+            /// box nobody has touched for an hour.
+            var isDead: Bool { state == "expired" && refreshable == false }
+        }
         let account: Account?
+        let credential: Credential?
         let version: Version?
         let updates: Updates?
         let loggedIn: Bool?

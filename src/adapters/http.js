@@ -21,6 +21,8 @@ import { dispatch } from './commands.js';
 import { describe } from '../core/login.js';
 import { log } from '../log.js';
 import { redactCommandLine } from '../core/redact.js';
+import { readCredentialState, describeCredential } from '../core/claude-credential.js';
+import { pickCredentialSource } from '../core/podman.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -131,6 +133,18 @@ export class HttpAdapter {
         running: sessions.filter((s) => s.status === 'running').length,
         loginEnabled: this.cfg.loginEnabled,
         auth: { ...this.login.status(), summary: describe(this.login.status()) },
+        // WHAT A SESSION WOULD GET, which is not the same question as `auth`
+        // above. `auth` reports on the box's home directory; a sandboxed
+        // session runs on a COPY taken at volume creation. The two answers
+        // came apart in production — "logged in" on a box where every new
+        // session came up logged out — so both are published and the client
+        // decides which one it is asking about.
+        //
+        // Never the token, and nothing derived from it: an expiry, whether
+        // there is something to renew with, and the account it names. All
+        // three are already visible to anyone who can run `claude auth status`
+        // on the box.
+        credential: this.cfg.sandbox ? credentialSummary(this.cfg) : null,
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
         sessions,
         // What has been forgotten but not yet deleted. Additive: an older
@@ -312,4 +326,30 @@ function readJson(req) {
     });
     req.on('error', () => resolve({}));
   });
+}
+
+/**
+ * The shared credential a sandboxed session inherits, described without
+ * quoting any of it.
+ *
+ * The SHARED one specifically: this endpoint has no actor, so it cannot answer
+ * "whose". `/verify claude` does that, because it runs as somebody. What this
+ * answers is the question a fleet dashboard asks — is this box in a state
+ * where starting a session is worth doing — and the shared credential is what
+ * makes that true or false for everyone who has not linked their own.
+ *
+ * @param {import('../config.js').Config} cfg
+ */
+function credentialSummary(cfg) {
+  const picked = pickCredentialSource(cfg, null);
+  if (!picked.source) return null;
+  const state = readCredentialState(picked.source);
+  return {
+    state: state.state,
+    expiresAt: state.expiresAt,
+    refreshable: state.refreshable,
+    account: state.account,
+    plan: state.plan,
+    summary: describeCredential(state, 'this box'),
+  };
 }

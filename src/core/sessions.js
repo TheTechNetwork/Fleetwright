@@ -359,7 +359,15 @@ export class SessionManager {
       // What DOES have to happen first is the volumes existing and the
       // conversation volume having credentials in it — without that the
       // session comes up unauthenticated and hangs at a login prompt.
-      const volumes = ensureSandboxVolumes(this.cfg, name, actor);
+      // The account off the record, so a resume refreshes the credential it
+      // already has rather than re-deriving one from whoever pressed resume.
+      // A colleague resuming somebody else's session must not move it onto
+      // their own Claude account.
+      const known = this.registry.get(name);
+      const volumes = ensureSandboxVolumes(this.cfg, name, actor, {
+        account: known?.account ?? null,
+        createdBy: known?.createdBy ?? null,
+      });
       if (!volumes.ok) {
         this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, createdBy: actor });
         return { ok: false, message: `Could not prepare the sandbox for "${name}": ${volumes.message}` };
