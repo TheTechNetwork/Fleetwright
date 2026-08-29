@@ -159,7 +159,7 @@ dependencies {
   // Custom Tabs: the provider's authorization page, opened inside the app and
   // closing itself when it redirects back. See WebAuth.kt for why this is a
   // real browser rather than a WebView. Pinned, like everything else here.
-  implementation("androidx.browser:browser:1.9.0")
+  implementation("androidx.browser:browser:1.10.0")
 
   // Firebase Cloud Messaging is deliberately NOT here yet — it needs a
   // google-services.json from your Firebase project, and the Google Services
