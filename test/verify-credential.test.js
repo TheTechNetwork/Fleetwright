@@ -101,3 +101,50 @@ test('both apps offer the test and can show the detail', () => {
     assert.match(src, /does not report what a token was granted/, `${name} renders "cannot tell" as something else`);
   }
 });
+
+test('a GitHub App token is not reported as missing every scope', async (t) => {
+  // THE FALSE ALARM. A GitHub App user token carries no classic scopes: its
+  // capabilities are the App's permissions, chosen at install and absent from
+  // `x-oauth-scopes`. Parsing an absent header as `[]` and subtracting it from
+  // the PAT scope list produced, on screen, next to a perfectly working token:
+  //
+  //   missing repo, workflow, read:org, gist, read:packages, admin:repo_hook
+  //
+  // It is also a category error — an App's permissions and a PAT's scopes are
+  // different vocabularies with nothing to compare.
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+
+  const { verifyToken } = await import('../src/core/connectors.js');
+
+  // No header at all: a GitHub App user token.
+  globalThis.fetch = async () => new Response(JSON.stringify({ login: '00o-sh' }), { status: 200 });
+  const app = await verifyToken('github', 'ghu_x');
+  assert.equal(app.ok, true);
+  assert.equal(app.granted, null, 'an App token must read as "cannot tell", not as "none"');
+  assert.match(app.message, /GitHub App token/, 'and it should say why rather than leaving a silent null');
+
+  // Present but blank is the same fact.
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ login: '00o-sh' }), { status: 200, headers: { 'x-oauth-scopes': '' } });
+  assert.equal((await verifyToken('github', 'ghu_x')).granted, null);
+
+  // A classic PAT still reports what it has.
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ login: '00o-sh' }), { status: 200, headers: { 'x-oauth-scopes': 'repo, workflow' } });
+  assert.deepEqual((await verifyToken('github', 'ghp_x')).granted, ['repo', 'workflow']);
+});
+
+test('and storing an App token does not warn about scopes it cannot have', async (t) => {
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ login: '00o-sh' }), { status: 200 });
+
+  const store = new Connections(dir());
+  const saved = store.save(HOST_ROW, 'github', 'ghu_x', '00o-sh', null);
+  assert.equal(saved.ok, true);
+  assert.equal(/It is missing/.test(saved.message), false, 'a token with nothing to compare was called short');
+
+  const checked = await store.check(HOST_ROW, 'github');
+  assert.equal(checked.missing, null, '"cannot tell" is not "missing everything"');
+});
