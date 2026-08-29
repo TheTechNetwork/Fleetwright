@@ -32,7 +32,16 @@ test('restarting and applying are opt-in, never by omission', () => {
   assert.equal(toCommandLine({ verb: 'update', params: {} }), '/update');
   assert.equal(toCommandLine({ verb: 'update', params: { restart: 'yes' } }), '/update --restart');
   assert.equal(toCommandLine({ verb: 'upgrade', params: {} }), '/upgrade');
-  assert.equal(toCommandLine({ verb: 'upgrade', params: { apply: 'yes' } }), '/upgrade apply');
+  // `--apply`, and this line used to read `'/upgrade apply'` — asserting the
+  // string the code produced rather than one the command parses. agent-hub's
+  // upgrade reads `flags.has('apply')`, and a bare word never reaches flags, so
+  // this test passed while the feature did nothing.
+  //
+  // A test that pins an implementation detail agrees with the implementation by
+  // construction. test/command-mapping.test.js now checks the line against the
+  // actual parser instead, which is the only version of this assertion with
+  // anything to say.
+  assert.equal(toCommandLine({ verb: 'upgrade', params: { apply: 'yes' } }), '/upgrade --apply');
 });
 
 test('the flags are enums, so nothing else fits through', () => {

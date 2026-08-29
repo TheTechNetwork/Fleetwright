@@ -622,7 +622,16 @@ export function toCommandLine({ verb, params, actor }) {
     case 'update':
       return p.restart === 'yes' ? '/update --restart' : '/update';
     case 'upgrade':
-      return p.apply === 'yes' ? '/upgrade apply' : '/upgrade';
+      // `--apply`, NOT `apply`. agent-hub's upgrade reads `flags.has('apply')`,
+      // and parse() only puts a dash-prefixed token in flags — so a positional
+      // `apply` was silently the reporting mode. The symptom was exact and
+      // misleading: tapping "Apply upgrade" returned the CHECK text, ending in
+      // the host's own hint, "/upgrade --apply to install them."
+      //
+      // `update` sent `--restart` and worked, which is why one of the pair
+      // looked fine and the other looked broken. Two mappings, one convention,
+      // and nothing checked that they agreed.
+      return p.apply === 'yes' ? '/upgrade --apply' : '/upgrade';
     case 'reboot':
       // Bare `/reboot` is step one and returns the pin; pin + hostname is
       // step two. Both are `name`-typed, so neither can carry anything but
