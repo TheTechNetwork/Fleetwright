@@ -233,7 +233,19 @@ test('a pane that says "not logged in" is reported as that, not as a timeout', (
   const why = diagnoseRc(pane);
   assert.ok(why, 'the cause is on the screen');
   assert.match(why.detail, /not logged in/i);
-  assert.match(why.remedy, /AGENT_HUB_SANDBOX_CREDENTIALS/, 'and the remedy names the setting to check');
+
+  // THE REMEDY MUST NOT COST A CONVERSATION. This message is read at the worst
+  // moment, and it used to end in "/forget the session and start it again so
+  // the volume is seeded fresh" — correct when a resume never re-seeded, since
+  // destroying the volume was then the only way to get a current credential
+  // into one. A resume re-seeds now, so that advice throws away a week of work
+  // to fix something a resume fixes, and a remedy that expensive when a
+  // cheaper one exists is worse than no remedy at all.
+  assert.ok(!/forget/i.test(why.remedy), 'the remedy tells somebody to destroy their conversation');
+  assert.match(why.remedy, /resume/i, 'and does not name the cheap fix');
+  // Cheapest first, ending at the one that loses something — how every other
+  // remedy in this codebase is written.
+  assert.ok(why.remedy.indexOf('Sign in again') < why.remedy.indexOf('/verify'));
 });
 
 test('a self-updated CLI is reported as needing a restart', () => {
