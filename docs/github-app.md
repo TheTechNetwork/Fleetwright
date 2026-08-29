@@ -106,14 +106,103 @@ This is the part to get right, and it follows directly from
 - **The client secret** is not a credential to anything on its own — it is
   useless without a refresh token. It may live where hosts already keep
   configuration.
-- **The per-person refresh token** goes exactly where the PAT lives today:
-  `${stateDir}/accounts/<email>.env`, 0600, one file per person. Same blast
-  radius as now, with an access token that expires in eight hours instead of
-  never.
+- **The per-person refresh token** lives in `${stateDir}/connections/<row>.renewal.json`,
+  0600, one file per person, **mounted into no session** — beside the `.env`
+  a session does get and the `.connections.json` a phone may read. Same blast
+  radius as the PAT it replaces, with an access token that expires in eight
+  hours instead of never. (Shipped: see [accounts.md](./accounts.md).)
 
 So the first build is **user-to-server OAuth**, not installation tokens. That
 is not a compromise; it is the half that does not require the broker, and it
 already beats a PAT on lifetime, scope and revocability.
+
+## Scoping to a repository: mostly already true, and free
+
+Asked directly: *"if an app has permission to scope tokens it issues we can do
+it by scoping to repo unless more is needed."* It can, and the API is exactly
+that shape — but **most of what that buys is already in force**, which is worth
+knowing before building anything.
+
+**A user-to-server token cannot exceed the installation.** GitHub's rule is
+that an App *"can only access resources in an account where it is installed"*
+and *"can only access resources that the user has access to"*. So a token from
+today's flow is already bounded by the repositories the person picked when they
+clicked Install. The scoping is per *installation* rather than per session, and
+it is chosen by the person rather than by us — but it is real, and it is on.
+
+**Which makes one setting the highest-value thing on this page.** If the
+installation is on *All repositories*, none of that scoping exists and every
+token reaches everything the person can. If it is on *Only select
+repositories*, it is already narrow. That is a screen on github.com, no code,
+and it should be checked before anything below is built.
+
+**Mint-time scoping is the increment on top**, and it is confirmed rather than
+assumed — `POST /app/installations/{id}/access_tokens` takes `repositories` or
+`repository_ids` (up to 500) and a `permissions` object that may be any subset
+of what the installation granted; omit `permissions` and the token gets all of
+them. One hour. **It requires a JWT**, which means the private key.
+
+What it adds over the installation scoping already in force:
+
+| | today (user-to-server) | per-session installation token |
+|---|---|---|
+| lifetime | 8 hours, renewed | **1 hour** |
+| scope chosen by | the person, at install | **us, at mint** |
+| granularity | per person | **per session** |
+| narrowing later | they edit the installation | a different mint |
+
+The middle row is the one that matters and is also the catch: scope chosen at
+mint time is chosen by whoever holds the key, so a compromised minter simply
+omits `permissions` and gets everything. **Narrow tokens do not make a minting
+key safer** — that is the rule from trust.md restated, and it is why scoping is
+an argument for the broker rather than an argument around it.
+
+### Escalation, and why it is the broker
+
+*"Allowing a token to be updated in a session if more is needed, using the MCP
+concept."* That is the right shape and it is what the broker is for. A session
+that holds no token and asks a socket each time can be given the narrowest
+thing that works, and asking for more becomes a REQUEST — one that can be
+logged, refused, or put in front of a person — rather than a fact discovered
+afterwards from a token that already had the reach.
+
+It also fixes something smaller and immediate: a session that holds `GH_TOKEN`
+in its environment holds whatever was current when it started. Renewal already
+reaches the next session; it cannot reach into a running one. A socket makes
+that difference disappear.
+
+**The broker without minting is already worth building, and needs no decision
+about the private key.** It serves the user-to-server token this fleet already
+stores, which is exactly the order trust.md argues for: *"minting without the
+broker is a shorter fuse on the same bomb; the broker without minting is
+already an improvement."*
+
+### The tension nobody has named yet
+
+**"Any account" and per-session minting pull against each other.** This App is
+registered installable by any account, deliberately, so a guest can bring their
+own GitHub and install it on their own repositories. That is also precisely
+what makes the private key cross-tenant: a key that mints for every
+installation, on an App that anybody may install, mints into *guests'*
+repositories too.
+
+trust.md's bar for where a minting key may live is *"where a compromise is
+already total for the things it affects."* A host holding this key would be
+one compromise away from minting into a guest's account it has otherwise never
+touched — which is not that bar, and no amount of scoping the minted tokens
+changes it.
+
+There are two coherent ways out and they should be chosen deliberately:
+
+1. **Keep "Any account", and guests keep pasting their own tokens** — the
+   second route stays first-class, which was already the decision, and the App
+   is for the org. Minting then only ever reaches org repositories, and the key
+   sits inside a blast radius that is already the org's.
+2. **Restrict the App to this account**, and guests use their own GitHub
+   entirely. Simpler key story, and it costs the one-tap flow for guests.
+
+Doing neither and building minting anyway is the option that looks like
+progress and quietly widens what a single compromised host can reach.
 
 ## Registered, and what each value is
 
