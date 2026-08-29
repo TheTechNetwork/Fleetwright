@@ -133,6 +133,10 @@ Not today. But it decides the shape of anything new that needs configuring:
 | Scheduled system/app update checks, so the answer is ready when asked | wanted | pairs with host-version-in-app |
 | **Package the host** — versioned tarball + manifest instead of a monorepo checkout | **partial** | `docs/packaging.md`. Path-scoped "behind" **done** (a docs commit no longer makes a host say it is behind, or restart). Next: publish the tarball in CI, then teach `/update` the manifest with a git fallback |
 | CI runs the Worker in workerd; tail workflow; frame logging | **done** | born in the Aug-28 outage |
+| **A resumed session gets a current credential** | **done** | `docs/accounts.md`. The old rule — "a resume never re-seeds, which is what keeps a session on the account it began with" — kept the bytes in order to keep the account, and the bytes were never the account. A week-old session came back logged out on a box where a new one worked. The account is pinned now and the credential is not |
+| **A host that would hand out a dead credential is degraded** | **done** | `claude auth status` reports on the box's home directory; a sandboxed session runs on a copy of a file. Both are published; the coordinator degrades only on expired-with-nothing-to-renew, because expired-but-refreshable is the ordinary state of an idle box |
+| **Auto-restart a session whose pane stopped moving** | **done** | `docs/sidecar.md`, `AGENT_FLEET_IDLE_RESTART_MINUTES` (60, 0 to disable). Never a session at a prompt; two attempts and then it says it has stopped |
+| Scheduled credential refresh on the host itself, so a box is never signed out at the moment somebody starts a session | wanted | today the fix is a person tapping sign-in. `claude auth status` renews as a side effect; nothing runs it on a timer |
 | Node-coordinator socket-leg parity tests (the ws analogue of the executed OpenAPI spec) | wanted | the one interface without an executable cross-implementation contract |
 
 ---
