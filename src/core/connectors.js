@@ -45,7 +45,7 @@ const VERIFY_TIMEOUT_MS = 10_000;
  * @property {string[]} env            environment variables the token is exported as
  * @property {(host: string) => string} url  where to go to create one
  * @property {string} hint             said on screen, before they leave for that page
- * @property {(secret: string) => Promise<{ ok: boolean, account?: string, granted?: string[], message: string }>} verify
+ * @property {(secret: string) => Promise<{ ok: boolean, account?: string, granted?: string[]|null, message: string }>} verify
  * @property {string[]} [wants]  permissions the catalogue currently asks for, when they are checkable
  */
 
@@ -159,12 +159,38 @@ export const PROVIDERS = Object.freeze({
       // Granted scopes are not a secret. They are the same list the person
       // ticked, and storing them is what lets the app say "this one is missing
       // workflow" instead of "connected".
-      const granted = (res.headers.get('x-oauth-scopes') || '')
-        .split(',')
-        .map((x) => x.trim())
-        .filter(Boolean);
+      // ABSENT IS NOT EMPTY, and conflating them reported a working token as
+      // broken. A GitHub APP user token carries no classic scopes at all — its
+      // capabilities are the App's permissions, chosen at install and listed
+      // nowhere in this header — so GitHub omits it. Parsing that as `[]` and
+      // subtracting it from the PAT scope list produced "missing repo,
+      // workflow, read:org, gist, read:packages, admin:repo_hook" on a token
+      // that was working perfectly.
+      //
+      // It was also a category error: an App token's permissions and a PAT's
+      // scopes are different vocabularies, and there is nothing to compare.
+      // `null` means "cannot tell", which both apps already render as itself
+      // rather than as an absence.
+      const header = res.headers.get('x-oauth-scopes');
+      const granted = header === null || header.trim() === ''
+        ? null
+        : header.split(',').map((x) => x.trim()).filter(Boolean);
       return login
-        ? { ok: true, account: login, granted, message: `GitHub token verified as @${login}.` }
+        ? {
+            ok: true,
+            account: login,
+            granted,
+            message:
+              `GitHub token verified as @${login}.` +
+              // Said once, here, rather than left as a silent null the apps
+              // have to explain for themselves. An App token is not a lesser
+              // token — it is a differently-shaped one, and its permissions
+              // live on the installation.
+              (granted === null
+                ? '\nThis looks like a GitHub App token: its permissions are the ones chosen when the App was ' +
+                  'installed, and GitHub does not report them as scopes.'
+                : ''),
+          }
         : { ok: false, message: 'GitHub accepted the token but did not say who it belongs to.' };
     },
   },
@@ -491,6 +517,10 @@ export class Connections {
     meta[provider] = { account, updatedAt: Date.now(), ...(granted ? { granted } : {}) };
     writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
 
+    // `granted === null` means the provider will not say — an App token, whose
+    // permissions are the installation's. Nothing to subtract, so nothing is
+    // short, and claiming otherwise is how a working credential gets reported
+    // as broken the moment it is stored.
     const short = granted && p.wants ? p.wants.filter((w) => !granted.includes(w)) : [];
     return {
       ok: true,
