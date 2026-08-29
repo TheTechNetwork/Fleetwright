@@ -24,18 +24,54 @@ Every piece of the paste UI — numbered steps, the one-tap paste, "delete the
 old one first", the stored scope list — is scaffolding around a step this
 removes. It stays for Cloudflare, which has no equivalent program.
 
+## Who creates it: once per DEPLOYMENT, not once per person
+
+Worth stating plainly, because the opposite is the natural reading and it is
+what makes the App look unusable:
+
+> that way doesn't work very well as every user must create the app
+
+**A user never sees the create form.** The App is created once, by whoever runs
+the fleet. Everybody else clicks **Install**, picks their repositories, and is
+done — one App, many installations, which is the entire shape of the thing.
+
+Where that instinct is right is one level up: **anyone who self-hosts
+Fleetwright needs their own App**, because the callback URL points at their own
+coordinator. That is real friction for a project meant to be cloned and run,
+and it is why there are two routes rather than one.
+
+## Two routes, and neither is a fallback for the other
+
+| | when |
+|---|---|
+| **GitHub App** | the deployment has one configured. No credential crosses a person, per-repository scope, uninstall is a revocation we are told about |
+| **Paste a token** | it does not. Also the only route for Cloudflare, which has no app program at all |
+
+The paste route is not a degraded mode kept for compatibility — it is the
+correct answer for a fleet whose operator has not registered an App, and the
+only answer for a provider that offers none. Both are first-class, the app
+shows whichever the host reports, and neither screen apologises for being the
+other one.
+
+That also settles what happens on a fresh clone: it works, with pasting, and
+registering an App is an upgrade rather than a prerequisite.
+
 ## The part only the account owner can do
 
 Create the App at **Settings → Developer settings → GitHub Apps → New**.
 
 | field | value | why |
 |---|---|---|
-| Name | `Fleetwright` | appears on the consent screen |
+| Name | `Fleetwright` | appears on the consent screen. **Globally unique across GitHub** — if it is taken, the name is the only field here that has to change |
 | Homepage URL | `https://fleet.thetech.network` | |
 | Callback URL | `https://fleet.thetech.network/oauth/github/callback` | the coordinator already serves public routes; this is one more |
 | Expire user authorization tokens | **on** | this is what makes the access token eight hours instead of indefinite. Off by default, and off is the whole point missed |
 | Request user authorization (OAuth) during installation | **on** | so one flow both installs and identifies the person |
 | Webhook | **off** for now | nothing consumes it yet; turn it on when uninstall-detection is built |
+| Setup URL | blank | with OAuth-during-install on, GitHub returns to the callback anyway |
+| Redirect on update | off | until something consumes it |
+| Allow wildcard matching | **off** | a wildcard sends tokens to any subdomain and additional path of the redirect. This is the field where "convenient" and "hands your token to a neighbour" are the same checkbox |
+| Enable Device Flow | **off** | deliberately — see the phishing note in connectors.md |
 | Where can this be installed | **Any account** | guests bring their own GitHub accounts |
 
 **Repository permissions**, mirroring what the PAT scopes were doing:
