@@ -103,6 +103,49 @@ repositories. That key is the actor who *started* the session, off the record,
 never the actor pressing resume — otherwise a colleague resuming somebody's
 work quietly lends it their credentials.
 
+**And something has to ask.** A credential renews when it is USED, and nothing
+on an idle host uses one — no session is running, which is what idle means. So
+it goes stale precisely when it must not: at the moment somebody starts a
+session on a box that has been quiet since yesterday. That is the whole of
+*"deb13-staging wouldn't work until I clicked sign in again"* — signing in
+worked because signing in is a use.
+
+`src/core/keepalive.js` runs hourly and is **a ladder, cheapest rung first**:
+`claude auth status`, which is free and may renew as a side effect of asking,
+and then a one-shot prompt, which costs a few tokens and unambiguously
+exercises the credential against the API. It stops at the first rung that
+works, so an idle box normally pays nothing, and it does not run at all on a
+credential with hours left.
+
+**The verdict comes from the credential file, never from an exit code**, and
+that is the only reason this is safe to ship. Every one of those commands can
+succeed without renewing anything — which is exactly what `auth status` was
+doing for weeks, called every twenty seconds by the watcher, while credentials
+expired underneath it. So the expiry is read before and after and the question
+is whether it *moved*, and moved *later*: a CLI that rewrote the same token
+would change the mtime and grant nothing. When nothing moves, the log says so,
+which is a bug report rather than a silent success.
+
+It is deliberately **not a session**, though a session would also work. A
+session is a container, a volume, a tmux pane, a registry record, a watcher
+entry, a bin entry and an idle-restart candidate — every one of them blast
+radius for something whose entire job is to make one HTTPS request.
+
+Linked accounts are renewed too, staged into an isolated `CLAUDE_CONFIG_DIR`
+and written back only if they gained life. They go stale *worse* than the
+shared credential: the shared one is exercised whenever anybody on the box
+works, while a guest's account that has not started a session this week is used
+by nothing at all.
+
+**GitHub does not work this way and the same fix would do nothing.** A GitHub
+App user token is not renewed by being used; it is renewed by exchanging a
+refresh token, explicitly, against `POST /login/oauth/access_token`. We receive
+that refresh token at the end of the OAuth flow **and throw it away** —
+`core.js` says so in as many words, because the host cannot perform the
+exchange without the client secret. So today a GitHub App connection is dead
+eight hours after it is made and the only remedy is connecting again. That is
+the next piece, and it is a stored-secret problem rather than a usage one.
+
 **Two ways to be signed out, and only one of them was visible.** `claude auth
 status` reports on the box's own home directory; a sandboxed session runs on a
 copy of a file. A box can report itself signed in and hand every new session a
