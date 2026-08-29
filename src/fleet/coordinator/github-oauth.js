@@ -87,6 +87,44 @@ export class PendingAuthorizations {
 }
 
 /**
+ * The origin, parsed rather than trimmed.
+ *
+ * This was `origin.replace(/\/+$/, '')`, which CodeQL flagged the day after
+ * CodeQL started running, and it was right twice over.
+ *
+ * **The regex backtracks.** `\/+$` against a long run of slashes that does not
+ * end the string is polynomial: 60,000 slashes with one character after them
+ * took three seconds, measured. Anchoring at the end is what makes it
+ * quadratic rather than linear.
+ *
+ * **And the input is not ours.** The Node coordinator built its origin from
+ * `req.headers.host`, which is whatever the client sent. So the slow string
+ * was one header away, and — separately — a forged Host would have been
+ * assembled into a `redirect_uri`. GitHub refuses a redirect that is not on the
+ * App's registered list, so that was never a token leak, but building a URL out
+ * of an attacker's header and sending it to a provider is not a thing to leave
+ * standing because the provider happens to catch it.
+ *
+ * `new URL(...).origin` is linear, and cannot produce a trailing slash at all —
+ * so the trimming this replaced is not merely faster, it is unnecessary.
+ *
+ * @param {unknown} value
+ * @returns {string|null} the normalised origin, or null if it is not one
+ */
+export function normaliseOrigin(value) {
+  const raw = String(value ?? '');
+  // A bound before parsing: a megabyte of Host header is not a URL anybody
+  // meant to send, and refusing it costs nothing.
+  if (!raw || raw.length > 2048) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Where to send somebody to authorize.
  *
  * `redirect_uri` is sent explicitly rather than relying on the App's default,
@@ -97,9 +135,11 @@ export class PendingAuthorizations {
  * @param {{ clientId: string, origin: string, state: string }} args
  */
 export function authorizeUrl({ clientId, origin, state }) {
+  const base = normaliseOrigin(origin);
+  if (!base) return null;
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', `${origin.replace(/\/+$/, '')}/oauth/github/callback`);
+  url.searchParams.set('redirect_uri', `${base}/oauth/github/callback`);
   url.searchParams.set('state', state);
   return url.toString();
 }
@@ -114,6 +154,8 @@ export function authorizeUrl({ clientId, origin, state }) {
  * @param {{ clientId: string, clientSecret: string, code: string, origin: string, fetch?: typeof globalThis.fetch }} args
  */
 export async function exchangeCode({ clientId, clientSecret, code, origin, fetch: doFetch = globalThis.fetch }) {
+  const base = normaliseOrigin(origin);
+  if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
   let body;
   try {
     const res = await doFetch('https://github.com/login/oauth/access_token', {
@@ -123,7 +165,7 @@ export async function exchangeCode({ clientId, clientSecret, code, origin, fetch
         client_id: clientId,
         client_secret: clientSecret,
         code,
-        redirect_uri: `${origin.replace(/\/+$/, '')}/oauth/github/callback`,
+        redirect_uri: `${base}/oauth/github/callback`,
       }),
       signal: AbortSignal.timeout(15_000),
     });

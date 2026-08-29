@@ -705,7 +705,12 @@ export class CoordinatorCore {
     const catalogue = reply?.connections?.catalogue;
     if (!Array.isArray(catalogue)) return reply;
 
+    // An origin we cannot parse means no App offer, and the paste route is
+    // returned untouched. Better a working paste than an authorize URL built
+    // out of something that was not an address.
     const state = this.newId();
+    const url = authorizeUrl({ clientId, origin, state });
+    if (!url) return reply;
     this.pendingGithub.mint({ state, hostId, email });
     return {
       ...reply,
@@ -715,7 +720,7 @@ export class CoordinatorCore {
           c?.provider === 'github'
             ? {
                 ...c,
-                url: authorizeUrl({ clientId, origin, state }),
+                url,
                 // The app renders no paste field for this one: there is
                 // nothing to copy, which is the entire point of the App.
                 flow: 'app',
