@@ -165,6 +165,52 @@ and the cost of not doing so is unbounded.
 Deleting it now is also free: nothing uses it, and the OAuth build does not
 need it.
 
+### What the key is actually for, which is one call
+
+There is exactly one thing a GitHub App's private key does here:
+
+```
+sign a JWT with it  (RS256, iss = client id, 10 minutes)
+POST /app/installations/{installation_id}/access_tokens
+  → a one-hour installation token, scoped to that installation
+```
+
+That is the whole list. It is **not** used for webhook verification (that is the
+webhook secret), not for the OAuth exchange (that is the client secret), and not
+for anything a session does. So the question "where does the pem need to live"
+has a single answer: **wherever installation tokens are minted, and nowhere
+else.**
+
+### Which is a service that does not exist, and might never
+
+Three candidate holders, and two are already ruled out:
+
+| holder | verdict |
+|---|---|
+| every host | **no** — N copies of a key that mints for every installation. One host compromise reaches every member and every org that ever installed the App |
+| the coordinator | **no** — treated as compromised by design; this would make it the highest-value target in the system |
+| a separate minting service, asked by hosts over their existing keys | the only shape that works, and it is the broker |
+
+And the fourth option, which is the one to hold open: **user-to-server OAuth may
+simply be enough.** An eight-hour access token, scoped to chosen repositories,
+revocable from a screen the person already knows, with a refresh token whose
+blast radius is one person. If that turns out to be sufficient in practice, the
+private key is never needed at all and this section stays a note.
+
+### So where should the .pem be saved
+
+**In a password manager, and nowhere in this system.** `trust.md` already names
+1Password as the custody answer for exactly this class of thing. Not the
+repository, not GitHub Actions secrets, not Cloudflare, not a host — none of
+those are places it is needed, and every one of them is a place it could be
+found.
+
+The stronger option, and the recommended one: **do not save it.** Delete the key
+in GitHub, and generate a fresh one at the moment a minting service first needs
+one. Regeneration is a button; a key sitting unused for months in a place
+somebody has to remember is the failure mode this whole document is arguing
+against.
+
 ## Build order
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
