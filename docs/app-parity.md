@@ -241,3 +241,50 @@ cannot update a box too old to have `update`. What works is that box's own
 Telegram bot or a shell on it, both of which reach agent-hub directly rather
 than through this protocol. A pull that did not restart looks identical from
 the coordinator, and is at least as common — so both routes say `--restart`.
+
+## The round after: one tap, a bin with a home, and a credential that expires
+
+Four things shipped to both phones together, and three of them were fixes to
+something that had been reported as working.
+
+**The recycle bin lived under the machines.** Each host's row in settings
+carried its own bin entries, because that is where the volumes physically are.
+That is an implementation detail leaking into the layout: somebody who just
+forgot a session is not thinking about which box held it. It is one fleet-wide
+screen now, reachable from the session list, **reachable when empty**, and
+sorted by deadline rather than by host. Reported as *"recycle bin was never
+added to the app as far as I can tell"* — it had been, in the place nobody
+would look, which is nearly the same thing.
+
+It also would have been empty however full it was: `FleetView` never fetched
+the hosts, so the count summed an empty array.
+
+**"Done" was the app asking the person to be the callback.** The GitHub App
+flow opened an external browser and then had nothing to do but wait, so a
+button existed purely so somebody could tell the app about a redirect it had
+already been handed. iOS now uses `ASWebAuthenticationSession` and Android a
+Custom Tab, and on Android the manifest had claimed `fleetwright://connected`
+since the App round with **nothing consuming the Intent** — `onNewIntent` was
+never overridden.
+
+The browser choice is not about the tap. Both of those are the *real* browser:
+real address bar, real padlock, own process, the user's own cookies. A WebView
+needs no dependency and would look tidier, and is a login form drawn by the app
+that is asking for the login. A tripwire test refuses one on both platforms.
+
+The paste route keeps its numbered steps deliberately. It does not come back —
+there is a token to copy and no redirect to wait for — so an embedded browser
+would open a window that never closes itself.
+
+**A host can be signed in and hand every session a dead credential.** `loggedIn`
+reports on the box's home directory; a sandboxed session runs on a copy taken
+when its volume was made. Both phones now show the second answer, and both show
+it **only when the token has expired and there is nothing to renew it with** —
+expired-but-refreshable is the ordinary state of a box nobody has touched for an
+hour, and a warning that fires on the ordinary case is one people stop reading.
+
+**A token GitHub reports no scopes for is not a token missing every scope.**
+Both apps said "GitHub does not report what a token was granted", which is true
+of Cloudflare and untrue of GitHub — it reports for classic tokens and not for
+app or fine-grained ones. That is a property of the token, not of the provider,
+and the catalogue's `wants` was already on screen to tell them apart.

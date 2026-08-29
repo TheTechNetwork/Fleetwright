@@ -79,8 +79,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Coming back from a provider.
+     *
+     * `singleTask` means the redirect resumes THIS activity rather than
+     * stacking a second copy, so the callback arrives here and not in
+     * onCreate. The manifest has claimed `fleetwright://connected` since the
+     * GitHub App round and nothing consumed it, which is why the screen that
+     * started the flow needed a "Done" button: the app was being told by hand
+     * about a callback it had already received and dropped.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        WebAuth.deliver(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // The cold-start case: the app was not running when the browser
+        // redirected, so the callback is the launch Intent rather than a new
+        // one. Same delivery, and the flow filters anything that is not ours.
+        WebAuth.deliver(intent)
 
         // Android 13+ will not show a notification until this is granted, and a
         // fleet app that cannot tell you a session is waiting has lost its main

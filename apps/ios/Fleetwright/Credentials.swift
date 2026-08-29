@@ -72,12 +72,31 @@ struct CredentialsView: View {
                     // person is holding a phone, in a browser, on somebody
                     // else's website, and has to know what they are coming
                     // back to do.
-                    if let url = pending.url, let link = URL(string: url) {
-                        Link(destination: link) {
-                            Label(
-                                pending.isSignIn ? "1. Open the sign-in page" : "1. Open \(pending.label) and create the token",
-                                systemImage: "arrow.up.forward.app",
-                            )
+                    if let url = pending.url {
+                        if pending.isAppFlow {
+                            // ONE TAP, because this flow has a callback. The
+                            // page redirects to our own scheme when it is
+                            // done, so the app can wait for it instead of
+                            // asking somebody to come back and confirm the
+                            // thing that already happened.
+                            Button {
+                                Task { await authorize(pending, url: url) }
+                            } label: {
+                                Label("Connect \(pending.label)", systemImage: "arrow.up.forward.app")
+                            }
+                            .disabled(busy)
+                        } else if let link = URL(string: url) {
+                            // NUMBERED, because this flow does NOT come back:
+                            // there is a token to copy, and no redirect to wait
+                            // for. Opening it in an embedded browser would open
+                            // a window that never closes itself, which is worse
+                            // than a link that is honest about leaving.
+                            Link(destination: link) {
+                                Label(
+                                    pending.isSignIn ? "1. Open the sign-in page" : "1. Open \(pending.label) and create the token",
+                                    systemImage: "arrow.up.forward.app",
+                                )
+                            }
                         }
                     }
                     Text(pending.hint).font(.caption).foregroundStyle(.secondary)
@@ -88,12 +107,10 @@ struct CredentialsView: View {
                     // holds. A token field here would be asking somebody for
                     // something that does not exist.
                     if pending.isAppFlow {
-                        Text("2. That is all — GitHub sends the result back by itself.")
-                            .font(.caption)
-                        Button("Done") {
-                            clear()
-                            Task { await load() }
-                        }
+                        // No step 2. The button above is the whole flow now;
+                        // "Done" existed only so somebody could tell the app
+                        // what it could have watched for itself.
+                        Button("Cancel", role: .cancel) { clear() }
                     } else {
                         Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
                             .font(.caption)
@@ -289,6 +306,31 @@ struct CredentialsView: View {
         }
     }
 
+    /// The whole of the app flow: open the page, wait for it to come back.
+    ///
+    /// WHAT COMES BACK IS TRUSTED FOR NOTHING. A custom scheme is unverified —
+    /// any app on the phone may claim it — so `ok=1` in the callback is a nudge
+    /// to refresh and not a fact. The truth is whatever the host reports when
+    /// asked, which is what `load()` goes and does either way.
+    @MainActor
+    private func authorize(_ provider: Fleet.Connections.Available, url: String) async {
+        busy = true
+        defer { busy = false }
+        do {
+            _ = try await WebAuth.authorize(url)
+            pending = nil
+            await load()
+            // Deliberately not "connected": this says what the app did, and
+            // the row below says what the host found. If they disagree, the
+            // row is right.
+            result = "Checked with \(provider.label)."
+        } catch {
+            // A cancellation has no description on purpose — somebody who
+            // changed their mind has not made a mistake to be told about.
+            if let text = error.localizedDescription.nilIfEmpty { result = text }
+        }
+    }
+
     @MainActor
     private func forget(_ provider: Fleet.Connections.Available) async {
         busy = true
@@ -392,4 +434,11 @@ private func actionLabel(_ provider: Fleet.Connections.Available, _ linked: Flee
     if provider.isSignIn { return "Sign in again" }
     if let missing = linked.missing, !missing.isEmpty { return "Update permissions" }
     return "Replace"
+}
+
+private extension String {
+    /// `localizedDescription` of an error whose description is nil comes back
+    /// as the empty string rather than as nothing, so a cancelled sign-in
+    /// would otherwise blank the result line instead of leaving it alone.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

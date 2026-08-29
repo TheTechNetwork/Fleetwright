@@ -49,6 +49,26 @@ radius is bounded by what the code does — it verifies tokens, and a
 malicious version could forge a sign-in but could not reach a host,
 because hosts verify signatures themselves.
 
+## androidx.browser — Android app
+
+`androidx.browser:browser`, for Custom Tabs: the provider's authorization page
+opened inside the app, closing itself when it redirects back. Pinned to an
+exact version like everything else here.
+
+**Why a dependency at all.** The alternative is not "no browser" — it is a
+WebView, which needs no dependency and is the wrong answer. A Custom Tab is the
+real browser: real address bar, real padlock, its own process, the user's own
+cookies. A WebView is a login form drawn by the app that is asking for the
+login, which is the shape of every credential-phishing screen ever built, and
+the fact that it would be *our* app drawing it is not something a person on the
+other side of the screen can check.
+
+iOS needs no equivalent because `ASWebAuthenticationSession` is in the SDK.
+
+**Blast radius.** It renders a page and returns; it holds no credential, and
+what comes back over the custom scheme is trusted for nothing beyond "go and
+ask the host again".
+
 ## androidx.credentials + googleid — Android app
 
 Used for signing in. Three artifacts, all Google-maintained:
