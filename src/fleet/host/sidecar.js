@@ -373,7 +373,22 @@ export class Sidecar {
             `agent-hub had ${s.rcUrl ? JSON.stringify(s.rcUrl) : 'nothing'}`,
         );
       }
-      return { ...s, rcUrl: r.url, ...(r.repaired ? { rcUrlRepaired: r.reason } : {}) };
+      return {
+        ...s,
+        rcUrl: r.url,
+        ...(r.repaired ? { rcUrlRepaired: r.reason } : {}),
+        // HOW LONG THIS PANE HAS LOOKED THE SAME. Health has carried it since
+        // idle tracking shipped and the session list did not, so the app could
+        // show "running" for a session that had not moved since Tuesday and
+        // "running" for one mid-build, in the same font.
+        //
+        // A timestamp rather than a duration: the phone doing the arithmetic
+        // is the only place it stays right while a screen is open. Null for a
+        // session that is not running, and for one showing a prompt — that
+        // pane is still because somebody has to answer it, which is the
+        // opposite of idle.
+        idleSince: this.watcher?.idleSince?.(s.name) ?? null,
+      };
     });
   }
 
