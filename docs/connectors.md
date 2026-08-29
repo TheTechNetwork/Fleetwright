@@ -348,19 +348,45 @@ paste. So the redirect would remove the copy, not the round trip.
 Removing the copy is a real win and worth having. It is just a smaller one than
 the GitHub App's, and it is gated on something Anthropic controls.
 
-**What would actually remove the paste: a device-authorization flow**
-(RFC 8628). It inverts the direction — the page shows a short user code, the
-person confirms there, and *the CLI polls* for the result. Nobody copies
-anything back, and the credential never transits a phone at all. That is the
-shape every CLI login has converged on for exactly this reason.
+**A device-authorization flow (RFC 8628) is the obvious next suggestion, and it
+is worse than the paste.** This document recommended it for about an hour;
+the correction is kept rather than edited away, because the reasoning that
+produced it is the reasoning somebody else will produce.
 
-So the thing to check before building anything here is whether `claude auth
-login` has, or gains, a device-code mode. If it does, the host polls and this
-whole screen loses its paste field. If it does not, the honest ceiling for
-Claude is what is already built: open the page, come back, one-tap paste.
+The appeal is real: the page shows a short user code, the person confirms
+there, the CLI polls, and nobody copies anything back. What it costs is the
+property that makes the paste safe.
 
-Worth re-checking rather than assuming from this document — it is a CLI flag,
-and CLI flags change.
+**Device-code phishing is an active attack class, not a theoretical one.** An
+attacker starts the flow, sends the victim the genuine verification URL and the
+genuine user code, and the victim approves. Every signal anybody is taught to
+check passes — real domain, real TLS, real provider page — and the thing being
+approved is *an authorization somebody else initiated*. It has been used at
+scale against Entra and Google, and there is no version of the screen that
+fixes it, because the screen is not lying.
+
+A pasted token has no such step. The person navigates to the page themselves,
+creates a credential, sees the scopes, and hands it over deliberately. **Consent
+is bound to an action they started.** That is a stronger property than a shorter
+lifetime.
+
+And the premise does not even hold here. RFC 8628 exists for devices that
+*cannot show a browser* — a television, a CLI on a headless box. The person
+using this app is holding a phone with a browser in it. Adopting device flow
+would import its attack surface without needing the thing it was invented for.
+
+So the ranking, for this product:
+
+1. **A provider app** (GitHub). No credential crosses a person at all, and
+   consent is bound to an install they initiated.
+2. **A pasted token.** They created it, they saw the scopes, they chose to hand
+   it over.
+3. **Device flow.** Shorter-lived, and approvable by someone who was phished
+   into it.
+
+Which means the paste is not a wart waiting for a better mechanism. For Claude,
+where no app program exists, it is the correct end state — and the work worth
+doing is making it clear and quick, not removing it.
 
 ### Cloudflare has no equivalent, and that keeps being the pattern
 
