@@ -41,7 +41,10 @@ struct Reassurance {
     init(sessions: [Fleet.Session], hosts: [Fleet.FleetHost]) {
         waiting = sessions.filter { $0.prompt != nil }.count
         running = sessions.filter { $0.isRunning }.count
-        quiet = sessions.filter { $0.quietFor != nil }.count
+        // Only the ones that look STALLED. Counting finished sessions as
+        // "quiet a while" told somebody three things needed attention on a
+        // fleet where everything had gone perfectly.
+        quiet = sessions.filter { $0.looksStalled }.count
         unwell = hosts.filter { $0.state != "healthy" }.map { $0.hostId }
         blind = hosts.isEmpty
         healthy = hosts.count - hosts.filter { $0.state != "healthy" }.count

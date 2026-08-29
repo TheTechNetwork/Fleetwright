@@ -32,6 +32,42 @@ const DEFAULT_INTERVAL_MS = 20_000;
 const AWAITING_RE = /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files/i;
 
 /**
+ * A session sitting at its own prompt, with nothing to do.
+ *
+ * THE STATE THAT BROKE AUTO-RESTART, reported from a phone within a day of it
+ * shipping: `cc-brave-narwhal` was stopped and resumed twice and then declared
+ * beyond help, because it had FINISHED. A session that completed its work sits
+ * at the input prompt forever, and a pane at an input prompt does not change —
+ * so by the only measurement the watcher had, "done" and "wedged" were the
+ * same thing.
+ *
+ * They are opposites. Done is the most common state in the fleet and needs
+ * nothing; wedged is rare and is the whole reason the feature exists.
+ * Restarting a finished session puts it back at the same prompt, which is
+ * precisely what "went straight back to idle" was reporting — the mechanism
+ * working perfectly on a question nobody asked.
+ *
+ * The footer is the tell. Claude Code draws its permission-mode line whenever
+ * it is READY FOR INPUT and not while it is working, so its presence is the
+ * session saying "your turn" rather than "I am stuck".
+ */
+const AT_REST_RE = /bypass permissions on|shift\+tab to cycle|\baccept edits on\b|plan mode on/i;
+
+/**
+ * How long we go on suppressing "finished" after starting a restart.
+ *
+ * The restart's own `/stop` is a status change like any other, and the watcher
+ * reported it the way it reports every other one: "cc-brave-narwhal finished".
+ * It had not finished. We stopped it, deliberately, one second earlier — and
+ * telling somebody their session finished when we ended it ourselves is the
+ * kind of small lie that costs the whole surface its credibility.
+ *
+ * Generous, because a resume can take most of a minute and the window only has
+ * to outlive our own stop.
+ */
+const RESTART_QUIET_MS = 3 * 60_000;
+
+/**
  * How many times a session may be restarted for idleness before we stop.
  *
  * Two, and the second one is the point: once covers the ordinary wedge, and a
@@ -76,7 +112,7 @@ export class SessionWatcher {
      * pane and is the most active thing in the fleet: somebody has to answer
      * it. Anything acting on idleness has to exclude those, which is why the
      * prompt is tracked in the same pass.
-     * @type {Map<string, { hash: string, since: number }>}
+     * @type {Map<string, { hash: string, since: number, atRest?: boolean }>}
      */
     this.idle = new Map();
     /**
@@ -97,6 +133,13 @@ export class SessionWatcher {
      * @type {Map<string, { count: number, at: number }>}
      */
     this.restarts = new Map();
+    /**
+     * Sessions we are stopping on purpose right now, and when we started.
+     * See RESTART_QUIET_MS — this exists so our own `/stop` does not get
+     * announced as the session finishing.
+     * @type {Map<string, number>}
+     */
+    this.restarting = new Map();
     this.idleRestartMs = idleRestartMs;
     this.idleRestartLimit = idleRestartLimit;
     this.hub = hub;
@@ -170,6 +213,11 @@ export class SessionWatcher {
       // Only a running session has a pane worth reading, and only a running
       // session can be waiting for anybody.
       let awaiting = false;
+      // Is it sitting at its own prompt with nothing to do? Not the same
+      // question as `awaiting`, which is "a dialog is blocking it" — this is
+      // the ordinary ready state, and it is the most common state in the
+      // fleet. See AT_REST_RE.
+      let atRest = false;
       /** @type {any} */
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
@@ -179,6 +227,13 @@ export class SessionWatcher {
         if (pane) {
           this.#noteIdle(name, pane);
           awaiting = AWAITING_RE.test(pane);
+          atRest = AT_REST_RE.test(pane);
+          // Kept beside the clock so health can report WHY a pane is still
+          // without reading it a second time. "Still" is not one fact: a
+          // finished session and a wedged one look identical on a timer and
+          // are opposites to a person.
+          const entry = this.idle.get(name);
+          if (entry) entry.atRest = atRest;
           // The pane is read either way. Reading the QUESTION out of it costs
           // one more pass over text already in hand, and is the difference
           // between a notification that says "resumed (summary)" and one that
@@ -203,11 +258,19 @@ export class SessionWatcher {
         else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt));
       } else {
         if (before.status === 'running' && !running) {
-          this.#fire(quiet, {
-            event: session.status === 'error' ? 'session.error' : 'session.ended',
-            name,
-            text: session.detail,
-          });
+          // NOT WHEN WE STOPPED IT. A restart's own `/stop` is a status change
+          // like any other, and this reported it the way it reports every
+          // other one — "cc-brave-narwhal finished", one second after we ended
+          // it ourselves. An error still gets through: that is a fact about
+          // the session rather than about our own action.
+          const ours = this.#restartingRecently(name);
+          if (!ours || session.status === 'error') {
+            this.#fire(quiet, {
+              event: session.status === 'error' ? 'session.error' : 'session.ended',
+              name,
+              text: session.detail,
+            });
+          }
         }
         // The transition, not the state — a session parked at a prompt is one
         // notification, not one every twenty seconds until somebody answers.
@@ -219,7 +282,11 @@ export class SessionWatcher {
       // AUTO-RESTART, last, and only for a session that is running, not
       // asking anything, and has been frozen longer than the threshold. Each
       // of those three is load-bearing — see #maybeRestartIdle.
-      if (running && !awaiting) await this.#maybeRestartIdle(name, quiet);
+      // A SESSION AT ITS OWN PROMPT IS NOT WEDGED, IT IS DONE — and done is
+      // the most common state in the fleet. Both exclusions are the same
+      // shape: a still pane is not evidence of a problem when there is a
+      // perfectly good reason for it to be still.
+      if (running && !awaiting && !atRest) await this.#maybeRestartIdle(name, quiet);
 
       this.seen.set(name, { status: session.status, awaiting, rcUrl });
     }
@@ -229,6 +296,7 @@ export class SessionWatcher {
     for (const name of [...this.seen.keys()]) if (!live.has(name)) this.seen.delete(name);
     for (const name of [...this.idle.keys()]) if (!live.has(name)) this.idle.delete(name);
     for (const name of [...this.restarts.keys()]) if (!live.has(name)) this.restarts.delete(name);
+    for (const name of [...this.restarting.keys()]) if (!live.has(name)) this.restarting.delete(name);
   }
 
   /**
@@ -275,36 +343,56 @@ export class SessionWatcher {
     // differing proves nothing on its own — see this.restarts.
     this.idle.set(name, { hash: this.idle.get(name)?.hash ?? '', since: Date.now() });
 
+    // Marked before the stop, so our own stop is not announced as the session
+    // finishing on whichever tick observes it.
+    this.restarting.set(name, Date.now());
+    let ok = false;
     try {
       await this.hub.command(`/stop ${name}`);
       const resumed = await this.hub.command(`/resume ${name} summary`);
-      const ok = /** @type {any} */ (resumed)?.ok !== false;
+      ok = /** @type {any} */ (resumed)?.ok !== false;
       this.log.info(`watcher: ${name} was idle ${minutes}m — restarted (attempt ${already + 1})`);
-      this.#fire(quiet, {
-        event: 'session.restarted',
-        name,
-        text: ok
-          ? `Restarted after ${minutes} minutes with nothing happening. The conversation was kept.`
-          : `Tried to restart it after ${minutes} minutes idle and the resume did not take.`,
-      });
     } catch (e) {
       // A failed restart is not a reason to keep trying every tick — the
       // attempt is already counted above, deliberately before the work.
       this.log.warn(`watcher: could not restart ${name}: ${/** @type {Error} */ (e).message}`);
     }
 
-    if (already + 1 >= this.idleRestartLimit) {
-      this.#fire(quiet, {
-        event: 'session.stuck',
-        name,
-        // Says what will happen next, which is nothing. A message that only
-        // reports a failure leaves somebody waiting for a retry that is not
-        // coming.
-        text:
-          `Restarted ${already + 1} time${already ? 's' : ''} and it went straight back to idle. ` +
-          'Not trying again — something is wrong that a restart does not fix.',
-      });
+    // ONE MESSAGE, NOT TWO. These used to be separate events, so hitting the
+    // cap sent "Restarted after 60 minutes with nothing happening" AND
+    // "Restarted 2 times and it went straight back to idle" — arriving
+    // together, the second contradicting the tone of the first, for one
+    // decision. An interruption costs far more than the time it takes to read;
+    // spending two on one event is spending one of them against the person.
+    const last = already + 1 >= this.idleRestartLimit;
+    this.#fire(quiet, {
+      event: last ? 'session.stuck' : 'session.restarted',
+      name,
+      text: !ok
+        ? `Tried to restart it after ${minutes} minutes idle and the resume did not take.`
+        : last
+          // Says what happens next, which is nothing. A message that only
+          // reports a failure leaves somebody waiting for a retry that is not
+          // coming.
+          ? `Restarted it ${already + 1} times and it went straight back to idle. Not trying again — `
+            + 'something is wrong that a restart does not fix.'
+          : `Restarted after ${minutes} minutes with nothing happening. The conversation was kept.`,
+    });
+  }
+
+  /**
+   * Did we stop this session ourselves a moment ago?
+   *
+   * @param {string} name
+   */
+  #restartingRecently(name) {
+    const at = this.restarting.get(name);
+    if (at === undefined) return false;
+    if (Date.now() - at > RESTART_QUIET_MS) {
+      this.restarting.delete(name);
+      return false;
     }
+    return true;
   }
 
   /**
@@ -324,7 +412,7 @@ export class SessionWatcher {
     const hash = String(h);
     const before = this.idle.get(name);
     if (before && before.hash === hash) return;
-    this.idle.set(name, { hash, since: Date.now() });
+    this.idle.set(name, { hash, since: Date.now(), atRest: this.idle.get(name)?.atRest ?? false });
     // RECOVERED, and only then. A restart always moves the pane, so "it moved"
     // cannot mean "the restart worked" — that reset would fire one tick after
     // every attempt and the cap would never bind. What does mean it: the pane
@@ -346,6 +434,21 @@ export class SessionWatcher {
    */
   idleSince(name) {
     return this.idle.get(name)?.since ?? null;
+  }
+
+  /**
+   * Is this session's pane showing its own prompt — finished, or between
+   * things, and waiting for input?
+   *
+   * The difference between "done" and "stuck", which a timer cannot see. The
+   * app showed "quiet for 3h" for both, which is true of each and useful about
+   * neither: the whole question somebody opens the app to ask is which one it
+   * is.
+   *
+   * @param {string} name
+   */
+  atRest(name) {
+    return this.idle.get(name)?.atRest ?? false;
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */

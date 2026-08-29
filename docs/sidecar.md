@@ -200,6 +200,26 @@ Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
   however long it waits — that pane is still because somebody has to answer it
   — and it gives up after two restarts that did not help rather than looping.
 
+  **"Still" is not one fact, which is what broke this in production.** It
+  shipped, and a session on a real box was stopped and resumed twice and then
+  declared beyond help — because it had *finished*. A session that completed
+  its work sits at the input prompt forever, and a pane at an input prompt does
+  not change, so by the only measurement available "done" and "wedged" were the
+  same thing. They are opposites: done is the most common state in the fleet
+  and needs nothing, and restarting it puts it back at the same prompt, which
+  is exactly what *"went straight back to idle"* was reporting.
+
+  So a pane showing the permission-mode footer is a session **at rest**, not a
+  stuck one. Claude Code draws that line when it is ready for input and not
+  while it is working, which makes it the session saying "your turn". What is
+  left after excluding *waiting for an answer* and *waiting for you* is a pane
+  stopped in the middle of something, which is the case worth acting on.
+
+  The same distinction travels to the phones as `atRest` on each session, so
+  the app can say **"ready · idle 3h"** rather than "quiet for 3h" — and the
+  reassurance line counts only the stalled ones, having briefly reported three
+  things as needing attention on a fleet where everything had gone perfectly.
+
   Both the restart and the giving-up are notifiable events. A fleet that
   quietly restarts things is one nobody can debug: the session's own
   conversation history will not explain a gap it did not cause.

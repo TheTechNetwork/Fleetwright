@@ -69,6 +69,7 @@ test('the headline never stands alone', () => {
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
     assert.match(src, /\bbasis\b/, `${name} has a headline with nothing behind it`);
     assert.match(src, /machines? healthy/, `${name} never says what it counted`);
+    assert.match(src, /looksStalled/, `${name} counts finished sessions as needing attention`);
   }
 });
 
@@ -115,6 +116,13 @@ test('both apps show how long a session has been quiet, and neither shouts about
     // and a counter that resets every few seconds is noise that teaches people
     // to ignore it.
     assert.match(model, /300/, `${name} has no floor, so it will flicker on every pause`);
+    // AND IT SAYS WHICH KIND OF STILL. A finished session and a wedged one
+    // both stop changing; rendering both as "quiet for 3h" is true of each and
+    // useful about neither, and it invited a person to worry at the most
+    // common state in the fleet. The banner counts only the stalled ones for
+    // the same reason.
+    assert.match(model, /atRest/, `${name} cannot tell a finished session from a stuck one`);
+    assert.match(model, /looksStalled/, `${name} has no notion of "worth a second look"`);
     // Never for a session at a prompt: that pane is still because somebody has
     // to answer it, which is the opposite of idle.
     assert.match(model, /prompt/, `${name} would call a waiting session idle`);
