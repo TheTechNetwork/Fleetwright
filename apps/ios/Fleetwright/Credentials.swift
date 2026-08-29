@@ -127,6 +127,13 @@ struct CredentialsView: View {
             loaded = true
             await load()
         }
+        // The browser came back. Reload rather than believe it: the URL says a
+        // flow finished, and what is actually stored is the host's to report.
+        .onReceive(NotificationCenter.default.publisher(for: .credentialsChanged)) { _ in
+            pending = nil
+            secret = ""
+            Task { await load() }
+        }
     }
 
     @ViewBuilder

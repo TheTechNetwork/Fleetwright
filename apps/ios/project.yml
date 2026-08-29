@@ -92,6 +92,22 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # THE SCHEME THE OAUTH CALLBACK RETURNS TO.
+        #
+        # A person taps Connect, leaves for GitHub, authorizes, and would
+        # otherwise land on a page telling them to close a tab — a return they
+        # have to notice and perform. The coordinator's callback redirects here
+        # instead, and the app refreshes the screen they left.
+        #
+        # NOT a universal link: those need a domain association file and an
+        # apex the app is verified for, which is real setup for a self-hoster.
+        # A custom scheme is unverified and therefore not a place to send
+        # anything secret — which is why it carries only `provider` and `ok`,
+        # and the credential never leaves the coordinator's own request.
+        CFBundleURLTypes:
+          - CFBundleURLName: network.thetech.fleetwright
+            CFBundleURLSchemes:
+              - fleetwright
         # Answers export compliance in the bundle instead of per build in App
         # Store Connect. Without it every upload lands in "Missing Compliance"
         # and cannot go to testers until somebody clicks through the same two

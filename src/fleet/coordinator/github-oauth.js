@@ -205,12 +205,43 @@ export async function exchangeCode({ clientId, clientSecret, code, origin, fetch
  *
  * @param {{ ok: boolean, text: string }} result
  */
+/**
+ * The scheme both apps register, so the browser can hand control back.
+ *
+ * A person who taps Connect leaves the app, authorizes, and lands on a page
+ * telling them to close it — which is a tab they have to notice, and a return
+ * they have to perform. Redirecting finishes the job the flow started.
+ *
+ * Deliberately a fixed literal rather than anything the request can influence:
+ * a redirect target that a query parameter could steer is an open redirect,
+ * and this page is reached by following a link from GitHub.
+ */
+const APP_SCHEME = 'fleetwright://connected';
+
+/** @param {{ ok: boolean, provider?: string }} result */
+export function appReturnUrl({ ok, provider = 'github' }) {
+  // Only two values, both ours. Nothing from the request reaches this.
+  return `${APP_SCHEME}?provider=${encodeURIComponent(provider)}&ok=${ok ? '1' : '0'}`;
+}
+
+/**
+ * The page a browser lands on afterwards.
+ *
+ * @param {{ ok: boolean, text: string }} result
+ */
 export function callbackPage({ ok, text }) {
   const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
+  const back = appReturnUrl({ ok });
+  // The redirect is attempted immediately AND offered as a link. A custom
+  // scheme fails silently when the app is not installed — on a desktop
+  // browser, or in a private window — so the page has to work on its own
+  // afterwards rather than being a blank screen that redirected nowhere.
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${ok ? 'Connected' : 'Not connected'}</title>
-<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}</style>
+<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}
+a.back{display:inline-block;margin-top:1rem}</style>
 <h1>${ok ? 'GitHub connected' : 'Not connected'}</h1>
 <p>${safe}</p>
-<p>You can close this and go back to the app.</p>`;
+<p><a class="back" href="${back}">Back to Fleetwright</a></p>
+<script>location.replace(${JSON.stringify(back)})</script>`;
 }

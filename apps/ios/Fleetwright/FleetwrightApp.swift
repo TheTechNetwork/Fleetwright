@@ -1,6 +1,13 @@
 import SwiftUI
 import UserNotifications
 
+extension Notification.Name {
+    /// A provider flow finished somewhere outside the app. Whoever is showing
+    /// credentials reloads; nobody trusts the payload, because a custom scheme
+    /// can be claimed by anything.
+    static let credentialsChanged = Notification.Name("network.thetech.fleetwright.credentialsChanged")
+}
+
 @main
 struct FleetwrightApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -15,6 +22,19 @@ struct FleetwrightApp: App {
                 // appearance would leave a phone that signed in on its first
                 // launch unregistered until its second.
                 .task(id: settings.credential) { await delegate.registerForPush(settings: settings) }
+                // COMING BACK FROM A PROVIDER. The coordinator's OAuth callback
+                // redirects to fleetwright://connected when it has stored the
+                // token, so the browser hands control back instead of leaving
+                // somebody on a page telling them to close a tab.
+                //
+                // Carries only `provider` and `ok`. A custom scheme is
+                // unverified — any app may claim it — so nothing here is
+                // trusted with anything: it is a nudge to refresh, and the
+                // truth is whatever the host reports next.
+                .onOpenURL { url in
+                    guard url.scheme == "fleetwright", url.host == "connected" else { return }
+                    NotificationCenter.default.post(name: .credentialsChanged, object: nil)
+                }
         }
     }
 }

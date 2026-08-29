@@ -129,9 +129,13 @@ test('the browser gets a page, and the page cannot be injected into', () => {
   const page = callbackPage({ ok: false, text: '<script>alert(1)</script> & "quoted"' });
   assert.equal(page.includes('<script>alert'), false);
   assert.match(page, /&lt;script&gt;/);
-  // Nothing to load: this is served by the coordinator and must not become a
-  // page that fetches anything.
-  assert.equal(/src=|href=/.test(page), false);
+  // NOTHING EXTERNAL TO LOAD, which is the property that matters — this is
+  // served by the coordinator and must not become a page that fetches
+  // anything. The assertion used to be "no href at all", which was a proxy for
+  // that and broke the moment the page grew a link back into the app. A link
+  // to our own scheme loads nothing.
+  assert.equal(/(src|href)\s*=\s*["']?https?:/i.test(page), false, 'the callback page loads something external');
+  assert.match(page, /href="fleetwright:\/\/connected/, 'and it offers the way back');
 });
 
 test('a fleet with no App configured says so rather than failing oddly', async () => {
@@ -210,4 +214,59 @@ test('no anchored quantifier runs on a caller-supplied string', async () => {
   const src = readFileSync(new URL('../src/fleet/coordinator/github-oauth.js', import.meta.url), 'utf8');
   const code = src.split('\n').filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//')).join('\n');
   assert.equal(/replace\(\/[^/]*\+\$\//.test(code), false, 'an anchored + quantifier is back in this file');
+});
+
+test('the access token is stored, never the refresh token', async () => {
+  // THE 401. This read `refreshToken ?? accessToken`, reaching for the
+  // longer-lived value — and a refresh token is not an API credential. It
+  // authenticates nothing: `GET /user` with one is a 401 every time. So the
+  // whole flow worked and then reported "GitHub rejected that token (401)",
+  // which reads like a bad token and was a wrong one.
+  const src = await import('node:fs').then((fs) =>
+    fs.readFileSync(new URL('../src/fleet/coordinator/core.js', import.meta.url), 'utf8'),
+  );
+  const fn = /async finishGithubAuthorization\([\s\S]*?\n  \}/.exec(src);
+  assert.ok(fn, 'finishGithubAuthorization is gone');
+  // COMMENTS STRIPPED FIRST. The comment above that line quotes the bug it
+  // fixed — `refreshToken ?? accessToken` — so matching raw source finds the
+  // explanation and calls it the defect. Third time this shape has cost a
+  // rewrite: a tripwire has to read code, not prose about code.
+  const code = fn[0]
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+  assert.match(code, /const secret = exchanged\.accessToken;/);
+  assert.equal(/refreshToken \?\?/.test(code), false, 'the refresh token is being stored as a credential again');
+});
+
+test('the callback hands control back to the app', async () => {
+  const { appReturnUrl, callbackPage } = await import('../src/fleet/coordinator/github-oauth.js');
+
+  // Only two values, both ours. A redirect target a query parameter could
+  // steer is an open redirect, and this page is reached by following a link
+  // from GitHub.
+  assert.equal(appReturnUrl({ ok: true }), 'fleetwright://connected?provider=github&ok=1');
+  assert.equal(appReturnUrl({ ok: false }), 'fleetwright://connected?provider=github&ok=0');
+
+  // Attempted AND offered. A custom scheme fails silently when the app is not
+  // installed — a desktop browser, a private window — so the page has to work
+  // on its own afterwards rather than being a blank screen that went nowhere.
+  const page = callbackPage({ ok: true, text: 'done' });
+  assert.match(page, /location\.replace/);
+  assert.match(page, /Back to Fleetwright/);
+});
+
+test('both apps register the scheme the callback returns to', async () => {
+  const { readFileSync } = await import('node:fs');
+  const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+  // iOS declares it in the generated Info.plist via project.yml.
+  assert.match(read('apps/ios/project.yml'), /CFBundleURLSchemes:\s*\n\s*- fleetwright/);
+  assert.match(read('apps/ios/Fleetwright/FleetwrightApp.swift'), /onOpenURL/);
+
+  // Android declares an intent filter, and singleTask so returning resumes the
+  // app that started the flow rather than stacking a second copy on it.
+  const manifest = read('apps/android/app/src/main/AndroidManifest.xml');
+  assert.match(manifest, /android:scheme="fleetwright"/);
+  assert.match(manifest, /android:launchMode="singleTask"/);
 });

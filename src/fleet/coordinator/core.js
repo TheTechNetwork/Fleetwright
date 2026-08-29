@@ -764,10 +764,22 @@ export class CoordinatorCore {
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
-    // STORED WHERE THE PASTED TOKEN WOULD HAVE GONE, by the verb that already
-    // does it — same validation, same redaction, same per-person file. A
-    // second path into that storage is a second thing to get right.
-    const secret = exchanged.refreshToken ?? exchanged.accessToken;
+    // THE ACCESS TOKEN, NEVER THE REFRESH TOKEN. This read
+    // `exchanged.refreshToken ?? exchanged.accessToken`, reaching for the
+    // longer-lived value — and a refresh token is not an API credential. It
+    // authenticates nothing: `GET /user` with one is a 401, every time. The
+    // whole flow worked and then reported "GitHub rejected that token (401)",
+    // which read like a bad token and was a wrong one.
+    //
+    // What a session uses is the access token. The refresh token exists only to
+    // mint the next one, and has nowhere to live until the host can refresh —
+    // which needs the client secret it is sent over the socket, and that is the
+    // next piece rather than this one.
+    //
+    // Stored by the verb that already does it: same validation, same redaction,
+    // same per-person file. A second path into that storage is a second thing
+    // to get right.
+    const secret = exchanged.accessToken;
     const reply = await this.dispatch({
       verb: 'link',
       params: { provider: 'github', secret },
@@ -780,10 +792,13 @@ export class CoordinatorCore {
     if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };
     return {
       ok: true,
-      text: exchanged.refreshToken
-        ? 'Your sessions can use GitHub now, and the access token refreshes itself.'
-        : 'Your sessions can use GitHub now. This App issues non-expiring tokens — turning on ' +
-          '"Expire user authorization tokens" in its settings is worth doing.',
+      // Honest about the eight hours rather than quiet about them. A token that
+      // stops working tomorrow, from a screen that said "connected", is worse
+      // than one that said so.
+      text: exchanged.expiresIn
+        ? `Your sessions can use GitHub now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours; ` +
+          'connecting again renews it, and automatic renewal is the next piece.'
+        : 'Your sessions can use GitHub now.',
     };
   }
 
