@@ -125,10 +125,17 @@ test('both apps carry the bin, and neither renders it for an old host', () => {
   // docs/app-parity.md exists because a gap one commit wide is invisible in a
   // summary.
   const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
-  const ios = read('apps/ios/Fleetwright/Fleet.swift') + read('apps/ios/Fleetwright/FleetView.swift');
+  // RecycleBinView is where the bin lives now — it moved out of the host rows
+  // in settings, because that is where the volumes are and not where a person
+  // thinks about a session they forgot.
+  const ios =
+    read('apps/ios/Fleetwright/Fleet.swift') +
+    read('apps/ios/Fleetwright/FleetView.swift') +
+    read('apps/ios/Fleetwright/RecycleBin.swift');
   const android =
     read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt') +
-    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt') +
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/RecycleBinSheet.kt');
 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
     assert.match(src, /\brestore\b/, `${name} cannot restore`);
