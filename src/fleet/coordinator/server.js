@@ -34,6 +34,7 @@ import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
 import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { credentialFrom, isClientCredential } from './credential.js';
+import { callbackPage } from './github-oauth.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -527,6 +528,28 @@ export class Coordinator {
       return json(res, 200, { ok: true, hostId: outcome.host.hostId, fingerprint: outcome.host.fingerprint });
     }
 
+    // THE GITHUB CALLBACK. GitHub redirects a BROWSER here, which carries no
+    // fleet credential — `state` is what stands in for one: unguessable,
+    // single-use, minutes-long, and bound to the host and person who started
+    // the flow. Both coordinators serve it, because a client that works
+    // against one and not the other is exactly what openapi.json exists to
+    // prevent.
+    if (p === '/oauth/github/callback' && req.method === 'GET') {
+      const result = await this.core.finishGithubAuthorization({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state'),
+        origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
+      });
+      res.writeHead(result.ok ? 200 : 400, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      // HTML, not JSON: a person was sent here by a browser, and a raw object
+      // on screen is how a working flow looks broken.
+      res.end(callbackPage(result));
+      return undefined;
+    }
+
     // Two ways to be allowed past here, and they are not the same thing.
     //
     // A per-device credential is the everyday one: issued at sign-in, named
@@ -708,7 +731,21 @@ export class Coordinator {
         // which sees everything — it is what you hold when identity is broken.
         requester: requesterFor(client),
       });
-      return json(res, 200, reply);
+      // A `connect` reply carries the host's catalogue, which offers the paste
+      // route because a host knows nothing about a GitHub App. Only the
+      // coordinator can improve on that, and it rewrites the one entry it can.
+      return json(
+        res,
+        200,
+        body.verb === 'connect'
+          ? this.core.offerGithubApp(
+              reply,
+              typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),
+              client?.email ?? null,
+              `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
+            )
+          : reply,
+      );
     }
 
     // Shortcut-friendly shorthand: GET /api/<verb>/<name>. §7 asks for flat

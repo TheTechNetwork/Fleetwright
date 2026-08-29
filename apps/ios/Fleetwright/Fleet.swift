@@ -104,7 +104,14 @@ struct Fleet {
             /// What this asks for, when the provider will say what a token was
             /// granted. Absent for Cloudflare, which will not.
             let wants: [String]?
+            /// `"app"` when the coordinator has rewritten this to a provider
+            /// app authorization. Absent means the paste route, which is the
+            /// normal case and not a lesser one.
+            let flow: String?
             var id: String { provider }
+
+            /// Nothing to copy, so nothing to paste. The whole point of the App.
+            var isAppFlow: Bool { flow == "app" }
             /// Claude is a sign-in; the rest are tokens to paste. Which one
             /// decides the shape of the row, so it is asked once here rather
             /// than at four places in the view.

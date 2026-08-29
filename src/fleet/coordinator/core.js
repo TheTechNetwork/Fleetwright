@@ -18,6 +18,7 @@ import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
+import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -44,6 +45,7 @@ export class CoordinatorCore {
    *   intentTimeoutMs?: number,
    *   logger?: { info: Function, warn: Function, error: Function, debug: Function },
    *   push?: import('../push.js').Pusher|null,
+   *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
    * }} [opts]
    */
   constructor({
@@ -54,6 +56,10 @@ export class CoordinatorCore {
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
     logger,
     push = null,
+    // The GitHub App, when a deployment has registered one. Absent is the
+    // normal case for a fresh clone and is not an error: the paste route is
+    // first-class, not a fallback. See docs/github-app.md.
+    githubApp = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -62,6 +68,14 @@ export class CoordinatorCore {
     this.intentTimeoutMs = intentTimeoutMs;
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
+    this.githubApp = githubApp;
+    /**
+     * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
+     * back. In memory rather than in storage on purpose: it lives ten minutes,
+     * and a coordinator restart losing one costs somebody a second tap, while
+     * persisting it would mean writing who-is-authorizing-what to disk.
+     */
+    this.pendingGithub = new PendingAuthorizations({ now });
     this.registry = new HostRegistry({ now });
     // An ephemeral host that drops is retired by the registry; the key it
     // enrolled with has to go with it, which only the core can do.
@@ -669,6 +683,110 @@ export class CoordinatorCore {
    * On the core rather than in each coordinator's route, because the two had
    * already drifted — the Worker served 50 and the Node one served none at all.
    */
+  /**
+   * Offer the App flow in place of the paste, when there is an App.
+   *
+   * The HOST publishes the catalogue and knows nothing about a GitHub App —
+   * correctly, since the client id and secret belong to the deployment rather
+   * than to any machine. So the coordinator rewrites the one entry it can
+   * improve on, and leaves everything else alone.
+   *
+   * Cloudflare is untouched, and always will be: there is no third-party app
+   * program to rewrite it to.
+   *
+   * @param {any} reply       a connect reply carrying `connections`
+   * @param {string} hostId   where the flow must come back to
+   * @param {string|null} email  whose credential this will be
+   * @param {string} origin   this coordinator's public origin
+   */
+  offerGithubApp(reply, hostId, email, origin) {
+    const clientId = this.githubApp?.clientId;
+    if (!clientId || !this.githubApp?.clientSecret) return reply;
+    const catalogue = reply?.connections?.catalogue;
+    if (!Array.isArray(catalogue)) return reply;
+
+    // An origin we cannot parse means no App offer, and the paste route is
+    // returned untouched. Better a working paste than an authorize URL built
+    // out of something that was not an address.
+    const state = this.newId();
+    const url = authorizeUrl({ clientId, origin, state });
+    if (!url) return reply;
+    this.pendingGithub.mint({ state, hostId, email });
+    return {
+      ...reply,
+      connections: {
+        ...reply.connections,
+        catalogue: catalogue.map((c) =>
+          c?.provider === 'github'
+            ? {
+                ...c,
+                url,
+                // The app renders no paste field for this one: there is
+                // nothing to copy, which is the entire point of the App.
+                flow: 'app',
+                hint:
+                  'Choose which repositories Fleetwright may see. Nothing is copied or pasted — ' +
+                  'GitHub sends the result back, and you can change the repositories or uninstall ' +
+                  'it from your GitHub settings at any time.',
+              }
+            : c,
+        ),
+      },
+    };
+  }
+
+  /**
+   * Finish an authorization GitHub has redirected back to us.
+   *
+   * Everything here is refusable and says why in a sentence a person reading a
+   * browser page can act on. The one thing it must never do is exchange a code
+   * for a flow it did not start — which is what `redeem` is for, and why it is
+   * the first thing that happens.
+   *
+   * @param {{ code?: unknown, state?: unknown, origin: string }} args
+   */
+  async finishGithubAuthorization({ code, state, origin }) {
+    const clientId = this.githubApp?.clientId;
+    const clientSecret = this.githubApp?.clientSecret;
+    if (!clientId || !clientSecret) {
+      return { ok: false, text: 'This fleet has no GitHub App configured.' };
+    }
+    const flow = this.pendingGithub.redeem(state);
+    if (!flow) {
+      // Deliberately one message for unknown, expired and replayed. Telling a
+      // stranger which of those it was is telling them whether a state exists.
+      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    }
+    if (typeof code !== 'string' || !code) {
+      return { ok: false, text: 'GitHub did not send an authorization code back.' };
+    }
+
+    const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
+    if (!exchanged.ok) return { ok: false, text: exchanged.message };
+
+    // STORED WHERE THE PASTED TOKEN WOULD HAVE GONE, by the verb that already
+    // does it — same validation, same redaction, same per-person file. A
+    // second path into that storage is a second thing to get right.
+    const secret = exchanged.refreshToken ?? exchanged.accessToken;
+    const reply = await this.dispatch({
+      verb: 'link',
+      params: { provider: 'github', secret },
+      actor: flow.email ?? undefined,
+      preferHost: flow.hostId,
+      // The person authorized in a browser; there is no fleet credential on
+      // that request, and the state is what proved who they are.
+      requester: null,
+    });
+    if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };
+    return {
+      ok: true,
+      text: exchanged.refreshToken
+        ? 'Your sessions can use GitHub now, and the access token refreshes itself.'
+        : 'Your sessions can use GitHub now. This App issues non-expiring tokens — turning on ' +
+          '"Expire user authorization tokens" in its settings is worth doing.',
+    };
+  }
+
   /**
    * @param {{ email?: string|null, admin?: boolean }|null} [requester]
    */

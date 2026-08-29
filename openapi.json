@@ -1121,6 +1121,53 @@
           }
         }
       }
+    },
+    "/oauth/github/callback": {
+      "get": {
+        "summary": "Finish a GitHub App authorization",
+        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
     }
   }
 }
