@@ -18,9 +18,18 @@ import SwiftUI
 ///
 /// docs/naming.md has the reasoning. The short version is that the blank name
 /// field was the abandonment point, and every choice here is aimed at it.
+/// What the sheet collected. Handed up rather than sent from here, so the
+/// request outlives the sheet that described it.
+struct StartRequest {
+    let title: String?
+    let brief: String?
+    let mode: String?
+    let host: String?
+}
+
 struct StartSheet: View {
     let settings: Settings
-    let onStarted: (String) -> Void
+    let onStart: (StartRequest) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var brief = ""
@@ -28,7 +37,6 @@ struct StartSheet: View {
     @State private var kind: SessionKind?
     @State private var host = ""
     @State private var hosts: [String] = []
-    @State private var busy = false
     @State private var suggesting = false
     @State private var error = ""
 
@@ -49,22 +57,6 @@ struct StartSheet: View {
                     Text(Naming.canSuggest
                          ? "A title is suggested on this device. Nothing here is sent anywhere to name it."
                          : "Optional. Helps you recognise this session later.")
-                }
-
-                // WHAT IS HAPPENING, while it happens. A spinner says "wait";
-                // this says what for, which is the difference between waiting
-                // and wondering whether it is broken.
-                if busy {
-                    Section {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text(waited > 12
-                                 ? "Still starting — the box is bringing up the sandbox and waiting for Remote Control. This can take a minute."
-                                 : "Starting…")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
                 }
 
                 Section("Title") {
@@ -140,30 +132,13 @@ struct StartSheet: View {
                     // Both are optional and the whole point is that this is
                     // answerable without them.
                     //
-                    // WHEN BUSY, A SPINNER — not a greyed-out button. Starting
-                    // a session takes the host up to a minute: it brings up a
-                    // container, seeds credentials into a fresh volume, and
-                    // waits out the Remote Control check. Disabling the button
-                    // and changing nothing else is indistinguishable from a
-                    // hang, and was reported as one.
-                    if busy {
-                        ProgressView()
-                    } else {
-                        Button("Start") { Task { await start() } }
-                            .disabled(!settings.configured)
-                    }
+                    // No busy state, because there is nothing to be busy for:
+                    // this closes on tap and the work happens behind it.
+                    Button("Start") { start() }
+                        .disabled(!settings.configured)
                 }
             }
         }
-    }
-
-    /// A URLSession timeout, as opposed to a refusal from the fleet.
-    ///
-    /// The distinction matters because the remedies are opposite: a refusal is
-    /// final and worth reading, a timeout means the answer is still in flight
-    /// and the list is the place to look.
-    private func isTimeout(_ error: Error) -> Bool {
-        (error as NSError).code == NSURLErrorTimedOut || "\(error)".localizedCaseInsensitiveContains("time")
     }
 
     /// Suggest once the typing stops, not on every keystroke.
@@ -201,51 +176,29 @@ struct StartSheet: View {
         title = suggested
     }
 
-    /// Seconds spent waiting, so the message can grow more informative rather
-    /// than the screen growing more silent.
-    @State private var waited = 0
-    @State private var tick: Task<Void, Never>?
 
-    private func start() async {
-        busy = true
-        waited = 0
-        tick = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                await MainActor.run { waited += 1 }
-            }
-        }
-        defer { tick?.cancel() }
-        error = ""
+    /// Hand it up and close. Nobody waits.
+    ///
+    /// This used to await the whole start — a container, a fresh volume,
+    /// credentials and the Remote Control check, up to a minute — with the
+    /// sheet open the entire time. Two attempts at fixing that were wrong in
+    /// the same direction: a greyed-out button that read as a hang, then a
+    /// spinner that explained the wait. EXPLAINING A WAIT IS STILL A WAIT.
+    ///
+    /// Nobody needs to be present for it, so the request goes up to the view
+    /// that outlives this sheet, and the answer comes back as a notification.
+    private func start() {
         var finalTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if let prefix = kind?.titlePrefix, !prefix.isEmpty, !finalTitle.isEmpty {
             finalTitle = "\(prefix): \(finalTitle)"
         }
-        do {
-            let reply = try await Fleet(settings: settings).start(
-                name: nil,
-                title: finalTitle.isEmpty ? nil : finalTitle,
-                brief: brief.trimmingCharacters(in: .whitespacesAndNewlines),
-                mode: kind?.mode,
-                host: host.isEmpty ? nil : host
-            )
-            onStarted(reply.text ?? "Started a session")
-            dismiss()
-        } catch {
-            // Shown here rather than dismissed into the list: the sheet holds
-            // the only copy of what they typed, and closing it to show an error
-            // elsewhere throws that away.
-            //
-            // AND A TIMEOUT IS NOT A FAILURE. `start` is mutating and carries
-            // an idempotency key, so a request that gave up may well have
-            // started a session anyway — saying "failed" would send somebody
-            // to start a second one. The honest answer names both
-            // possibilities and points at the list.
-            self.error = isTimeout(error)
-                ? "Still starting, or started — the answer did not come back in time. Close this and pull to refresh; "
-                  + "if it is there, it worked. Starting again is safe: the same request is not run twice."
-                : error.localizedDescription
-        }
-        busy = false
+        let trimmedBrief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
+        onStart(StartRequest(
+            title: finalTitle.isEmpty ? nil : finalTitle,
+            brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
+            mode: kind?.mode,
+            host: host.isEmpty ? nil : host
+        ))
+        dismiss()
     }
 }

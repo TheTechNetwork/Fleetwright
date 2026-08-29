@@ -447,6 +447,14 @@ export class Sidecar {
             // is filtered everywhere. The promptId is what makes an answer
             // safe to act on later.
             prompt: this.#promptFor(s),
+            // WHEN THIS PANE LAST CHANGED. A timestamp rather than a duration,
+            // for the same reason startedAt is: the phone doing the arithmetic
+            // is the only place it can stay right while a screen is open.
+            //
+            // Null for a session that is not running, and meaningless for one
+            // showing a prompt — that pane is still because somebody has to
+            // answer it, which is the opposite of idle.
+            idleSince: this.watcher?.idleSince?.(s.name) ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
         // The account this box runs on, for the app's settings screen: which

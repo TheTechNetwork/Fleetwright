@@ -61,10 +61,9 @@ struct FleetView: View {
                 SettingsView(settings: settings) { Task { await refresh() } }
             }
             .sheet(isPresented: $showingStart) {
-                StartSheet(settings: settings) { text in
-                    status = text
-                    Task { await refresh(keepStatus: true) }
-                }
+                // The sheet gathers what to start and hands it up. It does not
+                // wait for the answer — see startInBackground.
+                StartSheet(settings: settings, onStart: startInBackground)
             }
             .task { await refresh() }
             .onAppear { if !settings.configured { showingSettings = true } }
@@ -77,6 +76,51 @@ struct FleetView: View {
     ///   call succeeds. Set after an action, whose reply text is the only
     ///   confirmation the coordinator ever gives — a plain refresh would wipe
     ///   "Started cc-brave-otter." a few hundred milliseconds after it appeared.
+    /// Start a session without making anybody watch it happen.
+    ///
+    /// THE SHEET CLOSES IMMEDIATELY. Starting takes the host up to a minute —
+    /// a container, a fresh volume, credentials, and the Remote Control check
+    /// — and the two previous attempts at this were wrong in the same
+    /// direction: first a greyed-out button that looked like a hang, then a
+    /// spinner that explained the wait. Explaining a wait is still a wait.
+    ///
+    /// Nobody needs to be present for it, so the answer arrives as a
+    /// notification and the person gets their phone back.
+    ///
+    /// The task is owned HERE rather than in the sheet, because a task tied to
+    /// a dismissed view is one that may not finish — and this is a mutating
+    /// request that has already left.
+    private func startInBackground(_ request: StartRequest) {
+        status = "Starting a session. You will get a notification when it is ready."
+        Task {
+            do {
+                let reply = try await Fleet(settings: settings).start(
+                    name: nil,
+                    title: request.title,
+                    brief: request.brief,
+                    mode: request.mode,
+                    host: request.host
+                )
+                let text = reply.text ?? "Started."
+                await MainActor.run { status = text }
+                LocalNotice.post(title: "Session ready", body: text)
+            } catch {
+                // A TIMEOUT IS NOT A FAILURE: `start` is mutating and carries
+                // an idempotency key, so the session may well exist. Saying
+                // "failed" would send somebody to start a second one — and the
+                // second would be a second session, because a retry mints a
+                // new key.
+                let timedOut = (error as NSError).code == NSURLErrorTimedOut
+                let text = timedOut
+                    ? "Still starting, or started — the answer did not come back in time. Pull to refresh to see."
+                    : error.localizedDescription
+                await MainActor.run { status = text }
+                LocalNotice.post(title: timedOut ? "Session may be starting" : "Could not start a session", body: text)
+            }
+            await refresh(keepStatus: true)
+        }
+    }
+
     private func refresh(keepStatus: Bool = false) async {
         guard settings.configured else { return }
         busy = true

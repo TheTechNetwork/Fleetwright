@@ -44,6 +44,21 @@ export class SessionWatcher {
   constructor({ hub, emit, intervalMs = DEFAULT_INTERVAL_MS, allowSessionText = false, logger }) {
     /** The last prompt read per session, so health need not peek again. */
     this.prompts = new Map();
+    /**
+     * How long each session's pane has looked exactly the same.
+     *
+     * Free, because the pane is already being read every tick to find prompts
+     * — this is one hash of text that is in hand. `{ hash, since }` per
+     * session: when the hash changes the clock restarts, and `since` is the
+     * moment it last stopped changing.
+     *
+     * IDLE IS NOT THE SAME AS DONE. A session waiting at a prompt has a still
+     * pane and is the most active thing in the fleet: somebody has to answer
+     * it. Anything acting on idleness has to exclude those, which is why the
+     * prompt is tracked in the same pass.
+     * @type {Map<string, { hash: string, since: number }>}
+     */
+    this.idle = new Map();
     this.hub = hub;
     this.emit = emit;
     // Whether a prompt that quotes the session — a path, a command line — may
@@ -122,6 +137,7 @@ export class SessionWatcher {
       if (running) {
         const pane = await this.hub.peek(name).catch(() => null);
         if (pane) {
+          this.#noteIdle(name, pane);
           awaiting = AWAITING_RE.test(pane);
           // The pane is read either way. Reading the QUESTION out of it costs
           // one more pass over text already in hand, and is the difference
@@ -166,6 +182,34 @@ export class SessionWatcher {
     // A session the hub has forgotten is gone; keeping it would mean it fires
     // "ended" again if the name is ever reused.
     for (const name of [...this.seen.keys()]) if (!live.has(name)) this.seen.delete(name);
+    for (const name of [...this.idle.keys()]) if (!live.has(name)) this.idle.delete(name);
+  }
+
+  /**
+   * Track whether this pane is still moving.
+   *
+   * A cheap non-cryptographic hash, because the question is "did these bytes
+   * change" and nothing here is deciding anything about a secret. The last
+   * lines are what a working session churns, so the whole visible pane is
+   * hashed rather than a tail — a spinner at the bottom of an otherwise static
+   * screen is still work happening.
+   *
+   * @param {string} name @param {string} pane
+   */
+  #noteIdle(name, pane) {
+    let h = 5381;
+    for (let i = 0; i < pane.length; i++) h = ((h * 33) ^ pane.charCodeAt(i)) >>> 0;
+    const hash = String(h);
+    const before = this.idle.get(name);
+    if (!before || before.hash !== hash) this.idle.set(name, { hash, since: Date.now() });
+  }
+
+  /**
+   * When this session's pane last changed, or null if it is not being watched.
+   * @param {string} name
+   */
+  idleSince(name) {
+    return this.idle.get(name)?.since ?? null;
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */
