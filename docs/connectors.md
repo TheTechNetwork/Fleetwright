@@ -321,6 +321,47 @@ already know. The client secret required to refresh is not a credential to
 anything on its own, which is what makes it tolerable on a host in a way a
 minting private key is not.
 
+### Claude: the same idea, blocked by not owning the client
+
+Suggested: pass the token back to the app in a URL, the way the App flow does.
+That is exactly the right instinct — an OAuth redirect to a scheme the app
+registers is precisely what removes a paste, and it is what makes the GitHub
+flow above a two-step.
+
+**It does not work for Claude, and the reason is worth writing down so nobody
+re-derives it.** The authorize URL is not ours:
+
+```
+https://claude.com/cai/oauth/authorize?code=true&client_id=…
+```
+
+That `client_id` is Claude Code's. **A redirect target belongs to the OAuth
+client**, and we are not it — we cannot register `fleetwright://` against
+somebody else's client, and asking Anthropic's page to send a code to an app it
+has never heard of is the thing OAuth exists to prevent.
+
+The second half is harder still. The **PKCE verifier lives on the host**, in
+the pane the CLI is running in. Even if the app received the code by URL, it
+would still have to hand it to that host — which is what it does today after a
+paste. So the redirect would remove the copy, not the round trip.
+
+Removing the copy is a real win and worth having. It is just a smaller one than
+the GitHub App's, and it is gated on something Anthropic controls.
+
+**What would actually remove the paste: a device-authorization flow**
+(RFC 8628). It inverts the direction — the page shows a short user code, the
+person confirms there, and *the CLI polls* for the result. Nobody copies
+anything back, and the credential never transits a phone at all. That is the
+shape every CLI login has converged on for exactly this reason.
+
+So the thing to check before building anything here is whether `claude auth
+login` has, or gains, a device-code mode. If it does, the host polls and this
+whole screen loses its paste field. If it does not, the honest ceiling for
+Claude is what is already built: open the page, come back, one-tap paste.
+
+Worth re-checking rather than assuming from this document — it is a CLI flag,
+and CLI flags change.
+
 ### Cloudflare has no equivalent, and that keeps being the pattern
 
 There is no public program for a third party to be a Cloudflare "app" the way
