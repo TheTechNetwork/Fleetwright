@@ -312,6 +312,9 @@ export class Sidecar {
         // the object is what guarantees that, and test/connectors.test.js
         // pins its keys for exactly this reason.
         ...(r.connections ? { connections: r.connections } : {}),
+        // What a stored token can actually do, when it was just asked. Scope
+        // names, an account, and what is absent — never the token.
+        ...(r.check ? { check: r.check } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {
@@ -682,6 +685,8 @@ export function toCommandLine({ verb, params, actor }) {
       // permission check on a value the enforcing end never sees is not a
       // permission check.
       return `/link ${p.provider} ${p.secret}${p.scope === 'host' ? ' --host' : ''}`;
+    case 'verify':
+      return `/verify ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
     case 'unlink':
       if (p.provider === 'claude') {
         if (p.scope === 'host') return '/login logout';

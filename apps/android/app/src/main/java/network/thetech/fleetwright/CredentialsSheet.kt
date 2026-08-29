@@ -57,6 +57,9 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
     var pending by remember { mutableStateOf<Fleet.Connections.Available?>(null) }
     var secret by remember { mutableStateOf("") }
     var result by remember { mutableStateOf("") }
+    // The last answer per provider, kept so the detail can be reopened without
+    // asking the provider again.
+    var checks by remember { mutableStateOf(mapOf<String, Fleet.Check>()) }
     var busy by remember { mutableStateOf(false) }
 
     // Reloaded on host AND on every resume, which is how coming back from the
@@ -147,6 +150,24 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             ) { Text(actionLabel(provider, linked)) }
 
                             if (linked != null) {
+                                // TEST, because "connected" is a fact about
+                                // storage and not about the token — it can be
+                                // revoked, expire, or have its permissions
+                                // narrowed at the provider long after it was
+                                // stored, and nothing here would know until a
+                                // session failed four hours in.
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        scope.launch {
+                                            busy = true
+                                            val reply = Fleet(settings).verify(host, provider.provider)
+                                            if (reply.check != null) checks = checks + (provider.provider to reply.check)
+                                            else result = reply.text
+                                            busy = false
+                                        }
+                                    },
+                                ) { Text("Test") }
                                 TextButton(
                                     enabled = !busy,
                                     onClick = {
@@ -160,6 +181,34 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                         }
                                     },
                                 ) { Text("Forget") }
+                            }
+                        }
+
+                        // WHAT IT CAN DO, once somebody has asked. Shown under
+                        // the row rather than in a dialog: it is the answer to
+                        // the button directly above it.
+                        checks[provider.provider]?.let { c ->
+                            Text(
+                                describeCheck(c),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (c.ok) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.error,
+                            )
+                            c.granted?.takeIf { it.isNotEmpty() }?.let {
+                                Text("Has: ${it.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (c.granted == null) {
+                                Text(
+                                    "${provider.label} does not report what a token was granted.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            c.missing?.takeIf { it.isNotEmpty() }?.let {
+                                Text(
+                                    "Asked for and not granted: ${it.joinToString(", ")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
                             }
                         }
                     }
@@ -291,4 +340,20 @@ private fun actionLabel(provider: Fleet.Connections.Available, linked: Fleet.Con
     if (provider.isSignIn) return "Sign in again"
     if (!linked.missing.isNullOrEmpty()) return "Update permissions"
     return "Replace"
+}
+
+/**
+ * "works · octocat · 6 scopes · 4 missing", or what went wrong.
+ *
+ * One line, because the detail is directly underneath and this sits below a
+ * row that is already three lines tall.
+ */
+private fun describeCheck(check: Fleet.Check): String {
+    if (!check.ok) return check.message ?: "could not be checked"
+    return listOfNotNull(
+        "works",
+        check.account?.takeIf { it.isNotBlank() },
+        check.granted?.let { "${it.size} scope${if (it.size == 1) "" else "s"}" },
+        check.missing?.takeIf { it.isNotEmpty() }?.let { "${it.size} missing" },
+    ).joinToString(" · ")
 }

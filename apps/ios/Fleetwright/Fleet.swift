@@ -68,10 +68,26 @@ struct Fleet {
         }
     }
 
+    /// What a stored credential can do, straight from the provider.
+    struct Check: Codable, Hashable {
+        let ok: Bool?
+        let account: String?
+        /// Scope names it HAS. Nil where the provider will not say — which is
+        /// a different fact from an empty list, and rendering it as "none"
+        /// would be a lie about Cloudflare in particular.
+        let granted: [String]?
+        /// Scope names this project asks for.
+        let wants: [String]?
+        /// Asked for and not granted. Nil means "cannot tell".
+        let missing: [String]?
+        let message: String?
+    }
+
     struct Reply: Codable {
         let ok: Bool?
         let text: String?
         let sessions: [Session]?
+        var check: Check?
         /// What could be connected and what is, when the reply is about
         /// credentials. Never a token — the host does not send one and there
         /// is no field here that could hold one.
@@ -290,6 +306,16 @@ struct Fleet {
     /// Forget a token everywhere it was stored.
     func unlinkEverywhere(provider: String) async throws -> Reply {
         try await intent("unlink", params: ["provider": provider])
+    }
+
+    /// Ask the provider what a STORED credential can actually do.
+    ///
+    /// Different from checking at link time, which checks a value somebody
+    /// just pasted. A token can be revoked, expire, or have its permissions
+    /// narrowed at the provider long afterwards, and nothing here would know
+    /// until a session failed.
+    func verify(host: String? = nil, provider: String) async throws -> Reply {
+        try await intent("verify", params: ["provider": provider], host: host)
     }
 
     /// Forget a stored credential. Does NOT revoke it at the provider.
