@@ -10,6 +10,7 @@ import { LoginFlow } from './core/login.js';
 import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
+import { renewAllCredentials } from './core/keepalive.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -133,6 +134,32 @@ export async function main() {
       log.warn('bin sweep failed', e);
     }
   }, 3_600_000).unref?.();
+
+  // THE CREDENTIALS, so an idle box is not signed out by the time somebody
+  // reaches for it.
+  //
+  // An OAuth credential renews when it is USED, and nothing on an idle host
+  // uses one — no session is running, which is what idle means. So it goes
+  // stale exactly when it must not: at the moment somebody starts a session on
+  // a box that has been quiet since yesterday. See src/core/keepalive.js for
+  // the ladder and for why the verdict is read off the credential file rather
+  // than off an exit code.
+  //
+  // Hourly, and almost always free: the check is a file read, and a credential
+  // with hours left costs nothing at all. Once at startup too, because a box
+  // that has just been rebooted is the one most likely to be holding something
+  // that expired while it was off.
+  if (cfg.credentialKeepaliveMs) {
+    const keepalive = () => {
+      try {
+        renewAllCredentials(cfg);
+      } catch (e) {
+        log.warn('keepalive failed', e);
+      }
+    };
+    setTimeout(keepalive, 30_000).unref?.();
+    setInterval(keepalive, cfg.credentialKeepaliveMs).unref?.();
+  }
 }
 
 /** @param {SessionManager} sessions */

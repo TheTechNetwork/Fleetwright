@@ -159,6 +159,20 @@ export function loadConfig(env = process.env) {
     // 0 disables the check entirely — /update still refreshes.
     sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 6 * 60 * 60 * 1000),
 
+    // How often to make sure the Claude credentials on this box are still
+    // live. 0 turns it off.
+    //
+    // AN OAUTH CREDENTIAL RENEWS WHEN IT IS USED, and nothing on an idle host
+    // uses one — no session is running, which is what idle means. So it goes
+    // stale precisely when it must not: at the moment somebody starts a
+    // session on a box that has been quiet since yesterday.
+    //
+    // Hourly, and almost always free: the check is a file read, and a
+    // credential with hours left on it costs nothing at all. See
+    // src/core/keepalive.js — the expensive step is only reached when the free
+    // one did not work, and only when there is something to gain.
+    credentialKeepaliveMs: Math.max(0, int('AGENT_HUB_CREDENTIAL_KEEPALIVE_MS', 3_600_000)),
+
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.
     // Turn it off on a shared box where other tmux sessions are none of the
