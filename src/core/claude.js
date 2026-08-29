@@ -150,10 +150,23 @@ export function diagnoseRc(text) {
   if (NOT_LOGGED_IN_RE.test(pane)) {
     return {
       detail: 'the session is not logged in, so Remote Control cannot come online',
+      // THE OLD REMEDY HERE TOLD PEOPLE TO FORGET THE SESSION, and this
+      // message is exactly the one somebody reads at the worst moment. It made
+      // sense when a resume never re-seeded: the only way to get a current
+      // credential into a volume was to destroy the volume, so the advice was
+      // "throw away the conversation". It is now both destructive and
+      // unnecessary — a resume re-seeds from the account the volume already
+      // holds — and a remedy that costs a week of work when a cheaper one
+      // exists is worse than no remedy at all.
+      //
+      // The order below is the cheapest fix first, ending at the one that
+      // loses something, which is how every other remedy in this codebase is
+      // written.
       remedy:
-        'A sandboxed session is given a copy of the host credentials the first time its volume is created. ' +
-        'Check AGENT_HUB_SANDBOX_CREDENTIALS points at a real, current file, then /forget the session and start it ' +
-        'again so the volume is seeded fresh.',
+        'A session gets a copy of the credential when it starts or resumes, so the usual cause is that the ' +
+        "credential on the box itself is stale. Sign in again on the host, then /resume this session — the resume " +
+        'takes a fresh copy and keeps the conversation. If it still comes up logged out, /verify claude says which ' +
+        'of the two is wrong.',
     };
   }
   if (UPDATING_RE.test(pane)) {
