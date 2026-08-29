@@ -159,6 +159,52 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         }
     }
 
+    /**
+     * Start a session without making anybody watch it happen.
+     *
+     * THE SHEET CLOSES ON TAP. Starting takes the host up to a minute — a
+     * container, a fresh volume, credentials, and the Remote Control check —
+     * and two earlier attempts at this were wrong in the same direction: a
+     * disabled button, then a spinner explaining the wait. Explaining a wait is
+     * still a wait, and nobody needs to be present for it.
+     *
+     * The coroutine is owned HERE, not in the dialog, because a job scoped to a
+     * dismissed composable is one that may not finish — and this is a mutating
+     * request that has already left.
+     */
+    fun startInBackground(request: StartRequest) {
+        status = "Starting a session. You will get a notification when it is ready."
+        scope.launch {
+            val text = try {
+                val reply = fleet.start(
+                    title = request.title,
+                    brief = request.brief,
+                    mode = request.mode,
+                    host = request.host,
+                )
+                LocalNotice.post(context, "Session ready", reply.text.ifBlank { "Started." })
+                reply.text.ifBlank { "Started." }
+            } catch (e: Exception) {
+                // A TIMEOUT IS NOT A FAILURE: `start` is mutating and carries
+                // an idempotency key, so the session may well exist. Saying
+                // "failed" would send somebody to start a second one — and the
+                // second would be a second session, because a retry mints a
+                // new key.
+                val message = e.message.orEmpty()
+                val timedOut = e is java.net.SocketTimeoutException || message.contains("timeout", true)
+                val out = if (timedOut) {
+                    "Still starting, or started — the answer did not come back in time. Pull to refresh to see."
+                } else {
+                    message.ifBlank { "could not start" }
+                }
+                LocalNotice.post(context, if (timedOut) "Session may be starting" else "Could not start a session", out)
+                out
+            }
+            status = text
+            refresh(keepStatus = true)
+        }
+    }
+
     // Launched from a shortcut: open the sheet with that kind already chosen.
     // The sheet, not a silent start — a shortcut says WHAT kind of work, and the
     // brief still says what the work is. Skipping straight to a started session
@@ -179,10 +225,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                 showStart = false
                 pendingKindId = null
             },
-            onStarted = { text ->
-                status = text
-                refresh(keepStatus = true)
-            },
+            onStart = { request -> startInBackground(request) },
         )
     }
 
