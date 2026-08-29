@@ -70,6 +70,45 @@ routes = [
 # glance, rather than being one opaque hex string among three.
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
+# --- the GitHub App -----------------------------------------------------------
+# Identifiers, not credentials, and that is why they are here rather than in a
+# secret. A client id appears in the query string of every authorize URL the
+# app hands out — it is public by construction, and pretending otherwise would
+# be the shared-secret habit wearing a different hat.
+#
+# The CLIENT SECRET is a secret and lives in `wrangler secret put`:
+#
+#   wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET
+#
+# It is worth being exact about what that secret is and is not. On its own it
+# authorises nothing — it cannot read a repository, mint a token, or identify
+# anybody. It is only useful alongside an authorization code the person just
+# produced, or a refresh token they already granted. That is what makes it
+# tolerable in a coordinator, when the App's PRIVATE KEY is not: the private
+# key mints installation tokens for every installation of the App, which is
+# every member and every org that ever installed it. See docs/github-app.md.
+#
+# Absent means "no App configured", which is not an error: the paste route is a
+# first-class answer, not a fallback, and a fresh clone of this repo has no App
+# and should still work.
+AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
+
+# Kept because installation tokens will want it — though GitHub now accepts the
+# CLIENT ID as the JWT issuer in its place, so this may turn out to be the last
+# thing that needs it. Recorded rather than dropped: an id that is hard to find
+# again costs more than a line here.
+AGENT_FLEET_GITHUB_APP_ID = "4758006"
+
+# The slug, which is what the INSTALL url is built from:
+#
+#   https://github.com/apps/fleetwright-agents/installations/new
+#
+# Not derivable from the name without guessing at GitHub's slugifying — "Fleetwright
+# Agents" became `fleetwright-agents`, and the OAuth path needs no slug at all,
+# so this exists purely so the install link can be built without a lookup that
+# requires the private key to authenticate.
+AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
+
 # Which hostname IS the demo. Named here rather than hardcoded in worker.js so
 # there is one place to change it, and so a second deployment of this Worker can
 # have its own — or none, which is what local dev and any fork gets by default.

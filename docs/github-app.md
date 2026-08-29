@@ -113,6 +113,58 @@ So the first build is **user-to-server OAuth**, not installation tokens. That
 is not a compromise; it is the half that does not require the broker, and it
 already beats a PAT on lifetime, scope and revocability.
 
+## Registered, and what each value is
+
+| | value | where it lives |
+|---|---|---|
+| App ID | `4758006` | `[vars]` — an identifier |
+| Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` — appears in every authorize URL |
+| Client secret | *(to generate)* | `wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET` |
+| Private key | *(not yet needed)* | nowhere, until the broker exists |
+
+**The first build needs only the Client ID and the secret.** User-to-server
+OAuth authorizes against
+`https://github.com/login/oauth/authorize?client_id=…`, which needs no app
+slug, no private key, and no installation. That is a useful accident of
+ordering: the half that works before the broker is also the half that needs the
+least.
+
+GitHub's own note on the settings page — *"Using your App ID to get
+installation tokens? You can now use your Client ID instead"* — means the App
+ID may end up unused entirely. It is recorded anyway, because an id that is
+hard to find again costs more than a line of config.
+
+**The slug is `fleetwright-agents`** — the name "Fleetwright" was taken, so the
+App is "Fleetwright Agents", and GitHub slugified it with a hyphen. Confirmed
+rather than guessed: `https://github.com/apps/fleetwright-agents` answers 200,
+which also confirms the App is public and installable by anybody.
+
+The install URL is therefore
+`https://github.com/apps/fleetwright-agents/installations/new`. The OAuth path
+needs no slug at all.
+
+## The private key: received, and deliberately not installed anywhere
+
+The key exists and is a 2048-bit RSA key. It has not been written to a secret
+store, a host, the coordinator, or this repository, and that is the design
+rather than an oversight — [above](#where-each-piece-may-live-which-is-the-whole-design)
+and [trust.md](./trust.md): it mints installation tokens for **every**
+installation of this App, so it may not live on hosts (N copies, one compromise
+reaches everybody) and may not live in the coordinator (treated as
+compromised). **It waits for the broker**, and the broker does not exist.
+
+**This particular key should be revoked and a fresh one generated when the
+broker is built.** It arrived through a chat transcript and an upload
+directory — channels whose retention nobody in this repository controls. That
+is not a claim it has leaked; it is that a key which mints for every
+installation is exactly the wrong thing to keep because rotating it is
+inconvenient. GitHub allows several private keys per App and deleting one is a
+button, so the cost of regenerating at the moment of use is approximately zero
+and the cost of not doing so is unbounded.
+
+Deleting it now is also free: nothing uses it, and the OAuth build does not
+need it.
+
 ## Build order
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
