@@ -156,6 +156,11 @@ dependencies {
   implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
+  // Custom Tabs: the provider's authorization page, opened inside the app and
+  // closing itself when it redirects back. See WebAuth.kt for why this is a
+  // real browser rather than a WebView. Pinned, like everything else here.
+  implementation("androidx.browser:browser:1.9.0")
+
   // Firebase Cloud Messaging is deliberately NOT here yet — it needs a
   // google-services.json from your Firebase project, and the Google Services
   // Gradle plugin FAILS THE BUILD when that file is absent. Adding it now would

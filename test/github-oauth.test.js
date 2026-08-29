@@ -8,6 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { PendingAuthorizations, authorizeUrl, exchangeCode, callbackPage } from '../src/fleet/coordinator/github-oauth.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
@@ -269,4 +270,52 @@ test('both apps register the scheme the callback returns to', async () => {
   const manifest = read('apps/android/app/src/main/AndroidManifest.xml');
   assert.match(manifest, /android:scheme="fleetwright"/);
   assert.match(manifest, /android:launchMode="singleTask"/);
+});
+
+test('the app flow is one tap on both phones, and the paste flow is not', () => {
+  // "Why is update or login two clicks when we can do one in an embedded
+  // browser." It was two because each app launched an external browser and
+  // then had nothing to do but wait — the "Done" button existed so a person
+  // could tell the app about a callback it had already been handed and
+  // dropped. The app was asking the person to be the callback.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const ios = read('apps/ios/Fleetwright/WebAuth.swift') + read('apps/ios/Fleetwright/Credentials.swift');
+  const android =
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/WebAuth.kt') +
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt') +
+    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+
+  // THE BROWSER IS A REAL BROWSER on both, and that matters more than the tap.
+  // ASWebAuthenticationSession and a Custom Tab both show the real address bar
+  // and the real padlock and run outside this app's process. A WKWebView or a
+  // WebView would look tidier and would be a login form drawn by the app that
+  // is asking for it, which is the shape of every phishing screen ever built.
+  assert.match(ios, /ASWebAuthenticationSession/);
+  assert.match(android, /CustomTabsIntent/);
+
+  // COMMENTS STRIPPED FIRST. This is the fifth tripwire in this repo to match
+  // the prose explaining why something is wrong rather than the thing being
+  // wrong — the paragraph above each of these says the word "WebView" in order
+  // to rule it out.
+  const code = (/** @type {string} */ src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/WKWebView/.test(code(ios)), 'iOS must not draw the provider login itself');
+  assert.ok(!/\bWebView\b/.test(code(android)), 'Android must not draw it either');
+
+  for (const [name, src] of [['iOS', ios], ['Android', android]]) {
+    // The one-tap path is gated on the app flow. The paste route has no
+    // redirect to wait for, so an embedded browser there would open a window
+    // that never closes itself — worse than a link that is honest about
+    // leaving.
+    assert.match(src, /isAppFlow/, `${name} does not distinguish the two flows`);
+    // And the button that asked somebody to confirm what already happened is
+    // gone.
+    assert.ok(!/"2\. That is all/.test(code(src)), `${name} still shows a step 2 for a flow with no step 2`);
+  }
+
+  // Android needs one thing iOS does not: the redirect arrives as an Intent on
+  // the activity rather than as a return value, and the manifest has claimed
+  // that scheme since the App round with nothing consuming it.
+  assert.match(android, /onNewIntent/);
+  assert.match(android, /WebAuth\.deliver/);
 });

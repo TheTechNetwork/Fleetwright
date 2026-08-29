@@ -81,6 +81,26 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
         busy = false
     }
 
+    // THE CALLBACK ITSELF, which is a different signal from "the app resumed".
+    // Resuming happens for every reason a phone resumes an app; this happens
+    // only when a provider redirected back to us, so it is the one that may
+    // close the flow rather than merely refresh behind it.
+    //
+    // Still trusted for nothing beyond that. A custom scheme is unverified —
+    // any app may claim it — so the `ok` in the query is not read here at all,
+    // and the sentence below says what the app DID rather than what happened.
+    // The row underneath is the host's answer and is the one that is right.
+    LaunchedEffect(Unit) {
+        WebAuth.returned.collect {
+            pending = null
+            secret = ""
+            busy = true
+            Fleet(settings).connections(host).connections?.let { connections = it }
+            busy = false
+            result = "Checked with the provider."
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Your credentials") },
@@ -251,11 +271,29 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                         // on somebody else's website and has to know what they
                         // are coming back to do.
                         p.url?.let { url ->
-                            TextButton(onClick = {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                            }) {
+                            TextButton(
+                                enabled = !busy,
+                                onClick = {
+                                    // ONE TAP FOR A FLOW THAT COMES BACK. An
+                                    // app authorization redirects to our own
+                                    // scheme when it is done, so a Custom Tab
+                                    // can close itself and the screen below
+                                    // refreshes — no step 2, and no "Done"
+                                    // button asking somebody to report an
+                                    // event the app already received.
+                                    //
+                                    // The paste route keeps ACTION_VIEW and
+                                    // its numbers. It does NOT come back:
+                                    // there is a token to copy and no redirect
+                                    // to wait for, so an in-app browser would
+                                    // open a window that never closes itself.
+                                    if (p.isAppFlow) WebAuth.open(context, url)
+                                    else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                },
+                            ) {
                                 Text(
-                                    if (p.isSignIn) "1. Open the sign-in page"
+                                    if (p.isAppFlow) "Connect ${p.label}"
+                                    else if (p.isSignIn) "1. Open the sign-in page"
                                     else "1. Open ${p.label} and create the token",
                                 )
                             }
@@ -266,9 +304,8 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                         // coordinator, which hands it to the box over the
                         // socket it already holds. A token field here would be
                         // asking for something that does not exist.
-                        Text(
-                            if (p.isAppFlow) "2. That is all — GitHub sends the result back by itself."
-                            else if (p.isSignIn) "2. Come back and paste the code"
+                        if (!p.isAppFlow) Text(
+                            if (p.isSignIn) "2. Come back and paste the code"
                             else "2. Come back and paste the token",
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -332,10 +369,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             TextButton(onClick = {
                                 pending = null
                                 secret = ""
-                                if (p.isAppFlow) {
-                                    scope.launch { Fleet(settings).connections(host).connections?.let { connections = it } }
-                                }
-                            }) { Text(if (p.isAppFlow) "Done" else "Cancel") }
+                            }) { Text("Cancel") }
                         }
                     }
                 }
