@@ -2,7 +2,11 @@ package network.thetech.fleetwright
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -58,6 +62,18 @@ fun StartSheet(
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
     var busy by remember { mutableStateOf(false) }
+    // Seconds spent waiting, so the message grows more informative rather than
+    // the screen growing more silent. Starting takes the host up to a minute:
+    // it brings up a container, seeds credentials into a fresh volume, and
+    // waits out the Remote Control check.
+    var waited by remember { mutableStateOf(0) }
+    LaunchedEffect(busy) {
+        waited = 0
+        while (busy) {
+            kotlinx.coroutines.delay(1000)
+            waited++
+        }
+    }
     var error by remember { mutableStateOf("") }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
@@ -141,6 +157,24 @@ fun StartSheet(
                         }
                     }
                 }
+                // WHAT IS HAPPENING, while it happens. A button that says
+                // "Starting…" says wait; this says what for, which is the
+                // difference between waiting and wondering whether it broke.
+                if (busy) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(
+                            if (waited > 12)
+                                "Still starting — the box is bringing up the sandbox and waiting for Remote "
+                                    + "Control. This can take a minute."
+                            else "Starting…",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 if (error.isNotBlank()) {
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -171,7 +205,20 @@ fun StartSheet(
                             // Shown here rather than dismissed into the list:
                             // this dialog holds the only copy of what they
                             // typed, and closing it throws that away.
-                            error = e.message ?: "could not start"
+                            //
+                            // AND A TIMEOUT IS NOT A FAILURE. `start` is
+                            // mutating and carries an idempotency key, so a
+                            // request that gave up may well have started a
+                            // session anyway — saying "failed" would send
+                            // somebody to start a second one.
+                            val message = e.message.orEmpty()
+                            error = if (e is java.net.SocketTimeoutException || message.contains("timeout", true)) {
+                                "Still starting, or started — the answer did not come back in time. Close this and " +
+                                    "pull to refresh; if it is there, it worked. Starting again is safe: the same " +
+                                    "request is not run twice."
+                            } else {
+                                message.ifBlank { "could not start" }
+                            }
                         }
                         busy = false
                     }
