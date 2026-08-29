@@ -129,6 +129,43 @@ and why the console should render the registry's `reason` string rather than
 hiding it. **The system has to be able to distinguish "nothing is happening"
 from "I have lost the ability to tell you", and say which.**
 
+## Where it was written down and not done
+
+Three of these were argued in this document, agreed, and absent from both
+phones. Worth recording, because the gap between a principle and a surface is
+where all of them go to die.
+
+**"Nothing needs you" was nowhere.** The document calls it the most important
+state in the system and both apps rendered a list of rows. A list is not that:
+reading five rows and concluding that none of them is asking anything is work,
+and it is work somebody redoes every time they open the app — which is the loop
+the anxiety runs in, restarted rather than closed. There is now one line at the
+top of both, and it is two sentences on purpose: the headline, and **why it is
+confident**. A reassurance with no basis is one somebody has to take on faith.
+
+It leads with the most urgent true clause and nothing else, so a banner cannot
+say "3 machines healthy" while a session is waiting. And §7 gets its own branch:
+a fleet nobody can hear from is not a fleet with nothing running, and the app
+says which — *"the coordinator has no health from any machine, so this cannot
+say whether anything is running"*.
+
+**"Running" was doing two jobs.** A session mid-build and one that had not moved
+since Tuesday rendered identically, in the same font, and the difference is the
+entire question somebody opens the app to ask. The watcher had measured it since
+idle-restart shipped and the session list did not carry it. Both apps now show
+*"quiet for 20m"* — with a five-minute floor, because a pane pauses constantly
+and a counter that resets every few seconds is noise that teaches people to
+ignore the field, and never for a session at a prompt, which is still because
+somebody has to answer it.
+
+**And a host could be signed in while every session it started came up signed
+out.** §7 again: the system has to be able to distinguish "nothing is happening"
+from "I have lost the ability to tell you". `claude auth status` answers about
+the box's home directory; a sandboxed session runs on a copy. Both are published
+now, and the coordinator degrades a host on the second — narrowly, only when the
+token has expired and there is nothing to renew it with, because a warning that
+fires on the ordinary case is one people stop reading.
+
 ## What this rules out
 
 Anything that manufactures engagement. No streaks, no badges that exist to be

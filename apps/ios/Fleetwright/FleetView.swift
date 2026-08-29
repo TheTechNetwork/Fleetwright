@@ -24,13 +24,32 @@ struct FleetView: View {
     var body: some View {
         NavigationStack {
             List {
+                // FIRST, ALWAYS, ABOVE THE LIST. docs/psychology.md names
+                // "nothing needs you" as the most important state in the
+                // system and neither app said it: a list of rows is not that,
+                // because reading five rows and concluding none of them is
+                // asking anything is work somebody redoes every time they open
+                // the app — which is the loop the anxiety runs in.
+                Section {
+                    ReassuranceBanner(summary: Reassurance(sessions: sessions, hosts: fleetHosts))
+                }
                 if !status.isEmpty {
                     Section { Text(status).font(.system(.footnote, design: .monospaced)) }
                 }
                 Section {
                     if sessions.isEmpty && !busy {
-                        Text("No sessions. Pull to refresh, or start one.")
-                            .foregroundStyle(.secondary)
+                        // ContentUnavailableView rather than a grey sentence:
+                        // it is the system's empty state, so it inherits the
+                        // spacing, the type and the behaviour every other app
+                        // on the phone uses for the same situation.
+                        ContentUnavailableView {
+                            Label("No sessions", systemImage: "moon.zzz")
+                        } description: {
+                            Text("Nothing is running on any machine in this fleet.")
+                        } actions: {
+                            Button("Start one") { showingStart = true }
+                                .disabled(!settings.configured)
+                        }
                     }
                     ForEach(sessions) { session in
                         SessionRow(session: session, busy: busy, stop: { await act { try await fleet.stop(session.name) } },
@@ -46,7 +65,12 @@ struct FleetView: View {
                 }
             }
             .refreshable { await refresh() }
-            .navigationTitle("agent-fleet")
+            // The product is called Fleetwright; this said "agent-fleet",
+            // which is the repository. A person who installed one app and is
+            // looking at another name has to work out whether they are the
+            // same thing, and the answer being yes does not make the question
+            // free. Android has always said Fleetwright.
+            .navigationTitle("Fleetwright")
             .safeAreaInset(edge: .bottom) {
                 // THE BIN, WITH THE SESSIONS. It sat under each host's row in
                 // settings, because that is where the volumes live — an
@@ -219,6 +243,16 @@ private struct SessionRow: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+            // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
+            // session mid-build and one that has not moved since Tuesday
+            // looked identical, and the difference is the whole question
+            // somebody opens this app to ask. Nil under five minutes, so a
+            // working session never wears it.
+            if let quiet = session.quietFor {
+                Label(quiet, systemImage: "pause.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             // WHAT IT IS ASKING, and the answer as a row of buttons.
             //
             // This is the whole point of a notification that carries the

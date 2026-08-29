@@ -27,6 +27,16 @@ struct Fleet {
         let startedAt: Double?
         /// Whose Claude account it runs on: an email, or "shared".
         let account: String?
+        /// When this session's pane last changed, as epoch milliseconds.
+        ///
+        /// A timestamp rather than a duration: the phone doing the arithmetic
+        /// is the only place it stays right while a screen is open — the same
+        /// reason `startedAt` travels this way.
+        ///
+        /// Nil for a session that is not running, and for one showing a
+        /// prompt: that pane is still because somebody has to answer it, which
+        /// is the opposite of idle.
+        let idleSince: Double?
         /// What it is asking, when it is asking. Present only while a prompt
         /// is on screen — and the id is what makes answering it later safe.
         let prompt: Prompt?
@@ -54,6 +64,27 @@ struct Fleet {
         var workspace: String? {
             guard let cwd, !cwd.isEmpty else { return nil }
             return URL(fileURLWithPath: cwd).lastPathComponent
+        }
+
+        /// How long it has been quiet, once that is long enough to mean
+        /// something.
+        ///
+        /// "Running" was doing two jobs: a session mid-build and one that has
+        /// not moved since Tuesday looked identical, in the same font, and the
+        /// difference is the entire question somebody opens this app to ask.
+        ///
+        /// NOTHING UNDER FIVE MINUTES. A pane pauses constantly — waiting on a
+        /// network call, thinking, between tool calls — and a counter that
+        /// resets every few seconds is noise that trains people to ignore the
+        /// field. This is meant to answer "has it been stuck for an hour",
+        /// which is the anxiety in docs/psychology.md, not "is it typing".
+        var quietFor: String? {
+            guard isRunning, prompt == nil, let idleSince, idleSince > 0 else { return nil }
+            let seconds = Date().timeIntervalSince1970 - idleSince / 1000
+            guard seconds >= 300 else { return nil }
+            if seconds < 3600 { return "quiet for \(Int(seconds / 60))m" }
+            if seconds < 86_400 { return "quiet for \(Int(seconds / 3600))h" }
+            return "quiet for \(Int(seconds / 86_400))d"
         }
 
         /// "3h" — coarse on purpose. The exact age of a session is never the

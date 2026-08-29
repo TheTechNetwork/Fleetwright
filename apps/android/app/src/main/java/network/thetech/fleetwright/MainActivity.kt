@@ -322,6 +322,14 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
 
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
 
+            // FIRST, ALWAYS, ABOVE THE LIST. docs/psychology.md names
+            // "nothing needs you" as the most important state in the system
+            // and neither app said it: a list of rows is not that, because
+            // reading five rows and concluding none of them is asking anything
+            // is work somebody redoes every time they open the app — which is
+            // the loop the anxiety runs in.
+            ReassuranceBanner(Reassurance.of(sessions, binHosts))
+
             if (status.isNotBlank()) {
                 Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Text(status, Modifier.padding(12.dp), fontFamily = FontFamily.Monospace)
@@ -329,11 +337,17 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             }
 
             if (sessions.isEmpty() && !busy) {
-                Text(
-                    "No sessions. Tap “New session” to start one.",
+                Column(
                     Modifier.padding(top = 24.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("No sessions", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Nothing is running on any machine in this fleet. Tap “New session” to start one.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -457,6 +471,18 @@ private fun SessionCard(
             )
             if (context.isNotEmpty()) {
                 Text(context.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            }
+            // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
+            // session mid-build and one that has not moved since Tuesday
+            // looked identical, and the difference is the whole question
+            // somebody opens this app to ask. Null under five minutes, so a
+            // working session never wears it.
+            session.quietFor?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             // WHAT IT IS ASKING, and the answer as buttons. Reading a
             // question on a phone and being unable to answer it is the shape

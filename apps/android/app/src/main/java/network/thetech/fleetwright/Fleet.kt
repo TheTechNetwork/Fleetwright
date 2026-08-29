@@ -49,9 +49,49 @@ class Fleet(private val settings: Settings) {
          * on screen; the id is what makes answering it later safe.
          */
         val prompt: Prompt? = null,
+        /**
+         * When this session's pane last changed, epoch millis.
+         *
+         * A timestamp rather than a duration, for the same reason [startedAt]
+         * is: the phone doing the arithmetic is the only place it stays right
+         * while a screen is open.
+         *
+         * Null for a session that is not running, and for one showing a
+         * prompt: that pane is still because somebody has to answer it, which
+         * is the opposite of idle.
+         */
+        val idleSince: Long? = null,
     ) {
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
+
+        val isRunning: Boolean get() = status == "running"
+
+        /**
+         * How long it has been quiet, once that is long enough to mean
+         * something.
+         *
+         * "Running" was doing two jobs: a session mid-build and one that has
+         * not moved since Tuesday looked identical, in the same font, and the
+         * difference is the entire question somebody opens this app to ask.
+         *
+         * NOTHING UNDER FIVE MINUTES. A pane pauses constantly — waiting on a
+         * network call, thinking, between tool calls — and a counter that
+         * resets every few seconds is noise that trains people to ignore the
+         * field. This answers "has it been stuck for an hour", which is the
+         * anxiety in docs/psychology.md, not "is it typing".
+         */
+        val quietFor: String? get() {
+            if (!isRunning || prompt != null) return null
+            val since = idleSince?.takeIf { it > 0 } ?: return null
+            val seconds = (System.currentTimeMillis() - since) / 1000
+            return when {
+                seconds < 300 -> null
+                seconds < 3600 -> "quiet for ${seconds / 60}m"
+                seconds < 86_400 -> "quiet for ${seconds / 3600}h"
+                else -> "quiet for ${seconds / 86_400}d"
+            }
+        }
 
         /** The last path component — what a person recognises about a checkout. */
         val workspace: String? get() = cwd?.takeIf { it.isNotBlank() }?.trimEnd('/')?.substringAfterLast('/')
@@ -723,6 +763,7 @@ class Fleet(private val settings: Settings) {
                         },
                     )
                 },
+                idleSince = o.optLong("idleSince").takeIf { it > 0 },
             )
         }
     }
@@ -783,6 +824,9 @@ class Fleet(private val settings: Settings) {
  * kept on the device.
  */
 class Settings(context: Context) {
+    // The file name, NOT a label. Renaming it would orphan the settings on
+    // every phone that already has the app — a stored URL and credential
+    // silently gone, on the one screen where losing input costs the most.
     private val prefs = context.getSharedPreferences("agent-fleet", Context.MODE_PRIVATE)
 
     /** Not sensitive: an origin, and the app talks to no other. */
