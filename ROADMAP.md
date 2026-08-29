@@ -101,6 +101,28 @@ anything. (`docs/wanted.md` has the full table.)
 | Session config from app/TG | wanted | `docs/wanted.md` |
 | Prompt-efficiency helpers injected at session start (rules, helpers, our own tools) | **designed** | `docs/wanted.md` — host-side named profiles, then measure interruptions before arguing about contents |
 
+## 6b. The install should ask nothing
+
+Stated as the goal rather than a task, because it is the thing several other
+decisions are already serving: **spin up a box, install, register, go.** Every
+question the installer asks is a thing somebody has to know, get right, and
+repeat on the next machine — and a fleet is by definition the next machine.
+
+| what it asks today | what would remove it |
+|---|---|
+| coordinator URL | baked into the one-line install command, which already carries it |
+| enrolment pin | the pin *is* the answer; the command could carry it and enrol unattended |
+| Claude login | the last step that genuinely needs a human — and now reachable from the app, so it does not have to be answered during the install |
+| anything the deployment configures | **the config frame** — see `docs/github-app.md`. A value the coordinator can send down an authenticated socket is a value the installer never has to ask for, and a file nobody has to place |
+
+The last row is why the GitHub client secret is delivered over the socket
+rather than written to `/etc` on each host: *"needing to put files manually on
+the host is the part I don't want."* Every credential or setting that arrives
+this way is one fewer question, on every machine, for ever.
+
+Not today. But it decides the shape of anything new that needs configuring:
+**if a host needs a value, the coordinator should be able to send it.**
+
 ## 7. Operations
 
 | feature | status | where |

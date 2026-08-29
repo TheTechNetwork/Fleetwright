@@ -188,11 +188,52 @@ phone. It must not be a `[vars]` entry for a reason this file already records
 about the APNs key: **Cloudflare keeps vars and secrets in one namespace, so a
 deploy carrying a var of that name CLOBBERS the secret.** One place per name.
 
-**2. Each host, in its environment file**, `AGENT_HUB_GITHUB_CLIENT_SECRET`,
-0600, beside the configuration it already keeps.
+**2. Nowhere on the host. The coordinator sends it down the socket.**
 
-That second one deserves its justification rather than a shrug, because "a
-secret on every host" is the shape this document keeps refusing:
+The first version of this said "each host, in its environment file, 0600" — and
+that is a file somebody has to place on every machine, which is the exact thing
+this project exists to remove. *"nothing to run, and nothing to ssh into"* is
+the promise; a config file that has to be copied to each box, and re-copied
+whenever the secret rotates, is not a small exception to it.
+
+**The channel already exists.** Every host holds an authenticated websocket to
+the coordinator — it dialled out, proved possession of its P-256 key against a
+nonce, and keeps that socket open. The coordinator already has the client
+secret, because it performs the code exchange. So it sends it on connect, and
+the host keeps it **in memory**.
+
+That is better than a file in three ways rather than one:
+
+- **Nothing to place.** A host enrolled tomorrow gets it by connecting.
+- **Nothing to steal at rest.** There is no file, so there is no file to read
+  out of a backup, a snapshot, or a stolen disk.
+- **Rotation is a deploy.** Change the secret in Cloudflare, and every host has
+  the new one the next time it connects. No fan-out, no stale copy on the box
+  somebody forgot.
+
+The cost is honest and small: a host that cannot reach the coordinator cannot
+refresh a token. A host in that state also cannot be asked to do anything, and
+sessions already holding a valid access token keep working for up to eight
+hours.
+
+### The config frame is a FIXED SET, for the same reason intents are
+
+This is the guardrail, and it matters more than the feature. "The coordinator
+can push configuration to hosts" is a command channel wearing a different hat —
+arbitrary key/value delivery from the party this system treats as compromised
+is exactly what `design.md` §5 refuses when it refuses shell strings.
+
+So the frame carries **named values from a fixed list**, validated on arrival by
+the host, and a key the host does not recognise is dropped rather than stored.
+Same shape as the verb set: the coordinator can send what the protocol names,
+and cannot invent a new thing to send.
+
+Today that list is one entry, the GitHub client secret. It should grow slowly
+and never become a map.
+
+### Why this may be delivered at all, when the private key may not
+
+Because the client secret authorises **nothing on its own**:
 
 > The client secret authorises **nothing on its own**. It cannot read a
 > repository, mint a token, or name a person. It is useful only together with
@@ -200,14 +241,16 @@ secret on every host" is the shape this document keeps refusing:
 > granted — and the host holding it already has that person's refresh token.
 
 So a host compromise yields what it already yielded: that host's refresh
-tokens. The secret adds no reach beyond them. Contrast the private key, which
-adds *every installation of the App* — that is the difference, and it is why
-one of these may be replicated and the other may not.
+tokens. The secret adds no reach beyond them, and in memory it does not even
+survive a restart. Contrast the private key, which adds *every installation of
+the App* — that is the difference, and it is why one of these may be
+distributed and the other may not.
 
 The alternative would be hosts asking the coordinator to refresh for them,
-which sends a refresh token up through the coordinator every eight hours. That
-is worse: it makes the coordinator a credential path on a schedule, to avoid
-storing a value that grants nothing by itself.
+which sends a refresh token **up** through the coordinator every eight hours.
+That is worse in the direction that matters: it makes the coordinator a
+credential path on a schedule, in order to avoid sending down a value that
+grants nothing by itself.
 
 **And keep a copy in a password manager**, because GitHub shows a client secret
 exactly once. Losing it means generating another and updating both places —
