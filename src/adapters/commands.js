@@ -242,7 +242,15 @@ function verifyClaude(ctx) {
   const picked = pickCredentialSource(ctx.cfg, ctx.actor);
   const mine = picked.account !== 'shared';
   if (!picked.source) {
-    lines.push('\nSessions on this box are not sandboxed, so they use the login above directly.');
+    // NOT THE SAME AS "not sandboxed", which is what this used to say. It is
+    // reached whenever there is no credential file to copy — which includes a
+    // sandboxed box whose AGENT_HUB_SANDBOX_CREDENTIALS points nowhere, and
+    // that is a fault rather than a configuration choice.
+    lines.push('');
+    lines.push(ctx.cfg.sandbox
+      ? 'Sessions here are sandboxed but no credential file is configured to seed them with, so they will come '
+        + 'up logged out. Check AGENT_HUB_SANDBOX_CREDENTIALS.'
+      : 'Sessions on this box are not sandboxed, so they use the login above directly.');
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);
@@ -260,12 +268,63 @@ function verifyClaude(ctx) {
         : 'Run /login on this box to replace it — until then new sessions come up logged out.',
     );
   }
+  // WHEN SOMETHING WILL HAPPEN, which is the question this screen was actually
+  // being asked. Reported from a real box: "one of the hosts only has 6 hours
+  // left, want to see if it gets bumped to 8 — a test doesn't do it from the
+  // app." Nothing was wrong and nothing was going to happen, and the screen
+  // gave no way to know that.
+  //
+  // A CREDENTIAL WITH HOURS LEFT IS NOT A PROBLEM TO BE SOLVED. An OAuth
+  // client renews near expiry, not on request, so a token cannot be topped up
+  // early by asking harder — and a screen that offers a Test button next to an
+  // expiry invites exactly that reading.
+  lines.push('');
+  lines.push(renewalPlan(ctx, state));
   // The resumed-session case, which is the one that went wrong: a session
   // takes a copy at volume creation and used to keep it forever. It no longer
   // does, and saying so is the difference between trusting a resume and
   // forgetting a week of work to get a fresh one.
-  lines.push('\nResuming a session refreshes its copy from whichever account it began on.');
+  //
+  // And a session can never renew the BOX's credential, which is the other
+  // half of that report — "starting a new session doesn't renew Claude". It
+  // cannot: a sandboxed session works on a copy inside its own volume, so any
+  // refresh the CLI does in there updates the copy and never the original.
+  lines.push('Resuming a session refreshes its copy from whichever account it began on. A session can never renew '
+    + "this box's own credential — it works on a copy in its volume.");
   return lines.join('\n');
+}
+
+/**
+ * What the box will do about this credential, and when.
+ *
+ * @param {any} ctx
+ * @param {import('../core/claude-credential.js').CredentialState} state
+ */
+function renewalPlan(ctx, state) {
+  const every = ctx.cfg.credentialKeepaliveMs;
+  if (!every) return 'Automatic renewal is switched off on this box (AGENT_HUB_CREDENTIAL_KEEPALIVE_MS=0).';
+  if (state.state === 'unknown') {
+    return 'This box checks hourly, but cannot act on a credential it cannot read.';
+  }
+  const left = state.expiresAt === null ? null : state.expiresAt - Date.now();
+  if (left !== null && left > RENEW_WITHIN_MS) {
+    const until = Math.round((left - RENEW_WITHIN_MS) / 60_000);
+    return `Nothing to do yet. This box will start trying about ${humaniseMinutes(until)} from now, when there is `
+      + 'less than four hours left. A token with hours on it cannot be topped up early — the CLI renews near '
+      + 'expiry, not when asked.';
+  }
+  return 'This box is in the window where it tries to renew, hourly, and will use a one-shot prompt if the free '
+    + 'check does not move it.';
+}
+
+/** Four hours, matching src/core/keepalive.js. */
+const RENEW_WITHIN_MS = 4 * 3_600_000;
+
+/** @param {number} minutes */
+function humaniseMinutes(minutes) {
+  if (minutes < 60) return `${Math.max(minutes, 1)} minutes`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? 'an hour' : `${hours} hours`;
 }
 
 /**

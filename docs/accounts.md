@@ -117,6 +117,26 @@ exercises the credential against the API. It stops at the first rung that
 works, so an idle box normally pays nothing, and it does not run at all on a
 credential with hours left.
 
+**Two windows, not one**, and the second was missing until it was tested on a
+real box. `within` (four hours) is when it starts *asking*; `urgent`
+(forty-five minutes) is when it starts *spending*. They have to differ because
+**we do not decide when a token refreshes** — the CLI does, and an OAuth client
+renews near expiry rather than whenever it is asked. Between the two, the
+honest expectation is that nothing happens.
+
+With one window that was two bugs at once: the paid rung fired every hour for
+four hours buying nothing, and each of those logged a warning saying the
+mechanism had failed. A warning that fires four times per token on a healthy
+box is one nobody reads by the second day — and it was the same warning that
+means something is genuinely wrong.
+
+**A token six hours from expiry is healthy, not stale.** It cannot be topped up
+early, by us or by anybody, so `/verify claude` says when the box will start
+trying rather than leaving somebody watching a number that is not going to
+move. And **a session can never renew the box's own credential**: a sandboxed
+session works on a copy inside its volume, so any refresh the CLI does in there
+updates the copy and never the original.
+
 **The verdict comes from the credential file, never from an exit code**, and
 that is the only reason this is safe to ship. Every one of those commands can
 succeed without renewing anything — which is exactly what `auth status` was
