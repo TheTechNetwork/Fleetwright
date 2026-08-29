@@ -267,6 +267,75 @@ a fan-out would copy one paste to every host in the fleet. So they behave like
 `logs`, `update` and `reboot` — one named box, and `ambiguous_host` when the
 fleet has several and nobody said which. Both apps carry the host through.
 
+## A provider app would delete this flow rather than improve it
+
+Asked: with a GitHub App — or a Cloudflare equivalent — would this be more
+streamlined? Yes, and the size of the difference is worth being exact about,
+because it is not "fewer taps".
+
+| | pasting a token today | a GitHub App |
+|---|---|---|
+| 1 | open the token page | open the install page |
+| 2 | review scopes, set an expiry | pick repositories, Install |
+| 3 | generate, **copy** | — |
+| 4 | come back to the app | — |
+| 5 | **paste** | — |
+| 6 | we verify and store | GitHub redirects back; done |
+
+**The person never sees a credential.** Every piece of design in this document
+that exists because of the paste — the numbered steps, the one-tap paste
+button, "replace means delete the old one first", the stored scope list so we
+can say a token is short — is scaffolding around a step that an app removes.
+
+Three other problems go with it:
+
+- **Revocation becomes real.** Uninstalling the app, or changing which
+  repositories it can see, happens in one place on GitHub and we are *told*.
+  Today neither provider will let us revoke on somebody's behalf, so "replace"
+  is an instruction rather than an action.
+- **Permission drift becomes GitHub's job.** When the asked-for list grows,
+  GitHub prompts existing installations to approve the change. That is a
+  first-class mechanism replacing the `missing:` line this repo had to invent.
+- **Scope stops being account-wide.** A classic PAT with `repo` can reach every
+  repository the person can. An installation sees the ones they chose.
+
+### But the private key is the catch, and it is the same catch as before
+
+A GitHub App's private key mints installation tokens **for every installation of
+that app** — every member, every org that installed it. One key, everybody's
+repositories. Replicating that to each host would be strictly worse than the N
+copies of a per-person token we have today: a single host compromise would
+reach every member rather than that host's.
+
+So installation tokens want ONE holder, which under
+[trust.md](./trust.md) cannot be the coordinator and does not yet exist. That
+is the broker, again, and it is why the order there is broker first.
+
+**The shape that works before the broker exists is user-to-server OAuth on the
+App.** The person authorizes; what comes back is an eight-hour access token and
+a refresh token, and the refresh token is stored per person exactly where the
+PAT lives today. The blast radius is then the same as today's — one person's
+credential per host — while the access token is eight hours instead of
+indefinite, scoped to chosen repositories, and revocable from a screen they
+already know. The client secret required to refresh is not a credential to
+anything on its own, which is what makes it tolerable on a host in a way a
+minting private key is not.
+
+### Cloudflare has no equivalent, and that keeps being the pattern
+
+There is no public program for a third party to be a Cloudflare "app" the way
+there is for GitHub. `wrangler login` is OAuth against Cloudflare's *own*
+client, which is not a door open to us. So Cloudflare stays paste-a-token —
+which is the same asymmetry [trust.md](./trust.md) already records for minting:
+GitHub hands out an authority weaker than an account credential, and Cloudflare
+does not hand one out at all.
+
+**Worth verifying before building rather than taking from here**, since a
+provider adding a program is exactly the kind of thing that changes quietly.
+
+So the paste flow is not wasted work: it is what Cloudflare keeps, and what
+GitHub uses until the App exists.
+
 ## What this is not, said plainly
 
 **It is not the proxy.** [trust.md](./trust.md) argues for terminating
