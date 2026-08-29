@@ -657,9 +657,18 @@ export class CoordinatorCore {
         sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine);
       }
 
+      // COVERAGE, when the question was "what am I connected to". A fan-out
+      // returns one reply per host, and for `connect` the interesting part is
+      // where they DISAGREE: a credential reaches the hosts that were
+      // reachable when it was stored, so a machine enrolled later has none.
+      // Merging that into a per-provider list of hosts is what lets a screen
+      // say "missing on deb14" instead of implying the fleet is uniform.
+      const connections = mergeConnections(results);
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
+        ...(connections ? { connections } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
@@ -764,10 +773,22 @@ export class CoordinatorCore {
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
-    // STORED WHERE THE PASTED TOKEN WOULD HAVE GONE, by the verb that already
-    // does it — same validation, same redaction, same per-person file. A
-    // second path into that storage is a second thing to get right.
-    const secret = exchanged.refreshToken ?? exchanged.accessToken;
+    // THE ACCESS TOKEN, NEVER THE REFRESH TOKEN. This read
+    // `exchanged.refreshToken ?? exchanged.accessToken`, reaching for the
+    // longer-lived value — and a refresh token is not an API credential. It
+    // authenticates nothing: `GET /user` with one is a 401, every time. The
+    // whole flow worked and then reported "GitHub rejected that token (401)",
+    // which read like a bad token and was a wrong one.
+    //
+    // What a session uses is the access token. The refresh token exists only to
+    // mint the next one, and has nowhere to live until the host can refresh —
+    // which needs the client secret it is sent over the socket, and that is the
+    // next piece rather than this one.
+    //
+    // Stored by the verb that already does it: same validation, same redaction,
+    // same per-person file. A second path into that storage is a second thing
+    // to get right.
+    const secret = exchanged.accessToken;
     const reply = await this.dispatch({
       verb: 'link',
       params: { provider: 'github', secret },
@@ -780,10 +801,13 @@ export class CoordinatorCore {
     if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };
     return {
       ok: true,
-      text: exchanged.refreshToken
-        ? 'Your sessions can use GitHub now, and the access token refreshes itself.'
-        : 'Your sessions can use GitHub now. This App issues non-expiring tokens — turning on ' +
-          '"Expire user authorization tokens" in its settings is worth doing.',
+      // Honest about the eight hours rather than quiet about them. A token that
+      // stops working tomorrow, from a screen that said "connected", is worse
+      // than one that said so.
+      text: exchanged.expiresIn
+        ? `Your sessions can use GitHub now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours; ` +
+          'connecting again renews it, and automatic renewal is the next piece.'
+        : 'Your sessions can use GitHub now.',
     };
   }
 
@@ -858,6 +882,54 @@ function explainUnknownVerb(reply, host) {
       `  /update --restart               (that box's own Telegram bot)\n` +
       'A pull without a restart looks the same from here — the files are new and the running ' +
       'service still holds the old command list, which is why both lines say --restart.',
+  };
+}
+
+/**
+ * Fold per-host `connections` replies into one answer with coverage in it.
+ *
+ * The catalogue is the same everywhere, so the first host's wins. What differs
+ * is `connected`, and the difference is the point: `hosts` names where each
+ * credential actually is, and `missing` names where it is not.
+ *
+ * @param {any[]} results
+ */
+function mergeConnections(results) {
+  const withConnections = results.filter((r) => r?.connections?.catalogue);
+  if (!withConnections.length) return null;
+
+  /** @type {string[]} */
+  const everywhere = results.map((r) => r.hostId).filter(Boolean);
+  /** @type {Map<string, { provider: string, label: string|null, account: string|null, hosts: string[] }>} */
+  const byProvider = new Map();
+  for (const r of withConnections) {
+    for (const c of r.connections.connected || []) {
+      // SPREAD THE HOST'S RECORD, then add coverage — rather than building a
+      // fresh object from the four fields I happened to think of. The first
+      // version dropped `missing` (the PERMISSIONS a token was not granted)
+      // entirely, which is worse than the collision it was avoiding: a screen
+      // that had been saying "missing workflow" would simply stop.
+      const found = byProvider.get(c.provider) || { ...c, hosts: /** @type {string[]} */ ([]) };
+      found.hosts.push(r.hostId);
+      // An account name differing between hosts is possible and worth surfacing
+      // rather than averaging: it means two different tokens are in play.
+      if (c.account && found.account && c.account !== found.account) found.account = 'differs between machines';
+      byProvider.set(c.provider, found);
+    }
+  }
+
+  return {
+    catalogue: withConnections[0].connections.catalogue,
+    connected: [...byProvider.values()].map((c) => ({
+      ...c,
+      // `absentFrom`, NOT `missing`. A connected credential already carries a
+      // `missing` — the PERMISSIONS it was not granted — and spreading this on
+      // top would have silently replaced "missing workflow" with "missing
+      // deb14". Two different absences, and one word for both is how a screen
+      // ends up telling somebody the wrong thing about their token.
+      absentFrom: everywhere.filter((h) => !c.hosts.includes(h)),
+    })),
+    hosts: everywhere,
   };
 }
 

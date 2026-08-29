@@ -27,6 +27,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 
 /**
@@ -55,7 +59,20 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
-    LaunchedEffect(host) {
+    // Reloaded on host AND on every resume, which is how coming back from the
+    // browser lands. The redirect says a flow finished; what is actually stored
+    // is the host's to report, so this asks rather than believes — a custom
+    // scheme is unverified and any app may claim it.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var resumes by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumes++
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(host, resumes) {
         busy = true
         Fleet(settings).connections(host).connections?.let { connections = it }
         busy = false

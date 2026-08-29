@@ -17,10 +17,33 @@
     <activity
         android:name=".MainActivity"
         android:exported="true"
+        android:launchMode="singleTask"
         android:label="Fleetwright">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+
+      <!--
+        COMING BACK FROM A PROVIDER. The coordinator's OAuth callback redirects
+        to fleetwright://connected once it has stored the token, so the browser
+        hands control back instead of leaving somebody on a page telling them
+        to close a tab.
+
+        singleTask so returning resumes the app that started the flow rather
+        than stacking a second copy of it on top.
+
+        NOT an App Link: those need a domain association file and a verified
+        apex, which is real setup for anybody self-hosting this. A custom
+        scheme is unverified — any app may claim it — which is exactly why the
+        redirect carries only `provider` and `ok`, and no credential ever
+        travels this way.
+      -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="fleetwright" android:host="connected" />
       </intent-filter>
     </activity>
 
