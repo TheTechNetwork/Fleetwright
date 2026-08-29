@@ -176,7 +176,7 @@ node bin/agent-fleet-sidecar doctor       # check this box can drive its agent-h
 node bin/agent-fleet-sidecar              # run
 ```
 
-Every setting is in `src/fleet/host/config.js`. Two are worth calling out:
+Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
 
 - **`AGENT_FLEET_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same
@@ -188,6 +188,21 @@ Every setting is in `src/fleet/host/config.js`. Two are worth calling out:
   passes the freshness check against a cache that has already forgotten it, and
   runs a second time. That is the exact failure the idempotency key exists to
   prevent, reintroduced by two constants drifting apart.
+- **`AGENT_FLEET_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
+  session whose pane has not changed at all for that long is stopped and
+  resumed. The useful case is one that wedged overnight, where the fix is
+  mechanical and nobody was awake to do it.
+
+  The generous default is the interesting part. **The two mistakes do not cost
+  the same:** a wedged session that recovers an hour later than it might have
+  costs an hour, and a working session restarted mid-build loses the work. So
+  the threshold errs long, a session parked at a prompt is never touched
+  however long it waits — that pane is still because somebody has to answer it
+  — and it gives up after two restarts that did not help rather than looping.
+
+  Both the restart and the giving-up are notifiable events. A fleet that
+  quietly restarts things is one nobody can debug: the session's own
+  conversation history will not explain a gap it did not cause.
 
 ## Transport
 

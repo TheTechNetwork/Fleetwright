@@ -81,6 +81,21 @@ export function loadSidecarConfig(env = process.env) {
     // to the person holding the phone. See src/fleet/host/prompt.js.
     promptText: str(env, 'AGENT_FLEET_PROMPT_TEXT', '0') === '1',
 
+    // How long a session's pane may sit completely unchanged before it is
+    // stopped and resumed. 0 turns it off.
+    //
+    // AN HOUR, which is deliberately generous. The failure this catches is a
+    // session that wedged overnight, where the fix is mechanical and nobody
+    // was awake to do it. The failure it must NOT cause is killing a session
+    // that is genuinely working with a quiet pane — a long build, a big test
+    // run — and the cost of those two mistakes is not symmetric: a wedged
+    // session recovers an hour later than it might have, a restarted one loses
+    // work that was happening.
+    //
+    // A session sitting at a prompt is never touched however long it waits;
+    // that pane is still because somebody has to answer it.
+    idleRestartMs: Math.max(0, int(env, 'AGENT_FLEET_IDLE_RESTART_MINUTES', 60)) * 60_000,
+
     // --- the per-session hook socket ---------------------------------------
     // Where the sockets bind-mounted into sandboxes live. See host/hook-socket.js.
     hookSocketDir: str(env, 'AGENT_FLEET_HOOK_SOCKET_DIR', '/run/agent-fleet'),

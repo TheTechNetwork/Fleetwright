@@ -1019,7 +1019,19 @@ const EVENT_PAGE = 50;
 const FANOUT_TIMEOUT_MS = 10_000;
 
 /** Events worth waking somebody for. The rest are for the log. */
-const NOTIFIABLE = new Set(['session.awaiting-input', 'session.ended', 'session.error', 'session.rc-online']);
+const NOTIFIABLE = new Set([
+  'session.awaiting-input',
+  'session.ended',
+  'session.error',
+  'session.rc-online',
+  // BOTH ENDS OF THE AUTO-RESTART. A fleet that quietly restarts things is
+  // one nobody can debug — the session's own conversation history will not
+  // explain a gap it did not cause — and giving up has to be louder than
+  // trying, because that is the point at which a person is needed and nothing
+  // further is going to happen without them.
+  'session.restarted',
+  'session.stuck',
+]);
 
 /** @param {Record<string, any>} event */
 export function describeEvent(event) {
@@ -1032,6 +1044,10 @@ export function describeEvent(event) {
       return event.text || 'hit an error';
     case 'session.rc-online':
       return 'is ready to drive';
+    case 'session.restarted':
+      return event.text || 'was restarted after going idle';
+    case 'session.stuck':
+      return event.text || 'keeps going idle and a restart is not fixing it';
     default:
       return event.event;
   }
