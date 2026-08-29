@@ -50,6 +50,7 @@ test('the verb set is exactly what is documented', () => {
     'peek',
     'purge',
     'reboot',
+    'renew',
     'restore',
     'resume',
     'start',
@@ -127,7 +128,11 @@ test('only state-changing verbs are marked mutating', () => {
     // restore and purge both change what exists on the box, and being mutating
     // is what gets their idempotency key honoured — a retried purge must not
     // report "no session named that" for work it deleted a moment ago.
-    ['answer', 'connect', 'forget', 'link', 'purge', 'reboot', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
+    // renew writes the renewal material to disk, and the idempotency key
+    // matters more here than anywhere: GitHub ROTATES a refresh token on every
+    // exchange, so a deposit applied twice from one retry is a way to store
+    // material that has already been spent.
+    ['answer', 'connect', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

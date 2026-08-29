@@ -10,7 +10,7 @@ import { LoginFlow } from './core/login.js';
 import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
-import { renewAllCredentials } from './core/keepalive.js';
+import { renewAllCredentials, renewProviderTokens } from './core/keepalive.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -156,6 +156,12 @@ export async function main() {
       } catch (e) {
         log.warn('keepalive failed', e);
       }
+      // The provider tokens, on the same timer and by a DIFFERENT mechanism —
+      // a GitHub App token is not renewed by being used, so exercising it
+      // would run, report success and achieve nothing. Async and unawaited:
+      // one is local process work and the other is an HTTPS round trip, and
+      // neither should hold up the other.
+      renewProviderTokens(cfg).catch((e) => log.warn('provider keepalive failed', e));
     };
     setTimeout(keepalive, 30_000).unref?.();
     setInterval(keepalive, cfg.credentialKeepaliveMs).unref?.();

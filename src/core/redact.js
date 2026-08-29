@@ -33,6 +33,10 @@
 const SECRET_FROM = new Map([
   ['code', 0], // /code <authorization-code>
   ['link', 1], // /link <provider> <token>
+  // /renew <provider> <refresh-token> <client-secret> — TWO secrets, and the
+  // second is the App's own, shared by every host in the fleet. The provider
+  // name is still worth keeping for the same reason it is on `link`.
+  ['renew', 1],
 ]);
 
 /** What replaces it. Fixed length, so the log never leaks the secret's size. */

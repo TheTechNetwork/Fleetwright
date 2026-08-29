@@ -137,14 +137,52 @@ shared credential: the shared one is exercised whenever anybody on the box
 works, while a guest's account that has not started a session this week is used
 by nothing at all.
 
-**GitHub does not work this way and the same fix would do nothing.** A GitHub
-App user token is not renewed by being used; it is renewed by exchanging a
-refresh token, explicitly, against `POST /login/oauth/access_token`. We receive
-that refresh token at the end of the OAuth flow **and throw it away** —
-`core.js` says so in as many words, because the host cannot perform the
-exchange without the client secret. So today a GitHub App connection is dead
-eight hours after it is made and the only remedy is connecting again. That is
-the next piece, and it is a stored-secret problem rather than a usage one.
+**GitHub does not work this way, and building the same fix for it would have
+achieved nothing.** A GitHub App user token is not renewed by being used; it is
+renewed by exchanging a refresh token, explicitly, against
+`POST /login/oauth/access_token`. A thousand API calls extend it by zero
+seconds. We used to receive that refresh token at the end of the OAuth flow and
+throw it away, because there was nowhere for it to live — so every App
+connection was dead eight hours after it was made, and reconnecting was the
+only remedy.
+
+**The material now goes to the host, and that is `trust.md`'s rule rather than
+a convenience:** *"spreading minting keys across hosts means a compromised host
+costs that host's access; centralising them means a compromised coordinator
+costs everything."* Keeping refresh tokens at the coordinator would make the
+one internet-facing component hold every member's renewable GitHub credential,
+which is the outcome that rule exists to refuse. A host already holds the
+access token and already runs that person's sessions.
+
+**Three files now, and the split is the whole custody argument:**
+
+| file | who reads it |
+|---|---|
+| `<row>.env` | what a **session** gets — sourced into every container |
+| `<row>.connections.json` | what a **phone** may see — no secret in it at all |
+| `<row>.renewal.json` | what only the **host** may use — mounted nowhere |
+
+A refresh token in the env file would be handed to every session on the box,
+and a session that leaked one would have leaked something that re-mints after
+every revocation. The access token a session holds expires in eight hours; the
+thing that replaces it must not travel with it.
+
+It is a **deposit, not a schedule**: `renew` is sent once, when the connection
+is made, and the host renews on its own timer from then on — so nothing has to
+be scheduled anywhere it could be missed. **The client id travels with it**
+rather than being configured, because an install question is a thing somebody
+has to be told and the standing goal is to have none of them.
+
+**Both halves or neither.** GitHub rotates the refresh token on every exchange
+and invalidates the old one, so storing the new access token without the new
+refresh token renews exactly once and breaks every renewal after it — eight
+hours later, with nothing to point at. And a refused renewal leaves what is
+stored alone: the access token still has time on it, and overwriting it with
+nothing would turn *"this expires later today"* into *"this is broken now"*.
+
+A new **verb**, not two more parameters on `link` — adding a parameter is the
+flag day and adding a verb is free. An older host answers `unknown_verb` and
+its connections behave exactly as they did before.
 
 **Two ways to be signed out, and only one of them was visible.** `claude auth
 status` reports on the box's own home directory; a sandboxed session runs on a

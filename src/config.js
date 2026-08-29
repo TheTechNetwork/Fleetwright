@@ -173,6 +173,7 @@ export function loadConfig(env = process.env) {
     // one did not work, and only when there is something to gain.
     credentialKeepaliveMs: Math.max(0, int('AGENT_HUB_CREDENTIAL_KEEPALIVE_MS', 3_600_000)),
 
+
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.
     // Turn it off on a shared box where other tmux sessions are none of the
