@@ -13,6 +13,9 @@ struct FleetView: View {
     let settings: Settings
 
     @State private var sessions: [Fleet.Session] = []
+    /// Hosts, for the bin — which is fleet-wide and therefore needs them all.
+    @State private var fleetHosts: [Fleet.FleetHost] = []
+    private var binCount: Int { fleetHosts.reduce(0) { $0 + ($1.health?.bin?.count ?? 0) } }
     @State private var status = ""
     @State private var busy = false
     @State private var showingSettings = false
@@ -44,6 +47,25 @@ struct FleetView: View {
             }
             .refreshable { await refresh() }
             .navigationTitle("agent-fleet")
+            .safeAreaInset(edge: .bottom) {
+                // THE BIN, WITH THE SESSIONS. It sat under each host's row in
+                // settings, because that is where the volumes live — an
+                // implementation detail leaking into the layout. Reachable
+                // when empty too: a safety net nobody can find until they need
+                // it does not reassure anybody, and this one looked for a
+                // while like it did not exist.
+                NavigationLink {
+                    RecycleBinView(settings: settings, hosts: fleetHosts) {
+                        Task { await refresh(keepStatus: true) }
+                    }
+                } label: {
+                    Label(binCount > 0 ? "Recycle bin (\(binCount))" : "Recycle bin", systemImage: "trash")
+                        .font(.footnote)
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Settings") { showingSettings = true }
@@ -139,6 +161,13 @@ struct FleetView: View {
         } catch {
             status = error.localizedDescription
         }
+        // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is not
+        // a session, it is a session that stopped being one. `try?` and a
+        // separate statement on purpose — a fleet call that fails must not
+        // blank the session list that already arrived, and an empty bin and an
+        // unreachable coordinator are allowed to look the same HERE because
+        // the sessions above have already said which it was.
+        fleetHosts = (try? await fleet.fleetHosts()) ?? fleetHosts
     }
 
     private func act(_ work: () async throws -> Fleet.Reply) async {
@@ -692,31 +721,6 @@ private struct SettingsView: View {
                                 CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
                             }
                             .font(.caption)
-                            // THE BIN, under the host holding it. Placed here and not
-                            // beside the live sessions on purpose: this is not work in
-                            // progress, it is work somebody stopped — and a recycle
-                            // bin mixed into a list of running things reads as clutter
-                            // rather than as a safety net.
-                            if let bin = host.health?.bin, !bin.isEmpty {
-                                ForEach(bin) { item in
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.title ?? item.name).font(.caption)
-                                        Text(describeBinned(item))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                        HStack(spacing: 12) {
-                                            Button("Restore") { Task { await binAction(item.name, restore: true) } }
-                                            Button("Delete now", role: .destructive) {
-                                                purgeTarget = item.name
-                                            }
-                                        }
-                                        .font(.caption)
-                                        .buttonStyle(.borderless)
-                                        .disabled(busyHost != nil)
-                                    }
-                                    .padding(.leading, 12)
-                                }
-                            }
                         }
                         .padding(.vertical, 2)
                     }

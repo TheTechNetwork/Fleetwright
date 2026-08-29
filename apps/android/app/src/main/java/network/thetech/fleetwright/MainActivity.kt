@@ -137,6 +137,9 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     // restored across a rotation would show sessions that may since have
     // stopped.
     var sessions by remember { mutableStateOf(listOf<Fleet.Session>()) }
+    // Hosts, for the bin — which is fleet-wide and therefore needs them all.
+    var binHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
+    var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
     /**
@@ -155,6 +158,12 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
             status = if (!reply.ok) reply.text else if (keepStatus) status else ""
+            // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is
+            // not a session, it is a session that stopped being one. Kept in a
+            // separate assignment that falls back to what we already had — a
+            // fleet call that fails must not blank the session list that
+            // already arrived.
+            binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
             busy = false
         }
     }
@@ -229,6 +238,15 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         )
     }
 
+    if (showBin) {
+        RecycleBinSheet(
+            settings = settings,
+            hosts = binHosts,
+            onDismiss = { showBin = false },
+            onChanged = { refresh(keepStatus = true) },
+        )
+    }
+
     LaunchedEffect(Unit) { refresh() }
 
     Scaffold(
@@ -237,6 +255,16 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                 title = { Text("Fleetwright") },
                 actions = {
                     TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
+                    // THE BIN, WITH THE SESSIONS. It sat under each host's row
+                    // in settings, because that is where the volumes live — an
+                    // implementation detail leaking into the layout. Reachable
+                    // when EMPTY too: a safety net nobody can find until they
+                    // need it does not reassure anybody, and this one looked
+                    // for a while like it did not exist.
+                    val bin = binHosts.sumOf { it.bin.size }
+                    TextButton(onClick = { showBin = true }) {
+                        Text(if (bin > 0) "Bin ($bin)" else "Bin")
+                    }
                     TextButton(onClick = { showSettings = !showSettings }) { Text("Settings") }
                 },
             )
@@ -547,7 +575,6 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // asks once. `forget` deliberately does not ask, because it is now
         // reversible — a confirmation on the reversible action and none on the
         // permanent one is how people learn to tap through both.
-        var purgeTarget by remember { mutableStateOf<String?>(null) }
         var rebootPin by remember { mutableStateOf("") }
         var rebootConfirm by remember { mutableStateOf("") }
         var credentialsFor by remember { mutableStateOf<String?>(null) }
@@ -601,41 +628,6 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     }
                     if (host.rebootRequired) {
                         Text("reboot required", style = MaterialTheme.typography.bodySmall)
-                    }
-                    // THE BIN, under the host holding it. Not beside the live
-                    // sessions on purpose: this is not work in progress, it is
-                    // work somebody stopped — and a recycle bin mixed into a
-                    // list of running things reads as clutter rather than as a
-                    // safety net.
-                    host.bin.forEach { item ->
-                        Column(
-                            Modifier.padding(start = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            Text(item.title ?: item.name, style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                listOfNotNull("forgotten", item.title?.let { item.name }, item.remaining)
-                                    .joinToString(" · "),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(
-                                    enabled = busyHost == null,
-                                    onClick = {
-                                        scope.launch {
-                                            busyHost = item.name
-                                            hostActionResult = Fleet(settings).restore(item.name).text
-                                            busyHost = null
-                                            fleetHosts = Fleet(settings).fleetHosts()
-                                        }
-                                    },
-                                ) { Text("Restore") }
-                                TextButton(
-                                    enabled = busyHost == null,
-                                    onClick = { purgeTarget = item.name },
-                                ) { Text("Delete now") }
-                            }
-                        }
                     }
                     // MAINTENANCE, which used to need SSH. Update is safe and
                     // idempotent so it is one tap; reboot is two steps and asks
@@ -703,31 +695,6 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             // The pin is issued by the BOX: a coordinator that could mint it
             // could reboot the fleet. The button stays disabled until the typed
             // name matches, which is the only guard that survives being remote.
-            purgeTarget?.let { target ->
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Delete $target for good?", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "The conversation and the workspace go with it. This is the only step here "
-                            + "that cannot be undone — forgetting was reversible, this is not.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            enabled = busyHost == null,
-                            onClick = {
-                                scope.launch {
-                                    busyHost = target
-                                    hostActionResult = Fleet(settings).purge(target).text
-                                    purgeTarget = null
-                                    busyHost = null
-                                    fleetHosts = Fleet(settings).fleetHosts()
-                                }
-                            },
-                        ) { Text("Delete") }
-                        TextButton(onClick = { purgeTarget = null }) { Text("Cancel") }
-                    }
-                }
-            }
             rebootTarget?.let { target ->
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Reboot $target", style = MaterialTheme.typography.titleSmall)
