@@ -46,6 +46,8 @@ const VERIFY_TIMEOUT_MS = 10_000;
  * @property {(host: string) => string} url  where to go to create one
  * @property {string} hint             said on screen, before they leave for that page
  * @property {(secret: string) => Promise<{ ok: boolean, account?: string, granted?: string[]|null, message: string }>} verify
+ *   `granted` is null when the provider does not report scopes for this KIND
+ *   of token — never `[]`, which means "reported, and it has none".
  * @property {string[]} [wants]  permissions the catalogue currently asks for, when they are checkable
  */
 
@@ -514,7 +516,12 @@ export class Connections {
     // `granted` is a list of scope names, not a credential. Kept beside the
     // metadata so the app can say "missing workflow" rather than "connected"
     // when the asked-for list has grown since this token was made.
-    meta[provider] = { account, updatedAt: Date.now(), ...(granted ? { granted } : {}) };
+    // Array.isArray, NOT truthiness. An empty array is a real answer — a
+    // classic token ticked for nothing — and dropping it here would store it
+    // as absent, which every reader downstream correctly interprets as "cannot
+    // tell". The one token we can be certain is short of every scope would
+    // then be the one we say nothing about.
+    meta[provider] = { account, updatedAt: Date.now(), ...(Array.isArray(granted) ? { granted } : {}) };
     writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
 
     // `granted === null` means the provider will not say — an App token, whose
