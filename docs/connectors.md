@@ -321,6 +321,36 @@ already know. The client secret required to refresh is not a credential to
 anything on its own, which is what makes it tolerable on a host in a way a
 minting private key is not.
 
+### Claude: redirecting to the HOST, checked rather than assumed
+
+The suggestion was sharper than the one answered below: not "redirect the token
+to the app", but **redirect it back to the host** — which is where it has to end
+up anyway, since the PKCE verifier lives in the pane there. That would remove
+the paste AND the round trip, which is the whole prize.
+
+It cannot be done, and the reason is now checked rather than reasoned about.
+On **Claude Code 2.1.234**:
+
+```
+$ claude auth login --help
+Options:
+  --claudeai       Use Claude subscription (default)
+  --console        Use Anthropic Console (API usage billing) instead
+  --email <email>  Pre-populate email address on the login page
+  --sso            Force SSO login flow
+```
+
+**There is no redirect flag.** And the URL the CLI mints, observed live, is
+`https://claude.com/cai/oauth/authorize?code=true&client_id=…` — `code=true` is
+the CLI asking for the out-of-band flow, which is *by definition* the one that
+ends in a code somebody carries back by hand.
+
+So there is nowhere to redirect to and no way to ask for one: the redirect
+target belongs to Claude Code's OAuth client, not to us. Worth re-running that
+`--help` after a CLI upgrade rather than trusting this paragraph — it is one
+command, and a flag appearing is exactly the kind of change that would make
+this section wrong.
+
 ### Claude: the same idea, blocked by not owning the client
 
 Suggested: pass the token back to the app in a URL, the way the App flow does.
