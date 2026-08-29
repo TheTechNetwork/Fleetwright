@@ -198,6 +198,27 @@ test('a token is checked before it is stored, and the reasons stay apart', async
   assert.match(unreachable.message, /Nothing was stored/);
 });
 
+test('null and empty survive being stored, which is where they used to be lost', () => {
+  // THE MIRROR OF THE HEADER BUG, one layer down. #222 fixed `verify()` so an
+  // absent `x-oauth-scopes` reports null rather than []; `save()` then dropped
+  // `granted` on plain falsiness, which does the same conflation in the other
+  // direction — an empty array, the one answer we can be certain about, was
+  // written as absent and read back as "cannot tell".
+  //
+  // GitHub can no longer produce [] at all, which is exactly why this is worth
+  // a test rather than a comment: the next provider added to that table will
+  // be written by somebody who has not read this paragraph.
+  const dir = mkdtempSync(join(tmpdir(), 'granted-'));
+  const store = new Connections(dir);
+
+  store.save(HOST_ROW, 'github', GH, 'octocat', null);
+  assert.equal(store.list(HOST_ROW)[0].missing, null, 'no scopes reported stays cannot-tell');
+
+  store.save(HOST_ROW, 'github', GH, 'octocat', []);
+  const missing = store.list(HOST_ROW)[0].missing;
+  assert.ok(Array.isArray(missing) && missing.length > 0, 'reported-and-empty is missing everything asked for');
+});
+
 test('cloudflare reports an inactive token as inactive, not as a network problem', async (t) => {
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });

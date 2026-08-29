@@ -208,7 +208,22 @@ struct CredentialsView: View {
                     if let granted = result.granted, !granted.isEmpty {
                         Text("Has: \(granted.joined(separator: ", "))").font(.caption2)
                     } else if result.granted == nil {
-                        Text("\(provider.label) does not report what a token was granted.")
+                        // TWO DIFFERENT REASONS FOR THE SAME NIL, and telling
+                        // them apart is the difference between "this is fine"
+                        // and "we could not check". Cloudflare has nothing a
+                        // token may read about its own permissions, so it
+                        // never reports — that is a property of the provider.
+                        // GitHub reports for classic tokens and not for app or
+                        // fine-grained ones, so it is a property of the TOKEN,
+                        // and saying "GitHub does not report" would be flatly
+                        // untrue of the next token this screen shows.
+                        //
+                        // The CATALOGUE's `wants` is what separates them: a
+                        // provider whose permissions are checkable at all
+                        // publishes one, and it is in scope right here.
+                        Text((provider.wants ?? []).isEmpty
+                            ? "\(provider.label) does not report what a token was granted."
+                            : "This token has no scopes to report — an app or fine-grained token carries permissions instead, set where it was created.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     if let missing = result.missing, !missing.isEmpty {

@@ -198,8 +198,37 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                 Text("Has: ${it.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
                             }
                             if (c.granted == null) {
+                                // TWO DIFFERENT REASONS FOR THE SAME NULL, and
+                                // telling them apart is the difference between
+                                // "this is fine" and "we could not check".
+                                // Cloudflare has nothing a token may read about
+                                // its own permissions, so it never reports —
+                                // a property of the provider. GitHub reports
+                                // for classic tokens and not for app or
+                                // fine-grained ones, so it is a property of the
+                                // TOKEN, and "GitHub does not report" would be
+                                // flatly untrue of the next token shown here.
+                                //
+                                // The CATALOGUE's `wants` separates them: a
+                                // provider whose permissions are checkable
+                                // publishes one, and it is in scope here.
                                 Text(
-                                    "${provider.label} does not report what a token was granted.",
+                                    if (provider.wants.isEmpty()) {
+                                        "${provider.label} does not report what a token was granted."
+                                    } else {
+                                        // The operator goes at the END of the
+                                        // line here, not the start of the next
+                                        // one. Inside a block that RETURNS a
+                                        // value, a newline ends the expression
+                                        // and a leading `+` is read as a unary
+                                        // plus on a String — which is not an
+                                        // operator String has. It compiles fine
+                                        // in argument position, which is why
+                                        // the rest of this file gets away with
+                                        // the other style.
+                                        "This token has no scopes to report — an app or fine-grained token " +
+                                            "carries permissions instead, set where it was created."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
