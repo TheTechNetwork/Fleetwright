@@ -22,6 +22,7 @@ import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { callbackPage } from '../../src/fleet/coordinator/github-oauth.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -51,6 +52,14 @@ export class Fleet {
       // A Worker request cannot outlive its invocation the way a Node process
       // can, so an intent waits far less long here than on a box.
       intentTimeoutMs: 60_000,
+      // Absent is the normal case for a deployment that has not registered an
+      // App, and is not an error: the paste route is first-class and a fresh
+      // clone of this repo must work with no GitHub App at all.
+      githubApp: {
+        clientId: env.AGENT_FLEET_GITHUB_CLIENT_ID,
+        clientSecret: env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
+        slug: env.AGENT_FLEET_GITHUB_APP_SLUG,
+      },
     });
 
     // Coalesced per invocation: several events can be recorded while handling
@@ -397,6 +406,20 @@ export class Fleet {
       );
     }
 
+    if (url.pathname === '/oauth/github/callback') {
+      const result = await this.core.finishGithubAuthorization({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state'),
+        origin: url.origin,
+      });
+      // HTML, not JSON: the thing reading this is a browser somebody was sent
+      // to, and a raw object on screen is how a working flow looks broken.
+      return new Response(callbackPage(result), {
+        status: result.ok ? 200 : 400,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
       // WHO IS ASKING. This returned every host's health blob verbatim —
       // every session's name, title, working directory, owner and live prompt
@@ -446,8 +469,7 @@ export class Fleet {
       if (!body || typeof body.verb !== 'string') {
         return json({ ok: false, error: { code: 'bad_request' }, text: 'send {verb, params}' }, 400);
       }
-      return json(
-        await this.core.dispatch({
+      const reply = await this.core.dispatch({
           verb: body.verb,
           params: body.params && typeof body.params === 'object' ? body.params : {},
           // The client's own identity wins over anything the request claims:
@@ -463,7 +485,21 @@ export class Fleet {
           // The VERIFIED caller, for visibility. Null for the break-glass token,
           // which sees everything — it is what you hold when identity is broken.
           requester: requesterFor(client),
-        }),
+        });
+      // A `connect` reply carries the host's catalogue, which offers the paste
+      // route because a host knows nothing about a GitHub App — correctly, the
+      // client id and secret belong to the deployment rather than to any
+      // machine. The coordinator is the only part that can improve on that, so
+      // it rewrites the one entry it can and leaves the rest alone.
+      return json(
+        body.verb === 'connect'
+          ? this.core.offerGithubApp(
+              reply,
+              typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),
+              client?.email ?? null,
+              url.origin,
+            )
+          : reply,
       );
     }
 

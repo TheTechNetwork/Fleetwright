@@ -179,7 +179,15 @@ class Fleet(private val settings: Settings) {
              * granted. Empty for Cloudflare, which will not.
              */
             val wants: List<String> = emptyList(),
+            /**
+             * `"app"` when the coordinator has rewritten this to a provider app
+             * authorization. Absent means the paste route, which is the normal
+             * case and not a lesser one.
+             */
+            val flow: String? = null,
         ) {
+            /** Nothing to copy, so nothing to paste. The point of the App. */
+            val isAppFlow: Boolean get() = flow == "app"
             /**
              * Claude is a sign-in; the rest are tokens to paste. Which one
              * decides the shape of the row, so it is asked once rather than at
@@ -582,6 +590,7 @@ class Fleet(private val settings: Settings) {
                         wants = c.optJSONArray("wants")?.let { w ->
                             (0 until w.length()).mapNotNull { k -> w.optString(k).takeIf { it.isNotBlank() } }
                         } ?: emptyList(),
+                        flow = c.optString("flow").takeIf { it.isNotBlank() && it != "null" },
                     )
                 }
             },

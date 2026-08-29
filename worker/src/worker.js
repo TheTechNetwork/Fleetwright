@@ -103,6 +103,17 @@ export default {
       return env.FLEET.get(id).fetch(request);
     }
 
+    // THE GITHUB CALLBACK, above the token gate on purpose: GitHub redirects a
+    // BROWSER here, and a browser carries no fleet credential. What stands in
+    // for one is the `state` — unguessable, single-use, minutes-long, and bound
+    // to the host and person who started the flow. That is the whole security
+    // of this route, and it is checked inside the Durable Object because that
+    // is where the pending flow was minted.
+    if (url.pathname === '/oauth/github/callback') {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
     // Refusing to run open is not the same as being misconfigured. A
     // coordinator with no credentials is remote control of every box in the
     // fleet for anyone who finds the URL, and a Worker URL is not a secret.
@@ -1207,7 +1218,17 @@ const OPENAPI = JSON.stringify({
                       "start",
                       "resume",
                       "stop",
-                      "forget"
+                      "forget",
+                      "answer",
+                      "logs",
+                      "update",
+                      "upgrade",
+                      "reboot",
+                      "connect",
+                      "link",
+                      "unlink",
+                      "restore",
+                      "purge"
                     ]
                   },
                   "params": {
@@ -1220,6 +1241,10 @@ const OPENAPI = JSON.stringify({
                   "id": {
                     "type": "string",
                     "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session."
+                  },
+                  "host": {
+                    "type": "string",
+                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
                   }
                 }
               }
@@ -1407,6 +1432,53 @@ const OPENAPI = JSON.stringify({
             "description": "this coordinator has no audience configured, so it cannot check one"
           }
         }
+      }
+    },
+    "/oauth/github/callback": {
+      "get": {
+        "summary": "Finish a GitHub App authorization",
+        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     }
   }

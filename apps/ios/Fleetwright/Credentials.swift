@@ -69,33 +69,45 @@ struct CredentialsView: View {
                     }
                     Text(pending.hint).font(.caption).foregroundStyle(.secondary)
 
-                    Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
-                        .font(.caption)
-                    HStack {
-                        // The one field in this app that holds a live
-                        // credential. Never a TextField: iOS would offer to
-                        // autocorrect it, capitalise it and remember it in the
-                        // keyboard cache.
-                        SecureField(pending.isSignIn ? "Code" : "Token", text: $secret)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        // ONE TAP INSTEAD OF A LONG PRESS. PasteButton is
-                        // user-initiated and consented by construction — it
-                        // reads the clipboard only when tapped, so nothing here
-                        // sees what was copied unless somebody asks it to.
-                        // Reading UIPasteboard directly would be the same
-                        // convenience and a silent clipboard read.
-                        PasteButton(payloadType: String.self) { items in
-                            guard let first = items.first else { return }
-                            Task { @MainActor in secret = first.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    // NO PASTE FIELD FOR AN APP FLOW, because there is nothing
+                    // to copy. GitHub sends the result to the coordinator,
+                    // which hands it to the box over the socket it already
+                    // holds. A token field here would be asking somebody for
+                    // something that does not exist.
+                    if pending.isAppFlow {
+                        Text("2. That is all — GitHub sends the result back by itself.")
+                            .font(.caption)
+                        Button("Done") {
+                            clear()
+                            Task { await load() }
                         }
-                        .labelStyle(.iconOnly)
-                        .buttonBorderShape(.capsule)
-                    }
+                    } else {
+                        Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
+                            .font(.caption)
+                        HStack {
+                            // The one field in this app that holds a live
+                            // credential. Never a TextField: iOS would offer to
+                            // autocorrect it, capitalise it and remember it in
+                            // the keyboard cache.
+                            SecureField(pending.isSignIn ? "Code" : "Token", text: $secret)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            // ONE TAP INSTEAD OF A LONG PRESS. PasteButton is
+                            // user-initiated and consented by construction — it
+                            // reads the clipboard only when tapped, so nothing
+                            // here sees what was copied unless somebody asks.
+                            PasteButton(payloadType: String.self) { items in
+                                guard let first = items.first else { return }
+                                Task { @MainActor in secret = first.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonBorderShape(.capsule)
+                        }
 
-                    Button("3. Connect \(pending.label)") { Task { await link(pending) } }
-                        .disabled(secret.isEmpty || busy)
-                    Button("Cancel", role: .cancel) { clear() }
+                        Button("3. Connect \(pending.label)") { Task { await link(pending) } }
+                            .disabled(secret.isEmpty || busy)
+                        Button("Cancel", role: .cancel) { clear() }
+                    }
                 } header: {
                     Text(pending.label)
                 } footer: {

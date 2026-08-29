@@ -166,8 +166,15 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             }
                         }
                         Text(p.hint, style = MaterialTheme.typography.bodySmall)
+                        // NO PASTE FIELD FOR AN APP FLOW, because there is
+                        // nothing to copy. GitHub sends the result to the
+                        // coordinator, which hands it to the box over the
+                        // socket it already holds. A token field here would be
+                        // asking for something that does not exist.
                         Text(
-                            if (p.isSignIn) "2. Come back and paste the code" else "2. Come back and paste the token",
+                            if (p.isAppFlow) "2. That is all — GitHub sends the result back by itself."
+                            else if (p.isSignIn) "2. Come back and paste the code"
+                            else "2. Come back and paste the token",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         // The one field in this app that holds a live
@@ -175,7 +182,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                         // autocapitalisation: Android would otherwise offer to
                         // capitalise a token and keep it in the keyboard's
                         // learned-words cache.
-                        OutlinedTextField(
+                        if (!p.isAppFlow) OutlinedTextField(
                             value = secret,
                             onValueChange = { secret = it },
                             singleLine = true,
@@ -203,7 +210,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(
+                            if (!p.isAppFlow) TextButton(
                                 enabled = secret.isNotBlank() && !busy,
                                 onClick = {
                                     scope.launch {
@@ -227,7 +234,13 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                     }
                                 },
                             ) { Text("3. Connect ${p.label}") }
-                            TextButton(onClick = { pending = null; secret = "" }) { Text("Cancel") }
+                            TextButton(onClick = {
+                                pending = null
+                                secret = ""
+                                if (p.isAppFlow) {
+                                    scope.launch { Fleet(settings).connections(host).connections?.let { connections = it } }
+                                }
+                            }) { Text(if (p.isAppFlow) "Done" else "Cancel") }
                         }
                     }
                 }
