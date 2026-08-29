@@ -635,12 +635,17 @@ private struct SettingsView: View {
                             .font(.caption)
                             .buttonStyle(.borderless)
                             .disabled(busyHost != nil)
-                            // CREDENTIALS, which is the last thing on this box
-                            // that needed a terminal. A guest brings their own
-                            // GitHub, Cloudflare and Claude accounts and has
-                            // no shell here at all.
-                            NavigationLink("Credentials") {
-                                CredentialsView(settings: settings, host: host.hostId)
+                            // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
+                            // this row is where it belongs: it is a login the
+                            // BOX performs in a pane, not a token that travels.
+                            //
+                            // GitHub and Cloudflare moved out to their own
+                            // section — they are the person's, they go to every
+                            // machine, and keeping them under a host
+                            // contradicted the sentence at the bottom of the
+                            // screen that said so.
+                            NavigationLink("Sign in to Claude") {
+                                CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
                             }
                             .font(.caption)
                             // THE BIN, under the host holding it. Placed here and not
@@ -676,6 +681,20 @@ private struct SettingsView: View {
                 } footer: {
                     Text("What each machine reports about itself: whether it is signed in, which plan, "
                          + "and whether its code is behind.")
+                }
+
+                // YOUR credentials, not a machine's. Top level, because a
+                // token is the person's and reaches every host — which is what
+                // the screen said while living under one particular box.
+                if !settings.credential.isEmpty {
+                    Section {
+                        NavigationLink("Your credentials") {
+                            CredentialsView(settings: settings, host: nil)
+                        }
+                    } footer: {
+                        Text("GitHub and Cloudflare, on every machine in the fleet. Signing in to Claude is "
+                             + "per machine and lives with the machine.")
+                    }
                 }
 
                 // Kinds, and the toggle that decides what a spoken start does

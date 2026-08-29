@@ -87,6 +87,23 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // for one. GitHub and Cloudflare have no such state — the token is minted on
   // the provider's page and the host only stores it — so the same paste is
   // correct on every box at once.
+  // BARE `connect` FANS OUT TOO, and my reasoning for pinning it was wrong.
+  //
+  // I wrote that fanning out a question would mean "N copies of one answer,
+  // and the catalogue is identical on every box anyway". The catalogue is. The
+  // CONNECTED LIST IS NOT — it is per host, because a token reaches the hosts
+  // that were reachable when it was pasted and a host enrolled later has none.
+  //
+  // So asking one box answers "do I have GitHub" with whatever that box knows,
+  // and hides the only interesting case: the machine that is missing it. Which
+  // is exactly the question somebody asks after adding a host.
+  if (verb === 'connect' && !intent.params?.provider && !preferHost) {
+    const hosts = registry.reachable();
+    return hosts.length
+      ? { kind: 'fanout', hosts }
+      : { kind: 'refused', code: 'no_hosts', reason: describeWhyNoHosts(registry) };
+  }
+
   if (
     (verb === 'link' || verb === 'unlink') &&
     intent.params?.provider &&

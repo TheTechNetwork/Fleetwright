@@ -14,7 +14,13 @@ import SwiftUI
 /// vendor — and it is why this view has no `switch provider` in it.
 struct CredentialsView: View {
     let settings: Settings
-    /// Which box to ASK. Still needed, and no longer the whole story.
+    /// Which box to ASK, when the question is about one. Nil is the normal
+    /// case now: this screen is FLEET-WIDE, because a token is the person's.
+    ///
+    /// It used to live under a host row, which contradicted the sentence at
+    /// the bottom of it — "a token goes to every machine in the fleet". Only
+    /// the Claude sign-in is genuinely per machine, and that stays on the host
+    /// it signs in.
     ///
     /// `connect` is a question — what could I connect, and what have I — and
     /// one box answers it for the fleet, since the catalogue is identical
@@ -26,7 +32,10 @@ struct CredentialsView: View {
     /// says "credentials on <box>". Connecting a GitHub token again on every
     /// machine, and again on each one enrolled later, is bookkeeping the fleet
     /// exists to remove.
-    let host: String
+    let host: String?
+    /// The per-machine half. A host row shows Claude and nothing else; the
+    /// fleet-wide screen shows everything else.
+    var onlyClaude: Bool = false
 
     @State private var connections = Fleet.Connections()
     @State private var pending: Fleet.Connections.Available?
@@ -38,11 +47,11 @@ struct CredentialsView: View {
     var body: some View {
         List {
             Section {
-                ForEach(connections.catalogue) { provider in
+                ForEach(connections.catalogue.filter { $0.isSignIn == onlyClaude }) { provider in
                     row(provider)
                 }
             } header: {
-                Text("Your credentials")
+                Text(onlyClaude ? "Claude on \(host ?? "this machine")" : "Your credentials")
             } footer: {
                 Text("Each one is created on the provider's own page, on your account, and can be "
                      + "revoked there at any time. A token goes to every machine in the fleet, because "
@@ -148,6 +157,17 @@ struct CredentialsView: View {
                 // at whatever step needs the scope it never had.
                 if let missing = linked.missing, !missing.isEmpty {
                     Text("missing \(missing.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                // WHERE IT ACTUALLY IS. A credential reaches the machines that
+                // were reachable when it was stored — so a host enrolled
+                // afterwards has none, and "connected" on its own implies a
+                // uniformity the fleet does not have. Connecting again covers
+                // the stragglers, which is why this says so rather than
+                // leaving somebody to discover it inside a session.
+                if let absent = linked.absentFrom, !absent.isEmpty {
+                    Text("not on \(absent.joined(separator: ", ")) — connect again to include \(absent.count == 1 ? "it" : "them")")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }

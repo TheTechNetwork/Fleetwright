@@ -657,9 +657,18 @@ export class CoordinatorCore {
         sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine);
       }
 
+      // COVERAGE, when the question was "what am I connected to". A fan-out
+      // returns one reply per host, and for `connect` the interesting part is
+      // where they DISAGREE: a credential reaches the hosts that were
+      // reachable when it was stored, so a machine enrolled later has none.
+      // Merging that into a per-provider list of hosts is what lets a screen
+      // say "missing on deb14" instead of implying the fleet is uniform.
+      const connections = mergeConnections(results);
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
+        ...(connections ? { connections } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
@@ -873,6 +882,54 @@ function explainUnknownVerb(reply, host) {
       `  /update --restart               (that box's own Telegram bot)\n` +
       'A pull without a restart looks the same from here — the files are new and the running ' +
       'service still holds the old command list, which is why both lines say --restart.',
+  };
+}
+
+/**
+ * Fold per-host `connections` replies into one answer with coverage in it.
+ *
+ * The catalogue is the same everywhere, so the first host's wins. What differs
+ * is `connected`, and the difference is the point: `hosts` names where each
+ * credential actually is, and `missing` names where it is not.
+ *
+ * @param {any[]} results
+ */
+function mergeConnections(results) {
+  const withConnections = results.filter((r) => r?.connections?.catalogue);
+  if (!withConnections.length) return null;
+
+  /** @type {string[]} */
+  const everywhere = results.map((r) => r.hostId).filter(Boolean);
+  /** @type {Map<string, { provider: string, label: string|null, account: string|null, hosts: string[] }>} */
+  const byProvider = new Map();
+  for (const r of withConnections) {
+    for (const c of r.connections.connected || []) {
+      // SPREAD THE HOST'S RECORD, then add coverage — rather than building a
+      // fresh object from the four fields I happened to think of. The first
+      // version dropped `missing` (the PERMISSIONS a token was not granted)
+      // entirely, which is worse than the collision it was avoiding: a screen
+      // that had been saying "missing workflow" would simply stop.
+      const found = byProvider.get(c.provider) || { ...c, hosts: /** @type {string[]} */ ([]) };
+      found.hosts.push(r.hostId);
+      // An account name differing between hosts is possible and worth surfacing
+      // rather than averaging: it means two different tokens are in play.
+      if (c.account && found.account && c.account !== found.account) found.account = 'differs between machines';
+      byProvider.set(c.provider, found);
+    }
+  }
+
+  return {
+    catalogue: withConnections[0].connections.catalogue,
+    connected: [...byProvider.values()].map((c) => ({
+      ...c,
+      // `absentFrom`, NOT `missing`. A connected credential already carries a
+      // `missing` — the PERMISSIONS it was not granted — and spreading this on
+      // top would have silently replaced "missing workflow" with "missing
+      // deb14". Two different absences, and one word for both is how a screen
+      // ends up telling somebody the wrong thing about their token.
+      absentFrom: everywhere.filter((h) => !c.hosts.includes(h)),
+    })),
+    hosts: everywhere,
   };
 }
 

@@ -88,6 +88,8 @@ struct Fleet {
     struct Connections: Codable, Hashable {
         var catalogue: [Available] = []
         var connected: [Linked] = []
+        /// Every machine that answered, so "missing" has something to mean.
+        var hosts: [String]?
 
         struct Available: Codable, Hashable, Identifiable {
             let provider: String
@@ -125,7 +127,23 @@ struct Fleet {
             /// token, and there is no field for one.
             let account: String?
             let updatedAt: Double?
+            /// Which machines actually have it, and which do not.
+            ///
+            /// A credential reaches the hosts that were reachable when it was
+            /// stored, so a machine enrolled later has none — and a screen that
+            /// says "connected" without saying where implies a uniformity the
+            /// fleet does not have.
+            ///
+            /// `absentFrom`, not `missing`: this type already has a `missing`
+            /// for PERMISSIONS, and one word for both absences is how a screen
+            /// ends up telling somebody the wrong thing about their token.
+            let hosts: [String]?
+            let absentFrom: [String]?
             /// Permissions this token does NOT have that are now asked for.
+            ///
+            /// Not to be confused with `missing` on the coverage side, which is
+            /// about MACHINES. Two different absences, and conflating them
+            /// would put "missing workflow" and "missing deb14" in one line.
             ///
             /// Three states, and they are genuinely three: a list means "short
             /// by these", empty means "checked, nothing missing", and **nil
@@ -233,7 +251,9 @@ struct Fleet {
     /// One round trip: the catalogue and the current state arrive together, so
     /// a picker never renders a provider list from one answer and its status
     /// from another.
-    func connections(host: String) async throws -> Reply {
+    func connections(host: String? = nil) async throws -> Reply {
+        // No host means fleet-wide: the coordinator fans it out and merges the
+        // answers, which is the only way to see WHERE a credential is.
         try await intent("connect", params: [:], host: host)
     }
 
@@ -243,7 +263,7 @@ struct Fleet {
     /// permission: the HOST derives whose account it is from the verified
     /// identity on the request, and there is no parameter that could name
     /// somebody else. `.host` logs the BOX in and is admin-only.
-    func connect(host: String, provider: String, scope: Scope = .me) async throws -> Reply {
+    func connect(host: String? = nil, provider: String, scope: Scope = .me) async throws -> Reply {
         var params = ["provider": provider]
         if scope == .host { params["scope"] = "host" }
         return try await intent("connect", params: params, host: host)
@@ -255,7 +275,7 @@ struct Fleet {
     /// Claude's flow is a login waiting in a pane on that box; a code typed
     /// into a different one would be a live credential landing where nothing
     /// asked for it.
-    func link(host: String, provider: String, secret: String, scope: Scope = .me) async throws -> Reply {
+    func link(host: String? = nil, provider: String, secret: String, scope: Scope = .me) async throws -> Reply {
         var params = ["provider": provider, "secret": secret]
         if scope == .host { params["scope"] = "host" }
         return try await intent("link", params: params, host: host)
@@ -273,7 +293,7 @@ struct Fleet {
     }
 
     /// Forget a stored credential. Does NOT revoke it at the provider.
-    func unlink(host: String, provider: String, scope: Scope = .me) async throws -> Reply {
+    func unlink(host: String? = nil, provider: String, scope: Scope = .me) async throws -> Reply {
         var params = ["provider": provider]
         if scope == .host { params["scope"] = "host" }
         return try await intent("unlink", params: params, host: host)
