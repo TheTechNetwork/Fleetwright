@@ -101,11 +101,40 @@ export class LoginFlow {
    * ~/.claude/.credentials.json directly would be faster but would encode a
    * private file format; `claude auth status --json` is the supported answer
    * and stays correct across auth methods (subscription, console, SSO).
+   *
+   * WHOSE STATUS, WHICH THIS DID NOT ASK. It read `this.pending?.linkDir` and
+   * silently pointed the CLI at it — so while ANY member's link flow was in
+   * flight, every caller asking "is this box logged in" was answered about an
+   * empty, isolated config directory instead. The answer is `false`, and it
+   * travels: /api/state → health → the registry marks the host degraded with
+   * "claude is not logged in on this host" → the scheduler stops sending it
+   * work. A box that is perfectly logged in drops out of the fleet because
+   * somebody started linking their own account on it.
+   *
+   * Worse if the pending goes stale. `isPending()` is what expires an
+   * abandoned flow, and this never called it, so a linkDir that had already
+   * been deleted kept being handed to the CLI for as long as the process
+   * lived.
+   *
+   * They are two different questions and are two arguments now. `scope: 'box'`
+   * — the default, and what every external caller wants — is about THIS
+   * MACHINE and never looks at a link flow. `scope: 'pending'` is the in-flight
+   * link, and only `submitCode` has any business asking it.
+   *
+   * @param {{ scope?: 'box'|'pending' }} [opts]
    * @returns {AuthStatus}
    */
-  status() {
+  status({ scope = 'box' } = {}) {
+    // isPending() UNCONDITIONALLY, not just when asked about the pending one.
+    // It is the only thing that expires an abandoned flow, so making it
+    // conditional leaves a dead linkDir sitting in memory until something else
+    // happens to ask — which is how a stale one survived for as long as the
+    // process lived. Calling it here means every status check is also a chance
+    // to notice the flow is over.
+    const live = this.isPending();
+    const dir = scope === 'pending' && live ? this.pending?.linkDir : null;
     const r = spawnSync(this.cfg.claudeBin, ['auth', 'status', '--json'], {
-      env: this.pending?.linkDir ? { ...process.env, CLAUDE_CONFIG_DIR: this.pending.linkDir } : process.env,
+      env: dir ? { ...process.env, CLAUDE_CONFIG_DIR: dir } : process.env,
       encoding: 'utf8',
       timeout: 15_000,
     });
@@ -295,7 +324,9 @@ export class LoginFlow {
       await sleep(2000);
       const alive = hasSession(name);
       const text = alive ? capturePane(name, 80) : '';
-      const st = this.status();
+      // The one caller that means the OTHER question: did the code just typed
+      // into the pane produce a credential in the isolated directory.
+      const st = this.status({ scope: this.pending?.linkDir ? 'pending' : 'box' });
       if (st.loggedIn) {
         const link = this.pending?.linkFor && this.pending.linkDir
           ? { email: this.pending.linkFor, dir: this.pending.linkDir }
