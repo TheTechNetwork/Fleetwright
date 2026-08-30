@@ -50,7 +50,7 @@ test('the refresh token is in a third file, not the one sessions are given', (t)
   // have leaked far more than a session can.
   const s = store(t);
   s.store.save(HOST_ROW, 'github', ACCESS, 'octocat', null);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
 
   const env = readFileSync(/** @type {string} */ (s.store.envPathFor(HOST_ROW)), 'utf8');
   assert.ok(env.includes(ACCESS), 'the access token is what a session gets');
@@ -61,20 +61,20 @@ test('the refresh token is in a third file, not the one sessions are given', (t)
   const meta = readFileSync(/** @type {string} */ (s.store.metaPathFor(HOST_ROW)), 'utf8');
   assert.ok(!meta.includes(REFRESH) && !meta.includes(CLIENT));
 
-  assert.deepEqual(s.store.readRenewal(HOST_ROW, 'github'), { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  assert.deepEqual(s.store.readRenewal(HOST_ROW, 'github'), { clientId: CLIENT_ID, refresh: REFRESH });
 });
 
 test('renewal material is 0600, like every other secret here', (t) => {
   const s = store(t);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
   const { mode } = statSync(/** @type {string} */ (s.store.renewalPathFor(HOST_ROW)));
   assert.equal(mode & 0o777, 0o600);
 });
 
 test('rows are found without being told who exists', (t) => {
   const s = store(t);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
-  s.store.saveRenewal('guest@example.com', 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
+  s.store.saveRenewal('guest@example.com', 'github', { clientId: CLIENT_ID, refresh: REFRESH });
 
   const rows = s.store.renewableRows();
   assert.equal(rows.length, 2);
@@ -90,7 +90,7 @@ test('a renewal stores BOTH halves, because GitHub rotates the refresh token', a
   // renews once, then breaks eight hours later with nothing to point at.
   const s = store(t);
   s.store.save(HOST_ROW, 'github', ACCESS, 'octocat', null);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT, expiresIn: 1 });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, expiresIn: 1 });
 
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
@@ -110,7 +110,7 @@ test('a renewal stores BOTH halves, because GitHub rotates the refresh token', a
     );
   };
 
-  const results = await renewProviderTokens(s.cfg);
+  const results = await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
 
   assert.equal(results[0].outcome, 'renewed');
   const env = readFileSync(/** @type {string} */ (s.store.envPathFor(HOST_ROW)), 'utf8');
@@ -125,12 +125,12 @@ test('a token with hours left is not spent on a renewal', async (t) => {
   // one, and every exchange is a chance to lose the connection to a network
   // failure at the wrong moment.
   const s = store(t);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT, expiresIn: 28_800 });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, expiresIn: 28_800 });
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
   globalThis.fetch = async () => { throw new Error('the network was touched'); };
 
-  const results = await renewProviderTokens(s.cfg);
+  const results = await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
   assert.equal(results[0].outcome, 'not-due');
 });
 
@@ -140,7 +140,7 @@ test('an unknown expiry is treated as due, not as fine', async (t) => {
   // one HTTPS request; being late costs a session.
   const s = store(t);
   s.store.save(HOST_ROW, 'github', ACCESS, 'octocat', null);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
 
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
@@ -150,7 +150,7 @@ test('an unknown expiry is treated as due, not as fine', async (t) => {
     return new Response(JSON.stringify({ access_token: 'ghu_x0000000000000000000000000000', expires_in: 28_800 }), { status: 200 });
   };
 
-  await renewProviderTokens(s.cfg);
+  await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
   assert.equal(asked, true);
 });
 
@@ -160,14 +160,14 @@ test('a refused renewal is reported and does not damage what is stored', async (
   // nothing would turn "this expires later today" into "this is broken now".
   const s = store(t);
   s.store.save(HOST_ROW, 'github', ACCESS, 'octocat', null);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
 
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ error: 'bad_refresh_token', error_description: 'expired' }), { status: 200 });
 
-  const results = await renewProviderTokens(s.cfg);
+  const results = await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
 
   assert.equal(results[0].outcome, 'failed');
   assert.match(String(results[0].detail), /refused/);
@@ -179,7 +179,7 @@ test('a network failure is not a dead refresh token', async (t) => {
   // The difference decides whether somebody has to go and reconnect, which is
   // the same argument verifyToken makes about a bad token.
   const s = store(t);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
   const r = await refreshGithubToken({
     refresh: REFRESH,
     client: CLIENT,
@@ -198,7 +198,7 @@ test('a box with no renewal material does nothing at all', async (t) => {
   t.after(() => { globalThis.fetch = real; });
   globalThis.fetch = async () => { throw new Error('the network was touched'); };
 
-  assert.deepEqual(await renewProviderTokens(s.cfg), []);
+  assert.deepEqual(await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } }), []);
 });
 
 // --- the protocol ------------------------------------------------------------
@@ -248,11 +248,48 @@ test('a partial record renews nothing rather than failing at the provider', (t) 
   // All three or none. Two of the three produces an error from GitHub that
   // nobody reading it can act on, several hours from the thing that caused it.
   const s = store(t);
-  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, client: CLIENT });
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
   const file = /** @type {string} */ (s.store.renewalPathFor(HOST_ROW));
   const all = JSON.parse(readFileSync(file, 'utf8'));
   delete all.github.clientId;
   writeFileSync(file, JSON.stringify(all));
 
   assert.equal(s.store.readRenewal(HOST_ROW, 'github'), null);
+});
+
+// --- the secret is not in the file any more ---------------------------------
+
+test('the client secret is never written to disk', (t) => {
+  // THE CLAIM github-app.md HAS ALWAYS MADE and the code contradicted:
+  // "Nowhere on the host … the host keeps it in memory … there is no file, so
+  // there is no file to read out of a backup, a snapshot, or a stolen disk."
+  //
+  // It was in `<row>.renewal.json`, once per member per host — and it is the
+  // FLEET-WIDE App secret, so a single stolen disk yielded renewable GitHub
+  // access for every member who linked on that box, and rotating it in
+  // Cloudflare silently broke every renewal eight hours later because this file
+  // was the one being read.
+  const s = store(t);
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
+
+  const raw = readFileSync(/** @type {string} */ (s.store.renewalPathFor(HOST_ROW)), 'utf8');
+
+  assert.ok(raw.includes(REFRESH), 'the refresh token belongs here — it is useless alone');
+  assert.equal(raw.includes(CLIENT), false, 'the client secret reached the disk');
+});
+
+test('a host the coordinator has not configured says so, rather than failing at GitHub', async (t) => {
+  // A box that has never received a config frame — one that cannot reach the
+  // coordinator, or a fleet with no App configured. Failing here with a named
+  // reason beats an exchange that GitHub refuses with an error nobody local can
+  // act on, hours from the thing that caused it.
+  const s = store(t);
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH });
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async () => { throw new Error('the network was touched'); };
+
+  const results = await renewProviderTokens(s.cfg, { secrets: {} });
+
+  assert.equal(results[0].outcome, 'no-secret');
 });

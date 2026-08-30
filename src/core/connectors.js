@@ -455,12 +455,12 @@ export class Connections {
    * Store what a host needs to renew a connection on its own.
    *
    * @param {string|symbol|null} row @param {string} provider
-   * @param {{ clientId: string, refresh: string, client: string, expiresIn?: number|null }} material
+   * @param {{ clientId: string, refresh: string, expiresIn?: number|null }} material
    */
-  saveRenewal(row, provider, { clientId, refresh, client, expiresIn = null }) {
+  saveRenewal(row, provider, { clientId, refresh, expiresIn = null }) {
     const file = this.renewalPathFor(row);
     if (!file) return { ok: false, message: 'there is no credential row for that identity' };
-    if (!looksLikeToken(refresh) || !looksLikeToken(client) || !looksLikeToken(clientId)) {
+    if (!looksLikeToken(refresh) || !looksLikeToken(clientId)) {
       return { ok: false, message: 'that does not look like renewal material' };
     }
     /** @type {Record<string, unknown>} */
@@ -472,7 +472,14 @@ export class Connections {
     // call. When it is absent the renewal is simply always due, which is the
     // safe direction: being early costs one HTTPS request and being late costs
     // a session.
-    all[provider] = { clientId, refresh, client, updatedAt: Date.now(), expiresIn };
+    // NO CLIENT SECRET. It used to be written here, which is the one thing
+    // docs/github-app.md promises does not happen — the fleet-wide App secret,
+    // at rest once per member per host, and rotation in Cloudflare silently
+    // breaking every renewal eight hours later because this file was the one
+    // being read. It arrives on the config frame now and lives in the sidecar's
+    // memory. What is left in this file is a refresh token, which is useless
+    // without it.
+    all[provider] = { clientId, refresh, updatedAt: Date.now(), expiresIn };
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
     return { ok: true, message: `${PROVIDERS[provider]?.label ?? provider} can now renew itself on this box.` };
@@ -480,18 +487,18 @@ export class Connections {
 
   /**
    * @param {string|symbol|null} row @param {string} provider
-   * @returns {{ clientId: string, refresh: string, client: string }|null}
+   * @returns {{ clientId: string, refresh: string }|null}
    */
   readRenewal(row, provider) {
     const file = this.renewalPathFor(row);
     if (!file || !existsSync(file)) return null;
     try {
       const entry = JSON.parse(this.#readGuarded(file))?.[provider];
-      // All three or nothing. A partial record is a renewal that will fail at
-      // the provider with an error nobody can act on, and there is nothing
-      // useful to do with two of the three.
-      return typeof entry?.refresh === 'string' && typeof entry?.client === 'string' && typeof entry?.clientId === 'string'
-        ? { clientId: entry.clientId, refresh: entry.refresh, client: entry.client }
+      // Both or nothing. A partial record is a renewal that fails at the
+      // provider with an error nobody can act on, hours from the thing that
+      // caused it.
+      return typeof entry?.refresh === 'string' && typeof entry?.clientId === 'string'
+        ? { clientId: entry.clientId, refresh: entry.refresh }
         : null;
     } catch {
       return null;

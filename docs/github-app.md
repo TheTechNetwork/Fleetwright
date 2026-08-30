@@ -322,7 +322,19 @@ Same shape as the verb set: the coordinator can send what the protocol names,
 and cannot invent a new thing to send.
 
 Today that list is one entry, the GitHub client secret. It should grow slowly
-and never become a map.
+and never become a map — asserted by a test rather than left as an intention,
+because the way it stops being true is somebody adding a key that seemed
+harmless in isolation.
+
+**Built, and it was not for a while.** The first version of `renew` carried the
+client secret as a parameter and `saveRenewal` wrote it into
+`<row>.renewal.json` — contradicting every claim in this section, once per
+member per host, with the fleet-wide secret at rest and rotation in Cloudflare
+silently breaking every renewal eight hours later because that file was the one
+being read. Found by an outside review of the repository's own documents
+(`security.md` G2). The frame described above is what shipped in its place, and
+the renewal timer moved from agent-hub to the sidecar with it: the exchange
+needs the secret, and the sidecar is the process that has it.
 
 ### Why this may be delivered at all, when the private key may not
 

@@ -242,10 +242,13 @@ export function renewAllCredentials(cfg, { within } = {}) {
  * shipped and every connection made by pasting a token.
  *
  * @param {import('../config.js').Config} cfg
- * @param {{ within?: number, now?: () => number }} [opts]
+ * @param {{ within?: number, now?: () => number, secrets?: Record<string, string> }} [opts]
+ *   `secrets` — what the coordinator supplied on the config frame. Passed in
+ *   rather than read, because the process holding the coordinator socket is the
+ *   one that has it and this module must not learn to look for it on disk.
  * @returns {Promise<Array<{ row: string, provider: string, outcome: string, detail?: string }>>}
  */
-export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = Date.now } = {}) {
+export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = Date.now, secrets = {} } = {}) {
   /** @type {Array<{ row: string, provider: string, outcome: string, detail?: string }>} */
   const results = [];
   const store = new Connections(cfg.stateDir);
@@ -255,6 +258,16 @@ export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = D
     for (const provider of ['github']) {
       const material = store.readRenewal(row, provider);
       if (!material) continue;
+      // THE SECRET COMES FROM MEMORY, NOT FROM THE FILE. It is delivered on the
+      // coordinator's config frame and held by the process that holds that
+      // socket; the file on disk carries only a refresh token, which is useless
+      // without it. A host that has not been given one cannot renew and says so
+      // rather than failing at GitHub with an error nobody can act on.
+      const client = secrets.githubClientSecret;
+      if (!client) {
+        results.push({ row: label, provider, outcome: 'no-secret', detail: 'the coordinator has not supplied a client secret' });
+        continue;
+      }
       // WHEN, from the metadata rather than from the token: the access token
       // is opaque to us and GitHub does not publish an introspection endpoint
       // we may call. `updatedAt` plus the lifetime GitHub told us at exchange
@@ -269,7 +282,7 @@ export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = D
         // Everything the exchange needs came with the deposit — nothing here
         // is configured on the box, which is what keeps this off the list of
         // questions an install has to ask.
-        const r = await refreshGithubToken(material);
+        const r = await refreshGithubToken({ ...material, client });
         if (!r.ok) {
           log.warn(`keepalive: could not renew ${provider} for ${label} — ${r.message}`);
           results.push({ row: label, provider, outcome: 'failed', detail: r.message });
@@ -285,7 +298,7 @@ export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = D
           continue;
         }
         if (r.refreshToken) {
-          store.saveRenewal(row, provider, { ...material, refresh: r.refreshToken, expiresIn: r.expiresIn });
+          store.saveRenewal(row, provider, { clientId: material.clientId, refresh: r.refreshToken, expiresIn: r.expiresIn });
         }
         log.info(`keepalive: renewed ${provider} for ${label}`);
         results.push({ row: label, provider, outcome: 'renewed' });

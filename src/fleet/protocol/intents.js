@@ -402,12 +402,24 @@ export const VERBS = Object.freeze({
       // run it through cleanText, which is the wrong shape for anything that
       // must arrive byte-identical.
       clientId: { type: 'secret', required: true, max: 256 },
-      // Both of these ARE live credentials, and `secret` for the three reasons
-      // `link.secret` is: cleanText would mangle them, a refusal must never
-      // quote them back, and every log site between here and the pane has to
-      // know to mask them (src/core/redact.js).
+      // A live credential, and `secret` for the three reasons `link.secret` is:
+      // cleanText would mangle it, a refusal must never quote it back, and
+      // every log site between here and the pane has to know to mask it
+      // (src/core/redact.js).
       refresh: { type: 'secret', required: true, max: 4096 },
-      client: { type: 'secret', required: true, max: 4096 },
+      // ACCEPTED AND IGNORED, kept only so an older coordinator's deposit is
+      // not refused outright. The client secret used to travel here and be
+      // written to disk beside the refresh token — which docs/github-app.md
+      // has always said does not happen, and which put the FLEET-WIDE secret
+      // at rest once per member per host and made rotation silently break
+      // every renewal eight hours later. It arrives on the config frame now
+      // and stays in memory.
+      //
+      // Optional rather than removed, deliberately: dropping a parameter a
+      // coordinator still sends would make it `bad_params` — a flag day, after
+      // the version handshake had already agreed. Accepting and discarding is
+      // the compatible direction.
+      client: { type: 'secret', required: false, max: 4096 },
     },
     mutating: true,
     summary: 'Give a host what it needs to renew a connection without being asked again.',
