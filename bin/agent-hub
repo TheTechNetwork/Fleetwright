@@ -17,6 +17,8 @@ import { loadConfig } from '../src/config.js';
 import { loadEnvFile } from '../src/core/env-file.js';
 import { Registry } from '../src/core/registry.js';
 import { titleFromTranscript } from '../src/core/titles.js';
+import { existsSync } from 'node:fs';
+import { readApiToken, apiTokenFile } from '../src/core/api-token.js';
 
 const argv = process.argv.slice(2);
 const sub = argv[0] || 'serve';
@@ -186,17 +188,45 @@ function tmuxSessionName() {
   return r.status === 0 ? (r.stdout || '').trim() : '';
 }
 
+/**
+ * The token this CLI presents, which is usually not in anybody's shell.
+ *
+ * agent-hub's API used to be open whenever AGENT_HUB_TOKEN was unset, and this
+ * CLI was written against that: send a header if the environment happens to
+ * have one, otherwise send nothing and be let in. Closing that hole gave the
+ * service a generated token — and made THIS the third client, which nobody
+ * updated. The sidecar got a fallback the same hour; the CLI did not, so
+ * `agent-hub update` on a freshly updated box answers "unauthorised" and asks
+ * about a variable that is not the answer.
+ *
+ * Third clients are how this keeps happening: two were in mind and the one
+ * driven by a person at a keyboard was not.
+ *
+ * NOT MEMOISED IN A MODULE-LEVEL `let`, which is how the first version of this
+ * failed: this script runs its work above the point that declaration would sit
+ * at, so the first call hit the temporal dead zone and reported "Cannot access
+ * 'resolvedToken' before initialization" — a worse error than the one it was
+ * fixing. One small file read per invocation costs nothing.
+ *
+ * An explicit AGENT_HUB_TOKEN still wins: somebody who set one has their own
+ * arrangement.
+ */
+function apiToken() {
+  return cfg.token || readApiToken(cfg.stateDir) || '';
+}
+
 async function post(path, body, timeoutMs = 15_000) {
   /** @type {Record<string,string>} */
   const headers = { 'content-type': 'application/json' };
-  if (cfg.token) headers.authorization = `Bearer ${cfg.token}`;
+  const token = apiToken();
+  if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok && res.status === 401) throw new Error('unauthorised — is AGENT_HUB_TOKEN set in this shell?');
+  if (!res.ok && res.status === 401) throw new Error(unauthorisedHelp());
   return res.json();
 }
 
@@ -224,4 +254,31 @@ function safeParse(s) {
   } catch {
     return {};
   }
+}
+
+/**
+ * Why this call was refused, in terms of what to do about it.
+ *
+ * The old text asked whether AGENT_HUB_TOKEN was set in the shell, which is
+ * the wrong question on almost every box: the service generates its own and
+ * nobody is expected to export anything. The interesting case is a PERMISSION
+ * one — the token file is 0600 and owned by the service user, so running the
+ * CLI as somebody else reads nothing and gets a 401 that looks like a bug.
+ */
+function unauthorisedHelp() {
+  const file = apiTokenFile(cfg.stateDir);
+  if (apiToken()) {
+    return `unauthorised — the token in ${file} is not the one the service is using. Restart it: systemctl restart agent-hub`;
+  }
+  if (existsSync(file)) {
+    return (
+      `unauthorised — ${file} exists but this user cannot read it (it is 0600 and owned by the service user).\n`
+      + `Run as that user, or with sudo: sudo -u ${cfg.runUser || 'agent'} agent-hub …`
+    );
+  }
+  return (
+    `unauthorised — no API token found at ${file}, and AGENT_HUB_TOKEN is not set in this shell.\n`
+    + 'A running service generates that file on startup, so this usually means it has not started since the '
+    + 'last update: systemctl status agent-hub'
+  );
 }

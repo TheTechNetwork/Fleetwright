@@ -160,3 +160,65 @@ test('the browser still gets something it can act on', async (t) => {
   assert.equal(r.status, 401);
   assert.match(await r.text(), /token=/);
 });
+
+// --- the third client -------------------------------------------------------
+
+test('the agent-hub CLI can reach a service that now requires a token', async (t) => {
+  // THE REGRESSION THIS FILE DID NOT CATCH THE FIRST TIME. Closing the open API
+  // gave the service a generated token; the sidecar got a fallback the same
+  // hour and `bin/agent-hub` did not. So on every updated box, every CLI
+  // command answered:
+  //
+  //   Could not reach agent-hub at http://127.0.0.1:8790
+  //   (unauthorised — is AGENT_HUB_TOKEN set in this shell?)
+  //
+  // asking about a variable that is not the answer. Two clients were in mind
+  // and the one driven by a person at a keyboard was not.
+  //
+  // Spawned for real rather than unit-tested, because what broke was the wiring
+  // between two programs and nothing testing one of them would have seen it.
+  const { spawnSync } = await import('node:child_process');
+  const h = await hub(t);
+  const port = /** @type {any} */ (h.adapter.server).address().port;
+  const env = {
+    ...process.env,
+    AGENT_HUB_STATE_DIR: h.stateDir,
+    AGENT_HUB_WORKDIR: h.stateDir,
+    AGENT_HUB_PORT: String(port),
+    AGENT_HUB_BIND: '127.0.0.1',
+    // Explicitly empty: the whole point is that nobody exports this and it
+    // still works.
+    AGENT_HUB_TOKEN: '',
+    AGENT_HUB_TELEGRAM_TOKEN: '',
+  };
+
+  const r = spawnSync(process.execPath, ['bin/agent-hub', 'list'], {
+    encoding: 'utf8', env, cwd: new URL('..', import.meta.url).pathname, timeout: 20_000,
+  });
+
+  const output = `${r.stdout}${r.stderr}`;
+  assert.equal(output.includes('unauthorised'), false, `the CLI could not authenticate:\n${output}`);
+});
+
+test('and says something useful when it genuinely cannot', () => {
+  // The old message asked whether AGENT_HUB_TOKEN was set in the shell, which
+  // is the wrong question on almost every box — nobody is expected to export
+  // anything. Naming the file, and the usual reason it is missing, is the
+  // difference between a remedy and a shrug.
+  //
+  // Asserted against the source rather than by spawning. The spawned version of
+  // this hung under the test runner and passed standalone, and a test that is
+  // flaky about a MESSAGE is worse than no test: it gets deleted, and the
+  // message it was protecting goes with it. The path itself is covered by the
+  // spawn above.
+  const cli = readFileSync(new URL('../bin/agent-hub', import.meta.url), 'utf8');
+
+  assert.match(cli, /readApiToken/, 'the CLI does not read the generated token at all');
+  assert.match(cli, /no API token found at/, 'and cannot say so when there is none');
+  assert.match(cli, /systemctl status agent-hub/, 'without naming what to do about it');
+  // The permission case, which is the one that looks like a bug: the file is
+  // 0600 and owned by the service user, so running the CLI as somebody else
+  // reads nothing and gets a 401.
+  assert.match(cli, /cannot read it/, 'and cannot explain a permission failure');
+  assert.match(cli, /sudo -u/, 'nor name the fix for one');
+});
