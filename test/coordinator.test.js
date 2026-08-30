@@ -611,3 +611,53 @@ test('a degraded host is still refused new work', async (t) => {
   assert.equal(reply.ok, false);
   assert.match(String(reply.text || reply.error?.code), /no_hosts|not logged in|degraded/i);
 });
+
+test('a host that goes degraded says so once, not every fifteen seconds', async () => {
+  // deb132's shared credential expired on a Saturday afternoon. agent-hub
+  // warned hourly for THIRTY HOURS, the coordinator marked the host degraded,
+  // the app showed it three storeys down in Settings — and nobody was told.
+  // docs/psychology.md §7 is exactly this: silence has to be trustworthy before
+  // it is comfortable, and a warning that reaches a log file is silence.
+  //
+  // The transition is the event. A host reports health every fifteen seconds,
+  // so a box degraded since yesterday must produce one notification and not
+  // five thousand — the same discipline the session watcher uses.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+
+  // A fresh host starts `unknown`, so its first healthy report IS a transition
+  // and the registry says so. Whether it is worth a notification is the
+  // coordinator's judgement, not the registry's bookkeeping — see
+  // #onHostState, which drops unknown→healthy precisely because every connect
+  // and every deploy would otherwise ring a phone to say a box is fine.
+  assert.equal(reg.recordHealth('box', health())?.from, 'unknown');
+  assert.equal(reg.recordHealth('box', health()), null, 'a repeat of the same state is not news');
+  const down = reg.recordHealth('box', health({ loggedIn: false }));
+  assert.equal(down?.to, 'degraded');
+  assert.match(String(down?.reason), /not logged in/);
+
+  assert.equal(reg.recordHealth('box', health({ loggedIn: false })), null, 'still degraded is not a new event');
+  assert.equal(reg.recordHealth('box', health({ loggedIn: false })), null);
+
+  // RECOVERY IS NEWS TOO. Somebody told a box is broken and never told it came
+  // back checks manually forever after, which relocates the anxiety rather than
+  // removing it.
+  const up = reg.recordHealth('box', health());
+  assert.equal(up?.to, 'healthy');
+});
+
+test('a host whose reason changes has changed, even staying degraded', () => {
+  // "not logged in" and "the credential a session would get has expired" are
+  // both `degraded` and are different problems with different remedies.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({ loggedIn: false }));
+
+  const moved = reg.recordHealth('box', health({
+    loggedIn: true,
+    credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' },
+  }));
+
+  assert.equal(moved?.to, 'degraded');
+  assert.match(String(moved?.reason), /credential/);
+});

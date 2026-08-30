@@ -126,10 +126,18 @@ export class HostRegistry {
     };
   }
 
-  /** @param {string} hostId @param {HostHealth} health */
+  /**
+   * @param {string} hostId @param {HostHealth} health
+   * @returns {{ from: string, to: string, reason: string }|null} the state
+   *   TRANSITION, when there was one. Returned rather than logged because the
+   *   transition is the notifiable thing and only the caller can notify — and
+   *   because a state, reported every fifteen seconds, is not an event.
+   */
   recordHealth(hostId, health) {
     const host = this.hosts.get(hostId);
-    if (!host) return;
+    if (!host) return null;
+    const before = host.state;
+    const beforeReason = host.reason;
     host.health = health;
     host.healthAt = this.now();
     // A host whose own agent-hub is unreachable is NOT healthy, even though its
@@ -162,6 +170,17 @@ export class HostRegistry {
       host.state = 'healthy';
       host.reason = 'reporting normally';
     }
+    // THE TRANSITION, NOT THE STATE. A host reports health every fifteen
+    // seconds; a box that has been degraded since yesterday must produce one
+    // notification, not five thousand. Same discipline as the session watcher,
+    // and for the same reason — a phone that cries wolf gets its notifications
+    // turned off, which costs you the one that mattered.
+    //
+    // The reason is part of the identity: a host that goes from "not logged in"
+    // to "credential expired" changed in a way worth saying, even though both
+    // are `degraded`.
+    if (host.state === before && host.reason === beforeReason) return null;
+    return { from: before, to: host.state, reason: host.reason };
   }
 
   /**
