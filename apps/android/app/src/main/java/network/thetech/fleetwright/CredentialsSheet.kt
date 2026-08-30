@@ -109,6 +109,15 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                // NAMES THE DIFFERENCE, because the screen offers both and they
+                // are not variations of one thing. A box reporting itself
+                // signed out is not fixed by linking a person's account.
+                Text(
+                    "Two different logins. “Sign in this machine” is the account this box runs on: every "
+                        + "session started here uses it unless the person who started it has linked their own. "
+                        + "“Connect” links YOURS, for your sessions only, and leaves the machine's alone.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Text(
                     "Each one is created on the provider's own page, on your account, and can be revoked "
                         + "there at any time. A token goes to every machine in the fleet, because it is yours "
@@ -179,6 +188,41 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                     }
                                 },
                             ) { Text(actionLabel(provider, linked)) }
+
+                            // SIGNING THE BOX IN, WHICH THIS SCREEN COULD NOT
+                            // DO AT ALL.
+                            //
+                            // The host row says "NOT signed in — sessions will
+                            // not start" and offered exactly one action, which
+                            // linked the PERSON's account: a different
+                            // credential, in a different file, used by a
+                            // different set of sessions. Somebody whose box was
+                            // signed out tapped it, linked an account that was
+                            // already fine, and watched the machine go on
+                            // reporting itself broken. The button under the
+                            // problem did not fix the problem.
+                            //
+                            // Two different things, named as two: `scope=host`
+                            // logs the MACHINE in — the account every session
+                            // without a linked one runs on — and is admin-only,
+                            // checked at the coordinator.
+                            if (provider.isSignIn) {
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        scope.launch {
+                                            busy = true
+                                            val reply = Fleet(settings).connect(host, provider.provider, "host")
+                                            reply.connections?.let { fresh ->
+                                                connections = fresh
+                                                pending = fresh.catalogue.firstOrNull { it.provider == provider.provider }
+                                            }
+                                            if (!reply.ok) result = reply.text
+                                            busy = false
+                                        }
+                                    },
+                                ) { Text("Sign in this machine") }
+                            }
 
                             if (linked != null) {
                                 // TEST, because "connected" is a fact about

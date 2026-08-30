@@ -167,12 +167,21 @@ export class CoordinatorCore {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.kind === 'health' && msg.health) {
-      this.registry.recordHealth(hostId, msg.health);
+      const moved = this.registry.recordHealth(hostId, msg.health);
       // The outcome, not just the input: recordHealth silently ignores a host
       // the registry does not know, and during the outage that silence was
       // indistinguishable from the frame never arriving.
       const known = this.registry.list().find((h) => h.hostId === hostId);
       this.log.info(`coordinator: health from ${hostId} → ${known ? `${known.state}` : 'IGNORED — not in registry'}`);
+      // A BOX THAT CANNOT START SESSIONS IS AT LEAST AS WORTH SAYING AS A
+      // SESSION THAT NEEDS AN ANSWER, and until now it was said only in a
+      // journal. deb132's shared credential expired on a Saturday afternoon;
+      // agent-hub warned about it hourly for thirty hours, the coordinator
+      // marked the host degraded, the app showed it — three storeys down in
+      // Settings — and nobody was told. docs/psychology.md §7 is exactly this:
+      // silence has to be trustworthy before it is comfortable, and a warning
+      // that reaches a log file is silence.
+      if (moved) await this.#onHostState(hostId, moved);
       return;
     }
 
@@ -223,6 +232,51 @@ export class CoordinatorCore {
     this.onEvents?.();
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
+    if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
+  }
+
+  /**
+   * A host changed state. Say so, once, in words about what it means.
+   *
+   * @param {string} hostId
+   * @param {{ from: string, to: string, reason: string }} moved
+   */
+  async #onHostState(hostId, moved) {
+    // RECOVERY IS WORTH SAYING TOO. A person told a box is broken and never
+    // told it came back checks manually forever after, which is the anxiety
+    // this product exists to remove rather than relocate.
+    const recovered = moved.to === 'healthy';
+    // NOT EVERY TRANSITION IS NEWS, and the registry is right to report them
+    // all — deciding what is worth a person's attention is this function's job,
+    // not its bookkeeping's.
+    //
+    // `unknown` is what a host looks like while it is being restarted,
+    // including by an update somebody just asked for. Going INTO it says
+    // nothing (we lost contact, briefly, on purpose), and coming OUT of it into
+    // health is the other half of the same non-event: every connect,
+    // every deploy, every restart would ring a phone to say a box is fine.
+    //
+    // Coming out of unknown into DEGRADED is news, which is why this is not
+    // simply "ignore anything touching unknown": a box that reboots and comes
+    // back signed out is exactly the thing nobody found out about for thirty
+    // hours.
+    if (moved.to === 'unknown') return;
+    if (moved.from === 'unknown' && recovered) return;
+    const event = this.record({
+      hostId,
+      event: recovered ? 'host.recovered' : 'host.degraded',
+      name: hostId,
+      text: recovered
+        ? `${hostId} is reporting normally again.`
+        // The reason, verbatim, because the registry works hard to make it
+        // specific and a notification that says "degraded" sends somebody to
+        // go and find out what this line already knows.
+        : `${hostId} cannot start sessions: ${moved.reason}`,
+    });
+    // `record` writes to the ring; it does not notify. Only host-originated
+    // events did, which is part of how this whole class of fact stayed
+    // invisible — the coordinator's own observations went to a log and a list
+    // nobody opens.
     if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
   }
 
@@ -1081,6 +1135,12 @@ const NOTIFIABLE = new Set([
   'session.ended',
   'session.error',
   'session.rc-online',
+  // A BOX THAT CANNOT START SESSIONS, and its recovery. This list was sessions
+  // only, so the one fact that stops the whole fleet working reached a journal
+  // and nothing else — deb132 spent thirty hours signed out, warning hourly,
+  // while the phone said nothing.
+  'host.degraded',
+  'host.recovered',
   // BOTH ENDS OF THE AUTO-RESTART. A fleet that quietly restarts things is
   // one nobody can debug — the session's own conversation history will not
   // explain a gap it did not cause — and giving up has to be louder than
@@ -1105,6 +1165,10 @@ export function describeEvent(event) {
       return event.text || 'was restarted after going idle';
     case 'session.stuck':
       return event.text || 'keeps going idle and a restart is not fixing it';
+    case 'host.degraded':
+      return event.text || 'cannot start sessions';
+    case 'host.recovered':
+      return event.text || 'is reporting normally again';
     default:
       return event.event;
   }

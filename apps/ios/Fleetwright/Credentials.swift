@@ -57,11 +57,21 @@ struct CredentialsView: View {
             } header: {
                 Text(onlyClaude ? "Claude on \(host ?? "this machine")" : "Your credentials")
             } footer: {
-                Text("Each one is created on the provider's own page, on your account, and can be "
-                     + "revoked there at any time. A token goes to every machine in the fleet, because "
-                     + "it is yours rather than any one box's — sessions you start get it, and nobody "
-                     + "else's do. Signing in to Claude is per machine: that one is a login the box "
-                     + "performs, not a token you paste.")
+                // NAMES THE DIFFERENCE, because the screen offers both and they
+                // are not variations of one thing. A box reporting itself
+                // signed out is not fixed by linking a person's account, and
+                // the old wording — "signing in to Claude is per machine" —
+                // described the machine login while the only button did the
+                // other one.
+                Text(onlyClaude
+                     ? "Two different logins. \"Sign in this machine\" is the account this box runs on: every "
+                       + "session started here uses it unless the person who started it has linked their own. "
+                       + "\"Connect\" links YOURS, for your sessions only, and leaves the machine's alone."
+                     : "Each one is created on the provider's own page, on your account, and can be "
+                       + "revoked there at any time. A token goes to every machine in the fleet, because "
+                       + "it is yours rather than any one box's — sessions you start get it, and nobody "
+                       + "else's do. Signing in to Claude is per machine: that one is a login the box "
+                       + "performs, not a token you paste.")
             }
 
             if let pending {
@@ -212,6 +222,22 @@ struct CredentialsView: View {
                 Button(actionLabel(provider, connections.linked(provider.provider))) {
                     Task { await begin(provider) }
                 }
+                // SIGNING THE BOX IN, WHICH THIS SCREEN COULD NOT DO AT ALL.
+                //
+                // The host row says "NOT signed in — sessions will not start"
+                // and offered exactly one action, which linked the PERSON's
+                // account: a different credential, in a different file, used
+                // by a different set of sessions. Somebody whose box was
+                // signed out tapped it, linked an account that was already
+                // fine, and watched the machine go on reporting itself broken.
+                // The button under the problem did not fix the problem.
+                //
+                // Two different things, named as two: `scope: host` logs the
+                // MACHINE in — the account every session without a linked one
+                // runs on — and is admin-only, checked at the coordinator.
+                if provider.isSignIn && host != nil {
+                    Button("Sign in this machine") { Task { await begin(provider, scope: .host) } }
+                }
                 if connections.linked(provider.provider) != nil {
                     // TEST, because "connected" is a fact about storage and not
                     // about the token. It can be revoked, expire, or have its
@@ -271,7 +297,7 @@ struct CredentialsView: View {
     /// in a pane on that host, so the box has to be asked, and what comes back
     /// is that URL as a field rather than something scraped out of prose.
     @MainActor
-    private func begin(_ provider: Fleet.Connections.Available) async {
+    private func begin(_ provider: Fleet.Connections.Available, scope: Fleet.Scope = .me) async {
         secret = ""
         result = ""
         guard provider.isSignIn else {
@@ -281,7 +307,7 @@ struct CredentialsView: View {
         busy = true
         defer { busy = false }
         do {
-            let reply = try await Fleet(settings: settings).connect(host: host, provider: provider.provider)
+            let reply = try await Fleet(settings: settings).connect(host: host, provider: provider.provider, scope: scope)
             if let fresh = reply.connections {
                 connections = fresh
                 pending = fresh.catalogue.first { $0.provider == provider.provider }

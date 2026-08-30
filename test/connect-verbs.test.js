@@ -14,6 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { validateIntent, PROTOCOL_VERSION, VERBS, isMutating } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
@@ -209,4 +210,38 @@ test('a credential cannot be smuggled in as a flag', () => {
     assert.equal(r.ok, false, secret);
     assert.equal(r.code, 'bad_params');
   }
+});
+
+test('both apps can sign the BOX in, not only link a person', () => {
+  // REPORTED FROM THE FLEET: "I signed in today yet it is still reporting
+  // broken." The host row said "NOT signed in — sessions will not start" and
+  // offered exactly one action, which sent `connect claude` with the DEFAULT
+  // scope — linking the person's own account. That is a different credential,
+  // in a different file, used by a different set of sessions.
+  //
+  // So somebody whose box was signed out tapped the button under the problem,
+  // linked an account that was already fine and already renewing hourly, and
+  // watched the machine go on reporting itself broken. There was no way from
+  // either app to log a MACHINE in at all — the one thing that fixes the
+  // message being displayed.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const code = (/** @type {string} */ src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  const ios = read('apps/ios/Fleetwright/Credentials.swift');
+  const android = read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt');
+
+  for (const [name, src] of [['iOS', ios], ['Android', android]]) {
+    assert.match(code(src), /Sign in this machine/, `${name} still cannot log a box in`);
+    // AND NAMES THE DIFFERENCE. Two buttons that both say "sign in" would be
+    // worse than one: the failure here was never that the action was missing
+    // from the screen, it was that nobody could tell which action they needed.
+    assert.match(src, /session started here uses it/i, `${name} does not explain what the machine login is`);
+  }
+
+  // The scope has to actually travel. `scope: host` is admin-only and checked
+  // at the coordinator, so a member gets a refusal that says so — which is a
+  // better outcome than a button that silently does the other thing.
+  assert.match(code(ios), /scope: \.host/);
+  assert.match(code(android), /"host"/);
 });
