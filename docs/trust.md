@@ -1,5 +1,13 @@
 # Trust: who is asking, and what they are allowed to hand a session
 
+> **This document argues; [security.md](./security.md) states.** Where the two
+> disagree, the specification wins — it was written by somebody with no stake in
+> the reasoning here, and it supersedes at least two claims below that were true
+> when written and quietly falsified by later changes. In particular, the
+> "worst a compromised coordinator can do is start and stop sessions" bound
+> repeated here is **wrong** and several conclusions leaning on it need
+> re-deriving: see `security.md` §4.1 and gap G1.
+
 Written after stepping back, because three things had been treated as one and
 they behave differently.
 
