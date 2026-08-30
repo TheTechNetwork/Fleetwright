@@ -82,12 +82,17 @@ Claude account, or harvest a code mid-flow. **Half of that was answered and half
 of it is still true**, and being clear about which is which is the whole
 security story here.
 
-**Answered — the aiming.** There is no `email`, `account`, `user` or `owner`
-parameter anywhere in the verb set. `scope: me` means *the verified actor*, an
-identity the **host** derives from the actor string the coordinator resolved
-against an ID token. A caller can say *what* to connect and never *whose*. A
-test refuses any identity-shaped parameter name on any verb, because the way
-this property would be lost is somebody adding an innocent-looking convenience.
+**Partly answered — the aiming.** There is no `email`, `account`, `user` or
+`owner` parameter anywhere in the verb set, and a test refuses any
+identity-shaped parameter name. No ordinary caller can aim a link at somebody
+else's row.
+
+**Against a compromised coordinator it is not answered at all.** `scope: me`
+resolves against the *actor string*, which the coordinator puts on the wire and
+the host does not verify — it strips a `fleet:` prefix. The aiming moved from a
+parameter we refuse to a field we trust absolutely. See
+[security.md](./security.md) SEC-ID-3; this section previously claimed the
+opposite.
 
 **Still true — the page.** A compromised coordinator can show somebody a
 different authorization page and harvest what they paste into it. That is real.

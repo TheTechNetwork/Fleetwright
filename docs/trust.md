@@ -1,13 +1,5 @@
 # Trust: who is asking, and what they are allowed to hand a session
 
-> **This document argues; [security.md](./security.md) states.** Where the two
-> disagree, the specification wins — it was written by somebody with no stake in
-> the reasoning here, and it supersedes at least two claims below that were true
-> when written and quietly falsified by later changes. In particular, the
-> "worst a compromised coordinator can do is start and stop sessions" bound
-> repeated here is **wrong** and several conclusions leaning on it need
-> re-deriving: see `security.md` §4.1 and gap G1.
-
 Written after stepping back, because three things had been treated as one and
 they behave differently.
 
@@ -76,10 +68,18 @@ design.md §3 already says the coordinator's registry is a cache with
 provenance, never the authority, and that each host stays the sole authority on
 its own tmux. Secrets follow the same rule for the same reason: a coordinator
 is an internet-facing service holding a socket to every box in the fleet, and
-it is the single most attractive thing in the system to compromise. Today the
-worst a compromised coordinator can do is start and stop sessions. If it also
-held secrets, the worst it could do would be exfiltrate every credential the
-fleet touches, silently, from anywhere.
+it is the single most attractive thing in the system to compromise.
+
+**The baseline here was understated and the conclusion survives it.** This
+paragraph said the worst a compromised coordinator can do is start and stop
+sessions. Since v2 it can also *write* a credential into a member's row via
+`link`/`renew`, which every session that member starts is then seeded with —
+bad, and still nothing like the alternative. If the coordinator also *held*
+secrets it could exfiltrate every credential the fleet touches, silently, from
+anywhere, including for hosts it is not currently driving and members who have
+never started a session. The gap between "poison one row on one box" and "read
+everything, everywhere, forever" is what this rule is buying, and correcting
+the baseline makes the case stronger rather than weaker.
 
 So the rule, stated once so it can be checked against later:
 
@@ -789,8 +789,11 @@ long as nobody notices** — and it re-issues after each revocation.
 So "the Worker holds permission to generate Cloudflare tokens" is not a smaller
 version of "the Worker holds a Cloudflare token". It is a larger one. The same
 argument that refuses the vault refuses this harder: coordinator compromise
-currently buys start-and-stop-some-sessions, and this would upgrade it to
-mint-credentials-for-every-provider-for-every-member.
+currently buys the verb set — lifecycle, plus writing a credential into a row on
+a box it is driving (§security.md 4.1) — and this would upgrade it to
+mint-credentials-for-every-provider-for-every-member, retroactively and
+everywhere. The baseline is worse than this document originally claimed and the
+delta is the part the argument rests on, so the conclusion is unchanged.
 
 **The minting key belongs where a compromise is already total for the things it
 affects** — the host, behind the per-session broker, or the proxy. A host

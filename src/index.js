@@ -11,6 +11,7 @@ import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials, renewProviderTokens } from './core/keepalive.js';
+import { ensureApiToken } from './core/api-token.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -73,7 +74,7 @@ export async function main() {
 
   /** @type {Array<{ stop: () => Promise<unknown> }>} */
   const adapters = [];
-  const http = new HttpAdapter(cfg, { sessions, login });
+  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg) });
   await http.start();
   adapters.push(http);
 
