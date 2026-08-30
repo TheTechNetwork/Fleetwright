@@ -321,6 +321,16 @@ class Fleet(private val settings: Settings) {
             val account: String?,
             val updatedAt: Long,
             val missing: List<String>? = null,
+            /**
+             * This token can no longer renew itself.
+             *
+             * It still WORKS, which is what makes it worth saying early: an
+             * eight-hour token that cannot renew stops within the day, and the
+             * failure without this is "it worked yesterday" with nothing on any
+             * screen explaining it. Set when the box swept renewal material it
+             * could not use, and cleared the moment a fresh token is stored.
+             */
+            val needsReconnect: Boolean = false,
         )
 
         fun linked(provider: String): Linked? = connected.firstOrNull { it.provider == provider }
@@ -755,6 +765,7 @@ class Fleet(private val settings: Settings) {
                         else c.optJSONArray("missing")?.let { m ->
                             (0 until m.length()).mapNotNull { k -> m.optString(k).takeIf { it.isNotBlank() } }
                         } ?: emptyList(),
+                        needsReconnect = c.optBoolean("needsReconnect"),
                     )
                 }
             },

@@ -192,6 +192,15 @@ struct Fleet {
             /// token, and there is no field for one.
             let account: String?
             let updatedAt: Double?
+            /// This token can no longer renew itself.
+            ///
+            /// It still WORKS, which is what makes it worth saying early: an
+            /// eight-hour token that cannot renew stops within the day, and the
+            /// failure without this is "it worked yesterday" with nothing on
+            /// any screen explaining it. Set when the box swept renewal
+            /// material it could not use, and cleared the moment a fresh token
+            /// is stored.
+            let needsReconnect: Bool?
             /// Which machines actually have it, and which do not.
             ///
             /// A credential reaches the hosts that were reachable when it was
