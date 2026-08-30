@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { Connections } from './connectors.js';
 import { refreshSandboxImage, podmanAvailable } from './podman.js';
 import { requestRestart } from './restart-watch.js';
 
@@ -372,6 +373,64 @@ const STEPS = [
       return r.changed
         ? { ok: true, changed: true, text: 'Sandbox image updated — new sessions will use it.' }
         : { ok: true, changed: false, text: 'Sandbox image is up to date.' };
+    },
+  },
+  {
+    name: 'credentials',
+    /**
+     * Clear out credential material this box will never use again.
+     *
+     * AN UPDATE IS THE MOMENT THIS BECOMES NECESSARY, which is why it lives
+     * here rather than on a timer. Code that stops reading a field does not
+     * remove the field: the release that moved the GitHub client secret onto
+     * the config frame left a copy of the FLEET-WIDE secret in
+     * `<row>.renewal.json` on every box that had ever connected GitHub, once
+     * per member. Nothing reads it now, which does not make it harmless — a
+     * credential nobody reads is a credential nobody is watching, and it is
+     * still valid, still fleet-wide, and still in every backup taken since.
+     *
+     * Also drops renewal records that cannot renew anything: no client id, no
+     * refresh token, or a provider this host no longer knows. Their only effect
+     * is to make a box look like it can do something it cannot.
+     *
+     * @param {import('../config.js').Config} cfg
+     */
+    run(cfg) {
+      let swept;
+      try {
+        swept = new Connections(cfg.stateDir).sweep();
+      } catch (e) {
+        // Never fails an update. A box that could not tidy up is a box that
+        // still wants the new code.
+        return { ok: true, changed: false, text: `Could not tidy stored credentials: ${/** @type {Error} */ (e).message}` };
+      }
+
+      const lines = [];
+      if (swept.scrubbed.length) {
+        lines.push(
+          `Removed a stored copy of the GitHub app secret from ${swept.scrubbed.length} credential file(s). `
+            + 'Nothing reads it any more; it should not have been left on disk.',
+        );
+      }
+      if (swept.dropped.length && !swept.reconnect.length) {
+        lines.push(`Dropped ${swept.dropped.length} renewal record(s) that could no longer renew anything.`);
+      }
+      // THE ONE A PERSON HAS TO ACT ON, said in the words of what happens to
+      // them rather than of what we deleted. Somebody reading this has a GitHub
+      // connection that works right now and stops within the day, and the
+      // failure mode without this line is "it worked yesterday" with nothing on
+      // any screen explaining why.
+      if (swept.reconnect.length) {
+        const who = [...new Set(swept.reconnect.map((r) => r.split('/')[0]))];
+        lines.push(
+          `GITHUB NEEDS RECONNECTING for ${who.join(', ')}.
+`
+            + 'Those tokens still work but can no longer renew themselves, so they will stop within eight hours. '
+            + 'Reconnecting takes one tap in the app — Settings, Credentials, Connect GitHub — and nothing needs '
+            + 'to be pasted or copied. Sessions already running keep the token they started with.',
+        );
+      }
+      return { ok: true, changed: false, text: lines.join('\n\n') };
     },
   },
 ];

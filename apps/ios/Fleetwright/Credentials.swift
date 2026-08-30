@@ -180,6 +180,15 @@ struct CredentialsView: View {
                 // session. The asked-for list grows; a token minted before it
                 // grew still verifies, still says "connected", and then fails
                 // at whatever step needs the scope it never had.
+                // THE ONE THAT NEEDS ACTING ON, above the scope detail because
+                // it is more urgent than any of it: the token works right now
+                // and stops within the day.
+                if linked.needsReconnect == true {
+                    Text("Reconnect this — it still works but can no longer renew itself, so it stops within "
+                         + "eight hours. One tap below; nothing to copy or paste.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
                 if let missing = linked.missing, !missing.isEmpty {
                     Text("missing \(missing.joined(separator: ", "))")
                         .font(.caption2)

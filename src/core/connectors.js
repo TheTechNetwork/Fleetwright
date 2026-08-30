@@ -529,6 +529,79 @@ export class Connections {
   }
 
   /**
+   * Remove renewal material that can no longer be used, and say what went.
+   *
+   * TWO KINDS OF LITTER, and the first one is a live secret. Until the config
+   * frame shipped, `renew` carried the GitHub App client secret and this store
+   * wrote it into `<row>.renewal.json` — the FLEET-WIDE secret, once per member
+   * per host. Nothing reads that field any more, so on every box that ever
+   * connected GitHub it is a credential sitting at rest for no reason at all.
+   * A field nobody reads is not harmless; it is a credential nobody is
+   * watching.
+   *
+   * The second kind is a record that cannot do its job: no client id, no
+   * refresh token, or a provider this host no longer knows. Those cannot renew
+   * anything and their only effect is to make a box look like it can.
+   *
+   * A ROW THAT LOSES ITS MATERIAL IS MARKED, not silently emptied. The person's
+   * GitHub token still works — for up to eight hours — and then stops, and
+   * "it worked yesterday" with nothing on screen is the worst version of this.
+   * `needsReconnect` is what the apps read to say so before it bites.
+   *
+   * @returns {{ scrubbed: string[], dropped: string[], reconnect: string[] }}
+   */
+  sweep() {
+    /** @type {{ scrubbed: string[], dropped: string[], reconnect: string[] }} */
+    const out = { scrubbed: [], dropped: [], reconnect: [] };
+    if (!existsSync(this.dir)) return out;
+
+    for (const row of this.renewableRows()) {
+      const file = this.renewalPathFor(row);
+      if (!file || !existsSync(file)) continue;
+      const label = typeof row === 'string' ? row : 'this box';
+      /** @type {Record<string, any>} */
+      let all;
+      try { all = JSON.parse(this.#readGuarded(file)); } catch { continue; }
+
+      let changed = false;
+      for (const [provider, entry] of Object.entries(all)) {
+        if (entry && typeof entry === 'object' && 'client' in entry) {
+          delete entry.client;
+          out.scrubbed.push(`${label}/${provider}`);
+          changed = true;
+        }
+        const usable = entry && typeof entry.refresh === 'string' && typeof entry.clientId === 'string'
+          && isProvider(provider);
+        if (!usable) {
+          delete all[provider];
+          out.dropped.push(`${label}/${provider}`);
+          if (this.list(row).some((c) => c.provider === provider)) {
+            this.#markReconnect(row, provider);
+            out.reconnect.push(`${label}/${provider}`);
+          }
+          changed = true;
+        }
+      }
+      if (!changed) continue;
+      if (Object.keys(all).length === 0) unlinkSync(file);
+      else writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+    }
+    return out;
+  }
+
+  /** @param {string|symbol|null} row @param {string} provider */
+  #markReconnect(row, provider) {
+    const file = this.metaPathFor(row);
+    if (!file || !existsSync(file)) return;
+    try {
+      const meta = JSON.parse(this.#readGuarded(file));
+      if (!meta[provider]) return;
+      meta[provider].needsReconnect = true;
+      writeFileSync(file, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
+    } catch { /* unreadable metadata is not a reason to fail a sweep */ }
+  }
+
+  /**
    * Every row on this box that has renewal material, so a timer can find them
    * without being told who exists.
    * @returns {Array<string|symbol>}
@@ -548,7 +621,7 @@ export class Connections {
   /**
    * What is connected, and to which account. Never the token.
    * @param {string|symbol|null} row
-   * @returns {Array<{ provider: string, label: string, account: string|null, updatedAt: number }>}
+   * @returns {Array<{ provider: string, label: string, account: string|null, updatedAt: number, needsReconnect?: boolean }>}
    */
   list(row) {
     const file = this.metaPathFor(row);
@@ -570,6 +643,10 @@ export class Connections {
             // not say — and null is deliberately different from an empty
             // array, which means "checked, nothing missing".
             missing: granted && wants ? wants.filter((w) => !granted.includes(w)) : null,
+            // This token cannot renew itself any more — its material was
+            // dropped, or predates the renewal flow. It keeps working until it
+            // expires and then stops, so saying so early is the whole point.
+            needsReconnect: /** @type {any} */ (v)?.needsReconnect === true,
           };
         })
         .sort((a, b) => a.provider.localeCompare(b.provider));
@@ -728,6 +805,9 @@ export class Connections {
     // as absent, which every reader downstream correctly interprets as "cannot
     // tell". The one token we can be certain is short of every scope would
     // then be the one we say nothing about.
+    // needsReconnect is NOT carried forward: storing a token is the act that
+    // answers it, and a warning that outlives its cause is one people learn to
+    // ignore.
     meta[provider] = { account, updatedAt: Date.now(), ...(Array.isArray(granted) ? { granted } : {}) };
     writeFileSync(metaFile, `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
 
