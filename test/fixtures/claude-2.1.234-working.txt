@@ -1,0 +1,40 @@
+│                                                    │ ─────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                      │
+│                      ▝▜█████▛▘                     │ Added `PreModelSwitch` and `PostModelSwitch` hook events (bloc… │
+│                        ▘▘ ▝▝                       │ Added live streaming of a foreground subagent's tool calls and… │
+│         Opus 5 (1M context) · Claude Max ·         │ Added a Spend limit bar to `/usage` and a `rate_limits.spend_l… │
+│         Example Org         │ /release-notes for more                                         │
+│                /…/scratchpad/panebox               │                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ⚠ 1 MCP server needs authentication · run /mcp
+
+ ▎ Auto mode is now Claude Code's default permission mode.
+ ▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and
+ ▎ prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.
+ ▎ https://code.claude.com/docs/en/permission-modes
+   +2 more · /status
+
+❯ Run this exact bash command and report the output: sleep 25; echo done
+
+● I'll run it now.
+
+● Bash(sleep 25; echo done)
+  ⎿  Error: Blocked: sleep 25 followed by: echo done. To wait for a condition, use Monitor with an until-loop (e.g.
+     `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain
+     shorter sleeps to work around this block.
+
+● Foreground sleep is blocked by the harness, so I'll run the exact command in the background.
+
+● Bash(sleep 25; echo done)
+  ⎿  Running in the background (↓ to manage)
+
+● The command is running in the background (~25s). I'll report the output as soon as it finishes.
+
+✻ Sautéed for 6s · 1 shell still running
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ what's the output?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 1 shell · ← for agents · ↓ to manage                                                    /rc active
+

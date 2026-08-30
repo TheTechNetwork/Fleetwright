@@ -29,29 +29,62 @@ const DEFAULT_INTERVAL_MS = 20_000;
  *  describe, and this catches the case where a person is plainly needed and we
  *  cannot say why. "Something is waiting" is worth a notification even when the
  *  question is not one we know how to read. */
-const AWAITING_RE = /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files/i;
+export const AWAITING_RE =
+  /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files|Is this a project you created or one you trust/i;
 
 /**
- * A session sitting at its own prompt, with nothing to do.
+ * The CLI is drawing its own chrome, so it is not wedged.
  *
- * THE STATE THAT BROKE AUTO-RESTART, reported from a phone within a day of it
- * shipping: `cc-brave-narwhal` was stopped and resumed twice and then declared
- * beyond help, because it had FINISHED. A session that completed its work sits
- * at the input prompt forever, and a pane at an input prompt does not change —
- * so by the only measurement the watcher had, "done" and "wedged" were the
- * same thing.
+ * THIS IS THE SECOND VERSION AND THE FIRST ONE WAS WRONG, in the exact way an
+ * outside reviewer predicted and a real capture then proved. It read:
  *
- * They are opposites. Done is the most common state in the fleet and needs
- * nothing; wedged is rare and is the whole reason the feature exists.
- * Restarting a finished session puts it back at the same prompt, which is
- * precisely what "went straight back to idle" was reporting — the mechanism
- * working perfectly on a question nobody asked.
+ *     /bypass permissions on|shift+tab to cycle|accept edits on|plan mode on/
  *
- * The footer is the tell. Claude Code draws its permission-mode line whenever
- * it is READY FOR INPUT and not while it is working, so its presence is the
- * session saying "your turn" rather than "I am stuck".
+ * on the stated premise that "Claude Code draws its permission-mode line
+ * whenever it is READY FOR INPUT and not while it is working". Captured from
+ * tmux against CLI 2.1.234, that premise is FALSE. The mode line is drawn in
+ * both states; only the parenthetical changes:
+ *
+ *     idle     ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+ *     working  ⏵⏵ auto mode on · 1 shell · ← for agents · ↓ to manage
+ *
+ * So in `bypass permissions` — which is what this fleet runs by default — a
+ * session in the middle of a tool call matched "at rest". It would never be
+ * restarted however wedged it got, and the apps showed it as "ready · idle"
+ * while it was actively working. Both directions wrong, from one unverified
+ * sentence about somebody else's TUI.
+ *
+ * WHAT THE PANE CAN ACTUALLY TELL US, having gone and looked: whether the CLI
+ * is drawing at all. It cannot distinguish "working quietly" from "wedged" — a
+ * frozen process keeps whatever it last painted, footer included — and no
+ * regex over pane text ever will. That is a fact about the measurement, not a
+ * gap in this pattern, and pretending otherwise produced both bugs.
+ *
+ * So the trigger is narrow on purpose: restart only when the pane shows none of
+ * the CLI's chrome, which is as close to "it is not drawing" as this
+ * measurement gets. Working, waiting and finished all keep their footer and are
+ * all left alone — and of those three, left alone is right for every one.
+ *
+ * If this needs to fire more often the signal is process liveness, not more
+ * clever reading of text. Written down in docs/sidecar.md rather than guessed
+ * at again here.
  */
-const AT_REST_RE = /bypass permissions on|shift\+tab to cycle|\baccept edits on\b|plan mode on/i;
+export const DRAWING_RE = /⏵⏵|shift\+tab to cycle|to manage\b|esc to interrupt/i;
+
+/**
+ * The CLI is READY FOR INPUT specifically — not merely alive.
+ *
+ * A narrower question than DRAWING_RE, with a different consumer. The restart
+ * gate asks "is it wedged", and working and waiting are both "no". The app asks
+ * "is this finished or is it busy", and those are opposite answers to somebody
+ * deciding whether to look.
+ *
+ * The parenthetical is what separates them, verified against real captures:
+ * `(shift+tab to cycle)` is drawn when the CLI is waiting for input and is
+ * replaced by the running-shell hints while it works. It is the one part of
+ * that line that means anything.
+ */
+export const READY_RE = /shift\+tab to cycle/i;
 
 /**
  * How long we go on suppressing "finished" after starting a restart.
@@ -213,11 +246,12 @@ export class SessionWatcher {
       // Only a running session has a pane worth reading, and only a running
       // session can be waiting for anybody.
       let awaiting = false;
-      // Is it sitting at its own prompt with nothing to do? Not the same
-      // question as `awaiting`, which is "a dialog is blocking it" — this is
-      // the ordinary ready state, and it is the most common state in the
-      // fleet. See AT_REST_RE.
+      // THREE QUESTIONS, NOT ONE, and collapsing any pair has produced a bug:
+      //   awaiting — a dialog is blocking it and a person must answer
+      //   drawing  — the CLI is painting its own chrome, so it is not wedged
+      //   ready    — it is waiting for input specifically, rather than working
       let atRest = false;
+      let ready = false;
       /** @type {any} */
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
@@ -227,13 +261,14 @@ export class SessionWatcher {
         if (pane) {
           this.#noteIdle(name, pane);
           awaiting = AWAITING_RE.test(pane);
-          atRest = AT_REST_RE.test(pane);
+          atRest = DRAWING_RE.test(pane);
+          ready = READY_RE.test(pane);
           // Kept beside the clock so health can report WHY a pane is still
           // without reading it a second time. "Still" is not one fact: a
           // finished session and a wedged one look identical on a timer and
           // are opposites to a person.
           const entry = this.idle.get(name);
-          if (entry) entry.atRest = atRest;
+          if (entry) entry.atRest = ready;
           // The pane is read either way. Reading the QUESTION out of it costs
           // one more pass over text already in hand, and is the difference
           // between a notification that says "resumed (summary)" and one that
@@ -282,10 +317,10 @@ export class SessionWatcher {
       // AUTO-RESTART, last, and only for a session that is running, not
       // asking anything, and has been frozen longer than the threshold. Each
       // of those three is load-bearing — see #maybeRestartIdle.
-      // A SESSION AT ITS OWN PROMPT IS NOT WEDGED, IT IS DONE — and done is
-      // the most common state in the fleet. Both exclusions are the same
-      // shape: a still pane is not evidence of a problem when there is a
-      // perfectly good reason for it to be still.
+      // A PANE THE CLI IS STILL PAINTING IS NOT A WEDGED ONE, whether it is
+      // waiting, working or finished. All three exclusions are the same shape:
+      // a still pane is not evidence of a problem when there is a perfectly
+      // good reason for it to be still, and there usually is.
       if (running && !awaiting && !atRest) await this.#maybeRestartIdle(name, quiet);
 
       this.seen.set(name, { status: session.status, awaiting, rcUrl });
@@ -437,8 +472,12 @@ export class SessionWatcher {
   }
 
   /**
-   * Is this session's pane showing its own prompt — finished, or between
-   * things, and waiting for input?
+   * Is this session's pane READY FOR INPUT — finished, or between things?
+   *
+   * Narrower than the restart gate on purpose, and the two were briefly one
+   * value: a working session is not wedged (do not restart) and is also not
+   * ready (do not call it idle). One boolean could not say both, and the
+   * version that tried told the apps a session running a build was "ready".
    *
    * The difference between "done" and "stuck", which a timer cannot see. The
    * app showed "quiet for 3h" for both, which is true of each and useful about

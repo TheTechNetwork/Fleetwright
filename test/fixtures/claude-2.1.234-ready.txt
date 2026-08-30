@@ -1,0 +1,40 @@
+╭─── Claude Code v2.1.234 ─────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                        │
+│                  Welcome back Eli!                 │ Ask Claude to create a new app or clone a repository            │
+│                                                    │ ─────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                      │
+│                      ▝▜█████▛▘                     │ Added `PreModelSwitch` and `PostModelSwitch` hook events (bloc… │
+│                        ▘▘ ▝▝                       │ Added live streaming of a foreground subagent's tool calls and… │
+│         Opus 5 (1M context) · Claude Max ·         │ Added a Spend limit bar to `/usage` and a `rate_limits.spend_l… │
+│         Example Org         │ /release-notes for more                                         │
+│                /…/scratchpad/panebox               │                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ⚠ 1 MCP server needs authentication · run /mcp
+
+ ▎ Auto mode is now Claude Code's default permission mode.
+ ▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and
+ ▎ prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.
+ ▎ https://code.claude.com/docs/en/permission-modes
+   +2 more · /status
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents                    ✔ 10 routines ran (latest 1d ago) · /routines
+                                                                                                            /rc active
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

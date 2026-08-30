@@ -41,7 +41,21 @@ const KINDS = [
   },
   {
     kind: 'trust',
-    test: /Do you trust the files/i,
+    // TWO WORDINGS, AND THE OLD ONE ALONE MATCHED NOTHING TODAY. Captured from
+    // a real CLI 2.1.234 pane, the dialog now reads "Quick safety check: Is
+    // this a project you created or one you trust?" — so this matcher, and the
+    // watcher's AWAITING_RE beside it, had silently stopped recognising a
+    // dialog that blocks a session until somebody answers it.
+    //
+    // What that cost: no notification that a session needed a person, no
+    // options to answer from the app, and — because that pane also carries none
+    // of the CLI's usual chrome — a session sitting on it was a RESTART
+    // CANDIDATE, stopped and resumed straight back onto the same question.
+    //
+    // The old wording is kept rather than replaced. An older CLI is still a
+    // CLI, and a matcher that only knows today's text is the thing that just
+    // failed.
+    test: /Do you trust the files|Is this a project you created or one you trust/i,
     question: 'Do you trust the files in this folder?',
     // The dialog names the directory. The QUESTION above does not, and the
     // directory is not what we send.
