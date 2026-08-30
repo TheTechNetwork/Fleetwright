@@ -45,6 +45,8 @@
 
 import os from 'node:os';
 import { validateIntent, isMutating, PROTOCOL_VERSION } from '../protocol/intents.js';
+import { readConfigFrame } from '../protocol/config-frame.js';
+import { renewProviderTokens } from '../../core/keepalive.js';
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
 import { SessionWatcher } from './watcher.js';
@@ -92,6 +94,8 @@ export class Sidecar {
    *   healthIntervalMs?: number,
    *   promptText?: boolean,
    *   idleRestartMs?: number,
+   *   renewIntervalMs?: number,
+   *   hubConfig?: any,
    *   watch?: boolean,
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
    *   version?: (() => { head: string|null, branch: string|null }|null)|null,
@@ -101,6 +105,8 @@ export class Sidecar {
     version = null,
     promptText = false,
     idleRestartMs = 0,
+    renewIntervalMs = 3_600_000,
+    hubConfig = null,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -116,6 +122,17 @@ export class Sidecar {
     }
     this.hub = hub;
     this.transport = transport;
+    /**
+     * What the coordinator has told this host about itself, IN MEMORY ONLY.
+     *
+     * Never written anywhere. That is the entire point: the one value in here
+     * today is the fleet-wide GitHub App client secret, and the version of this
+     * that shipped first put it in the credential store — at rest, once per
+     * member per host, with rotation silently breaking every renewal eight
+     * hours later. Nothing to place, nothing at rest, rotation is a deploy.
+     * @type {Map<string, string>}
+     */
+    this.config = new Map();
     this.hostId = hostId || os.hostname();
     this.labels = labels;
     // Injected rather than read here: the sidecar knows about a coordinator
@@ -130,6 +147,14 @@ export class Sidecar {
     this.healthIntervalMs = healthIntervalMs;
     /** @type {any} */
     this.healthTimer = null;
+    /** @type {any} */
+    this.renewTimer = null;
+    this.renewIntervalMs = renewIntervalMs;
+    // Enough of agent-hub's config to find its credential store. The sidecar
+    // and agent-hub run as the same user on the same box, which is what lets
+    // the process holding the secret write the result where the sessions will
+    // read it.
+    this.hubConfig = hubConfig;
     // Watching is what turns "a session needs you" into a notification on a
     // phone. Off in tests, which drive tick() directly.
     this.watcher = watch
@@ -169,6 +194,16 @@ export class Sidecar {
       void this.#pushHealth();
     }
     this.watcher?.start();
+
+    // RENEWING PROVIDER TOKENS BELONGS HERE, not in agent-hub, because the
+    // exchange needs the App client secret and this is the process that has it
+    // — in memory, off the config frame, never on disk. agent-hub renews the
+    // CLAUDE credential on its own timer, which is a different mechanism for a
+    // different reason: that one renews by being used.
+    if (this.renewIntervalMs > 0 && this.hubConfig) {
+      this.renewTimer = setInterval(() => void this.#renewProviders(), this.renewIntervalMs);
+      this.renewTimer.unref?.();
+    }
     this.log.info(`sidecar: ${this.hostId} → ${this.transport.origin} (protocol v${PROTOCOL_VERSION})`);
     return true;
   }
@@ -176,8 +211,33 @@ export class Sidecar {
   async stop() {
     if (this.healthTimer) clearInterval(this.healthTimer);
     this.healthTimer = null;
+    if (this.renewTimer) clearInterval(this.renewTimer);
+    this.renewTimer = null;
     this.watcher?.stop();
     await this.transport.stop();
+  }
+
+  /**
+   * Trade refresh tokens for new access tokens, using the secret the
+   * coordinator supplied.
+   *
+   * Silent when there is nothing to do, which is the common case: a box with no
+   * GitHub connections, or one whose tokens have hours left, does nothing and
+   * says nothing.
+   */
+  async #renewProviders() {
+    const client = this.config.get('githubClientSecret');
+    // Not a warning. A fleet with no GitHub App configured is a supported
+    // fleet, and warning hourly about a feature nobody turned on is how a log
+    // stops being read.
+    if (!client) return;
+    try {
+      const results = await renewProviderTokens(this.hubConfig, { secrets: { githubClientSecret: client } });
+      const renewed = results.filter((r) => r.outcome === 'renewed').length;
+      if (renewed) this.log.info(`sidecar: renewed ${renewed} provider token(s)`);
+    } catch (e) {
+      this.log.warn(`sidecar: provider renewal failed: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /** Volunteer our health, so the coordinator never has to ask. */
@@ -209,6 +269,12 @@ export class Sidecar {
   /** @param {unknown} msg */
   async #onMessage(msg) {
     const reply = await this.handle(msg);
+    // A frame with nothing to answer sends nothing. The coordinator correlates
+    // replies by id, and a reply with no id is a message it can only discard —
+    // or, worse, one that clobbers a waiter. See the fan-out bug in
+    // docs/fleet-debug notes: replies keyed by the wrong thing broke the fleet
+    // the moment it had two hosts.
+    if (reply?.kind === 'none') return;
     await this.transport.send(reply);
   }
 
@@ -223,6 +289,12 @@ export class Sidecar {
    * @returns {Promise<Record<string, any>>}
    */
   async handle(msg) {
+    // CONFIG BEFORE INTENT, because it is not one. A config frame carries named
+    // values from a fixed set (src/fleet/protocol/config-frame.js) and gets no
+    // reply — there is nothing to correlate and nothing to say. Checked first so
+    // validateIntent never sees a frame it would refuse as a malformed intent.
+    if (/** @type {any} */ (msg)?.kind === 'config') return this.#onConfig(msg);
+
     const checked = validateIntent(msg, { maxSkewMs: this.maxSkewMs });
     if (checked.ok === false) {
       const raw = /** @type {any} */ (msg);
@@ -589,6 +661,34 @@ export class Sidecar {
       // for health to fail.
       return null;
     }
+  }
+
+  /**
+   * Take a config frame.
+   *
+   * Returns nothing: there is no reply to a frame that carries no id, and a
+   * host that acknowledged its own configuration would be telling the
+   * coordinator something it already knows.
+   *
+   * @param {unknown} msg
+   */
+  #onConfig(msg) {
+    const read = readConfigFrame(msg);
+    if (!read.ok) {
+      this.log.warn(`sidecar: ignored a config frame — ${read.error}`);
+      return { kind: 'none' };
+    }
+    for (const [key, value] of Object.entries(read.values)) this.config.set(key, value);
+    // The KEYS are logged, never the values. Knowing what arrived is how
+    // somebody diagnoses a renewal that is not happening; knowing the value is
+    // how a journal that now reaches a phone becomes a credential leak.
+    if (Object.keys(read.values).length) {
+      this.log.info(`sidecar: coordinator supplied ${Object.keys(read.values).join(', ')}`);
+    }
+    for (const key of read.dropped) {
+      this.log.warn(`sidecar: config frame carried "${key}", which this host does not recognise — dropped`);
+    }
+    return { kind: 'none' };
   }
 
   #updates() {

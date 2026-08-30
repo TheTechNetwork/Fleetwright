@@ -19,6 +19,7 @@ import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
+import { buildConfigFrame } from '../protocol/config-frame.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -113,6 +114,20 @@ export class CoordinatorCore {
   hostConnected(hostId, send) {
     this.registry.connect(hostId, send);
     this.log.info(`coordinator: ${hostId} connected`);
+    // WHAT THIS HOST NEEDS AND MUST NOT KEEP. One frame, a fixed set of named
+    // values, sent on every connect — so a host enrolled tomorrow gets it by
+    // connecting, nothing is at rest on any box, and rotating a value here is a
+    // deploy rather than a fan-out to N machines somebody has to remember.
+    //
+    // Failure is not fatal to the connection: a host with no client secret
+    // cannot renew a GitHub token and can do everything else, and refusing the
+    // socket over it would turn a degraded capability into an offline box.
+    try {
+      const frame = buildConfigFrame({ githubClientSecret: this.githubApp?.clientSecret });
+      if (frame) send(frame);
+    } catch (e) {
+      this.log.warn(`coordinator: could not send config to ${hostId}: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /** @param {string} hostId @param {string} reason */
@@ -820,7 +835,11 @@ export class CoordinatorCore {
     if (exchanged.refreshToken) {
       const deposited = await this.dispatch({
         verb: 'renew',
-        params: { provider: 'github', clientId, refresh: exchanged.refreshToken, client: clientSecret },
+        // NO CLIENT SECRET HERE ANY MORE. It used to travel with the deposit
+        // and be written to disk beside the refresh token, which is what
+        // github-app.md has always said does not happen. It arrives on the
+        // config frame instead and stays in the sidecar's memory.
+        params: { provider: 'github', clientId, refresh: exchanged.refreshToken },
         actor: flow.email ?? undefined,
         preferHost: flow.hostId,
         requester: null,

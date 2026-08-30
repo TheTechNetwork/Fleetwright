@@ -785,23 +785,26 @@ export const COMMANDS = {
   },
 
   renew: {
-    usage: '/renew <provider> <client-id> <refresh-token> <client-secret>',
+    usage: '/renew <provider> <client-id> <refresh-token>',
     short: 'Let this box keep a connection alive by itself',
     help:
       'A GitHub App token lasts eight hours and is not renewed by being used — it is replaced by an '
       + 'exchange that needs the App client secret. This stores what that exchange needs, in a file no '
       + 'session is given, and the box renews on its own from then on.',
     run: async (ctx, args) => {
-      const [provider, clientId, refresh, client] = args;
-      if (provider !== 'github' || !clientId || !refresh || !client) {
-        return { ok: false, text: 'Usage: /renew github <client-id> <refresh-token> <client-secret>' };
+      // The fourth argument is the client secret an older coordinator still
+      // sends. It is READ AND DISCARDED: it belongs in the sidecar's memory,
+      // delivered on the config frame, not in a file on this box.
+      const [provider, clientId, refresh] = args;
+      if (provider !== 'github' || !clientId || !refresh) {
+        return { ok: false, text: 'Usage: /renew github <client-id> <refresh-token>' };
       }
       const row = rowForActor(ctx.actor);
       // Fails closed. There is no row to write to, so nothing is written —
       // rather than falling back to one other people read.
       if (row === null) return { ok: false, text: 'Could not tell whose connection this is, so nothing was stored.' };
       const store = new Connections(ctx.cfg.stateDir);
-      const saved = store.saveRenewal(row, provider, { clientId, refresh, client });
+      const saved = store.saveRenewal(row, provider, { clientId, refresh });
       if (!saved.ok) return { ok: false, text: saved.message };
       // NOT RENEWED HERE. The token that arrived with this connection is
       // minutes old and has its full eight hours; spending an exchange now

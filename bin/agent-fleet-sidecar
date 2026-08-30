@@ -130,6 +130,10 @@ async function run() {
     maxSkewMs: cfg.maxSkewMs,
     promptText: cfg.promptText,
     idleRestartMs: cfg.idleRestartMs,
+    // agent-hub's own config, so the sidecar can reach the credential store it
+    // writes renewed tokens into. Same user, same box — see
+    // src/fleet/protocol/config-frame.js for why the renewal lives here.
+    hubConfig: loadConfig(),
     logger: log,
     // Reported with health, so a phone can say "this box is 3 commits behind
     // and has 12 packages waiting" without anybody logging in to look.
