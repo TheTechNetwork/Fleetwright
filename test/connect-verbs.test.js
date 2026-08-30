@@ -50,17 +50,43 @@ test('an unattributed caller cannot link "their" account', () => {
   );
 });
 
+test('a box has no Claude account to sign in or out of', () => {
+  // `scope: host` on Claude meant "log this MACHINE in". The machine has no
+  // Claude account any more — docs/one-account-per-person.md — and the whole
+  // family of confusion this removes started there: a host row saying "NOT
+  // signed in" whose only button linked a person, a `loggedIn: false` from the
+  // box's home directory marking a host unschedulable while a perfectly good
+  // linked credential renewed itself beside it.
+  //
+  // REFUSED, NOT REMOVED FROM THE ENUM. Dropping a value an older coordinator
+  // still sends would be `bad_params` arriving after the version handshake had
+  // already agreed — the flag day the protocol design exists to avoid. So it
+  // is accepted on the wire and answered with a reason.
+  for (const verb of ['connect', 'unlink']) {
+    assert.throws(
+      () => toCommandLine({ verb, params: { provider: 'claude', scope: 'host' }, actor: 'admin@example.com' }),
+      /no Claude account of its own/,
+      verb,
+    );
+  }
+
+  // The other providers are unaffected: a GitHub token genuinely can belong to
+  // the box, and `--host` is still how you say so.
+  assert.equal(
+    toCommandLine({ verb: 'connect', params: { provider: 'github', scope: 'host' }, actor: 'admin@example.com' }),
+    '/connect github --host',
+  );
+});
+
 test('each provider lands on the command that already existed', () => {
   const as = 'me@example.com';
   const cases = [
     [{ verb: 'connect', params: {} }, '/connect'],
     [{ verb: 'connect', params: { provider: 'github' } }, '/connect github'],
-    [{ verb: 'connect', params: { provider: 'claude', scope: 'host' } }, '/login force'],
     [{ verb: 'link', params: { provider: 'github', secret: 'ghp_x' } }, '/link github ghp_x'],
     [{ verb: 'link', params: { provider: 'claude', secret: 'code_x' } }, '/code code_x'],
     [{ verb: 'unlink', params: { provider: 'cloudflare' } }, '/unlink cloudflare'],
     [{ verb: 'unlink', params: { provider: 'claude' } }, `/accounts remove ${as}`],
-    [{ verb: 'unlink', params: { provider: 'claude', scope: 'host' } }, '/login logout'],
   ];
   for (const [spec, expected] of cases) {
     assert.equal(toCommandLine({ ...spec, actor: as }), expected, JSON.stringify(spec.params));

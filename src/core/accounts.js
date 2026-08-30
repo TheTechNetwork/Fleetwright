@@ -41,6 +41,95 @@ export function extractOauthAccount(claudeJsonText) {
   }
 }
 
+/**
+ * Give the box's own Claude account to the person it belongs to.
+ *
+ * A host running today has a working `~/.claude/.credentials.json` and may have
+ * no linked accounts at all. Removing the fallback without this would break it
+ * on update, which is the worst version of a simplification.
+ *
+ * So the credential does not move and does not change — IT ACQUIRES AN OWNER.
+ * `~/.claude.json`'s `oauthAccount` block already carries the email, and it is
+ * the same field seeding has relied on since the day a sandbox came up "not
+ * logged in" holding a perfectly valid token. A fleet where everybody was
+ * running on the org account keeps running on it, under the name of the person
+ * it always belonged to.
+ *
+ * Runs once and is a no-op afterwards: an existing row is never overwritten,
+ * because the box's copy is by then the older one and adopting it again would
+ * hand a session a credential its owner has already replaced.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ adopted: string|null, why: string }}
+ */
+export function adoptBoxAccount(cfg) {
+  const file = cfg.sandboxCredentialsFile;
+  if (!file || !existsSync(file)) return { adopted: null, why: 'this box has no Claude credential of its own' };
+  const home = path.dirname(path.dirname(file));
+  let email = null;
+  try {
+    const meta = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8'));
+    email = normaliseEmail(meta?.oauthAccount?.emailAddress);
+  } catch {
+    return { adopted: null, why: 'could not read whose account the box credential is' };
+  }
+  if (!email) return { adopted: null, why: 'the box credential does not say whose account it is' };
+
+  const store = new Accounts(cfg.stateDir);
+  if (store.credentialPathFor(email)) {
+    return { adopted: null, why: `${email} already has a linked account here, which is newer than the box's copy` };
+  }
+  const accountMeta = extractOauthAccount(readFileSync(path.join(home, '.claude.json'), 'utf8'));
+  const saved = store.save(email, readFileSync(file, 'utf8'), accountMeta);
+  return saved.ok
+    ? { adopted: email, why: `adopted this box's Claude account as ${email}` }
+    : { adopted: null, why: saved.message };
+}
+
+/**
+ * Who a session runs as, when the actor did not say.
+ *
+ * `telegram:<id>`, `web` and `cli` are all SOMEBODY OPERATING THE BOX, and
+ * until now they landed on the box's own Claude account. That account is gone
+ * — see docs/one-account-per-person.md — so this answers the question it left:
+ * whose credential does a local surface use.
+ *
+ * THE SINGLE LINKED ACCOUNT, WHEN THERE IS EXACTLY ONE. No configuration, no
+ * ambiguity, and the two other cases degrade into a question rather than a
+ * wrong answer: none linked is "link one", several is "say which". Both are
+ * answerable by a person in one step, which is more than the old behaviour
+ * offered — it silently picked the machine's account and told nobody.
+ *
+ * `AGENT_HUB_OPERATOR` settles the ambiguous case and is needed only there.
+ *
+ * This is NOT the shared account renamed. It is a named person's credential,
+ * attributed to them and revocable by them, which is every property the box
+ * account did not have.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ email: string|null, why: string }}
+ */
+export function operatorAccount(cfg) {
+  const configured = normaliseEmail(cfg.operator);
+  const linked = new Accounts(cfg.stateDir).list();
+  if (configured) {
+    return linked.includes(configured)
+      ? { email: configured, why: `AGENT_HUB_OPERATOR is ${configured}` }
+      : { email: null, why: `AGENT_HUB_OPERATOR names ${configured}, who has not linked a Claude account on this box` };
+  }
+  if (linked.length === 1) return { email: linked[0], why: `${linked[0]} is the only linked account here` };
+  if (linked.length === 0) {
+    return {
+      email: null,
+      why: 'nobody has linked a Claude account on this box yet — connect one from the app, or run `agent-hub login`',
+    };
+  }
+  return {
+    email: null,
+    why: `${linked.length} people have linked accounts here, so set AGENT_HUB_OPERATOR to say which one local sessions use`,
+  };
+}
+
 /** A bare email, lowercased — or null for anything else. @param {unknown} value */
 export function normaliseEmail(value) {
   const email = String(value || '').toLowerCase().trim();

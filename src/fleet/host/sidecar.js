@@ -813,7 +813,19 @@ export function toCommandLine({ verb, params, actor }) {
       // admin-only thing.
       if (!p.provider) return p.scope === 'host' ? '/connect --host' : '/connect';
       if (p.provider === 'claude') {
-        if (p.scope === 'host') return '/login force';
+        // NO BOX ACCOUNT TO SIGN IN ANY MORE. `scope: host` on Claude used to
+        // mean "log this MACHINE in", and the machine has no Claude account —
+        // see docs/one-account-per-person.md. Refused with a reason rather than
+        // removed from the enum: dropping a value an older coordinator still
+        // sends would be `bad_params` arriving after the version handshake had
+        // already agreed, which is the flag day the whole protocol design
+        // exists to avoid.
+        if (p.scope === 'host') {
+          throw new Error(
+            'this box has no Claude account of its own — sign in as a person instead, and their sessions run on '
+            + 'their account. See docs/one-account-per-person.md',
+          );
+        }
         if (!mine) throw new Error('connect me needs a signed-in identity — this caller has no email');
         return `/login for ${mine}`;
       }
@@ -837,7 +849,10 @@ export function toCommandLine({ verb, params, actor }) {
       return `/verify ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
     case 'unlink':
       if (p.provider === 'claude') {
-        if (p.scope === 'host') return '/login logout';
+        // Same as `connect` above: there is no machine account to log out of.
+        if (p.scope === 'host') {
+          throw new Error('this box has no Claude account of its own — unlink a person instead');
+        }
         if (!mine) throw new Error('unlink me needs a signed-in identity — this caller has no email');
         return `/accounts remove ${mine}`;
       }

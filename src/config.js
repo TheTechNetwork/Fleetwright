@@ -151,7 +151,18 @@ export function loadConfig(env = process.env) {
     // Copied into each session's fresh conversation volume, or the session
     // comes up unauthenticated and hangs at a login prompt nobody can answer.
     // Set empty to disable and manage credentials yourself.
+    // The box's own Claude credential. NO LONGER WHAT SESSIONS RUN ON — see
+    // docs/one-account-per-person.md — and kept for exactly one purpose: it is
+    // adopted into an account row on first run, so a host that has been working
+    // for months goes on working under the name of the person it always
+    // belonged to.
     sandboxCredentialsFile: str('AGENT_HUB_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
+
+    // Whose account local surfaces use — the Telegram bot, the web UI, and
+    // `agent-hub new` typed on the box. Needed only when more than one person
+    // has linked an account here; with exactly one, that one is the answer.
+    // See operatorAccount().
+    operator: str('AGENT_HUB_OPERATOR'),
     // How often a session start may check the registry for a newer sandbox
     // image. Six hours, matching the package-list refresh: often enough that a
     // fix ships within a working day without anybody running /update, rare

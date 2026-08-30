@@ -65,6 +65,9 @@ exit 0
       sandboxAutoBuild: true,
       sandboxContainerfile: containerfile,
       sandboxCredentialsFile: '',
+      // Credential selection now consults the account store, which needs a
+      // directory to look in — the box's own credential is no longer an answer.
+      stateDir: dir,
       ...patch,
     }),
   };
@@ -142,8 +145,31 @@ test('a missing Containerfile is named, rather than failing inside podman', (t) 
 
 // --- preparing a session ----------------------------------------------------
 
+/** A linked Claude account, which a session now requires. @param {string} dir */
+function linkAccount(dir, email = 'operator@example.com') {
+  const accounts = path.join(dir, 'accounts');
+  mkdirSync(accounts, { recursive: true });
+  writeFileSync(path.join(accounts, `${email}.json`), JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+  return email;
+}
+
+test('a box where nobody has linked an account refuses, and names the remedy', (t) => {
+  // THE BOX HAS NO CLAUDE ACCOUNT OF ITS OWN ANY MORE —
+  // docs/one-account-per-person.md. Starting anyway would produce a session
+  // sitting at a login prompt with nobody there to answer it, which is the
+  // exact silent hang this tool exists to prevent.
+  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+
+  const r = ensureSandboxVolumes(s.cfg(), 'nobody');
+
+  assert.equal(r.ok, false);
+  assert.match(String(r.message), /No Claude account/);
+  assert.match(String(r.message), /nobody has linked/);
+});
+
 test('starting a session builds the image, then creates its volumes', (t) => {
   const s = stubPodman(t, { has: [] });
+  linkAccount(s.dir);
 
   const r = ensureSandboxVolumes(s.cfg(), 'bigjob');
 
@@ -159,6 +185,7 @@ test('a build failure stops before any volume is created', (t) => {
   // it did not make and cannot reason about.
   const s = stubPodman(t, { has: [], failBuild: true });
 
+  linkAccount(s.dir);
   const r = ensureSandboxVolumes(s.cfg(), 'bigjob');
 
   assert.equal(r.ok, false);

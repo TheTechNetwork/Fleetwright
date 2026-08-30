@@ -1,18 +1,20 @@
 // Whose Claude account a session runs on.
 //
-// docs/accounts.md: the shared org credential is the default; a person who has
-// linked their own gets theirs. The selection is the feature and podman is
-// not, which is why pickCredentialSource is exported.
+// docs/one-account-per-person.md: THE BOX HAS NO CLAUDE ACCOUNT. A session runs
+// on the account of whoever started it, and a local surface — Telegram, the
+// CLI, the web UI — runs as the operator, which is a named person rather than
+// the machine. The selection is the feature and podman is not, which is why
+// pickCredentialSource is exported.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createRequire } from 'node:module';
 
-import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount } from '../src/core/accounts.js';
+import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount, adoptBoxAccount } from '../src/core/accounts.js';
 import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
 
 const require = createRequire(import.meta.url);
@@ -53,7 +55,12 @@ test('garbage is refused before it becomes a credential file', () => {
   assert.deepEqual(a.list(), []);
 });
 
-test('a linked person gets their account, everyone else the shared one', () => {
+test('a linked person gets their account, and nobody gets the box\'s', () => {
+  // THE BOX HAS NO CLAUDE ACCOUNT ANY MORE — docs/one-account-per-person.md.
+  // This used to fall back to the machine's own credential for anyone who had
+  // not linked, which quietly shared one person's Claude subscription with
+  // everybody who could reach the fleet. True of an org and false of a guest,
+  // and the standing rule for guests is that they bring their own everything.
   const stateDir = dir();
   const a = new Accounts(stateDir);
   a.save('client@example.com', JSON.stringify({ token: 'theirs' }));
@@ -63,16 +70,41 @@ test('a linked person gets their account, everyone else the shared one', () => {
   assert.equal(linked.account, 'client@example.com');
   assert.match(linked.source, /client@example\.com\.json$/);
 
-  for (const actor of ['fleet:owner@example.com', 'telegram:12345', 'web', null]) {
+  // Somebody who has NOT linked gets a refusal with their name in it, rather
+  // than somebody else's subscription.
+  const stranger = pickCredentialSource(cfg, 'fleet:owner@example.com');
+  assert.equal(stranger.source, null);
+  assert.match(String(stranger.why), /has not linked/);
+
+  // A local surface runs as THE OPERATOR — here unambiguous, because exactly
+  // one person has linked an account on this box.
+  for (const actor of ['telegram:12345', 'web', null]) {
     const picked = pickCredentialSource(cfg, actor);
-    assert.equal(picked.account, 'shared', String(actor));
-    assert.equal(picked.source, '/shared/.credentials.json');
+    assert.equal(picked.account, 'client@example.com', String(actor));
   }
 });
 
-test('no shared credential configured means none seeded, exactly as before', () => {
+test('a box where nobody has linked refuses, and says how to fix it', () => {
+  // Not silence, and not the machine's account. Every version of this refusal
+  // is something one person can fix in one step.
   const picked = pickCredentialSource({ stateDir: dir(), sandboxCredentialsFile: '' }, 'telegram:1');
   assert.equal(picked.source, null);
+  assert.match(String(picked.why), /nobody has linked/);
+});
+
+test('two linked accounts is a question, not a guess', () => {
+  const stateDir = dir();
+  const a = new Accounts(stateDir);
+  a.save('one@example.com', JSON.stringify({ token: '1' }));
+  a.save('two@example.com', JSON.stringify({ token: '2' }));
+
+  const picked = pickCredentialSource({ stateDir, sandboxCredentialsFile: '' }, 'cli');
+  assert.equal(picked.source, null);
+  assert.match(String(picked.why), /AGENT_HUB_OPERATOR/);
+
+  // And naming one settles it.
+  const named = pickCredentialSource({ stateDir, operator: 'two@example.com', sandboxCredentialsFile: '' }, 'cli');
+  assert.equal(named.account, 'two@example.com');
 });
 
 test('the identity travels with the credential', () => {
@@ -111,4 +143,58 @@ test('the shared identity is derived from the shared credential\'s home', () => 
   assert.ok(file, 'extracted once the state file exists');
   const { readFileSync } = require('node:fs');
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).emailAddress, 'org@example.com');
+});
+
+test("the box's own account is adopted by the person it belongs to", (t) => {
+  // MIGRATION, AND IT HAS TO BE SILENT. A host running today has a working
+  // ~/.claude/.credentials.json and may have no linked accounts at all.
+  // Removing the fallback without this breaks it on update, which is the worst
+  // version of a simplification.
+  //
+  // The credential does not move and does not change — it acquires an owner.
+  const stateDir = dir();
+  const home = mkdtempSync(join(tmpdir(), 'home-'));
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  const cred = join(home, '.claude', '.credentials.json');
+  writeFileSync(cred, JSON.stringify({ claudeAiOauth: { accessToken: 'theboxs' } }));
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({
+    oauthAccount: { emailAddress: 'Owner@Example.com', organizationName: 'Example' },
+  }));
+  const cfg = /** @type {any} */ ({ stateDir, sandboxCredentialsFile: cred });
+
+  const first = adoptBoxAccount(cfg);
+
+  assert.equal(first.adopted, 'owner@example.com', 'normalised, like every other email here');
+  assert.deepEqual(new Accounts(stateDir).list(), ['owner@example.com']);
+  // The identity travels with it, which is the pair a sandbox needs — a
+  // credential without its oauthAccount is a login that fails while every file
+  // involved is genuine.
+  assert.ok(existsSync(new Accounts(stateDir).accountMetaPathFor('owner@example.com')));
+  // And a session started by anybody on this box now resolves to that person.
+  assert.equal(pickCredentialSource(cfg, 'telegram:1').account, 'owner@example.com');
+});
+
+test('adoption never overwrites an account somebody already linked', (t) => {
+  // The box's copy is by then the OLDER one. Adopting it again would hand a
+  // session a credential its owner has already replaced — and would do it
+  // silently, on every restart.
+  const stateDir = dir();
+  const home = mkdtempSync(join(tmpdir(), 'home-'));
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  const cred = join(home, '.claude', '.credentials.json');
+  writeFileSync(cred, JSON.stringify({ claudeAiOauth: { accessToken: 'stale' } }));
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.com' } }));
+  new Accounts(stateDir).save('owner@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'current' } }));
+
+  const again = adoptBoxAccount(/** @type {any} */ ({ stateDir, sandboxCredentialsFile: cred }));
+
+  assert.equal(again.adopted, null);
+  assert.match(again.why, /already has a linked account/);
+  assert.match(new Accounts(stateDir).read('owner@example.com') || '', /current/);
+});
+
+test('a box with no credential of its own adopts nothing and says so', () => {
+  const r = adoptBoxAccount(/** @type {any} */ ({ stateDir: dir(), sandboxCredentialsFile: '/nowhere' }));
+  assert.equal(r.adopted, null);
+  assert.match(r.why, /no Claude credential of its own/);
 });

@@ -127,7 +127,12 @@ test('per-person Claude credentials resolve over the fleet too', () => {
   // failing open.
   const state = dir();
   const cfg = /** @type {any} */ ({ stateDir: state, sandboxCredentialsFile: null });
-  assert.equal(pickCredentialSource(cfg, `fleet:${FROM_THE_COORDINATOR}`).account, 'shared');
+  // Before a credential exists it is a REFUSAL naming them, not somebody
+  // else's account — docs/one-account-per-person.md removed the fallback to
+  // the box, which is what "failed safe" used to mean here.
+  const before = pickCredentialSource(cfg, `fleet:${FROM_THE_COORDINATOR}`);
+  assert.equal(before.source, null);
+  assert.match(String(before.why), /has not linked/);
 
   // With a credential on file it must pick theirs. Written directly, because
   // this test is about the lookup and not about the login flow.

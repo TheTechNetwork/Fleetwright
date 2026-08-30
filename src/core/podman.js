@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
-import { Accounts, emailFromActor, extractOauthAccount, rowForActor } from './accounts.js';
+import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 
@@ -371,7 +371,11 @@ export function refreshSeededCredentials(cfg, name, { account = null, actor = nu
     log.warn(`sandbox: could not refresh ${claude}: ${seeded.message}`);
     return { refreshed: false, account: owner, why: seeded.message };
   }
-  return { refreshed: true, account: owner };
+  // The RESOLVED account, not the recorded one. A volume recorded as `shared`
+  // resolves to the person the box credential was adopted as, and reporting the
+  // old word would write it straight back onto the registry record — keeping a
+  // name alive for something that no longer exists.
+  return { refreshed: true, account: picked.account };
 }
 
 /**
@@ -386,17 +390,17 @@ export function refreshSeededCredentials(cfg, name, { account = null, actor = nu
  * @returns {{ source: string|null, accountMeta: string|null, account: string }|null}
  */
 export function credentialSourceForAccount(cfg, account) {
-  if (account && account !== 'shared') {
-    const store = new Accounts(cfg.stateDir);
-    const linked = store.credentialPathFor(account);
-    if (!linked) return null;
-    return { source: linked, accountMeta: store.accountMetaPathFor(account), account };
-  }
-  return {
-    source: cfg.sandboxCredentialsFile || null,
-    accountMeta: sharedAccountMetaFile(cfg),
-    account: 'shared',
-  };
+  // `shared` is what volumes created before docs/one-account-per-person.md
+  // recorded, and those sessions are still running. The migration adopts the
+  // box credential into a named row, so the honest answer for an old volume is
+  // the account that adoption produced — resolved through the operator, which
+  // is the same person.
+  const email = account === 'shared' ? operatorAccount(cfg).email : account;
+  if (!email) return null;
+  const store = new Accounts(cfg.stateDir);
+  const linked = store.credentialPathFor(email);
+  if (!linked) return null;
+  return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
 }
 
 /**
@@ -451,14 +455,30 @@ export function volumeAccount(cfg, volume) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} volume
- * @param {{ source: string|null, accountMeta?: string|null, account: string }} picked
+ * @param {{ source: string|null, accountMeta?: string|null, account: string, why?: string }} picked
  * @param {string|null} [actor]  for the provider tokens, which key on the
  *   person rather than on the Claude account — see pickSecretsFile.
  * @returns {{ ok: boolean, message?: string, account?: string }}
  */
 function seedCredentials(cfg, volume, picked, actor = null) {
   const source = picked.source;
-  if (!source) return { ok: true }; // deliberately disabled
+  if (!source) {
+    // REFUSED, NOT SKIPPED. This used to return ok — "deliberately disabled" —
+    // because the only way to get here was an operator emptying the config.
+    // Now it means nobody's account was found, and starting anyway produces a
+    // session that comes up at a login prompt with nobody there to answer it,
+    // which is the exact silent hang this whole tool exists to prevent.
+    //
+    // The refusal carries WHY, because every version of it is a thing one
+    // person can fix in one step: link an account, or name which of several is
+    // the operator.
+    return {
+      ok: false,
+      message:
+        `No Claude account to give this session: ${picked.why ?? 'none is linked on this box'}.\n`
+        + 'Connect one from the app under Your credentials, or run `agent-hub login` on the box.',
+    };
+  }
   // The identity rides with the credential when there is one. The entrypoint
   // merges .oauth-account.json into the container's /root/.claude.json on
   // every start — the newer CLI reads logged-in-ness off the PAIR, and a
@@ -498,25 +518,33 @@ function seedCredentials(cfg, volume, picked, actor = null) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {string|null} actor
- * @returns {{ source: string|null, accountMeta?: string|null, account: string }}
+ * @returns {{ source: string|null, accountMeta?: string|null, account: string, why?: string }}
+ *   `why` is present only when `source` is null, and is written to be shown to
+ *   a person: it is the difference between "this session cannot start" and
+ *   "this session cannot start because you have not linked an account".
  */
 export function pickCredentialSource(cfg, actor) {
   const email = emailFromActor(actor);
+  const store = new Accounts(cfg.stateDir);
   if (email) {
-    const store = new Accounts(cfg.stateDir);
     const linked = store.credentialPathFor(email);
-    // Linked or shared, never an error: a member who has not linked simply
-    // works on the org account, which is the promised default — not a wall.
     if (linked) return { source: linked, accountMeta: store.accountMetaPathFor(email), account: email };
+    // NO FALLBACK TO THE BOX ANY MORE. This used to return the machine's own
+    // account here, on the grounds that a shared org plan is a licence somebody
+    // chose to share. True of an org and false of a guest — and the standing
+    // rule for guests is that they bring their own everything, which was a
+    // policy nobody could see being applied. Now it is structural.
+    return { source: null, accountMeta: null, account: email, why: `${email} has not linked a Claude account` };
   }
+  // An actor with no email is somebody operating the box: Telegram, the CLI,
+  // the local web UI. They run as a PERSON now rather than as the machine —
+  // see operatorAccount and docs/one-account-per-person.md.
+  const operator = operatorAccount(cfg);
+  if (!operator.email) return { source: null, accountMeta: null, account: 'nobody', why: operator.why };
   return {
-    source: cfg.sandboxCredentialsFile || null,
-    // The shared identity, derived from the same home the shared credential
-    // comes from: ~/.claude/.credentials.json sits inside ~/.claude, and the
-    // state file sits beside that directory as ~/.claude.json. Null when it
-    // is not there — an old box degrades to exactly the old behaviour.
-    accountMeta: sharedAccountMetaFile(cfg),
-    account: 'shared',
+    source: store.credentialPathFor(operator.email),
+    accountMeta: store.accountMetaPathFor(operator.email),
+    account: operator.email,
   };
 }
 
