@@ -160,7 +160,7 @@ export class Fleet {
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
       const wanted = String(body?.hostId || '');
-      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
+      const spent = await this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
       // Saved either way: a spent code must not come back if this object is
       // evicted between the redemption and the next write.
       await this.#saveEnrollment();
