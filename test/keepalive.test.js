@@ -318,3 +318,39 @@ test('the app can say WHEN, not just what', async () => {
   // one.
   assert.match(reply.text, /copy in its volume/);
 });
+
+// --- whose login is being reported ------------------------------------------
+
+test('a link flow in progress does not make the whole box report signed out', async () => {
+  // REPORTED FROM THE FLEET: "we broke one of the hosts somehow, it permanently
+  // reports Claude as not logged in."
+  //
+  // `status()` read `this.pending?.linkDir` and silently pointed the CLI at it.
+  // So while ANY member's link flow was in flight, every caller asking "is this
+  // box logged in" was answered about an empty, isolated config directory. The
+  // answer is false, and it travels: /api/state → health → the registry marks
+  // the host degraded with "claude is not logged in on this host" → the
+  // scheduler stops sending it work.
+  //
+  // It never called isPending(), which is what expires an abandoned flow — so a
+  // linkDir that had already been deleted kept being handed to the CLI for as
+  // long as the process lived. That is the "permanently".
+  const { LoginFlow } = await import('../src/core/login.js');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'login-'));
+  const flow = new LoginFlow(/** @type {any} */ ({
+    claudeBin: '/bin/echo', stateDir: dir, loginEnabled: true,
+    loginSessionName: 'no-such-tmux-session', loginTimeoutMs: 600_000,
+  }));
+
+  // A pending link, of the shape an abandoned flow leaves behind.
+  flow.pending = {
+    startedAt: Date.now(), startedBy: null, url: null, mode: 'claudeai',
+    linkFor: 'guest@example.com', linkDir: path.join(dir, 'gone'),
+  };
+
+  flow.status();
+
+  // Asking about the box expires the dead flow rather than honouring it — the
+  // tmux session named above does not exist, which is what isPending() checks.
+  assert.equal(flow.pending, null, 'a dead link flow went on answering for the box');
+});

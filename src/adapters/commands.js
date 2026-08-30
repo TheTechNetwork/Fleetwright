@@ -238,7 +238,18 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
  * @returns {string}
  */
 function verifyClaude(ctx) {
-  const lines = [describe(ctx.login.status())];
+  const auth = ctx.login.status();
+  const lines = [describe(auth)];
+  // A LOGIN IN FLIGHT IS NOT A LOGGED-OUT BOX, and for a while this surface
+  // could not tell you which you were looking at. `status()` used to answer
+  // about whichever link flow was in progress, so a member linking their own
+  // account made the whole machine report itself signed out — and the registry
+  // turned that into "claude is not logged in on this host" and stopped
+  // scheduling to it. Saying so is what makes that five seconds to diagnose
+  // rather than an afternoon.
+  if (ctx.login.isPending?.()) {
+    lines.push('A login is in progress on this box right now. That is separate from the status above.');
+  }
   const picked = pickCredentialSource(ctx.cfg, ctx.actor);
   const mine = picked.account !== 'shared';
   if (!picked.source) {
@@ -254,6 +265,18 @@ function verifyClaude(ctx) {
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);
+  // THE CONTRADICTION, NAMED. Two independent readings of the same box: what
+  // the CLI says, and what is actually in the file a session gets. When they
+  // disagree the interesting fact is the disagreement itself — and which way
+  // round it goes says which of the two to go and look at.
+  if (auth.loggedIn === false && state.state === 'fresh') {
+    lines.push('');
+    lines.push(
+      'THESE TWO DISAGREE. `claude auth status` reports signed out while the credential file on this box is '
+      + 'valid and unexpired. That is a fault in the reporting rather than in the credential — sessions here '
+      + 'will work. Restarting agent-hub clears it.',
+    );
+  }
   lines.push('');
   lines.push(
     mine
