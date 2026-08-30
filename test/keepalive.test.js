@@ -297,10 +297,14 @@ test('the app can say WHEN, not just what', async () => {
   writeFileSync(file, JSON.stringify({
     claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 6 * HOUR },
   }));
+  // A linked account, because a session now runs on a PERSON's credential and
+  // the box no longer has one of its own.
+  mkdirSync(path.join(dir, 'accounts'), { recursive: true });
+  writeFileSync(path.join(dir, 'accounts', 'box@example.com.json'), readFileSync(file, 'utf8'));
   const ctx = {
     cfg: { credentialKeepaliveMs: 3_600_000, sandbox: true, sandboxCredentialsFile: file, stateDir: dir },
     actor: null,
-    login: { status: () => ({ loggedIn: true, email: 'box@example.com' }) },
+    login: { status: () => ({ loggedIn: true, email: 'box@example.com' }), isPending: () => false },
   };
 
   const reply = await dispatch(/** @type {any} */ (ctx), '/verify claude');

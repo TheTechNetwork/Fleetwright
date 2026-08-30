@@ -50,17 +50,43 @@ test('an unattributed caller cannot link "their" account', () => {
   );
 });
 
+test('a box has no Claude account to sign in or out of', () => {
+  // `scope: host` on Claude meant "log this MACHINE in". The machine has no
+  // Claude account any more — docs/one-account-per-person.md — and the whole
+  // family of confusion this removes started there: a host row saying "NOT
+  // signed in" whose only button linked a person, a `loggedIn: false` from the
+  // box's home directory marking a host unschedulable while a perfectly good
+  // linked credential renewed itself beside it.
+  //
+  // REFUSED, NOT REMOVED FROM THE ENUM. Dropping a value an older coordinator
+  // still sends would be `bad_params` arriving after the version handshake had
+  // already agreed — the flag day the protocol design exists to avoid. So it
+  // is accepted on the wire and answered with a reason.
+  for (const verb of ['connect', 'unlink']) {
+    assert.throws(
+      () => toCommandLine({ verb, params: { provider: 'claude', scope: 'host' }, actor: 'admin@example.com' }),
+      /no Claude account of its own/,
+      verb,
+    );
+  }
+
+  // The other providers are unaffected: a GitHub token genuinely can belong to
+  // the box, and `--host` is still how you say so.
+  assert.equal(
+    toCommandLine({ verb: 'connect', params: { provider: 'github', scope: 'host' }, actor: 'admin@example.com' }),
+    '/connect github --host',
+  );
+});
+
 test('each provider lands on the command that already existed', () => {
   const as = 'me@example.com';
   const cases = [
     [{ verb: 'connect', params: {} }, '/connect'],
     [{ verb: 'connect', params: { provider: 'github' } }, '/connect github'],
-    [{ verb: 'connect', params: { provider: 'claude', scope: 'host' } }, '/login force'],
     [{ verb: 'link', params: { provider: 'github', secret: 'ghp_x' } }, '/link github ghp_x'],
     [{ verb: 'link', params: { provider: 'claude', secret: 'code_x' } }, '/code code_x'],
     [{ verb: 'unlink', params: { provider: 'cloudflare' } }, '/unlink cloudflare'],
     [{ verb: 'unlink', params: { provider: 'claude' } }, `/accounts remove ${as}`],
-    [{ verb: 'unlink', params: { provider: 'claude', scope: 'host' } }, '/login logout'],
   ];
   for (const [spec, expected] of cases) {
     assert.equal(toCommandLine({ ...spec, actor: as }), expected, JSON.stringify(spec.params));
@@ -212,18 +238,20 @@ test('a credential cannot be smuggled in as a flag', () => {
   }
 });
 
-test('both apps can sign the BOX in, not only link a person', () => {
-  // REPORTED FROM THE FLEET: "I signed in today yet it is still reporting
-  // broken." The host row said "NOT signed in — sessions will not start" and
-  // offered exactly one action, which sent `connect claude` with the DEFAULT
-  // scope — linking the person's own account. That is a different credential,
-  // in a different file, used by a different set of sessions.
+test('neither app offers to sign a machine in, because there is nothing to sign in', () => {
+  // THIS TEST ASSERTED THE OPPOSITE ONE COMMIT AGO, and both versions were
+  // right about the model they were written for.
   //
-  // So somebody whose box was signed out tapped the button under the problem,
-  // linked an account that was already fine and already renewing hourly, and
-  // watched the machine go on reporting itself broken. There was no way from
-  // either app to log a MACHINE in at all — the one thing that fixes the
-  // message being displayed.
+  // The host row said "NOT signed in — sessions will not start" and its only
+  // action linked a PERSON's account, so somebody whose box was signed out
+  // tapped it, linked an account that was already fine, and watched the machine
+  // go on reporting itself broken. The fix at the time was a second button that
+  // logged the MACHINE in.
+  //
+  // Then the machine stopped having an account — docs/one-account-per-person.md
+  // — which removes the confusion at its source rather than labelling both
+  // halves of it. A button that signs in a thing with no account is worse than
+  // the ambiguity it was added to resolve.
   const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
   const code = (/** @type {string} */ src) =>
     src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
@@ -232,16 +260,13 @@ test('both apps can sign the BOX in, not only link a person', () => {
   const android = read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt');
 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
-    assert.match(code(src), /Sign in this machine/, `${name} still cannot log a box in`);
-    // AND NAMES THE DIFFERENCE. Two buttons that both say "sign in" would be
-    // worse than one: the failure here was never that the action was missing
-    // from the screen, it was that nobody could tell which action they needed.
-    assert.match(src, /session started here uses it/i, `${name} does not explain what the machine login is`);
+    assert.ok(!/Sign in this machine/.test(code(src)), `${name} still offers to sign a machine in`);
+    // And says what replaced it, because a screen that simply drops a button
+    // leaves somebody looking for the button.
+    assert.match(src, /no Claude account of its own|per person/i, `${name} does not explain the new model`);
   }
 
-  // The scope has to actually travel. `scope: host` is admin-only and checked
-  // at the coordinator, so a member gets a refusal that says so — which is a
-  // better outcome than a button that silently does the other thing.
-  assert.match(code(ios), /scope: \.host/);
-  assert.match(code(android), /"host"/);
+  // `scope: host` never reaches a host for Claude — refused at the mapping with
+  // a reason rather than removed from the enum, which would be a flag day.
+  assert.ok(!/scope: \.host/.test(code(ios)), 'iOS still asks for a machine login');
 });

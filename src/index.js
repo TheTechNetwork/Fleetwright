@@ -12,6 +12,7 @@ import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
+import { adoptBoxAccount } from './core/accounts.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -54,6 +55,17 @@ export async function main() {
   const login = new LoginFlow(cfg);
 
   log.info(`agent-hub starting on ${cfg.hostname} · workdir ${cfg.workdir} · cap ${cfg.maxSessions}`);
+
+  // THE BOX'S OWN ACCOUNT BECOMES SOMEBODY'S, once, on the way up. See
+  // docs/one-account-per-person.md — sessions no longer run as the machine, so
+  // a host that has been working for months would otherwise stop working on
+  // update. The credential does not move; it acquires an owner.
+  try {
+    const adopted = adoptBoxAccount(cfg);
+    if (adopted.adopted) log.info(`accounts: ${adopted.why}`);
+  } catch (e) {
+    log.warn(`accounts: could not adopt this box's Claude account: ${/** @type {Error} */ (e).message}`);
+  }
 
   const auth = login.status();
   if (auth.loggedIn) {

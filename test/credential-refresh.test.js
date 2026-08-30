@@ -121,10 +121,14 @@ exit 0
 test('resuming a session re-seeds the credential it already had', (t) => {
   const s = stubPodman(t, { volumes: ['claude-old', 'work-old'] });
 
+  // 'shared' is what volumes made before docs/one-account-per-person.md
+  // recorded. It resolves through the operator now — the same person the box
+  // credential was adopted as — so an old volume keeps the account it began on.
+  s.link('operator@example.com');
   const r = ensureSandboxVolumes(s.cfg(), 'old', 'fleet:someone@example.com', { account: 'shared' });
 
   assert.equal(r.ok, true);
-  assert.equal(r.account, 'shared');
+  assert.equal(r.account, 'operator@example.com');
   const seeds = s.seeds();
   assert.equal(seeds.length, 1, 'exactly one seeding pass, on the volume that already existed');
   assert.match(seeds[0], /claude-old:\/dest/);
@@ -135,6 +139,7 @@ test('a fresh start still seeds exactly once and does not then refresh it', (t) 
   // The refresh is for volumes that already existed. Running it after a create
   // would copy the same file twice and add a container run to every start.
   const s = stubPodman(t, { volumes: [] });
+  s.link('operator@example.com');
 
   const r = ensureSandboxVolumes(s.cfg(), 'brandnew', null);
 
@@ -201,9 +206,10 @@ test('a host credential that is itself expired is not copied over a live one', (
   // it with a dead one would turn a session that could have recovered into one
   // that cannot — a refresh has to be able to decline.
   const s = stubPodman(t, { volumes: ['claude-stale', 'work-stale'] });
-  s.credential(s.shared, Date.now() - HOUR);
+  const operator = s.link('operator@example.com', Date.now() - HOUR);
+  s.credential(operator, Date.now() - HOUR);
 
-  const r = refreshSeededCredentials(s.cfg(), 'stale', { account: 'shared' });
+  const r = refreshSeededCredentials(s.cfg(), 'stale', { account: 'operator@example.com' });
 
   assert.equal(r.refreshed, false);
   assert.match(String(r.why), /expired/);
@@ -216,8 +222,9 @@ test('a refresh that fails is not fatal to the resume', (t) => {
   // one this fixes — it would lose work rather than delay it.
   const s = stubPodman(t, { volumes: ['claude-x', 'work-x'] });
 
+  s.link('operator@example.com');
   const r = ensureSandboxVolumes(s.cfg({ sandboxCredentialsFile: '/nowhere/.credentials.json' }), 'x', null, {
-    account: 'shared',
+    account: 'gone@example.com',
   });
 
   assert.equal(r.ok, true);
@@ -230,7 +237,8 @@ test('an account resolves to its own file, or to nothing at all', (t) => {
   const alice = s.link('alice@example.com');
 
   assert.equal(credentialSourceForAccount(s.cfg(), 'alice@example.com')?.source, alice);
-  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, s.shared);
+  // 'shared' resolves through the operator, which is what adoption produced.
+  assert.equal(credentialSourceForAccount(s.cfg(), 'shared')?.source, alice);
   // Not "fall back to shared": a linked account that has gone away is a
   // different situation from never having had one, and the caller has to be
   // able to tell them apart to say something true about it.

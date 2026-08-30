@@ -253,15 +253,14 @@ function verifyClaude(ctx) {
   const picked = pickCredentialSource(ctx.cfg, ctx.actor);
   const mine = picked.account !== 'shared';
   if (!picked.source) {
-    // NOT THE SAME AS "not sandboxed", which is what this used to say. It is
-    // reached whenever there is no credential file to copy — which includes a
-    // sandboxed box whose AGENT_HUB_SANDBOX_CREDENTIALS points nowhere, and
-    // that is a fault rather than a configuration choice.
+    // WHOSE ACCOUNT IS MISSING, in their own words. The box has no Claude
+    // account of its own any more (docs/one-account-per-person.md), so this is
+    // reached whenever the person asking has not linked one — or, for a local
+    // surface, whenever the operator cannot be worked out. Both are one step
+    // from fixed and the step differs, so the reason has to travel.
     lines.push('');
-    lines.push(ctx.cfg.sandbox
-      ? 'Sessions here are sandboxed but no credential file is configured to seed them with, so they will come '
-        + 'up logged out. Check AGENT_HUB_SANDBOX_CREDENTIALS.'
-      : 'Sessions on this box are not sandboxed, so they use the login above directly.');
+    lines.push(`A session you start would not get a Claude account: ${picked.why ?? 'none is linked here'}.`);
+    lines.push('Connect one under Your credentials in the app, or run `agent-hub login` on the box.');
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);

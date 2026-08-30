@@ -1,5 +1,13 @@
 # Whose Claude account runs the work
 
+> **Superseded in part by [one-account-per-person.md](./one-account-per-person.md).**
+> The shared box credential described below is gone: a session runs on the
+> account of whoever started it, and a local surface runs as a named operator.
+> The fallback this document defends — "a shared org plan is a licence somebody
+> chose to share" — is exactly what was removed, because it was true of an org
+> and false of a guest. Everything here about SEEDING, refresh and custody still
+> holds; only the choosing changed.
+
 Asked for: a **shared org account at the coordinator**, **per-user accounts**
 for people who bring their own, and a **fleet admin** who can see everything and
 can let a friend or a client use the fleet under their own Claude account.
