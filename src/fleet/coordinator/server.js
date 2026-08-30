@@ -409,7 +409,7 @@ export class Coordinator {
     if (p === '/api/enroll/host' && req.method === 'POST') {
       const body = await readJson(req);
       const wanted = String(body?.hostId || '');
-      const spent = this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
+      const spent = await this.core.enrollment.redeem(String(body?.code || ''), 'host', wanted);
       if (!spent.ok) {
         this.saveState(); // a spent code must not survive a restart
         return json(res, 403, { ok: false, error: { code: 'bad_code' }, text: spent.reason });

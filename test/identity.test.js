@@ -140,27 +140,54 @@ test('a proof is spent, so a captured one opens nothing', async (t) => {
   assert.equal(again.status, 401);
 });
 
-test('guessing pins stops working long before a million tries', () => {
+test('guessing pins gets slow long before a million tries', async () => {
+  // SLOW, NOT SHUT, and the difference is the whole of G7. The first version
+  // refused every redemption once ten guesses had failed in a minute — which
+  // is trivial to sustain, so anyone able to reach the endpoint could keep
+  // enrolment closed for everybody, indefinitely, without ever coming close to
+  // guessing a code. It defended the thing it was built for and handed away
+  // something else.
   let clock = 0;
-  const enrollment = new Enrollment({ now: () => clock, maxFailures: 5 });
-  enrollment.mint({ purpose: 'host' });
+  /** @type {number[]} */ const waited = [];
+  const enrollment = new Enrollment({
+    now: () => clock,
+    maxFailures: 5,
+    // Injected so the throttle is asserted without waiting it out. A throttle
+    // whose test skips the throttle is a throttle nobody checks.
+    sleep: async (ms) => { waited.push(ms); },
+  });
+  const { code } = enrollment.mint({ purpose: 'host' });
 
   for (let i = 0; i < 5; i++) {
-    assert.equal(enrollment.redeem('000000', 'host').ok, false);
+    assert.equal((await enrollment.redeem('000000', 'host')).ok, false);
   }
-  const shut = enrollment.redeem('000000', 'host');
-  assert.match(shut.reason, /too many wrong codes/);
+  assert.deepEqual(waited, [], 'the budget is free until it is spent');
 
-  // And it opens again, because the fleet's operators are also the people
-  // typing pins, and a permanent lockout would be a permanent outage.
+  // Past the budget, every attempt pays — and the price rises.
+  await enrollment.redeem('000000', 'host');
+  await enrollment.redeem('000000', 'host');
+  assert.ok(waited.length === 2 && waited[1] > waited[0], `the penalty must grow: ${waited}`);
+  assert.ok(waited.every((ms) => ms <= 5_000), 'and be capped, so a person is delayed rather than stopped');
+
+  // AND A REAL CODE STILL WORKS. This is the property that was given away: an
+  // attacker can make enrolment slow and can never make it impossible.
+  const spent = await enrollment.redeem(code, 'host');
+  assert.equal(spent.ok, true, 'somebody holding a real pin was locked out by somebody else guessing');
+
+  // The wait applies to correct codes too, and has to: knowing whether a code
+  // is right is exactly what the delay is paying for, and waiting only on
+  // failures would time-leak the answer.
+  assert.equal(waited.length, 3);
+
   clock += 61_000;
-  assert.match(enrollment.redeem('000000', 'host').reason, /not valid/);
+  assert.match((await enrollment.redeem('000000', 'host')).reason, /not valid/);
+  assert.equal(waited.length, 3, 'and the budget refills');
 });
 
-test('a code minted for a device cannot enrol a host', () => {
+test('a code minted for a device cannot enrol a host', async () => {
   const enrollment = new Enrollment();
   const { code } = enrollment.mint({ purpose: 'device' });
-  const refused = enrollment.redeem(code, 'host');
+  const refused = await enrollment.redeem(code, 'host');
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /issued for a device/);
 });

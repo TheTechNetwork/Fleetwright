@@ -523,10 +523,10 @@ this at real machines. G5–G7 are real and smaller.
 | **G1** | **corrected.** Every site now states the real bound: `intents.js`, `intents.md`, `connectors.md`, `design.md`, `coordinator.md`, `trust.md` ×2. The two `trust.md` conclusions that leaned on the understated baseline were re-derived and **both survive** — the vault refusal and the minting-key placement rest on the *delta*, which correcting the baseline widens rather than narrows. |
 | **G2** | **fixed.** The config frame `github-app.md` describes is built (`src/fleet/protocol/config-frame.js`), sent on every host connect, and held in the sidecar's memory. `saveRenewal` no longer stores `client`; `renew` accepts it and discards it so an older coordinator is not refused. The renewal timer moved from agent-hub to the sidecar, because the exchange needs the secret and the sidecar is the process that has it. `test/config-frame.test.js`, `test/github-renewal.test.js`. |
 | **G3** | **fixed.** `promptId` folds in a bounded, non-travelling digest of the dialog body, for the kinds that recur (`permission`, `trust`) and not for the one that does not (`resume`, whose body carries a live counter). `test/prompt.test.js`. |
-| **G4** | open, and unfixable from a keyboard: needs captures from a real box. |
+| **G4** | **fixed, and it found two more bugs.** Captured from tmux against CLI 2.1.234. The premise was false — the mode line is drawn while working too, so in `bypass permissions` a session mid-tool-call matched "at rest": never restarted, and shown as "ready · idle" while working. The trust dialog had also stopped being recognised entirely, making it invisible AND a restart candidate. `test/real-panes.test.js`. |
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
-| **G7** | stated in §10, as intended. |
+| **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |
 
 ---
 
@@ -549,9 +549,13 @@ Stated plainly, because omission is where a security document lies.
   that box; TPM sealing narrows the *disk/backup* case (§4.6) and is aspirational.
 - **A stolen unlocked phone**, beyond one revocation. The credential is a bearer
   token until enclave-backed keys ship.
-- **Denial of service.** Global enrolment lockout (§9-G7), fan-out timeouts, and a
-  host that will not answer are handled for *correctness* (a mute host degrades
-  its own entry, not the fleet), not for availability under a determined attacker.
+- **Denial of service.** Fan-out timeouts and a host that will not answer are
+  handled for *correctness* (a mute host degrades its own entry, not the fleet),
+  not for availability under a determined attacker. **Enrolment is the exception
+  and was fixed rather than accepted** (§9-G7): a global lockout let anyone who
+  could reach the endpoint keep enrolment shut indefinitely without ever nearly
+  guessing a code, so it is a bounded delay now — slow under attack, never
+  closed.
 - **Traffic analysis / metadata.** The coordinator sees which member touched which
   host and when; that is not hidden.
 
