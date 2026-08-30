@@ -209,16 +209,43 @@ Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
   and needs nothing, and restarting it puts it back at the same prompt, which
   is exactly what *"went straight back to idle"* was reporting.
 
-  So a pane showing the permission-mode footer is a session **at rest**, not a
-  stuck one. Claude Code draws that line when it is ready for input and not
-  while it is working, which makes it the session saying "your turn". What is
-  left after excluding *waiting for an answer* and *waiting for you* is a pane
-  stopped in the middle of something, which is the case worth acting on.
+  **And the first fix for that was also wrong, which is the more useful half of
+  this story.** It keyed on the permission-mode name, on the stated premise that
+  Claude Code draws that line when it is ready for input and not while working.
+  Captured from tmux against CLI 2.1.234, the premise is false — the mode line
+  is drawn in both states and only the parenthetical changes:
 
-  The same distinction travels to the phones as `atRest` on each session, so
-  the app can say **"ready · idle 3h"** rather than "quiet for 3h" — and the
-  reassurance line counts only the stalled ones, having briefly reported three
-  things as needing attention on a fleet where everything had gone perfectly.
+  ```
+  ready     ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+  working   ⏵⏵ auto mode on · 1 shell · ← for agents · ↓ to manage
+  ```
+
+  So in `bypass permissions`, which is what this fleet runs by default, a
+  session mid-tool-call matched "at rest": never restarted however wedged, and
+  shown in the apps as "ready · idle" while it was actively working. Two
+  unverified sentences about somebody else's TUI, two bugs.
+
+  **What the pane can actually tell you** is whether the CLI is drawing at all.
+  It cannot separate "working quietly" from "wedged" — a frozen process keeps
+  whatever it last painted, footer included — and no regex over pane text will.
+  That is a property of the measurement, not a gap in the pattern.
+
+  So the trigger is deliberately narrow: restart only when the pane carries none
+  of the CLI's chrome. Working, waiting and finished all keep theirs and are all
+  left alone, and left alone is right for every one of them. **If this needs to
+  fire more often the signal is process liveness** — is the container burning
+  CPU, does the pane's process respond — not more clever reading of text.
+
+  Two signals travel to the phones, because one could not answer both questions:
+  the restart gate wants "is it wedged" (working and waiting are both *no*),
+  while the app wants "finished or busy" (opposite answers). The app says
+  **"ready · idle 3h"** only for the narrower one.
+
+  `test/real-panes.test.js` holds captures from a real CLI and asserts the
+  matchers against them, with instructions for refreshing them. Every earlier
+  test here used a pane somebody invented, which is how both bugs shipped: the
+  fixtures agreed with the regexes because the same person wrote both, from the
+  same wrong idea of what the screen says.
 
   Both the restart and the giving-up are notifiable events. A fleet that
   quietly restarts things is one nobody can debug: the session's own
