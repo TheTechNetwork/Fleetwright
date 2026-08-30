@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -429,4 +429,30 @@ test('both apps offer three actions, not two', () => {
     // Missing permissions are surfaced, not swallowed.
     assert.match(src, /missing /, `${name} does not surface missing permissions`);
   }
+});
+
+test('a credential file whose mode was widened is tightened, loudly', () => {
+  // ASYMMETRIC CUSTODY, found by putting both paths in one table while writing
+  // the security spec. `host/identity.js` re-checks its key file's mode on
+  // every load and refuses a loosened one; the credential store wrote 0600 and
+  // then never looked again.
+  //
+  // The failure that hides is the silent one: a backup-restore, an `rsync -a`
+  // under a different umask, a stray chmod — and every other account on the box
+  // can read a live token with nothing anywhere saying so.
+  const dir = mkdtempSync(join(tmpdir(), 'modes-'));
+  const store = new Connections(dir);
+  store.save(HOST_ROW, 'github', GH, 'octocat', null);
+  const file = /** @type {string} */ (store.envPathFor(HOST_ROW));
+
+  chmodSync(file, 0o644);
+  // Any read goes through the guard; `list` reads metadata, so use one that
+  // touches the secret file itself.
+  store.save(HOST_ROW, 'cloudflare', 'cf_token00000000000000000000000000', null, null);
+
+  assert.equal(statSync(file).mode & 0o777, 0o600, 'the widened file was left widened');
+  // TIGHTENED, NOT REFUSED. Unlike a host key these are ours to rewrite, and a
+  // session that cannot read its credentials is a worse outcome than one that
+  // reads them from a file we just corrected.
+  assert.ok(readFileSync(file, 'utf8').includes(GH), 'tightening must not lose the credential');
 });

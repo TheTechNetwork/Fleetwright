@@ -83,7 +83,9 @@ useless for a retry — that is the caller's to own.
 
 It sends intents, never commands, and it cannot express a shell string even to
 itself: `place()` routes verbs, and the host validates the verb set again on
-arrival. A compromised coordinator can start and stop sessions. It cannot run
+arrival. A compromised coordinator is bounded by the VERB SET — which since v2
+includes credential writes, so the old "it can start and stop sessions" line
+here understated it; see [security.md](./security.md) §4.1. It still cannot run
 anything. That is the whole point of §5, and it is why the verb set is small and
 boring.
 

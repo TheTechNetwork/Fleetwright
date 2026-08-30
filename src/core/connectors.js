@@ -31,10 +31,11 @@
 // "the guests will be bringing their own GitHub Cloudflare Claude creds, no
 // shared creds to them."
 
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
 import { normaliseEmail, HOST_ROW } from './accounts.js';
+import { log } from '../log.js';
 
 /** How long a provider gets to answer before we call the token unverifiable. */
 const VERIFY_TIMEOUT_MS = 10_000;
@@ -485,7 +486,7 @@ export class Connections {
     const file = this.renewalPathFor(row);
     if (!file || !existsSync(file)) return null;
     try {
-      const entry = JSON.parse(readFileSync(file, 'utf8'))?.[provider];
+      const entry = JSON.parse(this.#readGuarded(file))?.[provider];
       // All three or nothing. A partial record is a renewal that will fail at
       // the provider with an error nobody can act on, and there is nothing
       // useful to do with two of the three.
@@ -510,7 +511,7 @@ export class Connections {
     const file = this.renewalPathFor(row);
     if (!file || !existsSync(file)) return null;
     try {
-      const entry = JSON.parse(readFileSync(file, 'utf8'))?.[provider];
+      const entry = JSON.parse(this.#readGuarded(file))?.[provider];
       const at = Number(entry?.updatedAt);
       const life = Number(entry?.expiresIn);
       if (!Number.isFinite(at) || !Number.isFinite(life) || life <= 0) return null;
@@ -613,13 +614,48 @@ export class Connections {
     };
   }
 
+  /**
+   * Read a credential file, refusing to do it quietly if its mode was widened.
+   *
+   * `host/identity.js` has done this for the host key since it was written; the
+   * credential store wrote 0600 and then never looked again. The asymmetry was
+   * only visible with both custody paths in one table, which is what writing
+   * the security spec produced — and the failure it hides is the silent one: a
+   * backup-restore, an `rsync -a` under a different umask, a stray chmod, and
+   * every other account on the box can read a live token with nothing anywhere
+   * saying so.
+   *
+   * TIGHTENED RATHER THAN REFUSED. Unlike a host key these are ours to rewrite,
+   * and a session that cannot read its credentials is a worse outcome than one
+   * that reads them from a file we just corrected. The warning is the product:
+   * something widened it, the token should be assumed to have been readable,
+   * and what to do about that is a person's decision rather than this
+   * function's.
+   *
+   * @param {string} file
+   * @returns {string}
+   */
+  #readGuarded(file) {
+    const mode = statSync(file).mode & 0o777;
+    if (mode & 0o077) {
+      log.warn(
+        `connections: ${file} was mode ${mode.toString(8)} — tightening to 600. Something widened it, and any `
+          + 'credential in it should be treated as having been readable by every account on this box.',
+      );
+      try {
+        chmodSync(file, 0o600);
+      } catch { /* not ours to fix; the warning is what matters */ }
+    }
+    return readFileSync(file, 'utf8');
+  }
+
   /** The tokens themselves, read back to rewrite the file. @param {string|symbol|null} row */
   #secrets(row) {
     const file = this.envPathFor(row);
     /** @type {Record<string, string>} */
     const out = {};
     if (!file || !existsSync(file)) return out;
-    for (const raw of readFileSync(file, 'utf8').split('\n')) {
+    for (const raw of this.#readGuarded(file).split('\n')) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
       const eq = line.indexOf('=');

@@ -230,7 +230,9 @@ line. The agent's own command registry is the allowlist.
 
 The failure to design against: the Worker is compromised (bad deploy, leaked API token, supply
 chain) and is now driving root-capable boxes. With a fixed verb set the blast radius is "someone
-started and stopped some sessions." With command strings it's every box you own. Cheap now,
+bounded by the verb set" — which since v2 includes credential writes; see
+docs/security.md §4.1, and note this line used to say "started and stopped some
+sessions", which is no longer the bound. With command strings it's every box you own. Cheap now,
 impossible to retrofit once something is passing strings.
 
 Corollaries: the agent pins the expected coordinator origin, and every command carries an

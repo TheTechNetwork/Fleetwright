@@ -516,6 +516,18 @@ correction, an addition to non-goals (§10).
 Gaps G1–G4 are the ones that change what a person should believe before pointing
 this at real machines. G5–G7 are real and smaller.
 
+### Status
+
+| gap | state |
+|---|---|
+| **G1** | **corrected.** Every site now states the real bound: `intents.js`, `intents.md`, `connectors.md`, `design.md`, `coordinator.md`, `trust.md` ×2. The two `trust.md` conclusions that leaned on the understated baseline were re-derived and **both survive** — the vault refusal and the minting-key placement rest on the *delta*, which correcting the baseline widens rather than narrows. |
+| **G2** | open. Needs the config frame `github-app.md` describes and nothing implements. |
+| **G3** | **fixed.** `promptId` folds in a bounded, non-travelling digest of the dialog body, for the kinds that recur (`permission`, `trust`) and not for the one that does not (`resume`, whose body carries a live counter). `test/prompt.test.js`. |
+| **G4** | open, and unfixable from a keyboard: needs captures from a real box. |
+| **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
+| **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
+| **G7** | stated in §10, as intended. |
+
 ---
 
 ## 10. Non-goals — what this does not defend against

@@ -23,18 +23,24 @@ import { log } from '../log.js';
 import { redactCommandLine } from '../core/redact.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource } from '../core/podman.js';
+import { apiTokenFile } from '../core/api-token.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export class HttpAdapter {
   /**
    * @param {import('../config.js').Config} cfg
-   * @param {{ sessions: import('../core/sessions.js').SessionManager, login: import('../core/login.js').LoginFlow }} deps
+   * @param {{ sessions: import('../core/sessions.js').SessionManager, login: import('../core/login.js').LoginFlow, token?: string|null }} deps
    */
-  constructor(cfg, { sessions, login }) {
+  constructor(cfg, { sessions, login, token = null }) {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
+    // RESOLVED, NOT READ FROM CONFIG. An unset AGENT_HUB_TOKEN used to mean "no
+    // gate at all", which stopped being defensible when the credential verbs
+    // landed on this endpoint — see src/core/api-token.js. The caller passes
+    // the generated one; cfg.token is only the explicitly configured case.
+    this.token = token ?? cfg.token ?? '';
     /** @type {import('node:http').Server|null} */
     this.server = null;
     // Read once at startup: the UI is a single static file and re-reading it
@@ -56,7 +62,7 @@ export class HttpAdapter {
       });
       this.server.on('error', reject);
       this.server.listen(this.cfg.port, this.cfg.bind, () => {
-        const gate = this.cfg.token ? 'token required' : 'no token (loopback only)';
+        const gate = this.cfg.token ? 'token required' : `token required (${apiTokenFile(this.cfg.stateDir)})`;
         log.info(`http: listening on ${this.cfg.bind}:${this.cfg.port} · ${gate}`);
         resolve(true);
       });
@@ -247,16 +253,23 @@ export class HttpAdapter {
    * @param {URL} url
    */
   #authorised(req, url) {
-    // No token configured is only reachable on loopback (config.js refuses to
-    // start otherwise), so there is nothing to check.
-    if (!this.cfg.token) return true;
+    // FAILS CLOSED. There used to be an early `return true` here for the case
+    // where no token was configured, justified by the listener being on
+    // loopback — which conflated "somebody has a shell on this box" with
+    // "somebody has THIS SERVICE'S shell". Those differ by every other account
+    // on the machine, and the endpoint now writes credentials.
+    //
+    // A missing token is now a refusal rather than a pass: if generation failed
+    // there is no way to tell the sidecar from anything else, and answering
+    // everybody is the wrong side of that to err on.
+    if (!this.token) return false;
 
     const header = req.headers.authorization || '';
     const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
     const cookie = readCookie(req.headers.cookie || '', 'agent_hub_token');
     const query = url.searchParams.get('token') || '';
 
-    return [bearer, cookie, query].some((v) => v && safeEqual(v, this.cfg.token));
+    return [bearer, cookie, query].some((v) => v && safeEqual(v, this.token));
   }
 }
 

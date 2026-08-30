@@ -109,3 +109,82 @@ test('a long label is capped rather than carrying a pane through it', () => {
   const p = /** @type {any} */ (readPrompt(long));
   assert.ok(p.options[0].label.length <= 80);
 });
+
+// --- the collision the id was supposed to prevent ---------------------------
+//
+// SEC-PROTO-4. `promptId` hashed kind + option labels, which is the dialog's
+// SHAPE — and two permission asks have the same shape. So `rm -rf build` and
+// `git push` produced the same id, and the guard that refuses an answer aimed
+// at a question that has since been replaced passed happily when the
+// replacement was another permission ask. That is the common case in agent
+// work, and the one where answering the wrong question costs something.
+
+const RM = `Do you want to proceed?
+
+  bash: rm -rf build
+
+  1. Yes
+  2. No, tell Claude what to do differently`;
+
+const PUSH = `Do you want to proceed?
+
+  bash: git push --force origin main
+
+  1. Yes
+  2. No, tell Claude what to do differently`;
+
+test('two permission asks with different commands get different ids', () => {
+  const a = /** @type {any} */ (readPrompt(RM));
+  const b = /** @type {any} */ (readPrompt(PUSH));
+
+  // Same shape in every respect the old id looked at.
+  assert.equal(a.kind, b.kind);
+  assert.deepEqual(a.options, b.options);
+  assert.equal(a.question, b.question);
+
+  assert.notEqual(
+    promptId('cc-otter', a),
+    promptId('cc-otter', b),
+    'a late tap approving rm -rf would have been accepted against git push',
+  );
+});
+
+test('the command never leaves the box — only a hash of it does', () => {
+  // The body is what makes the id discriminate, and it is exactly the text the
+  // carriesSessionText rule exists to keep on the machine. describePrompt
+  // returns an explicit {question, options}, so `subject` cannot travel by
+  // accident; this asserts that rather than trusting it.
+  const p = /** @type {any} */ (readPrompt(RM));
+  assert.match(p.subject, /rm -rf build/, 'the id has something to discriminate on');
+
+  const shown = describePrompt(p, true);
+  assert.equal(JSON.stringify(shown).includes('rm -rf'), false, 'the command reached the wire');
+  assert.equal(promptId('cc-otter', p).length, 8, 'and what does travel is a short hash');
+});
+
+test('a permission dialog still survives its own redraw', () => {
+  // The property the original design was protecting, which the fix must not
+  // spend: a spinner, a token counter or a clock redrawing BELOW the options
+  // must not invalidate a question somebody is halfway through reading.
+  const p = /** @type {any} */ (readPrompt(RM));
+  const redrawn = /** @type {any} */ (readPrompt(`${RM}\n\n  ⏳ 12.4k tokens · 38s`));
+
+  assert.equal(promptId('cc-otter', p), promptId('cc-otter', redrawn));
+});
+
+test('two trust asks for two directories are two questions', () => {
+  const a = /** @type {any} */ (readPrompt('Do you trust the files in this folder?\n\n/home/eli/work/a\n\n  1. Yes\n  2. No'));
+  const b = /** @type {any} */ (readPrompt('Do you trust the files in this folder?\n\n/home/eli/work/b\n\n  1. Yes\n  2. No'));
+
+  assert.notEqual(promptId('cc-otter', a), promptId('cc-otter', b));
+});
+
+test('a resume dialog is deliberately NOT discriminated', () => {
+  // Which kinds need it is a property of the kind. A resume dialog is unique
+  // per session — there is one, and it is not replaced by a different resume
+  // dialog meaning something else — and its body carries a live message
+  // counter, so folding the body in would buy nothing and churn the id while
+  // somebody reads it.
+  const p = /** @type {any} */ (readPrompt(RESUME));
+  assert.equal(p.subject, '');
+});

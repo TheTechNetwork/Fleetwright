@@ -10,10 +10,23 @@
 // The failure this is designed against is not a bug in the coordinator — it is
 // the coordinator being compromised outright (a bad deploy, a leaked API token,
 // a dependency) while it is driving root-capable boxes. With a fixed verb set
-// the blast radius of that is "someone started and stopped some sessions". With
-// command strings it is every box in the fleet. It costs almost nothing now and
-// cannot be retrofitted once something is passing strings, which is why it is
-// the first thing built.
+// the blast radius is bounded BY THE VERB SET; with command strings it is every
+// box in the fleet. It costs almost nothing now and cannot be retrofitted once
+// something is passing strings, which is why it is the first thing built.
+//
+// WHAT THAT BOUND ACTUALLY IS, and it is not what this comment said for a year.
+// It said "someone started and stopped some sessions", which was true of the
+// original eight read-and-lifecycle verbs and stopped being true the moment v2
+// added `link`, `unlink`, `connect` and `renew`. Those WRITE CREDENTIALS: a
+// compromised coordinator can put a token it controls into somebody's row, and
+// every session that person starts afterwards is seeded with it. That is
+// exfiltration, not lifecycle, and `start`+`peek` never gave it — those read.
+//
+// The bound is real and worth having. It is "whatever the verb set permits",
+// which is why docs/security.md §6.3 lists the five conditions a new verb must
+// meet and requires this paragraph to be updated rather than repeated when one
+// of them writes a credential. A fixed vocabulary whose bound nobody re-derives
+// is a fixed vocabulary that quietly grows.
 //
 // WHERE THE AUTHORITY LIVES
 //
@@ -99,13 +112,24 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  *    attacker's Claude account. Two things changed. The reasoning was written
  *    for a SHARED account and does not hold for a guest, who brings their own
  *    credential and has no shell on the box — for them "just SSH in" is the
- *    feature missing, not a smaller inconvenience. And the aiming half of the
- *    attack is now impossible by construction: `scope: me` links the account
- *    of the VERIFIED ACTOR, whose email the host derives itself and which no
- *    parameter can name. What remains is honest and written down in
- *    docs/trust.md: a compromised coordinator can show a person a different
- *    authorization page. It cannot do that with more authority than `start`
- *    already gives it on the same box.
+ *    feature missing, not a smaller inconvenience.
+ *
+ *    THE SECOND HALF OF THIS ONCE READ "the aiming is now impossible by
+ *    construction", AND THAT WAS WRONG. Removing every email/account/user/owner
+ *    PARAMETER is real and worth keeping — it stops any ordinary caller aiming
+ *    a link at somebody else. It does nothing against the adversary this whole
+ *    module is designed for. `scope: me` resolves against the ACTOR STRING, and
+ *    the actor string is put on the wire by the coordinator; the host does not
+ *    verify it, it strips a `fleet:` prefix (src/core/accounts.js). Against a
+ *    compromised coordinator the aiming simply moved from a parameter we
+ *    refused to a field we trust. docs/trust.md has always said so plainly —
+ *    "coordinator → host: trusted absolutely" — and this comment contradicted
+ *    it. See docs/security.md SEC-ID-3.
+ *
+ *    And the page half is bounded less tightly than it claimed: a compromised
+ *    coordinator can show a person a different authorization page, which `start`
+ *    also allows. But `link` and `renew` WRITE a credential, and no amount of
+ *    `start` does that — see the blast-radius note at the top of this file.
  *
  *  - **No path parameter anywhere.** agent-hub's `/new <name> <path>` takes any
  *    path with no validation (a known gap, §1), and a sandboxed session's

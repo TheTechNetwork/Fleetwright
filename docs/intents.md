@@ -25,9 +25,23 @@ and never a shell string, never a command line, never a path.
 The failure being designed against is not a bug in the coordinator. It is the
 coordinator **compromised outright** — a bad deploy, a leaked API token, a
 dependency — while it is driving boxes that run unsupervised shells with
-`--dangerously-skip-permissions`. With a fixed verb set the blast radius of that
-is *"someone started and stopped some sessions."* With command strings it is
-every box in the fleet.
+`--dangerously-skip-permissions`. With a fixed verb set the blast radius is
+bounded **by the verb set**; with command strings it is every box in the fleet.
+
+**What that bound actually is, corrected.** This paragraph said *"someone
+started and stopped some sessions"* for a year. That was true of the original
+eight read-and-lifecycle verbs and stopped being true when v2 added `link`,
+`unlink`, `connect` and `renew` — verbs that **write credentials**. A
+compromised coordinator can put a token it controls into a member's row, and
+every session that member starts afterwards is seeded with it. That is
+exfiltration rather than lifecycle, and `start` + `peek` never bought it: those
+read a credential, they do not replace one.
+
+The bound is still real and still worth having. It is *"whatever the verb set
+permits"* — which is why [security.md](./security.md) §6.3 lists the five
+conditions a new verb must meet, and requires this paragraph to be **re-derived**
+rather than repeated whenever one of them touches a credential. A fixed
+vocabulary whose bound nobody revisits is a fixed vocabulary that quietly grows.
 
 ## Where the authority lives
 
@@ -224,12 +238,19 @@ answered and half of it is still true**, and a document that quietly rewrites
 its own conclusions teaches nobody which half was which. The verbs shipped as
 `connect`/`link`/`unlink` — see [connectors.md](./connectors.md).
 
-**ANSWERED: the aiming.** There is no email, account, user or owner parameter
-anywhere in the verb set. `scope: me` means the verified actor, an identity the
-HOST derives from the actor string the coordinator resolved against an ID
-token. A caller can say what to connect and never whose. A test refuses any
-identity-shaped parameter name on any verb, because that is the innocent
-convenience that would take the property away.
+**PARTLY ANSWERED: the aiming.** There is no email, account, user or owner
+parameter anywhere in the verb set, and a test refuses any identity-shaped
+parameter name on any verb. That is real: no ordinary caller can aim a link at
+somebody else's row.
+
+**It does nothing against a compromised coordinator, and this section used to
+say it did.** `scope: me` resolves against the *actor string*, and the actor
+string is put on the wire by the coordinator. The host does not verify it — it
+strips a `fleet:` prefix (`src/core/accounts.js`). So against the adversary this
+protocol is designed for, aiming moved from a parameter we refuse to a field we
+trust absolutely. [trust.md](./trust.md) has always said so — *"coordinator →
+host: trusted absolutely"* — and this paragraph contradicted it. See
+[security.md](./security.md) SEC-ID-3.
 
 **STILL TRUE: the page.** A compromised coordinator can show somebody a
 different authorization page and harvest what they paste into it. What bounds

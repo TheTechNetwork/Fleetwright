@@ -8,6 +8,7 @@
 
 import os from 'node:os';
 import { REPLAY_TTL_MS } from './sidecar.js';
+import { readApiToken } from '../../core/api-token.js';
 
 /** @typedef {ReturnType<typeof loadSidecarConfig>} SidecarConfig */
 
@@ -42,7 +43,14 @@ export function loadSidecarConfig(env = process.env) {
     // Whatever AGENT_HUB_TOKEN the hub was configured with. Empty is valid: a
     // loopback-bound hub with no token needs none. Holding this is the
     // sidecar's real privilege — /api/command runs any line it is given.
-    hubToken: str(env, 'AGENT_FLEET_HUB_TOKEN') || null,
+    // Falls back to the token agent-hub generates for itself. Both services
+    // run as the same user on the same box, so the sidecar can simply read it
+    // — which is what keeps "there is always a token now" from becoming a
+    // question the install has to ask. See src/core/api-token.js.
+    hubToken:
+      str(env, 'AGENT_FLEET_HUB_TOKEN')
+      || readApiToken(str(env, 'AGENT_HUB_STATE_DIR', '/var/lib/agent-hub'))
+      || null,
     // Generous, and matching agent-hub's own CLI: a start waits out the Remote
     // Control check, a resume waits for the dialog to render.
     hubCommandTimeoutMs: Math.max(5_000, int(env, 'AGENT_FLEET_HUB_COMMAND_TIMEOUT_MS', 300_000)),
