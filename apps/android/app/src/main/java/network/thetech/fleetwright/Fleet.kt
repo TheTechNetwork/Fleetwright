@@ -819,6 +819,22 @@ class Fleet(private val settings: Settings) {
 
     private fun get(path: String): JSONObject = send("GET", path, null)
 
+    /**
+     * Somewhere cleartext cannot escape to: the device, or the emulator's route
+     * to the machine hosting it.
+     *
+     * A TAILNET ADDRESS IS NOT ON THIS LIST, deliberately. WireGuard encrypts
+     * it, which is a good argument at the wrong layer — the app cannot tell a
+     * tailnet IP from anything else in that range, and Tailscale issues real
+     * HTTPS certificates for ts.net names anyway. `tailscale cert` serves that
+     * workflow; an exception here would serve every other plain-http address
+     * too.
+     */
+    private fun isLocal(host: String?): Boolean = when (host?.lowercase()) {
+        "localhost", "127.0.0.1", "::1", "[::1]", "10.0.2.2" -> true
+        else -> false
+    }
+
     private fun send(
         method: String,
         path: String,
@@ -826,7 +842,17 @@ class Fleet(private val settings: Settings) {
         authenticated: Boolean = true,
     ): JSONObject {
         val base = settings.coordinatorUrl.trimEnd('/')
-        val connection = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+        val url = URL("$base$path")
+        // NOT OVER CLEARTEXT — see res/xml/network_security_config.xml, which
+        // enforces the same rule one layer down. Both exist because they fail
+        // differently: the platform refuses the socket with a stack trace, and
+        // this refuses the request with a sentence somebody can act on.
+        if (!url.protocol.equals("https", ignoreCase = true) && !isLocal(url.host)) {
+            throw IllegalStateException(
+                "Refusing to send your credential over plain http. Use https:// for ${url.host}.",
+            )
+        }
+        val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             doOutput = body != null
             // Long, because a `start` waits out the Remote Control check on the

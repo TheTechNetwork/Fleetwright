@@ -18,7 +18,7 @@ yet designed).
 | Sign in with Apple server-to-server revocation notifications | **done** | `docs/identity.md` |
 | Session attribution — every record says who asked | **done** | `docs/accounts.md`, #132 |
 | **Per-user Claude accounts**: shared org account at the coordinator, members link their own; admin sees all sessions, members see theirs | **done** | `docs/accounts.md`. Visibility, ownership, `/login for <email>` linking (isolated, never touches the box login), per-person seeding with the account identity, `/accounts` list/unlink. The invite-a-client flow is real end to end |
-| Invite flow: admin lets a friend/client use the fleet on their own Claude account | **designed** | falls out of the three `accounts.md` steps above |
+| Invite flow: admin lets a friend/client use the fleet on their own Claude account | **done** | `invites.js`, `invite-email.js`, the People screen on both phones. The email grants nothing — it names WHICH ADDRESS to sign in with, which is the failure it actually prevents — and carries both store links, labelled per phone |
 | Google RISC / Cross-Account Protection receiver | wanted | needs Google console setup first |
 
 ## 2. Secrets, and what a session may touch
