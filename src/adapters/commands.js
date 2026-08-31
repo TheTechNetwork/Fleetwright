@@ -42,7 +42,9 @@ import { describe } from '../core/login.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource } from '../core/podman.js';
-import { runUpdate, updateStatus, updateAvailable, canSelfRestart } from '../core/update.js';
+import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
+import { applyRelease } from '../core/release-apply.js';
+import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -928,8 +930,43 @@ export const COMMANDS = {
     help:
       'Pull the latest code onto this box. --restart applies it immediately ' +
       '(sessions are left running).',
-    run: (ctx, _args, flags) => {
+    run: async (ctx, _args, flags) => {
       const status = updateStatus(ctx.cfg);
+
+      // A PACKAGED BOX UPDATES BY MANIFEST, not by pull. Branching here rather
+      // than inside runUpdate keeps the git path exactly as it was — the
+      // fallback docs/packaging.md relies on to move boxes one at a time is
+      // only a fallback if it is untouched.
+      if (status.packaged) {
+        if (!ctx.cfg.releaseManifest) {
+          return {
+            ok: false,
+            text:
+              `${status.dir} is a release.\n\n` +
+              'Set AGENT_HUB_RELEASE_MANIFEST to the URL of a release manifest and /update will fetch from it.',
+          };
+        }
+        const r = await applyRelease({
+          installDir: ctx.cfg.installDir,
+          manifestUrl: ctx.cfg.releaseManifest,
+          protocol: PROTOCOL_VERSION,
+          dryRun: flags.has('check'),
+        });
+        // The same two-step as the git path: the code lands, then somebody
+        // decides when to restart. A release that restarted the box the moment
+        // it downloaded would apply itself while sessions were mid-answer.
+        const applied = r.ok && r.changed && (flags.has('restart') || flags.has('apply'));
+        if (applied) {
+          const restarted = restartSelf();
+          return { ok: restarted.ok, text: `${r.message}\n\n${restarted.message}` };
+        }
+        return {
+          ok: r.ok,
+          text: r.message,
+          buttons: r.ok && r.changed && canSelfRestart() ? [{ label: 'Restart to apply', command: '/update --restart' }] : undefined,
+        };
+      }
+
       if (!status.ok) return { ok: false, text: status.message ?? 'Could not read the checkout.' };
 
       // --check answers "is there anything" without changing the box, which is

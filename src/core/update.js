@@ -491,6 +491,40 @@ export function canSelfRestart() {
 }
 
 /**
+ * Restart this process so the code on disk becomes the code running.
+ *
+ * EXIT RATHER THAN `systemctl restart`, for the reason the git path already
+ * relies on: systemd's Restart=always brings us straight back, and it needs no
+ * privilege an unprivileged service user does not already have. Sessions are
+ * untouched — KillMode=process is what makes that true, and is why that line in
+ * the unit is load-bearing.
+ *
+ * Extracted from runUpdate so the release path restarts the same way rather
+ * than growing a second one. Two restart mechanisms in a product whose job is
+ * to survive its own updates is two things to get wrong.
+ *
+ * @param {{ actor?: string|null, stateDir?: string|null, head?: string|null, exit?: (code: number) => void }} [opts]
+ */
+export function restartSelf({ actor = null, stateDir = null, head = null, exit } = {}) {
+  if (!canSelfRestart()) {
+    return { ok: true, restarting: false, message: 'Not running under systemd, so this cannot restart itself — restart it however you started it.' };
+  }
+  // Told BEFORE exiting. After would be too late: this process is about to
+  // stop, and a marker written from a dead process is not written at all.
+  requestRestart({ head: head ?? undefined, actor: actor ?? undefined, stateDir: stateDir ?? undefined });
+  const parts = ['Restarting now. Sessions are left running; this reconnects to them on the way back up.'];
+  const stale = staleSiblings();
+  if (stale.length) {
+    parts.push(`${stale.join(' and ')} will pick this up within a minute — nothing to run, and nothing to ssh into.`);
+  }
+  log.warn(`update: restarting to apply new code${actor ? ` (asked by ${actor})` : ''}`);
+  const stop = exit || ((code) => process.exit(code));
+  setTimeout(() => stop(0), RESTART_DELAY_MS);
+  return { ok: true, restarting: true, message: parts.join('\n\n') };
+}
+
+
+/**
  * @param {import('../config.js').Config} cfg
  * @param {{ restart?: boolean, actor?: string|null, exit?: (code: number) => void }} opts
  * @returns {{ ok: boolean, changed: boolean, message: string, restarting: boolean }}
