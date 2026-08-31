@@ -26,8 +26,12 @@ else
   printf 'FAILED\n%s\n' "$(printf '%s' "$out" | head -10)"; fail=1
 fi
 
+# `--external:cloudflare:*` for the same reason as node: those modules exist in
+# the Workers runtime and nowhere else. Wrangler resolves them; esbuild here is
+# checking that everything ELSE resolves, and treating a runtime built-in as a
+# missing dependency would make this check fail on correct code.
 printf 'worker     ... '
-if out=$(cd worker && ./node_modules/.bin/esbuild src/worker.js --bundle --format=esm --platform=neutral --outfile=/dev/null --external:node:* 2>&1); then
+if out=$(cd worker && ./node_modules/.bin/esbuild src/worker.js --bundle --format=esm --platform=neutral --outfile=/dev/null --external:node:* --external:cloudflare:* 2>&1); then
   printf 'bundles\n'
 else
   printf 'FAILED\n%s\n' "$out"; fail=1

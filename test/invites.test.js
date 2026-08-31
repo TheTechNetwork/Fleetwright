@@ -120,3 +120,75 @@ test('both coordinators gate invites the same way, in every direction', () => {
     assert.match(src, /invites/, `${name} does not persist invitations`);
   }
 });
+
+// --- the email, which is a courtesy and not a credential --------------------
+
+test('the invitation email grants nothing and names the address', async () => {
+  // EVERY INVITATION EMAIL ANYBODY HAS RECEIVED CONTAINS A LINK THAT GRANTS
+  // SOMETHING. This one must not, because there is nothing here to grant — the
+  // person signs in as themselves and the coordinator checks the verified
+  // address against a list.
+  //
+  // What makes it worth sending anyway is the one fact that prevents the most
+  // likely failure: WHICH ADDRESS to use. Somebody invited at one address signs
+  // in with whichever Google account their phone was holding, is refused as
+  // "not on this fleet's list", and cannot tell they are on it under another
+  // name.
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({
+    email: 'guest@example.com',
+    fleet: 'the workshop fleet',
+    invitedBy: 'owner@example.com',
+    note: 'the billing work',
+    appUrl: 'https://apps.apple.com/app/id123',
+  });
+
+  assert.match(mail.text, /Sign in with this address: guest@example\.com/);
+  assert.match(mail.text, /nothing in this email to click for access and no code to enter/);
+  assert.match(mail.text, /the billing work/);
+  // No token, no code, no redeem link. Asserted rather than assumed, because
+  // this is the file where somebody would helpfully add one.
+  assert.equal(/token|code=|invite=|redeem|accept/i.test(mail.text.replace('no code to enter', '')), false);
+});
+
+test('a deployment with no app link says so rather than sending a dead end', async () => {
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({ email: 'g@example.com', fleet: 'a fleet' });
+  assert.match(mail.text, /has not published a link/);
+});
+
+test('not being configured to send is not a failure', async () => {
+  // Most deployments will never set this up. An invitation reporting an error
+  // because a courtesy was unavailable sends somebody looking for a problem
+  // they do not have.
+  const { sendInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const about = { email: 'g@example.com', fleet: 'a fleet', invitedBy: 'o@e.com' };
+
+  assert.deepEqual(await sendInvite(null, about), { sent: false, why: 'no email is configured for this fleet' });
+  assert.match((await sendInvite({ send: async () => {}, from: null }, about)).why, /no sender address/);
+});
+
+test('a refused send is reported, because the person inviting is the one who can fix it', async () => {
+  // Cloudflare refuses for reasons an operator can act on and would otherwise
+  // never see: an unverified recipient, a plan that does not include sending, a
+  // sender domain that is not theirs.
+  const { sendInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const r = await sendInvite(
+    { from: 'fleet@example.com', send: async () => { throw new Error('E_RECIPIENT_NOT_VERIFIED'); } },
+    { email: 'g@example.com', fleet: 'a fleet', invitedBy: 'o@e.com' },
+  );
+
+  assert.equal(r.sent, false);
+  assert.match(r.why, /E_RECIPIENT_NOT_VERIFIED/);
+});
+
+test('the invitation stands whether or not the email went', async () => {
+  // The list is the authority and the mail is a courtesy. `add` succeeds before
+  // sending is ever attempted, so an invitation whose email bounced is still an
+  // invitation — and the reply says which happened rather than implying an
+  // email went when it did not.
+  const invites = new Invites();
+  const r = invites.add('guest@example.com', { invitedBy: 'o@e.com' });
+  assert.equal(r.ok, true);
+  assert.equal(invites.has('guest@example.com'), true);
+});

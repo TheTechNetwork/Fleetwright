@@ -21,6 +21,7 @@
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { callbackPage } from '../../src/fleet/coordinator/github-oauth.js';
 
@@ -302,7 +303,24 @@ export class Fleet {
         note: body?.note ? String(body.note) : null,
       });
       if (r.ok) await this.#saveInvites();
-      return json({ ...r, invites: this.core.invites.list() }, r.ok ? 200 : 400);
+      // BEST EFFORT, AND SAID EITHER WAY. The list is the authority and the
+      // mail is a courtesy: an invitation whose email bounced is still an
+      // invitation, which is why `add` has already succeeded by here. What the
+      // reply must not do is imply an email went when it did not — the whole
+      // point of sending one is that the person knows which address to use.
+      const posted = r.ok
+        ? await sendInvite(this.#mailer(), {
+          email: r.invite?.email ?? '',
+          fleet: this.env.AGENT_FLEET_NAME || 'this Fleetwright fleet',
+          invitedBy: client?.email || 'admin',
+          note: r.invite?.note ?? null,
+          appUrl: this.env.AGENT_FLEET_APP_URL || null,
+        })
+        : { sent: false, why: 'not invited' };
+      const text = r.ok
+        ? `${r.message}${posted.sent ? '\nAn email is on its way to them.' : `\nNo email sent — ${posted.why}. Send them the app yourself.`}`
+        : r.message;
+      return json({ ...r, text, invites: this.core.invites.list() }, r.ok ? 200 : 400);
     }
 
     if (url.pathname.startsWith('/api/invites/') && request.method === 'DELETE') {
@@ -706,6 +724,45 @@ export class Fleet {
 
   async #saveClients() {
     await this.state.storage.put('clients', this.core.clients.serialise());
+  }
+
+  /**
+   * The Cloudflare email binding, wrapped so the core never sees one.
+   *
+   * Absent on a deployment that has not added the binding, which is most of
+   * them and is not an error — see sendInvite. `from` must be an address on a
+   * domain this account controls; Cloudflare refuses anything else, and that
+   * refusal reaches the person inviting rather than a log.
+   */
+  #mailer() {
+    const binding = /** @type {any} */ (this.env).EMAIL;
+    const from = this.env.AGENT_FLEET_INVITE_FROM || null;
+    if (!binding || !from) return { send: null, from };
+    return {
+      from,
+      send: async (/** @type {{to: string, subject: string, text: string}} */ message) => {
+        // Built here rather than in the shared module: EmailMessage is a
+        // Cloudflare runtime type, and the composer stays a pure function that
+        // a test can run.
+        const raw = [
+          `From: ${from}`,
+          `To: ${message.to}`,
+          `Subject: ${message.subject}`,
+          'Content-Type: text/plain; charset=utf-8',
+          'MIME-Version: 1.0',
+          '',
+          message.text,
+        ].join('\r\n');
+        // IMPORTED HERE, NOT AT THE TOP. `cloudflare:email` exists only in the
+        // Workers runtime, and a static import makes this whole module
+        // unloadable under Node — which is where most of this project's tests
+        // run, including the ones that exercise these very routes. A dynamic
+        // import inside the one function that needs it keeps the file readable
+        // by both.
+        const { EmailMessage } = await import('cloudflare:email');
+        await binding.send(new EmailMessage(from, message.to, raw));
+      },
+    };
   }
 
   async #saveInvites() {

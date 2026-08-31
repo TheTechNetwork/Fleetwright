@@ -33,6 +33,7 @@ import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
 import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { callbackPage } from './github-oauth.js';
 
@@ -616,7 +617,24 @@ export class Coordinator {
         note: body?.note ? String(body.note) : null,
       });
       if (r.ok) this.saveState();
-      return json(res, r.ok ? 200 : 400, { ...r, invites: this.core.invites.list() });
+      // BEST EFFORT, AND SAID EITHER WAY. The list is the authority and the
+      // mail is a courtesy: an invitation whose email bounced is still an
+      // invitation, which is why `add` has already succeeded by here. What the
+      // reply must not do is imply an email went when it did not — the whole
+      // point of sending one is that the person knows which address to use.
+      const posted = r.ok
+        ? await sendInvite(this.core.mailer, {
+          email: r.invite?.email ?? '',
+          fleet: inviteFleetName(),
+          invitedBy: client?.email || 'admin',
+          note: r.invite?.note ?? null,
+          appUrl: inviteAppUrl(),
+        })
+        : { sent: false, why: 'not invited' };
+      const text = r.ok
+        ? `${r.message}${posted.sent ? '\nAn email is on its way to them.' : `\nNo email sent — ${posted.why}. Send them the app yourself.`}`
+        : r.message;
+      return json(res, r.ok ? 200 : 400, { ...r, text, invites: this.core.invites.list() });
     }
 
     if (p.startsWith('/api/invites/') && req.method === 'DELETE') {
@@ -880,4 +898,14 @@ function readJson(req) {
     });
     req.on('error', () => resolve(null));
   });
+}
+
+/** What to call this fleet in an invitation. */
+function inviteFleetName() {
+  return process.env.AGENT_FLEET_NAME || 'this Fleetwright fleet';
+}
+
+/** Where to get the app, when a deployment has published a link. */
+function inviteAppUrl() {
+  return process.env.AGENT_FLEET_APP_URL || null;
 }
