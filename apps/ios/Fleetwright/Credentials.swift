@@ -246,8 +246,8 @@ struct CredentialsView: View {
                 Text("not connected").font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
-                Button(actionLabel(provider, connections.linked(provider.provider))) {
-                    Task { await begin(provider) }
+                Button(actionLabel(provider, connections.linked(provider.provider), on: targetHost(provider))) {
+                    Task { await begin(provider, on: targetHost(provider)) }
                 }
                 if connections.linked(provider.provider) != nil {
                     // TEST, because "connected" is a fact about storage and not
