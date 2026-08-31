@@ -39,20 +39,39 @@ MERGE
 fi
 
 # The other credentials — GitHub, Cloudflare, whatever else was connected.
-# Written by src/core/connectors.js as `KEY='value'` lines, which is both
-# shell-sourceable and what systemd's EnvironmentFile parser expects; one
-# quoting rule, two consumers, no second format to keep in step.
 #
-# `set -a` exports everything the file defines, so `gh` and `wrangler` find
-# their tokens without the session having to be told they exist. They are NOT
-# passed as `-e` flags on the podman command line, because that command line is
-# the tmux pane's process and readable from `ps` by anyone on the box.
-if [ -f /root/.claude/.secrets.env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . /root/.claude/.secrets.env
-  set +a
+# THEY ARE NO LONGER HERE. This used to seed /root/.claude/.secrets.env into the
+# volume and `set -a` it into the environment, which was already the careful
+# version: not `-e` flags on the podman command line, because that line is the
+# tmux pane's process and readable from `ps` by anyone on the box.
+#
+# It still meant every process in this container held GH_TOKEN for the life of
+# the session — in /proc, inherited by every child, present in anything that
+# dumps an environment — and, worse in practice, held whatever was current when
+# the session STARTED. Rotating a token reached the next session and could not
+# reach into a running one, so "my token expired" was fixed by stopping work.
+#
+# Now the session asks, over the same per-session socket the SessionStart hook
+# uses, and gets what is current at the moment it asks. See
+# docs/credential-broker.md.
+#
+# git needs no shim: it has a credential helper protocol, and this is a helper.
+# `--global` rather than a repository setting, because the session clones
+# repositories this script has never heard of.
+if command -v git-credential-fleet >/dev/null 2>&1; then
+  git config --global --replace-all credential.https://github.com.helper fleet
+  git config --global --replace-all credential.https://gist.github.com.helper fleet
+  # Scoped to github.com rather than set as a bare `credential.helper`. A global
+  # helper is consulted for EVERY host a session ever clones from, which would
+  # hand our helper the hostname of anything the session was told to fetch. It
+  # refuses those on its own, and not being asked is better than refusing.
 fi
+
+# A file left over from before the broker. Removed rather than ignored: a
+# resumed session's volume still holds one, and a stale token that nothing
+# refreshes is worse than no token — it fails in a way that looks like the
+# broker is broken.
+rm -f /root/.claude/.secrets.env
 
 # The SessionStart hook, registered the same way install.sh does it on a host,
 # but pointed at the unix socket. Merged with node rather than rewritten, so a

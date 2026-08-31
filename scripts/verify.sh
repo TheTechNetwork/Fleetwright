@@ -59,5 +59,17 @@ else
   printf 'FAILED\n'; fail=1
 fi
 
+# The scripts that run INSIDE a session's container. They are not covered by the
+# installer check above and have no test that executes them, so a syntax error
+# would first be seen by somebody whose session could not start.
+# tool-shim.sh is a template: @TOOL@ substitutes into a filename, which parses
+# on its own, so it is checked as written.
+printf 'sandbox    ... '
+if sh -n sandbox/entrypoint.sh 2>/dev/null && sh -n sandbox/tool-shim.sh 2>/dev/null; then
+  printf 'parses\n'
+else
+  printf 'FAILED\n'; fail=1
+fi
+
 [ "$fail" = 0 ] && printf '\nALL GREEN\n' || printf '\nSOMETHING FAILED — do not commit\n'
 exit "$fail"

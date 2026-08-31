@@ -48,6 +48,7 @@
 // The sidecar still uses it, for the same reason it always did. It just is not
 // the only thing that can.
 
+import { answerCredentialRequest, CREDENTIAL_PATH } from './credential-broker.js';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
@@ -94,14 +95,20 @@ export function isValidSessionName(name) {
  * @typedef {object} HookSocketOptions
  * @property {string} [dir]                  host directory for the sockets
  * @property {(r: HookReport) => { ok: boolean, message?: string } | Promise<{ ok: boolean, message?: string }>} onSessionStart
+ * @property {((name: string) => Record<string, string>|null)} [secretsFor]
+ *   The credential broker's reader: the connected tokens belonging to whoever
+ *   owns this session, READ AT THE MOMENT OF THE REQUEST. That timing is the
+ *   feature — see credential-broker.js. Absent means the broker is off and the
+ *   route answers 404, which is what an older or non-sandboxed host does.
  * @property {{ info: (m: string) => void, warn: (m: string) => void }} [logger]
  */
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, logger }) {
+  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, logger }) {
     this.dir = dir;
     this.onSessionStart = onSessionStart;
+    this.secretsFor = secretsFor || null;
     this.log = logger || { info: () => {}, warn: () => {} };
     /** @type {Map<string, import('node:http').Server>} */
     this.servers = new Map();
@@ -195,7 +202,9 @@ export class HookSocketServer {
    * @param {import('node:http').ServerResponse} res
    */
   async #handle(name, req, res) {
-    if ((req.url || '').split('?')[0] !== HOOK_PATH) {
+    const route = (req.url || '').split('?')[0];
+    if (route === CREDENTIAL_PATH) return this.#credential(name, req, res);
+    if (route !== HOOK_PATH) {
       return json(res, 404, { ok: false, error: 'not found' });
     }
     if (req.method !== 'POST') {
@@ -233,6 +242,42 @@ export class HookSocketServer {
 
     const result = await this.onSessionStart({ name, cwd, uuid, title });
     return json(res, result.ok ? 200 : 400, result);
+  }
+
+  /**
+   * The credential broker. Same authority as everything else here: the session
+   * is WHICHEVER SOCKET THIS ARRIVED ON, and the request carries no identity
+   * because none of it could be believed.
+   *
+   * @param {string} name
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   */
+  async #credential(name, req, res) {
+    if (!this.secretsFor) {
+      return json(res, 404, { ok: false, error: 'not found' });
+    }
+    if (req.method !== 'POST') {
+      return json(res, 405, { ok: false, error: 'POST only' });
+    }
+    const body = await readJson(req);
+    if (body === null) return json(res, 400, { ok: false, error: 'body too large or not JSON' });
+
+    const provider = String(body.provider || '');
+    // READ NOW, NOT AT START. The whole point: a token rotated ten minutes ago
+    // is the one this returns, and the session that asked did not have to be
+    // restarted to see it.
+    const answer = answerCredentialRequest({ provider, secrets: this.secretsFor(name) });
+
+    // EVERY GRANT IS LOGGED, AND THE VALUE NEVER IS. What makes the broker
+    // better than an environment variable is partly that asking leaves a trace;
+    // a trace that quoted the token would undo the rest of it.
+    if (answer.ok) {
+      this.log.info(`credential-broker: served ${answer.provider} to ${name}`);
+    } else {
+      this.log.info(`credential-broker: refused ${provider.slice(0, 40) || '(none)'} for ${name} — ${answer.error}`);
+    }
+    return json(res, answer.ok ? 200 : 404, answer);
   }
 }
 
