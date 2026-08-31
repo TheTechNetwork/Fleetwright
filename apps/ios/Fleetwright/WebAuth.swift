@@ -53,7 +53,13 @@ enum WebAuth {
     @MainActor
     static func authorize(_ url: String, scheme: String = "fleetwright") async throws -> URL {
         guard let start = URL(string: url) else { throw Failure.badURL }
-        let anchor = PresentationAnchor()
+        // Resolved BEFORE the session is built, so "there is nowhere to put
+        // this window" is an error somebody reads rather than a tap that does
+        // nothing. See frontmostWindow.
+        guard let window = frontmostWindow() else {
+            throw Failure.message("This device would not open a sign-in window.")
+        }
+        let anchor = PresentationAnchor(window: window)
         return try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(url: start, callbackURLScheme: scheme) { callback, error in
                 if let callback {
@@ -83,17 +89,38 @@ enum WebAuth {
         }
     }
 
-    /// Where to put the window. `ASWebAuthenticationSession` needs a window to
-    /// present from and SwiftUI has no hook that hands one over, so this finds
-    /// the active scene's key window the way UIKit expects.
+    /// Where to put the window. `ASWebAuthenticationSession` needs one to
+    /// present from and SwiftUI has no hook that hands one over, so this asks
+    /// UIKit for the scene that is actually in front.
+    ///
+    /// IT RETURNS AN OPTIONAL ON PURPOSE. This used to end `?? UIWindow()` —
+    /// which iOS 26 deprecated, and which was already the wrong answer for a
+    /// better reason than the warning: a window belonging to no scene is not
+    /// on screen, so presenting from it draws nothing. The fallback turned "we
+    /// could not find anywhere to show this" into a tap that appeared to work
+    /// and then sat there. An anchor we cannot produce is a failure, and it now
+    /// says so in the one place that can still tell somebody.
+    ///
+    /// The active scene is preferred and any scene will do, because during a
+    /// scene transition — backgrounding mid-flow, an external display — there
+    /// may briefly be no foregroundActive one, and the window from a moment ago
+    /// is a better anchor than no window at all.
+    @MainActor
+    private static func frontmostWindow() -> UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.keyWindow ?? scene?.windows.first
+    }
+
     private final class PresentationAnchor: NSObject, ASWebAuthenticationPresentationContextProviding {
         var keepAlive: ASWebAuthenticationSession?
+        private let window: UIWindow
 
-        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-            let scene = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first { $0.activationState == .foregroundActive }
-            return scene?.keyWindow ?? ASPresentationAnchor()
+        init(window: UIWindow) {
+            self.window = window
+            super.init()
         }
+
+        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { window }
     }
 }
