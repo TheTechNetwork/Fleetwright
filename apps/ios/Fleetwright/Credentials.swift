@@ -51,7 +51,23 @@ struct CredentialsView: View {
     var body: some View {
         List {
             Section {
-                ForEach(connections.catalogue.filter { $0.isSignIn == onlyClaude }) { provider in
+                // CLAUDE IS SHOWN HERE TOO NOW, and leaving it out was the
+                // single biggest hole in onboarding somebody who is not the
+                // person who built this.
+                //
+                // A session refused for want of a Claude account says to
+                // connect one in the app — and this screen filtered Claude
+                // out, because Claude is per machine and the rest are
+                // fleet-wide. So the remedy named a screen that could not
+                // perform it, and the only place that could was three taps
+                // away under a host nobody had a reason to open.
+                //
+                // The per-machine truth is not hidden, it is REPORTED: the
+                // coordinator already merges this across hosts and says which
+                // machines are missing it. That is better information than the
+                // fleet-wide providers get, not worse — so Claude is shown,
+                // and the action names the machine it is about to act on.
+                ForEach(onlyClaude ? connections.catalogue.filter(\.isSignIn) : connections.catalogue) { provider in
                     row(provider)
                 }
             } header: {
@@ -292,7 +308,20 @@ struct CredentialsView: View {
     /// in a pane on that host, so the box has to be asked, and what comes back
     /// is that URL as a field rather than something scraped out of prose.
     @MainActor
-    private func begin(_ provider: Fleet.Connections.Available, scope: Fleet.Scope = .me) async {
+    /// Which machine this action is about.
+    ///
+    /// A token goes to the whole fleet, so nil is right for those — the
+    /// coordinator fans the request out. A CLAUDE login happens in a pane on
+    /// ONE box, so fanning it out would start a login on every machine at once
+    /// and hand back several URLs. It goes to the first machine that does not
+    /// have it, which is also the one the person is being asked to fix.
+    private func targetHost(_ provider: Fleet.Connections.Available) -> String? {
+        if let host { return host }
+        guard provider.isSignIn else { return nil }
+        return connections.linked(provider.provider)?.absentFrom?.first ?? connections.hosts?.first
+    }
+
+    private func begin(_ provider: Fleet.Connections.Available, on target: String? = nil) async {
         secret = ""
         result = ""
         guard provider.isSignIn else {
@@ -302,7 +331,7 @@ struct CredentialsView: View {
         busy = true
         defer { busy = false }
         do {
-            let reply = try await Fleet(settings: settings).connect(host: host, provider: provider.provider, scope: scope)
+            let reply = try await Fleet(settings: settings).connect(host: target ?? host, provider: provider.provider)
             if let fresh = reply.connections {
                 connections = fresh
                 pending = fresh.catalogue.first { $0.provider == provider.provider }
@@ -459,9 +488,18 @@ private func describeLinked(_ linked: Fleet.Connections.Linked) -> String {
 ///    stronger than the token itself — so asking for that would be the wrong
 ///    trade. The provider's hint names the deletion as step zero instead of
 ///    implying it is handled.
-private func actionLabel(_ provider: Fleet.Connections.Available, _ linked: Fleet.Connections.Linked?) -> String {
-    guard let linked else { return provider.isSignIn ? "Sign in" : "Connect" }
-    if provider.isSignIn { return "Sign in again" }
+private func actionLabel(_ provider: Fleet.Connections.Available, _ linked: Fleet.Connections.Linked?, on target: String?) -> String {
+    // NAMES THE MACHINE when there is one and it is not obvious. Claude is per
+    // machine, so "Sign in" on a fleet-wide screen is a button whose effect
+    // depends on something the label does not say — and the machine it picks
+    // is precisely the one the person is being told about.
+    let where_ = target.map { " on \($0)" } ?? ""
+    guard let linked else { return provider.isSignIn ? "Sign in\(where_)" : "Connect" }
+    if provider.isSignIn {
+        // Already linked somewhere. If a machine is still missing it, that is
+        // the useful action; otherwise this is a replacement.
+        return (linked.absentFrom?.isEmpty == false) ? "Sign in\(where_)" : "Sign in again\(where_)"
+    }
     if let missing = linked.missing, !missing.isEmpty { return "Update permissions" }
     return "Replace"
 }
