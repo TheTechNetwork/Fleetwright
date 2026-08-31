@@ -181,40 +181,53 @@ jobs:
 
   # Play, on whichever track the event means.
   #
-  #   push to main       PLAY_TRACK       default alpha  — closed testing
-  #   release published  PLAY_OPEN_TRACK  default beta   — open testing
+  #   push to main       PLAY_COMMIT_TRACK    default beta        — open testing
+  #   release published  PLAY_RELEASE_TRACK   default production  — everybody
   #
-  # The difference that matters is who is on the other side. Closed testing
-  # takes people by email list or link and they chose to be there. Open testing
-  # is anybody who finds the link, which is why it is the one a release should
-  # reach and a merge should not: a merge happens because a branch was ready,
-  # and "ready to merge" is not the same decision as "ready for strangers".
+  # The difference that matters is who is on the other side. Open testing is
+  # anybody who finds the Play listing and taps join; production is anybody who
+  # finds the Play listing. That is a smaller gap than it sounds, and it is the
+  # right one to put a RELEASE across rather than a merge: a merge happens
+  # because a branch was ready, and "ready to merge" is not the same decision as
+  # "ready for everybody who already has it installed".
   #
-  # Both go through Google review, so neither is instant. That is fine — the
-  # slowness is doing a job on the open track, and on the closed one it is the
-  # price of not maintaining a separate internal list.
+  # WHY NOT TAG PUSHES AS WELL. A GitHub release is made FROM a tag, so pushing
+  # one fires both `push: tags` and `release: published` — two runs, two build
+  # numbers, two production releases minutes apart, the second one silently
+  # replacing the first. The release event is also the only one carrying notes,
+  # and on production those notes are public. A bare tag with no release is not
+  # a shipment; it is a bookmark.
+  #
+  # Both go through Google review, so neither is instant. On production that
+  # slowness is the last chance to notice.
   #
   # Both are repository VARIABLES so moving a track is a setting rather than a
   # pull request:
   #
-  #   gh variable set PLAY_TRACK --body internal
-  #   gh variable set PLAY_OPEN_TRACK --body production
+  #   gh variable set PLAY_COMMIT_TRACK --body alpha
+  #   gh variable set PLAY_RELEASE_TRACK --body beta
+  #
+  # And PLAY_ROLLOUT stages a production release rather than shipping it whole:
+  #
+  #   gh variable set PLAY_ROLLOUT --body 0.1
+  #
+  # It is unset on purpose. A staged rollout has to be FINISHED by hand in the
+  # console, and a default that leaves every release half-shipped by a pipeline
+  # reporting success is worse than no staging at all.
   publish:
     name: publish to Play
     needs: release
     # Both events publish, and they publish to DIFFERENT TRACKS. That is what
     # makes them two shipments rather than one duplicate:
     #
-    #   push to main       closed testing  — the people who asked to be there
-    #   release published  open testing    — anybody with the link
+    #   push to main       open testing  — anybody who found the listing and joined
+    #   release published  production    — everybody
     #
-    # Exactly the shape iOS already had, where a merge goes to internal
-    # TestFlight and a release goes to external with Apple's review between
-    # them. Two audiences and a decision, not the same app sent twice.
-    #
-    # workflow_dispatch stays on the closed track: dispatching by hand is a
-    # test of the pipeline, and a pipeline test should not land in front of
-    # everybody with the link.
+    # workflow_dispatch stays on the COMMIT track, which matters more now that
+    # the other one is production: dispatching by hand is a test of the
+    # pipeline, and a pipeline test must not be the thing that ships to the
+    # public. Nothing reaches production without somebody publishing a release
+    # and writing what is in it.
     if: >-
       needs.release.outputs.built == 'true' &&
       (github.event_name == 'release' ||
@@ -246,8 +259,11 @@ jobs:
           # day somebody cleared the variable.
           PLAY_TRACK: >-
             ${{ github.event_name == 'release'
-                && (vars.PLAY_OPEN_TRACK || 'beta')
-                || (vars.PLAY_TRACK || 'alpha') }}
+                && (vars.PLAY_RELEASE_TRACK || 'production')
+                || (vars.PLAY_COMMIT_TRACK || 'beta') }}
+          # Empty means "all of it", which is the only sane default — see
+          # rollout() in the tool. Only consulted on a production release.
+          PLAY_ROLLOUT: ${{ github.event_name == 'release' && vars.PLAY_ROLLOUT || '' }}
           # A push has no release to take notes from, so fall back to the commit
           # subject. Empty notes are accepted by Play and tell a tester nothing.
           RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name || github.event.head_commit.message }}
@@ -256,4 +272,4 @@ jobs:
             echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping Play. See docs/ci.md."
             exit 0
           fi
-          AAB_PATH="$(find bundle -name '*.aab' | head -1)" node tools/play-internal-release.mjs
+          AAB_PATH="$(find bundle -name '*.aab' | head -1)" node tools/play-release.mjs

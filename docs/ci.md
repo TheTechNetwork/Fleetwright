@@ -122,37 +122,44 @@ becomes the *upload* key, which Google can reset if lost. That is the safer
 default for a first release and changes nothing above — the workflow signs with
 whatever it is given.
 
-## Google Play — the closed (alpha) track
+## Google Play — open testing on a merge, production on a release
 
-A **published GitHub release** builds a signed bundle and uploads it to Play's
-**closed testing** track.
-
-Closed rather than internal, deliberately:
-
-| | internal | closed (alpha) |
+| event | track | who |
 |---|---|---|
-| review | none, live in minutes | Google reviews the build first |
-| testers | up to 100, named individually | email lists or an opt-in link |
-| what it is for | does the build work at all | the first people who did not build it |
+| push to `main` | **open testing** (`beta`) | anybody who found the listing and joined |
+| release published | **production** | everybody |
 
-The slowness is the point at this stage. `PLAY_TRACK` is a repository variable,
-so moving between `internal`, `alpha` and `beta` is a setting rather than a
-change to the workflow — unset means `alpha`.
+The app is public — [listing](https://play.google.com/store/apps/details?id=network.thetech.fleetwright) —
+so a merge no longer lands somewhere private. Open testing is the right place
+for it: real installs, on real phones, without a hand-maintained list, and one
+deliberate act still standing between a merge and the public.
+
+Both are repository variables, so moving a track is a setting rather than a
+change to the workflow — `PLAY_COMMIT_TRACK` (unset means `beta`) and
+`PLAY_RELEASE_TRACK` (unset means `production`).
+
+`PLAY_ROLLOUT` stages a production release rather than shipping it whole
+(`0.1` = 10%), and only applies to a release. It is unset on purpose: a staged
+rollout has to be **finished by hand in the console**, so defaulting to one
+leaves every release permanently half-shipped by a pipeline reporting success.
+
+Every track above internal goes through Google review, so nothing here is
+instant. On production that slowness is the last chance to notice.
 
 | what | where |
 |---|---|
 | `PLAY_SERVICE_ACCOUNT_JSON` | a GitHub secret. Play Console → Setup → API access → create a service account, grant it **Release manager**, download the JSON key |
 | The app record | Play Console → Create app. Name **Fleetwright**, package `network.thetech.fleetwright` |
 | The first upload | **by hand.** Play asks for the content rating, the data safety form and the target audience on a first release, and no API can answer those for you |
-| A closed testing track with testers | Play Console → Testing → Closed testing → Alpha |
+| An open testing track | Play Console → Testing → Open testing. A merge cannot publish to a track that does not exist |
 
 Unset the secret and the job warns and skips, like every other credential here.
 
 ### The listing
 
-Internal testing needs **no store listing** — testers install from a link and
-never see a store page. It does need the 512 icon, and the App content
-declarations, which apply to every track:
+Open testing and production both need a **full store listing** — unlike internal
+testing, where people install from a link and never see a store page. Plus the
+512 icon and the App content declarations, which apply to every track:
 
 | | |
 |---|---|
