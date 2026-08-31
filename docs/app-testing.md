@@ -166,7 +166,11 @@ credential, which presents as "The coordinator rejected the token" against a
 coordinator whose token is correct. `uninstall` and `install` before seeding,
 and confirm what actually went out rather than what `defaults read` reports.
 
-**The iOS deployment target is 18.0.** Older simulators will not appear.
+**The iOS deployment target is 26.0.** Older simulators will not appear, and
+that is the point rather than an inconvenience: the app uses Liquid Glass — the
+tab bar that minimises on scroll, the glass materials, the button styles — and
+those are 26-only. One version back, deliberately, which is the same posture as
+`minSdk = 36` on Android and stays true when 27 ships.
 
 ## What to actually test
 

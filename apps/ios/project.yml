@@ -22,9 +22,14 @@ options:
     # ship one.
     #
     # THE COST IS REAL AND WORTH STATING, exactly as the Android side states it:
-    # this excludes anybody who has not updated. That is the same posture as
-    # `minSdk = 36` over there — one version back, deliberately, on an app with
-    # no installed base to keep working.
+    # this excludes anybody who has not updated. Same posture as `minSdk = 36`
+    # over there — one version back, deliberately, on an app with no installed
+    # base to keep working.
+    #
+    # 26 rather than 27, and it stays 26 when 27 ships next week. Targeting an
+    # OS that is not out yet means nobody can run the build and CI has no SDK
+    # for it; targeting the one before means the rule above is satisfied the day
+    # it lands, without a change. Move this when 28 is announced, not before.
     iOS: "26.0"
 
 targets:
