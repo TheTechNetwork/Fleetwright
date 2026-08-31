@@ -16,7 +16,16 @@ name: Fleetwright
 options:
   bundleIdPrefix: network.thetech
   deploymentTarget:
-    iOS: "18.0"
+    # iOS 26, for Liquid Glass — the tab bar that minimises on scroll, the glass
+    # materials, and the button styles are all 26-only APIs, and guarding every
+    # one of them behind `if #available` would mean maintaining two designs to
+    # ship one.
+    #
+    # THE COST IS REAL AND WORTH STATING, exactly as the Android side states it:
+    # this excludes anybody who has not updated. That is the same posture as
+    # `minSdk = 36` over there — one version back, deliberately, on an app with
+    # no installed base to keep working.
+    iOS: "26.0"
 
 targets:
   Fleetwright:

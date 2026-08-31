@@ -15,7 +15,7 @@ struct FleetwrightApp: App {
 
     var body: some Scene {
         WindowGroup {
-            FleetView(settings: settings)
+            FleetApp(settings: settings)
                 // Keyed on the credential, not run once. Permission is asked
                 // for after there is something to notify about, which now means
                 // after signing in — and a `.task` that fires only on first
