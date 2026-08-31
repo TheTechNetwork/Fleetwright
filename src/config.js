@@ -152,6 +152,10 @@ export function loadConfig(env = process.env) {
     // Typed on purpose, and logged on every start. See core/sandbox-args.js:
     // the refusal has to be escapable or it gets escaped by deleting the check.
     sandboxAllowUnsafeArgs: bool('AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS', false),
+    // Where a packaged host asks what the current release is. Unset on a
+    // checkout, which updates by git and always will — see docs/packaging.md,
+    // where the fallback is what makes moving one box at a time safe.
+    releaseManifest: str('AGENT_HUB_RELEASE_MANIFEST'),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
