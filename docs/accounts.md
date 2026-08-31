@@ -222,6 +222,36 @@ token to renew it with. Expired-but-refreshable is the ordinary state of a box
 nobody has touched for an hour, and a warning that fires on the ordinary case
 is one people stop reading.
 
+## Inviting somebody — done
+
+Adding a person meant editing `AGENT_FLEET_AUTH_ALLOW` and deploying: a code
+change per person, made by the one person who could already do everything. It
+is a screen now (`docs/../src/fleet/coordinator/invites.js`), and the two lists
+answer two different questions:
+
+| | |
+|---|---|
+| the env allow list | **who this deployment belongs to.** Survives losing all state, which is what makes it the bootstrap: a coordinator with empty storage still knows its owner, so somebody can always let everybody else back in |
+| invitations | **who that person has since invited.** Stored, revocable, no deploy |
+
+**An invitation is not a credential.** It is permission to *attempt* a sign-in,
+and the sign-in still has to produce a verified email from a provider the
+coordinator trusts. Nothing here can be redeemed, replayed or stolen into an
+account — the worst a leaked list does is say who was invited. There is no link
+to send; you send them the app.
+
+**And an invitation is never admin.** The admin seat is assigned once, to the
+first person to sign in. An invited person is a member: they see their own work
+and cannot invite anybody else, or "invite" would be a way to hand out the fleet
+one step removed. Whole domains cannot be invited from a phone either — that
+blast radius is invisible at the moment somebody taps, and the env list keeps
+that power because editing it is already deliberate.
+
+**Withdrawing does not sign anybody out.** A device credential already issued
+keeps working until it is revoked, which is a separate act on a separate object.
+The reply says so, because the gap is exactly where somebody would assume
+otherwise.
+
 **4. Visibility — done.** Admin sees every session; a member sees the ones
 their identity created. **Filtered at the coordinator, never at the host.** The
 host does not know who is asking — it has one token and answers it — so a
