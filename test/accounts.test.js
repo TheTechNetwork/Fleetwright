@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -197,4 +197,46 @@ test('a box with no credential of its own adopts nothing and says so', () => {
   const r = adoptBoxAccount(/** @type {any} */ ({ stateDir: dir(), sandboxCredentialsFile: '/nowhere' }));
   assert.equal(r.adopted, null);
   assert.match(r.why, /no Claude credential of its own/);
+});
+
+test('no message still promises a shared account to fall back to', () => {
+  // THE PROSE OUTLIVED THE MODEL, reported from a phone as a sequence:
+  // unlinking said "sessions they start now use the shared account", a healthy
+  // host showed "NOT signed in — sessions will not start" in red, and `/verify`
+  // said "Run /login to authenticate this box". Three sentences describing a
+  // box account that no longer exists, on three different screens.
+  //
+  // Every one of them was true when written. That is the whole difficulty: a
+  // model change does not fail a test, it just leaves the words behind.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const code = (/** @type {string} */ src) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  const surfaces = {
+    'the unlink reply': 'src/adapters/commands.js',
+    'the auth summary': 'src/core/login.js',
+    'the iOS fleet list': 'apps/ios/Fleetwright/FleetView.swift',
+    'the Android fleet list': 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt',
+  };
+  for (const [what, file] of Object.entries(surfaces)) {
+    const src = code(read(file));
+    assert.ok(!/use the shared account/.test(src), `${what} still promises a shared account`);
+    assert.ok(!/authenticate this box/.test(src), `${what} still tells somebody to log the box in`);
+    assert.ok(!/NOT signed in/.test(src), `${what} still reports a box as signed out`);
+  }
+});
+
+test('a host reports how many people can start a session on it', () => {
+  // The number that replaced the boolean. Both apps read it, and both treat
+  // absent as an older host rather than as a fault — the distinction this
+  // codebase keeps having to restate.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  for (const [name, file] of [
+    ['iOS', 'apps/ios/Fleetwright/FleetView.swift'],
+    ['Android', 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'],
+  ]) {
+    const src = read(file);
+    assert.match(src, /claudeAccounts/, `${name} does not read the count`);
+    assert.match(src, /Nobody has connected a Claude account here/, `${name} does not name the real fault`);
+  }
 });

@@ -482,7 +482,14 @@ export class LoginFlow {
 /** @param {AuthStatus} st */
 export function describe(st) {
   if (!st.loggedIn) {
-    return st.error ? `Not logged in (${st.error})` : 'Not logged in. Run /login to authenticate this box.';
+    // NOT AN INSTRUCTION ANY MORE. This said "Run /login to authenticate this
+    // box", which was the remedy when a machine had its own Claude account.
+    // Since docs/one-account-per-person.md it has none, so this is the ordinary
+    // state of every host and telling somebody to fix it sends them to sign in
+    // a thing that is not supposed to be signed in.
+    return st.error
+      ? `This box has no Claude account of its own (${st.error})`
+      : 'This box has no Claude account of its own, which is normal. Sessions run on the account of whoever starts them.';
   }
   const bits = [`Logged in as ${st.email || 'unknown'}`];
   if (st.subscriptionType) bits.push(`plan: ${st.subscriptionType}`);

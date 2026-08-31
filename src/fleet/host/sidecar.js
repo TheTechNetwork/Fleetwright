@@ -74,6 +74,13 @@ const REPLAY_MAX = 512;
 const PEEK_CONCURRENCY = 4;
 
 /**
+ * Verbs after which this host can do something it could not before, or the
+ * reverse. Health is pushed immediately once one of these lands, so somebody
+ * who just changed something is not answered from the frame before it.
+ */
+const CAPABILITY_VERBS = new Set(['connect', 'link', 'unlink', 'renew', 'update', 'upgrade']);
+
+/**
  * @typedef {object} Transport
  * @property {string} origin  the coordinator origin this transport is pinned to
  * @property {(handler: (msg: unknown) => Promise<void>) => void} onMessage
@@ -319,6 +326,20 @@ export class Sidecar {
     }
     const pending = this.#run(intent);
     this.#remember(intent.id, pending);
+    // A VERB THAT CHANGES WHAT THIS HOST IS CAPABLE OF PUSHES HEALTH AT ONCE.
+    //
+    // Health is volunteered every fifteen seconds, which is right for a number
+    // that drifts and wrong for one somebody just changed on purpose. Connect
+    // an account and test it immediately, and the coordinator answers from the
+    // frame before the change — "nobody has linked a Claude account on this
+    // host", about a host where you have just linked one. Reported from a
+    // phone, where it reads as the link having failed.
+    //
+    // Cheap: health is a couple of local reads, and only these verbs can move
+    // it.
+    if (CAPABILITY_VERBS.has(intent.verb)) {
+      void pending.then(() => this.#pushHealth()).catch(() => {});
+    }
     return pending;
   }
 

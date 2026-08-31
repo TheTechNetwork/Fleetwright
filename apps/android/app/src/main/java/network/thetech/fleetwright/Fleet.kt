@@ -173,6 +173,15 @@ class Fleet(private val settings: Settings) {
         val state: String?,
         val reason: String?,
         val loggedIn: Boolean?,
+        /**
+         * How many people have connected a Claude account on this machine.
+         *
+         * The field that replaced [loggedIn] as the one worth judging a host
+         * on: a machine has no Claude account of its own, so `loggedIn: false`
+         * is the ordinary state of every box. Zero here is the real fault; null
+         * is an older host and is not one.
+         */
+        val claudeAccounts: Int? = null,
         val accountEmail: String?,
         val accountPlan: String?,
         val accountOrg: String?,
@@ -685,6 +694,9 @@ class Fleet(private val settings: Settings) {
                     state = o.optString("state").takeIf { it.isNotBlank() },
                     reason = o.optString("reason").takeIf { it.isNotBlank() && it != "null" },
                     loggedIn = if (health?.has("loggedIn") == true) health.optBoolean("loggedIn") else null,
+                    claudeAccounts = if (health?.has("claudeAccounts") == true && !health.isNull("claudeAccounts")) {
+                        health.optInt("claudeAccounts")
+                    } else null,
                     accountEmail = account?.optString("email")?.takeIf { it.isNotBlank() && it != "null" },
                     accountPlan = account?.optString("plan")?.takeIf { it.isNotBlank() && it != "null" },
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },

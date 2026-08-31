@@ -697,12 +697,25 @@ private struct SettingsView: View {
                                 // rather than anywhere I can see it.
                                 Text(describeAccount(account))
                                     .font(.caption2).foregroundStyle(.secondary)
-                            } else if host.health?.loggedIn == false {
-                                // Said plainly, because this is the single
-                                // most common cause of a session that starts
-                                // and then does nothing.
-                                Text("NOT signed in — sessions will not start")
-                                    .font(.caption2).foregroundStyle(.red)
+                            }
+                            // WHO CAN START A SESSION HERE. This used to read
+                            // "NOT signed in — sessions will not start", off
+                            // the box's own Claude login, and it survived the
+                            // model that made it true: a machine has no account
+                            // now, so that line appeared in red on every host —
+                            // including ones reporting healthy, which is a
+                            // screen contradicting itself.
+                            //
+                            // Zero is the real fault and is the only one worth
+                            // colouring. Absent means an older host and says
+                            // nothing at all.
+                            if let accounts = host.health?.claudeAccounts {
+                                Text(accounts == 0
+                                     ? "Nobody has connected a Claude account here — sessions will not start"
+                                     : accounts == 1 ? "1 person can start sessions here"
+                                     : "\(accounts) people can start sessions here")
+                                    .font(.caption2)
+                                    .foregroundStyle(accounts == 0 ? .red : .secondary)
                             }
                             // THE SECOND WAY TO BE SIGNED OUT, and the one
                             // that was invisible. The line above reports on
@@ -793,8 +806,12 @@ private struct SettingsView: View {
                             CredentialsView(settings: settings, host: nil)
                         }
                     } footer: {
-                        Text("GitHub and Cloudflare, on every machine in the fleet. Signing in to Claude is "
-                             + "per machine and lives with the machine.")
+                        // "Signing in to Claude is per machine and lives with
+                        // the machine" described the box account that no longer
+                        // exists.
+                        Text("GitHub and Cloudflare go to every machine in the fleet. Claude is per person: a "
+                             + "session runs on the account of whoever started it, and it has to be connected "
+                             + "on each machine separately.")
                     }
                 }
 

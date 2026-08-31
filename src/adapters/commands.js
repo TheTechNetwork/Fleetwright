@@ -632,7 +632,17 @@ export const COMMANDS = {
         const email = normaliseEmail(args[1]);
         if (!email) return { ok: false, text: 'Usage: /accounts remove <email>' };
         return store.remove(email)
-          ? { ok: true, text: `Unlinked ${email}. Sessions they start now use the shared account; running ones keep what they were seeded with.` }
+          // THERE IS NO SHARED ACCOUNT TO FALL BACK TO. This said there was,
+          // which was true until docs/one-account-per-person.md and is now the
+          // opposite of what happens: unlinking is what STOPS somebody being
+          // able to start a session, and a message promising a fallback sends
+          // them off to discover that at the worst moment.
+          ? {
+            ok: true,
+            text:
+              `Unlinked ${email}. They cannot start sessions on this box until they connect an account again — `
+              + 'there is no shared one to fall back to. Sessions already running keep what they were seeded with.',
+          }
           : { ok: false, text: `${email} has no linked account.` };
       }
       const linked = store.list();
