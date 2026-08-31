@@ -587,6 +587,13 @@ struct Fleet {
         let version: Version?
         let updates: Updates?
         let loggedIn: Bool?
+        /// How many people have connected a Claude account on this machine.
+        ///
+        /// The field that replaced `loggedIn` as the one worth judging a host
+        /// on: a machine has no Claude account of its own, so `loggedIn: false`
+        /// is the ordinary state of every box. Zero here is the real fault;
+        /// nil is an older host and is not one.
+        let claudeAccounts: Int?
         let running: Int?
         let maxSessions: Int?
         /// Forgotten, still recoverable. Absent on a host that has not been

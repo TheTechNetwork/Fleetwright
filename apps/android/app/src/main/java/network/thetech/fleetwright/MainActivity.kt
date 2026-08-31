@@ -653,13 +653,26 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     if (host.accountEmail != null) {
                         val bits = listOfNotNull("signed in as ${host.accountEmail}", host.accountPlan, host.accountOrg)
                         Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                    } else if (host.loggedIn == false) {
-                        // The single most common cause of a session that
-                        // starts and then does nothing.
+                    }
+                    // WHO CAN START A SESSION HERE. This used to read "NOT
+                    // signed in — sessions will not start", off the box's own
+                    // Claude login, and it survived the model that made it
+                    // true: a machine has no account now, so that line appeared
+                    // in red on every host — including ones reporting healthy,
+                    // which is a screen contradicting itself.
+                    //
+                    // Zero is the real fault and the only one worth colouring.
+                    // Null means an older host and says nothing at all.
+                    host.claudeAccounts?.let { accounts ->
                         Text(
-                            "NOT signed in — sessions will not start",
+                            when (accounts) {
+                                0 -> "Nobody has connected a Claude account here — sessions will not start"
+                                1 -> "1 person can start sessions here"
+                                else -> "$accounts people can start sessions here"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = if (accounts == 0) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     host.version?.let { head ->
