@@ -53,18 +53,27 @@ full, so the alert baseline is never built from a partial view.
 | | push to main | release published |
 |---|---|---|
 | iOS | TestFlight **internal** | TestFlight **external** |
-| Android | Play **closed** testing (`PLAY_TRACK`, default `alpha`) | Play **open** testing (`PLAY_OPEN_TRACK`, default `beta`) |
+| Android | Play **open** testing (`PLAY_COMMIT_TRACK`, default `beta`) | Play **production** (`PLAY_RELEASE_TRACK`, default `production`) |
 
 Android used to publish on both events to the *same* track, which made the
 second one a duplicate: the same app to the same testers with a different
 version code and a hole in the sequence. The fix is not to remove a trigger but
 to make the two events mean different things, which is what iOS already did.
 
-**The distinction is who is on the other side.** Closed testing takes people by
-email list or link and they chose to be there. Open testing is anybody who finds
-the link. A merge happens because a branch was ready, and *"ready to merge"* is
-not the same decision as *"ready for strangers"* — so the wider audience needs
-an act with a person behind it, and publishing a release is that act.
+**The distinction is who is on the other side.** Open testing is anybody who
+finds the Play listing and taps join; production is anybody who finds the Play
+listing. That is a smaller gap than it sounds, and it is the right one to put a
+release across rather than a merge. A merge happens because a branch was ready,
+and *"ready to merge"* is not the same decision as *"ready for everybody who
+already has it installed"* — so the wider audience needs an act with a person
+behind it, and publishing a release is that act.
+
+**Tag pushes are deliberately not a trigger.** A GitHub release is made *from* a
+tag, so a tag push fires both `push: tags` and `release: published` — two runs,
+two version codes, two production releases minutes apart with the second
+silently replacing the first. The release event is also the only one carrying
+notes, and on production those notes are public. A bare tag with no release is
+not a shipment; it is a bookmark.
 
 A release also attaches the signed APK to the GitHub release, which is the thing
 somebody sideloads and a store upload does not provide.
@@ -73,9 +82,14 @@ Both tracks are repository variables, so moving one is a setting rather than a
 pull request:
 
 ```sh
-gh variable set PLAY_TRACK --body internal        # closed side
-gh variable set PLAY_OPEN_TRACK --body production # open side
+gh variable set PLAY_COMMIT_TRACK --body alpha  # what a merge reaches
+gh variable set PLAY_RELEASE_TRACK --body beta  # what a release reaches
 ```
+
+`PLAY_ROLLOUT` stages a production release instead of shipping it whole
+(`0.1` = 10%). **Unset on purpose**: a staged rollout has to be finished by hand
+in the console, and a default that leaves every release half-shipped by a
+pipeline reporting success is worse than no staging at all.
 
 **Main runs are never cancelled.** `cancel-in-progress` is on for pull requests
 only. A cancelled PR run is waste; a cancelled main run is something that did

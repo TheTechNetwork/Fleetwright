@@ -1,4 +1,4 @@
-// Push the freshly built bundle to Play's internal testing track.
+// Push the freshly built bundle to a Play track.
 //
 // The counterpart to tools/testflight-distribute.mjs, and deliberately shaped
 // the same way: zero dependencies, a service-account JWT, and plain HTTP. Play
@@ -18,6 +18,32 @@ const PACKAGE = env('PLAY_PACKAGE_NAME');
 const AAB = env('AAB_PATH');
 const TRACK = process.env.PLAY_TRACK || 'internal';
 const NOTES = (process.env.RELEASE_NOTES || '').trim().slice(0, 500);
+const ROLLOUT = rollout();
+
+/**
+ * How much of the track gets it, for the one track where that question exists.
+ *
+ * PLAY REJECTS `userFraction` ON A COMPLETED RELEASE and rejects an
+ * `inProgress` one without it, so these two fields are a PAIR and not two
+ * settings. Getting the pairing wrong is a 400 from the commit at the very end,
+ * after the upload, which is the most expensive place to find out.
+ *
+ * Unset means all of it. A staged rollout is a thing somebody chooses for a
+ * production release and then has to come back and finish in the console —
+ * making it the default would leave releases permanently half-shipped by a
+ * pipeline that reported success.
+ *
+ * @returns {number|null} a fraction in (0,1), or null for the whole track
+ */
+function rollout() {
+  const raw = (process.env.PLAY_ROLLOUT || '').trim();
+  if (!raw) return null;
+  const f = Number(raw);
+  if (!Number.isFinite(f) || f <= 0 || f > 1) {
+    throw new Error(`PLAY_ROLLOUT must be a fraction between 0 and 1, not ${JSON.stringify(raw)}`);
+  }
+  return f === 1 ? null : f;
+}
 
 /** @param {string} name */
 function env(name) {
@@ -119,7 +145,8 @@ async function main() {
       releases: [
         {
           versionCodes: [String(bundle.versionCode)],
-          status: 'completed',
+          // See rollout(): status and userFraction are one decision.
+          ...(ROLLOUT ? { status: 'inProgress', userFraction: ROLLOUT } : { status: 'completed' }),
           ...(NOTES ? { releaseNotes: [{ language: 'en-US', text: NOTES }] } : {}),
         },
       ],
@@ -127,7 +154,11 @@ async function main() {
   });
 
   await api(bearer, `/androidpublisher/v3/applications/${PACKAGE}/edits/${edit.id}:commit`, { method: 'POST' });
-  console.log(`committed — versionCode ${bundle.versionCode} is live on ${TRACK}`);
+  console.log(
+    ROLLOUT
+      ? `committed — versionCode ${bundle.versionCode} is rolling out to ${ROLLOUT * 100}% of ${TRACK}, finish it in the console`
+      : `committed — versionCode ${bundle.versionCode} is live on ${TRACK}`,
+  );
 }
 
 main().catch((e) => {
