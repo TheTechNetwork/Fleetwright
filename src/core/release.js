@@ -23,6 +23,16 @@
 
 import { createHash } from 'node:crypto';
 
+/**
+ * What may become a path segment.
+ *
+ * No slash, no backslash, no `..`, and nothing starting with a dot — so the
+ * value cannot leave the directory it is joined to, and cannot hide from `ls`
+ * once it is there. Applied to BOTH the version and the filename, because both
+ * end up on the filesystem and only one of them looks like it would.
+ */
+const PLAIN_NAME = /^[A-Za-z0-9._-]+$/;
+
 /** Where a release is unpacked, relative to the install root's parent. */
 export const RELEASES_DIR = 'releases';
 
@@ -62,12 +72,29 @@ export function decideRelease({ manifest, installed, protocol }) {
       return { act: false, reason: 'unreadable', message: `the release manifest has no ${field}` };
     }
   }
+  // THE VERSION IS A PATH TOO, and this is the check that was missing while the
+  // one below it existed. `file` looks like a filename so it got validated;
+  // `version` looks like a label, and then releasePaths turns it into
+  // `<base>/releases/<version>` and `<base>/releases/.incoming-<version>`,
+  // which are mkdir'd, written to, renamed and symlinked. A version of
+  // `../../../../tmp/x` normalises straight out of the releases directory.
+  //
+  // Validating the field that LOOKS dangerous and missing the one that also
+  // becomes a path is the recurring shape here: true where it was written,
+  // quietly false one layer up.
+  if (!PLAIN_NAME.test(m.version) || m.version.startsWith('.')) {
+    return {
+      act: false,
+      reason: 'unreadable',
+      message: `the release version is not a plain name: ${m.version.slice(0, 60)}`,
+    };
+  }
   if (!/^[0-9a-f]{64}$/.test(m.sha256)) {
     return { act: false, reason: 'unreadable', message: 'the release manifest\'s sha256 is not a sha256' };
   }
   // A filename becomes a path. This is the one field an attacker controls that
   // ends up on the filesystem, so it is a name and never a route to one.
-  if (!/^[A-Za-z0-9._-]+$/.test(m.file) || m.file.startsWith('.')) {
+  if (!PLAIN_NAME.test(m.file) || m.file.startsWith('.')) {
     return { act: false, reason: 'unreadable', message: `the release filename is not a plain name: ${m.file.slice(0, 60)}` };
   }
 
