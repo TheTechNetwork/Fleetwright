@@ -55,6 +55,46 @@ one, which should not accumulate as a second registration that fails forever.
 Tokens the provider reports as dead (`404`, `UNREGISTERED`) are dropped rather
 than retried on every event.
 
+**A phone that changes its address does not become two phones.** The map is
+keyed by the address, so a changed address leaves the old row behind — and that
+row is not obviously dead, because FCM keeps accepting a superseded registration
+token for a while. Two live rows for one phone is every notification delivered
+twice, which nobody reads as stale state. So a registration carrying a
+`clientId` — the credential issued to that phone — drops the other rows holding
+the same one. Without a `clientId` nothing is dropped: an unauthenticated
+registration cannot tell *the same phone with a new address* from *a different
+phone*, and guessing deletes somebody else's.
+
+## Android: the token is becoming an installation ID
+
+firebase-messaging **25.1.0** (16 June 2026) deprecated `getToken`,
+`deleteToken` and `onNewToken` together. FCM is moving from a per-app
+registration token to the **Firebase installation ID**, which is a handle on the
+install across the whole Firebase stack rather than a channel for one product.
+
+The app moved with it:
+
+| was | is |
+|---|---|
+| `FirebaseMessaging.getInstance().token` | `FirebaseInstallations.getInstance().id` |
+| `FirebaseMessagingService.onNewToken` | `FirebaseMessagingService.onRegistered` |
+
+`onRegistered` is also the better callback: it fires on routine syncs at app
+startup as well as on change, so a registration that quietly lapsed repairs
+itself instead of waiting for a rotation that may never come.
+
+**The coordinator did not change, and that is not luck.** The FCM v1 `token`
+field is documented as *"Deprecated: Use `fid` instead … During the transition
+period, this field also accepts a Firebase Installation ID (FID)."* So a phone
+that upgrades starts posting a FID into the same field, old registrations keep
+working, and there is no flag day. Renaming the protocol parameter to `fid`
+would have been one: an old client sending `token` fails **after** the version
+handshake agreed, which is the worst-shaped failure this protocol has. The name
+outlives its literal meaning on purpose.
+
+Moving the sender to the `fid` field is a later, separate change, and it can
+only happen once nothing is registered under an old-style token.
+
 ## iOS: APNs, directly
 
 The iOS app registers with APNs and posts the raw device token. That is not an

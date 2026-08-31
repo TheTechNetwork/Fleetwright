@@ -486,10 +486,17 @@ export class CoordinatorCore {
   // --- devices -------------------------------------------------------------
 
   /**
-   * Register a phone for push. Keyed by the push token rather than by a device
-   * id we mint, because the token is what actually identifies a delivery
-   * target — and a reinstall gives the same phone a new one, which should not
-   * accumulate as a second registration that fails forever.
+   * Register a phone for push. Keyed by the push address rather than by a
+   * device id we mint, because the address is what actually identifies a
+   * delivery target — and a reinstall gives the same phone a new one, which
+   * should not accumulate as a second registration that fails forever.
+   *
+   * `token` is the field name and no longer the whole story: FCM is moving to
+   * addressing a message by Firebase installation ID, and its `token` field
+   * accepts either during the transition. The name is kept because renaming a
+   * protocol parameter is a flag day — an old client sending `token` to a new
+   * coordinator expecting `fid` fails AFTER the version handshake agreed, which
+   * is the worst-shaped failure this protocol has.
    *
    * @param {{ platform: string, token: string, actor?: string, clientId?: string }} reg
    */
@@ -515,6 +522,30 @@ export class CoordinatorCore {
       registeredAt: existing?.registeredAt ?? this.now(),
     };
     this.devices.set(token, device);
+    // ONE PHONE, ONE ROW. The map is keyed by the push address, so a phone
+    // whose address changed leaves its old row behind — and the old row is not
+    // obviously dead. FCM keeps accepting a superseded registration token for a
+    // while, so the fleet would deliver every notification twice to the same
+    // phone until the day FCM finally said UNREGISTERED. Nobody would read that
+    // as stale state; they would read it as the fleet being broken.
+    //
+    // This is not hypothetical: FCM is moving from registration tokens to the
+    // Firebase installation ID, and every phone crosses that line once, on the
+    // update that changes what it registers.
+    //
+    // clientId is the credential issued to this phone, so it is the only thing
+    // here that identifies the DEVICE rather than the address. Where it is
+    // missing the rows are left alone — an unauthenticated registration cannot
+    // tell "the same phone" from "a different one", and guessing deletes
+    // somebody else's.
+    if (clientId) {
+      for (const [key, other] of this.devices) {
+        if (key !== token && other.clientId === clientId) {
+          this.devices.delete(key);
+          this.log.info(`coordinator: dropped superseded ${other.platform} device ${other.id}`);
+        }
+      }
+    }
     this.log.info(`coordinator: registered ${platform} device ${device.id}`);
     return { ok: true, deviceId: device.id };
   }

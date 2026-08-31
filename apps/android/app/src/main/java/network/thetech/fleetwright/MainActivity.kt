@@ -35,7 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.installations.FirebaseInstallations
 import kotlinx.coroutines.launch
 
 /**
@@ -57,7 +57,12 @@ class MainActivity : ComponentActivity() {
      * On every launch rather than once: registration is keyed by the token, so
      * repeating it is an update rather than a duplicate, and "once" would mean
      * a phone that was configured after its first launch never registers at
-     * all. Messaging.onNewToken covers rotation in between.
+     * all. Messaging.onRegistered covers rotation in between.
+     *
+     * THE FIREBASE INSTALLATION ID, not an FCM registration token. FCM is
+     * moving to addressing a message by FID, and firebase-messaging 25.1.0
+     * deprecated getToken along with onNewToken. FirebaseInstallations is where
+     * that value comes from and is not deprecated.
      *
      * Silent when the app has no coordinator yet — there is nowhere to send it,
      * and an error about that on first launch would be noise in front of the
@@ -66,10 +71,10 @@ class MainActivity : ComponentActivity() {
     private fun registerForPush() {
         val settings = Settings(applicationContext)
         if (!settings.configured) return
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+        FirebaseInstallations.getInstance().id.addOnCompleteListener { task ->
             val token = task.result
             if (!task.isSuccessful || token.isNullOrBlank()) {
-                Log.w("Fleetwright", "no FCM token: ${task.exception?.message}")
+                Log.w("Fleetwright", "no Firebase installation ID: ${task.exception?.message}")
                 return@addOnCompleteListener
             }
             lifecycleScope.launch {
