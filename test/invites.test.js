@@ -140,12 +140,19 @@ test('the invitation email grants nothing and names the address', async () => {
     fleet: 'the workshop fleet',
     invitedBy: 'owner@example.com',
     note: 'the billing work',
-    appUrl: 'https://apps.apple.com/app/id123',
+    apps: { ios: 'https://testflight.apple.com/join/ABC', android: 'https://play.google.com/store/apps/details?id=x' },
   });
 
   assert.match(mail.text, /Sign in with this address: guest@example\.com/);
   assert.match(mail.text, /nothing in this email to click for access and no code to enter/);
   assert.match(mail.text, /the billing work/);
+  // BOTH STORES, EACH LABELLED. One link cannot serve two phones, and the
+  // recipient's is the one thing an invitation cannot know in advance.
+  assert.match(mail.text, /iPhone or iPad — https:\/\/testflight/);
+  assert.match(mail.text, /Android — https:\/\/play\.google\.com/);
+  // The TestFlight step people miss, detected from the URL rather than
+  // configured — somebody who taps it on a laptop concludes it is broken.
+  assert.match(mail.text, /install Apple's TestFlight app first/);
   // No token, no code, no redeem link. Asserted rather than assumed, because
   // this is the file where somebody would helpfully add one.
   assert.equal(/token|code=|invite=|redeem|accept/i.test(mail.text.replace('no code to enter', '')), false);
@@ -155,6 +162,20 @@ test('a deployment with no app link says so rather than sending a dead end', asy
   const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
   const mail = composeInvite({ email: 'g@example.com', fleet: 'a fleet' });
   assert.match(mail.text, /has not published a link/);
+});
+
+test('a deployment that ships one phone does not imply the other', async () => {
+  // Listing "Android — " with nothing after it, or naming a store this fleet
+  // has not published to, sends somebody looking for an app that is not there.
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({
+    email: 'g@example.com',
+    fleet: 'a fleet',
+    apps: { android: 'https://play.google.com/store/apps/details?id=x' },
+  });
+  assert.match(mail.text, /Android — https/);
+  assert.equal(/iPhone|iPad|TestFlight/i.test(mail.text), false);
+  assert.equal(/has not published a link/.test(mail.text), false);
 });
 
 test('not being configured to send is not a failure', async () => {

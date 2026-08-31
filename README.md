@@ -13,6 +13,21 @@ reach any of it from a cold radio.
 > re-entering every secret. The App Store needed a unique name, so it got one.
 > See [docs/naming.md](docs/naming.md).
 
+## Get the app
+
+| | |
+|---|---|
+| **iPhone / iPad** | [TestFlight beta](https://testflight.apple.com/join/FyQnP8T9) — install Apple's TestFlight app first, and open the link on the device itself |
+| **Android** | [Google Play](https://play.google.com/store/apps/details?id=network.thetech.fleetwright) |
+
+Neither is any use on its own: the app is a client for a coordinator, and it
+asks for one on first launch. **It holds no credential of yours** — you sign in
+as yourself with Apple or Google, and the fleet recognises the address. See
+[docs/accounts.md](docs/accounts.md).
+
+These same two links are what an invitation email carries, set as
+`AGENT_FLEET_APP_IOS` and `AGENT_FLEET_APP_ANDROID`.
+
 One project, two processes:
 
 ```
