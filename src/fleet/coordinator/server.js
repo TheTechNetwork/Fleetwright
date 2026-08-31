@@ -628,7 +628,7 @@ export class Coordinator {
           fleet: inviteFleetName(),
           invitedBy: client?.email || 'admin',
           note: r.invite?.note ?? null,
-          appUrl: inviteAppUrl(),
+          apps: inviteApps(),
         })
         : { sent: false, why: 'not invited' };
       const text = r.ok
@@ -905,7 +905,10 @@ function inviteFleetName() {
   return process.env.AGENT_FLEET_NAME || 'this Fleetwright fleet';
 }
 
-/** Where to get the app, when a deployment has published a link. */
-function inviteAppUrl() {
-  return process.env.AGENT_FLEET_APP_URL || null;
+/** Where to get the app, per phone. See appLines in invite-email.js. */
+function inviteApps() {
+  return {
+    ios: process.env.AGENT_FLEET_APP_IOS || null,
+    android: process.env.AGENT_FLEET_APP_ANDROID || null,
+  };
 }

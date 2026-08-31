@@ -314,7 +314,10 @@ export class Fleet {
           fleet: this.env.AGENT_FLEET_NAME || 'this Fleetwright fleet',
           invitedBy: client?.email || 'admin',
           note: r.invite?.note ?? null,
-          appUrl: this.env.AGENT_FLEET_APP_URL || null,
+          apps: {
+            ios: this.env.AGENT_FLEET_APP_IOS || null,
+            android: this.env.AGENT_FLEET_APP_ANDROID || null,
+          },
         })
         : { sent: false, why: 'not invited' };
       const text = r.ok

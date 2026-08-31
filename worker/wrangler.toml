@@ -166,8 +166,13 @@ AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gma
 #                             refusal is surfaced to whoever tapped Invite
 #                             rather than left in a log.
 #   AGENT_FLEET_NAME          what to call this fleet in the message
-#   AGENT_FLEET_APP_URL       where to get the app. Without it the message says
-#                             so, rather than arriving with no way to act on it
+#   AGENT_FLEET_APP_IOS       where to get the app, per phone. Two values and
+#   AGENT_FLEET_APP_ANDROID   not one, because the recipient's phone decides
+#                             which link is the real one and an invitation is
+#                             the one message that cannot know that in advance.
+#                             Either may be left unset; with neither, the
+#                             message says so rather than arriving with no way
+#                             to act on it.
 #
 # The `send_email` binding below is what actually sends. Email Sending is
 # enabled on this account and the plan covers arbitrary recipients, so an
@@ -187,10 +192,12 @@ AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gma
 # here costs one confusing invitation and not a silent hole.
 AGENT_FLEET_NAME = "the Fleetwright fleet"
 AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
-# Where to get the app. Left unset until there is a link worth sending: the
-# message says so plainly rather than arriving with no way to act on it, which
-# is better than a URL that 404s.
-# AGENT_FLEET_APP_URL = "https://..."
+# Where to get the app. iOS is a TestFlight beta rather than the App Store, and
+# the invitation says so on its own — a TestFlight link needs Apple's TestFlight
+# app installed first and only opens on the device, which is invisible to anyone
+# who has not used one before.
+AGENT_FLEET_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
+AGENT_FLEET_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
 
 [[send_email]]
 name = "EMAIL"
