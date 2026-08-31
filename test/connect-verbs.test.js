@@ -270,3 +270,25 @@ test('neither app offers to sign a machine in, because there is nothing to sign 
   // a reason rather than removed from the enum, which would be a flag day.
   assert.ok(!/scope: \.host/.test(code(ios)), 'iOS still asks for a machine login');
 });
+
+test('the fleet-wide credentials screen shows Claude, and names the machine it will act on', () => {
+  // THE BIGGEST HOLE IN ONBOARDING SOMEBODY WHO IS NOT US. A session refused
+  // for want of a Claude account pointed at "Your credentials" — and that
+  // screen filtered Claude out, because Claude is per machine and the rest are
+  // fleet-wide. The remedy named a screen that could not perform it, and the
+  // only place that could was three taps away under a host nobody had a reason
+  // to open.
+  //
+  // The per-machine truth is not hidden now, it is REPORTED: the coordinator
+  // already merges this across hosts and says which machines are missing it,
+  // which is better information than the fleet-wide providers get.
+  const src = readFileSync(new URL('../apps/ios/Fleetwright/Credentials.swift', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  assert.ok(!/isSignIn == onlyClaude/.test(code), 'Claude is still filtered out of the fleet-wide view');
+  // AND THE ACTION IS AIMED. A Claude login happens in a pane on ONE box, so a
+  // fleet-wide connect would start a login on every machine at once and hand
+  // back several URLs.
+  assert.match(code, /targetHost/, 'the action does not choose a machine');
+  assert.match(code, /absentFrom/, 'and does not choose the machine that is missing it');
+});
