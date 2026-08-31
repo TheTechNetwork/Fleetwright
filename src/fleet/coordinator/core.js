@@ -103,12 +103,6 @@ export class CoordinatorCore {
      * @type {(() => void)|null}
      */
     this.onEvents = null;
-    /**
-     * When each host-state fact was last announced, so a reconnect does not
-     * re-announce it. Keyed by host, state and reason — see #onHostState.
-     * @type {Map<string, number>}
-     */
-    this.announced = new Map();
   }
 
   // --- hosts ---------------------------------------------------------------
@@ -253,29 +247,9 @@ export class CoordinatorCore {
     // The registry's memory of a host's previous state is reset by `connect()`,
     // so every reconnect looks like a fresh transition — and a degraded box
     // reconnects for all the ordinary reasons: a service restart, an update, a
-    // socket blip, the coordinator itself being replaced. Reported from a phone
-    // as a stream of identical notifications about one broken machine, which is
-    // exactly the "cries wolf" failure the watcher's transition rule exists to
-    // avoid, arriving through the one path that had no such rule.
-    //
-    // Keyed on the REASON as well as the state: a host that goes from "not
-    // logged in" to "the credential a session would get has expired" has told
-    // you something new.
-    const key = `${hostId}:${moved.to}:${moved.reason}`;
-    // `has`, not a default of 0. Defaulting made "never announced" indistinguishable
-    // from "announced at time zero", so on any clock reading less than an hour —
-    // a test's, or a freshly booted Worker's — the very first notification was
-    // suppressed as a repeat. Absent and long-ago are different facts, which is
-    // the same distinction this codebase keeps having to relearn.
-    const before = this.announced.get(key);
-    if (before !== undefined && this.now() - before < HOST_STATE_QUIET_MS) return;
-    // Anything else remembered about this host is stale now — a box that
-    // recovers must be able to report the same fault again tomorrow without
-    // waiting out an hour that started before it was fixed.
-    for (const k of [...this.announced.keys()]) {
-      if (k.startsWith(`${hostId}:`)) this.announced.delete(k);
-    }
-    this.announced.set(key, this.now());
+    // socket blip, the coordinator itself being replaced. That is the "cries
+    // wolf" failure the watcher's transition rule exists to avoid, arriving
+    // through the one path that had no such rule.
 
     // RECOVERY IS WORTH SAYING TOO. A person told a box is broken and never
     // told it came back checks manually forever after, which is the anxiety
@@ -297,16 +271,33 @@ export class CoordinatorCore {
     // hours.
     if (moved.to === 'unknown') return;
     if (moved.from === 'unknown' && recovered) return;
+
+    // SUPPRESSED FROM THE EVENT RING, WHICH SURVIVES A RESTART. The first
+    // version of this kept an in-memory map — and the coordinator is a Durable
+    // Object that is replaced on every deploy, of which there were six in a
+    // day. Every deploy emptied the map and re-announced every standing fault,
+    // which is most of what "still spamming" was.
+    //
+    // The ring is already persisted for exactly this class of question, and a
+    // notification we sent IS an event in it, so there is nothing new to store.
+    const text = recovered
+      ? `${hostId} is reporting normally again.`
+      // The reason, verbatim: the registry works hard to make it specific, and
+      // a notification saying "degraded" sends somebody to find out what this
+      // line already knows.
+      : `${hostId} cannot start sessions: ${moved.reason}`;
+    const said = this.events.some(
+      (e) => e.hostId === hostId
+        && (e.event === 'host.degraded' || e.event === 'host.recovered')
+        && e.text === text
+        && this.now() - e.at < HOST_STATE_QUIET_MS,
+    );
+    if (said) return;
     const event = this.record({
       hostId,
       event: recovered ? 'host.recovered' : 'host.degraded',
       name: hostId,
-      text: recovered
-        ? `${hostId} is reporting normally again.`
-        // The reason, verbatim, because the registry works hard to make it
-        // specific and a notification that says "degraded" sends somebody to
-        // go and find out what this line already knows.
-        : `${hostId} cannot start sessions: ${moved.reason}`,
+      text,
     });
     // `record` writes to the ring; it does not notify. Only host-originated
     // events did, which is part of how this whole class of fact stayed

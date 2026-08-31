@@ -22,6 +22,7 @@ import { describe } from '../core/login.js';
 import { log } from '../log.js';
 import { redactCommandLine } from '../core/redact.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
+import { Accounts } from '../core/accounts.js';
 import { pickCredentialSource } from '../core/podman.js';
 import { apiTokenFile } from '../core/api-token.js';
 
@@ -151,6 +152,11 @@ export class HttpAdapter {
         // three are already visible to anyone who can run `claude auth status`
         // on the box.
         credential: this.cfg.sandbox ? credentialSummary(this.cfg) : null,
+        // HOW MANY PEOPLE CAN START A SESSION HERE. Zero is the only
+        // Claude-shaped fault a HOST can have now that a machine has no
+        // account of its own — whose account is missing is a per-session
+        // question, answered by name at the point somebody asks.
+        claudeAccounts: new Accounts(this.cfg.stateDir).list().length,
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
         sessions,
         // What has been forgotten but not yet deleted. Additive: an older
