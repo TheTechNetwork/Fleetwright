@@ -37,6 +37,9 @@ export async function startStubHub({
   // Mutable, so a test can take a healthy box and make it degraded — which is
   // the state that used to hide a host's sessions entirely.
   let auth = initialAuth;
+  // How many people have linked a Claude account here. Non-zero by default,
+  // because a box nobody can start a session on is the unusual case.
+  let claudeAccounts = 1;
   /** @type {string[]} */
   const commands = [];
   /** @type {Array<{name: string, cwd: string|null, uuid: string}>} */
@@ -78,6 +81,7 @@ export async function startStubHub({
         running: sessions.filter((s) => s.status === 'running').length,
         loginEnabled: true,
         auth,
+        claudeAccounts,
         loginPending: null,
         sessions,
       });
@@ -110,6 +114,10 @@ export async function startStubHub({
     /** @param {Record<string, unknown>} next */
     setAuth: (next) => {
       auth = next;
+    },
+    /** @param {number} n */
+    setClaudeAccounts: (n) => {
+      claudeAccounts = n;
     },
     commands,
     hookReports,

@@ -35,6 +35,7 @@ const health = (patch = {}) => ({
   sessions: [],
   loadavg: [0, 0, 0],
   loggedIn: true,
+  claudeAccounts: 1,
   hub: { reachable: true },
   ...patch,
 });
@@ -77,11 +78,39 @@ test('a host whose session manager is unreachable is degraded, not healthy', () 
   assert.equal(reg.schedulable().length, 0);
 });
 
-test('a host that is not logged into Claude is degraded', () => {
+test('a box with no Claude account of its own is NOT degraded for it', () => {
+  // THIS ASSERTED THE OPPOSITE UNTIL docs/one-account-per-person.md. A machine
+  // has no Claude account now, so `loggedIn: false` is the ordinary state of
+  // every host — and this rule made every host permanently degraded,
+  // permanently unschedulable, and re-announced on every coordinator deploy. A
+  // stale rule producing a stream of notifications about a fault that no longer
+  // exists.
   const reg = new HostRegistry();
   reg.connect('box', () => {});
-  reg.recordHealth('box', health({ loggedIn: false }));
+  reg.recordHealth('box', health({ loggedIn: false, claudeAccounts: 2 }));
+  assert.equal(reg.get('box')?.state, 'healthy');
+});
+
+test('a box nobody has linked an account on is degraded, because nothing can start', () => {
+  // The question that replaced it. Zero is a real fault with a real remedy;
+  // WHOSE account is missing is a per-session question, answered by name at the
+  // point somebody asks.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({ claudeAccounts: 0 }));
+
   assert.equal(reg.get('box')?.state, 'degraded');
+  assert.match(reg.get('box')?.reason || '', /nobody has linked/);
+  assert.equal(reg.schedulable().length, 0);
+});
+
+test('an older host that does not report accounts is not faulted for it', () => {
+  // Absent is cannot-tell, never a fault — the same rule the credential field
+  // follows, and the one this codebase keeps having to restate.
+  const reg = new HostRegistry();
+  reg.connect('box', () => {});
+  reg.recordHealth('box', health({ claudeAccounts: null }));
+  assert.equal(reg.get('box')?.state, 'healthy');
 });
 
 test('a host whose sessions would get a dead credential is degraded, though it is logged in', () => {
@@ -572,12 +601,15 @@ test('losing the coordinator makes the sidecar reconnect, not exit', async (t) =
   assert.ok(transport.retryTimer, 'a retry is pending and holding the process up');
 });
 
-test('a box whose claude is logged out is still asked what it has', async (t) => {
+test('a box that is degraded is still asked what it has', async (t) => {
   // `list` fanned out over schedulable(), which requires state === 'healthy'.
-  // So a degraded box — agent-hub answering, sessions running, claude merely
-  // logged out — dropped out of the answer entirely. Not greyed out, not
-  // flagged: absent. The phone showed a shorter list and said nothing, and the
-  // sessions it hid were the ones on the box that needed attention.
+  // So a degraded box — agent-hub answering, sessions running — dropped out of
+  // the answer entirely. Not greyed out, not flagged: absent. The phone showed
+  // a shorter list and said nothing, and the sessions it hid were the ones on
+  // the box that needed attention.
+  //
+  // Degraded via `claudeAccounts: 0` now. It used to be a logged-out box, which
+  // stopped being a fault when the machine stopped having an account.
   //
   // Asserted on which HOSTS were reached rather than on the sessions returned,
   // because the stub hub answers /list without a session payload — the property
@@ -585,7 +617,7 @@ test('a box whose claude is logged out is still asked what it has', async (t) =>
   const { coordinator, stub } = await fleet(t, { sessions: [sessionRecord('inherited')] });
   await new Promise((r) => setTimeout(r, 600));
 
-  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  stub.setClaudeAccounts(0);
   await new Promise((r) => setTimeout(r, 1200));
 
   const host = coordinator.registry.hosts.get('unabandoned');
@@ -602,15 +634,15 @@ test('a box whose claude is logged out is still asked what it has', async (t) =>
 
 test('a degraded host is still refused new work', async (t) => {
   // The other half, and the reason the two selectors exist separately: placing
-  // a session on a box whose claude is logged out is placing it nowhere.
+  // a session on a box nobody can start a session on is placing it nowhere.
   const { coordinator, stub } = await fleet(t);
   await new Promise((r) => setTimeout(r, 600));
-  stub.setAuth({ loggedIn: false, summary: 'Not logged in' });
+  stub.setClaudeAccounts(0);
   await new Promise((r) => setTimeout(r, 1200));
 
   const reply = await coordinator.dispatch({ verb: 'start', params: { name: 'nope' } });
   assert.equal(reply.ok, false);
-  assert.match(String(reply.text || reply.error?.code), /no_hosts|not logged in|degraded/i);
+  assert.match(String(reply.text || reply.error?.code), /no_hosts|linked|degraded/i);
 });
 
 test('a host that goes degraded says so once, not every fifteen seconds', async () => {
@@ -633,12 +665,12 @@ test('a host that goes degraded says so once, not every fifteen seconds', async 
   // and every deploy would otherwise ring a phone to say a box is fine.
   assert.equal(reg.recordHealth('box', health())?.from, 'unknown');
   assert.equal(reg.recordHealth('box', health()), null, 'a repeat of the same state is not news');
-  const down = reg.recordHealth('box', health({ loggedIn: false }));
+  const down = reg.recordHealth('box', health({ claudeAccounts: 0 }));
   assert.equal(down?.to, 'degraded');
-  assert.match(String(down?.reason), /not logged in/);
+  assert.match(String(down?.reason), /nobody has linked/);
 
-  assert.equal(reg.recordHealth('box', health({ loggedIn: false })), null, 'still degraded is not a new event');
-  assert.equal(reg.recordHealth('box', health({ loggedIn: false })), null);
+  assert.equal(reg.recordHealth('box', health({ claudeAccounts: 0 })), null, 'still degraded is not a new event');
+  assert.equal(reg.recordHealth('box', health({ claudeAccounts: 0 })), null);
 
   // RECOVERY IS NEWS TOO. Somebody told a box is broken and never told it came
   // back checks manually forever after, which relocates the anxiety rather than
@@ -652,10 +684,10 @@ test('a host whose reason changes has changed, even staying degraded', () => {
   // both `degraded` and are different problems with different remedies.
   const reg = new HostRegistry();
   reg.connect('box', () => {});
-  reg.recordHealth('box', health({ loggedIn: false }));
+  reg.recordHealth('box', health({ claudeAccounts: 0 }));
 
   const moved = reg.recordHealth('box', health({
-    loggedIn: true,
+    claudeAccounts: 2,
     credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' },
   }));
 
@@ -686,7 +718,7 @@ test('a host that keeps reconnecting does not keep announcing the same fault', a
 
   const flap = () => {
     c.hostConnected('box', () => {});
-    return c.onHostMessage('box', { kind: 'health', health: health({ loggedIn: false }) });
+    return c.onHostMessage('box', { kind: 'health', health: health({ claudeAccounts: 0 }) });
   };
 
   await flap();
@@ -720,16 +752,47 @@ test('a host whose fault CHANGES says so, even inside the quiet hour', async () 
   c.devices.set('phone', { token: 't', platform: 'ios' });
   c.hostConnected('box', () => {});
 
-  await c.onHostMessage('box', { kind: 'health', health: health({ loggedIn: false }) });
+  await c.onHostMessage('box', { kind: 'health', health: health({ claudeAccounts: 0 }) });
   clock += 60_000;
   await c.onHostMessage('box', {
     kind: 'health',
     health: health({
-      loggedIn: true,
+      claudeAccounts: 2,
       credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' },
     }),
   });
 
   assert.equal(sent.length, 2);
   assert.match(sent[1].body, /credential/);
+});
+
+test('a coordinator restart does not re-announce a fault it already announced', async () => {
+  // "Notifications still spamming", after the first fix. That fix kept an
+  // in-memory map — and this coordinator is a Durable Object replaced on every
+  // deploy, of which there were six in one day. Every deploy emptied the map
+  // and re-announced every standing fault.
+  //
+  // The event ring is already persisted for exactly this class of question, and
+  // a notification we sent IS an event in it, so suppression reads from there
+  // and survives what an in-memory map could not.
+  let clock = 5_000_000;
+  const sent = [];
+  const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+  const push = { send: async (_d, m) => { sent.push(m); } };
+
+  const first = new CoordinatorCore({ now: () => clock, logger: quiet, push });
+  first.devices.set('phone', { token: 't', platform: 'ios' });
+  first.hostConnected('box', () => {});
+  await first.onHostMessage('box', { kind: 'health', health: health({ claudeAccounts: 0 }) });
+  assert.equal(sent.length, 1);
+
+  // The deploy. A new object, and the ring restored from storage — which is
+  // what `onEvents` persists and what a real restart loads back.
+  const restored = new CoordinatorCore({ now: () => clock, logger: quiet, push });
+  restored.devices.set('phone', { token: 't', platform: 'ios' });
+  restored.events.push(...first.events);
+  restored.hostConnected('box', () => {});
+  await restored.onHostMessage('box', { kind: 'health', health: health({ claudeAccounts: 0 }) });
+
+  assert.equal(sent.length, 1, 'the deploy re-announced a fault the fleet had already been told about');
 });

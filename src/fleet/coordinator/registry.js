@@ -31,7 +31,11 @@
  * @property {{ email: string|null, plan: string|null, org: string|null }|null} [account]
  * @property {{ head: string|null, branch: string|null }|null} [version]
  * @property {number[]} loadavg
- * @property {boolean|null} loggedIn
+ * @property {boolean|null} loggedIn  the box's OWN Claude login. Kept for
+ *   display — it is what `claude auth status` says on that machine — and no
+ *   longer used to judge health: a box has no Claude account of its own.
+ * @property {number|null} [claudeAccounts]  how many people have linked one
+ *   here. Zero is the fault; null is an older host and is not.
  * @property {{reachable: boolean, reason?: string}} [hub]
  * @property {Array<{name: string, title?: string|null, createdBy?: string|null, deletedAt?: number|null, expiresAt?: number|null}>} [bin]
  * @property {{ state: 'fresh'|'expired'|'unknown', expiresAt: number|null, refreshable: boolean, account: string|null, plan: string|null, summary: string }|null} [credential]
@@ -146,9 +150,21 @@ export class HostRegistry {
     if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
-    } else if (health.loggedIn === false) {
+    } else if (health.claudeAccounts === 0) {
+      // NOBODY CAN START A SESSION HERE, which is a different question from the
+      // one this used to ask. It read `loggedIn === false` — the box's own
+      // Claude login — and that rule outlived its model: since
+      // docs/one-account-per-person.md a machine HAS no Claude account, so
+      // every host reports `loggedIn: false` and every host was permanently
+      // degraded, permanently unschedulable, and re-announced on every
+      // coordinator deploy. A stale rule producing a stream of notifications
+      // about a fault that no longer exists.
+      //
+      // What matters now is whether anybody's account is on the box. None is a
+      // real fault with a real remedy; whose is missing is a per-session
+      // question and is answered there, by name.
       host.state = 'degraded';
-      host.reason = 'claude is not logged in on this host';
+      host.reason = 'nobody has linked a Claude account on this host';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this

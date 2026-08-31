@@ -558,6 +558,12 @@ export class Sidecar {
             idleSince: this.watcher?.idleSince?.(s.name) ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
+        // HOW MANY PEOPLE CAN START A SESSION HERE. The health field that
+        // replaced `loggedIn` as the thing the coordinator judges on: a machine
+        // has no Claude account of its own any more, so `loggedIn: false` is
+        // the ordinary state of every box and stopped meaning anything.
+        // Additive — an older host sends nothing and is not faulted for it.
+        claudeAccounts: typeof state.claudeAccounts === 'number' ? state.claudeAccounts : null,
         // The account this box runs on, for the app's settings screen: which
         // plan, which org, which address. Not a secret — it is what
         // `agent-hub login status` prints on the box — and it is the
@@ -624,6 +630,7 @@ export class Sidecar {
         resumable: null,
         sessions: null,
         loggedIn: null,
+        claudeAccounts: null,
       };
     }
   }
