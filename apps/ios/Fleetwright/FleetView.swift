@@ -16,6 +16,30 @@ struct FleetView: View {
     /// Hosts, for the bin — which is fleet-wide and therefore needs them all.
     @State private var fleetHosts: [Fleet.FleetHost] = []
     private var binCount: Int { fleetHosts.reduce(0) { $0 + ($1.health?.bin?.count ?? 0) } }
+    /// Machines where THIS PERSON has connected Claude. Nil until asked.
+    ///
+    /// The count a host reports is a fleet-wide fact — how many people can
+    /// start something here — and a guest joining a fleet where somebody else
+    /// has connected would read as "set up" while being unable to start
+    /// anything. Whose account is missing is a question about the person
+    /// asking, so it is asked as them.
+    @State private var myClaudeHosts: [String]?
+
+    /// Nowhere to run anything yet.
+    ///
+    /// Distinguished from "nothing is running" because they are different
+    /// situations with different next steps, and merging them is what let
+    /// somebody new tap Start and be refused for a reason nothing had
+    /// mentioned.
+    ///
+    /// Both halves have to be KNOWN. An empty fleet list is "we have not heard
+    /// yet", and a nil answer here is "we have not asked" — neither is
+    /// evidence of anything, and claiming setup is needed on the strength of a
+    /// missing answer is the benign-looking lie this project keeps refusing.
+    private var needsSetup: Bool {
+        guard !fleetHosts.isEmpty, let mine = myClaudeHosts else { return false }
+        return mine.isEmpty
+    }
     @State private var status = ""
     @State private var busy = false
     @State private var showingSettings = false
@@ -42,13 +66,38 @@ struct FleetView: View {
                         // it is the system's empty state, so it inherits the
                         // spacing, the type and the behaviour every other app
                         // on the phone uses for the same situation.
-                        ContentUnavailableView {
-                            Label("No sessions", systemImage: "moon.zzz")
-                        } description: {
-                            Text("Nothing is running on any machine in this fleet.")
-                        } actions: {
-                            Button("Start one") { showingStart = true }
-                                .disabled(!settings.configured)
+                        // TWO DIFFERENT EMPTY SCREENS, and they were one.
+                        //
+                        // Somebody new signs in, sees "Nothing is running" and
+                        // a Start button, taps it, and is refused for want of a
+                        // Claude account — having been told nothing about
+                        // needing one. That is the whole of onboarding
+                        // somebody who is not the person who built this: the
+                        // first screen is confident and the second one is a
+                        // refusal.
+                        //
+                        // A person with nowhere to run anything is not looking
+                        // at an empty list, they are looking at a setup step.
+                        if needsSetup {
+                            ContentUnavailableView {
+                                Label("Nothing set up yet", systemImage: "person.badge.key")
+                            } description: {
+                                Text("A session runs on YOUR Claude account, and it has to be connected on each "
+                                     + "machine separately. Connect one and you can start work here.")
+                            } actions: {
+                                NavigationLink("Connect Claude") {
+                                    CredentialsView(settings: settings, host: nil)
+                                }
+                            }
+                        } else {
+                            ContentUnavailableView {
+                                Label("No sessions", systemImage: "moon.zzz")
+                            } description: {
+                                Text("Nothing is running on any machine in this fleet.")
+                            } actions: {
+                                Button("Start one") { showingStart = true }
+                                    .disabled(!settings.configured)
+                            }
                         }
                     }
                     ForEach(sessions) { session in
@@ -192,6 +241,15 @@ struct FleetView: View {
         // unreachable coordinator are allowed to look the same HERE because
         // the sessions above have already said which it was.
         fleetHosts = (try? await fleet.fleetHosts()) ?? fleetHosts
+
+        // ONLY WHEN THERE IS NOTHING TO SHOW. This is a fan-out across the
+        // fleet, and asking it on every refresh would spend a round trip per
+        // pull to answer a question that only matters on an empty screen — the
+        // one case where nothing else is competing for the time.
+        if sessions.isEmpty {
+            let reply = try? await fleet.connections()
+            myClaudeHosts = reply?.connections?.linked("claude")?.hosts ?? []
+        }
     }
 
     private func act(_ work: () async throws -> Fleet.Reply) async {
