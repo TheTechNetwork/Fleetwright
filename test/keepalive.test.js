@@ -352,9 +352,25 @@ test('a link flow in progress does not make the whole box report signed out', as
     linkFor: 'guest@example.com', linkDir: path.join(dir, 'gone'),
   };
 
+  // ASKED ABOUT THE BOX, ANSWERED ABOUT THE BOX. `status()` no longer consults
+  // `this.pending` at all — it takes an explicit directory — so a link flow,
+  // live or stale, cannot change what this machine reports about itself.
+  //
+  // The first fix for this made status() call isPending() on every check, to
+  // expire abandoned flows. That was right alone and wrong beside submitCode,
+  // which DEPENDS on the pending surviving until it has harvested the
+  // credential — and isPending() clears it the moment the login pane exits,
+  // which is exactly what a successful login looks like. A shared reader with
+  // a side effect on shared state; a login that had just worked reported
+  // "Login failed."
+  //
+  // Not looking is the fix that has no second edge.
   flow.status();
 
-  // Asking about the box expires the dead flow rather than honouring it — the
-  // tmux session named above does not exist, which is what isPending() checks.
-  assert.equal(flow.pending, null, 'a dead link flow went on answering for the box');
+  assert.equal(flow.pending?.linkDir, path.join(dir, 'gone'), 'status must not touch the pending flow');
+
+  // And expiring an abandoned flow is still somebody's job — the function whose
+  // name is the question.
+  assert.equal(flow.isPending(), false);
+  assert.equal(flow.pending, null);
 });

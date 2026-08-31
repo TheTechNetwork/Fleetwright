@@ -121,18 +121,27 @@ export class LoginFlow {
    * MACHINE and never looks at a link flow. `scope: 'pending'` is the in-flight
    * link, and only `submitCode` has any business asking it.
    *
-   * @param {{ scope?: 'box'|'pending' }} [opts]
+   * AN EXPLICIT DIRECTORY, NOT A LOOK AT `this.pending`, and that is the second
+   * correction to this function today. The first one stopped it reporting on
+   * whatever link flow happened to be in progress — right — and made it call
+   * `isPending()` on every check to expire abandoned flows, which was right on
+   * its own and wrong next to `submitCode`.
+   *
+   * `submitCode` DEPENDS ON THE PENDING SURVIVING until it has harvested the
+   * credential, and `isPending()` clears it the moment the login pane exits —
+   * which is exactly what a SUCCESSFUL login looks like. So a status check
+   * inside that loop deleted the thing the loop was about to read, the harvest
+   * found nothing, and a login that had just worked reported "Login failed."
+   *
+   * A shared reader with a side effect on shared state is the shape of that
+   * mistake. It takes a directory now and touches nothing.
+   *
+   * @param {{ configDir?: string|null }} [opts]  where to read from. Omitted
+   *   means THIS MACHINE, which is what every external caller wants.
    * @returns {AuthStatus}
    */
-  status({ scope = 'box' } = {}) {
-    // isPending() UNCONDITIONALLY, not just when asked about the pending one.
-    // It is the only thing that expires an abandoned flow, so making it
-    // conditional leaves a dead linkDir sitting in memory until something else
-    // happens to ask — which is how a stale one survived for as long as the
-    // process lived. Calling it here means every status check is also a chance
-    // to notice the flow is over.
-    const live = this.isPending();
-    const dir = scope === 'pending' && live ? this.pending?.linkDir : null;
+  status({ configDir = null } = {}) {
+    const dir = configDir;
     const r = spawnSync(this.cfg.claudeBin, ['auth', 'status', '--json'], {
       env: dir ? { ...process.env, CLAUDE_CONFIG_DIR: dir } : process.env,
       encoding: 'utf8',
@@ -318,19 +327,23 @@ export class LoginFlow {
     sendKeys(name, ['-l', trimmed]); // -l = literal, so nothing is read as a key name
     sendKeys(name, ['Enter']);
 
+    // CAPTURED ONCE, BEFORE THE LOOP. Read per-iteration off `this.pending`,
+    // this was hostage to anything that cleared it — and something did: a
+    // status check inside the loop expired the flow the moment the pane
+    // exited, which is what success looks like. The loop owns what it is
+    // harvesting.
+    const link = this.pending?.linkFor && this.pending.linkDir
+      ? { email: this.pending.linkFor, dir: this.pending.linkDir }
+      : null;
+
     // Watch the pane for an outcome, but treat `claude auth status` as the
     // authority — the banner wording is cosmetic and changes between releases.
     for (let waited = 0; waited < 60_000; waited += 2000) {
       await sleep(2000);
       const alive = hasSession(name);
       const text = alive ? capturePane(name, 80) : '';
-      // The one caller that means the OTHER question: did the code just typed
-      // into the pane produce a credential in the isolated directory.
-      const st = this.status({ scope: this.pending?.linkDir ? 'pending' : 'box' });
+      const st = this.status({ configDir: link?.dir ?? null });
       if (st.loggedIn) {
-        const link = this.pending?.linkFor && this.pending.linkDir
-          ? { email: this.pending.linkFor, dir: this.pending.linkDir }
-          : null;
         this.finish();
         if (link) {
           // The credential moves into the store and the isolated dir goes
@@ -367,10 +380,30 @@ export class LoginFlow {
         log.info(`login: succeeded as ${st.email || 'unknown account'}`);
         return { ok: true, status: st, message: `${describe(st)}\n\nReady — start a session with /new.` };
       }
-      if (!alive || FAILURE_RE.test(text)) {
+      // THE PANE EXITING IS WHAT SUCCESS LOOKS LIKE, which is why this is not
+      // simply a failure branch. The CLI closes when it is done, so `!alive`
+      // arrives on the happy path too — and `text` is empty in that case, which
+      // is how this produced the single most useless message in the product:
+      // "Login failed.", with nothing after it, for a login that had worked.
+      //
+      // So the credential is the authority, asked once more before giving up.
+      if (!alive) {
+        const settled = this.status({ configDir: link?.dir ?? null });
+        if (settled.loggedIn) continue; // let the success branch above handle it
+        this.finish();
+        return {
+          ok: false,
+          message:
+            'The login window closed without leaving a credential. That usually means the code had already '
+            + 'expired — they are good for a few minutes — so start the sign-in again and paste the new one '
+            + 'promptly.',
+        };
+      }
+      if (FAILURE_RE.test(text)) {
+        // The pane's own words, which are the only thing here that knows WHY.
         const tail = text.trim().split('\n').slice(-5).join('\n');
         this.finish();
-        return { ok: false, message: `Login failed.${tail ? `\n${tail}` : ''}` };
+        return { ok: false, message: `The sign-in was refused.${tail ? `\n\n${tail}` : ''}` };
       }
       if (SUCCESS_RE.test(text)) continue; // pane says yes; wait for status to agree
     }
