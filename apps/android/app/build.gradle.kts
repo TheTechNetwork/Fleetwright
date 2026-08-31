@@ -124,6 +124,11 @@ dependencies {
   // separately stay compatible.
   implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
   implementation("com.google.firebase:firebase-messaging")
+  // Declared even though firebase-messaging pulls it in transitively. The app
+  // calls FirebaseInstallations directly now that the FID is the push address,
+  // and a direct call on a transitive dependency breaks the day the library
+  // that happened to carry it stops.
+  implementation("com.google.firebase:firebase-installations")
 
   // Firebase drags in androidx.fragment 1.1.0 transitively, and lint fails a
   // RELEASE build on it: registerForActivityResult needs 1.3.0 or newer, and

@@ -62,6 +62,41 @@ test('re-registering the same token updates rather than duplicating', () => {
   assert.equal([...c.devices.values()][0].actor, 'telegram:2');
 });
 
+test('a phone that changes its push address does not become two phones', () => {
+  // THE FCM TOKEN -> FID TRANSITION IN ONE TEST. Every phone crosses that line
+  // once, on the update that changes what it registers, and the old address
+  // does not stop working the moment the new one appears — FCM keeps accepting
+  // a superseded registration token. Two live rows for one phone is every
+  // notification delivered twice, which nobody reads as stale state.
+  const c = core();
+  c.registerDevice({ platform: 'android', token: 'old-fcm-token-'.padEnd(40, 'x'), clientId: 'phone-1' });
+  c.registerDevice({ platform: 'android', token: 'new-fid-'.padEnd(40, 'y'), clientId: 'phone-1' });
+
+  assert.equal(c.devices.size, 1);
+  assert.equal([...c.devices.values()][0].token.startsWith('new-fid'), true);
+});
+
+test('two phones on one account both keep their registration', () => {
+  // The guard above keys on the credential issued to a phone, not on the
+  // person. Someone with a tablet and a phone is one actor and two devices.
+  const c = core();
+  c.registerDevice({ platform: 'android', token: 'a'.repeat(40), clientId: 'phone-1', actor: 'fleet:e@x.com' });
+  c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), clientId: 'tablet-2', actor: 'fleet:e@x.com' });
+
+  assert.equal(c.devices.size, 2);
+});
+
+test('an unidentified registration never deletes an existing one', () => {
+  // No clientId means the coordinator cannot tell "the same phone with a new
+  // address" from "a different phone". Cannot-tell is not the same as
+  // supersedes, and guessing here deletes somebody else's registration.
+  const c = core();
+  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  c.registerDevice({ platform: 'android', token: 'b'.repeat(40) });
+
+  assert.equal(c.devices.size, 2);
+});
+
 test('a nonsense platform or token is refused', () => {
   const c = core();
   assert.equal(c.registerDevice({ platform: 'blackberry', token: 'a'.repeat(40) }).ok, false);
