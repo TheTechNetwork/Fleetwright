@@ -14,6 +14,7 @@
 
 import { HostRegistry } from './registry.js';
 import { ClientRegistry } from './clients.js';
+import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
@@ -46,6 +47,7 @@ export class CoordinatorCore {
    *   intentTimeoutMs?: number,
    *   logger?: { info: Function, warn: Function, error: Function, debug: Function },
    *   push?: import('../push.js').Pusher|null,
+ *   mailer?: { send: ((m: { to: string, subject: string, text: string }) => Promise<void>)|null, from: string|null }|null,
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
    * }} [opts]
    */
@@ -57,6 +59,10 @@ export class CoordinatorCore {
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
     logger,
     push = null,
+    // Sending an invitation email, when a deployment has set it up. Optional
+    // and injected for the same reason `push` is: the core knows nothing about
+    // Cloudflare bindings, and the Node coordinator has none.
+    mailer = null,
     // The GitHub App, when a deployment has registered one. Absent is the
     // normal case for a fresh clone and is not an error: the paste route is
     // first-class, not a fallback. See docs/github-app.md.
@@ -83,6 +89,12 @@ export class CoordinatorCore {
     this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
+    // Who the admin has let in since the deploy. The env allowlist says who
+    // this deployment BELONGS to and survives losing all state; this says who
+    // that person has invited, and is the half that does not need a deploy.
+    // See src/fleet/coordinator/invites.js.
+    this.invites = new Invites({ now });
+    this.mailer = mailer;
     // Which machines are in the fleet. The authority, unlike `registry` above,
     // which is a cache of what those machines say about themselves.
     this.hostIds = new HostIdentities({ now });

@@ -500,6 +500,37 @@ struct Fleet {
 
     /// Remove a machine from the fleet. It is disconnected as well as revoked —
     /// a revoked host with a live socket is still in the fleet.
+    /// Somebody the admin has let into this fleet.
+    ///
+    /// An invitation is NOT a credential. It is permission to attempt a
+    /// sign-in, and the sign-in still has to produce a verified email from a
+    /// provider the coordinator trusts — so there is nothing here to redeem,
+    /// replay, or steal into an account.
+    struct Invite: Codable, Identifiable, Hashable {
+        let email: String
+        let invitedBy: String?
+        let at: Double?
+        let note: String?
+        var id: String { email }
+    }
+
+    func invites() async throws -> [Invite] {
+        let data = try await get("/api/invites")
+        struct Reply: Codable { let invites: [Invite]? }
+        return try JSONDecoder().decode(Reply.self, from: data).invites ?? []
+    }
+
+    func invite(_ email: String, note: String? = nil) async throws -> Reply {
+        var body: [String: Any] = ["email": email]
+        if let note, !note.isEmpty { body["note"] = note }
+        return try JSONDecoder().decode(Reply.self, from: try await send("POST", "/api/invites", body: body))
+    }
+
+    func uninvite(_ email: String) async throws -> Reply {
+        let path = "/api/invites/\(email.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? email)"
+        return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
+    }
+
     func revokeHost(_ hostId: String) async throws -> Reply {
         let data = try await send("DELETE", "/api/hosts/\(hostId)", body: nil)
         return try JSONDecoder().decode(Reply.self, from: data)

@@ -128,3 +128,30 @@ test('both apps show how long a session has been quiet, and neither shouts about
     assert.match(model, /prompt/, `${name} would call a waiting session idle`);
   }
 });
+
+test('a person with nowhere to run anything sees a setup step, not an empty list', () => {
+  // ONBOARDING, and the moment it went wrong. Somebody new signs in, sees
+  // "Nothing is running" and a Start button, taps it, and is refused for want
+  // of a Claude account — having been told nothing about needing one. The
+  // first screen is confident and the second is a refusal.
+  //
+  // A person with nowhere to run anything is not looking at an empty list.
+  // They are looking at a setup step, and it is a different screen.
+  const src = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+
+  assert.match(src, /needsSetup/, 'the two empty states are still one');
+  assert.match(src, /Nothing set up yet/);
+  assert.match(src, /Connect Claude/, 'and it does not offer the thing that fixes it');
+
+  // ASKED AS THE PERSON. The count a host reports is fleet-wide — how many
+  // people can start something here — so a guest joining a fleet where
+  // somebody else has connected would read as "set up" while being unable to
+  // start anything. Whose account is missing is a question about the asker.
+  assert.match(src, /myClaudeHosts/, 'it judges setup on somebody else\'s account');
+
+  // AND BOTH HALVES HAVE TO BE KNOWN. An empty fleet list is "we have not
+  // heard yet" and a nil answer is "we have not asked" — neither is evidence,
+  // and claiming setup is needed on the strength of a missing answer is the
+  // benign-looking lie this project keeps refusing.
+  assert.match(src, /guard !fleetHosts\.isEmpty, let mine = myClaudeHosts/);
+});

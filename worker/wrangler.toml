@@ -156,6 +156,31 @@ AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4g
 # every Google account on earth.
 AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gmail.com,e6591050@gmail.com"
 
+# Inviting somebody by email. BOTH ARE OPTIONAL and the invitation works
+# without them — the list is the authority and the mail is a courtesy, so a
+# deployment with neither set simply reports that no email was sent and the
+# person doing the inviting sends the app themselves.
+#
+#   AGENT_FLEET_INVITE_FROM   an address on a domain THIS ACCOUNT CONTROLS.
+#                             Cloudflare refuses anything else, and that
+#                             refusal is surfaced to whoever tapped Invite
+#                             rather than left in a log.
+#   AGENT_FLEET_NAME          what to call this fleet in the message
+#   AGENT_FLEET_APP_URL       where to get the app. Without it the message says
+#                             so, rather than arriving with no way to act on it
+#
+# The `send_email` binding below is what actually sends. Sending to addresses
+# VERIFIED as Email Routing destinations is free on any plan; sending to an
+# arbitrary new invitee needs Workers Paid. Untested against a real invitee
+# from here — the code reports whatever Cloudflare says rather than assuming
+# it worked.
+# AGENT_FLEET_NAME = "the workshop fleet"
+# AGENT_FLEET_APP_URL = "https://apps.apple.com/app/id..."
+# AGENT_FLEET_INVITE_FROM = "fleet@thetech.network"
+
+# [[send_email]]
+# name = "EMAIL"
+
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per
 # client address is far more than a person tapping around an app and far less
