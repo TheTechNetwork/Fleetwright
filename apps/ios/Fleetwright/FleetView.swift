@@ -863,6 +863,13 @@ private struct SettingsView: View {
                         NavigationLink("Your credentials") {
                             CredentialsView(settings: settings, host: nil)
                         }
+                        // WHO ELSE IS ALLOWED IN. Adding a person used to be a
+                        // commit and a deploy; it is a screen now, which is the
+                        // last thing about running this fleet that needed a
+                        // keyboard.
+                        NavigationLink("People") {
+                            PeopleView(settings: settings)
+                        }
                     } footer: {
                         // "Signing in to Claude is per machine and lives with
                         // the machine" described the box account that no longer
