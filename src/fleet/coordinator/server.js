@@ -145,6 +145,7 @@ export class Coordinator {
     const state = JSON.parse(raw);
     this.core.hostIds.restore(state.hosts || []);
     this.core.clients.restore(state.clients || []);
+    this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // Push registrations too. The Worker has always kept these in Durable
     // Object storage; the Node coordinator held them in a Map and lost them on
@@ -230,6 +231,7 @@ export class Coordinator {
       {
         hosts: this.core.hostIds.serialise(),
         clients: this.core.clients.serialise(),
+        invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         devices: [...this.core.devices.values()],
       },
@@ -477,7 +479,10 @@ export class Coordinator {
             'and a hidden Apple address can never match one.',
         });
       }
-      if (!isAllowed(who.email, allow)) {
+      // EITHER LIST. The env one says who this deployment belongs to and
+      // survives losing all state; the invited one says who they have let in
+      // since, and needs no deploy. See invites.js for why they stay separate.
+      if (!isAllowed(who.email, allow) && !this.core.invites.has(who.email)) {
         return json(res, 403, { ok: false, error: { code: 'not_allowed' }, text: `${who.email} is not on this fleet's list.` });
       }
 
@@ -585,6 +590,39 @@ export class Coordinator {
         error: { code: 'not_admin' },
         text: 'Removing machines and other people\u2019s devices needs an admin credential on this fleet.',
       });
+    }
+
+    // INVITING IS ADMIN, IN EVERY DIRECTION — reading the list included,
+    // because a list of who has been invited is a list of colleagues, and a
+    // member has no reason to hold one. An invited person is a member and
+    // cannot invite anybody else; otherwise "invite" would be a way to hand out
+    // the fleet, one step removed. See src/fleet/coordinator/invites.js.
+    if (p.startsWith('/api/invites') && client && !client.admin) {
+      return json(res, 403, {
+        ok: false,
+        error: { code: 'not_admin' },
+        text: 'Inviting people to this fleet needs an admin credential.',
+      });
+    }
+
+    if (p === '/api/invites' && req.method === 'GET') {
+      return json(res, 200, { ok: true, invites: this.core.invites.list() });
+    }
+
+    if (p === '/api/invites' && req.method === 'POST') {
+      const body = await readJson(req);
+      const r = this.core.invites.add(String(body?.email || ''), {
+        invitedBy: client?.email || 'admin',
+        note: body?.note ? String(body.note) : null,
+      });
+      if (r.ok) this.saveState();
+      return json(res, r.ok ? 200 : 400, { ...r, invites: this.core.invites.list() });
+    }
+
+    if (p.startsWith('/api/invites/') && req.method === 'DELETE') {
+      const r = this.core.invites.remove(decodeURIComponent(p.slice('/api/invites/'.length)));
+      if (r.ok) this.saveState();
+      return json(res, r.ok ? 200 : 404, { ...r, invites: this.core.invites.list() });
     }
 
     if (p === '/api/hosts' && req.method === 'GET') {

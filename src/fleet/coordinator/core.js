@@ -14,6 +14,7 @@
 
 import { HostRegistry } from './registry.js';
 import { ClientRegistry } from './clients.js';
+import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
@@ -83,6 +84,11 @@ export class CoordinatorCore {
     this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
+    // Who the admin has let in since the deploy. The env allowlist says who
+    // this deployment BELONGS to and survives losing all state; this says who
+    // that person has invited, and is the half that does not need a deploy.
+    // See src/fleet/coordinator/invites.js.
+    this.invites = new Invites({ now });
     // Which machines are in the fleet. The authority, unlike `registry` above,
     // which is a cache of what those machines say about themselves.
     this.hostIds = new HostIdentities({ now });
