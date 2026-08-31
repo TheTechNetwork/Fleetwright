@@ -13,9 +13,9 @@
 // Zero dependencies. ES256 via WebCrypto, which is why this is .mjs and not a
 // shell script — signing an ES256 JWT in bash is a tar pit.
 
-const KEY_ID = env('APPSTORE_KEY_ID');
-const ISSUER_ID = env('APPSTORE_ISSUER_ID');
-const PRIVATE_KEY = env('APPSTORE_PRIVATE_KEY');
+const KEY_ID = env('ASC_KEY_ID');
+const ISSUER_ID = env('ASC_ISSUER_ID');
+const PRIVATE_KEY = env('ASC_KEY_P8');
 const BUNDLE_ID = env('BUNDLE_ID');
 const BUILD_NUMBER = env('BUILD_NUMBER');
 // internal (default) or external. They are genuinely different deliveries, not

@@ -119,8 +119,8 @@ jobs:
       - name: Check there are credentials to upload with
         id: creds
         env:
-          KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-          P12: ${{ secrets.APPLE_DISTRIBUTION_P12 }}
+          KEY: ${{ secrets.ASC_KEY_P8 }}
+          P12: ${{ secrets.APPLE_DIST_P12 }}
           PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
           # ALL THREE, or skip. This used to check only the API key, and the
@@ -130,8 +130,8 @@ jobs:
           # ability to release at all, and takes a trip to the developer portal
           # to undo.
           missing=""
-          [ -z "$KEY" ] && missing="$missing APPSTORE_PRIVATE_KEY"
-          [ -z "$P12" ] && missing="$missing APPLE_DISTRIBUTION_P12"
+          [ -z "$KEY" ] && missing="$missing ASC_KEY_P8"
+          [ -z "$P12" ] && missing="$missing APPLE_DIST_P12"
           [ -z "$PROFILE" ] && missing="$missing APPLE_PROVISIONING_PROFILE"
           if [ -n "$missing" ]; then
             echo "::warning::Not set:$missing — skipping TestFlight rather than signing automatically. See docs/ci.md."
@@ -150,8 +150,8 @@ jobs:
       - name: Install the App Store Connect API key
         if: steps.creds.outputs.have == 'true'
         env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         # An API key rather than certificates in the repo: it is one secret,
         # it is revocable from the web, and it lets xcodebuild create the
         # signing assets itself with -allowProvisioningUpdates. Fastlane match
@@ -159,13 +159,13 @@ jobs:
         # to look after.
         run: |
           mkdir -p ~/private_keys
-          printf '%s' "$APPSTORE_PRIVATE_KEY" > ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
+          printf '%s' "$ASC_KEY_P8" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
 
       - name: Generate the Xcode project
         if: steps.creds.outputs.have == 'true'
         working-directory: apps/ios
         env:
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           xcodegen generate
           # The team cannot live in project.yml — it is account-specific, and
@@ -229,12 +229,12 @@ jobs:
       - name: Import the signing certificate
         if: steps.creds.outputs.have == 'true'
         env:
-          P12: ${{ secrets.APPLE_DISTRIBUTION_P12 }}
-          P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          P12: ${{ secrets.APPLE_DIST_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DIST_P12_PASSWORD }}
         run: |
           set -euo pipefail
           if [ -z "$P12" ]; then
-            echo "::warning::APPLE_DISTRIBUTION_P12 is not set — falling back to cloud signing, which mints a certificate per run."
+            echo "::warning::APPLE_DIST_P12 is not set — falling back to cloud signing, which mints a certificate per run."
             exit 0
           fi
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
@@ -260,7 +260,7 @@ jobs:
               echo "Re-export the SAME key and certificate with -legacy, and check it says MAC: sha1:"
               echo "  openssl pkcs12 -export -legacy -inkey distribution.key -in distribution.pem -out distribution.p12"
               echo "  openssl pkcs12 -in distribution.p12 -info -nokeys -passin pass:... 2>&1 | grep MAC:"
-              echo "If it already says sha1, check APPLE_DISTRIBUTION_P12_PASSWORD for a trailing newline —"
+              echo "If it already says sha1, check APPLE_DIST_P12_PASSWORD for a trailing newline —"
               echo "piping a file or an echo into a secret includes one, and it fails the same way."
             fi
             exit 1
@@ -278,9 +278,9 @@ jobs:
         if: steps.creds.outputs.have == 'true'
         working-directory: apps/ios
         env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           # App Store Connect refuses a build number it has already seen for a
           # given version, so project.yml's CURRENT_PROJECT_VERSION of "1"
           # would have allowed exactly one upload ever. run_number only
@@ -335,9 +335,9 @@ jobs:
         if: steps.creds.outputs.have == 'true'
         working-directory: apps/ios
         env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           BUNDLE_ID: network.thetech.fleetwright
           PROFILE_NAME: ${{ steps.profile.outputs.name }}
         run: |
@@ -371,9 +371,9 @@ jobs:
             -archivePath "$RUNNER_TEMP/Fleetwright.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
-            -authenticationKeyPath ~/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8 \
-            -authenticationKeyID "$APPSTORE_KEY_ID" \
-            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
   # An upload is not a delivery. A build processes for anywhere between two
   # minutes and half an hour and then sits in App Store Connect until something
@@ -417,9 +417,9 @@ jobs:
           node-version: '24.20.0'
       - name: Assign the build to the internal group
         env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           BUNDLE_ID: network.thetech.fleetwright
           # The same number the archive stamped, which is how the build is
           # found again — App Store Connect calls it "version" on a build,
@@ -450,9 +450,9 @@ jobs:
           node-version: '24.20.0'
       - name: Assign the build to the external group and submit it for review
         env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           BUNDLE_ID: network.thetech.fleetwright
           BUILD_NUMBER: ${{ github.run_number }}
           AUDIENCE: external
