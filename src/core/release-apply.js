@@ -27,7 +27,7 @@
 // not built.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
 
@@ -120,7 +120,13 @@ export async function applyRelease({ installDir, manifestUrl, protocol, dryRun =
   mkdirSync(staging, { recursive: true });
   const tarball = path.join(staging, '.tarball');
   try {
-    execFileSync('sh', ['-c', 'cat > "$1"', 'sh', tarball], { input: Buffer.from(bytes) });
+    // writeFileSync, not `sh -c 'cat > "$1"'`. The shell version was doing
+    // nothing a plain write does not, and it spawned a shell to hold a path
+    // built from a manifest — which is how CodeQL found it
+    // (js/command-line-injection) and how a reader would have to stop and
+    // reason about quoting to see it was safe. No shell, nothing to reason
+    // about.
+    writeFileSync(tarball, bytes);
     // --no-same-owner: unpacking as root would otherwise restore whatever uid
     // the archive claims. --strip-components=1 drops the version directory the
     // tarball wraps everything in.

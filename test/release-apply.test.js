@@ -142,6 +142,25 @@ test('a box that is not laid out for releases is told which it is', async () => 
   assert.equal(releaseLayout('/opt/fleetwright/current').ok, true);
 });
 
+test('a traversing version never reaches the filesystem', async () => {
+  // The end-to-end half of the release.js test: proving the refusal happens
+  // BEFORE anything is created, not merely that the decision says no.
+  const box = makeBox('old-1');
+  const outside = path.join(path.dirname(box.base), 'escaped-' + path.basename(box.base));
+  const rel = makeRelease('x');
+  const r = await applyRelease({
+    installDir: box.current,
+    manifestUrl: URL_,
+    protocol: 2,
+    fetch: serve(rel, { version: `../../${path.basename(outside)}`, file: 'r.tar.gz', sha256: rel.sha256, protocol: 2 }),
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /not a plain name/);
+  assert.equal(existsSync(outside), false, 'a directory was created outside the release base');
+  assert.equal(path.basename(readlinkSync(box.current)), 'old-1');
+  rmSync(box.base, { recursive: true, force: true });
+});
+
 test('an unreachable manifest is a message, not a crash', async () => {
   const box = makeBox('old-1');
   const r = await applyRelease({

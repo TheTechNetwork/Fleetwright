@@ -36,10 +36,27 @@ test('a manifest missing a protocol is still usable', () => {
 });
 
 test('the filename is a name, never a path', () => {
-  // The one attacker-controlled field that reaches the filesystem.
   for (const file of ['../../etc/cron.d/x', '/etc/passwd', 'a/b.tar.gz', '.hidden', '']) {
     const d = decideRelease({ manifest: { ...good, file }, installed: '1', protocol: 2 });
     assert.equal(d.act, false, `should refuse ${JSON.stringify(file)}`);
+  }
+});
+
+test('the VERSION is a name too, which is the one that was missed', () => {
+  // `file` looks like a filename so it was validated. `version` looks like a
+  // label — and then releasePaths turns it into <base>/releases/<version> and
+  // <base>/releases/.incoming-<version>, which get mkdir'd, written to,
+  // renamed and symlinked.
+  //
+  // `../../../../tmp/pwned` normalises straight out of the releases directory,
+  // and the first thing that happens to it is mkdirSync({recursive: true}).
+  for (const version of ['../../../../tmp/pwned', '/etc/cron.d/x', 'a/b', '.hidden', '']) {
+    const d = decideRelease({ manifest: { ...good, version }, installed: '1', protocol: 2 });
+    assert.equal(d.act, false, `should refuse version ${JSON.stringify(version)}`);
+  }
+  // And the shapes CI actually produces still pass.
+  for (const version of ['main-42', '2026.09.01-2', 'v0.1.1']) {
+    assert.equal(decideRelease({ manifest: { ...good, version }, installed: '1', protocol: 2 }).act, true, version);
   }
 });
 
