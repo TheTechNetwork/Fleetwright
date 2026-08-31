@@ -123,6 +123,18 @@ struct CredentialsView: View {
                     } else {
                         Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
                             .font(.caption)
+                        // THE FAILURE THE CLI ITSELF ASKS ABOUT. Its refusal
+                        // reads "Invalid code. Please make sure the full code
+                        // was copied" — a partial copy is the common way this
+                        // goes wrong, and on a phone it is easy: the code is
+                        // long, it wraps, and a selection drag stops early.
+                        // Saying so before the round trip is cheaper than a
+                        // refusal after it.
+                        if pending.isSignIn {
+                            Text("Copy the whole thing, including anything after a #.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         HStack {
                             // The one field in this app that holds a live
                             // credential. Never a TextField: iOS would offer to

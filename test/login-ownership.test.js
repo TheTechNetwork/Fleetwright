@@ -16,7 +16,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { LoginFlow } from '../src/core/login.js';
+import { LoginFlow, failureLine } from '../src/core/login.js';
+import { readFileSync } from 'node:fs';
 
 /** A flow with a pending login, without needing tmux or the claude CLI. */
 function pending(startedBy, url = 'https://claude.ai/oauth/authorize?code=true') {
@@ -94,4 +95,40 @@ test('a pending login’s URL is not handed to whoever asks', async () => {
 
   const starter = await flow.start({ actor: 'fleet:admin@example.com' });
   assert.ok(starter.message.includes('claude.ai'), 'the person who started it still gets it back');
+});
+
+test('a refused sign-in shows the CLI\'s sentence, not the tail of a URL', () => {
+  // Captured from a real pane (CLI 2.1.234) after submitting a bad code. The
+  // CLI says something genuinely useful — a diagnosis and a remedy in one
+  // sentence — and taking the last five lines delivered it underneath two
+  // fragments of a percent-encoded authorize URL, with "copied" split across a
+  // line break by the terminal, to somebody who is already frustrated.
+  const pane = [
+    'ri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreat',
+    'e_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Am',
+    'cp_servers+user%3Afile_upload&code_challenge=73B22ApJYsxEi0_P4C5CaVOOlGf_8terzkM',
+    'JNF19Wz0&code_challenge_method=S256&state=nI7Oooazgk7X1iIMo5Dz0DCRootaVGVW6V69Dc',
+    'tfyqE',
+    'Paste code here if prompted > Invalid code. Please make sure the full code was c',
+    'opied.',
+  ].join('\n');
+
+  const line = failureLine(pane);
+
+  assert.equal(line, 'Invalid code. Please make sure the full code was copied.');
+  assert.equal(line.includes('code_challenge'), false, 'the URL leaked into the reason');
+  assert.equal(line.includes('Paste code here'), false, 'our own prompt is not the reason');
+});
+
+test('both apps warn about the partial copy before the round trip', () => {
+  // "Please make sure the full code was copied" is the CLI telling us what the
+  // common failure is. On a phone it is easy: the code is long, it wraps, and a
+  // selection drag stops early. Saying so before is cheaper than refusing after.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  for (const [name, src] of [
+    ['iOS', read('apps/ios/Fleetwright/Credentials.swift')],
+    ['Android', read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt')],
+  ]) {
+    assert.match(src, /including anything after a #/, `${name} does not warn about a partial copy`);
+  }
 });

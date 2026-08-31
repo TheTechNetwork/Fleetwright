@@ -326,6 +326,18 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             else "2. Come back and paste the token",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        // THE FAILURE THE CLI ITSELF ASKS ABOUT. Its refusal
+                        // reads "Invalid code. Please make sure the full code
+                        // was copied" — a partial copy is the common way this
+                        // goes wrong, and on a phone it is easy: the code is
+                        // long, it wraps, and a selection drag stops early.
+                        // Saying so before the round trip is cheaper than a
+                        // refusal after it.
+                        if (p.isSignIn) Text(
+                            "Copy the whole thing, including anything after a #.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         // The one field in this app that holds a live
                         // credential. Password transformation and no
                         // autocapitalisation: Android would otherwise offer to

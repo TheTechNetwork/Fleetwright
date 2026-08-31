@@ -52,6 +52,31 @@ const AUTH_URL_RE =
   /https:\/\/(?:claude\.com|claude\.ai|platform\.claude\.com|console\.anthropic\.com)\/[^\s"'<>]*/g;
 const SUCCESS_RE = /Login successful|Logged in as|Successfully (?:logged|signed) in|authentication successful/i;
 const FAILURE_RE = /Login failed|Invalid code|authentication failed|Error: /i;
+
+/**
+ * The line of a pane that says what went wrong, de-wrapped and on its own.
+ *
+ * The CLI's own message is the most useful thing on that screen — "Invalid
+ * code. Please make sure the full code was copied." is a complete diagnosis and
+ * a remedy in one sentence. Taking the last five lines instead delivered it
+ * underneath two fragments of a percent-encoded authorize URL, with the word
+ * "copied" split across a line break by the terminal.
+ *
+ * So: de-wrap first (the pane hard-wraps at the terminal width, which is why
+ * every other reader in this project does the same), then find the line the
+ * failure pattern actually matched, and drop the prompt that precedes it.
+ *
+ * @param {string} pane
+ * @returns {string}
+ */
+export function failureLine(pane) {
+  const lines = dewrapPane(pane).split('\n').map((l) => l.trim()).filter(Boolean);
+  const hit = [...lines].reverse().find((l) => FAILURE_RE.test(l));
+  if (!hit) return '';
+  // "Paste code here if prompted > Invalid code. …" — the prompt is ours to
+  // remove; what follows it is the answer.
+  return hit.replace(/^.*?>\s*/, '').trim().slice(0, 300);
+}
 // The pane is waiting for the pasted code.
 const AWAITING_CODE_RE = /paste (?:the |it |code)|enter the code|authorization code|Paste code here/i;
 
@@ -400,10 +425,14 @@ export class LoginFlow {
         };
       }
       if (FAILURE_RE.test(text)) {
-        // The pane's own words, which are the only thing here that knows WHY.
-        const tail = text.trim().split('\n').slice(-5).join('\n');
+        // THE PANE'S OWN SENTENCE, not the last five lines of it. The CLI says
+        // something genuinely useful here — "Invalid code. Please make sure the
+        // full code was copied." — and slicing the tail buried it under
+        // fragments of the wrapped authorize URL, split mid-word by the
+        // terminal, in a message somebody reads while already frustrated.
         this.finish();
-        return { ok: false, message: `The sign-in was refused.${tail ? `\n\n${tail}` : ''}` };
+        const why = failureLine(text);
+        return { ok: false, message: `The sign-in was refused.${why ? `\n\n${why}` : ''}` };
       }
       if (SUCCESS_RE.test(text)) continue; // pane says yes; wait for status to agree
     }
