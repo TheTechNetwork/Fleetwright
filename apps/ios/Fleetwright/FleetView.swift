@@ -600,6 +600,21 @@ private struct SettingsView: View {
                             .signInWithAppleButtonStyle(.black)
                             .frame(height: 44)
                             .disabled(settings.coordinatorURL.isEmpty || signingIn)
+                        // WHY IT IS GREY, SAID OUT LOUD. Sign-in posts an ID
+                        // token to a coordinator, so without a URL there is
+                        // nowhere to post it. That was true and invisible, and
+                        // a disabled control with no reason beside it reads as
+                        // a broken app — the next move is to tap it again
+                        // rather than to fill in the field above.
+                        //
+                        // Only for the reason that is a person's to fix.
+                        // "Signing in" needs no explanation; the button is
+                        // already saying it.
+                        if settings.coordinatorURL.isEmpty {
+                            Text("Add a coordinator URL above first — signing in means signing in to a fleet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                         // ONE TAP INTO A FLEET THAT ISN'T REAL.
                         //
                         // The demo credential has existed since App Review

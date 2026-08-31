@@ -893,6 +893,23 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     "the phone's keystore. A fleet allows people by email address.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            // WHY IT IS GREY, SAID OUT LOUD. Sign-in needs somewhere to sign in
+            // TO — the button posts an ID token to a coordinator, and without a
+            // URL there is nowhere to post it. That was true and invisible: a
+            // disabled control with no reason beside it reads as a broken app,
+            // and the person's next move is to tap it repeatedly rather than to
+            // fill in the field above.
+            //
+            // Only while it IS disabled, and only for the reason that is a
+            // person's to fix. "Busy" needs no explanation — the button says
+            // "signing in…" already.
+            if (url.isBlank()) {
+                Text(
+                    "Add a coordinator URL above first — signing in means signing in to a fleet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Button(
                 enabled = url.isNotBlank() && !busy,
                 onClick = {
