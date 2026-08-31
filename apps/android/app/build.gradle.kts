@@ -24,13 +24,21 @@ if (file("google-services.json").exists()) {
 //
 //     resources.getIdentifier("default_web_client_id", "string", context.packageName)
 //
-// which is the line every tutorial has and which is WRONG ON ANY BUILD WITH AN
-// applicationIdSuffix. Resources are compiled under the `namespace`; the debug
-// build's applicationId is namespace + ".debug"; so getIdentifier looked in a
-// package that has no resources, returned 0, and the app reported "this build
-// has no Google sign-in configured" — naming a Firebase problem that did not
-// exist. The release build worked, which is exactly what made it hard to see:
-// the failure only appears on the build a tester is handed.
+// which is the line every tutorial has, and which was broken on BOTH build
+// types here for two unrelated reasons:
+//
+//   RELEASE — isShrinkResources below. Nothing references that string
+//   statically, so the resource shrinker stripped it. Measured in the shipped
+//   beta APK: google_api_key, gcm_defaultSenderId, project_id and google_app_id
+//   are all in resources.arsc because the Firebase SDK names them in code, and
+//   default_web_client_id is absent. This is the one that reached people.
+//
+//   DEBUG — applicationIdSuffix. Resources are compiled under `namespace`; the
+//   debug applicationId is namespace + ".debug"; getIdentifier asked a package
+//   with no resources and got 0.
+//
+// Reading the value here makes it a compile-time constant, immune to both:
+// there is no resource to strip and no package to resolve.
 //
 // Reading it here removes the lookup. It is the same value the coordinator
 // verifies as the token's `aud` (AGENT_FLEET_AUTH_AUDIENCES), so the two halves

@@ -32,19 +32,31 @@ test('the Android config carries a web OAuth client', () => {
 });
 
 test('the client id is never looked up by application id again', () => {
-  // THE BUG THIS FILE EXISTS FOR. `getIdentifier(name, type, context.packageName)`
-  // is the line every tutorial has, and it is wrong on any build with an
-  // applicationIdSuffix: resources are compiled under the `namespace`, the
-  // debug applicationId is namespace + ".debug", so the lookup asks a package
-  // with no resources and gets 0. The app then reports "this build has no
-  // Google sign-in configured" — a Firebase problem that does not exist.
+  // THE BUG THIS FILE EXISTS FOR, and it broke BOTH build types for two
+  // unrelated reasons — so fixing either alone leaves it broken:
   //
-  // It only fails on the debug build, which is the one a tester is handed.
+  //   RELEASE — isShrinkResources. Nothing references the string statically, so
+  //   the shrinker strips it. Confirmed in the shipped beta APK.
+  //   DEBUG — applicationIdSuffix makes context.packageName differ from the
+  //   namespace the resources were compiled under.
+  //
+  // A resource lookup by name cannot be made safe against the first one, which
+  // is why this asserts the lookup is gone rather than that it is correct.
   assert.equal(/getIdentifier\s*\(/.test(SIGNIN), false, 'SignIn.kt is looking up a resource by name again');
   assert.equal(/context\.packageName/.test(SIGNIN), false);
   assert.match(SIGNIN, /BuildConfig\.GOOGLE_WEB_CLIENT_ID/);
   // And the explanation is still there for whoever hits this next.
   assert.match(SIGNIN_SRC, /applicationIdSuffix/);
+});
+
+test('resource shrinking stays on, and nothing depends on a resource name', () => {
+  // Not a suggestion to turn it off. Shrinking is why the release bundle is a
+  // reasonable size, and Play grades the app on it. The lesson is the pairing:
+  // with isShrinkResources on, ANY getIdentifier lookup is a resource that may
+  // not be there — so the two assertions belong in one test, where somebody
+  // adding the next runtime lookup has to read why.
+  assert.match(GRADLE, /isShrinkResources = true/);
+  assert.equal(/getIdentifier/.test(SIGNIN), false);
 });
 
 test('the gradle build reads it and turns buildConfig on', () => {
