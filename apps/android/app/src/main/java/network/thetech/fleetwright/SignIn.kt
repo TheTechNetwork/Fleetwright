@@ -42,10 +42,25 @@ object SignIn {
      * Firebase configured — and the repository is public, so that checkout is
      * most of them. This way it is a runtime message instead of a broken build.
      */
-    fun serverClientId(context: Context): String? {
-        val id = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-        return if (id == 0) null else context.getString(id).takeIf { it.isNotBlank() }
-    }
+    /**
+     * The web OAuth client this app names as its server.
+     *
+     * READ FROM BuildConfig, not from a string resource. This used to be
+     *
+     *     resources.getIdentifier("default_web_client_id", "string", context.packageName)
+     *
+     * which is the line every tutorial has and which is WRONG on any build with
+     * an applicationIdSuffix. Resources are compiled under the `namespace`, the
+     * debug applicationId is namespace + ".debug", so the lookup asked a package
+     * with no resources in it, got 0, and the app announced "this build has no
+     * Google sign-in configured" — naming a Firebase problem that did not exist.
+     *
+     * The release build worked, which is what made it hard to see: it failed
+     * only on the build a tester is handed.
+     *
+     * See app/build.gradle.kts, which reads it out of google-services.json.
+     */
+    fun serverClientId(): String? = BuildConfig.GOOGLE_WEB_CLIENT_ID?.takeIf { it.isNotBlank() }
 
     /**
      * Ask Google who this is, and return the raw ID token.
@@ -55,10 +70,11 @@ object SignIn {
      *   empty sheet — the classic "the button does nothing" report.
      */
     suspend fun googleIdToken(context: Context): String {
-        val clientId = serverClientId(context)
+        val clientId = serverClientId()
             ?: throw Failure(
-                "This build has no Google sign-in configured. It needs a web OAuth client in the " +
-                    "Firebase project and a google-services.json that carries it.",
+                "This build has no Google sign-in configured — it was built without a " +
+                    "google-services.json carrying a web OAuth client (client_type 3). " +
+                    "Sign in with Apple, or use a build from CI.",
             )
 
         val request = GetCredentialRequest.Builder()

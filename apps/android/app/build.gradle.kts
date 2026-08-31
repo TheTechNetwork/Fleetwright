@@ -18,12 +18,49 @@ if (file("google-services.json").exists()) {
   apply(plugin = "com.google.gms.google-services")
 }
 
+// THE GOOGLE WEB CLIENT ID, READ HERE RATHER THAN LOOKED UP AT RUNTIME.
+//
+// SignIn.kt used to find it with
+//
+//     resources.getIdentifier("default_web_client_id", "string", context.packageName)
+//
+// which is the line every tutorial has and which is WRONG ON ANY BUILD WITH AN
+// applicationIdSuffix. Resources are compiled under the `namespace`; the debug
+// build's applicationId is namespace + ".debug"; so getIdentifier looked in a
+// package that has no resources, returned 0, and the app reported "this build
+// has no Google sign-in configured" — naming a Firebase problem that did not
+// exist. The release build worked, which is exactly what made it hard to see:
+// the failure only appears on the build a tester is handed.
+//
+// Reading it here removes the lookup. It is the same value the coordinator
+// verifies as the token's `aud` (AGENT_FLEET_AUTH_AUDIENCES), so the two halves
+// of sign-in come from one file.
+val googleWebClientId: String? = run {
+  val f = file("google-services.json")
+  if (!f.exists()) return@run null
+  @Suppress("UNCHECKED_CAST")
+  val json = groovy.json.JsonSlurper().parse(f) as Map<String, Any>
+  val clients = json["client"] as? List<Map<String, Any>> ?: emptyList()
+  clients.asSequence()
+    .flatMap { (it["oauth_client"] as? List<Map<String, Any>> ?: emptyList()).asSequence() }
+    // client_type 3 is the WEB client. The type 1 entries beside it are the
+    // Android clients, which authorise the request and are not what the token
+    // is issued for — handing one of those to setServerClientId produces a
+    // token the coordinator refuses, with a message about audiences.
+    .firstOrNull { (it["client_type"] as? Number)?.toInt() == 3 }
+    ?.get("client_id") as? String
+}
+
 android {
   namespace = "network.thetech.fleetwright"
   compileSdk = 37
 
   defaultConfig {
     applicationId = "network.thetech.fleetwright"
+    // null, not "", when there is no google-services.json — a fork building
+    // without Firebase gets a clear refusal at the button rather than a
+    // sign-in attempt with an empty client id.
+    buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", googleWebClientId?.let { "\"$it\"" } ?: "null")
     // One version back, deliberately. This is a first build with no installed
     // base to keep working, and every API level supported below this is a
     // compatibility path somebody has to reason about forever. The cost is
@@ -97,7 +134,11 @@ android {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
   }
-  buildFeatures { compose = true }
+  buildFeatures {
+    compose = true
+    // For GOOGLE_WEB_CLIENT_ID above. Off by default since AGP 8.
+    buildConfig = true
+  }
   // No composeOptions block: the Compose compiler comes from the Kotlin plugin
   // above, at the Kotlin version, so there is nothing to keep in step.
 }
