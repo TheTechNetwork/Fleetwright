@@ -49,14 +49,27 @@ object SignIn {
      *
      *     resources.getIdentifier("default_web_client_id", "string", context.packageName)
      *
-     * which is the line every tutorial has and which is WRONG on any build with
-     * an applicationIdSuffix. Resources are compiled under the `namespace`, the
-     * debug applicationId is namespace + ".debug", so the lookup asked a package
-     * with no resources in it, got 0, and the app announced "this build has no
-     * Google sign-in configured" — naming a Firebase problem that did not exist.
+     * which is the line every tutorial has, and which was broken on BOTH build
+     * types for two unrelated reasons. Worth writing both down, because fixing
+     * either one alone leaves the app still saying "this build has no Google
+     * sign-in configured" — a Firebase problem that never existed.
      *
-     * The release build worked, which is what made it hard to see: it failed
-     * only on the build a tester is handed.
+     *  RELEASE — isShrinkResources. The only reference to that string was this
+     *  runtime lookup, which the resource shrinker cannot see, so it stripped
+     *  the resource. Measured in the Play beta APK: `google_api_key`,
+     *  `gcm_defaultSenderId`, `project_id` and `google_app_id` are all in
+     *  resources.arsc because the Firebase SDK references them statically, and
+     *  `default_web_client_id` is not there at all. THIS IS THE ONE THAT
+     *  REACHED PEOPLE.
+     *
+     *  DEBUG — applicationIdSuffix. Resources are compiled under the
+     *  `namespace`; the debug applicationId is namespace + ".debug"; so the
+     *  lookup asked a package with no resources and got 0.
+     *
+     * A BuildConfig field is a compile-time constant inlined into the code, so
+     * it is immune to both: there is no resource to strip and no package to
+     * resolve. Verified in a release APK built from the fix — the client id
+     * appears in classes.dex, and the resource is still (correctly) absent.
      *
      * See app/build.gradle.kts, which reads it out of google-services.json.
      */
