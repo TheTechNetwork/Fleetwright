@@ -192,3 +192,56 @@ test('the invitation stands whether or not the email went', async () => {
   assert.equal(r.ok, true);
   assert.equal(invites.has('guest@example.com'), true);
 });
+
+test('the email binding is configured, and configuring it did not orphan a var', () => {
+  // `[[send_email]]` is a TOML TABLE HEADER, so it ends `[vars]` wherever it
+  // lands. Put in the middle of that table it would silently move every
+  // variable after it out of scope — the Worker would deploy, and the
+  // allowlist, the GitHub client id and the demo host would simply be
+  // undefined. Nothing here would fail; sign-in would just start refusing
+  // everybody.
+  //
+  // So the file is PARSED rather than read, and the vars that must survive are
+  // named. A test that only checked the binding exists would have passed on a
+  // file that had broken authentication.
+  const toml = readFileSync(new URL('../worker/wrangler.toml', import.meta.url), 'utf8');
+  // Minimal reader: table headers and `key = "value"` at top level, which is
+  // all this assertion needs and avoids a dependency for one file.
+  const vars = new Set();
+  let table = null;
+  for (const raw of toml.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('#') || !line) continue;
+    const header = /^\[+([^\]]+)\]+$/.exec(line);
+    if (header) { table = header[1]; continue; }
+    const kv = /^([A-Za-z0-9_]+)\s*=/.exec(line);
+    if (kv && table === 'vars') vars.add(kv[1]);
+  }
+
+  for (const name of ['AGENT_FLEET_AUTH_ALLOW', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DEMO_HOST']) {
+    assert.ok(vars.has(name), `${name} fell out of [vars] — sign-in or the demo would break silently`);
+  }
+  assert.ok(vars.has('AGENT_FLEET_INVITE_FROM'), 'no sender address, so no invitation email can be sent');
+  assert.match(toml, /\[\[send_email\]\]/, 'the email binding is not declared');
+});
+
+test('the Worker sends through Email Sending, not the reply API', () => {
+  // TWO CLOUDFLARE PRODUCTS WITH SIMILAR NAMES, and the first version of this
+  // used the wrong one. `EmailMessage` from `cloudflare:email` wraps a raw MIME
+  // document and is how you REPLY to mail a Worker received — a different thing
+  // from sending to somebody who has never written to you. Email Sending takes
+  // a plain object and builds the MIME itself.
+  //
+  // Asserted because the two are easy to confuse and the failure is invisible
+  // until somebody actually invites a person: everything typechecks, bundles
+  // and deploys.
+  const src = readFileSync(new URL('../worker/src/fleet-do.js', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  assert.ok(!/cloudflare:email/.test(code), 'still importing the reply API');
+  assert.ok(!/new EmailMessage/.test(code), 'still building a raw MIME message');
+  // `from` is shorthand in the call, so this must not insist on a colon after
+  // it — the first version of this assertion did, and failed on correct code.
+  assert.match(code, /binding\.send\(\{[^}]*\bto:[^}]*\bfrom\b[^}]*\bsubject:[^}]*\btext:/s,
+    'not calling send() with the sending shape');
+});

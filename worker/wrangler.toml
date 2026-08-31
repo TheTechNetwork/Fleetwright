@@ -169,17 +169,35 @@ AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gma
 #   AGENT_FLEET_APP_URL       where to get the app. Without it the message says
 #                             so, rather than arriving with no way to act on it
 #
-# The `send_email` binding below is what actually sends. Sending to addresses
-# VERIFIED as Email Routing destinations is free on any plan; sending to an
-# arbitrary new invitee needs Workers Paid. Untested against a real invitee
-# from here — the code reports whatever Cloudflare says rather than assuming
-# it worked.
-# AGENT_FLEET_NAME = "the workshop fleet"
-# AGENT_FLEET_APP_URL = "https://apps.apple.com/app/id..."
-# AGENT_FLEET_INVITE_FROM = "fleet@thetech.network"
+# The `send_email` binding below is what actually sends. Email Sending is
+# enabled on this account and the plan covers arbitrary recipients, so an
+# invitation reaches somebody who has never been near this fleet — which is the
+# only kind of person worth emailing an invitation to.
+#
+# THE SENDER MUST BE AN ADDRESS THIS ACCOUNT CAN SEND AS — a domain set up for
+# Email Sending. It is the coordinator's own domain, which is worth having: an
+# invitation arriving from the address the fleet already answers on is one the
+# recipient can check, and one fewer domain for somebody to wonder about.
+#
+# `invites@` rather than `noreply@`: nobody replies to either, and only one of
+# them says what it is.
+#
+# Cloudflare refuses a sender this account cannot send as, and that refusal is
+# surfaced to whoever tapped Invite rather than left in a log — so a wrong value
+# here costs one confusing invitation and not a silent hole.
+AGENT_FLEET_NAME = "the Fleetwright fleet"
+AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
+# Where to get the app. Left unset until there is a link worth sending: the
+# message says so plainly rather than arriving with no way to act on it, which
+# is better than a URL that 404s.
+# AGENT_FLEET_APP_URL = "https://..."
 
-# [[send_email]]
-# name = "EMAIL"
+[[send_email]]
+name = "EMAIL"
+# `remote = true` so a local `wrangler dev` sends through the real service
+# rather than failing on a binding the local runtime cannot provide. Sending an
+# invitation is not a thing to discover works only in production.
+remote = true
 
 # Rate limit for the demo token, since the token is public and the point of
 # publishing it was to stop it needing an operator. 60 requests a minute per

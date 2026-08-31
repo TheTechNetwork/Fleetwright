@@ -741,26 +741,22 @@ export class Fleet {
     return {
       from,
       send: async (/** @type {{to: string, subject: string, text: string}} */ message) => {
-        // Built here rather than in the shared module: EmailMessage is a
-        // Cloudflare runtime type, and the composer stays a pure function that
-        // a test can run.
-        const raw = [
-          `From: ${from}`,
-          `To: ${message.to}`,
-          `Subject: ${message.subject}`,
-          'Content-Type: text/plain; charset=utf-8',
-          'MIME-Version: 1.0',
-          '',
-          message.text,
-        ].join('\r\n');
-        // IMPORTED HERE, NOT AT THE TOP. `cloudflare:email` exists only in the
-        // Workers runtime, and a static import makes this whole module
-        // unloadable under Node — which is where most of this project's tests
-        // run, including the ones that exercise these very routes. A dynamic
-        // import inside the one function that needs it keeps the file readable
-        // by both.
-        const { EmailMessage } = await import('cloudflare:email');
-        await binding.send(new EmailMessage(from, message.to, raw));
+        // THE EMAIL SENDING API, not the Email Routing one. The first version
+        // of this built a raw MIME document and wrapped it in an `EmailMessage`
+        // from `cloudflare:email` — which is how you REPLY to mail a Worker
+        // received, and is a different product from sending one to somebody who
+        // has never written to you. Sending takes a plain object and does the
+        // MIME itself.
+        //
+        // Dropping that also drops a Node problem it had brought with it:
+        // `cloudflare:email` exists only in the Workers runtime, so importing
+        // it made this module unloadable under Node, which is where most of
+        // this project's tests run.
+        //
+        // Text only, deliberately. This message is four short paragraphs whose
+        // most important line is an email address; HTML would add a rendering
+        // surface, an escaping question and nothing a reader gains.
+        await binding.send({ to: message.to, from, subject: message.subject, text: message.text });
       },
     };
   }

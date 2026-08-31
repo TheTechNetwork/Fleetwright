@@ -79,10 +79,10 @@ export async function sendInvite(mailer, about) {
     await mailer.send({ to: about.email, subject, text });
     return { sent: true, why: 'sent' };
   } catch (e) {
-    // REPORTED, NOT SWALLOWED. Cloudflare refuses sending for reasons an
-    // operator can act on and would otherwise never see — an unverified
-    // recipient, a plan that does not include it, a sender domain that is not
-    // theirs — and the person doing the inviting is the person who can fix it.
+    // REPORTED, NOT SWALLOWED. Cloudflare refuses for reasons an operator can
+    // act on and would otherwise never see — a sender address this account
+    // cannot send as, a recipient that has bounced or complained before — and
+    // the person doing the inviting is the person who can fix them.
     return { sent: false, why: `${/** @type {Error} */ (e).message}`.slice(0, 200) };
   }
 }
