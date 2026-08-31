@@ -27,21 +27,32 @@ import UIKit
 struct FleetApp: View {
     let settings: Settings
 
+    /// Which tab is showing. Held here so an unconfigured app can open on
+    /// Settings — which used to be a sheet thrown over the session list on
+    /// first launch, and is now simply the tab somebody needs to be on. A
+    /// modal telling you to go somewhere, in an app that has a place to go, is
+    /// the sheet-shaped habit this whole change is undoing.
+    @State private var tab: Tabs = .sessions
+    private enum Tabs: Hashable { case sessions, fleet, settings }
+
     var body: some View {
-        TabView {
-            Tab("Sessions", systemImage: "square.stack.3d.up") {
+        TabView(selection: $tab) {
+            Tab("Sessions", systemImage: "square.stack.3d.up", value: Tabs.sessions) {
                 FleetView(settings: settings)
             }
-            Tab("Fleet", systemImage: "server.rack") {
-                NavigationStack { SettingsView(settings: settings, focus: .machines, onDone: {}) }
+            Tab("Fleet", systemImage: "server.rack", value: Tabs.fleet) {
+                NavigationStack { SettingsView(settings: settings, focus: .machines) }
             }
-            Tab("Settings", systemImage: "gearshape") {
-                NavigationStack { SettingsView(settings: settings, focus: .you, onDone: {}) }
+            Tab("Settings", systemImage: "gearshape", value: Tabs.settings) {
+                NavigationStack { SettingsView(settings: settings, focus: .you) }
             }
         }
         // The content is the point; the chrome is not. On the way down the
         // tab bar shrinks to a pill and gives the list its height back.
         .tabBarMinimizeBehavior(.onScrollDown)
+        // Nowhere to point a coordinator at yet, so start where that is fixed
+        // rather than showing an empty session list and a modal about it.
+        .onAppear { if !settings.configured { tab = .settings } }
     }
 }
 
@@ -78,7 +89,6 @@ struct FleetView: View {
     }
     @State private var status = ""
     @State private var busy = false
-    @State private var showingSettings = false
     @State private var showingStart = false
 
     var body: some View {
@@ -160,35 +170,25 @@ struct FleetView: View {
             // same thing, and the answer being yes does not make the question
             // free. Android has always said Fleetwright.
             .navigationTitle("Fleetwright")
-            .safeAreaInset(edge: .bottom) {
-                // THE BIN, WITH THE SESSIONS. It sat under each host's row in
-                // settings, because that is where the volumes live — an
-                // implementation detail leaking into the layout. Reachable
-                // when empty too: a safety net nobody can find until they need
-                // it does not reassure anybody, and this one looked for a
-                // while like it did not exist.
-                NavigationLink {
-                    RecycleBinView(settings: settings, hosts: fleetHosts) {
-                        Task { await refresh(keepStatus: true) }
-                    }
-                } label: {
-                    Label(binCount > 0 ? "Recycle bin (\(binCount))" : "Recycle bin", systemImage: "trash")
-                        .font(.footnote)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                // GLASS, BECAUSE IT FLOATS OVER THE LIST. `.bar` was a flat
-                // strip that read as part of the content; this is a control
-                // sitting above it, and on iOS 26 that is what the material
-                // says. The capsule is the system's own shape for a floating
-                // control — the same one the tab bar collapses into — so the
-                // two agree rather than each inventing a radius.
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .padding(.bottom, 8)
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Settings") { showingSettings = true }
+                    // THE BIN, IN THE TOOLBAR RATHER THAN OVER THE LIST. It was
+                    // a glass capsule pinned to the bottom edge — which is
+                    // where the tab bar now lives, so two floating controls
+                    // fought for one corner and the bin sat on top of the last
+                    // session in the list.
+                    //
+                    // The toolbar is where a secondary action belongs once
+                    // there is somewhere for the primary ones to live, and it
+                    // takes the place of the Settings button that a Settings
+                    // TAB made redundant.
+                    NavigationLink {
+                        RecycleBinView(settings: settings, hosts: fleetHosts) {
+                            Task { await refresh(keepStatus: true) }
+                        }
+                    } label: {
+                        Label(binCount > 0 ? "Bin (\(binCount))" : "Bin", systemImage: "trash")
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     // Opens the sheet rather than starting immediately. The
@@ -199,16 +199,12 @@ struct FleetView: View {
                         .disabled(busy || !settings.configured)
                 }
             }
-            .sheet(isPresented: $showingSettings) {
-                SettingsView(settings: settings) { Task { await refresh() } }
-            }
             .sheet(isPresented: $showingStart) {
                 // The sheet gathers what to start and hands it up. It does not
                 // wait for the answer — see startInBackground.
                 StartSheet(settings: settings, onStart: startInBackground)
             }
             .task { await refresh() }
-            .onAppear { if !settings.configured { showingSettings = true } }
         }
     }
 
@@ -455,7 +451,10 @@ private struct SettingsView: View {
 
     let settings: Settings
     var focus: Focus = .all
-    let onDone: () -> Void
+    /// Called when a SHEET presentation is finished with. Nil in a tab, where
+    /// there is nothing to dismiss and a "Done" button is an instruction to
+    /// leave a place you live in.
+    var onDone: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var pushResult = ""
     @State private var signInResult = ""
@@ -566,7 +565,7 @@ private struct SettingsView: View {
                 settings.signedInAs = issued.email
                 signInResult = ""
                 await loadHosts()
-                onDone()
+                onDone?()
             } catch SignIn.Failure.cancelled {
                 signInResult = ""
             } catch {
@@ -627,7 +626,7 @@ private struct SettingsView: View {
                             settings.coordinatorURL = Demo.coordinatorURL
                             settings.signedInAs = Demo.label
                             settings.credential = Demo.credential
-                            onDone()
+                            onDone?()
                         }
                     } else if Demo.isActive(settings.coordinatorURL) {
                         // Said plainly, and never as "signed in". Every reply
@@ -1018,7 +1017,10 @@ private struct SettingsView: View {
                 }
                 }
             }
-            .navigationTitle("Settings")
+            // THE TAB'S OWN NAME. Both tabs rendered this view and both said
+            // "Settings", so the Fleet tab was titled after the sheet it used
+            // to be part of — a screen announcing itself as somewhere else.
+            .navigationTitle(focus == .machines ? "Fleet" : "Settings")
             .task { await loadHosts() }
             .alert(
                 "Revoke \(confirmingRevoke ?? "")?",
@@ -1049,8 +1051,12 @@ private struct SettingsView: View {
                      + "Getting it back means a new pin, typed on that box.")
             }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { onDone(); dismiss() }
+                // ONLY AS A SHEET. In a tab there is nothing to dismiss, and
+                // Done sat in the corner of a screen nobody had opened.
+                if let onDone {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { onDone(); dismiss() }
+                    }
                 }
             }
         }
