@@ -36,6 +36,7 @@ import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWi
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { callbackPage } from './github-oauth.js';
+import { resource } from '../../core/resources.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -399,7 +400,7 @@ export class Coordinator {
     // inlined, because this process has a filesystem and the Worker does not.
     if (p === '/openapi.json') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      return res.end(readFileSync(new URL('../../../openapi.json', import.meta.url), 'utf8'));
+      return res.end(readFileSync(resource('openapi.json'), 'utf8'));
     }
 
     // --- enrolment, before the token gate ------------------------------------

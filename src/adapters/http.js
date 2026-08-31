@@ -25,6 +25,7 @@ import { readCredentialState, describeCredential } from '../core/claude-credenti
 import { Accounts } from '../core/accounts.js';
 import { pickCredentialSource } from '../core/podman.js';
 import { apiTokenFile } from '../core/api-token.js';
+import { resource } from '../core/resources.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,7 +47,7 @@ export class HttpAdapter {
     this.server = null;
     // Read once at startup: the UI is a single static file and re-reading it
     // per request buys nothing.
-    this.html = readFileSync(path.join(HERE, '..', 'web', 'index.html'), 'utf8');
+    this.html = readFileSync(resource('src', 'web', 'index.html'), 'utf8');
   }
 
   get name() {

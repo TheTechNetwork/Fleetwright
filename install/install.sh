@@ -19,6 +19,23 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# A RELEASE, OR A CHECKOUT. The two differ in exactly one way that matters here:
+# a release carries its dependencies already bundled into lib/, so there is no
+# npm step, no lockfile, and no git remote to pull from. Everything else — the
+# units, the sandbox image, the wizard — is identical, which is why this is a
+# flag and not a second installer.
+#
+# Detected from the layout rather than from a flag somebody has to pass,
+# because the person running it got here by unpacking a tarball and has no
+# reason to know there are two shapes.
+PACKAGED=0
+if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
+
+# Set only when the new agent-hub has been SEEN to start. Section 8 will not
+# remove the install it replaced without it.
+SERVICES_STARTED=0
+OLD_UNIT_BACKUP_DIR=""
 ENV_FILE=/etc/agent-hub.env
 SIDECAR_ENV=/etc/agent-fleet-sidecar.env
 COORD_ENV=/etc/agent-fleet-coordinator.env
@@ -778,6 +795,20 @@ install_unit() { # install_unit NAME
   ok "$dest"
 }
 
+# KEPT BEFORE THEY ARE OVERWRITTEN, because the old ExecStart is the only
+# record of where the previous install lived — and install_unit is about to
+# replace it. Section 8 reads these to know what it is replacing.
+OLD_UNIT_BACKUP_DIR="$(mktemp -d)"
+for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+  if [ "$PLATFORM" = macos ]; then
+    [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] \
+      && cp "/Library/LaunchDaemons/network.thetech.$u.plist" "$OLD_UNIT_BACKUP_DIR/$u.service" || true
+  else
+    [ -f "/etc/systemd/system/$u.service" ] \
+      && cp "/etc/systemd/system/$u.service" "$OLD_UNIT_BACKUP_DIR/$u.service" || true
+  fi
+done
+
 install_unit agent-hub
 install_unit agent-fleet-sidecar
 install_unit agent-fleet-coordinator
@@ -994,6 +1025,13 @@ ok "config readable by $RUN_USER"
 # The sidecar and agent-hub are unaffected: neither imports it. That is why this
 # was invisible until a box tried to run its own coordinator.
 say "Runtime dependencies"
+if [ "$PACKAGED" = 1 ]; then
+  # NOTHING TO INSTALL, and that is the point of the release rather than a
+  # convenience. npm runs lifecycle scripts from every package in the tree, on
+  # a box whose whole job is to be trustworthy; a release is unpacked and runs
+  # none of them. The one runtime dependency is inside lib/.
+  ok "bundled — no npm install on this box"
+else
 NPM_BIN="$(command -v npm 2>/dev/null || true)"
 if [ -z "$NPM_BIN" ]; then
   # Debian ships npm separately from nodejs, so a box that got node from
@@ -1024,6 +1062,7 @@ else
     warn "npm install failed in $DIR — a coordinator on this box will not start.
        Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
   fi
+fi
 fi
 
 # The checkout must belong to the user that runs the service, or /update cannot
@@ -1504,7 +1543,10 @@ if [ "$WIZARD" = yes ]; then
           || warn "       journalctl -u $1 -n 50"
         return 1
       }
-      start_service agent-hub || true
+      # Recorded, because section 8 removes the previous install and must not
+      # do that on a box where the replacement never came up. Seen-to-start is
+      # the only evidence worth acting on.
+      if start_service agent-hub; then SERVICES_STARTED=1; fi
       [ "$FLEET_LOCAL" = 1 ] && { start_service agent-fleet-coordinator || true; }
 
       # Enrol BEFORE starting the sidecar. Not for correctness — the sidecar
@@ -1556,6 +1598,55 @@ if [ "$WIZARD" = yes ]; then
         warn "could not start the login: $LOGIN_OUT"
       fi
     fi
+  fi
+fi
+
+
+# --- 8. the install this one replaces ---------------------------------------
+#
+# EVERY INSTALL IS AN UPGRADE. Boxes are already running the checkout layout —
+# a git clone with node_modules — so a release cannot behave as though it
+# arrived on a clean machine. Two installs side by side is not "harmless
+# leftovers": it is a box where the next `/update` picks one of them and nobody
+# can tell which is running.
+#
+# Nothing here touches state. The credentials, the host key, the registry and
+# the env files all live OUTSIDE the install directory already
+# (/etc/*.env, /var/lib/agent-hub, /var/lib/agent-fleet), which is why this can
+# be a directory removal rather than a migration of data. The units were
+# rewritten above with __DIR__ pointing at this release, so the switch has
+# already happened by the time we get here.
+if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
+  say "The install this one replaces"
+
+  OLD_DIR=""
+  for u in agent-hub agent-fleet-sidecar; do
+    [ -f "$OLD_UNIT_BACKUP_DIR/$u.service" ] || continue
+    # The path the OLD unit ran from, taken from the backup rather than from
+    # the file we just overwrote.
+    d="$(sed -n 's|^ExecStart=[^ ]* \(.*\)/bin/[a-z-]*.*$|\1|p' "$OLD_UNIT_BACKUP_DIR/$u.service" | head -1)"
+    [ -n "$d" ] && [ "$d" != "$DIR" ] && OLD_DIR="$d" && break
+  done
+
+  if [ -z "$OLD_DIR" ]; then
+    ok "no earlier install to clean up"
+  elif [ ! -d "$OLD_DIR" ]; then
+    ok "the earlier install at $OLD_DIR is already gone"
+  elif [ "$SERVICES_STARTED" != 1 ]; then
+    # THE ORDER IS THE SAFETY. Removing the old tree before the new one has
+    # been seen to start would leave a box with neither.
+    warn "the new services did not start, so $OLD_DIR was left alone.
+       Fix the service, re-run this installer, and it will clean up then."
+  elif [ -d "$OLD_DIR/.git" ] && ! (cd "$OLD_DIR" && git diff --quiet HEAD 2>/dev/null); then
+    # Somebody's working tree. This is a development box, and deleting
+    # uncommitted work to tidy up a directory is not a trade this installer
+    # gets to make on anybody's behalf.
+    warn "$OLD_DIR has uncommitted changes, so it was NOT removed.
+       It is no longer what runs — the services point at $DIR.
+       Remove it yourself when you have saved what you want:  rm -rf $OLD_DIR"
+  else
+    rm -rf "$OLD_DIR"
+    ok "removed the earlier install at $OLD_DIR"
   fi
 fi
 
