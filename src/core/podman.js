@@ -475,8 +475,18 @@ function seedCredentials(cfg, volume, picked, actor = null) {
     return {
       ok: false,
       message:
-        `No Claude account to give this session: ${picked.why ?? 'none is linked on this box'}.\n`
-        + 'Connect one from the app under Your credentials, or run `agent-hub login` on the box.',
+        `No Claude account to give this session on ${cfg.hostname}: ${picked.why ?? 'none is linked on this box'}.\n`
+        // NAMES THE MACHINE, and does not name a screen. Claude is linked PER
+        // MACHINE, so "connect one" without saying which box is an instruction
+        // somebody can follow and still not fix this — they connect on the host
+        // they happen to be looking at, and the scheduler puts the next session
+        // somewhere else.
+        //
+        // The screen was named too, and named wrongly: it said "under Your
+        // credentials in the app", which on iOS hid Claude and on Android does
+        // not exist. A remedy pointing at a surface that cannot perform it is
+        // worse than one that just says what is needed.
+        + `Connect a Claude account for ${cfg.hostname} from the app, or run \`agent-hub login\` on that box.`,
     };
   }
   // The identity rides with the credential when there is one. The entrypoint
