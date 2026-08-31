@@ -39,7 +39,48 @@ StateDirectoryMode=0700
 KillMode=control-group
 TimeoutStopSec=10
 
+
+# --- Hardening ---------------------------------------------------------------
+#
+# MUCH HARDER THAN agent-hub.service, and that is not an inconsistency — it is
+# the difference between the two processes. This one spawns nothing: it is a
+# single Node process that talks WebSocket to the coordinator and HTTP to
+# 127.0.0.1:8790, and every directive rejected next door was rejected because
+# of podman or tmux, neither of which exists here.
+#
+# Measured the same way — `systemd-run` with the whole set, running a probe that
+# does what this actually does: write and chmod a 0600 file in the state
+# directory, sign with ed25519, listen on loopback, and make an HTTP request.
 NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+UMask=0077
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service
+# EPERM RATHER THAN SIGSYS, and this line is why the filter is usable at all.
+# Measured: with the default action, `@system-service` kills Node outright —
+# status=31/SYS, before it prints anything. Node makes a call outside that set
+# and tolerates being refused, but not being shot. The syscall is denied either
+# way; this chooses which of "denied" and "dead" the process gets.
+SystemCallErrorNumber=EPERM
+#
+# ProtectHome is READ-ONLY rather than yes: the sidecar reads the account and
+# connection files that live under the hub's state directory, which may be in
+# $HOME on a box installed from a checkout. Writing them is agent-hub's job.
 
 StandardOutput=journal
 StandardError=journal

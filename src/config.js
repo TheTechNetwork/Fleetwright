@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
+import { unsafeSandboxArgs, unsafeSandboxMessage } from './core/sandbox-args.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
 // Derived rather than configured, so it is right by construction even when the
@@ -144,6 +145,9 @@ export function loadConfig(env = process.env) {
     // deployment-specific (extra mounts, --network, --userns) that does not
     // belong hard-coded here.
     sandboxExtraArgs: str('AGENT_HUB_SANDBOX_ARGS').split(/\s+/).filter(Boolean),
+    // Typed on purpose, and logged on every start. See core/sandbox-args.js:
+    // the refusal has to be escapable or it gets escaped by deleting the check.
+    sandboxAllowUnsafeArgs: bool('AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS', false),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
@@ -286,8 +290,24 @@ export function loadConfig(env = process.env) {
  * @returns {{ errors: string[], warnings: string[] }}
  */
 export function validateConfig(cfg) {
+  /** @type {string[]} */
   const errors = [];
+  /** @type {string[]} */
   const warnings = [];
+
+  // The sandbox escape hatch, checked. AGENT_HUB_SANDBOX_ARGS is spliced
+  // straight into `podman run`, and a handful of the things it can say do not
+  // extend the sandbox — they remove it, while every document here goes on
+  // describing a session as contained. See core/sandbox-args.js.
+  if (cfg.sandbox) {
+    const unsafe = unsafeSandboxArgs(cfg.sandboxExtraArgs);
+    if (unsafe.length) {
+      // A WARNING WHEN OPTED IN, NOT SILENCE. Somebody who typed the override
+      // knows; somebody who inherited the box does not, and this is the line
+      // that tells them.
+      (cfg.sandboxAllowUnsafeArgs ? warnings : errors).push(unsafeSandboxMessage(unsafe));
+    }
+  }
 
   // A control surface reachable off-box with no token is remote shell access
   // for anyone who can route to the port. Refuse to start rather than warn.
