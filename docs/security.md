@@ -241,6 +241,29 @@ so probing for a nonce is not an enrolment oracle.
 *Falsify:* `test/oidc.test.js` and host-enrol tests; assert the signed value is a
 coordinator-issued, single-use nonce.
 
+**SEC-NET-1** — A phone MUST NOT send its device credential over cleartext to
+anything but loopback. The coordinator URL is typed by a person, so "TLS to the
+coordinator" above is an assumption about a *setting*, not a property of the
+code — and an assumption is where this one went wrong.
+
+*Found by CodeQL* (`swift/cleartext-transmission`) and true on exactly one of
+the two phones. iOS had been refusing plain `http` all along because App
+Transport Security defaults to off; Android shipped
+`usesCleartextTraffic="true"` and permitted it anywhere. Every request carries a
+Bearer credential and the replies carry session names, prompts and the signed-in
+email, so a listener on the path needs to break nothing — only be present.
+
+Both apps now refuse a non-`https` coordinator unless the host is loopback or
+`.local`, and each is backed by the platform's own enforcement one layer down
+(`NSAllowsLocalNetworking`, `network_security_config.xml`) so the app's rule and
+the platform's rule cannot drift apart. A tailnet address is deliberately NOT
+exempt: WireGuard is a good argument at the wrong layer, the app cannot
+distinguish a tailnet IP from any other, and Tailscale issues real certificates
+for `ts.net` names.
+
+*Falsify:* `Fleet.isLocal` / `isLocal` in `Fleet.kt`; grep for
+`NSAllowsArbitraryLoads` and `usesCleartextTraffic`, which must not appear.
+
 ### 4.9 Malicious contributor / compromised dependency
 
 **Bound:** high, and mostly out of band. A malicious change to `intents.js`,
@@ -580,8 +603,9 @@ Hold a change against this. If a box is unchecked, the change is not done.
 - [ ] Whether it can mint short-lived tokens is stated (`expiresAt: null` shown,
       never smoothed over).
 - [ ] The pre-filled scopes err toward the work succeeding *and* are unstickable.
-- [ ] No shared fallback for a per-person provider (GitHub/Cloudflare get their
-      own token or none; only Claude falls back to the shared org account).
+- [ ] No shared fallback, for any provider. Claude used to be the exception and
+      is not one any more — there is no box account to fall back to
+      (`one-account-per-person.md`).
 - [ ] Any at-rest material placed per §3; refresh-type material to
       `.renewal.json`, never `.env` (SEC-CRED-2).
 

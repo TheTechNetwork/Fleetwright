@@ -64,10 +64,18 @@ enum Demo {
 ///    a way it usually is not: no legal hostname contains a space, so there is
 ///    exactly one thing the person could have meant.
 ///
-/// Deliberately does NOT upgrade a typed `http://` to https. Somebody who
-/// wrote it meant it — a coordinator on a laptop over a tailnet is a real
-/// thing — and quietly changing a scheme somebody chose is how "it works on
-/// the terminal and not in the app" gets born.
+/// Deliberately does NOT upgrade a typed `http://` to https, and does not
+/// refuse it here either. Quietly changing a scheme somebody chose is how "it
+/// works in the terminal and not in the app" gets born, and a normaliser is the
+/// wrong place to enforce a security rule: it runs while somebody is still
+/// TYPING, so refusing here would reject `http` on the way to typing something
+/// legitimate.
+///
+/// The rule lives at the point of transmission instead — see `isLocal` in
+/// Fleet.swift. What was wrong before was not the permissiveness; it was that
+/// the comment here claimed plain http over a tailnet worked, and it never did:
+/// App Transport Security has been refusing it all along, with an opaque
+/// networking error rather than a sentence about cleartext.
 enum CoordinatorURL {
     static func normalise(_ raw: String) -> String {
         // Every kind of whitespace, anywhere, not just the ends. A pasted URL

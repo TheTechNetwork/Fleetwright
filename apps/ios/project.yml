@@ -47,6 +47,18 @@ targets:
       # version to bump for a TestFlight build is MARKETING_VERSION.
       path: Fleetwright/Info.plist
       properties:
+        # CLEARTEXT IS OFF, and this key does not turn it on — it narrows the
+        # default rather than widening it. ATS already refused plain http
+        # everywhere; NSAllowsLocalNetworking carves out loopback and .local, so
+        # a coordinator running on the same machine works while nothing else
+        # over http does. Fleet.swift refuses the same set, so the app's rule
+        # and the platform's rule are one rule and cannot drift apart.
+        #
+        # NSAllowsArbitraryLoads is deliberately absent. It is the key that
+        # would make the CodeQL cleartext finding real, and App Review asks for
+        # a justification for it that this app does not have.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         CFBundleDisplayName: Fleetwright
         # OTHER NAMES SIRI WILL ACCEPT FOR THIS APP.
         #

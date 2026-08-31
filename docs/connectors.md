@@ -142,24 +142,29 @@ rather than the old one-per-box.
 
 ## A member gets their own tokens or none
 
-Deliberately **not** the same rule as the Claude credential, and the difference
-is the point.
+This used to be the place where GitHub and Cloudflare differed from Claude:
 
 | | fallback when nothing is linked |
 |---|---|
-| Claude | the **shared** org account |
+| Claude | ~~the **shared** org account~~ → **nothing** |
 | GitHub, Cloudflare | **nothing** |
 
-A shared Claude plan is a licence somebody chose to share. A GitHub token is one
-person's access to their own repositories, and handing it to a guest because
-they happen not to have connected their own is exactly the thing that was ruled
-out:
+The argument for the exception was that a shared Claude plan is a licence
+somebody chose to share, where a GitHub token is one person's access to their
+own repositories. True of an org, false of a guest — and the rule that decides
+which is which was a sentence somebody had to remember:
 
 > To clarify the guests will be bringing their own GitHub Cloudflare Claude
 > creds — no shared creds to them.
 
-The box's own row exists and is used by actors with **no email** — the CLI,
-Telegram, the web UI — all of which are somebody operating the box itself.
+**Now all three are the same rule and the sentence is structural.**
+`pickCredentialSource` returns `why: "<email> has not linked a Claude account"`
+rather than a credential, because there is no box account left to hand out. See
+[one-account-per-person.md](./one-account-per-person.md).
+
+Actors with **no email** — the CLI, Telegram, the web UI — are somebody
+operating the box, and they run as the *operator*: a named person who linked an
+account, not the machine. That is the whole of the change.
 
 ## What the first audit found, and what changed
 

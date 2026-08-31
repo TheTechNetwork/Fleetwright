@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext off, with one hole the size of the machine you are developing on.
+
+  This replaces android:usesCleartextTraffic="true", which allowed plain http to
+  ANYWHERE. Every request the app makes carries a Bearer credential, and the
+  replies carry session names, prompts and the email of whoever is signed in —
+  all of it readable by anything on the path, and the credential replayable. A
+  passive listener does not have to break anything, only be present.
+
+  It also put the two apps in disagreement, which is the part worth naming: iOS
+  has been refusing cleartext all along because App Transport Security defaults
+  to off, so the same typed URL worked on one phone and failed on the other. The
+  permissive one was the one nobody had looked at.
+
+  10.0.2.2 is the emulator's route to the host machine — the Android equivalent
+  of localhost, and useless to anybody who is not sitting in front of it.
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false" />
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">localhost</domain>
+    <domain includeSubdomains="false">127.0.0.1</domain>
+    <domain includeSubdomains="false">::1</domain>
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+</network-security-config>

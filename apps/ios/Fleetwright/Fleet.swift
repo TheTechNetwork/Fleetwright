@@ -706,6 +706,27 @@ struct Fleet {
         guard let url = URL(string: settings.coordinatorURL + path) else {
             throw FleetError.message("That coordinator URL is not a URL")
         }
+        // NOT OVER CLEARTEXT. Every request from here carries a Bearer
+        // credential, and the replies carry session names, prompts and the
+        // email of whoever is signed in. On plain http all of that is readable
+        // by anything between the phone and the box, and the credential is
+        // replayable — a passive listener does not have to break anything, only
+        // be present.
+        //
+        // Loopback and .local are exempt because they cannot leave the device
+        // or the link, and a coordinator on the same machine is how this gets
+        // developed. That is exactly the exemption Apple carved out as
+        // NSAllowsLocalNetworking, so the app's ATS entry and this check agree.
+        //
+        // ATS was already refusing everything else — this changes the failure
+        // from an opaque "could not connect" into a sentence naming the cause,
+        // which is the difference between a person fixing their URL and a
+        // person concluding the fleet is down.
+        if url.scheme?.lowercased() != "https", !Self.isLocal(url.host) {
+            throw FleetError.message(
+                "Refusing to send your credential over plain http. Use https:// for \(url.host ?? "that address")."
+            )
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -729,6 +750,26 @@ struct Fleet {
             throw FleetError.message("The coordinator refused that.")
         }
         return data
+    }
+}
+
+extension Fleet {
+    /// Somewhere cleartext cannot escape to: the device itself, or the local
+    /// link. Matches ATS's NSAllowsLocalNetworking rather than inventing a
+    /// second definition of "local" that would disagree with the platform.
+    ///
+    /// A TAILNET ADDRESS IS NOT ON THIS LIST, deliberately. It is encrypted by
+    /// WireGuard, which is a good argument and the wrong layer: this app cannot
+    /// tell a tailnet IP from any other address in that range, and Tailscale
+    /// hands out real HTTPS certificates for ts.net names anyway. The workflow
+    /// is served by `tailscale cert`, not by an exception here.
+    static func isLocal(_ host: String?) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return false }
+        return host == "localhost"
+            || host == "127.0.0.1"
+            || host == "::1"
+            || host == "[::1]"
+            || host.hasSuffix(".local")
     }
 }
 

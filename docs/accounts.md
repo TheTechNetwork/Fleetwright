@@ -67,10 +67,11 @@ reason: an identity with an `@` in it must not be split on whitespace and read
 as arguments.
 
 **2. Linking an account — done.** `/login for <email>` runs the same OAuth flow
-in an **isolated `CLAUDE_CONFIG_DIR`**, so the box's own login is never
+in an **isolated `CLAUDE_CONFIG_DIR`**, so no other account on the box is
 touched — without the isolation, linking a client's account would log the whole
-box out of the org account, the exact machine-wide blast radius accounts exist
-to end. On success the credential moves into `accounts/<email>.json`; `/accounts`
+box out of whichever account was there, the exact machine-wide blast radius
+accounts exist to end. The isolation outlived the thing it was protecting: the
+box has no account of its own now, and the operator's is just another person's. On success the credential moves into `accounts/<email>.json`; `/accounts`
 lists and unlinks.
 
 **3. Seeding from it — done, and it taught us something.** A credential alone is
@@ -141,7 +142,7 @@ means something is genuinely wrong.
 **A token six hours from expiry is healthy, not stale.** It cannot be topped up
 early, by us or by anybody, so `/verify claude` says when the box will start
 trying rather than leaving somebody watching a number that is not going to
-move. And **a session can never renew the box's own credential**: a sandboxed
+move. And **a session can never renew the credential it was seeded with**: a sandboxed
 session works on a copy inside its volume, so any refresh the CLI does in there
 updates the copy and never the original.
 
@@ -213,9 +214,9 @@ flag day and adding a verb is free. An older host answers `unknown_verb` and
 its connections behave exactly as they did before.
 
 **Two ways to be signed out, and only one of them was visible.** `claude auth
-status` reports on the box's own home directory; a sandboxed session runs on a
-copy of a file. A box can report itself signed in and hand every new session a
-dead token. `/api/state` now publishes what a session *would* get beside what
+status` reports on whatever is in the home directory it is pointed at; a
+sandboxed session runs on a copy of a file. A box can report itself signed in
+and hand every new session a dead token. `/api/state` now publishes what a session *would* get beside what
 the box says about itself, health carries it, and the coordinator degrades a
 host on it — but only when the token has expired **and** there is no refresh
 token to renew it with. Expired-but-refreshable is the ordinary state of a box
@@ -315,8 +316,13 @@ constraint made mechanical:
 > To clarify the guests will be bringing their own GitHub Cloudflare Claude
 > creds — no shared creds to them.
 
-A member with no linked **Claude** account falls back to the shared one,
-because a shared org plan is a licence somebody chose to share. A member with
-no connected **GitHub or Cloudflare** token gets nothing at all — those are one
-person's access to their own repositories and accounts, and inheriting them by
-default is precisely what that sentence rules out.
+**That used to be true of GitHub and Cloudflare only.** A member with no linked
+Claude account fell back to the box's own, on the grounds that a shared org plan
+is a licence somebody chose to share — true of an org, false of a guest, and a
+policy nobody could see being applied.
+
+It is now the same rule for all three: **no linked account, no session.**
+`pickCredentialSource` returns `why: "<email> has not linked a Claude account"`
+rather than a credential, and there is no box account left to fall back to. See
+[one-account-per-person.md](./one-account-per-person.md) — the guest constraint
+stopped being a rule somebody had to remember and became the shape of the code.
