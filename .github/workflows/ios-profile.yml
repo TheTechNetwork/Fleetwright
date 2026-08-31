@@ -1,0 +1,77 @@
+name: iOS — recreate provisioning profile
+
+# Delete and recreate the App Store provisioning profile, bound to EVERY
+# currently-valid distribution certificate on the team, and verify it comes back
+# ACTIVE.
+#
+# WHEN TO RUN THIS. A provisioning profile names the specific distribution
+# certificates it trusts, and it is immutable — the App Store Connect API has no
+# "edit", only create and delete. So when a distribution certificate is revoked
+# (Apple caps them per team; freeing a slot for a sibling project means revoking
+# one), every profile that named it turns INVALID and signing fails with
+# "No profiles for 'network.thetech.fleetwright' were found". Run this to mint a
+# replacement bound to all the certificates that are still valid.
+#
+# AFTER IT RUNS: it does NOT update the APPLE_PROVISIONING_PROFILE secret — a
+# workflow cannot read a profile's bytes back out and cannot write org/repo
+# secrets through the proxy. Download the recreated profile from the developer
+# portal (Certificates, Identifiers & Profiles -> Profiles) and paste its base64
+# into the APPLE_PROVISIONING_PROFILE repository secret, then run the iOS
+# workflow. The recreated profile is what makes that upload sign.
+#
+# It reuses the shared App Store Connect API key (org secrets ASC_*), so it does
+# NOT mint anything — it binds to certificates that already exist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "recreate" to delete and recreate the profile'
+        required: true
+        default: ''
+
+concurrency:
+  # Serialised: two concurrent runs would race on delete-then-create of the same
+  # profile name.
+  group: ios-profile-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recreate:
+    if: inputs.confirm == 'recreate'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.20.0'
+
+      - name: Preflight — the credentials this cannot run without
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          missing=""
+          [ -n "$ASC_KEY_ID" ]    || missing="$missing ASC_KEY_ID"
+          [ -n "$ASC_ISSUER_ID" ] || missing="$missing ASC_ISSUER_ID"
+          [ -n "$ASC_KEY_P8" ]    || missing="$missing ASC_KEY_P8"
+          if [ -n "$missing" ]; then
+            echo "::error::Not set:$missing — these are org secrets (visibility: selected). See docs/ci.md."
+            exit 1
+          fi
+
+      - name: Delete and recreate the profile, bound to all valid dist certs
+        env:
+          # ASC_KEY_P8 is RAW PEM, not base64: the script hands it straight to
+          # node's signer. Do not base64 it.
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: network.thetech.fleetwright
+          PROFILE_NAME: Fleetwright Profile
+        run: node tools/recreate-ios-profile.mjs

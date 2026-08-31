@@ -14,6 +14,7 @@ never given.
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
 | `ios.yml` — `testflight` | published release | App Store Connect |
+| `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
 
 ## The one that matters most needs nothing
@@ -211,12 +212,43 @@ but it changes what "ship it" looks like later and is better known now.
 
 ## App Store Connect — TestFlight
 
-| secret | where it comes from |
+### These are ORG secrets, shared with ajar-family
+
+Fleetwright and `ajar-family` are both in Apple team `2BPX4R682U` and **share
+its certificate cap.** Apple caps distribution certificates per team, so if each
+repo mints its own CI certificate they revoke each other's — and a revoked
+certificate invalidates every provisioning profile bound to it. That is the exact
+failure this arrangement exists to stop repeating.
+
+So the credentials that are identical for both repos live **once**, as
+organisation secrets on `TheTechNetwork` (visibility: *selected*, granted to
+`ajar-family` and `Fleetwright`). Both repos' workflows read the same names:
+
+| org secret | where it comes from |
 |---|---|
-| `APPSTORE_ISSUER_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API |
-| `APPSTORE_KEY_ID` | the key's ID, on the same page |
-| `APPSTORE_PRIVATE_KEY` | the **contents** of the `AuthKey_XXXX.p8` file (downloadable once) |
-| `APPLE_TEAM_ID` | Membership details, a 10-character string |
+| `ASC_ISSUER_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API |
+| `ASC_KEY_ID` | the key's ID, on the same page |
+| `ASC_KEY_P8` | the **contents** of the `AuthKey_XXXX.p8` file (downloadable once). **Raw PEM, not base64** — the workflow does `printf '%s' "$ASC_KEY_P8" > AuthKey.p8`, so base64 would write a file that is not a key and fails at upload with nothing pointing at the cause |
+| `APPLE_DIST_P12` | `base64 -w0 distribution.p12` — this IS base64 (it is binary) |
+| `APPLE_DIST_P12_PASSWORD` | the `.p12` export password. Use a **hex** password: base64 can contain `/` and `+`, which get mangled between a GitHub secret and `security import -P` |
+
+| org variable | where it comes from |
+|---|---|
+| `APPLE_TEAM_ID` | Membership details, a 10-character string (`2BPX4R682U`). A **variable**, not a secret — it is public — so the workflow reads `${{ vars.APPLE_TEAM_ID }}` |
+
+The provisioning profile is the **one Apple credential that stays repo-level**:
+
+| repo secret | where it comes from |
+|---|---|
+| `APPLE_PROVISIONING_PROFILE` | the App Store profile for `network.thetech.fleetwright`, base64. Bound to this bundle id and meaningless in any other repo, so it is not shared |
+
+> **A repo secret SHADOWS an org secret of the same name.** If a stale
+> repo-level copy of `ASC_KEY_ID` (etc.) is left behind, the workflow silently
+> uses it instead of the org secret — so the org secret can be wrong and CI still
+> passes, right up until the local copy drifts. After a green run on the org
+> secrets, **delete the repo-level copies** of `ASC_KEY_ID`, `ASC_ISSUER_ID`,
+> `ASC_KEY_P8`, `APPLE_DIST_P12`, `APPLE_DIST_P12_PASSWORD` and the
+> `APPLE_TEAM_ID` variable. Keep only `APPLE_PROVISIONING_PROFILE`.
 
 An API key rather than certificates in the repository — for the *upload*. That
 part still holds: one secret, revocable from the web, no second repository of
@@ -232,14 +264,26 @@ the maximum number of certificates."* The certificates it had made were also
 worthless — their private keys lived on runners that no longer exist.
 
 So: one certificate, exported once as a `.p12`, imported into a throwaway
-keychain per job.
+keychain per job. As **org secrets** now (see above), because that one
+certificate is shared with `ajar-family` — the whole point is that the team has
+a single distribution certificate rather than one per repo racing to revoke each
+other:
 
-| secret | what it is |
+| org secret | what it is |
 |---|---|
-| `APPLE_DISTRIBUTION_P12` | `base64 -w0 distribution.p12` |
-| `APPLE_DISTRIBUTION_P12_PASSWORD` | the export password |
+| `APPLE_DIST_P12` | `base64 -w0 distribution.p12` |
+| `APPLE_DIST_P12_PASSWORD` | the export password. **Hex**, per the note above |
 
-No Mac is needed to make one:
+> **Do NOT create a new distribution certificate.** Reuse the existing shared
+> one. Minting another consumes the team's cap and, once the cap is hit, forces a
+> revocation that invalidates a profile somewhere — which is the bug this shared
+> arrangement is fixing. If a profile has already been invalidated by a
+> revocation, do not mint a cert to fix it: run the
+> **iOS — recreate provisioning profile** workflow, which rebinds the profile to
+> the certificates that are still valid.
+
+No Mac is needed to make the `.p12` (only ever done once, to seed the shared
+secret):
 
 ```sh
 openssl req -new -newkey rsa:2048 -nodes -keyout distribution.key -out distribution.csr \
@@ -510,7 +554,7 @@ leaves the account one certificate closer to unusable.
 
 ### Three secrets, and the job skips without all three
 
-`APPSTORE_PRIVATE_KEY`, `APPLE_DISTRIBUTION_P12`, `APPLE_PROVISIONING_PROFILE`.
+`ASC_KEY_P8` (org), `APPLE_DIST_P12` (org), `APPLE_PROVISIONING_PROFILE` (repo).
 The gate used to check only the first and fall back to automatic signing for
 the rest — which is precisely the fallback that burned the certificates.
 Skipping costs a release; minting costs the ability to release at all, and
@@ -520,7 +564,7 @@ takes a trip to the developer portal to undo.
 
 Once, in the developer portal — Certificates, Identifiers & Profiles →
 Profiles → **App Store Connect** distribution, for `network.thetech.fleetwright`,
-signed by the same certificate that is in `APPLE_DISTRIBUTION_P12`. Download it
+signed by the same certificate that is in `APPLE_DIST_P12`. Download it
 and:
 
 ```sh
@@ -531,6 +575,27 @@ The workflow prints the profile's name, app id and **expiry** on every run.
 Profiles expire after a year, and an expired one fails with a message about
 identities rather than about dates — so the date is printed where it will be
 read.
+
+### When a revoked certificate invalidates the profile
+
+A profile names the specific distribution certificates it trusts, and it is
+**immutable** — the App Store Connect API has create and delete, no edit. So when
+a distribution certificate is revoked (freeing a slot in the team's shared cap),
+every profile bound to it turns INVALID, and signing fails with the same "No
+profiles for 'network.thetech.fleetwright' were found" as a missing profile.
+
+Do **not** fix this by minting a new certificate — that is what fills the cap.
+Instead run **Actions → iOS — recreate provisioning profile** (type `recreate`
+to confirm). It uses the shared `ASC_*` org key to delete `Fleetwright Profile`
+and recreate it bound to **every** distribution certificate that is still valid,
+then verifies it comes back `ACTIVE` with `GET /v1/profiles`. Binding to all of
+them means a future revocation of any single certificate leaves the others still
+covering the profile. Source: `tools/recreate-ios-profile.mjs`.
+
+That workflow cannot write secrets (the proxy blocks the GitHub secrets API, and
+a profile's bytes cannot be read back out of App Store Connect), so after it runs
+download the recreated profile from the portal and refresh
+`APPLE_PROVISIONING_PROFILE` by hand, exactly as in *Making the profile* above.
 
 ### If the account is already full
 
