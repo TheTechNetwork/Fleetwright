@@ -259,8 +259,10 @@ function verifyClaude(ctx) {
     // surface, whenever the operator cannot be worked out. Both are one step
     // from fixed and the step differs, so the reason has to travel.
     lines.push('');
-    lines.push(`A session you start would not get a Claude account: ${picked.why ?? 'none is linked here'}.`);
-    lines.push('Connect one under Your credentials in the app, or run `agent-hub login` on the box.');
+    lines.push(`A session you start on ${ctx.cfg.hostname} would not get a Claude account: ${picked.why ?? 'none is linked here'}.`);
+    // The MACHINE, not a screen. Claude is linked per machine, so a remedy that
+    // does not say which one is one somebody can follow and still be stuck.
+    lines.push(`Connect a Claude account for ${ctx.cfg.hostname} from the app, or run \`agent-hub login\` on it.`);
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);

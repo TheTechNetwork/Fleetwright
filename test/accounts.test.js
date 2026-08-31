@@ -240,3 +240,21 @@ test('a host reports how many people can start a session on it', () => {
     assert.match(src, /Nobody has connected a Claude account here/, `${name} does not name the real fault`);
   }
 });
+
+test('a refusal names the machine, because Claude is linked per machine', () => {
+  // GUEST ONBOARDING, and the smallest piece of it. "Connect one under Your
+  // credentials in the app" is an instruction somebody can follow completely
+  // and still be stuck: they connect on whichever host they happened to open,
+  // and the scheduler puts the next session on the other one.
+  //
+  // It also named a screen that could not do it — iOS filtered Claude out of
+  // that view, and Android has no such view at all. A remedy pointing at a
+  // surface that cannot perform it is worse than one that only says what is
+  // needed.
+  const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  for (const file of ['src/core/podman.js', 'src/adapters/commands.js']) {
+    const src = read(file);
+    assert.ok(!/under Your credentials/.test(src), `${file} still names a screen`);
+    assert.match(src, /cfg\.hostname|ctx\.cfg\.hostname/, `${file} does not name the machine`);
+  }
+});
