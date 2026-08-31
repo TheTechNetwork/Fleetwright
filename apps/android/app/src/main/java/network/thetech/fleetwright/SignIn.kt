@@ -85,9 +85,14 @@ object SignIn {
     suspend fun googleIdToken(context: Context): String {
         val clientId = serverClientId()
             ?: throw Failure(
-                "This build has no Google sign-in configured — it was built without a " +
-                    "google-services.json carrying a web OAuth client (client_type 3). " +
-                    "Sign in with Apple, or use a build from CI.",
+                // NAMES THE BUILD. This message has now been reported twice
+                // about two different builds with two different causes, and
+                // neither report could say which build it was — because
+                // nothing in the app could. A refusal that identifies itself
+                // turns the next report into an answer.
+                "Build ${BuildConfig.VERSION_CODE} has no Google sign-in configured — it was built " +
+                    "without a google-services.json carrying a web OAuth client (client_type 3). " +
+                    "Sign in with Apple instead.",
             )
 
         val request = GetCredentialRequest.Builder()

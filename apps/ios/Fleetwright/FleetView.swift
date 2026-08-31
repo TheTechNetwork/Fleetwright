@@ -589,7 +589,12 @@ private struct SettingsView: View {
                 } header: {
                     Text("Coordinator")
                 } footer: {
-                    Text("The one origin this app will talk to.")
+                    // WHICH BUILD THIS IS. The marketing version is the same
+                    // across every TestFlight build of a release, so it cannot
+                    // tell two of them apart — and "it is still broken" and
+                    // "you do not have the fix yet" are the same sentence when
+                    // nobody can name the build they are on.
+                    Text("The one origin this app will talk to.\n\nFleetwright \(Bundle.main.shortVersion) (build \(Bundle.main.buildNumber))")
                 }
                 }
 
