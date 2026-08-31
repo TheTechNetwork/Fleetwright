@@ -192,7 +192,28 @@ one compromise away from minting into a guest's account it has otherwise never
 touched — which is not that bar, and no amount of scoping the minted tokens
 changes it.
 
-There are two coherent ways out and they should be chosen deliberately:
+**DECIDED: it stays on "Any account."** (31 Aug 2026, asked directly.)
+
+Which means option 1 below, and it makes the private key's blast radius a
+property of the HOST rather than of the registration — so bounding it is host
+hardening, not App settings. See [hardening.md](./hardening.md), which exists
+because of this decision.
+
+What follows from it, and must stay true:
+
+- **Guests keep pasting their own tokens.** The second route stays first-class.
+  Minting is for org repositories, so the key sits in a blast radius that is
+  already the org's.
+- **A guest installing the App is the case to watch.** The registration permits
+  it, so the property "this key never mints into somebody else's account" is
+  maintained by what the fleet does, not by what GitHub allows. That is a weaker
+  guarantee than option 2 would have given, and it is the price of the one-tap
+  flow staying available.
+- **Scoping the minted tokens still does not help.** Scope is chosen at mint
+  time by whoever holds the key; a compromised minter omits `permissions` and
+  takes everything. Narrow tokens do not make a minting key safer.
+
+The two ways out, for the record:
 
 1. **Keep "Any account", and guests keep pasting their own tokens** — the
    second route stays first-class, which was already the decision, and the App

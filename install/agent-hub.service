@@ -30,6 +30,62 @@ RestartSec=3
 KillMode=process
 TimeoutStopSec=15
 
+# --- Hardening ---------------------------------------------------------------
+#
+# EVERY LINE HERE WAS MEASURED, not chosen from a checklist: `systemd-run` with
+# one property at a time, running `podman run --rm alpine true`, on a real
+# systemd. The REJECTED list below is the valuable half — this unit runs
+# rootless podman AND a tmux server that a person attaches to from their own
+# shell, and most of what a hardening guide recommends breaks one or the other
+# silently. docs/hardening.md has the table and how to re-run it.
+#
+# Owner-only by default. The credential writers chmod explicitly; this closes
+# the window between create and chmod rather than replacing the chmod.
+UMask=0077
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectProc=invisible
+ProtectSystem=full
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+StateDirectory=agent-hub
+StateDirectoryMode=0700
+RuntimeDirectory=agent-hub
+RuntimeDirectoryMode=0700
+#
+# REJECTED, each with what actually happened:
+#
+#   NoNewPrivileges       newuidmap/newgidmap are setuid-root and are how
+#                         rootless podman gets a user namespace. Measured: a
+#                         setuid binary under this reports euid 65534 instead
+#                         of 0 — it does not fail, it silently does nothing,
+#                         which is the worst shape of breakage there is.
+#   RestrictSUIDSGID      podman does not start: crun dies with "cannot resolve
+#                         `null` under rootfs". It would also stop a session
+#                         doing `apt install sudo`, which creates a setuid file.
+#   PrivateTmp            tmux's socket lives in /tmp/tmux-<uid>. Measured: a
+#                         tmux server started under this is invisible to
+#                         `tmux ls` from the user's own shell, so every
+#                         `agent-hub attach` stops working.
+#   ProtectHome           rootless podman keeps its storage in
+#                         ~/.local/share/containers, and the Claude credential
+#                         is in ~/.claude.
+#   ProtectSystem=strict  podman run fails. `full` is what this needs: read-only
+#                         /usr, /boot and /etc. Nothing here writes to /etc —
+#                         the two files named in messages are only ever read.
+#   ProtectKernelTunables podman run fails.
+#   ProtectControlGroups  podman run fails; it writes its own cgroup.
+#   ProtectHostname       podman run fails.
+#   PrivateDevices        podman run fails, and it implies NoNewPrivileges.
+#   RestrictNamespaces    a container IS namespaces.
+#   SystemCallFilter      deliberately not attempted: the filter applies to
+#                         every child, and every child here includes crun and
+#                         whatever a session installs and runs. The sidecar
+#                         takes it instead — one Node process, no descendants.
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=agent-hub
