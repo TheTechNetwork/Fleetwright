@@ -11,11 +11,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
 import { unsafeSandboxArgs, unsafeSandboxMessage } from './core/sandbox-args.js';
+import { INSTALL_ROOT } from './core/resources.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
 // Derived rather than configured, so it is right by construction even when the
 // service is started from somewhere else entirely.
-const INSTALL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Found, not counted — see core/resources.js. This used to be `dirname(this
+// file)/..`, which is a statement about how deep config.js sits in the source
+// tree and stops being true the moment the code is bundled.
+const INSTALL_DIR = INSTALL_ROOT;
 
 /** @typedef {ReturnType<typeof loadConfig>} Config */
 
