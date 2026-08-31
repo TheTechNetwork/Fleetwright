@@ -9,6 +9,42 @@ import UIKit
 /// Every action is an intent to the coordinator. The app never talks to a host
 /// directly, so it never has to know which box holds which session — that is
 /// exactly what the coordinator is for.
+/// The app, as three places rather than one screen with a sheet on top.
+///
+/// It was a session list with everything else behind a Settings button: hosts,
+/// pins, fleet health, credentials, people, shortcuts, devices and the server
+/// URL, in one scroll five hundred lines long. That is fine while the only
+/// person using it built it, and it is the first thing that stops being fine
+/// for anybody else — "where do I connect Claude" has no answer that is a
+/// place, only a path.
+///
+/// Three, because there are three questions somebody actually arrives with:
+/// what is running, are my machines all right, and how is this set up.
+///
+/// The tab bar is iOS 26's, which means it floats over the content, adopts the
+/// glass material, and MINIMISES ON SCROLL — the list is what somebody came
+/// for, so the navigation gets out of the way as soon as they start reading.
+struct FleetApp: View {
+    let settings: Settings
+
+    var body: some View {
+        TabView {
+            Tab("Sessions", systemImage: "square.stack.3d.up") {
+                FleetView(settings: settings)
+            }
+            Tab("Fleet", systemImage: "server.rack") {
+                NavigationStack { SettingsView(settings: settings, focus: .machines, onDone: {}) }
+            }
+            Tab("Settings", systemImage: "gearshape") {
+                NavigationStack { SettingsView(settings: settings, focus: .you, onDone: {}) }
+            }
+        }
+        // The content is the point; the chrome is not. On the way down the
+        // tab bar shrinks to a pill and gives the list its height back.
+        .tabBarMinimizeBehavior(.onScrollDown)
+    }
+}
+
 struct FleetView: View {
     let settings: Settings
 
@@ -58,7 +94,11 @@ struct FleetView: View {
                     ReassuranceBanner(summary: Reassurance(sessions: sessions, hosts: fleetHosts))
                 }
                 if !status.isEmpty {
-                    Section { Text(status).font(.system(.footnote, design: .monospaced)) }
+                    Section {
+                        Text(status)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
                 }
                 Section {
                     if sessions.isEmpty && !busy {
@@ -135,9 +175,16 @@ struct FleetView: View {
                     Label(binCount > 0 ? "Recycle bin (\(binCount))" : "Recycle bin", systemImage: "trash")
                         .font(.footnote)
                 }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-                .background(.bar)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                // GLASS, BECAUSE IT FLOATS OVER THE LIST. `.bar` was a flat
+                // strip that read as part of the content; this is a control
+                // sitting above it, and on iOS 26 that is what the material
+                // says. The capsule is the system's own shape for a floating
+                // control — the same one the tab bar collapses into — so the
+                // two agree rather than each inventing a radius.
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .padding(.bottom, 8)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -387,7 +434,27 @@ private struct SessionRow: View {
 }
 
 private struct SettingsView: View {
+    /// Which half of this screen to show.
+    ///
+    /// The alternative was moving sections into two files, and the state here
+    /// — hosts, pins, the busy flag, the reboot ceremony's three fields — is
+    /// shared across the split in both directions. Two renderings of one view
+    /// keeps that state in one place; two views would have meant threading it
+    /// through bindings for no gain a person can see.
+    enum Focus { case machines, you, all }
+
+    /// Whether this half belongs on the screen being shown.
+    ///
+    /// The gated bodies are deliberately NOT re-indented. Swift does not care,
+    /// and adding four spaces to five hundred lines would have turned a change
+    /// a reviewer can read in a minute into a diff nobody can — which is the
+    /// wrong trade in a repository where the comments are the documentation.
+    private func shows(_ half: Focus) -> Bool {
+        focus == .all || focus == half
+    }
+
     let settings: Settings
+    var focus: Focus = .all
     let onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var pushResult = ""
@@ -514,6 +581,7 @@ private struct SettingsView: View {
                 // header:/footer: closures rather than Section("title") { } —
                 // there is no initialiser taking a String title AND a footer,
                 // which the first real compile caught.
+                if shows(.machines) {
                 Section {
                     TextField("https://fleet.thetech.network", text: Bindable(settings).coordinatorURL)
                         .autocorrectionDisabled()
@@ -524,7 +592,9 @@ private struct SettingsView: View {
                 } footer: {
                     Text("The one origin this app will talk to.")
                 }
+                }
 
+                if shows(.you) {
                 Section {
                     if settings.credential.isEmpty {
                         SignInWithAppleButton(.signIn, onRequest: SignIn.configure, onCompletion: signIn)
@@ -590,11 +660,13 @@ private struct SettingsView: View {
                          + "Choose \"Share My Email\" — a fleet allows people by address, and a hidden one matches nothing. "
                          + "No account? The demo is two invented machines and needs nothing.")
                 }
+                }
 
                 // Adding a machine. Deliberately here rather than buried: it is
                 // the second thing anybody does after signing in, and the pin
                 // is the whole of how a host joins now.
                 if !settings.credential.isEmpty {
+                    if shows(.machines) {
                     Section {
                         Button("Mint a pin for a new host") {
                             Task {
@@ -697,6 +769,7 @@ private struct SettingsView: View {
                 }
                 Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
+                    }
                 }
 
                 // "Use a credential instead" WAS HERE, and is gone.
@@ -726,6 +799,7 @@ private struct SettingsView: View {
                 // need the sign-in status and logs available on the app" —
                 // and this is the first half: the answer to "is that box
                 // logged in, on what plan, running what code" without SSH.
+                if shows(.machines) {
                 Section {
                     if fleetHosts.isEmpty {
                         Text("No hosts reporting yet.").font(.footnote).foregroundStyle(.secondary)
@@ -854,11 +928,13 @@ private struct SettingsView: View {
                     Text("What each machine reports about itself: whether it is signed in, which plan, "
                          + "and whether its code is behind.")
                 }
+                }
 
                 // YOUR credentials, not a machine's. Top level, because a
                 // token is the person's and reaches every host — which is what
                 // the screen said while living under one particular box.
                 if !settings.credential.isEmpty {
+                    if shows(.you) {
                     Section {
                         NavigationLink("Your credentials") {
                             CredentialsView(settings: settings, host: nil)
@@ -878,10 +954,12 @@ private struct SettingsView: View {
                              + "session runs on the account of whoever started it, and it has to be connected "
                              + "on each machine separately.")
                     }
+                    }
                 }
 
                 // Kinds, and the toggle that decides what a spoken start does
                 // to your screen.
+                if shows(.you) {
                 Section {
                     NavigationLink("Session kinds") { SessionKindsView() }
                     // Two taps to a phrase with no app name in it at all.
@@ -917,7 +995,9 @@ private struct SettingsView: View {
                     those you meant is clearer as you say it.
                     """)
                 }
+                }
 
+                if shows(.you) {
                 Section {
                     Button("Send a test notification") {
                         Task {
@@ -935,6 +1015,7 @@ private struct SettingsView: View {
                     }
                 } header: {
                     Text("Notifications")
+                }
                 }
             }
             .navigationTitle("Settings")

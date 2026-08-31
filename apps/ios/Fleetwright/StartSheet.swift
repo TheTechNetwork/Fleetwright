@@ -135,6 +135,11 @@ struct StartSheet: View {
                     // No busy state, because there is nothing to be busy for:
                     // this closes on tap and the work happens behind it.
                     Button("Start") { start() }
+                    // THE ONE PRIMARY ACTION IN THE APP, and the only place a
+                    // prominent glass button earns its weight. Used sparingly
+                    // on purpose: a screen where everything is prominent has
+                    // nothing that is.
+                    .buttonStyle(.glassProminent)
                         .disabled(!settings.configured)
                 }
             }

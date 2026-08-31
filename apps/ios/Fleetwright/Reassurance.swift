@@ -109,6 +109,15 @@ struct ReassuranceBanner: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+        // NO GLASS HERE, deliberately, and it is worth saying why in a change
+        // that adds it everywhere else. This sits INSIDE a list row rather than
+        // floating over anything, and glass on a surface that is not above
+        // something else is decoration — it costs legibility on the one line
+        // this app most wants read, to imitate a depth that is not there.
+        //
+        // The material means "this is above the content". Using it where that
+        // is false is how a design language stops carrying information.
+        //
         // One announcement rather than four fragments, because this is the one
         // line on the screen worth hearing first.
         .accessibilityElement(children: .combine)
