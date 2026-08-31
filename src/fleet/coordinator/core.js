@@ -103,6 +103,12 @@ export class CoordinatorCore {
      * @type {(() => void)|null}
      */
     this.onEvents = null;
+    /**
+     * When each host-state fact was last announced, so a reconnect does not
+     * re-announce it. Keyed by host, state and reason — see #onHostState.
+     * @type {Map<string, number>}
+     */
+    this.announced = new Map();
   }
 
   // --- hosts ---------------------------------------------------------------
@@ -242,6 +248,35 @@ export class CoordinatorCore {
    * @param {{ from: string, to: string, reason: string }} moved
    */
   async #onHostState(hostId, moved) {
+    // NOT AGAIN, FOR THE SAME REASON, WITHIN THE HOUR.
+    //
+    // The registry's memory of a host's previous state is reset by `connect()`,
+    // so every reconnect looks like a fresh transition — and a degraded box
+    // reconnects for all the ordinary reasons: a service restart, an update, a
+    // socket blip, the coordinator itself being replaced. Reported from a phone
+    // as a stream of identical notifications about one broken machine, which is
+    // exactly the "cries wolf" failure the watcher's transition rule exists to
+    // avoid, arriving through the one path that had no such rule.
+    //
+    // Keyed on the REASON as well as the state: a host that goes from "not
+    // logged in" to "the credential a session would get has expired" has told
+    // you something new.
+    const key = `${hostId}:${moved.to}:${moved.reason}`;
+    // `has`, not a default of 0. Defaulting made "never announced" indistinguishable
+    // from "announced at time zero", so on any clock reading less than an hour —
+    // a test's, or a freshly booted Worker's — the very first notification was
+    // suppressed as a repeat. Absent and long-ago are different facts, which is
+    // the same distinction this codebase keeps having to relearn.
+    const before = this.announced.get(key);
+    if (before !== undefined && this.now() - before < HOST_STATE_QUIET_MS) return;
+    // Anything else remembered about this host is stale now — a box that
+    // recovers must be able to report the same fault again tomorrow without
+    // waiting out an hour that started before it was fixed.
+    for (const k of [...this.announced.keys()]) {
+      if (k.startsWith(`${hostId}:`)) this.announced.delete(k);
+    }
+    this.announced.set(key, this.now());
+
     // RECOVERY IS WORTH SAYING TOO. A person told a box is broken and never
     // told it came back checks manually forever after, which is the anxiety
     // this product exists to remove rather than relocate.
@@ -324,7 +359,10 @@ export class CoordinatorCore {
     const body = describeEvent(event);
     try {
       await this.push?.send(devices, {
-        title: event.name ? `${event.name} on ${event.hostId}` : event.hostId,
+        // "deb132 on deb132" — a host event's name IS the host, and this
+        // template was written for sessions, where the two differ. Reported
+        // from a lock screen within minutes of host events shipping.
+        title: event.name && event.name !== event.hostId ? `${event.name} on ${event.hostId}` : event.hostId,
         body,
         data: { event: event.event, name: event.name ?? '', hostId: event.hostId, url: event.url ?? '' },
       });
@@ -1128,6 +1166,16 @@ const EVENT_PAGE = 50;
  * member set the price for the whole fleet.
  */
 const FANOUT_TIMEOUT_MS = 10_000;
+
+/**
+ * How long before the same host fact is worth saying again.
+ *
+ * An hour. Long enough that a flapping or restarting box says it once, short
+ * enough that a machine still broken tomorrow morning says so again — a fault
+ * reported once at midnight and never repeated is a fault somebody scrolls
+ * past.
+ */
+const HOST_STATE_QUIET_MS = 60 * 60_000;
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([

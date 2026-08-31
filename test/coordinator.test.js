@@ -13,6 +13,7 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 
 import { Coordinator } from '../src/fleet/coordinator/server.js';
 import { HostRegistry, HEALTH_STALE_MS } from '../src/fleet/coordinator/registry.js';
+import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
@@ -660,4 +661,75 @@ test('a host whose reason changes has changed, even staying degraded', () => {
 
   assert.equal(moved?.to, 'degraded');
   assert.match(String(moved?.reason), /credential/);
+});
+
+test('a host that keeps reconnecting does not keep announcing the same fault', async (t) => {
+  // REPORTED FROM A LOCK SCREEN within minutes of host events shipping: a
+  // stream of identical notifications about one broken machine.
+  //
+  // The registry's memory of a host's previous state is reset by `connect()`,
+  // so every reconnect looks like a fresh transition — and a degraded box
+  // reconnects for all the ordinary reasons: a service restart, an update, a
+  // socket blip, the coordinator itself being replaced. deb132 was restarted
+  // several times in an hour while broken.
+  //
+  // This is the "cries wolf" failure the watcher's transition rule exists to
+  // avoid, arriving through the one path that had no such rule.
+  let clock = 1_000_000;
+  const sent = [];
+  const c = new CoordinatorCore({
+    now: () => clock,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    push: { send: async (_d, msg) => { sent.push(msg); } },
+  });
+  c.devices.set('phone', { token: 't', platform: 'ios' });
+
+  const flap = () => {
+    c.hostConnected('box', () => {});
+    return c.onHostMessage('box', { kind: 'health', health: health({ loggedIn: false }) });
+  };
+
+  await flap();
+  assert.equal(sent.length, 1, 'the first time is news');
+  assert.match(sent[0].body, /cannot start sessions/);
+  // AND THE TITLE IS NOT "deb132 on deb132". A host event's name IS the host;
+  // the template was written for sessions, where the two differ.
+  assert.equal(sent[0].title, 'box');
+
+  for (let i = 0; i < 5; i++) await flap();
+  assert.equal(sent.length, 1, 'five reconnects later, still one notification');
+
+  // Tomorrow it says so again, because a fault reported once at midnight and
+  // never repeated is a fault somebody scrolls past.
+  clock += 61 * 60_000;
+  await flap();
+  assert.equal(sent.length, 2);
+});
+
+test('a host whose fault CHANGES says so, even inside the quiet hour', async () => {
+  // "not logged in" and "the credential a session would get has expired" are
+  // different problems with different remedies. Keyed on the reason, not just
+  // the state.
+  let clock = 1_000_000;
+  const sent = [];
+  const c = new CoordinatorCore({
+    now: () => clock,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    push: { send: async (_d, m) => { sent.push(m); } },
+  });
+  c.devices.set('phone', { token: 't', platform: 'ios' });
+  c.hostConnected('box', () => {});
+
+  await c.onHostMessage('box', { kind: 'health', health: health({ loggedIn: false }) });
+  clock += 60_000;
+  await c.onHostMessage('box', {
+    kind: 'health',
+    health: health({
+      loggedIn: true,
+      credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' },
+    }),
+  });
+
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].body, /credential/);
 });
