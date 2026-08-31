@@ -753,6 +753,14 @@ struct Fleet {
     }
 }
 
+extension Bundle {
+    /// The two numbers that identify a build, for the settings screen. The
+    /// short version is what the App Store shows and is the same for every
+    /// build of a release; CFBundleVersion is the one that differs.
+    var shortVersion: String { infoDictionary?["CFBundleShortVersionString"] as? String ?? "?" }
+    var buildNumber: String { infoDictionary?["CFBundleVersion"] as? String ?? "?" }
+}
+
 extension Fleet {
     /// Somewhere cleartext cannot escape to: the device itself, or the local
     /// link. Matches ATS's NSAllowsLocalNetworking rather than inventing a
