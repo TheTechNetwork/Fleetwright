@@ -74,15 +74,43 @@ once `npm ci` was involved.
    the digest a statement about the code rather than about a build machine.
 3. **Teach `/update` the manifest**, preferring it and falling back to git. One
    box at a time, and the fallback is the thing that makes that safe.
+   **Partly done** — `src/core/release.js` decides (protocol, version, digest,
+   filename) and `updateStatus` now tells a packaged box what updates it instead
+   of reporting a missing `.git`. What is not wired is the fetch-and-swap
+   itself.
 4. **Switch the installer** to fetch a release rather than clone, keeping
    `--from-source` for development boxes. **Half done** — `install.sh` detects
    which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
    skips npm entirely when packaged, and removes the install it replaced. What
-   is not done is FETCHING: a release still has to be unpacked by hand.
+   is not done is FETCHING: a release still has to be unpacked by hand. The
+   **layout** is done — a release is copied to `releases/<version>` and
+   `current` is moved onto it atomically, with the units pointing at `current`.
 5. **Drop the git path** once no box reports using it.
 
 Steps 2 and 3 are where the value is: after those, a docs change publishes
 nothing, and a host update is a download and a symlink.
+
+## The layout is the rollback
+
+```
+/opt/fleetwright/releases/main-41/    the one before
+/opt/fleetwright/releases/main-42/    unpacked, verified, complete
+/opt/fleetwright/current -> releases/main-42
+```
+
+The units point at `current`, so applying a release is **one symlink** — no
+daemon-reload, no edit to anything root owns, and no window where the tree a
+running process is reading is being written to.
+
+`ln -sfn` then `mv -Tf`, not `ln -sfn` alone: replacing an existing symlink in
+place is not atomic on every filesystem, and a symlink that briefly does not
+exist is a service that briefly cannot start.
+
+A checkout install still runs where it sits. A checkout is a thing somebody
+edits, and moving it under them would be its own kind of rude.
+
+`releasesToPrune` keeps the live release **and the one before it**. A rollback
+target that was tidied away is not a rollback target.
 
 ## What this does not solve
 

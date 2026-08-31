@@ -61,6 +61,20 @@ function git(cwd, args) {
 export function updateStatus(cfg) {
   const dir = cfg.installDir;
   if (!existsSync(path.join(dir, '.git'))) {
+    // A RELEASE IS NOT A BROKEN CHECKOUT. This message was accurate and a dead
+    // end: it told a packaged host that the thing it never had was missing, and
+    // named no way forward. A packaged box updates by fetching a manifest —
+    // docs/packaging.md — so say which kind of box this is and what updates it.
+    if (existsSync(path.join(dir, 'lib', 'agent-hub.mjs'))) {
+      return {
+        ok: false,
+        dir,
+        packaged: true,
+        message:
+          `${dir} is a release, not a checkout, so there is nothing to pull.\n` +
+          'Releases update by manifest: set AGENT_HUB_RELEASE_MANIFEST to the URL of one.',
+      };
+    }
     return { ok: false, dir, message: `${dir} is not a git checkout, so there is nothing to pull.` };
   }
   const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);

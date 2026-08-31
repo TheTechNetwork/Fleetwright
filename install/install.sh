@@ -32,6 +32,39 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGED=0
 if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
 
+# A RELEASE IS INSTALLED BESIDE THE ONE BEFORE IT, never over it. The layout is
+# the rollback:
+#
+#   /opt/fleetwright/releases/main-41/   the one before
+#   /opt/fleetwright/releases/main-42/   this one
+#   /opt/fleetwright/current -> releases/main-42
+#
+# The units point at `current`, so applying a release is one symlink — no
+# daemon-reload, no edit to anything root owns, and no window where the tree a
+# running process is reading is being written to. A checkout install keeps
+# running in place, because a checkout is a thing somebody edits and moving it
+# under them would be its own kind of rude.
+FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+if [ "$PACKAGED" = 1 ]; then
+  RELEASE_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/package.json" | head -1)"
+  [ -n "$RELEASE_VERSION" ] || RELEASE_VERSION="unversioned"
+  RELEASE_DIR="$FLEET_BASE/releases/$RELEASE_VERSION"
+  if [ "$DIR" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
+    mkdir -p "$FLEET_BASE/releases"
+    rm -rf "$RELEASE_DIR"
+    cp -a "$DIR/." "$RELEASE_DIR"
+    # Replaced atomically. `ln -sfn` on an existing symlink is not atomic on
+    # every filesystem, and a symlink that briefly does not exist is a service
+    # that briefly cannot start.
+    ln -sfn "$RELEASE_DIR" "$FLEET_BASE/.current.new"
+    mv -Tf "$FLEET_BASE/.current.new" "$FLEET_BASE/current"
+  fi
+  # Everything below templates units and runs binaries from here, so it is the
+  # symlink and not the versioned directory: that is what makes the next
+  # release a symlink swap instead of an installer run.
+  [ -L "$FLEET_BASE/current" ] && DIR="$FLEET_BASE/current"
+fi
+
 # Set only when the new agent-hub has been SEEN to start. Section 8 will not
 # remove the install it replaced without it.
 SERVICES_STARTED=0
