@@ -74,15 +74,16 @@ once `npm ci` was involved.
    the digest a statement about the code rather than about a build machine.
 3. **Teach `/update` the manifest**, preferring it and falling back to git. One
    box at a time, and the fallback is the thing that makes that safe.
-   **Partly done** — `src/core/release.js` decides (protocol, version, digest,
-   filename) and `updateStatus` now tells a packaged box what updates it instead
-   of reporting a missing `.git`. What is not wired is the fetch-and-swap
-   itself.
+   **Done** — `release.js` decides, `release-apply.js` fetches and swaps, and
+   `/update` branches on which kind of install it is. The git path is
+   untouched, which is what makes it a fallback rather than a second
+   implementation.
 4. **Switch the installer** to fetch a release rather than clone, keeping
    `--from-source` for development boxes. **Half done** — `install.sh` detects
    which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
    skips npm entirely when packaged, and removes the install it replaced. What
-   is not done is FETCHING: a release still has to be unpacked by hand. The
+   is not done is the FIRST install: a box still gets its first release
+   unpacked by hand, and updates itself by manifest from then on. The
    **layout** is done — a release is copied to `releases/<version>` and
    `current` is moved onto it atomically, with the units pointing at `current`.
 5. **Drop the git path** once no box reports using it.
@@ -111,6 +112,57 @@ edits, and moving it under them would be its own kind of rude.
 
 `releasesToPrune` keeps the live release **and the one before it**. A rollback
 target that was tidied away is not a rollback target.
+
+## Updating, in one order that does not change
+
+```
+1. ask the manifest, and decide          protocol, then version
+2. download
+3. VERIFY THE DIGEST                     before anything is unpacked
+4. unpack into staging                   a name that is not a version
+5. RUN IT ONCE                           the last moment this is free
+6. move the symlink                      atomic
+7. prune, keeping the one before
+```
+
+**Every step before 6 is reversible by doing nothing.** That is the property to
+preserve when editing `release-apply.js`: a failure at 1–5 leaves the box
+exactly as it was, and a failure after 6 leaves the previous release on disk to
+point back at.
+
+Step 5 is the one that is easy to leave out. A bundle built against a newer
+Node, or broken in a way a digest cannot see, fails there — where the running
+box is still untouched — instead of after the swap, where systemd restarts the
+corpse every three seconds and the box is unreachable by the tool that would
+fix it.
+
+Step 1 checks **protocol before version** so a host one flag day behind is told
+that, rather than told it is up to date. And it downloads nothing on a
+mismatch: there is no point spending bandwidth on a release that is going to be
+refused.
+
+### What the digest proves, and what it does not
+
+It proves the bytes are the bytes the manifest named — corruption, a truncated
+download, a cache serving something stale.
+
+**It does not prove the manifest is honest.** The manifest is fetched over the
+same TLS connection from the same host, so whoever serves it chooses what a box
+installs. That is the same trust as the git remote it replaces, bounded the
+same way: by who can write to that host. Signing the manifest is the thing that
+would change it, and it is not built.
+
+### Configuring it
+
+```sh
+AGENT_HUB_RELEASE_MANIFEST=https://releases.example/fleet/manifest.json
+```
+
+The tarball is fetched **relative to the manifest's own URL**, so one setting
+cannot point at another deployment's build, and moving a release host is one
+value rather than two that have to agree.
+
+Unset on a checkout, which updates by git and always will.
 
 ## What this does not solve
 
