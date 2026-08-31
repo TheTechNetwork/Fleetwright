@@ -500,16 +500,15 @@ function seedCredentials(cfg, volume, picked, actor = null) {
     mounts.push('-v', `${picked.accountMeta}:/seed/.oauth-account.json:ro`);
     copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
   }
-  // The other credentials — GitHub, Cloudflare, whatever gets added. Seeded on
-  // the same terms as the Claude credential: refreshed alongside it, so a
-  // rotated GitHub token reaches a resumed session rather than only a brand
-  // new one. Absent is not an error — a person with no connected providers is
-  // the ordinary case.
-  const secrets = pickSecretsFile(cfg, actor);
-  if (secrets) {
-    mounts.push('-v', `${secrets}:/seed/.secrets.env:ro`);
-    copy += ' && cp /seed/.secrets.env /dest/.secrets.env && chmod 600 /dest/.secrets.env';
-  }
+  // The other credentials — GitHub, Cloudflare, whatever gets added — ARE NOT
+  // SEEDED ANY MORE. They used to be copied in as `.secrets.env` and exported
+  // by the entrypoint, which froze them at start: a rotated token reached the
+  // next session and could not reach into a running one.
+  //
+  // The session asks the broker instead, over the socket it already has. See
+  // credential-broker.js. Nothing about the Claude credential changes — that
+  // one is read by a CLI we do not control, from a path it expects, so it is
+  // still a file in the volume.
   const r = podman(cfg, ['run', '--rm', ...mounts, cfg.sandboxImage, 'sh', '-c', copy]);
   if (r.status !== 0) {
     return {
@@ -562,18 +561,15 @@ export function pickCredentialSource(cfg, actor) {
  * Which connected tokens a session gets — GitHub, Cloudflare, and whatever
  * else is in the catalogue.
  *
- * DELIBERATELY NOT THE SAME RULE AS THE CLAUDE CREDENTIAL, and the difference
- * is the point. A person with no linked Claude account falls back to the
- * shared one, because a shared org plan is a licence somebody chose to share.
- * A GitHub token is not: it is one person's access to their own repositories,
- * and handing it to a guest because they happen not to have connected their
- * own would be exactly the thing that was ruled out — "the guests will be
- * bringing their own GitHub, Cloudflare, Claude creds, no shared creds to
- * them."
+ * An actor with a verified email gets THEIR tokens or none — "the guests will
+ * be bringing their own GitHub, Cloudflare, Claude creds, no shared creds to
+ * them." The box's own row is for actors that have no email — the CLI,
+ * Telegram, the web UI, all of which are somebody operating the box itself.
  *
- * So: an actor with a verified email gets THEIR tokens or none. The box's own
- * row is for actors that have no email — the CLI, Telegram, the web UI, all of
- * which are somebody operating the box itself.
+ * This used to be described here as differing from the Claude credential, which
+ * fell back to the box's shared account. It no longer does: there is no box
+ * account (docs/one-account-per-person.md), so all three providers now follow
+ * the rule this function always had.
  *
  * @param {import('../config.js').Config} cfg
  * @param {string|null} actor

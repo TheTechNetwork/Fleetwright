@@ -83,6 +83,28 @@ COPY hook.mjs /usr/local/lib/agent-session-hook.mjs
 RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs\n' > /usr/local/bin/agent-session-hook \
     && chmod +x /usr/local/bin/agent-session-hook
 
+# The credential broker's client, on the same socket and for the same reason.
+# Tokens are no longer written into this image's environment — a session ASKS,
+# and gets whatever is current rather than whatever was current when it started.
+# See docs/credential-broker.md.
+COPY credential.mjs /usr/local/lib/agent-credential.mjs
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-credential.mjs "$@"\n' > /usr/local/bin/fleet-cred \
+    && printf '#!/bin/sh\nexec node /usr/local/lib/agent-credential.mjs "$@"\n' > /usr/local/bin/git-credential-fleet \
+    && chmod +x /usr/local/bin/fleet-cred /usr/local/bin/git-credential-fleet
+
+# `gh` and `wrangler` read their token from the environment and speak no
+# credential-helper protocol, so they get a PATH shim instead: fetch, export for
+# ONE process, exec the real thing. The token never enters the session's own
+# environment, and each invocation gets whatever is current.
+COPY tool-shim.sh /usr/local/lib/agent-tool-shim.sh
+RUN set -e; \
+    for pair in gh:github wrangler:cloudflare; do \
+      tool="${pair%%:*}"; provider="${pair##*:}"; \
+      sed -e "s/@TOOL@/$tool/g" -e "s/@PROVIDER@/$provider/g" \
+        /usr/local/lib/agent-tool-shim.sh > "/usr/local/bin/$tool"; \
+      chmod +x "/usr/local/bin/$tool"; \
+    done
+
 COPY entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
 

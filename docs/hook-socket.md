@@ -126,3 +126,13 @@ even in a Telegram-only deployment.
   transport is only *fully* proven once that is. The failure mode if the mapping
   is wrong is loud (`EACCES` on connect), not silent.
 - **systemd `KillMode=process`** surviving a restart with live sessions.
+
+## The second thing on this socket
+
+The credential broker serves `/internal/credential` on the same socket, for the
+same reason the hook uses it: **which socket a request arrives on is what
+identifies the session**, and nothing in the request could be believed.
+
+A second socket would have meant a second lifecycle, a second mount, and a
+second place to get that reasoning wrong. See
+[credential-broker.md](./credential-broker.md).

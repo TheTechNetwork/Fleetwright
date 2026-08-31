@@ -13,6 +13,8 @@ import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
 import { adoptBoxAccount } from './core/accounts.js';
+import { pickSecretsFile } from './core/podman.js';
+import { loadEnvFile } from './core/env-file.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
 
@@ -48,6 +50,23 @@ export async function main() {
       ? new HookSocketServer({
           dir: cfg.sandboxHookSocketDir,
           onSessionStart: (r) => sessions.recordUuid(r),
+          // The credential broker's reader. READ PER REQUEST, deliberately:
+          // a token rotated while a session is running reaches it without a
+          // restart, which is the difference between the broker and the
+          // environment variable it replaces. See credential-broker.js.
+          //
+          // `createdBy` is the actor the session was started for, and
+          // pickSecretsFile turns that into a row — including refusing when it
+          // cannot tell, which is the case that used to resolve to the box's
+          // shared row.
+          secretsFor: (name) => {
+            const file = pickSecretsFile(cfg, registry.get(name)?.createdBy ?? null);
+            if (!file) return null;
+            /** @type {Record<string, string>} */
+            const env = {};
+            loadEnvFile(file, env);
+            return env;
+          },
           logger: log,
         })
       : null;
