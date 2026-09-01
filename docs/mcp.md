@@ -187,6 +187,29 @@ variable that could disagree:
   it mints will not verify here. Until it is set the page shows Google alone —
   an Apple button that cannot work is worse than no Apple button.
 
+**The origin has to be registered, and this is the failure everybody hits
+first.** Google Identity Services checks the page's origin against the OAuth
+client, and a coordinator serving `/oauth/authorize` is an origin that client
+has never heard of:
+
+> **Access blocked: Authorization Error** — Error 400: `origin_mismatch`
+
+Google Cloud Console → **APIs & Services → Credentials** → the Web application
+client → **Authorized JavaScript origins** → add the fleet's origin, e.g.
+`https://fleet.thetech.network`. Origin only: no path, no trailing slash.
+
+It goes in **JavaScript origins, not Authorized redirect URIs.** GIS never
+redirects — it hands the ID token to a callback in the page — so a redirect URI
+does nothing for this error, which is the wrong turn that costs an afternoon.
+
+The sign-in page prints its own origin in the footer for exactly this moment,
+because the error appears inside Google's popup where the page can neither see
+nor explain it.
+
+Testing against a Node coordinator on a box needs that origin registered too,
+and GIS refuses plain http except on `localhost` — so reach it as
+`http://localhost:8791`, not by IP.
+
 ## Reaching a temporary host
 
 Every tool takes a `host`. It is not a protocol parameter — placement travels
