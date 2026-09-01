@@ -589,8 +589,14 @@ class Fleet(private val settings: Settings) {
      * This is how a host gets in now: no shared token to copy onto every box,
      * one pin, ten minutes, single use.
      */
-    suspend fun mintHostPin(): String = withContext(Dispatchers.IO) {
-        val json = post("/api/enroll", JSONObject().put("kind", "host"))
+    /**
+     * @param ephemeral admits a host that is EXPECTED to vanish — a CI runner.
+     *   Decided here, when the pin is minted, rather than claimed by the host:
+     *   a machine that could declare itself temporary is a machine that could
+     *   decline to be cleaned up. See docs/ephemeral-hosts.md.
+     */
+    suspend fun mintHostPin(ephemeral: Boolean = false): String = withContext(Dispatchers.IO) {
+        val json = post("/api/enroll", JSONObject().put("kind", "host").put("ephemeral", ephemeral))
         json.optString("code").ifBlank {
             throw IllegalStateException(json.optString("text").ifBlank { "Could not mint a pin." })
         }

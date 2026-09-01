@@ -163,7 +163,7 @@ jobs:
             echo "::notice::Sessions here authenticate with ANTHROPIC_API_KEY. Usage bills to that API account, not to a subscription."
           else
             echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start. Add one in Settings → Secrets → Actions."
-          fi"
+          fi
           sleep "$(( MINUTES * 60 ))"
 
           # Politely, then not. A sidecar given the chance to close its socket
