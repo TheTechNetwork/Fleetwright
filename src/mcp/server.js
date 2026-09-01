@@ -122,6 +122,32 @@ function sessionFrom(reply, name = '') {
   return reply?.session ?? reply ?? null;
 }
 
+/**
+ * A health frame, as something a model can act on.
+ *
+ * Not JSON.stringify: the frame carries fields that answer nothing here
+ * (protocol version, the raw session list) and the two that decide whether work
+ * can be placed — free capacity and whether Claude is logged in — would be
+ * buried among them.
+ *
+ * @param {any} h
+ */
+function describeHealth(h) {
+  const lines = [];
+  if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
+    lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
+  }
+  if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
+  if (Array.isArray(h.labels)) lines.push(`tags: ${h.labels.length ? h.labels.join(', ') : 'none'}`);
+  // THE ONE THAT DECIDES WHETHER A SESSION CAN DO ANYTHING. A host with free
+  // capacity and no Claude login accepts a start and produces a session that
+  // cannot work, which is the confusing kind of healthy.
+  if (h.loggedIn === false) lines.push('claude: NOT LOGGED IN — a session here cannot do anything until somebody runs /login on it');
+  else if (h.loggedIn === true) lines.push(`claude: logged in${h.claudeAccounts ? ` (${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'})` : ''}`);
+  if (h.hub && h.hub.reachable === false) lines.push('hub: unreachable from the sidecar');
+  return lines.length ? lines.join('\n') : 'ok';
+}
+
 export class McpServer {
   /** @param {Options} opts */
   constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
@@ -575,6 +601,14 @@ export class McpServer {
     // the protocol was built for and the one an agent most needs, so it is
     // passed through rather than flattened into "failed".
     const failed = reply?.ok === false;
+    // THE PAYLOAD, WHEN THE TEXT DOES NOT CARRY IT. `health` answers
+    // `{ ok: true, text: 'ok', health: {…} }`, and rendering `text` alone made
+    // fleet_health return the single word "ok" — for a tool whose whole
+    // description is "capacity and load". The interesting half was fetched,
+    // sent across the fleet, and thrown away at the last hop.
+    if (!failed && reply?.health && typeof reply.health === 'object') {
+      return this.#text(describeHealth(reply.health), false);
+    }
     const body = reply?.text ?? JSON.stringify(reply, null, 1);
     return this.#text(String(body), failed);
   }

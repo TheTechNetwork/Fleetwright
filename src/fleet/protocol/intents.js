@@ -144,12 +144,16 @@ export const VERBS = Object.freeze({
   list: {
     params: {},
     mutating: false,
-    summary: 'Every session this host knows about, running or resumable.',
+    summary:
+      'Every session in the fleet, grouped by the host holding it. This is a list of SESSIONS — for the ' +
+      'machines themselves and whether they are usable, ask `status` with no name.',
   },
   status: {
     params: { name: { type: 'name', required: false } },
     mutating: false,
-    summary: 'Host health, or one session in detail.',
+    summary:
+      'With no name: every host, and whether each is usable — this is how you find out what machines exist. ' +
+      'With a name: that session in detail.',
   },
   peek: {
     params: {
@@ -162,7 +166,9 @@ export const VERBS = Object.freeze({
   health: {
     params: {},
     mutating: false,
-    summary: 'Capacity and load, for the scheduler. Never routed through the command registry.',
+    summary:
+      'Capacity and load for one host: how many sessions are running, how many free, load average, and ' +
+      'whether Claude is logged in. Ask `status` with no name for the fleet-wide picture.',
   },
   start: {
     params: {
@@ -172,10 +178,28 @@ export const VERBS = Object.freeze({
       // changes; the title is a label and can. Separating them is what makes
       // renaming safe, and a rename that cannot break anything is what stops
       // somebody hesitating over the first one. See docs/naming.md.
-      title: { type: 'text', required: false, max: TITLE_MAX },
+      title: {
+        type: 'text',
+        required: false,
+        max: TITLE_MAX,
+        describe: 'A label for people reading a list later. Not instructions.',
+      },
       // A sentence or two of context, so that opening a list in a week is
       // recognition rather than recall. Not passed to the model and not run.
-      brief: { type: 'text', required: false, max: BRIEF_MAX },
+      //
+      // SAID IN THE SCHEMA NOW, not only here. An agent that reads `brief` as
+      // "the task" starts a session, waits for a result, and gets a REPL at an
+      // empty prompt with nothing having failed anywhere — the worst shape a
+      // parameter can have, because silence looks like success.
+      brief: {
+        type: 'text',
+        required: false,
+        max: BRIEF_MAX,
+        describe:
+          'A note for whoever opens this session later. NOT the task: it is stored, never typed into the ' +
+          'session and never given to the model. The session starts idle and this protocol has no way to ' +
+          'send it a prompt — a person drives it.',
+      },
     },
     mutating: true,
     // SELF-CONTAINED, because this string is now read out of context. The MCP
@@ -183,8 +207,10 @@ export const VERBS = Object.freeze({
     // sees this sentence and nothing around it — and "see the note above" is a
     // reference to a comment in a file it will never open.
     summary:
-      'Start a new session. There is no path parameter: a session works in a fixed directory, ' +
-      'so where it runs is a property of the host rather than something to ask for.',
+      'Start a new session. IT COMES UP IDLE — nothing here can hand it work, because no verb sends text ' +
+      'to a session (`answer` picks a numbered option and nothing else). A person drives it from the app ' +
+      'or the pane. There is no path parameter: a session works in a fixed directory, so where it runs is ' +
+      'a property of the host rather than something to ask for.',
   },
   resume: {
     params: {

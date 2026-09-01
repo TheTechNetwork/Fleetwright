@@ -167,6 +167,12 @@ function schemaFor(name, spec) {
       out.type = 'string';
       if (typeof spec.max === 'number') out.maxLength = spec.max;
   }
+  // THE PARAMETER'S OWN WORDS, WHEN IT HAS ANY. A `text` parameter arrived
+  // here as `{type: 'string', maxLength: 500}` and nothing else — so an agent
+  // saw `brief`, reasonably read it as the task to run, and got a session
+  // sitting at an empty prompt. The protocol has always said "not passed to
+  // the model and not run"; it said it in a comment the agent never sees.
+  if (typeof spec.describe === 'string' && spec.describe) out.description = spec.describe;
   return out;
 }
 
@@ -211,8 +217,10 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       properties.tag = {
         type: 'string',
         description:
-          'Pick a kind of machine rather than a named one — "macos", "linux". A permanent host is used if ' +
-          'one carries the tag; if only a temporary host does, you are told its name instead of sent there.',
+          'WHERE NEW WORK RUNS — it does not filter what you are shown. Pick a kind of machine rather than ' +
+          'a named one ("macos", "linux"): a permanent host is used if one carries the tag, and if only a ' +
+          'temporary host does you are told its name instead of being sent there. On a read like `list` it ' +
+          'changes nothing, because reads fan out across the fleet.',
       };
       // THE OPERATING NOTE, ON THE TOOLS THAT NEED ONE. `initialize`
       // instructions are the contract; these are the reminders at the point of
