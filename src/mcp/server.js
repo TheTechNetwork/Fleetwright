@@ -53,6 +53,10 @@ const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
  * @property {() => number} [now]
  * @property {(ms: number) => Promise<void>} [sleep]
  * @property {number} [watchMs]   how often to look at started sessions; 0 disables
+ * @property {number} [maxWaitMs]  ceiling on a blocking tool, for transports with
+ *   a request timeout. Over stdio a long wait is just a long wait; over HTTP an
+ *   uncapped one is a dropped connection, which a client cannot tell from a
+ *   broken server.
  * @property {(fn: () => void, ms: number) => any} [setTimer]
  */
 
@@ -62,6 +66,7 @@ export class McpServer {
     now = () => Date.now(),
     sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)),
     watchMs = 10_000,
+    maxWaitMs = 0,
     setTimer = (/** @type {() => void} */ fn, /** @type {number} */ ms) => setTimeout(fn, ms).unref?.(),
   }) {
     this.coordinator = String(coordinator || '').replace(/\/+$/, '');
@@ -88,6 +93,7 @@ export class McpServer {
     // notifications to the person rather than the model, a session finishing is
     // a line they did not ask for.
     this.watchMs = watchMs;
+    this.maxWaitMs = maxWaitMs;
     this.setTimer = setTimer;
     this.watching = false;
     /** @type {Map<string, string>} */
@@ -213,7 +219,11 @@ export class McpServer {
    */
   async #await(params, host) {
     const name = String(params.name || '');
-    const seconds = Math.min(900, Math.max(5, Number(params.seconds) || 300));
+    // The ceiling is the transport's, not the caller's. Asking for ten minutes
+    // over a connection that will be cut at thirty seconds is a request that
+    // ends in silence rather than an answer.
+    const ceiling = this.maxWaitMs ? this.maxWaitMs / 1000 : 900;
+    const seconds = Math.min(ceiling, Math.max(5, Number(params.seconds) || 300));
     const deadline = this.now() + seconds * 1000;
 
     for (;;) {
@@ -249,7 +259,10 @@ export class McpServer {
         // is going fine.
         return this.#text(
           `${name} is still running after ${seconds}s. That is not a failure — it may just be slow. ` +
-            'Wait again, read it with fleet_read_log, or stop it if you have what you need.',
+            (this.maxWaitMs
+              ? 'This connection caps a single wait, so call fleet_await again to keep waiting. '
+              : '') +
+            'Or read it with fleet_read_log, or stop it if you have what you need.',
         );
       }
       await this.sleep(Math.min(5000, Math.max(1000, deadline - this.now())));
@@ -309,24 +322,38 @@ export class McpServer {
       this.log('mcp: ignored a line that was not JSON');
       return;
     }
+    const reply = await this.handleMessage(message);
+    if (reply) this.write(JSON.stringify(reply));
+  }
+
+  /**
+   * One JSON-RPC message in, one reply out — or null when there is nobody to
+   * answer.
+   *
+   * SEPARATE FROM THE FRAMING, so the same server works over stdio and over
+   * HTTP. A remote transport is a different envelope around the identical
+   * conversation, and a second implementation of the conversation is a second
+   * thing to get wrong.
+   *
+   * @param {any} message
+   * @returns {Promise<any|null>}
+   */
+  async handleMessage(message) {
     // A NOTIFICATION HAS NO ID AND GETS NO REPLY. Answering one is a protocol
     // error that some clients tolerate and others hang on.
     const isNotification = message.id === undefined || message.id === null;
     try {
       const result = await this.#dispatch(message);
-      if (!isNotification && result !== undefined) {
-        this.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
-      }
+      if (isNotification || result === undefined) return null;
+      return { jsonrpc: '2.0', id: message.id, result };
     } catch (e) {
-      if (isNotification) return;
+      if (isNotification) return null;
       const err = /** @type {any} */ (e);
-      this.write(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: message.id,
-          error: { code: typeof err.code === 'number' ? err.code : -32603, message: String(err.message || err) },
-        }),
-      );
+      return {
+        jsonrpc: '2.0',
+        id: message.id,
+        error: { code: typeof err.code === 'number' ? err.code : -32603, message: String(err.message || err) },
+      };
     }
   }
 
