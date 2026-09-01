@@ -99,6 +99,15 @@ install from Play, which is the worst possible order to discover it in. Take the
 SHA-1 from **Play Console → your app → Setup → App integrity → App signing key
 certificate** and add that one too.
 
+**It has now happened.** Build 300 from the Play beta answered
+`No credentials available`; the release APK from the same commit, installed
+directly, signed in fine. That difference IS the diagnosis — same code, same
+`google-services.json`, different signing certificate — and `SignIn.kt` now says
+so in the failure rather than passing Google's four words through.
+
+Adding the fingerprint is server-side: existing installs start working within
+minutes, with no new release.
+
 **3. Download `google-services.json` again and commit it.** One file carries
 every client. With a web client present, the Google Services plugin generates
 the `default_web_client_id` string resource that `SignIn.kt` looks up at runtime.
