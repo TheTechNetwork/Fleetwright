@@ -52,7 +52,7 @@ concurrency:
 
 jobs:
   host:
-    runs-on: macos-15
+    runs-on: macos-26
     # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
     # actually ends the job, via a sleep, so this is the value that applies when
     # something has hung rather than the value that governs a normal run.
