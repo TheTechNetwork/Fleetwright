@@ -68,20 +68,31 @@ export const DEFAULT_DENY = ([
  * An alias rather than a new verb, so the protocol is unchanged and an old host
  * answers it identically.
  */
-const ALIASES = [
+const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
   {
     name: 'fleet_await',
     verb: 'status',
     description:
-      'Wait until a session needs you or finishes, instead of polling. Returns as soon as it is waiting for ' +
-      'an answer, has ended, has errored, or the timeout passes — whichever comes first. Use this after ' +
-      'fleet_start rather than checking repeatedly.',
+      'Wait for a session to finish, instead of polling. Returns as soon as it has ended, has errored, or ' +
+      'the timeout passes — whichever comes first. Use this after fleet_start rather than checking repeatedly.',
     // Not a protocol verb. `status` is what it asks the fleet, repeatedly, and
     // the waiting happens in this server — see McpServer#await. The parameters
     // are its own.
     schema: {
       name: { type: 'string', description: 'The session to wait on.' },
-      seconds: { type: 'integer', minimum: 5, maximum: 900, description: 'How long to wait before giving up and saying so.' },
+      seconds: {
+        type: 'integer',
+        minimum: 5,
+        // THE CEILING THE CALLER WILL ACTUALLY GET. It was 900 on both
+        // transports while HTTP capped a wait at 25s, so an agent could ask for
+        // two minutes, plan around it, and be answered in twenty-five seconds —
+        // legible afterwards from the reply's prose, invisible before.
+        maximum: maxWaitSeconds,
+        description:
+          maxWaitSeconds < 900
+            ? `How long to wait. This connection caps a single wait at ${maxWaitSeconds}s and then says so; call again to keep waiting.`
+            : 'How long to wait before giving up and saying so.',
+      },
     },
     requires: ['name'],
     local: true,
@@ -162,14 +173,16 @@ function schemaFor(name, spec) {
 /**
  * The tool list, from the verbs.
  *
- * @param {{ allow?: string[]|null, deny?: string[], budgetMinutes?: number }} [opts]
+ * @param {{ allow?: string[]|null, deny?: string[], budgetMinutes?: number, maxWaitSeconds?: number }} [opts]
+ *   `maxWaitSeconds` is the ceiling THIS transport will honour on a blocking
+ *   tool, so the schema advertises what the caller will actually get.
  *   `allow` names verbs to expose beyond the safe set; null means the default.
  *   `budgetMinutes` is stated in the descriptions that need it — the lifecycle
  *   is the agent's to manage, so the numbers it manages against have to be in
  *   front of it rather than in a document somebody else read.
  * @returns {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>}
  */
-export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15 } = {}) {
+export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15, maxWaitSeconds = 900 } = {}) {
   const extra = new Set(allow || []);
   /** @type {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>} */
   const tools = Object.entries(VERBS)
@@ -228,7 +241,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       };
     });
 
-  for (const alias of ALIASES) {
+  for (const alias of aliasesFor(maxWaitSeconds)) {
     const base = tools.find((t) => t.verb === alias.verb);
     // Only if the verb it aliases is actually exposed — otherwise a denied
     // verb would come back through the side door under another name.

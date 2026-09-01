@@ -132,7 +132,7 @@ a redirect this fleet will not use. All three are checked *first*, because a
 page that collects a sign-in and then discovers it cannot deliver the result has
 spent somebody's credentials on a screen that was never going to work.
 
-**Registration survives a restart; codes do not.** A code lives ten minutes and
+**Registration survives a restart; codes do not.** A code lives five minutes and
 losing one costs a second tap. A registration is what a client wrote into its own
 config weeks ago, and forgetting it fails *after* a person has signed in.
 
@@ -170,7 +170,8 @@ connection — which a client cannot tell apart from a broken server.
 SSE stream and this transport opens none. It costs less than it sounds:
 measured against Claude Code 2.1.251, notifications are not surfaced to the
 model at all (see the matrix below), so the courtesy that does nothing over
-stdio does nothing here either. `fleet_await` remains the path that works.
+stdio does nothing here either. `fleet_await` is the path that works — and did
+not, until the status reply was being read correctly; see above.
 
 ### Configuring it
 
@@ -220,6 +221,28 @@ for you, and it belongs to whoever started it
 
 That is the case this server exists for: hand a job to a Mac that did not exist
 five minutes ago, watch it, collect the output.
+
+### What a status reply looks like, and why it is written down here
+
+`/status <name>` answers `{ ok, text, sessions: [record] }`. It has never
+answered `{ session: … }` — and both `fleet_await` and the notification watcher
+read the second shape. So an await could not see a session end: it polled to its
+own timeout and said "still running" about a finished job, and the watcher
+emitted nothing, ever.
+
+It passed because `scripts/check-mcp-client.mjs` **invented the shape it was
+testing against**. That is a third way that harness has lied, on top of the two
+recorded inside it, and the worst of the three — the other two failed loudly. A
+fake that answers in a shape the real thing does not use is a test that
+certifies the bug.
+
+Anything reading a reply here goes through `sessionFrom()` now.
+
+**What `fleet_await` detects, precisely:** a session that has **ended or
+errored**. It does *not* reliably detect one parked on a prompt — `awaiting` is
+a host-watcher signal that raises an event, and is not a field on a status
+reply. If one arrives the code uses it; nothing promises it, and the tool
+description says ended-or-errored and no more.
 
 ## Completion: told, not signalled
 
@@ -305,7 +328,7 @@ passes.
 
 | | `tools/*` | `logging` (`notifications/message`) | how established |
 |---|---|---|---|
-| this server | ✅ | ✅ declared and emitted | `test/mcp.test.js`, 35 tests — two spawn the binary and drive it over a real pipe |
+| this server | ✅ | ✅ declared and emitted | `test/mcp.test.js` and `test/mcp-remote.test.js`, against the reply shape the coordinator actually sends. It emitted **nothing on a real fleet** until 1 Sep 2026: the watcher read a `session` key no layer produces, and the conformance harness invented that key — so the tests certified the bug |
 | **Claude Code 2.1.251** | ✅ **verified** | ❌ **sent, and not surfaced to the model** | `scripts/check-mcp-client.mjs`, 1 Sep 2026 — three scenarios, wire captured |
 | Claude Desktop | untested here | untested here | GUI: see below |
 | any other client | untested here | untested here | — |

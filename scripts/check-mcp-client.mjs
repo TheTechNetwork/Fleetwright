@@ -197,7 +197,21 @@ results.push(
       // Only the watcher asks for `status`, and only that answer is awaiting —
       // so only the notification can carry the marker to the model.
       if (body.verb === 'status') {
-        return { ok: true, session: { status: 'running', awaiting: true, detail: 'MARKER-BANANA-9' } };
+        // THE SHAPE THE REAL COORDINATOR ANSWERS, which this file got wrong.
+        // It replied `{ session: {...} }`, a key no layer of this fleet has
+        // ever produced — `/status <name>` returns `{ ok, text, sessions: [] }`
+        // (src/adapters/commands.js). So fleet_await and the notification
+        // watcher were measured against an invented reply, passed, and were
+        // blind on every real fleet: an await could not see a session end, and
+        // the watcher emitted nothing, ever.
+        //
+        // THIS IS A THIRD WAY THIS HARNESS HAS LIED, and the worst of the
+        // three, because the other two failed loudly. A fake that answers in a
+        // shape the real thing does not use is a test that certifies the bug.
+        return {
+          ok: true,
+          sessions: [{ name: 'probe', status: 'running', awaiting: true, detail: 'MARKER-BANANA-9' }],
+        };
       }
       if (body.verb === 'peek') return { ok: true, text: 'still compiling, nothing to report' };
       return { ok: true, text: 'started probe' };
