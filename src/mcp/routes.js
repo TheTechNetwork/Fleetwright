@@ -75,9 +75,25 @@ function bearer(header) {
  * @property {(who: { email: string, name?: string|null }, deviceName: string) => Promise<{ token: string }>} issueCredential
  * @property {() => void} save
  * @property {{ google?: string|null, apple?: string|null }} signIn  client ids for the page
+ * @property {string} selfOrigin  where to send intents — see below
  */
 
 /**
+ * TWO ORIGINS, AND THEY ARE NOT THE SAME QUESTION.
+ *
+ * `req.origin` is where the CLIENT reached us, and on the Node coordinator it
+ * is built from the Host header. That is correct for the discovery documents
+ * and the WWW-Authenticate header: a client has to be pointed back at the
+ * address it actually used, and a spoofed Host only ever poisons the spoofer's
+ * own response.
+ *
+ * `deps.selfOrigin` is where THIS SERVER sends intents, and it must never come
+ * from a header. Conflating them made the coordinator issue an outbound request
+ * to any host an authenticated caller named — SSRF, with the coordinator's
+ * network position, reachable by any fleet member including a guest. Guests are
+ * semi-trusted here by design (docs/accounts.md), which is exactly the
+ * population this must hold against.
+ *
  * @param {{ method: string, path: string, origin: string, query: URLSearchParams, body: any, authorization: string|null }} req
  * @param {Deps} deps
  * @returns {Promise<{ status: number, json?: any, html?: string, headers?: Record<string,string> } | null>}
@@ -212,7 +228,8 @@ export async function mcpRoutes(req, deps) {
     const { status, body } = await handleMcpRequest({
       body: req.body,
       credential: /** @type {string} */ (token),
-      coordinator: origin,
+      // NOT `origin`. See the note above the function.
+      coordinator: deps.selfOrigin,
     });
     return { status, json: body };
   }

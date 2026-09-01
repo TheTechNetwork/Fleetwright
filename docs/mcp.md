@@ -136,6 +136,30 @@ spent somebody's credentials on a screen that was never going to work.
 losing one costs a second tap. A registration is what a client wrote into its own
 config weeks ago, and forgetting it fails *after* a person has signed in.
 
+### Two origins, and why they are not one setting
+
+The remote endpoint deals with two different addresses, and collapsing them was
+a **server-side request forgery**: the coordinator would issue an outbound
+request to whatever host an authenticated caller put in the `Host` header, from
+wherever the coordinator runs. Guests are semi-trusted here by design
+([accounts.md](./accounts.md)), which is exactly the population that has to hold
+against.
+
+- **Where the client reached us** — the discovery documents and the
+  `WWW-Authenticate` header. Built from the request, and it has to be: a client
+  must be pointed back at the address it actually used, and a spoofed `Host`
+  only ever poisons the spoofer's own response.
+- **Where this coordinator sends intents** — never from a request. The Node
+  coordinator uses its own listener address; the Worker uses its public URL.
+
+Set `AGENT_FLEET_PUBLIC_ORIGIN` when the coordinator cannot reach itself on the
+address it bound to — TLS terminated elsewhere, a container with a different
+internal address. Everywhere else it needs nothing.
+
+The MCP server speaks to the fleet over HTTP even when the coordinator is
+serving it in-process, which is what lets the same code run as a stdio binary on
+somebody's laptop. That loopback is the request being protected here.
+
 ### What the remote transport costs
 
 **`fleet_await` caps a single wait at 25 seconds** and answers "still running,

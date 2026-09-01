@@ -65,6 +65,10 @@ export class Coordinator {
     logger,
   } = {}) {
     this.apiToken = apiToken;
+    // Replaced by listen() with the real bound address. Set here so a
+    // coordinator that is constructed and never listened to still has a
+    // definite value rather than sending intents to "undefined".
+    this.selfOrigin = process.env.AGENT_FLEET_PUBLIC_ORIGIN || 'http://127.0.0.1:8791';
     // Enrolled host keys ARE the authority — the registry is the cache, they
     // are not. Losing them on restart means every box in the fleet is refused
     // until somebody walks round re-enrolling them, so unlike everything else
@@ -293,6 +297,14 @@ export class Coordinator {
     this.healthTimer = setInterval(() => this.#pollHealth(), this.healthIntervalMs);
     this.healthTimer.unref?.();
     const address = /** @type {import('node:net').AddressInfo} */ (this.server.address());
+    // WHERE THIS COORDINATOR REACHES ITSELF. The MCP server speaks to the fleet
+    // over HTTP — that is what lets the same code run as a stdio binary on
+    // somebody's laptop — so served in-process it calls back through its own
+    // socket. The address comes from the LISTENER and never from a request, or
+    // a caller could choose where the coordinator sends its next outbound
+    // request. AGENT_FLEET_PUBLIC_ORIGIN wins for deployments that terminate
+    // TLS elsewhere and cannot reach themselves on loopback.
+    this.selfOrigin = process.env.AGENT_FLEET_PUBLIC_ORIGIN || `http://${loopbackFor(host)}:${address.port}`;
     this.log.info(`coordinator: listening on ${host}:${address.port} (protocol v${PROTOCOL_VERSION})`);
     return address.port;
   }
@@ -428,6 +440,7 @@ export class Coordinator {
       issueCredential: (who, deviceName) => this.core.issueClient(who, deviceName),
       save: () => this.saveState(),
       signIn: signInClients(),
+      selfOrigin: this.selfOrigin,
     };
   }
 
@@ -1236,6 +1249,22 @@ function signInClients() {
     google: audiences.find((a) => a.endsWith('.apps.googleusercontent.com')) || null,
     apple: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
   };
+}
+
+/**
+ * The address to reach a listener bound to `host`.
+ *
+ * A wildcard bind is an instruction about what to ACCEPT, not an address to
+ * connect to: `http://0.0.0.0:8791` happens to work on Linux and does not
+ * elsewhere, which is the kind of thing that works in CI and fails on a Mac.
+ *
+ * @param {string} host
+ */
+function loopbackFor(host) {
+  if (host === '0.0.0.0' || host === '' || host === '::' || host === '::0') {
+    return host.includes(':') ? '[::1]' : '127.0.0.1';
+  }
+  return host.includes(':') ? `[${host}]` : host;
 }
 
 /** What to call this fleet in an invitation. */

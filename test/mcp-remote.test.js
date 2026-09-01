@@ -236,6 +236,201 @@ test('wiring MCP in did not eat every other POST body', async (t) => {
   assert.match(body.text, /JWT/i);
 });
 
+// --- SSRF: the Host header must not choose where we send things -------------
+
+test('a spoofed Host cannot steer the coordinator\'s outbound request', async (t) => {
+  const { c, base } = await coordinator(t);
+  const { token } = await c.core.issueClient({ email: 'owner@example.com', name: 'The Owner' }, 'a test');
+
+  // Somewhere the coordinator must never be persuaded to send an intent. It
+  // records any hit, and the assertion is that it stays empty.
+  const { createServer } = await import('node:http');
+  /** @type {string[]} */
+  const hits = [];
+  const trap = createServer((req, res) => {
+    hits.push(String(req.url));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true,"text":"you reached the wrong machine"}');
+  });
+  await new Promise((r) => trap.listen(0, '127.0.0.1', () => r(null)));
+  const trapPort = /** @type {any} */ (trap.address()).port;
+  t.after(() => trap.close());
+
+  // node:http rather than fetch, because undici refuses to let a caller set
+  // Host — and an attacker is not using undici.
+  const { request } = await import('node:http');
+  const reply = await new Promise((resolve) => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_list', arguments: {} },
+    });
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port: Number(new URL(base).port),
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+          authorization: `Bearer ${token}`,
+          // THE ATTACK. If the outbound intent is built from this, the
+          // coordinator makes a request to a machine the caller named — with
+          // the coordinator's network position, from inside wherever it runs.
+          host: `127.0.0.1:${trapPort}`,
+        },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (chunk) => (text += chunk));
+        res.on('end', () => resolve(text));
+      },
+    );
+    req.end(body);
+  });
+
+  assert.deepEqual(hits, [], 'the Host header chose where the coordinator sent its intent');
+  // And it answered — from the real fleet, which has no hosts connected.
+  const parsed = JSON.parse(String(reply));
+  assert.equal(/you reached the wrong machine/.test(JSON.stringify(parsed)), false);
+});
+
+test('the discovery documents DO follow the Host header, and should', async (t) => {
+  const { base } = await coordinator(t);
+  // The other half of the rule, and the reason this is two values rather than
+  // one hardened one: a client must be pointed back at the address it actually
+  // used, or the flow it is about to start goes somewhere it cannot reach. A
+  // spoofed Host here only ever poisons the spoofer's own response.
+  const { request } = await import('node:http');
+  const doc = await new Promise((resolve) => {
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port: Number(new URL(base).port),
+        path: '/.well-known/oauth-protected-resource',
+        method: 'GET',
+        headers: { host: 'fleet.example.test' },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => resolve(text));
+      },
+    );
+    req.end();
+  });
+  assert.equal(JSON.parse(String(doc)).resource, 'http://fleet.example.test/mcp');
+});
+
+// --- the crash that only the Worker had -------------------------------------
+
+test('the global fetch is called with a receiver Cloudflare will accept', async () => {
+  // `this.fetch = fetch` and then `this.fetch(...)` calls the global with an
+  // McpServer as its receiver. Node's fetch does not care. Cloudflare's throws:
+  //
+  //     Illegal invocation: function called with incorrect `this` reference.
+  //
+  // So every tool call on the deployed Worker failed, identically, below the
+  // layer that writes this server's careful refusals — an agent sent to use the
+  // fleet concluded the whole fleet was down. Stdio worked. 1010 tests passed.
+  //
+  // This stands in for the Workers runtime by refusing the same receiver.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const original = globalThis.fetch;
+  /** @type {string} */
+  let receiver = 'never called';
+  globalThis.fetch = /** @type {any} */ (
+    function (/** @type {any} */ _url, /** @type {any} */ _init) {
+      // A real global sees `this` as undefined (module code is strict) or the
+      // global object. Anything else is the bug.
+      // @ts-expect-error - `this` is exactly what is under test
+      const self = this;
+      if (self !== undefined && self !== globalThis) {
+        receiver = 'wrong';
+        throw new TypeError('Illegal invocation: function called with incorrect `this` reference.');
+      }
+      receiver = 'ok';
+      return Promise.resolve({ status: 200, json: async () => ({ ok: true, text: 'sunlit-harbor on deb132' }) });
+    }
+  );
+  try {
+    const server = new McpServer({
+      coordinator: 'https://fleet.example',
+      credential: 'fwk_a_b',
+      write: () => {},
+      watchMs: 0,
+    });
+    const reply = await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_list', arguments: {} },
+    });
+    assert.equal(receiver, 'ok', 'the global fetch was called with the wrong `this`');
+    assert.equal(reply.result.isError, undefined);
+    assert.match(reply.result.content[0].text, /sunlit-harbor/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('a bug in this server does not get reported as a fleet outage', async () => {
+  // "Could not reach the fleet" was said for every failure, including a crash
+  // inside this file. It is a claim about the network, and it sent a caller
+  // looking at hosts, connectivity and their own credential — none of which
+  // were involved. A caller can act on "retry" and on "tell the operator"; they
+  // cannot act on a sentence naming the wrong layer.
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @param {Error} thrown */
+  const textFor = async (thrown) => {
+    const server = new McpServer({
+      coordinator: 'https://fleet.example',
+      credential: 'fwk_a_b',
+      write: () => {},
+      watchMs: 0,
+      fetch: async () => {
+        throw thrown;
+      },
+    });
+    const reply = await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_list', arguments: {} },
+    });
+    return String(reply.result.content[0].text);
+  };
+
+  const internal = await textFor(new TypeError('Illegal invocation: function called with incorrect `this` reference.'));
+  assert.match(internal, /bug in the server/);
+  assert.match(internal, /nothing you change/i);
+  assert.equal(/Could not reach the fleet/.test(internal), false);
+
+  const outage = await textFor(new Error('connect ECONNREFUSED 10.0.0.4:8791'));
+  assert.match(outage, /Could not reach the fleet/);
+  assert.match(outage, /retrying is reasonable/);
+});
+
+test('the two log tools ask different questions', async () => {
+  // They both said "read a session's output, it survives the session ending",
+  // and an agent testing this server reported them as near-duplicates it could
+  // not choose between. It was right — nothing distinguished them.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const tools = toolsFor();
+  const journal = tools.find((t) => t.name === 'fleet_logs');
+  const session = tools.find((t) => t.name === 'fleet_read_log');
+  assert.ok(journal && session);
+
+  // The service half and the session half, and neither offers the other's.
+  assert.deepEqual(Object.keys(journal.inputSchema.properties).sort(), ['host', 'lines', 'service', 'tag']);
+  assert.deepEqual(Object.keys(session.inputSchema.properties).sort(), ['host', 'lines', 'name', 'tag']);
+  // `name` is what fleet_read_log exists for. Narrowing the base tool before
+  // the alias copied its properties took it away once.
+  assert.deepEqual(session.inputSchema.required, ['name']);
+});
+
 // --- and the Worker serves the same list ------------------------------------
 
 test('the Worker forwards every MCP path to the object, with no credential', async () => {

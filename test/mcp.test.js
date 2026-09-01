@@ -25,6 +25,25 @@ const rpc = (id, method, params) => JSON.stringify({ jsonrpc: '2.0', id, method,
 
 // --- the tools come from the verbs ------------------------------------------
 
+test('no verb parameter is unreachable from any tool', () => {
+  // This used to say the PLAIN tool must offer every parameter of its verb, so
+  // that a hand-maintained list could not drift from the protocol. The property
+  // it was really protecting is that nothing becomes unreachable — and a verb
+  // may now be split across two tools on purpose: `logs` does two jobs, so
+  // fleet_logs is the service journal and fleet_read_log is the session's
+  // output. Both are generated; neither invents anything; between them every
+  // parameter is still callable.
+  const tools = toolsFor();
+  for (const [verb, def] of Object.entries(VERBS)) {
+    const forVerb = tools.filter((t) => t.verb === verb && !t.local);
+    if (!forVerb.length) continue; // denied by default, which is its own test
+    const offered = new Set(forVerb.flatMap((t) => Object.keys(t.inputSchema.properties)));
+    for (const param of Object.keys(def.params || {})) {
+      assert.ok(offered.has(param), `${verb}: no tool offers ${param}`);
+    }
+  }
+});
+
 test('every exposed tool is a real verb, with the verb\'s own parameters', () => {
   // The point of generating them. A hand-written tool list is a second list to
   // keep in step, and it goes wrong silently: a tool offering a parameter the
@@ -40,11 +59,6 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
     // the schema entirely (fleet_await waits locally and takes its own
     // parameters). What none of them may do is claim to be the plain verb.
     const isAlias = tool.name !== `fleet_${tool.verb}`;
-    if (!isAlias) {
-      for (const param of Object.keys(def.params || {})) {
-        assert.ok(param in tool.inputSchema.properties, `${tool.name} is missing ${param}`);
-      }
-    }
     if (isAlias) continue;
     for (const param of Object.keys(tool.inputSchema.properties)) {
       // `host` and `tag` are PLACEMENT, carried beside the intent rather than
