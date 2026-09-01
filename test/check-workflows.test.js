@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, cpSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,12 +18,16 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function check(yaml) {
   const dir = mkdtempSync(path.join(tmpdir(), 'wfcheck-'));
   try {
-    mkdirSync(path.join(dir, '.github/workflows'), { recursive: true });
-    mkdirSync(path.join(dir, 'scripts'), { recursive: true });
-    writeFileSync(path.join(dir, '.github/workflows/x.yml'), yaml);
-    cpSync(path.join(ROOT, 'scripts/check-workflows.mjs'), path.join(dir, 'scripts/check-workflows.mjs'));
+    writeFileSync(path.join(dir, 'x.yml'), yaml);
+    // Runs THE script, from the repository, pointed at a throwaway directory.
+    // Copying it somewhere would test a copy — and a copy is a different
+    // checker the moment either one is edited.
     try {
-      execFileSync(process.execPath, ['scripts/check-workflows.mjs'], { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+      execFileSync(process.execPath, ['scripts/check-workflows.mjs', dir], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
       return { ok: true, output: '' };
     } catch (e) {
       return { ok: false, output: String(e.stdout || '') + String(e.stderr || '') };
@@ -99,6 +103,33 @@ jobs:
           for i in 1 2 3; do echo "$i"; done
 `);
   assert.equal(r.ok, true, r.output);
+});
+
+test('a quoted key is still a permissions key', () => {
+  // THE CASE THE HAND-ROLLED VERSION MISSED. A line-based reader looks for
+  // `permissions:` at the start of a line; YAML does not care how the key is
+  // written. A checker that quietly passes a broken workflow is worse than no
+  // checker, because it manufactures confidence — which is the exact failure
+  // this file exists to stop repeating.
+  const r = check(`
+name: X
+on: workflow_dispatch
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    "permissions":
+      contents: \${{ github.event_name == 'release' && 'write' || 'read' }}
+    steps:
+      - run: echo hi
+`);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /does not take an expression/);
+});
+
+test('a workflow that does not parse is a failure, not a skip', () => {
+  const r = check('name: X\non: [\njobs: {\n');
+  assert.equal(r.ok, false);
+  assert.match(r.output, /not valid YAML/);
 });
 
 test('expressions do not make an otherwise-fine script fail', () => {

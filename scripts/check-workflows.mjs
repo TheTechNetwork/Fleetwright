@@ -23,18 +23,26 @@
 // complaint: "getting tired of this uncaught issues".
 
 //
-// NO YAML LIBRARY. This repository ships one runtime dependency and adding a
-// second to lint with would be a strange trade — so the two things it needs are
-// read line by line: a `permissions:` block, and `run:` block scalars. Both are
-// well-defined shapes in YAML's indentation rules, and a checker that is wrong
-// about an exotic file fails loudly rather than silently passing it.
+// IT PARSES THE YAML PROPERLY, and the first version of this did not. That one
+// read `permissions:` blocks and `run:` scalars line by line to avoid a
+// dependency — reasoning about a RUNTIME dependency (this repository ships
+// exactly one, on purpose) applied to a DEV dependency that no host ever sees.
+//
+// The cost of hand-rolling was not elegance. A line-based reader silently
+// misses shapes it does not know — quoted keys, anchors, a folded scalar with
+// an indentation indicator — and a checker that quietly passes a broken
+// workflow is worse than no checker, because it manufactures confidence. That
+// is the exact failure this file exists to stop happening again.
 
 import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { load } from 'js-yaml';
 
-const DIR = '.github/workflows';
+// Takes a directory so the tests can point it at a throwaway tree and still run
+// THIS file rather than a copy — a copied checker is a different checker.
+const DIR = process.argv[2] || '.github/workflows';
 
 /**
  * Keys whose value GitHub does NOT evaluate as an expression.
@@ -51,75 +59,63 @@ const fail = (where, what) => {
   failures++;
 };
 
-/** Indentation of a line, or -1 for blank/comment. */
-const indentOf = (line) => (/^\s*(#|$)/.test(line) ? -1 : line.length - line.trimStart().length);
-
 /**
- * `permissions:` blocks, and whether anything in one is an expression.
+ * Anywhere a `permissions:` value is an expression.
  *
- * @param {string[]} lines @param {string} file
+ * Walks the parsed document rather than looking for a line, so it finds them at
+ * workflow level, at job level, and anywhere a future GitHub adds them.
+ *
+ * @param {any} node @param {string} file @param {string} at
  */
-function checkNoExpressions(lines, file) {
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)permissions:\s*(.*)$/.exec(lines[i]);
-    if (!m) continue;
-    const [, indent, inline] = m;
-    const body = inline ? [inline] : [];
-    for (let j = i + 1; j < lines.length; j++) {
-      const at = indentOf(lines[j]);
-      if (at === -1) continue;
-      if (at <= indent.length) break;
-      body.push(lines[j]);
+function checkNoExpressions(node, file, at = '') {
+  if (!node || typeof node !== 'object') return;
+  for (const [key, value] of Object.entries(node)) {
+    if (NO_EXPRESSIONS.includes(key) && JSON.stringify(value ?? null).includes('${{')) {
+      fail(
+        `${file} · ${at}${key}`,
+        `\`${key}:\` does not take an expression — the workflow is INVALID, and fails at dispatch ` +
+          'with "this run likely failed because of a workflow file issue" and no line number',
+      );
     }
-    for (const line of body) {
-      if (line.includes('${{')) {
-        fail(
-          `${file}:${i + 1} · permissions`,
-          '`permissions:` does not take an expression — the workflow is INVALID, and fails at dispatch ' +
-            'with "this run likely failed because of a workflow file issue" and no line number',
-        );
-        break;
-      }
-    }
+    if (value && typeof value === 'object') checkNoExpressions(value, file, `${at}${key}.`);
   }
 }
 
 /**
- * Every `run:` block scalar, parsed as shell.
+ * Every `run:` step, parsed as the shell it will actually run under.
  *
- * Expressions become a quoted placeholder first: `${{ ... }}` is not shell and
- * would make every script a syntax error. A placeholder keeps the shape a real
- * substitution has, so `if [ -n "${{ inputs.x }}" ]` still parses the way it
- * will at run time.
+ * `${{ }}` becomes a quoted placeholder first: it is not shell, and a raw one
+ * would make every script a syntax error. Quoted keeps the SHAPE a real
+ * substitution has, so `if [ -n "${{ inputs.x }}" ]` parses the way it will at
+ * run time — an unquoted placeholder would be a false pass.
  *
- * @param {string[]} lines @param {string} file
+ * @param {any} doc @param {string} file
  */
-function checkShell(lines, file) {
+function checkShell(doc, file) {
   const work = mkdtempSync(path.join(tmpdir(), 'wf-'));
   try {
-    for (let i = 0; i < lines.length; i++) {
-      const m = /^(\s*)-?\s*run:\s*([|>][-+]?)?\s*$/.exec(lines[i]);
-      if (!m) continue;
-      const indent = m[1].length;
-      const body = [];
-      for (let j = i + 1; j < lines.length; j++) {
-        const at = indentOf(lines[j]);
-        if (at === -1) {
-          body.push('');
-          continue;
+    for (const [jobName, job] of Object.entries(doc?.jobs || {})) {
+      const steps = /** @type {any} */ (job)?.steps;
+      if (!Array.isArray(steps)) continue;
+      for (const [i, step] of steps.entries()) {
+        if (typeof step?.run !== 'string') continue;
+        // The resolved shell, in GitHub's own precedence order. A `pwsh` step
+        // is not something bash can judge, and pretending otherwise would be
+        // the false-failure half of the same mistake.
+        const shell =
+          step.shell || /** @type {any} */ (job)?.defaults?.run?.shell || doc?.defaults?.run?.shell || 'bash';
+        if (!/^(bash|sh)$/.test(String(shell))) continue;
+        const script = step.run.replace(/\$\{\{[^}]*\}\}/g, 'EXPR');
+        const scriptFile = path.join(work, 'step.sh');
+        writeFileSync(scriptFile, script);
+        try {
+          execFileSync(String(shell), ['-n', scriptFile], { stdio: 'pipe' });
+        } catch (e) {
+          const why = String(/** @type {any} */ (e).stderr || /** @type {any} */ (e).message)
+            .replace(new RegExp(scriptFile, 'g'), 'step')
+            .trim();
+          fail(`${file} · ${jobName} · step ${i + 1}${step.name ? ` (${step.name})` : ''}`, why);
         }
-        if (at <= indent) break;
-        body.push(lines[j]);
-      }
-      if (!body.length) continue;
-      const script = body.join('\n').replace(/\$\{\{[^}]*\}\}/g, 'EXPR');
-      const scriptFile = path.join(work, 'step.sh');
-      writeFileSync(scriptFile, script);
-      try {
-        execFileSync('bash', ['-n', scriptFile], { stdio: 'pipe' });
-      } catch (e) {
-        const why = String(e.stderr || e.message).replace(new RegExp(scriptFile, 'g'), 'step').trim();
-        fail(`${file}:${i + 1} · run`, why);
       }
     }
   } finally {
@@ -129,9 +125,16 @@ function checkShell(lines, file) {
 
 for (const name of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
   const file = path.join(DIR, name);
-  const lines = readFileSync(file, 'utf8').split('\n');
-  checkNoExpressions(lines, file);
-  checkShell(lines, file);
+  let doc;
+  try {
+    doc = load(readFileSync(file, 'utf8'));
+  } catch (e) {
+    // A workflow that does not parse is one GitHub will not run either.
+    fail(file, `not valid YAML: ${/** @type {any} */ (e).message}`);
+    continue;
+  }
+  checkNoExpressions(doc, file);
+  checkShell(doc, file);
 }
 
 if (failures) {
