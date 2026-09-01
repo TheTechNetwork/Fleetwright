@@ -9,6 +9,10 @@
 //   AGENT_FLEET_COORDINATOR_URL   required — the fleet to talk to
 //   AGENT_FLEET_CREDENTIAL        required — a device token (fwk_…) from the app
 //   AGENT_FLEET_MCP_ALLOW         verbs to expose beyond the safe set, comma separated
+//   AGENT_FLEET_MCP_BUDGET_MINUTES  how long work here should take (default 15).
+//                                 Stated to the agent rather than enforced: the
+//                                 lifecycle is its to manage, and a number it
+//                                 can act on beats a timer it cannot see.
 //
 // In Claude Desktop or Claude Code:
 //
@@ -47,6 +51,7 @@ if (!coordinator || !credential) {
 const server = new McpServer({
   coordinator,
   credential,
+  budgetMinutes: Number(process.env.AGENT_FLEET_MCP_BUDGET_MINUTES) || 15,
   allow: (process.env.AGENT_FLEET_MCP_ALLOW || '')
     .split(/[,\s]+/)
     .map((s) => s.trim())

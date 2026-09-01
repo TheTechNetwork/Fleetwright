@@ -42,7 +42,6 @@ Revoking that credential in the app stops the MCP server, the same as any phone.
 reboot, upgrade, update   restart a machine somebody else is working on
 purge, forget, restore    destroy a conversation that cannot be recovered
 connect, link, unlink     move somebody's credentials around
-stop                      end work that is not yours
 answer                    ← the interesting one
 ```
 
@@ -106,13 +105,56 @@ for you, and it belongs to whoever started it
 That is the case this server exists for: hand a job to a Mac that did not exist
 five minutes ago, watch it, collect the output.
 
-## What is still missing for that
+## Completion: told, not signalled
 
-**Nothing reports completion.** A session that has finished its work looks
-exactly like one sitting idle. `peek` reads a pane and `status` says what a host
-believes; neither is *"tell me when this is done"*. On a permanent host that is
-an annoyance. On a runner being paid for by the minute it is the difference
-between hand-off-and-watch and polling.
+Nothing in the fleet reports "done". A finished session looks exactly like an
+idle one — `peek` reads a pane and `status` says what a host believes; neither
+is *"tell me when this is done"*.
 
-That is the next piece, and it is a fleet-side signal rather than an MCP one —
-which is why it is not smuggled in here as a tool that guesses.
+The first version of this document called that a missing fleet-side signal. It
+is not:
+
+> you can have the MCP endpoint and documentation handed to the LLM telling it
+> to kill, telling it has a 15 minute timeout unless or whatever else
+
+**The thing driving the fleet is a model, and it can be told what it owns.** A
+deadline in prose that an agent can act on beats a callback that has to be
+built, and it is honest about who is deciding — because deciding a session is
+finished is a judgement, and the fleet was never going to be the one making it.
+
+So `initialize` returns `instructions`, which is the field MCP has for exactly
+this:
+
+```
+WORK YOU START IS WORK YOU OWN.
+Sessions are expected to finish within about 15 minutes. Nothing in the fleet
+reports "done" — a finished session looks exactly like an idle one — so deciding
+it is over is your job, not something you will be told.
+
+  1. fleet_start, naming a host if you want a particular machine
+  2. fleet_peek to read what it is doing, as often as you need
+  3. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed
+
+TEMPORARY HOSTS COST MONEY WHILE THEY LIVE. …
+```
+
+`AGENT_FLEET_MCP_BUDGET_MINUTES` sets the number, and it is **stated rather than
+enforced**. A timer the agent cannot see produces a session that dies mid-answer
+with no explanation; a number it was given produces one that stops on purpose.
+
+The tools carry the reminder too, not only the preamble — a model that read the
+instructions twenty tool calls ago is not reliably still holding them.
+
+### Which is why `stop` is exposed
+
+It was withheld, on the reasoning that ending work is not something an agent
+should reach for unasked. That is true of somebody else's work and **false of
+its own**: an agent told to clean up after itself and given no way to do it
+leaves a paid-for runner idling, and the instruction becomes a lie the moment it
+is read.
+
+So the verb is exposed and **scoped in the server**: it refuses to stop a
+session it did not start in this conversation, remembers only successful starts,
+and forgets one as soon as it is stopped. A refused start does not make its name
+stoppable — on a fleet where people choose names, that name is probably
+somebody's.

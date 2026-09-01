@@ -63,11 +63,16 @@ test('the dangerous verbs are not exposed by default', () => {
   // the API directly. It is about what an agent reaches for unasked, which is a
   // different question from what a person may do.
   const exposed = toolsFor().map((t) => t.verb);
-  for (const verb of ['reboot', 'purge', 'forget', 'connect', 'unlink', 'answer', 'stop']) {
+  for (const verb of ['reboot', 'purge', 'forget', 'connect', 'unlink', 'answer']) {
     assert.equal(exposed.includes(verb), false, `${verb} should not be exposed by default`);
   }
   assert.deepEqual(exposed.includes('list'), true);
   assert.deepEqual(exposed.includes('start'), true);
+  // `stop` IS exposed, and used not to be. Withholding it made "clean up after
+  // yourself" an instruction the agent could not follow, and an instruction
+  // that cannot be followed is a lie the moment it is read. It is scoped in the
+  // server instead — see the test below.
+  assert.deepEqual(exposed.includes('stop'), true);
 });
 
 test('a withheld verb can be allowed explicitly, one at a time', () => {
@@ -244,4 +249,75 @@ test('the binary refuses to start without a fleet to talk to', async () => {
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '', 'nothing but protocol on stdout, even when refusing');
   assert.match(r.stderr, /AGENT_FLEET_CREDENTIAL/);
+});
+
+// --- the lifecycle contract -------------------------------------------------
+
+test('initialize hands the agent the contract, not just the capabilities', async () => {
+  // THE ANSWER TO "NOTHING REPORTS COMPLETION". The fleet does not need a new
+  // signal if the thing driving it is told what it owns and what it costs — a
+  // deadline in prose an agent can act on beats a callback that has to be
+  // built, and it is honest about who is deciding.
+  const { server, written } = serverWith({}, { budgetMinutes: 15 });
+  await server.handleLine(rpc(1, 'initialize'));
+  const text = written[0].result.instructions;
+
+  assert.match(text, /15 minutes/);
+  assert.match(text, /Work you start is work you own/i);
+  assert.match(text, /finished session looks exactly like an idle one/);
+  // The cost, because an agent that knows the verbs and not the consequences
+  // leaves a Mac idling until a timer nobody mentioned kills it.
+  assert.match(text, /cost money while they live/i);
+  assert.match(text, /gha-/);
+});
+
+test('the budget in the instructions is the one it was configured with', async () => {
+  const { server, written } = serverWith({}, { budgetMinutes: 45 });
+  await server.handleLine(rpc(1, 'initialize'));
+  assert.match(written[0].result.instructions, /45 minutes/);
+  assert.equal(/15 minutes/.test(written[0].result.instructions), false);
+});
+
+test('an agent may stop what it started, and nothing else', async () => {
+  // `stop` used to be withheld entirely, which made "clean up after yourself"
+  // an instruction the agent could not follow — and an instruction that cannot
+  // be followed is a lie the moment it is read.
+  const { server, written } = serverWith({ ok: true, text: 'ok' });
+
+  // Somebody else's session, by name.
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_stop', arguments: { name: 'someone-elses' } }));
+  assert.equal(written[0].result.isError, true);
+  assert.match(written[0].result.content[0].text, /not yours to stop/);
+
+  // Now start one, and it becomes stoppable.
+  await server.handleLine(rpc(2, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
+  await server.handleLine(rpc(3, 'tools/call', { name: 'fleet_stop', arguments: { name: 'mine' } }));
+  assert.equal(written[2].result.isError, undefined);
+});
+
+test('a session that failed to start is not remembered as ours', async () => {
+  // Otherwise a refused start hands the agent permission to stop a name it
+  // never created — which, on a fleet where names are chosen by people, is
+  // somebody else's session.
+  const { server, written } = serverWith({ ok: false, text: 'no hosts' });
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'never-ran' } }));
+  await server.handleLine(rpc(2, 'tools/call', { name: 'fleet_stop', arguments: { name: 'never-ran' } }));
+  assert.match(written[1].result.content[0].text, /not yours to stop/);
+});
+
+test('stopping forgets it, so a second stop is refused', async () => {
+  const { server, written } = serverWith({ ok: true, text: 'ok' });
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
+  await server.handleLine(rpc(2, 'tools/call', { name: 'fleet_stop', arguments: { name: 'mine' } }));
+  await server.handleLine(rpc(3, 'tools/call', { name: 'fleet_stop', arguments: { name: 'mine' } }));
+  assert.match(written[2].result.content[0].text, /not yours to stop/);
+});
+
+test('the tools carry the reminder, not only the preamble', () => {
+  // A model that read the instructions twenty tool calls ago is not reliably
+  // still holding them.
+  const tools = toolsFor({ budgetMinutes: 15 });
+  assert.match(tools.find((t) => t.verb === 'start').description, /own what you start/i);
+  assert.match(tools.find((t) => t.verb === 'peek').description, /no completion signal/);
+  assert.match(tools.find((t) => t.verb === 'stop').description, /Only sessions you started here/);
 });

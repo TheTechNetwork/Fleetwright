@@ -38,8 +38,19 @@ import { VERBS } from '../fleet/protocol/intents.js';
 /** @type {string[]} */
 export const DEFAULT_DENY = ([
   'reboot', 'upgrade', 'update', 'purge', 'forget', 'restore',
-  'connect', 'link', 'unlink', 'renew', 'answer', 'stop',
+  'connect', 'link', 'unlink', 'renew', 'answer',
 ]);
+
+// `stop` is NOT on that list, and that is a change rather than an oversight.
+//
+// It was, on the reasoning that ending work is not something an agent should
+// reach for unasked — which is true of somebody else's work and false of its
+// own. An agent told "clean up after yourself" and given no way to do it will
+// leave a paid-for runner idling, and the instruction becomes a lie the moment
+// it is read.
+//
+// So the verb is exposed and SCOPED: the server refuses to stop a session it
+// did not start in this conversation. See McpServer#call.
 
 /**
  * JSON Schema for one protocol parameter.
@@ -79,11 +90,14 @@ function schemaFor(name, spec) {
 /**
  * The tool list, from the verbs.
  *
- * @param {{ allow?: string[]|null, deny?: string[] }} [opts]
+ * @param {{ allow?: string[]|null, deny?: string[], budgetMinutes?: number }} [opts]
  *   `allow` names verbs to expose beyond the safe set; null means the default.
+ *   `budgetMinutes` is stated in the descriptions that need it — the lifecycle
+ *   is the agent's to manage, so the numbers it manages against have to be in
+ *   front of it rather than in a document somebody else read.
  * @returns {Array<{ name: string, description: string, inputSchema: object, verb: string, mutating: boolean }>}
  */
-export function toolsFor({ allow = null, deny = DEFAULT_DENY } = {}) {
+export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15 } = {}) {
   const extra = new Set(allow || []);
   return Object.entries(VERBS)
     .filter(([verb]) => !deny.includes(verb) || extra.has(verb))
@@ -103,9 +117,22 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY } = {}) {
         type: 'string',
         description: 'Run on this host by name. Required to reach a temporary host: those are never chosen automatically.',
       };
+      // THE OPERATING NOTE, ON THE TOOLS THAT NEED ONE. `initialize`
+      // instructions are the contract; these are the reminders at the point of
+      // use, because a model that read the preamble twenty tool calls ago is
+      // not reliably still holding it.
+      /** @type {Record<string, string>} */
+      const notes = {
+        start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
+        resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
+        stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it.',
+        peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',
+      };
+      const description = [def.summary || verb, notes[verb]].filter(Boolean).join(' ');
+
       return {
         name: `fleet_${verb}`,
-        description: def.summary || verb,
+        description,
         inputSchema: {
           type: 'object',
           properties,
