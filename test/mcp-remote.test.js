@@ -236,6 +236,81 @@ test('wiring MCP in did not eat every other POST body', async (t) => {
   assert.match(body.text, /JWT/i);
 });
 
+// --- parameters that quietly do nothing ------------------------------------
+
+test('brief says it is not the task', async () => {
+  // An agent read `brief` as the work to run — reasonably: the schema was
+  // `{type:'string', maxLength:500}` and said nothing else. It started a
+  // session, waited for a result, and got a REPL at an empty prompt with
+  // nothing having failed anywhere. Silence looks like success, which makes a
+  // no-op parameter the worst shape a parameter can have.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const start = toolsFor().find((t) => t.name === 'fleet_start');
+  const brief = String(start?.inputSchema.properties.brief.description || '');
+  assert.match(brief, /NOT the task/);
+  assert.match(brief, /never given to the model/);
+  // And the tool itself says the session arrives idle, so a plan is not built
+  // around handing it work.
+  assert.match(String(start?.description), /COMES UP IDLE/);
+});
+
+test('every text parameter carries its own words', async () => {
+  // The generated schema dropped `describe` on the floor for `text` params, so
+  // the two prose fields on `start` arrived with a length limit and no meaning.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const start = toolsFor().find((t) => t.name === 'fleet_start');
+  for (const param of ['title', 'brief']) {
+    assert.ok(
+      String(start?.inputSchema.properties[param].description || '').length > 20,
+      `${param} has no description, so a caller has to guess what it does`,
+    );
+  }
+});
+
+test('fleet_health answers with capacity, not the word ok', async () => {
+  // `health` replies `{ ok: true, text: 'ok', health: {…} }` and the server
+  // rendered `text` alone — so a tool described as "capacity and load" returned
+  // the single word "ok". The interesting half was fetched, sent across the
+  // fleet, and dropped at the last hop.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({
+        ok: true,
+        text: 'ok',
+        health: { running: 2, maxSessions: 5, free: 3, loadavg: [0.1, 0.2, 0.3], labels: ['linux'], loggedIn: false },
+      }),
+    }),
+  });
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_health', arguments: {} },
+  });
+  const text = String(reply.result.content[0].text);
+  assert.notEqual(text, 'ok');
+  assert.match(text, /2\/5 sessions running/);
+  assert.match(text, /tags: linux/);
+  // The one that decides whether a session can do anything at all. A host with
+  // free capacity and no login accepts a start and produces a session that
+  // cannot work — the confusing kind of healthy.
+  assert.match(text, /NOT LOGGED IN/);
+});
+
+test('tag says it places work rather than filtering a list', async () => {
+  // A tag on `list` is silently ignored — reads fan out across the fleet — so
+  // an agent filtering by "macos" got everything back and believed it.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const list = toolsFor().find((t) => t.name === 'fleet_list');
+  assert.match(String(list?.inputSchema.properties.tag.description), /does not filter what you are shown/);
+});
+
 // --- the reply shape the fleet actually sends --------------------------------
 //
 // Every test here answers `{ ok, text, sessions: [record] }`, which is what
