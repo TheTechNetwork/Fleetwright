@@ -15,6 +15,7 @@ import { Fleet } from './fleet-do.js';
 import { demoReply } from './demo.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
+import { isMcpPath } from '../../src/mcp/routes.js';
 
 export { Fleet };
 
@@ -110,6 +111,33 @@ export default {
     // of this route, and it is checked inside the Durable Object because that
     // is where the pending flow was minted.
     if (url.pathname === '/oauth/github/callback') {
+      const id = env.FLEET.idFromName('fleet');
+      return env.FLEET.get(id).fetch(request);
+    }
+
+    // THE REMOTE MCP ENDPOINT, above the token gate and necessarily so.
+    //
+    // Discovery is what a client reads before it holds any credential, the
+    // sign-in page is a browser with none, and `/mcp` itself must reach the
+    // object unauthenticated: the 401 it answers carries the WWW-Authenticate
+    // header that names where to sign in, and this Worker's generic 401 does
+    // not. A client that gets the generic one reports the endpoint as broken
+    // rather than as protected, and the flow never starts.
+    //
+    // The same list as isMcpPath() in src/mcp/routes.js, and it has to be —
+    // a path served there and not forwarded here is a 401 with no explanation.
+    // test/worker-routes.test.js walks both.
+    if (isMcpPath(url.pathname)) {
+      // The sign-in POST does the same expensive anonymous work /api/session
+      // does — a key-set fetch and a signature verification — so it gets the
+      // same bucket. The rest are cheap and carry no secret.
+      if (url.pathname === '/oauth/authorize' && request.method === 'POST' && env.SIGNIN_RATE_LIMIT) {
+        const key = `signin:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+        const { success } = await env.SIGNIN_RATE_LIMIT.limit({ key });
+        if (!success) {
+          return json({ ok: false, error: { code: 'rate_limited' }, text: 'Too many sign-in attempts. Try again in a minute.' }, 429);
+        }
+      }
       const id = env.FLEET.idFromName('fleet');
       return env.FLEET.get(id).fetch(request);
     }

@@ -94,6 +94,75 @@ dependency is worth adding when it does something hard — framing
 `{"jsonrpc":"2.0"}` is not hard, and js-yaml went in the moment hand-rolling
 would have meant *missing* things rather than merely writing more.
 
+## Remote: a URL instead of a binary
+
+Stdio works only where somebody has installed a binary and pasted a credential
+into a config file. Every coordinator also serves the same server over HTTP:
+
+```
+claude mcp add --transport http fleetwright https://fleet.example/mcp
+```
+
+There is no token to paste. The first call gets a 401 carrying
+`WWW-Authenticate`, the client follows it to the discovery documents, registers
+itself, and opens a browser at a page with two buttons on it — **Apple and
+Google, the same sign-in as the app**. Nothing new decides who you are: the same
+issuers, the same audiences, the same two allowlists (`AGENT_FLEET_AUTH_ALLOW`
+and the invite list), checked by the same function `/api/session` calls.
+
+| route | what it is |
+| --- | --- |
+| `GET /.well-known/oauth-protected-resource` | where the authorization server is (RFC 9728) |
+| `GET /.well-known/oauth-authorization-server` | what it supports (RFC 8414) |
+| `POST /oauth/register` | dynamic client registration (RFC 7591) |
+| `GET /oauth/authorize` | the page a person sees |
+| `POST /oauth/authorize` | the ID token comes back here |
+| `POST /oauth/token` | code + PKCE verifier, form-encoded (RFC 6749) |
+| `POST /mcp` | the conversation |
+
+**The access token IS a device credential.** It is an `fwk_…` in the same list
+as every phone, named "an MCP client", revoked from the same screen. That is why
+there are no refresh tokens: a refresh flow would add a second kind of
+credential with a second lifetime to reason about, to solve a problem this fleet
+does not have.
+
+**PKCE is required, not offered.** A request without `code_challenge_method=S256`
+is refused before the page renders — along with an unregistered `client_id` and
+a redirect this fleet will not use. All three are checked *first*, because a
+page that collects a sign-in and then discovers it cannot deliver the result has
+spent somebody's credentials on a screen that was never going to work.
+
+**Registration survives a restart; codes do not.** A code lives ten minutes and
+losing one costs a second tap. A registration is what a client wrote into its own
+config weeks ago, and forgetting it fails *after* a person has signed in.
+
+### What the remote transport costs
+
+**`fleet_await` caps a single wait at 25 seconds** and answers "still running,
+call again". A Worker request has a ceiling, and an uncapped wait is a dropped
+connection — which a client cannot tell apart from a broken server.
+
+**`notifications/message` has nowhere to go.** Streamable HTTP puts them on an
+SSE stream and this transport opens none. It costs less than it sounds:
+measured against Claude Code 2.1.251, notifications are not surfaced to the
+model at all (see the matrix below), so the courtesy that does nothing over
+stdio does nothing here either. `fleet_await` remains the path that works.
+
+### Configuring it
+
+`AGENT_FLEET_AUTH_AUDIENCES` already lists the applications this fleet accepts
+tokens for, and the web sign-in uses entries from it rather than a second
+variable that could disagree:
+
+- **Google** — the entry ending `.apps.googleusercontent.com`, picked out
+  automatically. Nothing to set.
+- **Apple** — needs `AGENT_FLEET_AUTH_APPLE_SERVICE`, and it must be a
+  **Services ID**, not the iOS bundle ID sitting in the same list. Sign in with
+  Apple JS answers `invalid_client` for a bundle ID and explains nothing. The
+  Services ID also has to be added to `AGENT_FLEET_AUTH_AUDIENCES`, or the token
+  it mints will not verify here. Until it is set the page shows Google alone —
+  an Apple button that cannot work is worse than no Apple button.
+
 ## Reaching a temporary host
 
 Every tool takes a `host`. It is not a protocol parameter — placement travels
