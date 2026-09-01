@@ -99,11 +99,23 @@ jobs:
           AGENT_HUB_SANDBOX: '0'
           AGENT_HUB_WORKDIR: ${{ runner.temp }}/work
           AGENT_HUB_STATE_DIR: ${{ runner.temp }}/state
+          # EVERY ABSOLUTE DEFAULT HAS TO MOVE, not just the obvious one. These
+          # default to /var/lib and /run, which on a macOS runner are either
+          # unwritable without sudo or simply not there — and the failure is
+          # `enrol` dying on EACCES before the host ever appears in the fleet.
+          #
+          # The state directory holds agent-hub's generated API token, and the
+          # sidecar finds that token by reading AGENT_HUB_STATE_DIR itself. So
+          # both processes must be given the same one, which is why it is here
+          # rather than only on the hub.
+          AGENT_FLEET_HOST_KEY: ${{ runner.temp }}/state/host-key.json
+          AGENT_FLEET_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
           MINUTES: ${{ inputs.minutes }}
           PIN: ${{ inputs.pin }}
         run: |
           set -euo pipefail
-          mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR"
+          mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+          chmod 700 "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
 
           # The session manager first: the sidecar talks to it on loopback and
           # is useless without it.
