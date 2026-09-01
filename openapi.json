@@ -476,6 +476,10 @@
                   "readmit": {
                     "type": "boolean",
                     "description": "Allow this pin to bring back a REVOKED host."
+                  },
+                  "ephemeral": {
+                    "type": "boolean",
+                    "description": "Admit a host that is expected to vanish: a disconnect retires the entry and revokes its key, and the scheduler will not place ordinary work on it. Decided here rather than claimed by the host \u2014 see docs/ephemeral-hosts.md."
                   }
                 }
               }

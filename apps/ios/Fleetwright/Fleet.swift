@@ -490,8 +490,12 @@ struct Fleet {
     ///
     /// This is how a host gets in now: no shared token to copy, one pin, ten
     /// minutes, single use.
-    func mintHostPin() async throws -> String {
-        let data = try await post("/api/enroll", body: ["kind": "host"])
+    /// - Parameter ephemeral: admits a host that is EXPECTED to vanish — a CI
+    ///   runner. Decided here, when the pin is minted, rather than claimed by
+    ///   the host: a machine that could declare itself temporary is a machine
+    ///   that could decline to be cleaned up. See docs/ephemeral-hosts.md.
+    func mintHostPin(ephemeral: Bool = false) async throws -> String {
+        let data = try await post("/api/enroll", body: ["kind": "host", "ephemeral": ephemeral])
         struct Reply: Codable { let ok: Bool?; let code: String?; let text: String? }
         let reply = try JSONDecoder().decode(Reply.self, from: data)
         guard let code = reply.code else { throw FleetError.message(reply.text ?? "Could not mint a pin.") }

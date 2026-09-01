@@ -556,6 +556,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var signInResult by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var pin by rememberSaveable { mutableStateOf("") }
+    var ephemeralPin by rememberSaveable { mutableStateOf(false) }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
     var confirming by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -1004,12 +1005,31 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             // signing in, and the pin is the whole of how a host joins now —
             // there is no shared token to copy onto the box.
             Text("Hosts", style = MaterialTheme.typography.titleMedium)
+            // TEMPORARY IS A PROPERTY OF THE PIN, not of the box. The
+            // coordinator has been able to admit a host that is expected to
+            // vanish since the framework was built, and nothing could ask it to
+            // — so every CI runner enrolled as permanent and left its entry
+            // behind when the job ended. One corpse per build.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = ephemeralPin, onCheckedChange = { ephemeralPin = it }, enabled = !busy)
+                Spacer(Modifier.width(8.dp))
+                Text("Temporary host (CI runner)", style = MaterialTheme.typography.bodyMedium)
+            }
+            if (ephemeralPin) {
+                Text(
+                    "Retired the moment it disconnects, and its key revoked. Never chosen " +
+                        "automatically for work — it has the most free capacity in the fleet " +
+                        "precisely because it is about to disappear.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             OutlinedButton(
                 enabled = !busy,
                 onClick = {
                     scope.launch {
                         busy = true
-                        pin = runCatching { Fleet(settings).mintHostPin() }
+                        pin = runCatching { Fleet(settings).mintHostPin(ephemeralPin) }
                             .getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
                         busy = false
                     }

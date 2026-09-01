@@ -460,6 +460,7 @@ private struct SettingsView: View {
     @State private var signInResult = ""
     @State private var signingIn = false
     @State private var pin = ""
+    @State private var ephemeralPin = false
     @State private var hosts: [Fleet.Host] = []
     @State private var fleetHosts: [Fleet.FleetHost] = []
     @State private var confirmingRevoke: String?
@@ -687,11 +688,23 @@ private struct SettingsView: View {
                 if !settings.credential.isEmpty {
                     if shows(.machines) {
                     Section {
+                        // TEMPORARY IS A PROPERTY OF THE PIN, not of the box.
+                        // The coordinator has been able to admit a host that is
+                        // expected to vanish since the framework was built, and
+                        // nothing could ask it to — so every CI runner enrolled
+                        // as permanent and left its entry behind when the job
+                        // ended. One corpse per build.
+                        Toggle("Temporary host (CI runner)", isOn: $ephemeralPin)
+                        if ephemeralPin {
+                            Text("Retired the moment it disconnects, and its key revoked. Never chosen automatically for work — it has the most free capacity in the fleet precisely because it is about to disappear.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                         Button("Mint a pin for a new host") {
                             Task {
                                 pin = ""
                                 do {
-                                    pin = try await Fleet(settings: settings).mintHostPin()
+                                    pin = try await Fleet(settings: settings).mintHostPin(ephemeral: ephemeralPin)
                                 } catch {
                                     signInResult = error.localizedDescription
                                 }

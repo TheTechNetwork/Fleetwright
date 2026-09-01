@@ -726,6 +726,14 @@ export class Coordinator {
         actor: client?.email || (body?.actor ? String(body.actor) : null),
         hostId: body?.hostId ? String(body.hostId) : null,
         readmit: Boolean(body?.readmit),
+        // EPHEMERAL IS DECIDED WHEN THE PIN IS MINTED, which is the whole
+        // design (docs/ephemeral-hosts.md) — a host that could declare itself
+        // temporary is a host that could decline to be cleaned up. mint() has
+        // accepted this since the framework was built; the HTTP layer dropped
+        // it, so every runner enrolled as a PERMANENT host and its entry
+        // survived the job that created it. One corpse per build, and the
+        // retirement code that exists to prevent exactly that never ran.
+        ephemeral: Boolean(body?.ephemeral),
       });
       this.saveState();
       return json(res, 200, { ok: true, ...issued });
