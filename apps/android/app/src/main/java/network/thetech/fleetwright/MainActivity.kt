@@ -590,7 +590,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // WHICH BUILD THIS IS, WHERE A PERSON CAN READ IT.
         //
-        // versionName is the constant "0.1.1", so every build Play has ever
+        // versionName is a constant per release, so every build Play has ever
         // shipped looks identical in the store listing and in Android's own app
         // settings. versionCode is the number that actually differs, and until
         // now it was in the APK and nowhere a human could see.
