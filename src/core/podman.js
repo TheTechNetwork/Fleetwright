@@ -54,6 +54,35 @@ export function podman(cfg, args, { timeout, input } = {}) {
 }
 
 /** @param {import('../config.js').Config} cfg */
+/**
+ * Does this image / volume / container exist?
+ *
+ * `inspect`, NOT `exists`. Podman has `podman volume exists` and friends; Docker
+ * has none of the three, and this project has one place where that matters: CI
+ * has Docker and no Podman, so the container half of the sandbox — the part
+ * that actually touches a volume — could not be exercised at all. Everything
+ * around it was tested and the thing itself was asserted by reading the source.
+ *
+ * `inspect` exists on both and answers the same question the same way: zero if
+ * it is there, non-zero if it is not. Output is discarded; only the status is
+ * read. So `AGENT_HUB_PODMAN_BIN=docker` now runs this code path unchanged.
+ *
+ * THE PRODUCT STILL WANTS PODMAN, and that is not a preference. docs/hardening.md
+ * is built on rootless: NoNewPrivileges against setuid newuidmap, ProtectHome
+ * against ~/.local/share/containers, and a refusal list including
+ * --userns=host. Docker's default is a root daemon, where "escaped the
+ * container" and "root on the box" are the same sentence. This makes the CLI
+ * calls portable so a test can run somewhere else; it does not move the fleet.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {'image'|'volume'|'container'} kind
+ * @param {string} id
+ */
+function exists(cfg, kind, id) {
+  return podman(cfg, [kind, 'inspect', id]).status === 0;
+}
+
+/** @param {import('../config.js').Config} cfg */
 export function podmanAvailable(cfg) {
   return spawnSync(cfg.podmanBin, ['--version'], { encoding: 'utf8' }).status === 0;
 }
@@ -82,7 +111,7 @@ export function sandboxNames(name) {
  * @param {import('../config.js').Config} cfg
  */
 export function sandboxImageExists(cfg) {
-  return podman(cfg, ['image', 'exists', cfg.sandboxImage]).status === 0;
+  return exists(cfg, 'image', cfg.sandboxImage);
 }
 
 /**
@@ -160,9 +189,22 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   return { ok: false, message: `could not build ${cfg.sandboxImage}:\n${tail}\n\n${manual}` };
 }
 
+/**
+ * Does this session have a workspace volume yet?
+ *
+ * Asked before any file operation, because `run -v name:/work` CREATES the
+ * volume when it is absent — so a read of a session that does not exist would
+ * quietly make one, with a name the caller chose. See src/core/files.js.
+ *
+ * @param {import('../config.js').Config} cfg @param {string} name
+ */
+export function workspaceExists(cfg, name) {
+  return exists(cfg, 'volume', sandboxNames(name).work);
+}
+
 /** @param {import('../config.js').Config} cfg @param {string} volume */
 function volumeExists(cfg, volume) {
-  return podman(cfg, ['volume', 'exists', volume]).status === 0;
+  return exists(cfg, 'volume', volume);
 }
 
 /**
@@ -662,7 +704,7 @@ export function removeSandboxVolumes(cfg, name) {
  */
 export function stopSandboxContainer(cfg, name) {
   const { container } = sandboxNames(name);
-  if (podman(cfg, ['container', 'exists', container]).status !== 0) return false;
+  if (!exists(cfg, 'container', container)) return false;
   podman(cfg, ['rm', '-f', container]);
   return true;
 }

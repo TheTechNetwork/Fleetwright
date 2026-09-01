@@ -33,7 +33,7 @@
 // the 8GB core dump a crashed session left behind".
 
 import { isValidName } from './names.js';
-import { podman, sandboxNames, podmanAvailable } from './podman.js';
+import { podman, sandboxNames, podmanAvailable, workspaceExists } from './podman.js';
 
 /** Bytes of a file this will return. Generous for source, refuses a blob. */
 export const MAX_READ_BYTES = 256 * 1024;
@@ -113,6 +113,22 @@ export function checkPath(p) {
  */
 function run(cfg, name, script, args, { write = false, stdin } = {}) {
   const { work } = sandboxNames(name);
+  // THE VOLUME MUST ALREADY EXIST, and this check is not politeness.
+  //
+  // `podman run -v somename:/work` CREATES `somename` when it is absent. So
+  // reading a session that does not exist did not fail — it silently made a
+  // volume, and the caller chooses the name. A loop over invented session names
+  // is unbounded volume creation on somebody's disk, from a read.
+  //
+  // Found by running the container instead of reading the source, which is the
+  // entire argument for this test existing.
+  if (!workspaceExists(cfg, name)) {
+    return {
+      status: 4,
+      stdout: '',
+      stderr: 'no such volume: that session has no workspace',
+    };
+  }
   const r = podman(
     cfg,
     [
@@ -163,7 +179,14 @@ export function listFiles(cfg, name, dir = '.') {
   const script = `
 cd "$t" 2>/dev/null || { echo "no such directory" >&2; exit 4; }
 [ -d "$t" ] || { echo "not a directory" >&2; exit 4; }
-find . -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null | sort -t'\\t' -k1,1r -k3,3f | head -n ${MAX_ENTRIES}
+# A REAL TAB, not the two characters backslash-t. sort -t takes one character
+# and refuses more with "multi-character tab". Spelled out rather than quoted
+# because this file is a JS template literal and a backtick would close it --
+# which is the second bug this one comment managed to contain.
+# Only the container test saw either. Reading the source saw neither.
+# Type first so directories lead, then name; size is never sorted on.
+tab=$(printf '\\t')
+find . -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null | sort -t"$tab" -k1,1 -k3,3f | head -n ${MAX_ENTRIES}
 `;
   const r = run(cfg, name, script, [dir]);
   if (r.status !== 0) return { ok: false, text: refusalFor(r, dir) };
@@ -204,9 +227,12 @@ export function readFile(cfg, name, file) {
 [ -f "$t" ] || { echo "not a file" >&2; exit 4; }
 size=$(stat -c %s "$t")
 if [ "$size" -gt ${MAX_READ_BYTES} ]; then echo "too big: $size" >&2; exit 5; fi
-# A NUL in the first 8k means binary. grep is doing the classification, which is
-# what it is for, rather than a heuristic written here.
-if head -c 8192 "$t" | grep -qP '\\x00' 2>/dev/null; then echo "binary" >&2; exit 6; fi
+# A NUL in the first 8k means binary. Counted rather than matched: grep -P
+# '\\x00' returns "no match" against a file full of them -- measured, not
+# assumed -- and tr is in coreutils on every image this could run on.
+n=$(head -c 8192 "$t" | wc -c)
+m=$(head -c 8192 "$t" | tr -d '\\000' | wc -c)
+if [ "$n" != "$m" ]; then echo "binary" >&2; exit 6; fi
 cat "$t"
 `;
   const r = run(cfg, name, script, [file]);

@@ -80,6 +80,30 @@ jobs:
       # import JSX and the component tests render the compiled output. A UI that
       # cannot be rendered in a test is a UI that ships broken — which is
       # exactly how the hand-rolled version of this page shipped.
+      # THE CONTAINER HALF OF THE SANDBOX, against Docker.
+      #
+      # test/files-container.test.js is the workspace browser running inside a
+      # real container — where the confinement actually lives. It was asserted
+      # by reading the source, because CI had no engine. It has Docker, and
+      # AGENT_HUB_PODMAN_BIN has always been configurable; what stood in the way
+      # was three podman-only subcommands, now `inspect` on both.
+      #
+      # THE FLEET STILL RUNS PODMAN. docs/hardening.md is built on rootless —
+      # NoNewPrivileges against setuid newuidmap, ProtectHome against
+      # ~/.local/share/containers. Docker's default is a root daemon, where
+      # "escaped the container" and "root on the box" are the same sentence.
+      # This is a test running somewhere else, not a change of engine.
+      #
+      # It found two real bugs on its first run: `sort -t` given two characters
+      # instead of a tab, and `podman run -v name:/work` CREATING the volume
+      # when absent, so reading a session that did not exist quietly made one
+      # under a name the caller chose.
+      - name: The workspace, inside a real container
+        run: node --test test/files-container.test.js
+        env:
+          AGENT_HUB_PODMAN_BIN: docker
+          AGENT_HUB_SANDBOX_IMAGE: debian:13-slim
+
       - run: npm test
       - run: npm run typecheck
 

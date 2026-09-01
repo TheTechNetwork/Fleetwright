@@ -98,6 +98,38 @@ authenticated and only for sessions they can see. The questionnaire should be
 re-run before the next store submission all the same, because the honest answer
 to "can users share content" changed shape even if the answer did not.
 
+## Tested against a real container, which is the point
+
+`test/files.test.js` checks the half that decides whether a container starts.
+`test/files-container.test.js` runs the other half — the one where the
+confinement actually lives — and **it found two real bugs on its first run that
+reading the source did not**:
+
+- **`sort -t'\t'`** reached the shell as two characters, not a tab. `sort`
+  refuses that outright: *"multi-character tab"*. Every listing was empty.
+- **`podman run -v name:/work` CREATES the volume when it is absent.** So
+  reading a session that did not exist did not fail — it silently made a volume,
+  under a name the caller chose. A loop over invented session names is unbounded
+  volume creation on somebody's disk, from a *read*. Every operation now checks
+  the workspace exists first.
+
+## Podman or Docker
+
+**The fleet runs rootless podman, and that is not a preference.**
+`docs/hardening.md` is built on it: `NoNewPrivileges` against setuid
+`newuidmap`, `ProtectHome` against `~/.local/share/containers`, and a refusal
+list including `--userns=host`. Docker's default is a root daemon, where
+"escaped the container" and "root on the box" are the same sentence. The sandbox
+is the isolation boundary for sessions; trading it for CI convenience would be a
+poor bargain.
+
+**But CI has Docker and no Podman**, which is why the container half went
+untested. `AGENT_HUB_PODMAN_BIN` was always configurable; what stood in the way
+was three podman-only subcommands — `volume exists`, `image exists`,
+`container exists`. Docker has none of them. They are `inspect` now, which both
+engines have and both answer by exit status, so the same code path runs under
+either. That is a portability fix in the CLI calls, not a change of engine.
+
 ## Status
 
 Coordinator, Worker, host and MCP: **done**. The apps are next — the verbs and

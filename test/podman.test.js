@@ -30,14 +30,18 @@ function stubPodman(t, { has = [], failBuild = false, failPull = false } = {}) {
     bin,
     `#!/bin/sh
 echo "$@" >> ${log}
+# INSPECT, NOT EXISTS. Podman has "volume exists" and friends; Docker has no
+# equivalent, and CI has Docker and no Podman -- so the container half of the
+# sandbox could never be exercised there. "inspect" is on both engines and
+# answers the same question by exit status, so this fake answers it too.
 case "$1 $2" in
-  "image exists")
+  "image inspect")
     for known in ${has.map((h) => `'${h}'`).join(' ') || "''"}; do
       [ "$3" = "$known" ] && exit 0
     done
     exit 1 ;;
-  "volume exists") exit 1 ;;
-  "container exists") exit 1 ;;
+  "volume inspect") exit 1 ;;
+  "container inspect") exit 1 ;;
 esac
 case "$1" in
   build) ${failBuild ? 'echo "Error: apt-get update failed" >&2; exit 1' : 'exit 0'} ;;
