@@ -57,6 +57,7 @@ const NONCE_SECRET_BYTES = 32;
  * @property {any} publicJwk
  * @property {string} fingerprint    short, for humans reading a list
  * @property {string|null} enrolledBy
+ * @property {string|null} [owner]  the person an EPHEMERAL host belongs to
  * @property {number} enrolledAt
  * @property {number|null} lastSeenAt
  * @property {number|null} revokedAt
@@ -91,9 +92,9 @@ export class HostIdentities {
    * rebuilt machine should do; the alternative is a fleet slowly filling with
    * dead entries nobody dares delete.
    *
-   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, readmit?: boolean, boundToThisHost?: boolean, ephemeral?: boolean }} spec
+   * @param {{ hostId: string, publicJwk: any, enrolledBy?: string|null, owner?: string|null, readmit?: boolean, boundToThisHost?: boolean, ephemeral?: boolean }} spec
    */
-  async enrol({ hostId, publicJwk, enrolledBy = null, readmit = false, boundToThisHost = false, ephemeral = false }) {
+  async enrol({ hostId, publicJwk, enrolledBy = null, owner = null, readmit = false, boundToThisHost = false, ephemeral = false }) {
     const id = String(hostId || '').trim();
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
       return { ok: false, error: 'a host id is letters, digits, dot, dash and underscore' };
@@ -145,6 +146,16 @@ export class HostIdentities {
       publicJwk: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y },
       fingerprint: await fingerprint(publicJwk),
       enrolledBy,
+      // WHOSE IT IS. Only meaningful for an ephemeral host: a permanent box is
+      // the fleet's, and one person owning it would mean nobody else could
+      // work. A runner is different — it exists because one person asked for
+      // it, for one job, and it costs them money while it lives.
+      //
+      // "Since they are ephemeral they belong to the user whose token started
+      // em" — so it is derived from whatever admitted the host, never claimed:
+      // the pin carries the person who minted it, and an Actions token carries
+      // the account that triggered the run.
+      ...(owner ? { owner } : {}),
       enrolledAt: this.now(),
       lastSeenAt: null,
       revokedAt: null,
@@ -317,6 +328,18 @@ export class HostIdentities {
    * Which is how it was reported — "removing a host in the app, it comes right
    * back". It never came back; it never left this list.
    */
+  /**
+   * One enrolled host, revoked or not.
+   *
+   * Added because `hostConnected` needs to know whether the machine dialling in
+   * is a runner, and the only record of that is here.
+   *
+   * @param {string} hostId
+   */
+  get(hostId) {
+    return this.hosts.get(hostId) ?? null;
+  }
+
   list() {
     return [...this.hosts.values()]
       .filter((h) => !h.revokedAt)

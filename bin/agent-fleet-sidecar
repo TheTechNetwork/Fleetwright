@@ -42,6 +42,7 @@ setLogStream(process.stderr);
 const sub = process.argv[2] || 'run';
 if (sub === 'doctor') await doctor();
 else if (sub === 'enrol' || sub === 'enroll') await doEnrol(process.argv[3]);
+else if (sub === 'enrol-actions' || sub === 'enroll-actions') await doEnrolActions(process.argv[3]);
 else if (sub === 'identity') await identity();
 else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
 else await run();
@@ -51,6 +52,9 @@ function usage() {
 
   agent-fleet-sidecar            run
   agent-fleet-sidecar enrol PIN  present this box to the coordinator (six-digit pin from /enroll)
+  agent-fleet-sidecar enrol-actions CLAIM
+                                 enrol from inside a GitHub Actions job. GitHub's own
+                                 token admits the machine; CLAIM says whose runner it is.
   agent-fleet-sidecar identity   print this box's key fingerprint
   agent-fleet-sidecar doctor     check this box can drive its agent-hub
 
@@ -208,6 +212,76 @@ async function run() {
  *
  * @param {string|undefined} pin
  */
+/**
+ * Enrol from inside a GitHub Actions job.
+ *
+ * A runner has nobody to read a pin to. The alternative everybody reaches for
+ * is a long-lived secret in CI that can admit a host — readable by every
+ * workflow in the repository, surviving the job, and unable to say WHICH job
+ * used it.
+ *
+ * GitHub will instead mint a token for this job on request, naming the
+ * repository, the workflow file and the run. It expires in minutes and cannot
+ * be exported from the job that asked for it. The coordinator verifies it the
+ * same way it verifies a sign-in and derives the host id from the run, so a job
+ * cannot name itself something else.
+ *
+ * Needs `permissions: id-token: write` on the job. Without it the request
+ * variables are simply absent, which is the common failure and is worth naming
+ * rather than reporting as a network error.
+ */
+async function doEnrolActions(claim) {
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !token) {
+    console.error(
+      'This is not a GitHub Actions job with id-token permission.\n' +
+        'Add `permissions: { id-token: write }` to the job — without it GitHub does not\n' +
+        'expose the request variables at all, which is why nothing here failed loudly.',
+    );
+    process.exit(2);
+  }
+  if (!cfg.coordinatorUrl) {
+    console.error('AGENT_FLEET_COORDINATOR_URL is not set — there is nothing to enrol with.');
+    process.exit(2);
+  }
+  try {
+    // The audience is a constant both sides agree on, so a token minted for
+    // some other service cannot be replayed at this coordinator.
+    const res = await fetch(`${url}&audience=fleetwright`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`GitHub refused to mint a job token: ${res.status}`);
+    const idToken = (await res.json()).value;
+
+    const key = await loadOrCreateKey(cfg.hostKeyFile);
+    const fp = await keyFingerprint(key.publicJwk);
+    const reply = await fetch(new URL('/api/enroll/actions', cfg.coordinatorUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // The OIDC token admits the machine. The claim says whose it is — see
+      // the route. Two different questions, answered by two different things.
+      body: JSON.stringify({ token: idToken, claim: claim || '', publicJwk: key.publicJwk }),
+    });
+    const body = await reply.json().catch(() => ({}));
+    if (!reply.ok || !body?.ok) {
+      // The coordinator's own sentence, not a status code. Every refusal it can
+      // give here names something specific — the repository is not on the list,
+      // the workflow file is not the one allowed, the audience is wrong.
+      throw new Error(body?.text || `the coordinator refused this job (${reply.status})`);
+    }
+    console.log(`enrolled ${body.hostId} at ${cfg.coordinatorUrl}`);
+    console.log(`  fingerprint ${fp}`);
+    console.log('  ephemeral: retired and its key revoked when this job ends');
+    // THE HOST ID CAME FROM THE COORDINATOR, derived from the run. The sidecar
+    // must run under that name or it will connect as somebody else — or as
+    // nobody.
+    process.env.AGENT_FLEET_HOST_ID = body.hostId;
+    await afterEnrol();
+  } catch (e) {
+    console.error(String(/** @type {Error} */ (e).message));
+    process.exit(1);
+  }
+}
+
 async function doEnrol(pin) {
   if (!pin) {
     console.error('usage: agent-fleet-sidecar enrol <six-digit pin>\n\nGet a pin with /enroll in Telegram or from the app.');

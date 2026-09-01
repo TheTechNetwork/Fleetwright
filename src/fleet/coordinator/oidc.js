@@ -25,7 +25,21 @@ import { jwtVerify, createRemoteJWKSet } from 'jose';
 const JWKS_URLS = {
   'https://accounts.google.com': 'https://www.googleapis.com/oauth2/v3/certs',
   'https://appleid.apple.com': 'https://appleid.apple.com/auth/keys',
+  'https://token.actions.githubusercontent.com': 'https://token.actions.githubusercontent.com/.well-known/jwks',
 };
+
+/** The one issuer that can speak for a CI job. */
+export const ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
+
+/**
+ * What a runner's token must be addressed to.
+ *
+ * A constant both sides agree on rather than a per-deployment value, because
+ * the point of the audience here is only that a token minted for some OTHER
+ * service cannot be replayed at this one. Which fleet it is for is settled by
+ * the repository allowlist, not by this string.
+ */
+export const DEFAULT_ACTIONS_AUDIENCE = 'fleetwright';
 
 /** @type {Map<string, any>} */
 const jwks = new Map();
@@ -50,6 +64,72 @@ function keysFor(issuer) {
     jwks.set(issuer, set);
   }
   return set;
+}
+
+/**
+ * A GitHub Actions job, proving it is the job it says it is.
+ *
+ * SEPARATE FROM verifyIdToken BECAUSE THE SUBJECT IS NOT A PERSON. That
+ * function ends by requiring an `email` claim and checking it against an
+ * allowlist of people; an Actions token carries no email and never will. What
+ * it carries instead is which repository, which workflow file, and which run —
+ * so the allowlist here is of REPOSITORIES, and the identity is a job.
+ *
+ * WHY THIS BEATS A STORED CREDENTIAL. The alternative for admitting a runner is
+ * a long-lived secret in CI that can enrol a host. That secret is readable by
+ * every workflow in the repository, survives the job, and cannot say WHICH job
+ * used it. A token from this issuer is minted per job, expires in minutes,
+ * names the run, and cannot be exported from the job that requested it.
+ *
+ * `job_workflow_ref` is the claim that matters most and is the one people skip.
+ * `repository` alone means any workflow in that repository can admit a host,
+ * including one added by a pull request. Pinning the workflow file means only
+ * the file that is supposed to do this can.
+ *
+ * @param {string} token
+ * @param {{ audiences: string[], repositories: string[], workflowRef?: string|null }} opts
+ * @returns {Promise<{ repository: string, runId: string, runAttempt: string, workflowRef: string, ref: string, actor: string }>}
+ */
+export async function verifyActionsToken(token, { audiences, repositories, workflowRef = null }) {
+  const raw = String(token || '');
+  if (raw.split('.').length !== 3) throw new Error('not a JWT');
+  if (!repositories.length) {
+    // Empty means nobody, the same way the person allowlist works. A
+    // deployment that has not said which repositories may admit hosts has not
+    // opted in, and defaulting to "any" would make enabling the issuer enough
+    // for anyone's fork to enrol.
+    throw new Error('no repositories are configured to enrol runners');
+  }
+
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(raw, keysFor(ACTIONS_ISSUER), {
+      issuer: ACTIONS_ISSUER,
+      audience: audiences,
+      algorithms: ['RS256', 'ES256'],
+      clockTolerance: 60,
+    }));
+  } catch (e) {
+    throw new Error(reasonFor(/** @type {any} */ (e)));
+  }
+
+  const repository = String(payload.repository || '');
+  if (!repositories.includes(repository)) {
+    throw new Error(`${repository || 'that repository'} is not allowed to enrol runners here`);
+  }
+  const jobWorkflowRef = String(payload.job_workflow_ref || '');
+  if (workflowRef && !jobWorkflowRef.startsWith(workflowRef)) {
+    throw new Error(`that job runs ${jobWorkflowRef || 'an unknown workflow'}, not ${workflowRef}`);
+  }
+
+  return {
+    repository,
+    runId: String(payload.run_id || ''),
+    runAttempt: String(payload.run_attempt || '1'),
+    workflowRef: jobWorkflowRef,
+    ref: String(payload.ref || ''),
+    actor: String(payload.actor || ''),
+  };
 }
 
 /**

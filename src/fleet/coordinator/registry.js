@@ -51,6 +51,7 @@
  * @property {number} connectedAt
  * @property {boolean} connected
  * @property {boolean} [ephemeral]  expected to vanish
+ * @property {string|null} [owner]   whose runner this is, for an ephemeral host
  */
 
 /** How stale a health report may be before the host becomes `unknown`. */
@@ -76,9 +77,9 @@ export class HostRegistry {
    * A host has dialled in.
    * @param {string} hostId
    * @param {(msg: object) => void} send
-   * @param {{ ephemeral?: boolean }} [opts]
+   * @param {{ ephemeral?: boolean, owner?: string|null }} [opts]
    */
-  connect(hostId, send, { ephemeral = false } = {}) {
+  connect(hostId, send, { ephemeral = false, owner = null } = {}) {
     const existing = this.hosts.get(hostId);
     // A reconnect from a host we already have replaces the old socket. The box
     // is the authority on itself, so the newest connection from it wins.
@@ -94,6 +95,8 @@ export class HostRegistry {
       // a runner, and the enrolment is the authority on this rather than
       // whatever the last connect happened to pass.
       ephemeral: ephemeral || existing?.ephemeral || false,
+      // Whose runner this is. Only an ephemeral host has one — see hosts.js.
+      owner: owner ?? existing?.owner ?? null,
       send,
     });
   }

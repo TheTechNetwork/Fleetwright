@@ -19,6 +19,7 @@
 // allowlist — but it is worth knowing it is not a *lesser* permission.
 
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
@@ -117,55 +118,88 @@ function sameActor(actor, startedBy) {
 const MAC_KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
 /**
- * The credential a just-finished login produced.
+ * The credential a just-finished login produced, from wherever it landed.
  *
- * ON LINUX IT IS A FILE and always was: `<CLAUDE_CONFIG_DIR>/.credentials.json`,
- * mode 0600. On macOS the CLI writes to the LOGIN KEYCHAIN instead — item
- * "Claude Code-credentials" — and only falls back to the file when the keychain
- * refuses the write, which is why this worked on every Linux host and failed
- * the first time anybody linked an account on a Mac with:
+ * THIS SEARCHES INSTEAD OF KNOWING, and that is the point rather than a
+ * shortcut. The CLI has at least three places it may put a credential and which
+ * one it picks depends on the platform, on whether a keychain accepted the
+ * write, and on a fallback path that is not necessarily the config directory we
+ * handed it:
  *
- *     The login finished but the credential could not be stored:
- *     ENOENT ... open '.../pending-<email>/.credentials.json'
+ *   <CLAUDE_CONFIG_DIR>/.credentials.json   Linux, and the documented fallback
+ *   $HOME/.claude/.credentials.json         where the fallback actually goes if
+ *                                           it ignores CLAUDE_CONFIG_DIR
+ *   keychain "Claude Code-credentials"      macOS, when the keychain takes it
  *
- * `status()` said the login had SUCCEEDED, because it asks the CLI, and the CLI
- * reads the keychain. So the flow got all the way to the last step and then
- * looked in the one place the credential was not.
+ * Two rounds of this have now been spent asserting which one it would be and
+ * being wrong, on a platform that cannot be reproduced where the code is
+ * written. Looking in all of them costs three stats and removes the question.
  *
- * THE KEYCHAIN IS NOT PER-CONFIG-DIR, and that is worth stating rather than
- * hiding: CLAUDE_CONFIG_DIR isolates the config directory and nothing else, so
- * on macOS a login for one account overwrites whatever keychain item was there
- * — before this function is ever reached. That is a property of the CLI, not of
- * this code. Taking the credential OUT of the shared slot and into the accounts
- * store is the best available answer: the item is deleted after it is read, so
- * the slot is empty rather than holding somebody's account, and the next login
- * starts from nothing.
+ * The keychain item is deleted once taken: CLAUDE_CONFIG_DIR isolates a
+ * directory and not the keychain, so on macOS every login shares one slot, and
+ * leaving a credential there means the next login overwrites somebody's account
+ * rather than an empty space.
  *
  * @param {string} dir  the isolated CLAUDE_CONFIG_DIR for this attempt
  * @returns {string} the credential JSON
  */
 function readLinkedCredential(dir) {
-  try {
-    return readFileSync(path.join(dir, '.credentials.json'), 'utf8');
-  } catch (fileError) {
-    if (process.platform !== 'darwin') throw fileError;
-    const read = spawnSync('security', ['find-generic-password', '-s', MAC_KEYCHAIN_SERVICE, '-w'], {
-      encoding: 'utf8',
+  const home = process.env.HOME || os.homedir();
+  /** @type {Array<{ what: string, read: () => string|null }>} */
+  const places = [
+    {
+      what: path.join(dir, '.credentials.json'),
+      read: () => tryRead(path.join(dir, '.credentials.json')),
+    },
+    // The CLI's documented fallback is "~/.claude/.credentials.json", which is
+    // not the same sentence as "<CLAUDE_CONFIG_DIR>/.credentials.json" — and on
+    // a machine where the keychain refuses the write, that difference is the
+    // whole bug.
+    {
+      what: path.join(home, '.claude', '.credentials.json'),
+      read: () => tryRead(path.join(home, '.claude', '.credentials.json')),
+    },
+  ];
+  if (process.platform === 'darwin') {
+    places.push({
+      what: `keychain "${MAC_KEYCHAIN_SERVICE}"`,
+      read: () => {
+        const r = spawnSync('security', ['find-generic-password', '-s', MAC_KEYCHAIN_SERVICE, '-w'], {
+          encoding: 'utf8',
+        });
+        const raw = (r.stdout || '').trim();
+        if (r.status !== 0 || !raw) return null;
+        spawnSync('security', ['delete-generic-password', '-s', MAC_KEYCHAIN_SERVICE], { encoding: 'utf8' });
+        return raw;
+      },
     });
-    const raw = (read.stdout || '').trim();
-    if (read.status !== 0 || !raw) {
-      throw new Error(
-        'the CLI reported a successful login but wrote no credential this process can read.\n' +
-          `Not at ${path.join(dir, '.credentials.json')}, and not in the "${MAC_KEYCHAIN_SERVICE}" keychain item ` +
-          `(${(read.stderr || '').trim().slice(0, 120) || 'no such item'}).\n` +
-          'On macOS the keychain must be unlocked for the user this service runs as.',
-      );
+  }
+
+  for (const place of places) {
+    const found = place.read();
+    if (found) {
+      log.info(`login: credential found at ${place.what}`);
+      return found;
     }
-    // Cleared once it is ours. Leaving it would mean the account stays live in
-    // a slot shared by every login on this machine, which is the thing the
-    // isolated config dir exists to prevent and cannot on this platform.
-    spawnSync('security', ['delete-generic-password', '-s', MAC_KEYCHAIN_SERVICE], { encoding: 'utf8' });
-    return raw;
+  }
+
+  // NAMES EVERY PLACE IT LOOKED. A failure that lists one path sends somebody
+  // to check that path; a failure that lists all of them is a report somebody
+  // can act on without another round trip.
+  throw new Error(
+    'the CLI reported a successful login but wrote no credential this process can read.\n' +
+      places.map((p) => `  looked in ${p.what}`).join('\n') +
+      '\nOn macOS the keychain must be unlocked for the user this service runs as.\n' +
+      'A host that cannot store a login can still run sessions with ANTHROPIC_API_KEY in its environment.',
+  );
+}
+
+/** @param {string} file */
+function tryRead(file) {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
   }
 }
 

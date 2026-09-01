@@ -99,6 +99,86 @@ and is then asked to stop, so it closes its socket and the coordinator retires
 the entry and revokes the key. There is no cleanup step to remember, because
 exiting normally IS the cleanup.
 
+## Enrolling with no pin: the job proves what it is
+
+`agent-fleet-sidecar enrol-actions`, and the workflow needs one line:
+
+```yaml
+permissions:
+  id-token: write
+```
+
+GitHub mints a short-lived token for that job naming the repository, the
+workflow file and the run. The coordinator verifies it with the same machinery
+it uses for a sign-in — different issuer, and an allowlist of **repositories**
+rather than people, because the subject is a job and not a person.
+
+**This beats a stored secret on every axis that matters.** A credential in CI
+that can enrol a host is readable by every workflow in the repository, survives
+the job, and cannot say which job used it. A token from this issuer expires in
+minutes, names the run, and cannot be exported from the job that asked for it.
+
+`job_workflow_ref` is the claim people skip. `repository` alone means *any*
+workflow there can admit a host, including one added by a pull request — so
+`AGENT_FLEET_ACTIONS_WORKFLOW` pins the file that is allowed to.
+
+**The host id is derived, never accepted.** A job that could choose its own name
+could choose a permanent host's, and re-enrolment replaces a key.
+
+```
+AGENT_FLEET_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
+AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/ephemeral-mac.yml@
+```
+
+Both are **operator** decisions — which repositories may admit machines at all —
+and change about as often as the fleet gains a repository. There is deliberately
+no per-person configuration here: a fleet where each new user needs a coordinator
+deploy before they can have a runner is not the thing being built.
+
+## Whose runner it is
+
+> Since they are ephemeral they belong to the user whose token started em
+
+Several people may want a runner at once, and they are **not interchangeable**:
+each exists because somebody asked for it, for their job, and costs them money
+while it lives. Somebody else's runner is not spare capacity — it is a machine
+that vanishes when a job you cannot see finishes.
+
+So an ephemeral host records an owner, derived from whatever admitted it and
+never claimed by the host:
+
+**Two different questions, answered by two different things:**
+
+| | what proves it | what it costs if it leaks |
+|---|---|---|
+| is this a real job in a repository we allow? | the OIDC token GitHub mints for the job | nothing — it expires in minutes and cannot leave the job |
+| whose runner is it? | a **claim**: an ordinary enrolment code, minted in the app | somebody can give a fleet member a free Mac. Not: put a machine in the fleet |
+
+That split is the point. The code stops being what admits a machine — GitHub's
+token does that, cryptographically, before the claim is looked at — so it is no
+longer an admission credential at all. It is a name tag.
+
+**A claim is required.** An unowned temporary host is one everybody sees and
+nobody is responsible for, and "I cannot tell whose this is" is not the same fact
+as "it belongs to nobody".
+
+**The claim is the last thing anybody types**, and the reason it is still typed
+is that nothing dispatches the workflow on the person's behalf yet. The
+coordinator holds a GitHub App installation; when it dispatches the run itself,
+it knows who asked before the job exists and the claim can travel as an input
+nobody sees. That is the next step, and it is what makes this genuinely
+self-service rather than one-field-shorter.
+
+Placement then skips other people's runners entirely, and a fleet whose only
+match is one of them refuses with that reason — not `at_capacity`, which is what
+it said before about an entirely empty machine.
+
+Ownership does **not** make your own runner a default target. It is empty, so
+capacity would choose it every time. Name it.
+
+Permanent hosts have no owner and should not: a box is the fleet's, and one
+person owning it would mean nobody else could work.
+
 ## What still has to be true for the Actions case
 
 - **A unique host id per run.** Two jobs sharing one identity is the clone bug

@@ -20,13 +20,31 @@
 
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
-import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { callbackPage } from '../../src/fleet/coordinator/github-oauth.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
+
+
+/**
+ * A comma or whitespace separated list from an environment variable.
+ *
+ * The Node coordinator has had one of these for a while; the Worker had not
+ * needed one. Written out rather than imported because everything the Worker
+ * shares with the Node side is deliberate, and a helper this small is not worth
+ * a new coupling between them.
+ *
+ * @param {string|undefined} value
+ */
+function splitList(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export class Fleet {
   /**
@@ -92,6 +110,9 @@ export class Fleet {
     this.state.blockConcurrencyWhile(async () => {
       this.core.hostIds.restore(/** @type {any[]} */ ((await this.state.storage.get('hostIds')) || []));
       this.core.clients.restore(/** @type {any[]} */ ((await this.state.storage.get('clients')) || []));
+      // Separate store, separate key. A runner token that did not survive a
+      // deploy would break every repository holding one, silently.
+      this.core.runnerTokens.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTokens')) || []));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       // The event ring, under its OWN key. Hibernation is by design here, so a
@@ -159,6 +180,81 @@ export class Fleet {
     // A machine with no credential asking for one. The code is the whole of the
     // authorisation, which is why it is short-lived and single-use — see
     // enrollment.js.
+    // A CI JOB ENROLLING ITSELF — no pin, and no secret that can admit a
+    // machine. GitHub mints a short-lived token per job naming the repository,
+    // the workflow file and the run; this is the same verifier used for
+    // sign-in, pointed at a different issuer, with an allowlist of REPOSITORIES
+    // rather than people because the subject is a job.
+    //
+    // Before the client check, deliberately: a runner has no fleet credential
+    // and the whole point is that it does not need one.
+    if (url.pathname === '/api/enroll/actions' && request.method === 'POST') {
+      const body = await readJson(request);
+      const repositories = splitList(this.env.AGENT_FLEET_ACTIONS_REPOS);
+      if (!repositories.length) {
+        return json(
+          {
+            ok: false,
+            error: { code: 'not_configured' },
+            text: 'This coordinator does not admit CI runners. Set AGENT_FLEET_ACTIONS_REPOS to the repositories that may.',
+          },
+          503,
+        );
+      }
+
+      let job;
+      try {
+        job = await verifyActionsToken(String(body?.token || ''), {
+          audiences: splitList(this.env.AGENT_FLEET_ACTIONS_AUDIENCE).length
+            ? splitList(this.env.AGENT_FLEET_ACTIONS_AUDIENCE)
+            : [DEFAULT_ACTIONS_AUDIENCE],
+          repositories,
+          workflowRef: this.env.AGENT_FLEET_ACTIONS_WORKFLOW || null,
+        });
+      } catch (e) {
+        return json({ ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message }, 403);
+      }
+
+      // Reusable, revocable, and powerless on its own: the machine was admitted
+      // by GitHub's token above. This only answers whose runner it is.
+      const claim = await this.core.runnerTokens.verify(String(body?.claim || ''));
+      if (!claim || !claim.email) {
+        return json(
+          {
+            ok: false,
+            error: { code: 'unclaimed' },
+            text:
+              'That runner token is not one this fleet issued, or it has been revoked. ' +
+              'Mint one in the app under Hosts → Runner tokens and put it in the repository ' +
+              'or organisation secret the workflow reads.',
+          },
+          403,
+        );
+      }
+
+      // DERIVED, NOT ACCEPTED. A job that could choose its own name could
+      // choose a permanent host's, and re-enrolment replaces a key.
+      const hostId = `gha-${job.repository.replace(/[^A-Za-z0-9]+/g, '-')}-${job.runId}-${job.runAttempt}`;
+      const result = await this.core.hostIds.enrol({
+        hostId,
+        publicJwk: body?.publicJwk,
+        enrolledBy: `actions:${job.repository}`,
+        owner: claim.email.toLowerCase(),
+        ephemeral: true,
+      });
+      await this.#saveEnrollment();
+      if (!result.ok || !result.host) {
+        return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
+      }
+      this.core.record({
+        event: 'host.enrolled',
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        text: `a runner from ${job.repository} enrolled itself for ${claim.email}`,
+      });
+      return json({ ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true }, 200);
+    }
+
     if (url.pathname === '/api/enroll/host' && request.method === 'POST') {
       const body = await readJson(request);
       const wanted = String(body?.hostId || '');
@@ -410,6 +506,52 @@ export class Fleet {
     // handing out an invitation, not a way in — and the pin it returns is the
     // only thing shown, once, because it is written down and typed somewhere
     // else.
+    // Runner tokens: reusable, revocable, and powerless on their own.
+    //
+    // Lives in a GitHub secret — organisation-wide or per repository — so it is
+    // spent on every run rather than once. Which of those you choose decides
+    // who the runners belong to: an ORGANISATION secret means every runner from
+    // that org belongs to whoever minted the token; a REPOSITORY or environment
+    // secret lets different repositories belong to different people. The fleet
+    // cannot tell the difference and does not need to.
+    if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
+      if (!client?.email) {
+        return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);
+      }
+      const body = await readJson(request);
+      const { client: issued, token } = await this.core.runnerTokens.issue(
+        body?.name ? String(body.name) : 'a repository',
+        {},
+      );
+      issued.email = client.email.toLowerCase();
+      await this.#saveClients();
+      // Shown once, like every other secret this coordinator issues.
+      return json({ ok: true, id: issued.id, token, email: issued.email }, 200);
+    }
+
+    if (url.pathname === '/api/runner-tokens' && request.method === 'GET') {
+      const mine = this.core.runnerTokens
+        .list()
+        .filter((t) => client?.admin || t.email === client?.email?.toLowerCase());
+      return json({ ok: true, tokens: mine }, 200);
+    }
+
+    if (url.pathname.startsWith('/api/runner-tokens/') && request.method === 'DELETE') {
+      const id = url.pathname.slice('/api/runner-tokens/'.length);
+      const found = this.core.runnerTokens.list().find((t) => t.id === id);
+      // "No such token" rather than "not yours", so the endpoint does not list
+      // what exists for anybody who can guess an id.
+      if (!found || !(client?.admin || found.email === client?.email?.toLowerCase())) {
+        return json({ ok: false, text: 'No such runner token.' }, 404);
+      }
+      const gone = this.core.runnerTokens.revoke(id);
+      await this.#saveClients();
+      return json(
+        { ok: gone, text: gone ? 'Revoked. Runs using it will no longer be attributed to you.' : 'No such runner token.' },
+        gone ? 200 : 404,
+      );
+    }
+
     if (url.pathname === '/api/enroll' && request.method === 'POST') {
       const body = await readJson(request);
       const kind = body?.kind === 'device' ? 'device' : 'host';
@@ -735,6 +877,7 @@ export class Fleet {
 
   async #saveClients() {
     await this.state.storage.put('clients', this.core.clients.serialise());
+    await this.state.storage.put('runnerTokens', this.core.runnerTokens.serialise());
   }
 
   /**

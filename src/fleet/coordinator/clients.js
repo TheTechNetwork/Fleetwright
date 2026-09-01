@@ -22,6 +22,19 @@
 
 /** `fwk_<id>_<secret>`: the id makes lookup O(1), the secret is what is proven. */
 const PREFIX = 'fwk';
+
+/**
+ * A SECOND KIND OF TOKEN, in a separate store rather than a flag on this one.
+ *
+ * Runner tokens live in their own ClientRegistry instance with their own
+ * prefix. They could have been a `kind` field here, which is less code — and
+ * one forgotten check away from a token that grants nothing becoming a
+ * credential that grants everything. The authenticator only ever consults the
+ * device store, so a runner token is structurally incapable of authenticating
+ * rather than merely refused. That difference is the whole reason for the
+ * duplication.
+ */
+export const RUNNER_PREFIX = 'fwr';
 const ID_BYTES = 6;
 const SECRET_BYTES = 24;
 
@@ -68,8 +81,9 @@ function timingSafeEqual(a, b) {
  */
 
 export class ClientRegistry {
-  /** @param {{ now?: () => number }} [opts] */
-  constructor({ now = () => Date.now() } = {}) {
+  /** @param {{ now?: () => number, prefix?: string }} [opts] */
+  constructor({ now = () => Date.now(), prefix = PREFIX } = {}) {
+    this.prefix = prefix;
     /** @type {Map<string, Client>} */
     this.clients = new Map();
     this.now = now;
@@ -101,7 +115,7 @@ export class ClientRegistry {
       admin,
     };
     this.clients.set(id, client);
-    return { client, token: `${PREFIX}_${id}_${secret}` };
+    return { client, token: `${this.prefix}_${id}_${secret}` };
   }
 
   /**
@@ -117,7 +131,7 @@ export class ClientRegistry {
   async verify(token) {
     if (typeof token !== 'string') return null;
     const parts = token.split('_');
-    if (parts.length !== 3 || parts[0] !== PREFIX) return null;
+    if (parts.length !== 3 || parts[0] !== this.prefix) return null;
     const [, id, secret] = parts;
 
     const client = this.clients.get(id);

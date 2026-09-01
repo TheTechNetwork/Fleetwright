@@ -1,0 +1,17 @@
+{
+  "//": "A WIDER NET, FOR ONE CLASS OF BUG. tsconfig.json type-checks src/ and the two binaries properly; this file adds worker/src, tools/ and sandbox/ and is used ONLY to look for TS2304 — 'Cannot find name'. Those directories carry 30-odd pre-existing type complaints (Cloudflare globals, `unknown` catch parameters, implicit any in one-off scripts) that are noise rather than defects, and demanding they all be fixed before any of them can be checked is how a check never gets added at all. An identifier that does not exist is a different thing: it is always a bug, it always throws at runtime, and it is invisible until the line runs. `splitList` was called in the Worker's enrolment route and defined nowhere — a ReferenceError in the production coordinator, on a route no test reaches.",
+  "extends": "./tsconfig.json",
+  "include": [
+    "worker/src/cloudflare.d.ts",
+    "src/**/*.js",
+    "worker/src/**/*.js",
+    "tools/**/*.mjs",
+    "sandbox/*.mjs",
+    "bin/agent-hub",
+    "bin/agent-fleet-sidecar"
+  ],
+  "exclude": [
+    "src/web/console.js",
+    "build/**"
+  ]
+}

@@ -32,7 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
-import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { callbackPage } from './github-oauth.js';
@@ -147,6 +147,9 @@ export class Coordinator {
     const state = JSON.parse(raw);
     this.core.hostIds.restore(state.hosts || []);
     this.core.clients.restore(state.clients || []);
+    // Separate store, separate slot. A runner token that did not survive a
+    // restart would break every repository holding one, silently, on a deploy.
+    this.core.runnerTokens.restore(state.runnerTokens || []);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // Push registrations too. The Worker has always kept these in Durable
@@ -233,6 +236,7 @@ export class Coordinator {
       {
         hosts: this.core.hostIds.serialise(),
         clients: this.core.clients.serialise(),
+        runnerTokens: this.core.runnerTokens.serialise(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         devices: [...this.core.devices.values()],
@@ -410,6 +414,111 @@ export class Coordinator {
     // needed the fleet-wide admin credential to join — exactly the shared
     // secret this rework removes. The pin is the authorisation for the first;
     // a signature is the authorisation for the other two.
+    // A CI JOB ENROLLING ITSELF, with no pin and no stored credential.
+    //
+    // "so user input doesn't work" — a runner has nobody to read a pin to, and
+    // the alternative everybody reaches for is a long-lived secret in CI that
+    // can admit a host. That secret is readable by every workflow in the
+    // repository, survives the job, and cannot say WHICH job used it.
+    //
+    // GitHub will instead mint a short-lived OIDC token per job, naming the
+    // repository, the workflow file and the run. The coordinator already knows
+    // how to verify an ID token — this is the same machinery pointed at a
+    // different issuer, with an allowlist of REPOSITORIES rather than people,
+    // because the subject is a job and not a person.
+    //
+    // ALWAYS EPHEMERAL, never negotiable. A host admitted this way is a job and
+    // will be destroyed with it; letting the request ask for anything else
+    // would put "clean me up" back in the hands of the thing being cleaned up.
+    if (p === '/api/enroll/actions' && req.method === 'POST') {
+      const body = await readJson(req);
+      const repositories = splitList(process.env.AGENT_FLEET_ACTIONS_REPOS);
+      const audiences = splitList(process.env.AGENT_FLEET_ACTIONS_AUDIENCE);
+      if (!repositories.length) {
+        return json(res, 503, {
+          ok: false,
+          error: { code: 'not_configured' },
+          text: 'This coordinator does not admit CI runners. Set AGENT_FLEET_ACTIONS_REPOS to the repositories that may.',
+        });
+      }
+
+      let job;
+      try {
+        job = await verifyActionsToken(String(body?.token || ''), {
+          // A constant both sides agree on, so a token minted for some other
+          // service cannot be replayed here. The workflow asks GitHub for a
+          // token with this audience; anything else fails the check before a
+          // repository is even looked at.
+          audiences: audiences.length ? audiences : [DEFAULT_ACTIONS_AUDIENCE],
+          repositories,
+          workflowRef: process.env.AGENT_FLEET_ACTIONS_WORKFLOW || null,
+        });
+      } catch (e) {
+        return json(res, 403, { ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message });
+      }
+
+      // THE HOST ID IS DERIVED, NOT ACCEPTED. A job that could choose its own
+      // name could choose a permanent host's, and re-enrolment REPLACES a key —
+      // so a workflow would be able to take over a real box. run_attempt is in
+      // it because a re-run reuses run_id.
+      const hostId = `gha-${job.repository.replace(/[^A-Za-z0-9]+/g, '-')}-${job.runId}-${job.runAttempt}`;
+
+      // WHOSE RUNNER IT IS, and this is deliberately NOT read from
+      // configuration. An owners map in the coordinator's environment would
+      // mean every person who wants a runner needs a deploy before they can
+      // have one — which is the opposite of the thing being built.
+      //
+      // The claim is an ordinary enrolment code, and using it here changes what
+      // it is FOR. It is no longer what admits the machine: the OIDC token did
+      // that, cryptographically, before this line. It only says who the runner
+      // belongs to — so a leaked one buys somebody the ability to give a fleet
+      // member a free Mac, rather than the ability to put a machine in a fleet.
+      //
+      // A claim is REQUIRED. An unowned temporary host is one everybody sees
+      // and nobody is responsible for, and "I cannot tell whose this is" is not
+      // the same fact as "it belongs to nobody".
+      // A REUSABLE TOKEN, because a claim has to live in a repository or
+      // organisation secret and be spent on every run. A single-use code cannot
+      // do that job — the second run of any workflow would fail.
+      //
+      // It grants nothing on its own. The machine was admitted by GitHub's
+      // token before this line; all this answers is whose runner it is. So a
+      // leaked one lets somebody attribute a runner to a fleet member — from a
+      // repository they must already be able to run workflows in — rather than
+      // put a machine in the fleet or call the API as anybody.
+      const claim = await this.core.runnerTokens.verify(String(body?.claim || ''));
+      if (!claim || !claim.email) {
+        return json(res, 403, {
+          ok: false,
+          error: { code: 'unclaimed' },
+          text:
+            'That runner token is not one this fleet issued, or it has been revoked. ' +
+            'Mint one in the app under Hosts → Runner tokens and put it in the repository ' +
+            'or organisation secret the workflow reads.',
+        });
+      }
+      const owner = claim.email.toLowerCase();
+
+      const result = await this.core.hostIds.enrol({
+        hostId,
+        publicJwk: body?.publicJwk,
+        enrolledBy: `actions:${job.repository}`,
+        owner,
+        ephemeral: true,
+      });
+      this.saveState();
+      if (!result.ok || !result.host) {
+        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+      }
+      this.core.record({
+        event: 'host.enrolled',
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        text: `a runner from ${job.repository} (${job.workflowRef}) enrolled itself`,
+      });
+      return json(res, 200, { ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true });
+    }
+
     if (p === '/api/enroll/host' && req.method === 'POST') {
       const body = await readJson(req);
       const wanted = String(body?.hostId || '');
@@ -423,6 +532,12 @@ export class Coordinator {
         hostId: wanted,
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
+        // "Since they are ephemeral they belong to the user whose token started
+        // em." The pin IS that token: it was minted by one person, for one
+        // machine, and the actor travelled with it all along. Only recorded for
+        // an ephemeral host — a permanent box is the fleet's, and one person
+        // owning it would mean nobody else could work.
+        owner: spent.entry.ephemeral ? emailOf(spent.entry.actor) : null,
         readmit: spent.entry.readmit,
         boundToThisHost: Boolean(spent.entry.hostId),
       });
@@ -715,6 +830,53 @@ export class Coordinator {
       return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
     }
 
+    // Runner tokens: reusable, revocable, and powerless on their own.
+    //
+    // Lives in a GitHub secret — organisation-wide or per repository — so it is
+    // spent on every run rather than once. Which of those you choose decides
+    // who the runners belong to: an ORGANISATION secret means every runner from
+    // that org belongs to whoever minted the token, and a REPOSITORY (or
+    // environment) secret lets different repositories belong to different
+    // people. The fleet cannot tell the difference and does not need to.
+    if (p === '/api/runner-tokens' && req.method === 'POST') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, text: 'Sign in first — a runner token belongs to a person.' });
+      }
+      const body = await readJson(req);
+      const { client: issued, token } = await this.core.runnerTokens.issue(
+        body?.name ? String(body.name) : 'a repository',
+        {},
+      );
+      // The email is the whole payload: it is what a runner is attributed to.
+      issued.email = client.email.toLowerCase();
+      this.saveState();
+      // SHOWN ONCE, like every other secret this coordinator issues. There is
+      // no endpoint that returns it again, because a token that can be read
+      // back is one a compromised session can read back.
+      return json(res, 200, { ok: true, id: issued.id, token, email: issued.email });
+    }
+
+    if (p === '/api/runner-tokens' && req.method === 'GET') {
+      const mine = this.core.runnerTokens
+        .list()
+        .filter((t) => client?.admin || t.email === client?.email?.toLowerCase());
+      return json(res, 200, { ok: true, tokens: mine });
+    }
+
+    if (p.startsWith('/api/runner-tokens/') && req.method === 'DELETE') {
+      const id = p.slice('/api/runner-tokens/'.length);
+      const found = this.core.runnerTokens.list().find((t) => t.id === id);
+      // Somebody else's token is not yours to revoke, and saying "no such
+      // token" rather than "not yours" keeps the endpoint from listing what
+      // exists for anybody who can guess an id.
+      if (!found || !(client?.admin || found.email === client?.email?.toLowerCase())) {
+        return json(res, 404, { ok: false, text: 'No such runner token.' });
+      }
+      const gone = this.core.runnerTokens.revoke(id);
+      this.saveState();
+      return json(res, gone ? 200 : 404, { ok: gone, text: gone ? 'Revoked. Runs using it will no longer be attributed to you.' : 'No such runner token.' });
+    }
+
     if (p === '/api/enroll' && req.method === 'POST') {
       const body = await readJson(req);
       const kind = body?.kind === 'device' ? 'device' : 'host';
@@ -845,6 +1007,21 @@ export class Coordinator {
 const DESTRUCTIVE = /^\/api\/(hosts|clients)\//;
 
 /** Comma or whitespace separated, the same shape the Worker reads from its env. */
+/**
+ * The email inside an actor string, or null.
+ *
+ * Actors arrive as `fleet:<email>` when the coordinator verified one, and as
+ * anything else when it did not. Only the verified form names a person.
+ *
+ * @param {string|null|undefined} actor
+ */
+function emailOf(actor) {
+  const s = String(actor || '');
+  return s.startsWith('fleet:') ? s.slice('fleet:'.length).toLowerCase() || null : null;
+}
+
+
+
 /** @param {string|undefined} value */
 function splitList(value) {
   return String(value || '')

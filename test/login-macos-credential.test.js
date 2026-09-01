@@ -17,11 +17,32 @@ test('a linked credential is looked for in both places', () => {
   assert.match(SRC, /find-generic-password/);
 });
 
-test('the file is still the first answer, and the only one off darwin', () => {
-  // The keychain path must not become the general one: on Linux a missing file
-  // is a real failure and swallowing it into a `security` call that cannot
-  // exist would turn a clear ENOENT into "command not found".
-  assert.match(SRC, /if \(process\.platform !== 'darwin'\) throw fileError;/);
+test('the config dir is looked at first, and the keychain only on darwin', () => {
+  // Order matters: the isolated CLAUDE_CONFIG_DIR is where the credential
+  // belongs, and the others are places it escapes to. And `security` must stay
+  // behind a platform check — on Linux it does not exist, and calling it would
+  // turn a clear "no credential" into "command not found".
+  const configFirst = SRC.indexOf("path.join(dir, '.credentials.json')");
+  const homeSecond = SRC.indexOf("path.join(home, '.claude'");
+  assert.ok(configFirst > 0 && configFirst < homeSecond, 'the isolated dir must be tried first');
+  assert.match(SRC, /if \(process\.platform === 'darwin'\) \{\s*places\.push/);
+});
+
+test('the home fallback is searched too', () => {
+  // The CLI's documented fallback is "~/.claude/.credentials.json", which is
+  // NOT the same sentence as "<CLAUDE_CONFIG_DIR>/.credentials.json" — and on a
+  // machine whose keychain refuses the write, that difference is the whole bug.
+  // Two rounds were spent asserting which location it would be, on a platform
+  // that cannot be reproduced where the code is written. Looking in all of them
+  // costs three stats and removes the question.
+  assert.match(SRC, /path\.join\(home, '\.claude', '\.credentials\.json'\)/);
+});
+
+test('a failure names every place it looked', () => {
+  // A failure listing one path sends somebody to check that path. One listing
+  // all of them is a report that can be acted on without another round trip.
+  assert.match(SRC, /looked in \$\{p\.what\}/);
+  assert.match(SRC, /ANTHROPIC_API_KEY/);
 });
 
 test('the keychain item is cleared once it has been taken', () => {
