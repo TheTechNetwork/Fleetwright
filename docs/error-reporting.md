@@ -89,6 +89,28 @@ Worker gained one, all three failed with `ERR_MODULE_NOT_FOUND` — while
 A local check that cannot fail the way CI fails certifies nothing. The job now
 installs the Worker's dependencies too.
 
+## The first real event, and what it taught
+
+`Durable Object reset because its code was updated.` on `POST /api/host/challenge`,
+minutes after the first deploy with reporting on.
+
+**It is not a defect.** Every Worker deploy evicts live Durable Objects, and
+Cloudflare throws that into whatever request was in flight. The host reconnected
+seconds later on its own backoff. Sentry's suggested fix — catch and retry —
+was half right and would have been dangerous applied whole: a blind replay
+spends a single-use enrolment pin twice, or runs two sessions for one `start`
+from a caller that sent no idempotency id.
+
+So a request is replayed only when replaying it is indistinguishable from
+sending it once: `GET`/`HEAD`, and `POST /api/host/challenge`, which mints a
+nonce that costs nothing to mint twice. Everything else gets **503 with
+`Retry-After`** — the honest answer, because the request may or may not have
+happened, and a caller that knows to come back is better served than one handed
+a 500 and a guess.
+
+The reporting earned its place on day one, and not by finding a bug: it found a
+**wrong answer to an expected event**, which no test would have failed on.
+
 ## Still to do
 
 - **The Android DSN is a placeholder.** The wizard fetches it and the wizard is

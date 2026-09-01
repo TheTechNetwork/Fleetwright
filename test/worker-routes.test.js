@@ -217,3 +217,84 @@ test('the privacy policy describes the app that exists', async () => {
   assert.equal(html.includes('collects nothing'), false, 'it collects an email address now');
   assert.equal(/API token you enter/.test(html), false, 'nobody types a token any more');
 });
+
+// --- a deploy landing mid-request -------------------------------------------
+
+test('a Durable Object reset replays a safe request instead of failing it', async () => {
+  // EVERY WORKER DEPLOY EVICTS LIVE DURABLE OBJECTS. Cloudflare throws
+  // "Durable Object reset because its code was updated." into whatever was in
+  // flight; there is nothing wrong with the object. It arrived as this fleet's
+  // first production error report, on /api/host/challenge, from a host that
+  // reconnected seconds later on its own.
+  //
+  // The bug was the ANSWER, not the event: an unhandled throw became a 500.
+  let attempts = 0;
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('Durable Object reset because its code was updated.');
+        return new Response('{"ok":true,"nonce":"abc"}', { status: 200 });
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{"hostId":"deb132"}' }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(res.status, 200);
+  assert.equal(attempts, 2, 'the request should have been replayed once');
+  assert.match(await res.text(), /nonce/);
+});
+
+test('a request that cannot be safely replayed gets 503 and a Retry-After', async () => {
+  // WHY NOT RETRY EVERYTHING. The reset arrives with no way to know whether the
+  // object had already acted. Replaying /api/enroll spends a single-use pin
+  // twice; replaying a `start` intent from a caller with no idempotency id runs
+  // two sessions. "It may or may not have happened, come back" is the honest
+  // answer, and a caller that knows to come back is better served than one
+  // handed a 500 and a guess.
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        throw new Error('Durable Object reset because its code was updated.');
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/intent', {
+      method: 'POST',
+      body: '{"verb":"start"}',
+      headers: { authorization: 'Bearer a-token-at-least-16ch' },
+    }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get('retry-after'), '2');
+  const body = /** @type {any} */ (await res.json());
+  assert.equal(body.error.code, 'restarting');
+  assert.match(body.text, /Nothing was lost/);
+});
+
+test('a real failure is still a real failure', async () => {
+  // Matching on the message is how these are recognised, so the match has to be
+  // narrow. Anything broader would swallow a genuine fault and retry it, which
+  // is how a bug becomes a bug that happens twice.
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        throw new TypeError('undefined is not a function');
+      },
+    }),
+  };
+  await assert.rejects(
+    worker.fetch(
+      new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
+      /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    ),
+    /undefined is not a function/,
+  );
+});

@@ -45,6 +45,91 @@ function isDemoHost(url, env) {
   return configured !== '' && url.hostname.toLowerCase() === configured;
 }
 
+/**
+ * Reach the Durable Object, surviving a deploy that lands mid-request.
+ *
+ * EVERY WORKER DEPLOY EVICTS LIVE DURABLE OBJECTS. Cloudflare throws
+ * "Durable Object reset because its code was updated." into whatever request
+ * was in flight, and there is nothing to fix in the object: it is the platform
+ * working as designed. It surfaced as this fleet's first production error
+ * report, on `/api/host/challenge`, from a host that reconnected seconds later
+ * on its own backoff.
+ *
+ * So this is not an outage. What was wrong is the ANSWER: an unhandled throw
+ * became a 500, which tells a host nothing and says "server broken" to anything
+ * reading status codes. A deploy is the most predictable interruption this
+ * service has, and it should read as "come back in a moment".
+ *
+ * WHY NOT RETRY EVERYTHING, which is the obvious move and the wrong one. The
+ * reset arrives with no way to know whether the object had already acted. Replay
+ * `/api/enroll` and a single-use pin is spent twice — the second attempt fails
+ * and the machine is told its pin is invalid. Replay `/api/intent` with `start`
+ * from a caller that sent no idempotency id and the fleet runs two sessions.
+ *
+ * A request is replayed only when replaying it is indistinguishable from
+ * sending it once:
+ *
+ *   - GET and HEAD, which change nothing by definition.
+ *   - POST /api/host/challenge, which mints a nonce. Getting a second one costs
+ *     nothing; the first is simply never spent, and hosts.js already expires
+ *     unspent nonces. This is the route the error actually arrived on.
+ *
+ * Everything else gets 503 with Retry-After. That is the honest answer — the
+ * request may or may not have happened, and a caller that knows to come back
+ * is better served than one handed a 500 and a guess.
+ *
+ * @param {any} env
+ * @param {Request} request
+ */
+async function callFleet(env, request) {
+  const url = new URL(request.url);
+  const replayable =
+    request.method === 'GET' ||
+    request.method === 'HEAD' ||
+    (request.method === 'POST' && url.pathname === '/api/host/challenge');
+
+  // Cloned BEFORE the first attempt, because a body is read once. Only when it
+  // could be replayed — cloning every request would buffer bodies this Worker
+  // otherwise streams straight through.
+  const spare = replayable ? request.clone() : null;
+
+  const id = env.FLEET.idFromName('fleet');
+  try {
+    return await env.FLEET.get(id).fetch(request);
+  } catch (e) {
+    if (!isObjectReset(e)) throw e;
+    if (spare) {
+      // A FRESH STUB, not the old one: the point is to reach the object as
+      // rebuilt by the deploy. Storage is durable and unaffected.
+      return await env.FLEET.get(env.FLEET.idFromName('fleet')).fetch(spare);
+    }
+    return json(
+      {
+        ok: false,
+        error: { code: 'restarting' },
+        text: 'This coordinator was redeployed while handling your request. Nothing was lost; try again.',
+      },
+      503,
+      { 'retry-after': '2' },
+    );
+  }
+}
+
+/**
+ * Is this the platform interrupting us, rather than a fault?
+ *
+ * Matched on the message because Cloudflare gives these no code. Kept to the
+ * two that mean "the object went away underneath you" — anything broader would
+ * swallow a real failure and retry it, which is how a bug becomes a bug that
+ * happens twice.
+ *
+ * @param {unknown} e
+ */
+function isObjectReset(e) {
+  const message = String(/** @type {any} */ (e)?.message || e);
+  return /Durable Object reset because its code was updated/i.test(message) || /cannot access storage because the object has been reset/i.test(message);
+}
+
 const handler = {
   /**
    * @param {Request} request
@@ -105,8 +190,7 @@ const handler = {
     // Apple's notifications carry no credential of ours and cannot — the
     // signature on the JWT is the authentication, checked in the object.
     if (url.pathname === '/apple/notifications' && request.method === 'POST') {
-      const id = env.FLEET.idFromName('fleet');
-      return env.FLEET.get(id).fetch(request);
+      return callFleet(env, request);
     }
 
     // THE GITHUB CALLBACK, above the token gate on purpose: GitHub redirects a
@@ -116,8 +200,7 @@ const handler = {
     // of this route, and it is checked inside the Durable Object because that
     // is where the pending flow was minted.
     if (url.pathname === '/oauth/github/callback') {
-      const id = env.FLEET.idFromName('fleet');
-      return env.FLEET.get(id).fetch(request);
+      return callFleet(env, request);
     }
 
     // THE REMOTE MCP ENDPOINT, above the token gate and necessarily so.
@@ -143,8 +226,7 @@ const handler = {
           return json({ ok: false, error: { code: 'rate_limited' }, text: 'Too many sign-in attempts. Try again in a minute.' }, 429);
         }
       }
-      const id = env.FLEET.idFromName('fleet');
-      return env.FLEET.get(id).fetch(request);
+      return callFleet(env, request);
     }
 
     // Refusing to run open is not the same as being misconfigured. A
@@ -217,8 +299,7 @@ const handler = {
       url.pathname === '/api/host/verify' ||
       url.pathname === '/api/enroll/host'
     ) {
-      const id = env.FLEET.idFromName('fleet');
-      return env.FLEET.get(id).fetch(request);
+      return callFleet(env, request);
     }
 
     const presented = credentialFrom(request.headers.get('authorization'), url);
@@ -277,8 +358,7 @@ const handler = {
           );
         }
       }
-      const id = env.FLEET.idFromName('fleet');
-      return env.FLEET.get(id).fetch(request);
+      return callFleet(env, request);
     }
 
     // The admin token, which is the only shared credential left. Non-empty by
@@ -301,16 +381,14 @@ const handler = {
       // client registry; the shared token stays a fast path that never needs
       // it.
       if (isClientCredential(presented)) {
-        const id = env.FLEET.idFromName('fleet');
-        return env.FLEET.get(id).fetch(request);
+        return callFleet(env, request);
       }
       return json({ ok: false, error: { code: 'unauthorised' } }, 401);
     }
 
     // One instance, one fleet. A fleet is tens of hosts; sharding would buy
     // headroom nobody needs at the cost of a consistency problem.
-    const id = env.FLEET.idFromName('fleet');
-    return env.FLEET.get(id).fetch(request);
+    return callFleet(env, request);
   },
 };
 
@@ -342,10 +420,13 @@ function timingSafeEqual(a, b) {
 }
 
 /** @param {unknown} body @param {number} [status] */
-function json(body, status = 200) {
+function json(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    // `extra` is for the headers a status code is meaningless without —
+    // Retry-After on a 503 is the difference between "come back in two seconds"
+    // and "something is broken, stop trying".
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra },
   });
 }
 
