@@ -99,6 +99,32 @@ const ALIASES = [
 ];
 
 /**
+ * Verbs whose tool shows less than the verb does.
+ *
+ * ONE TOOL, ONE QUESTION. `logs` does two jobs — a service journal and a
+ * session's own console output — and exposing both on one tool while
+ * `fleet_read_log` also offers the session half produced two tools whose
+ * descriptions both said "read a session's output, it survives the session
+ * ending". An agent testing this server reported them as near-duplicates and
+ * could not tell why both existed. It was right: nothing distinguished them.
+ *
+ * So the split is made real rather than described. `fleet_read_log` is the
+ * session half and `fleet_logs` is the service half, and neither mentions the
+ * other's job. No capability is lost — every parameter is still reachable — and
+ * the protocol is untouched, because this is presentation and `logs` remains
+ * one verb with both parameters.
+ */
+/** @type {Record<string, { description?: string, omit?: string[] }>} */
+const OVERRIDE = {
+  logs: {
+    description:
+      'Read a service journal on one host — the hub, the coordinator or the sidecar. ' +
+      "For what a SESSION printed, use fleet_read_log instead.",
+    omit: ['name'],
+  },
+};
+
+/**
  * JSON Schema for one protocol parameter.
  * @param {string} name @param {any} spec
  */
@@ -181,13 +207,12 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       // not reliably still holding it.
       /** @type {Record<string, string>} */
       const notes = {
-        logs: 'This is how you collect what a job produced — it survives the session ending, which the pane does not.',
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
         stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it.',
         peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',
       };
-      const description = [def.summary || verb, notes[verb]].filter(Boolean).join(' ');
+      const description = [OVERRIDE[verb]?.description || def.summary || verb, notes[verb]].filter(Boolean).join(' ');
 
       return {
         name: `fleet_${verb}`,
@@ -226,6 +251,17 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       mutating: base.mutating,
       local: Boolean(alias.local),
     });
+  }
+
+  // AFTER THE ALIASES, and that ordering is the whole of it. An alias copies
+  // the base tool's properties, so narrowing the base first hands the alias the
+  // narrowed set — which silently took `name` off fleet_read_log, the one
+  // parameter it cannot work without. Caught by a test that lists the tools and
+  // reads their schemas, which is what a client does.
+  for (const tool of tools) {
+    for (const gone of OVERRIDE[tool.verb]?.omit || []) {
+      if (tool.name === `fleet_${tool.verb}`) delete tool.inputSchema.properties[gone];
+    }
   }
 
   return tools;

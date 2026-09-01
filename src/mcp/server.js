@@ -60,6 +60,32 @@ const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
  * @property {(fn: () => void, ms: number) => any} [setTimer]
  */
 
+/**
+ * What to tell the caller when the intent never came back.
+ *
+ * "Could not reach the fleet" was said for EVERY failure, and it is a claim
+ * about the network. When the thing that actually broke was a bug inside this
+ * server, that sentence sent the reader looking at hosts, at connectivity, at
+ * their own credential — none of which were involved. One agent spent a whole
+ * session concluding "the fleet is down" from a `this`-reference error.
+ *
+ * A caller can act on "retry" and can act on "tell the operator". They cannot
+ * act on a sentence that names the wrong layer.
+ *
+ * @param {unknown} e
+ */
+function describeFailure(e) {
+  const message = String(/** @type {any} */ (e)?.message || e);
+  // A TypeError from the runtime is this server misusing an API — never a
+  // network condition. Nothing the caller varies will change it.
+  const internal = e instanceof TypeError || /Illegal invocation|is not a function|Cannot read /i.test(message);
+  return internal
+    ? `The MCP server itself failed before it could reach the fleet: ${message}. ` +
+        'This is a bug in the server, not a problem with your request or with the fleet — ' +
+        'nothing you change will get past it. Whoever operates this coordinator has to fix it.'
+    : `Could not reach the fleet: ${message}. The fleet may be down or this coordinator unreachable; retrying is reasonable.`;
+}
+
 export class McpServer {
   /** @param {Options} opts */
   constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
@@ -79,7 +105,21 @@ export class McpServer {
     // instructions below are asking for something it cannot do.
     /** @type {Set<string>} */
     this.started = new Set();
-    this.fetch = doFetch;
+    // WRAPPED, NEVER STORED BARE. `this.fetch = fetch` then `this.fetch(...)`
+    // calls the global with an McpServer as its receiver, and Cloudflare's
+    // runtime refuses that:
+    //
+    //     Illegal invocation: function called with incorrect `this` reference.
+    //
+    // Node's fetch tolerates it, so every test passed, stdio worked, and the
+    // Worker failed on EVERY tool call — deterministically, below the layer
+    // that writes the good refusals, so the fleet answered nothing at all.
+    // TRUE WHERE IT WAS WRITTEN, QUIETLY FALSE ONE LAYER UP, in the layer that
+    // exists to carry the other layers.
+    //
+    // The arrow calls doFetch with `this` undefined, which is what a global
+    // wants and what an injected test double does not care about.
+    this.fetch = (/** @type {any} */ url, /** @type {any} */ init) => doFetch(url, init);
     // Every reply goes through here so the transport is injectable and the
     // whole server is testable without a pipe.
     this.write = write || ((line) => process.stdout.write(`${line}\n`));
@@ -232,7 +272,7 @@ export class McpServer {
       try {
         reply = await this.#intent('status', { name }, host);
       } catch (e) {
-        return this.#text(`Could not reach the fleet: ${/** @type {Error} */ (e).message}`, true);
+        return this.#text(describeFailure(e), true);
       }
       if (reply?.ok === false) return this.#text(String(reply.text ?? 'refused'), true);
 
@@ -450,10 +490,10 @@ export class McpServer {
     try {
       reply = await this.#intent(tool.verb, params, host ? String(host) : null, tag ? String(tag) : null);
     } catch (e) {
-      // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed; the fleet
-      // could not be reached. isError lets the agent see it and carry on rather
-      // than the client treating the session as broken.
-      return this.#text(`Could not reach the fleet: ${/** @type {Error} */ (e).message}`, true);
+      // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed. isError
+      // lets the agent see it and carry on rather than the client treating the
+      // session as broken.
+      return this.#text(describeFailure(e), true);
     }
 
     // Remembered only on success, and forgotten when it is stopped — so the
