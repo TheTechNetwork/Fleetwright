@@ -178,8 +178,12 @@ test('a disconnected host is kept, marked offline, with its last known sessions'
 function registryWith(hosts) {
   const reg = new HostRegistry();
   for (const [id, h] of hosts) {
-    reg.connect(id, () => {});
-    reg.recordHealth(id, health({ hostId: id, ...h }));
+    // `ephemeral` is a property of the CONNECTION, not of the health frame — it
+    // comes from the enrolment, because a host that could declare itself
+    // temporary is a host that could decline to be cleaned up.
+    const { ephemeral, owner, ...rest } = h;
+    reg.connect(id, () => {}, { ephemeral: Boolean(ephemeral), owner: owner ?? null });
+    reg.recordHealth(id, health({ hostId: id, ...rest }));
   }
   return reg;
 }
@@ -214,17 +218,48 @@ test('equal capacity is broken by load, then by round robin', () => {
   assert.notEqual(picks[0], picks[1], 'a genuine tie must not always land on the same box');
 });
 
-test('labels filter before capacity ranks', () => {
+test('a tag filters before capacity ranks', () => {
+  // THE TAG TRAVELS BESIDE THE INTENT, and this test used to pass it INSIDE —
+  // `params: { labels: [...] }`. No verb declares a `labels` parameter, so
+  // validateIntent refuses it as bad_params: the filter was correct, tested,
+  // and unreachable from any real caller. A test can hold a code path alive
+  // long after nothing can call it.
+  //
+  // It cannot become a parameter either — adding one to an existing verb is a
+  // flag day. Placement is not part of the intent, which is where `host` has
+  // always lived.
   const reg = registryWith([
     ['plain', { free: 9, labels: [] }],
     ['gpubox', { free: 1, labels: ['gpu'] }],
   ]);
-  const p = place(reg, { verb: 'start', params: { labels: ['gpu'] } });
+  const p = place(reg, { verb: 'start', params: {} }, { preferLabels: ['gpu'] });
   assert.equal(p.host?.hostId, 'gpubox', 'a constraint is not a preference');
 
-  const none = place(reg, { verb: 'start', params: { labels: ['fpga'] } });
+  const none = place(reg, { verb: 'start', params: {} }, { preferLabels: ['fpga'] });
   assert.equal(none.kind, 'refused');
   assert.equal(none.code, 'no_host_matches');
+  // Names what the fleet DOES carry: "no host carries fpga" leaves somebody
+  // guessing whether they typed it wrong or the fleet simply has no such box.
+  assert.match(none.reason || '', /gpu/);
+});
+
+test('a tag with only a temporary match offers it rather than taking it', () => {
+  // "Tag Linux or tag macOS — no ephemeral, route if available, or offer
+  // ephemeral." A runner has the most free capacity in the fleet because it is
+  // empty and about to disappear, so it is named and somebody decides.
+  const reg = registryWith([
+    ['deb132', { free: 4, labels: ['linux'] }],
+    ['gha-mac-1', { free: 4, labels: ['macos'] }],
+  ]);
+  // A durable match is simply used.
+  assert.equal(place(reg, { verb: 'start', params: {} }, { preferLabels: 'linux' }).host?.hostId, 'deb132');
+
+  const macs = registryWith([['gha-mac-1', { free: 4, labels: ['macos'], ephemeral: true }]]);
+  const offered = place(macs, { verb: 'start', params: {} }, { preferLabels: 'macos' });
+  assert.equal(offered.kind, 'refused');
+  assert.equal(offered.code, 'only_ephemeral_hosts');
+  assert.match(offered.reason || '', /gha-mac-1/);
+  assert.match(offered.reason || '', /Nothing durable carries macos/);
 });
 
 test('a full fleet is refused with the numbers, not silently queued', () => {

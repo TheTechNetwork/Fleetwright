@@ -33,19 +33,31 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
   for (const tool of toolsFor()) {
     const def = VERBS[tool.verb];
     assert.ok(def, `${tool.name} names a verb that does not exist`);
-    for (const param of Object.keys(def.params || {})) {
-      assert.ok(param in tool.inputSchema.properties, `${tool.name} is missing ${param}`);
+    // An alias may narrow — fleet_read_log is `logs` with the service half
+    // dropped, because a tool that does two jobs reads as whichever one it is
+    // named after. It may not INVENT, which is what the second loop checks.
+    // An alias may narrow (fleet_read_log drops the service half) or replace
+    // the schema entirely (fleet_await waits locally and takes its own
+    // parameters). What none of them may do is claim to be the plain verb.
+    const isAlias = tool.name !== `fleet_${tool.verb}`;
+    if (!isAlias) {
+      for (const param of Object.keys(def.params || {})) {
+        assert.ok(param in tool.inputSchema.properties, `${tool.name} is missing ${param}`);
+      }
     }
+    if (isAlias) continue;
     for (const param of Object.keys(tool.inputSchema.properties)) {
-      // `host` is placement, carried beside the intent rather than in it.
-      if (param === 'host') continue;
+      // `host` and `tag` are PLACEMENT, carried beside the intent rather than
+      // in it — which is also why a tag could never be a verb parameter:
+      // adding one to an existing verb is a flag day.
+      if (param === 'host' || param === 'tag') continue;
       assert.ok(param in (def.params || {}), `${tool.name} offers ${param}, which ${tool.verb} does not take`);
     }
   }
 });
 
 test('required stays required, and enums keep their values', () => {
-  const tools = toolsFor({ allow: ['answer'] });
+  const tools = toolsFor({ allow: ['answer'] }).filter((t) => t.name === `fleet_${t.verb}`);
   for (const tool of tools) {
     const def = VERBS[tool.verb];
     const wanted = Object.entries(def.params || {}).filter(([, s]) => s.required).map(([p]) => p).sort();
@@ -320,4 +332,82 @@ test('the tools carry the reminder, not only the preamble', () => {
   assert.match(tools.find((t) => t.verb === 'start').description, /own what you start/i);
   assert.match(tools.find((t) => t.verb === 'peek').description, /no completion signal/);
   assert.match(tools.find((t) => t.verb === 'stop').description, /Only sessions you started here/);
+});
+
+// --- being told, rather than polling ----------------------------------------
+
+/** A server with a fake clock, so a blocking tool can be tested without waiting. */
+function awaitServer(replies) {
+  const written = [];
+  let clock = 0;
+  let i = 0;
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: (line) => written.push(JSON.parse(line)),
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    fetch: async () => ({ status: 200, json: async () => replies[Math.min(i++, replies.length - 1)] }),
+  });
+  return { server, written, calls: () => i };
+}
+
+test('waiting returns the moment a session needs a person', async () => {
+  // "should mcp be able to notify llm a task needs help or a task is complete?"
+  // An MCP server can send notifications and cannot reliably WAKE a model: a
+  // notification arrives on the transport, and whether it reaches the model
+  // depends on the client — one not in a turn is not listening. A tool that
+  // BLOCKS needs no waking. The return value is the notification.
+  const { server, written, calls } = awaitServer([
+    { ok: true, session: { status: 'running', awaiting: false } },
+    { ok: true, session: { status: 'running', awaiting: false } },
+    { ok: true, session: { status: 'running', awaiting: true, detail: 'Do you trust this project?' } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
+
+  assert.match(written[0].result.content[0].text, /waiting for an answer/);
+  assert.match(written[0].result.content[0].text, /Do you trust this project\?/);
+  assert.equal(calls() >= 3, true, 'it should have kept asking until something changed');
+  // Not an error: needing a person is an outcome, not a failure.
+  assert.equal(written[0].result.isError, undefined);
+});
+
+test('waiting returns when the session ends, and points at the output', async () => {
+  const { server, written } = awaitServer([
+    { ok: true, session: { status: 'running', awaiting: false } },
+    { ok: true, session: { status: 'stopped', awaiting: false } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine' } }));
+  assert.match(written[0].result.content[0].text, /has ended/);
+  // The pane is gone by now; the log is not.
+  assert.match(written[0].result.content[0].text, /fleet_read_log/);
+});
+
+test('a session still running at the deadline is not a failure', async () => {
+  // Calling it one would push an agent into stopping work that is going fine.
+  const { server, written } = awaitServer([{ ok: true, session: { status: 'running', awaiting: false } }]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 10 } }));
+  assert.equal(written[0].result.isError, undefined);
+  assert.match(written[0].result.content[0].text, /still running after 10s/);
+  assert.match(written[0].result.content[0].text, /not a failure/);
+});
+
+test('an errored session is reported as an error', async () => {
+  const { server, written } = awaitServer([{ ok: true, session: { status: 'error', awaiting: false } }]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine' } }));
+  assert.equal(written[0].result.isError, true);
+  assert.match(written[0].result.content[0].text, /has failed/);
+});
+
+test('read_log is the session half of logs, and says why it is not peek', () => {
+  const tool = toolsFor().find((t) => t.name === 'fleet_read_log');
+  assert.equal(tool.verb, 'logs');
+  // The service half is dropped: a tool that does two jobs reads as whichever
+  // one it is named after, which is why `fleet_logs` was never reached for
+  // collecting a job's output.
+  assert.equal('service' in tool.inputSchema.properties, false);
+  assert.deepEqual(tool.inputSchema.required, ['name']);
+  assert.match(tool.description, /Survives the session ending/);
 });

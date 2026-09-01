@@ -379,7 +379,7 @@ export class Coordinator {
    * fan-out and correlation are decisions, and a decision implemented twice is
    * a decision that will eventually be made two different ways.
    *
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
@@ -954,6 +954,7 @@ export class Coordinator {
         // Which host, when the person picked one in the app. A placement
         // preference, never an intent parameter — see scheduler.js.
         preferHost: typeof body.host === 'string' ? body.host : undefined,
+        preferLabels: body.tag ?? body.labels ?? null,
         // The VERIFIED caller, for visibility. Null for the break-glass token,
         // which sees everything — it is what you hold when identity is broken.
         requester: requesterFor(client),

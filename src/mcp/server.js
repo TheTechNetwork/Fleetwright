@@ -33,11 +33,13 @@ const PROTOCOL = '2024-11-05';
  * @property {typeof fetch} [fetch]
  * @property {(line: string) => void} [write]
  * @property {(m: string) => void} [log]
+ * @property {() => number} [now]
+ * @property {(ms: number) => Promise<void>} [sleep]
  */
 
 export class McpServer {
   /** @param {Options} opts */
-  constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {} }) {
+  constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {}, now = () => Date.now(), sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)) }) {
     this.coordinator = String(coordinator || '').replace(/\/+$/, '');
     this.credential = credential;
     this.budgetMinutes = budgetMinutes;
@@ -53,6 +55,83 @@ export class McpServer {
     // whole server is testable without a pipe.
     this.write = write || ((line) => process.stdout.write(`${line}\n`));
     this.log = log;
+    // Injected so a test can wait without waiting. A blocking tool tested with
+    // real time is a test nobody runs.
+    this.now = now;
+    this.sleep = sleep;
+  }
+
+  /**
+   * Wait until a session needs a person, finishes, or the clock runs out.
+   *
+   * ASKED DIRECTLY: "should mcp be able to notify llm a task needs help or a
+   * task is complete?" — and the honest answer is that an MCP server can send
+   * notifications but cannot reliably WAKE a model. A notification arrives on
+   * the transport; whether it reaches the model depends on the client, and a
+   * model that is not currently in a turn is not listening. Building on that
+   * would produce a feature that works in one client and silently does nothing
+   * in the next.
+   *
+   * A TOOL THAT BLOCKS NEEDS NO WAKING. The agent calls it and the return value
+   * IS the notification. It works in every client, because it is just a tool
+   * call that takes a while.
+   *
+   * The fleet already knows both facts and has for a long time — the host
+   * watcher detects a session blocked on a dialog, and both events are already
+   * considered worth waking a PERSON for (core.js NOTIFIABLE). This carries the
+   * same two signals to the other kind of caller.
+   *
+   * Polling, deliberately, and slowly. The alternative is a streaming endpoint
+   * on the coordinator, which is a real thing to build and to keep alive
+   * through a Worker; asking every few seconds is unglamorous and cannot
+   * silently stop working.
+   *
+   * @param {Record<string, any>} params
+   * @param {string|null} host
+   */
+  async #await(params, host) {
+    const name = String(params.name || '');
+    const seconds = Math.min(900, Math.max(5, Number(params.seconds) || 300));
+    const deadline = this.now() + seconds * 1000;
+
+    for (;;) {
+      /** @type {any} */
+      let reply;
+      try {
+        reply = await this.#intent('status', { name }, host);
+      } catch (e) {
+        return this.#text(`Could not reach the fleet: ${/** @type {Error} */ (e).message}`, true);
+      }
+      if (reply?.ok === false) return this.#text(String(reply.text ?? 'refused'), true);
+
+      const session = reply?.session ?? reply;
+      const status = String(session?.status ?? '');
+      // NEEDS A PERSON. The one state where waiting longer changes nothing:
+      // something is blocking on an answer, and nobody is going to give it.
+      if (session?.awaiting) {
+        return this.#text(
+          `${name} is waiting for an answer:\n${String(session.detail ?? session.text ?? '').trim()}\n\n` +
+            'It will not go further until somebody answers. Read it with fleet_read_log if you need the whole story.',
+        );
+      }
+      if (status === 'stopped' || status === 'error') {
+        return this.#text(
+          `${name} has ${status === 'error' ? 'failed' : 'ended'}. ` +
+            'Its output is still readable with fleet_read_log — that survives the session, unlike the pane.',
+          status === 'error',
+        );
+      }
+      if (this.now() >= deadline) {
+        // NOT AN ERROR. Still running after the time asked for is an answer,
+        // and calling it a failure would push an agent into stopping work that
+        // is going fine.
+        return this.#text(
+          `${name} is still running after ${seconds}s. That is not a failure — it may just be slow. ` +
+            'Wait again, read it with fleet_read_log, or stop it if you have what you need.',
+        );
+      }
+      await this.sleep(Math.min(5000, Math.max(1000, deadline - this.now())));
+    }
   }
 
   /**
@@ -72,9 +151,10 @@ export class McpServer {
       'reports "done" — a finished session looks exactly like an idle one — so deciding it is over is',
       'your job, not something you will be told.',
       '',
-      '  1. fleet_start, naming a host if you want a particular machine',
-      '  2. fleet_peek to read what it is doing, as often as you need',
-      '  3. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',
+      '  1. fleet_start, naming a host or a tag if you want a particular kind of machine',
+      '  2. fleet_await — it returns when the session needs an answer or ends. Do not poll.',
+      '  3. fleet_read_log to collect what it produced. This survives the session; its pane does not.',
+      '  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',
       '',
       'You may only stop sessions you started in this conversation. Anything else belongs to a person',
       'who is probably still using it.',
@@ -83,6 +163,10 @@ export class McpServer {
       'one job, belongs to whoever started it, and is destroyed when its job ends — taking any session',
       'on it with it. It is never chosen for you, so reaching one means naming it. Work left running',
       'there is not saved anywhere and is billed until the runner expires.',
+      '',
+      'TAGS PICK A KIND OF MACHINE. Pass `tag: "macos"` or `tag: "linux"` and the fleet finds a permanent',
+      'host carrying it. If the only match is temporary you are told its name rather than sent there — a',
+      'runner is offered, never chosen for you.',
       '',
       'Refusals name a reason. Read it — "claude is not logged in on deb132" is a different problem',
       'from "no hosts", and retrying will fix neither.',
@@ -176,7 +260,10 @@ export class McpServer {
       );
     }
 
-    const { host, ...params } = args;
+    const { host, tag, ...params } = args;
+
+    // A LOCAL TOOL — the waiting happens here, not in the fleet.
+    if (tool.local) return await this.#await(params, host ? String(host) : null);
 
     // ONLY WHAT THIS CONVERSATION STARTED. The instructions ask the agent to
     // clean up after itself, which means `stop` has to be available — and an
@@ -195,7 +282,7 @@ export class McpServer {
     /** @type {any} */
     let reply;
     try {
-      reply = await this.#intent(tool.verb, params, host ? String(host) : null);
+      reply = await this.#intent(tool.verb, params, host ? String(host) : null, tag ? String(tag) : null);
     } catch (e) {
       // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed; the fleet
       // could not be reached. isError lets the agent see it and carry on rather
@@ -234,12 +321,15 @@ export class McpServer {
    * @param {string} verb
    * @param {Record<string, any>} params
    * @param {string|null} host
+   * @param {string|null} [tag]
    */
-  async #intent(verb, params, host) {
+  async #intent(verb, params, host, tag = null) {
     const res = await this.fetch(`${this.coordinator}/api/intent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.credential}` },
-      body: JSON.stringify({ verb, params, ...(host ? { host } : {}) }),
+      // Placement travels BESIDE the intent, never inside its params — a host
+      // validates the intent, and a tag is not part of what it was asked to do.
+      body: JSON.stringify({ verb, params, ...(host ? { host } : {}), ...(tag ? { tag } : {}) }),
     });
     if (res.status === 401 || res.status === 403) {
       throw new Error('this credential was refused — it may have been revoked from the app');

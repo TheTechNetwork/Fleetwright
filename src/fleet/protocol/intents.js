@@ -221,7 +221,14 @@ export const VERBS = Object.freeze({
     // three journals into one stream would produce something nobody can read.
     // A caller names the host with the placement preference instead.
     mutating: false,
-    summary: 'The last lines of a service log on one host.',
+    // BOTH THINGS IT DOES. With `service` it is a service journal; with `name`
+    // it is that SESSION's own output — the container's stderr, which survives
+    // a session that has exited and has no pane left to read. The old summary
+    // named only the first, so anybody looking for what a job printed had no
+    // reason to think this was it.
+    summary:
+      'Read output. With `name`, a session\'s own console output — this survives after the session ends, ' +
+      'unlike its pane. With `service`, a service journal on one host.',
   },
   update: {
     params: {

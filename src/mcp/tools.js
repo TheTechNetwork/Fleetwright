@@ -53,6 +53,52 @@ export const DEFAULT_DENY = ([
 // did not start in this conversation. See McpServer#call.
 
 /**
+ * Extra tools that map onto a verb already exposed.
+ *
+ * `fleet_read_log` is `logs` with the session half brought to the front. The
+ * verb does two jobs — a service journal, and a session's own console output —
+ * and a single tool called `fleet_logs` reads as the first one. An agent looking
+ * for what a job printed had no reason to open it.
+ *
+ * Asked for directly ("fleet_readLog to read console output rather than peek"),
+ * and it is the right shape: peek is the live screen and disappears with the
+ * session, while this is what the session SAID and survives it. On a runner
+ * that is the difference between collecting a result and losing it.
+ *
+ * An alias rather than a new verb, so the protocol is unchanged and an old host
+ * answers it identically.
+ */
+const ALIASES = [
+  {
+    name: 'fleet_await',
+    verb: 'status',
+    description:
+      'Wait until a session needs you or finishes, instead of polling. Returns as soon as it is waiting for ' +
+      'an answer, has ended, has errored, or the timeout passes — whichever comes first. Use this after ' +
+      'fleet_start rather than checking repeatedly.',
+    // Not a protocol verb. `status` is what it asks the fleet, repeatedly, and
+    // the waiting happens in this server — see McpServer#await. The parameters
+    // are its own.
+    schema: {
+      name: { type: 'string', description: 'The session to wait on.' },
+      seconds: { type: 'integer', minimum: 5, maximum: 900, description: 'How long to wait before giving up and saying so.' },
+    },
+    requires: ['name'],
+    local: true,
+  },
+  {
+    name: 'fleet_read_log',
+    verb: 'logs',
+    description:
+      "Read a session's console output — everything it printed, not just what is on screen now. " +
+      'Survives the session ending, so this is how you collect a result. `peek` shows the live pane instead.',
+    // The session half only. `service` is a different question and has its own
+    // tool; offering both here would rebuild the ambiguity this exists to end.
+    omit: ['service'],
+  },
+];
+
+/**
  * JSON Schema for one protocol parameter.
  * @param {string} name @param {any} spec
  */
@@ -95,11 +141,12 @@ function schemaFor(name, spec) {
  *   `budgetMinutes` is stated in the descriptions that need it — the lifecycle
  *   is the agent's to manage, so the numbers it manages against have to be in
  *   front of it rather than in a document somebody else read.
- * @returns {Array<{ name: string, description: string, inputSchema: object, verb: string, mutating: boolean }>}
+ * @returns {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>}
  */
 export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15 } = {}) {
   const extra = new Set(allow || []);
-  return Object.entries(VERBS)
+  /** @type {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>} */
+  const tools = Object.entries(VERBS)
     .filter(([verb]) => !deny.includes(verb) || extra.has(verb))
     .map(([verb, def]) => {
       /** @type {Record<string, any>} */
@@ -117,12 +164,24 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
         type: 'string',
         description: 'Run on this host by name. Required to reach a temporary host: those are never chosen automatically.',
       };
+      // A TAG IS PLACEMENT, NOT AN INTENT PARAMETER, and the difference is a
+      // flag day — adding a parameter to an existing verb makes an old host
+      // answer bad_params after the version handshake already agreed. `host`
+      // has always travelled beside the intent; a tag is the same kind of
+      // statement, about where rather than about what to do.
+      properties.tag = {
+        type: 'string',
+        description:
+          'Pick a kind of machine rather than a named one — "macos", "linux". A permanent host is used if ' +
+          'one carries the tag; if only a temporary host does, you are told its name instead of sent there.',
+      };
       // THE OPERATING NOTE, ON THE TOOLS THAT NEED ONE. `initialize`
       // instructions are the contract; these are the reminders at the point of
       // use, because a model that read the preamble twenty tool calls ago is
       // not reliably still holding it.
       /** @type {Record<string, string>} */
       const notes = {
+        logs: 'This is how you collect what a job produced — it survives the session ending, which the pane does not.',
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
         stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it.',
@@ -143,4 +202,31 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
         mutating: Boolean(def.mutating),
       };
     });
+
+  for (const alias of ALIASES) {
+    const base = tools.find((t) => t.verb === alias.verb);
+    // Only if the verb it aliases is actually exposed — otherwise a denied
+    // verb would come back through the side door under another name.
+    if (!base) continue;
+    /** @type {Record<string, any>} */
+    const properties = alias.schema
+      ? { ...alias.schema, host: base.inputSchema.properties.host }
+      : { ...base.inputSchema.properties };
+    for (const gone of alias.omit || []) delete properties[gone];
+    tools.push({
+      name: alias.name,
+      description: alias.description,
+      inputSchema: {
+        type: 'object',
+        properties,
+        required: alias.requires || ['name'],
+        additionalProperties: false,
+      },
+      verb: alias.verb,
+      mutating: base.mutating,
+      local: Boolean(alias.local),
+    });
+  }
+
+  return tools;
 }

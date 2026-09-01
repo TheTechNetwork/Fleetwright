@@ -644,7 +644,7 @@ export class CoordinatorCore {
 
   /**
    * @param {any} host
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
@@ -681,7 +681,7 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
    */
   async dispatch(spec) {
     if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
@@ -746,6 +746,11 @@ export class CoordinatorCore {
       // The caller's chosen host, when they chose one. Beside the spec rather
       // than in params, so it can never leak into the intent a host validates.
       preferHost: typeof spec.preferHost === 'string' ? spec.preferHost : '',
+      // And the tag, for the same reason and by the same route. "Tag linux" is
+      // a statement about WHERE, not about what to do, so it never becomes part
+      // of the intent a host validates — which also keeps it from being a flag
+      // day, since adding a parameter to an existing verb is one.
+      preferLabels: spec.preferLabels ?? null,
       // And who is asking, so pinned verbs can refuse a member acting on work
       // that is not theirs — with the same words as "unknown", so an access
       // control never becomes an existence oracle.

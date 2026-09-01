@@ -145,6 +145,63 @@ with no explanation; a number it was given produces one that stops on purpose.
 The tools carry the reminder too, not only the preamble — a model that read the
 instructions twenty tool calls ago is not reliably still holding them.
 
+### Being told, rather than polling
+
+> should mcp be able to notify llm a task needs help or a task is complete?
+
+**A server can send notifications; it cannot reliably wake a model.** A
+notification arrives on the transport, and whether it reaches the model is up to
+the client — one that is not currently in a turn is not listening. Building on
+that gives a feature that works in one client and silently does nothing in the
+next.
+
+**A tool that blocks needs no waking.** `fleet_await` returns the moment the
+session needs an answer, ends, or errors — and the return value *is* the
+notification. It works everywhere, because it is just a tool call that takes a
+while.
+
+Both signals already existed and already wake a **person**: the host watcher
+detects a session blocked on a dialog, and `session.awaiting-input` and
+`session.ended` are in `NOTIFIABLE` (core.js). This carries the same two facts
+to the other kind of caller.
+
+It polls, deliberately and slowly. The alternative is a streaming endpoint on
+the coordinator — a real thing to build and to keep alive through a Worker.
+Asking every few seconds is unglamorous and cannot silently stop working.
+
+**Still running at the deadline is not a failure.** Reporting it as one pushes an
+agent into stopping work that is going fine.
+
+### `fleet_read_log`, not `peek`
+
+> fleet_readLog to read console output rather than peek
+
+`peek` is the live pane: what is on screen now, and gone when the session is. The
+`logs` verb has always also read a session's own console output — which survives
+the session ending — but it was summarised as *"the last lines of a service log
+on one host"*, so nobody looking for what a job printed had any reason to open
+it.
+
+`fleet_read_log` is that verb with the service half dropped and the name saying
+what it does. On a runner it is the difference between collecting a result and
+losing it, because the machine goes away.
+
+### Tags pick a kind of machine
+
+> Tag Linux or tag macOS — no ephemeral, route if available, or offer ephemeral
+
+`tag: "macos"` finds a permanent host carrying that label. If the only match is
+temporary, the refusal **names it** rather than sending work there — offered,
+never chosen, because a runner has the most free capacity in the fleet precisely
+because it is empty and about to disappear.
+
+A tag travels **beside** the intent, like `host`. It cannot be a verb parameter:
+adding one to an existing verb is a flag day, and an old host would answer
+`bad_params` after the version handshake had already agreed. The scheduler had
+this filter already — reading `intent.params.labels`, which no verb declares, so
+`validateIntent` refused every call that tried to use it. Correct, tested, and
+unreachable.
+
 ### Which is why `stop` is exposed
 
 It was withheld, on the reasoning that ending work is not something an agent
