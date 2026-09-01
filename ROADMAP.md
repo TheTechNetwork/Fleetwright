@@ -58,7 +58,7 @@ yet designed).
 | Session detail screen; notification actions | **partial** | answering works in-app; the notification *action* (answer without opening the app) is still to build |
 | Forget moves to a 7-day recycle bin, restorable | **done** | `/forget` bins, `/restore` brings it back, `/purge` is the old behaviour kept as its own word. The volumes stay, which is the feature and the cost — swept from every path that touches the bin and hourly besides. `AGENT_HUB_BIN_DAYS=0` restores the old behaviour for a box tight on disk |
 | TG settings setup / removal from the app | wanted | config, not protocol |
-| Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
+| Filesystem: browse / copy / edit / delete in the workspace | **done** on coordinator, Worker, host and MCP; apps next | `docs/filesystem.md` is the design pass it was waiting for. A workspace is a podman volume, not a host directory, so every operation runs a container over that ONE volume — never the sibling holding the Claude credential. Three redundant bounds on the path (JS, then `realpath` inside the container which is what catches a symlink, then a `:ro` mount), no network, content on stdin so it is never parsed as shell. Five verbs rather than one with an `op`, so `mutating` can be true of the destructive three and the MCP server can withhold them by default. Re-run the IARC questionnaire before the next submission |
 
 ## 4. Voice and the hub surfaces
 

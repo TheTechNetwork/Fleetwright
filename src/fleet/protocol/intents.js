@@ -86,11 +86,15 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
 
 /**
  * @typedef {object} ParamSpec
- * @property {'name'|'enum'|'int'|'text'|'secret'} type
+ * @property {'name'|'enum'|'int'|'text'|'secret'|'raw'} type
  * @property {boolean} required
  * @property {string[]} [values]  for 'enum'
  * @property {number} [min]       for 'int'
- * @property {number} [max]       for 'int', and the character limit for 'text'
+ * @property {number} [max]       for 'int', the character limit for 'text', and
+ *   the BYTE limit for 'raw' — a file is measured in bytes, not characters
+ * @property {string} [describe]  the parameter's own words, carried into the
+ *   generated MCP schema. Without it a caller sees a type and a bound and has
+ *   to guess the meaning, which is how `brief` came to be read as the task.
  */
 
 /**
@@ -256,6 +260,72 @@ export const VERBS = Object.freeze({
       'Read output. With `name`, a session\'s own console output — this survives after the session ends, ' +
       'unlike its pane. With `service`, a service journal on one host.',
   },
+  // --- the workspace ------------------------------------------------------
+  //
+  // FIVE VERBS RATHER THAN ONE WITH AN `op`. A single `files` verb taking
+  // op=list|read|write|delete would be a remote procedure call wearing an
+  // intent's clothes: the scheduler could not tell a read from a delete, the
+  // MCP server could not withhold the destructive half, and `mutating` would
+  // have to be a lie on one side or the other.
+  //
+  // Every one takes a session `name`, because a workspace belongs to a session
+  // — there is no fleet-wide filesystem here and nothing addresses one.
+  files: {
+    params: {
+      name: { type: 'name', required: true },
+      path: {
+        type: 'text',
+        required: false,
+        max: 512,
+        describe: 'A directory inside the session workspace, relative to its root. Leave empty for the root itself.',
+      },
+    },
+    mutating: false,
+    summary:
+      "List one directory in a session's workspace. One level, not a tree: a repository is tens of thousands " +
+      'of files and the answer to "what is in here" is about here.',
+  },
+  readfile: {
+    params: {
+      name: { type: 'name', required: true },
+      path: { type: 'text', required: true, max: 512, describe: 'The file to read, relative to the workspace root.' },
+    },
+    mutating: false,
+    summary:
+      "Read a text file from a session's workspace. Refuses binary and anything over 256KB rather than " +
+      'returning something unreadable.',
+  },
+  writefile: {
+    params: {
+      name: { type: 'name', required: true },
+      path: { type: 'text', required: true, max: 512, describe: 'The file to write, relative to the workspace root.' },
+      // `text`, not `secret`: cleanText would collapse the whitespace of the
+      // file being written, and a file is exactly what it is.
+      content: { type: 'raw', required: true, max: 256 * 1024, describe: 'The new contents. Replaces the file.' },
+    },
+    mutating: true,
+    summary: "Write a file in a session's workspace, creating it and any missing directories. Replaces what was there.",
+  },
+  copyfile: {
+    params: {
+      name: { type: 'name', required: true },
+      path: { type: 'text', required: true, max: 512, describe: 'What to copy, relative to the workspace root.' },
+      to: { type: 'text', required: true, max: 512, describe: 'Where to put it, relative to the workspace root.' },
+    },
+    mutating: true,
+    summary: "Copy a file or directory within a session's workspace.",
+  },
+  deletefile: {
+    params: {
+      name: { type: 'name', required: true },
+      path: { type: 'text', required: true, max: 512, describe: 'What to delete, relative to the workspace root.' },
+    },
+    mutating: true,
+    summary:
+      "Delete a file or directory from a session's workspace. Not recoverable — `forget` is the recoverable one, " +
+      'and it takes the whole workspace rather than part of it.',
+  },
+
   update: {
     params: {
       // Restart after pulling. Default false, and that default is the safe
@@ -593,6 +663,22 @@ function checkParam(verb, key, ps, value) {
   if (ps.type === 'text') {
     const r = cleanText(value, { max: ps.max, label: `${verb}.${key}` });
     return r.ok ? { ok: true, value: r.value } : bad(r.error);
+  }
+  if (ps.type === 'raw') {
+    // A FILE IS NOT PROSE. cleanText collapses runs of whitespace and strips
+    // control characters, which is right for a title and catastrophic for
+    // content: it would reindent somebody's source, join their blank lines, and
+    // hand back a file they did not write while reporting success.
+    //
+    // So this is bounded and otherwise untouched. The one exception is a NUL,
+    // which truncates the value for anything written in C — what gets validated
+    // and what gets stored would be different strings.
+    if (typeof value !== 'string') return bad(`${verb}.${key} must be text`);
+    if (Buffer.byteLength(value) > (ps.max ?? 256 * 1024)) {
+      return bad(`${verb}.${key} is larger than ${Math.round((ps.max ?? 262144) / 1024)}KB`);
+    }
+    if (value.includes('\0')) return bad(`${verb}.${key} contains a null byte`);
+    return { ok: true, value };
   }
   if (ps.type === 'secret') {
     // NOT cleanText. That collapses whitespace and strips control characters,

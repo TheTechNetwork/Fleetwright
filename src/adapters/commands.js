@@ -20,6 +20,9 @@
  * @property {string} [title]      prose a person wrote, carried as a FIELD rather
  *   than parsed out of the command line — see adapters/http.js
  * @property {string} [brief]      a sentence of context for the same reason
+ * @property {string} [content]    a file's body, carried as a FIELD for a
+ *   stronger version of the same reason: it has newlines and leading whitespace
+ *   that matter, and it may be a shell script
  */
 
 /**
@@ -50,6 +53,7 @@ import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade }
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
+import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -550,6 +554,71 @@ export const COMMANDS = {
         s.createdBy ? `started by: ${s.createdBy}` : null,
       ].filter(Boolean);
       return { ok: true, text: /** @type {string[]} */ (lines).join('\n'), sessions: [s] };
+    },
+  },
+
+  // --- the workspace --------------------------------------------------------
+  //
+  // Five commands rather than one with a subcommand, matching the five verbs
+  // for the same reason: `mutating` has to be true of the destructive ones and
+  // false of the others, and a single command cannot be both.
+  files: {
+    usage: '/files <name> [path]',
+    short: "List a directory in a session's workspace",
+    help: 'One level of a session workspace. Paths are relative to its root; leave the path off for the root.',
+    run: (ctx, args) => {
+      if (!args[0]) return { ok: false, text: 'Usage: /files <name> [path]' };
+      const r = listFiles(ctx.cfg, args[0], args[1] || '.');
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  readfile: {
+    usage: '/readfile <name> <path>',
+    short: "Read a text file from a session's workspace",
+    help: 'Text only, and bounded. A binary file or one over 256KB is refused rather than dumped.',
+    run: (ctx, args) => {
+      if (!args[0] || !args[1]) return { ok: false, text: 'Usage: /readfile <name> <path>' };
+      const r = readFile(ctx.cfg, args[0], args[1]);
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  writefile: {
+    usage: '/writefile <name> <path>',
+    short: "Write a file in a session's workspace",
+    help:
+      'The content travels as a field beside the command, not as an argument — a file has newlines and ' +
+      'leading whitespace that matter. Replaces whatever was there.',
+    run: (ctx, args) => {
+      if (!args[0] || !args[1]) return { ok: false, text: 'Usage: /writefile <name> <path>' };
+      if (typeof ctx.content !== 'string') {
+        return { ok: false, text: 'No content was sent. /writefile takes the file body as a field, not an argument.' };
+      }
+      const r = writeFile(ctx.cfg, args[0], args[1], ctx.content);
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  copyfile: {
+    usage: '/copyfile <name> <path> <to>',
+    short: "Copy a file or directory within a session's workspace",
+    help: 'Both ends are confined to the workspace: a copy is a write, and a write that lands outside is the same problem as a read that starts outside.',
+    run: (ctx, args) => {
+      if (!args[0] || !args[1] || !args[2]) return { ok: false, text: 'Usage: /copyfile <name> <path> <to>' };
+      const r = copyFile(ctx.cfg, args[0], args[1], args[2]);
+      return { ok: r.ok, text: r.text };
+    },
+  },
+
+  deletefile: {
+    usage: '/deletefile <name> <path>',
+    short: "Delete a file or directory from a session's workspace",
+    help: 'Not recoverable. /forget takes the whole workspace and keeps it for seven days; this takes part of it and keeps nothing.',
+    run: (ctx, args) => {
+      if (!args[0] || !args[1]) return { ok: false, text: 'Usage: /deletefile <name> <path>' };
+      const r = deleteFile(ctx.cfg, args[0], args[1]);
+      return { ok: r.ok, text: r.text };
     },
   },
 

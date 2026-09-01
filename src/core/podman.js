@@ -33,9 +33,19 @@ const BUILD_TIMEOUT_MS = 15 * 60_000;
  * @param {import('../config.js').Config} cfg
  * @param {string[]} args
  */
-/** @param {import('../config.js').Config} cfg @param {string[]} args @param {{ timeout?: number }} [opts] */
-export function podman(cfg, args, { timeout } = {}) {
-  const r = spawnSync(cfg.podmanBin, args, { encoding: 'utf8', ...(timeout ? { timeout } : {}) });
+/** @param {import('../config.js').Config} cfg @param {string[]} args @param {{ timeout?: number, input?: string }} [opts] */
+export function podman(cfg, args, { timeout, input } = {}) {
+  // `input` goes to the container's stdin rather than into the argument list.
+  // Content a caller supplies — a file being written, say — is the one thing
+  // that must never be parsed as shell, and stdin is the only place it cannot be.
+  const r = spawnSync(cfg.podmanBin, args, {
+    encoding: 'utf8',
+    ...(timeout ? { timeout } : {}),
+    ...(input === undefined ? {} : { input }),
+    // A file can be larger than the default 1MB pipe buffer, and a truncated
+    // read that looks successful is worse than a refusal.
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return {
     status: r.status === null ? 1 : r.status,
     stdout: r.stdout || '',

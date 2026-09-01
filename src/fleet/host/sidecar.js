@@ -809,6 +809,22 @@ export function toCommandLine({ verb, params, actor }) {
       return ['/new', p.name, p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null]
         .filter(Boolean)
         .join(' ');
+    // THE WORKSPACE. Quoted with the same care as everything else here: a
+    // path is a filename and never a command, so it travels as one argument.
+    case 'files':
+      return p.path ? `/files ${p.name} ${p.path}` : `/files ${p.name}`;
+    case 'readfile':
+      return `/readfile ${p.name} ${p.path}`;
+    // THE CONTENT IS NOT ON THE COMMAND LINE. It is a file: it has newlines,
+    // it has leading whitespace that matters, and it may be a shell script.
+    // It travels as a field beside the command, the same way `brief` does —
+    // see commandMeta below.
+    case 'writefile':
+      return `/writefile ${p.name} ${p.path}`;
+    case 'copyfile':
+      return `/copyfile ${p.name} ${p.path} ${p.to}`;
+    case 'deletefile':
+      return `/deletefile ${p.name} ${p.path}`;
     case 'resume':
       return p.choice ? `/resume ${p.name} ${p.choice}` : `/resume ${p.name}`;
     case 'stop':
@@ -949,5 +965,8 @@ export function commandMeta(verb, params = {}, actor = '') {
     ...(typeof actor === 'string' && actor ? { actor } : {}),
     ...(verb === 'start' && typeof params?.title === 'string' ? { title: params.title } : {}),
     ...(verb === 'start' && typeof params?.brief === 'string' ? { brief: params.brief } : {}),
+    // File content, for the same reason and by the same route: prose and
+    // payloads travel beside a command rather than inside it.
+    ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),
   };
 }
