@@ -11,6 +11,14 @@ name = "agent-fleet-coordinator"
 main = "src/worker.js"
 compatibility_date = "2026-01-15"
 
+# nodejs_als, NOT nodejs_compat, and the difference is the whole of the note
+# below. The Sentry SDK needs AsyncLocalStorage to associate an error with the
+# request that caused it; `nodejs_als` provides exactly that one API, while
+# `nodejs_compat` pulls in the whole polyfill surface this file spent a
+# paragraph declining. The objection was cold start, and it still stands — this
+# is the smallest flag that answers it.
+compatibility_flags = ["nodejs_als"]
+
 # nodejs_compat is not enabled, and that is a choice rather than a limitation.
 #
 # Workers runs npm packages and, with this flag, most of the node: built-ins —
@@ -25,7 +33,15 @@ compatibility_date = "2026-01-15"
 # If something genuinely needs a node: built-in or an npm package that pulls
 # one in, add:
 #
-#     compatibility_flags = ["nodejs_compat"]
+#     compatibility_flags = ["nodejs_compat", "nodejs_als"]
+#
+# UPDATE, 1 Sep 2026: `nodejs_als` is now set, for Sentry. That is the narrow
+# flag — one API, AsyncLocalStorage — and the reasoning above is unchanged for
+# the broad one. What error reporting DOES cost is bundle: 145 KB minified
+# before it and 327 KB after, measured rather than estimated. If a cold start
+# on cellular ever misses the second this file is written around, the SDK is
+# the first thing to try removing, and SENTRY_DSN being unset already disables
+# it without a deploy of code.
 #
 # and it will work. There is no rule being enforced; `wrangler deploy --dry-run`
 # in CI simply reports the truth either way.
@@ -192,6 +208,22 @@ AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gma
 # here costs one confusing invitation and not a silent hole.
 AGENT_FLEET_NAME = "the Fleetwright fleet"
 AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
+
+# ERROR REPORTING. A DSN is not a secret — it identifies a project and grants
+# only the ability to send it events, which is why it lives here as a var rather
+# than in `wrangler secret`. Unset means no reporting at all: a fresh clone, a
+# contributor's `wrangler dev` and a self-hosted fleet post nowhere, and turning
+# it off in an incident is a var change rather than a code deploy.
+#
+# WHAT IT MAY SEND IS DECIDED IN src/sentry.js, and the answer is: not the URL's
+# query, not a header, not a body. This coordinator carries a device credential
+# on nearly every request — one of them in the query string, deliberately, for
+# Shortcuts.
+SENTRY_DSN = "https://08d0e1e893370804857f8ce9e2f39f17@o4512012096765952.ingest.us.sentry.io/4512012108955648"
+SENTRY_ENVIRONMENT = "production"
+# Not 1.0. Every host sends a health frame every fifteen seconds and every phone
+# polls; tracing all of it spends the quota an actual incident needs.
+SENTRY_TRACES_SAMPLE_RATE = "0.05"
 # Where to get the app. iOS is a TestFlight beta rather than the App Store, and
 # the invitation says so on its own — a TestFlight link needs Apple's TestFlight
 # app installed first and only opens on the device, which is invisible to anyone

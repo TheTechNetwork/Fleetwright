@@ -32,12 +32,22 @@ options:
     # it lands, without a change. Move this when 28 is announced, not before.
     iOS: "26.0"
 
+# Error reporting. Pinned to an exact version rather than a range, like every
+# other dependency in this repository — a range is a build that changes without
+# a commit.
+packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    exactVersion: 8.60.0
+
 targets:
   Fleetwright:
     type: application
     platform: iOS
     sources:
       - path: Fleetwright
+    dependencies:
+      - package: Sentry
     info:
       # WRITTEN, not read. XcodeGen creates this plist on every generation, so
       # the file on disk is output — it is gitignored, and editing it there is
@@ -59,6 +69,11 @@ targets:
         # a justification for it that this app does not have.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # THE DSN, READ AT LAUNCH. Not a secret — it identifies a project and
+        # grants only the ability to post events to it. Empty means no
+        # reporting, which is what a fork or a fresh clone gets; FleetwrightApp
+        # returns early rather than starting the SDK.
+        SentryDSN: https://62d7ede761c48f65f65f07dc94b7a4ee@o4512012096765952.ingest.us.sentry.io/4512012119769088
         CFBundleDisplayName: Fleetwright
         # OTHER NAMES SIRI WILL ACCEPT FOR THIS APP.
         #

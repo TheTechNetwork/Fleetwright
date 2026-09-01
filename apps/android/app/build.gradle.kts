@@ -5,6 +5,35 @@ plugins {
   // applied separately; it is a compiler plugin rather than language support.
   id("com.android.application")
   id("org.jetbrains.kotlin.plugin.compose")
+  // Error reporting. The plugin's job here is ONE thing — uploading the
+  // ProGuard mapping so a release stack trace is readable — and everything
+  // else it offers is switched off in the `sentry {}` block below.
+  id("io.sentry.android.gradle") version "5.1.0"
+}
+
+// WHAT THE PLUGIN IS ALLOWED TO DO, which is much less than it does by default.
+//
+// This app holds a fleet credential, a coordinator address and an email. The
+// Sentry Gradle plugin's auto-instrumentation rewrites bytecode to record
+// database queries, file IO and OkHttp calls — and this app's OkHttp calls are
+// intents carrying that credential. Tracing them would ship it.
+sentry {
+    // The mapping upload is the reason the plugin is here at all, and it needs
+    // an auth token. sentry.properties is NOT in this repository — see
+    // .gitignore. Without one the upload is skipped and the build still works,
+    // which is what a fork or a fresh clone gets.
+    includeProguardMapping.set(true)
+    autoUploadProguardMapping.set(true)
+    ignoredBuildTypes.set(setOf("debug"))
+
+    // OFF. Every one of these instruments something that carries a credential
+    // or a person's data, to answer questions nobody has asked of this app.
+    tracingInstrumentation {
+        enabled.set(false)
+    }
+    autoInstallation {
+        enabled.set(false)
+    }
 }
 
 // Firebase, only when there is a config to read.
@@ -167,6 +196,10 @@ dependencies {
   implementation(platform("androidx.compose:compose-bom:2026.08.00"))
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
+
+  // Error reporting. Pinned like everything else here — a range is a build
+  // that changes without a commit.
+  implementation("io.sentry:sentry-android:8.29.0")
 
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship

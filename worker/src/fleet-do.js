@@ -774,7 +774,6 @@ export class Fleet {
           // Which host, when the person picked one in the app. A placement
           // preference, never an intent parameter — see scheduler.js.
           preferHost: typeof body.host === 'string' ? body.host : undefined,
-        preferLabels: body.tag ?? body.labels ?? null,
           // Placement, like `host` — see the comment in scheduler.js on why a tag
           // cannot be an intent parameter.
           preferLabels: body.tag ?? body.labels ?? null,

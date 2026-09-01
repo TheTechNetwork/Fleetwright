@@ -14,6 +14,36 @@
       android:networkSecurityConfig="@xml/network_security_config"
       android:theme="@style/Theme.Fleetwright">
 
+    <!-- ERROR REPORTING, AND WHAT IT IS FORBIDDEN TO SEND.
+         A DSN is not a secret: it identifies a project and grants only the
+         ability to post events to it, which is why it sits in the manifest
+         rather than in a secret store.
+
+         The rest of these are refusals, and they matter more. This app holds a
+         fleet credential, a coordinator address and the signed-in email:
+
+         - send-default-pii OFF keeps the user's IP and identifiers out.
+         - screenshot and view-hierarchy OFF: the session list, the pane and the
+           credentials sheet are all on screen, and a screenshot of any of them
+           is the thing the whole app is careful about.
+         - breadcrumbs for network requests OFF: this app's requests are intents
+           to the coordinator, and their URLs can carry ?token=.
+         - user-interaction breadcrumbs OFF: they record which control was
+           tapped, by resource id, on screens where the ids name people.
+
+         What is left is the crash and the stack, which is what this is for. -->
+    <meta-data android:name="io.sentry.dsn"
+        android:value="https://REPLACE_WITH_ANDROID_DSN@o4512012096765952.ingest.us.sentry.io/0" />
+    <meta-data android:name="io.sentry.send-default-pii" android:value="false" />
+    <meta-data android:name="io.sentry.attach-screenshot" android:value="false" />
+    <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="false" />
+    <meta-data android:name="io.sentry.traces.user-interaction.enable" android:value="false" />
+    <meta-data android:name="io.sentry.breadcrumbs.http" android:value="false" />
+    <meta-data android:name="io.sentry.breadcrumbs.user-interaction" android:value="false" />
+    <!-- Not 1.0. Tracing is off entirely: this app's spans would be its own
+         requests to the coordinator, which is the one thing not to record. -->
+    <meta-data android:name="io.sentry.traces.sample-rate" android:value="0.0" />
+
     <activity
         android:name=".MainActivity"
         android:exported="true"
