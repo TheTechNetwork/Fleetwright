@@ -99,6 +99,69 @@ and is then asked to stop, so it closes its socket and the coordinator retires
 the entry and revokes the key. There is no cleanup step to remember, because
 exiting normally IS the cleanup.
 
+## Enrolling with no pin: the job proves what it is
+
+`agent-fleet-sidecar enrol-actions`, and the workflow needs one line:
+
+```yaml
+permissions:
+  id-token: write
+```
+
+GitHub mints a short-lived token for that job naming the repository, the
+workflow file and the run. The coordinator verifies it with the same machinery
+it uses for a sign-in — different issuer, and an allowlist of **repositories**
+rather than people, because the subject is a job and not a person.
+
+**This beats a stored secret on every axis that matters.** A credential in CI
+that can enrol a host is readable by every workflow in the repository, survives
+the job, and cannot say which job used it. A token from this issuer expires in
+minutes, names the run, and cannot be exported from the job that asked for it.
+
+`job_workflow_ref` is the claim people skip. `repository` alone means *any*
+workflow there can admit a host, including one added by a pull request — so
+`AGENT_FLEET_ACTIONS_WORKFLOW` pins the file that is allowed to.
+
+**The host id is derived, never accepted.** A job that could choose its own name
+could choose a permanent host's, and re-enrolment replaces a key.
+
+```
+AGENT_FLEET_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
+AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/ephemeral-mac.yml@
+AGENT_FLEET_ACTIONS_OWNERS    github-login=email,github-login=email
+```
+
+## Whose runner it is
+
+> Since they are ephemeral they belong to the user whose token started em
+
+Several people may want a runner at once, and they are **not interchangeable**:
+each exists because somebody asked for it, for their job, and costs them money
+while it lives. Somebody else's runner is not spare capacity — it is a machine
+that vanishes when a job you cannot see finishes.
+
+So an ephemeral host records an owner, derived from whatever admitted it and
+never claimed by the host:
+
+| admitted by | owner |
+|---|---|
+| a pin | the person who minted it — the actor travelled with the pin all along |
+| an Actions token | the account that triggered the run, mapped through `AGENT_FLEET_ACTIONS_OWNERS` |
+
+**An unmapped GitHub account is a refusal, not an ownerless host.** "I cannot
+tell who this belongs to" and "it belongs to nobody" are different facts, and
+only one of them should put a machine in somebody's fleet.
+
+Placement then skips other people's runners entirely, and a fleet whose only
+match is one of them refuses with that reason — not `at_capacity`, which is what
+it said before about an entirely empty machine.
+
+Ownership does **not** make your own runner a default target. It is empty, so
+capacity would choose it every time. Name it.
+
+Permanent hosts have no owner and should not: a box is the fleet's, and one
+person owning it would mean nobody else could work.
+
 ## What still has to be true for the Actions case
 
 - **A unique host id per run.** Two jobs sharing one identity is the clone bug

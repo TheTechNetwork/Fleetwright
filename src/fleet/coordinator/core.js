@@ -124,7 +124,17 @@ export class CoordinatorCore {
    * @param {(msg: object) => void} send
    */
   hostConnected(hostId, send) {
-    this.registry.connect(hostId, send);
+    // THE ENROLMENT IS WHAT KNOWS, and until now nothing asked it. `connect`
+    // has taken an `ephemeral` flag since the framework was built and no caller
+    // ever passed one — so the registry's default of `false` applied to every
+    // host, and `disconnect` kept the entry for a runner exactly as it would
+    // for a real box. The retirement code could not fire, one layer below the
+    // place the flag was already being dropped.
+    const enrolled = this.hostIds?.get(hostId) ?? null;
+    this.registry.connect(hostId, send, {
+      ephemeral: Boolean(enrolled?.ephemeral),
+      owner: enrolled?.owner ?? null,
+    });
     this.log.info(`coordinator: ${hostId} connected`);
     // WHAT THIS HOST NEEDS AND MUST NOT KEEP. One frame, a fixed set of named
     // values, sent on every connect — so a host enrolled tomorrow gets it by

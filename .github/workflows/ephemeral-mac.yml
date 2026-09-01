@@ -22,8 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       pin:
-        description: 'Enrolment pin from the app (Fleet → Add a host). Ten minutes, single use.'
-        required: true
+        description: 'Optional. Leave empty to enrol with the job''s own GitHub OIDC token, which needs no pin at all.'
+        required: false
+        default: ''
         type: string
       minutes:
         description: 'How long to stay in the fleet. GitHub kills the job at 360.'
@@ -43,6 +44,16 @@ on:
 
 permissions:
   contents: read
+  # THE WHOLE POINT. GitHub mints a short-lived token per job naming the
+  # repository, the workflow file and the run, and the coordinator verifies it
+  # the same way it verifies a sign-in — different issuer, allowlist of
+  # REPOSITORIES rather than people, because the subject is a job.
+  #
+  # It beats the alternative on every axis that matters: a stored secret that
+  # can enrol a host is readable by every workflow in the repository, survives
+  # the job, and cannot say which job used it. This cannot be exported from the
+  # job that asked for it.
+  id-token: write
 
 concurrency:
   # One per run, and never cancelled by a newer one: this job IS the host, and
@@ -146,7 +157,15 @@ jobs:
             curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
           done
 
-          node bin/agent-fleet-sidecar enrol "$PIN"
+          # NO PIN NEEDED. The job proves what it is with a token GitHub mints
+          # for it, and the coordinator derives the host id from the run rather
+          # than accepting one — a job that could choose its own name could
+          # choose a permanent host's, and re-enrolment replaces a key.
+          if [ -n "$PIN" ]; then
+            node bin/agent-fleet-sidecar enrol "$PIN"
+          else
+            node bin/agent-fleet-sidecar enrol-actions
+          fi
 
           # THE JOB ENDING IS THE DISCONNECT, and the disconnect is what retires
           # this host and revokes its key. So the sidecar runs in the

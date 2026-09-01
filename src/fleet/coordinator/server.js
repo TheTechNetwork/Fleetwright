@@ -32,7 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
-import { verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { callbackPage } from './github-oauth.js';
@@ -410,6 +410,95 @@ export class Coordinator {
     // needed the fleet-wide admin credential to join — exactly the shared
     // secret this rework removes. The pin is the authorisation for the first;
     // a signature is the authorisation for the other two.
+    // A CI JOB ENROLLING ITSELF, with no pin and no stored credential.
+    //
+    // "so user input doesn't work" — a runner has nobody to read a pin to, and
+    // the alternative everybody reaches for is a long-lived secret in CI that
+    // can admit a host. That secret is readable by every workflow in the
+    // repository, survives the job, and cannot say WHICH job used it.
+    //
+    // GitHub will instead mint a short-lived OIDC token per job, naming the
+    // repository, the workflow file and the run. The coordinator already knows
+    // how to verify an ID token — this is the same machinery pointed at a
+    // different issuer, with an allowlist of REPOSITORIES rather than people,
+    // because the subject is a job and not a person.
+    //
+    // ALWAYS EPHEMERAL, never negotiable. A host admitted this way is a job and
+    // will be destroyed with it; letting the request ask for anything else
+    // would put "clean me up" back in the hands of the thing being cleaned up.
+    if (p === '/api/enroll/actions' && req.method === 'POST') {
+      const body = await readJson(req);
+      const repositories = splitList(process.env.AGENT_FLEET_ACTIONS_REPOS);
+      const audiences = splitList(process.env.AGENT_FLEET_ACTIONS_AUDIENCE);
+      if (!repositories.length) {
+        return json(res, 503, {
+          ok: false,
+          error: { code: 'not_configured' },
+          text: 'This coordinator does not admit CI runners. Set AGENT_FLEET_ACTIONS_REPOS to the repositories that may.',
+        });
+      }
+
+      let job;
+      try {
+        job = await verifyActionsToken(String(body?.token || ''), {
+          // A constant both sides agree on, so a token minted for some other
+          // service cannot be replayed here. The workflow asks GitHub for a
+          // token with this audience; anything else fails the check before a
+          // repository is even looked at.
+          audiences: audiences.length ? audiences : [DEFAULT_ACTIONS_AUDIENCE],
+          repositories,
+          workflowRef: process.env.AGENT_FLEET_ACTIONS_WORKFLOW || null,
+        });
+      } catch (e) {
+        return json(res, 403, { ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message });
+      }
+
+      // THE HOST ID IS DERIVED, NOT ACCEPTED. A job that could choose its own
+      // name could choose a permanent host's, and re-enrolment REPLACES a key —
+      // so a workflow would be able to take over a real box. run_attempt is in
+      // it because a re-run reuses run_id.
+      const hostId = `gha-${job.repository.replace(/[^A-Za-z0-9]+/g, '-')}-${job.runId}-${job.runAttempt}`;
+
+      // WHOSE RUNNER IT IS. A fleet may have several people wanting one at
+      // once, and an unowned temporary host is one everybody sees and nobody
+      // is responsible for. The OIDC token names the account that triggered
+      // the run — trustworthy, because GitHub signed it — and a configured map
+      // turns that into a fleet identity.
+      //
+      // Unmapped is a REFUSAL, not an ownerless host. "I cannot tell who this
+      // belongs to" and "it belongs to nobody" are different facts, and only
+      // one of them should put a machine in somebody's fleet.
+      const owner = ownerForGithubActor(job.actor);
+      if (!owner) {
+        return json(res, 403, {
+          ok: false,
+          error: { code: 'unknown_actor' },
+          text:
+            `${job.actor || 'that account'} is not mapped to anyone on this fleet. ` +
+            'Add it to AGENT_FLEET_ACTIONS_OWNERS as github-login=email.',
+        });
+      }
+
+      const result = await this.core.hostIds.enrol({
+        hostId,
+        publicJwk: body?.publicJwk,
+        enrolledBy: `actions:${job.repository}`,
+        owner,
+        ephemeral: true,
+      });
+      this.saveState();
+      if (!result.ok || !result.host) {
+        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+      }
+      this.core.record({
+        event: 'host.enrolled',
+        hostId: result.host.hostId,
+        fingerprint: result.host.fingerprint,
+        text: `a runner from ${job.repository} (${job.workflowRef}) enrolled itself`,
+      });
+      return json(res, 200, { ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true });
+    }
+
     if (p === '/api/enroll/host' && req.method === 'POST') {
       const body = await readJson(req);
       const wanted = String(body?.hostId || '');
@@ -423,6 +512,12 @@ export class Coordinator {
         hostId: wanted,
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
+        // "Since they are ephemeral they belong to the user whose token started
+        // em." The pin IS that token: it was minted by one person, for one
+        // machine, and the actor travelled with it all along. Only recorded for
+        // an ephemeral host — a permanent box is the fleet's, and one person
+        // owning it would mean nobody else could work.
+        owner: spent.entry.ephemeral ? emailOf(spent.entry.actor) : null,
         readmit: spent.entry.readmit,
         boundToThisHost: Boolean(spent.entry.hostId),
       });
@@ -845,6 +940,39 @@ export class Coordinator {
 const DESTRUCTIVE = /^\/api\/(hosts|clients)\//;
 
 /** Comma or whitespace separated, the same shape the Worker reads from its env. */
+/**
+ * The email inside an actor string, or null.
+ *
+ * Actors arrive as `fleet:<email>` when the coordinator verified one, and as
+ * anything else when it did not. Only the verified form names a person.
+ *
+ * @param {string|null|undefined} actor
+ */
+function emailOf(actor) {
+  const s = String(actor || '');
+  return s.startsWith('fleet:') ? s.slice('fleet:'.length).toLowerCase() || null : null;
+}
+
+/**
+ * The fleet identity behind a GitHub login.
+ *
+ * AGENT_FLEET_ACTIONS_OWNERS is `login=email,login=email`. A map rather than a
+ * claim in the request, because the request is made by the runner and a runner
+ * must not be able to say whose it is.
+ *
+ * @param {string} login
+ */
+function ownerForGithubActor(login) {
+  const wanted = String(login || '').toLowerCase();
+  if (!wanted) return null;
+  for (const pair of splitList(process.env.AGENT_FLEET_ACTIONS_OWNERS)) {
+    const [name, email] = pair.split('=').map((x) => x.trim().toLowerCase());
+    if (name && email && name === wanted) return email;
+  }
+  return null;
+}
+
+
 /** @param {string|undefined} value */
 function splitList(value) {
   return String(value || '')

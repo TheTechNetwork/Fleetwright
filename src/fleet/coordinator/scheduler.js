@@ -319,13 +319,39 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   //
   // Reachable for reads, listable, addressable BY NAME through the placement
   // preference. Just never chosen for you.
-  const durable = matching.filter((h) => !h.ephemeral);
-  if (!durable.length && matching.length) {
+  // AN EPHEMERAL HOST BELONGS TO ONE PERSON. Several people may want a runner
+  // at once, and they are not interchangeable: each one exists because somebody
+  // asked for it, for their job, and costs them money while it lives. Somebody
+  // else's runner is not spare capacity — it is a machine that will vanish when
+  // a job they cannot see finishes.
+  //
+  // Filtered rather than refused, because from this person's point of view the
+  // host is simply not one of theirs. Admins see every host for reads; placing
+  // work is still per-owner, because "can see it" and "should have work put on
+  // it" are different questions.
+  const usable = matching.filter((h) => !h.ephemeral || !h.owner || h.owner === requester?.email);
+  // Matched, but none of them are this person's to use. Without this the next
+  // check reports `at_capacity` — which is both wrong and unactionable: the
+  // host is empty, and the reason it cannot be used has nothing to do with how
+  // full it is.
+  if (matching.length && !usable.length) {
+    return {
+      kind: 'refused',
+      code: 'no_hosts',
+      reason:
+        'The only hosts that match are temporary ones belonging to somebody else. ' +
+        'A runner exists for one person\'s job and disappears when it ends, so it is not spare capacity. ' +
+        'Start your own, or use a permanent host.',
+    };
+  }
+
+  const durable = usable.filter((h) => !h.ephemeral);
+  if (!durable.length && usable.length) {
     return {
       kind: 'refused',
       code: 'only_ephemeral_hosts',
       reason:
-        `The only hosts that match are temporary: ${matching.map((h) => h.hostId).join(', ')}. ` +
+        `The only hosts that match are temporary: ${usable.map((h) => h.hostId).join(', ')}. ` +
         'Name one explicitly to use it — work started there is lost when it goes.',
     };
   }
