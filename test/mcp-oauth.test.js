@@ -258,6 +258,34 @@ test('the Authorization header is parsed without a regular expression', async ()
 
 // --- the one page a person sees ---------------------------------------------
 
+test('the page names the origin, which is the thing setup gets wrong', async () => {
+  // Error 400 origin_mismatch is the first thing a new deployment hits, and it
+  // happens inside Google's popup where this page can neither see nor explain
+  // it. Naming the origin is the one useful thing it can do — it is the exact
+  // string that has to go in the OAuth client's Authorized JavaScript origins.
+  const { authorizePage } = await import('../src/mcp/authorize-page.js');
+  const page = authorizePage.render({
+    clientId: 'mcp_1',
+    redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+    challenge: 'c',
+    state: '',
+    origin: 'https://fleet.example',
+    signIn: { google: '1-a.apps.googleusercontent.com' },
+  });
+  assert.match(page, /<code>https:\/\/fleet\.example<\/code>/);
+  // And the origin is ESCAPED, because on the Node coordinator it is built from
+  // the Host header, which the caller chooses.
+  const spoofed = authorizePage.render({
+    clientId: 'mcp_1',
+    redirectUri: 'https://claude.ai/cb',
+    challenge: 'c',
+    state: '',
+    origin: 'https://x"><script>alert(1)</script>',
+    signIn: {},
+  });
+  assert.equal(spoofed.includes('<script>alert(1)'), false);
+});
+
 test('the authorize page cannot be broken out of', async () => {
   // `client_id` and `state` arrive in the QUERY STRING and are embedded inside
   // a <script> element. JSON.stringify alone is not enough: a value containing

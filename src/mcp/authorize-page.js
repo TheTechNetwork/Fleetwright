@@ -43,6 +43,8 @@ const STYLE = `
   .buttons { display: grid; gap: .75rem; }
   .err { color: #b3261e; }
   footer { margin-top: 2rem; font-size: .8rem; color: color-mix(in srgb, CanvasText 55%, Canvas); }
+  .origin { display: block; margin-top: .5rem; }
+  code { font-size: .95em; word-break: break-all; }
 `;
 
 export const authorizePage = {
@@ -82,7 +84,17 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
     ${!signIn.google && !signIn.apple ? '<p class="err">This fleet has no sign-in configured.</p>' : ''}
   </div>
   <p id="msg"></p>
-  <footer>Apple and Google do the signing in. This page never sees a password.</footer>
+  <footer>Apple and Google do the signing in. This page never sees a password.
+    <!-- THE ORIGIN, WRITTEN DOWN WHERE THE FAILURE HAPPENS.
+         Error 400 origin_mismatch is the first thing a new deployment hits, and
+         it happens inside Google's own popup, where this page cannot see it or
+         explain it. What it CAN do is state the exact string that has to go in
+         the OAuth client's Authorized JavaScript origins, on the screen the
+         person is already looking at when they get it wrong.
+         (No backticks in here: this whole document is a template literal, and
+         one closes it. That is how this comment broke the build.) -->
+    <span class="origin">This fleet is <code>${esc(origin)}</code>.</span>
+  </footer>
 </main>
 <script>
 const ctx = ${scriptJson({ clientId, redirectUri, challenge, state, origin })};
@@ -113,7 +125,15 @@ async function finish(idToken) {
 ${
   signIn.google
     ? `window.addEventListener('load', () => {
-  if (!window.google) return;
+  // A SILENT RETURN HERE WAS A BLANK PAGE. If Google's script does not load —
+  // blocked, offline, a CSP somewhere upstream — the button area is simply
+  // empty and nothing says why, which reads as a broken fleet rather than a
+  // blocked script.
+  if (!window.google) {
+    msg.className = 'err';
+    msg.textContent = "Google's sign-in script did not load, so there is no button to press. Check that accounts.google.com is reachable from this browser.";
+    return;
+  }
   google.accounts.id.initialize({ client_id: ${scriptJson(signIn.google)}, callback: (r) => finish(r.credential) });
   google.accounts.id.renderButton(document.getElementById('g'), { theme: 'outline', size: 'large', width: 320 });
 });`
