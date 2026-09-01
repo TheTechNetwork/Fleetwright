@@ -32,11 +32,13 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyIdToken, isAllowed, isPrivateRelay, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { callbackPage } from './github-oauth.js';
 import { resource } from '../../core/resources.js';
+import { identify } from './identity.js';
+import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -152,6 +154,9 @@ export class Coordinator {
     this.core.runnerTokens.restore(state.runnerTokens || []);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
+    // MCP clients that registered themselves. Codes are not persisted and
+    // registrations are — see Authorizations.serialise() for why.
+    this.core.mcpAuthorizations.restore(state.mcpClients || []);
     // Push registrations too. The Worker has always kept these in Durable
     // Object storage; the Node coordinator held them in a Map and lost them on
     // every restart, so push worked until the service bounced and then stopped
@@ -239,6 +244,7 @@ export class Coordinator {
         runnerTokens: this.core.runnerTokens.serialise(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
+        mcpClients: this.core.mcpAuthorizations.serialise(),
         devices: [...this.core.devices.values()],
       },
       null,
@@ -384,6 +390,45 @@ export class Coordinator {
    */
   async dispatch(spec) {
     return this.core.dispatch(spec);
+  }
+
+  /**
+   * Who is signing in, and are they allowed.
+   *
+   * One function for `/api/session` and for the remote MCP sign-in, because
+   * they ask the same question and a second copy of an allowlist is one that
+   * gets fixed once.
+   *
+   * @param {string} idToken
+   */
+  #identify(idToken) {
+    return identify(idToken, {
+      issuers: splitList(process.env.AGENT_FLEET_AUTH_ISSUERS),
+      audiences: splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES),
+      allow: splitList(process.env.AGENT_FLEET_AUTH_ALLOW),
+      invites: this.core.invites,
+    });
+  }
+
+  /**
+   * What the MCP routes need from this coordinator.
+   *
+   * EVERY ONE OF THESE ALREADY EXISTED. Remote MCP adds a transport and an
+   * OAuth dance in front of it; it adds no new way to become somebody, no new
+   * kind of credential, and no new list of who is allowed. That is the reason
+   * this function is a mapping rather than an implementation.
+   *
+   * @returns {import('../../mcp/routes.js').Deps}
+   */
+  #mcpDeps() {
+    return {
+      authorizations: this.core.mcpAuthorizations,
+      verifyCredential: (token) => this.core.clients.verify(token),
+      verifyIdentity: (idToken) => this.#identify(idToken),
+      issueCredential: (who, deviceName) => this.core.issueClient(who, deviceName),
+      save: () => this.saveState(),
+      signIn: signInClients(),
+    };
   }
 
   // --- the client API ------------------------------------------------------
@@ -574,34 +619,10 @@ export class Coordinator {
     // which coordinator they are talking to.
     if (p === '/api/session' && req.method === 'POST') {
       const body = await readJson(req);
-      const issuers = splitList(process.env.AGENT_FLEET_AUTH_ISSUERS);
-      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
-      const allow = splitList(process.env.AGENT_FLEET_AUTH_ALLOW);
-      if (!issuers.length || !audiences.length) {
-        return json(res, 503, { ok: false, error: { code: 'not_configured' }, text: 'This coordinator has no sign-in configured.' });
-      }
-
-      let who;
-      try {
-        who = await verifyIdToken(String(body?.idToken || ''), { issuers, audiences });
-      } catch (e) {
-        return json(res, 401, { ok: false, error: { code: 'unauthorised' }, text: String(/** @type {Error} */ (e).message) });
-      }
-      if (isPrivateRelay(who.email)) {
-        return json(res, 403, {
-          ok: false,
-          error: { code: 'private_relay' },
-          text:
-            'Sign in again and choose "Share My Email". This coordinator allows people by email domain, ' +
-            'and a hidden Apple address can never match one.',
-        });
-      }
-      // EITHER LIST. The env one says who this deployment belongs to and
-      // survives losing all state; the invited one says who they have let in
-      // since, and needs no deploy. See invites.js for why they stay separate.
-      if (!isAllowed(who.email, allow) && !this.core.invites.has(who.email)) {
-        return json(res, 403, { ok: false, error: { code: 'not_allowed' }, text: `${who.email} is not on this fleet's list.` });
-      }
+      // The same four checks the remote MCP sign-in makes, from the same
+      // function. Two copies of an allowlist is one that gets fixed once.
+      const who = await this.#identify(String(body?.idToken || ''));
+      if (!who.ok) return json(res, who.status, { ok: false, error: { code: who.code }, text: who.text });
 
       const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
       this.saveState();
@@ -670,6 +691,36 @@ export class Coordinator {
       // on screen is how a working flow looks broken.
       res.end(callbackPage(result));
       return undefined;
+    }
+
+    // --- the remote MCP endpoint --------------------------------------------
+    //
+    // ABOVE THE TOKEN GATE, and every route here has to be. Discovery is what a
+    // client reads before it holds any credential; the sign-in page is a
+    // browser with none; and `/mcp` ITSELF must reach its own handler
+    // unauthenticated, because the 401 it returns carries the WWW-Authenticate
+    // header naming where to sign in. The gate's generic 401 would leave the
+    // endpoint looking broken rather than protected, and that header is where
+    // the whole flow starts.
+    //
+    // isMcpPath FIRST, and the body only after. Reading it to decide would
+    // consume the stream for every other POST on this coordinator.
+    if (isMcpPath(p)) {
+      const answer = await mcpRoutes(
+        {
+          method: req.method || 'GET',
+          path: p,
+          origin: publicOrigin(req),
+          query: url.searchParams,
+          body: req.method === 'POST' ? await readMcpBody(req) : null,
+          authorization: req.headers.authorization || null,
+        },
+        this.#mcpDeps(),
+      );
+      if (answer) {
+        sendMcp(res, answer);
+        return undefined;
+      }
     }
 
     // Two ways to be allowed past here, and they are not the same thing.
@@ -1085,6 +1136,106 @@ function readJson(req) {
     });
     req.on('error', () => resolve(null));
   });
+}
+
+/**
+ * The body of an MCP or OAuth request.
+ *
+ * NOT readJson(), for two reasons that are both real bugs if ignored:
+ *
+ *   A JSON-RPC BATCH IS AN ARRAY. readJson returns null for one, deliberately,
+ *   because every other route on this coordinator takes an object — so a client
+ *   batching its calls would have been told its request was not JSON-RPC.
+ *
+ *   /oauth/token IS FORM-ENCODED. RFC 6749 says so and clients follow it; a
+ *   token endpoint that only reads JSON refuses every conforming client, at the
+ *   last step of a flow the person has already completed.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+function readMcpBody(req) {
+  const form = String(req.headers['content-type'] || '').includes('application/x-www-form-urlencoded');
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > 1024 * 1024) req.destroy();
+    });
+    req.on('end', () => {
+      if (form) return resolve(Object.fromEntries(new URLSearchParams(body)));
+      try {
+        resolve(JSON.parse(body || 'null'));
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
+/**
+ * The origin a client actually reached us on.
+ *
+ * It goes into discovery documents and into the WWW-Authenticate header, so
+ * getting it wrong sends clients somewhere that does not answer. Behind a
+ * reverse proxy the scheme is only in the header — `http` here would publish an
+ * http:// authorization server for an https:// fleet, and a client that follows
+ * it is doing exactly the cleartext hop this repository has a CodeQL alert for.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+function publicOrigin(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
+  return `${proto}://${req.headers.host || 'localhost'}`;
+}
+
+/**
+ * @param {import('node:http').ServerResponse} res
+ * @param {{ status: number, json?: any, html?: string, headers?: Record<string, string|undefined> }} answer
+ */
+function sendMcp(res, answer) {
+  // An absent header is dropped rather than written. `writeHead` throws on an
+  // undefined value, and the routes return a union in which one branch's header
+  // is another branch's missing key.
+  /** @type {Record<string,string>} */
+  const extra = {};
+  for (const [k, v] of Object.entries(answer.headers || {})) if (v != null) extra[k] = String(v);
+
+  if (answer.html !== undefined) {
+    res.writeHead(answer.status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...extra });
+    return res.end(answer.html);
+  }
+  // 202 and nothing to say — a batch that was all notifications. A body here
+  // would be a JSON-RPC message with no id for the client to match it to.
+  if (answer.json === null || answer.json === undefined) {
+    res.writeHead(answer.status, extra);
+    return res.end();
+  }
+  res.writeHead(answer.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra });
+  return res.end(JSON.stringify(answer.json));
+}
+
+/**
+ * The client ids the sign-in page needs, picked out of the audience list.
+ *
+ * AGENT_FLEET_AUTH_AUDIENCES is already the set of applications this fleet
+ * accepts tokens for, so the web sign-in has to name one of them or the token
+ * it produces will not verify — a separate variable could disagree with it, and
+ * would, on the first deployment that set one and not the other.
+ *
+ * Google's web client is the entry ending in `.apps.googleusercontent.com`.
+ * Apple's is a SERVICES ID: a bundle id will not work for Sign in with Apple JS
+ * and returns `invalid_client` from Apple with no explanation, so the iOS
+ * bundle id sitting in the same list is deliberately not used. Set
+ * AGENT_FLEET_AUTH_APPLE_SERVICE to the Services ID once it exists; until then
+ * the page shows Google alone rather than an Apple button that cannot work.
+ */
+function signInClients() {
+  const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+  return {
+    google: audiences.find((a) => a.endsWith('.apps.googleusercontent.com')) || null,
+    apple: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+  };
 }
 
 /** What to call this fleet in an invitation. */

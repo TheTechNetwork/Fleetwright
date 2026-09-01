@@ -23,6 +23,28 @@ import { authorizationServerMetadata, protectedResourceMetadata, isSafeRedirect 
 import { authorizePage } from './authorize-page.js';
 
 /**
+ * Is this path ours at all?
+ *
+ * Asked BEFORE the body is read, and that is the whole reason it is separate
+ * from mcpRoutes(). A dispatcher that reads the body in order to decide has
+ * already consumed the stream, and every handler below it then reads an empty
+ * request — which is not a 404 but a route that silently receives nothing.
+ *
+ * @param {string} path
+ */
+export function isMcpPath(path) {
+  return (
+    path === '/mcp' ||
+    path === '/oauth/register' ||
+    path === '/oauth/authorize' ||
+    path === '/oauth/token' ||
+    path === '/.well-known/oauth-protected-resource' ||
+    path === '/.well-known/oauth-authorization-server' ||
+    path === '/.well-known/openid-configuration'
+  );
+}
+
+/**
  * @typedef {object} Deps
  * @property {import('./oauth.js').Authorizations} authorizations
  * @property {(token: string) => Promise<{ email?: string, admin?: boolean }|null>} verifyCredential
@@ -81,6 +103,17 @@ export async function mcpRoutes(req, deps) {
     }
     if (!isSafeRedirect(redirectUri)) {
       return { status: 400, html: authorizePage.error('That client asked to be sent back to an address this fleet will not use.') };
+    }
+    // THE SAME ARGUMENT, ONE STEP EARLIER. issueCode already refuses an
+    // unregistered client — but by then somebody has signed in, and being told
+    // afterwards that the client was never known is the wasted sign-in this page
+    // exists to avoid. A client whose registration this coordinator has
+    // forgotten re-registers on a 400 and tries again.
+    if (!deps.authorizations.knows(clientId)) {
+      return {
+        status: 400,
+        html: authorizePage.error('This fleet does not know that client. Remove it and add it again — it will register itself.'),
+      };
     }
     return {
       status: 200,

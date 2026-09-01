@@ -114,11 +114,25 @@ test('both coordinators gate invites the same way, in every direction', () => {
     // is a list of colleagues, and a member has no reason to hold one.
     assert.match(src, /\/api\/invites'\)\s*&&\s*client\s*&&\s*!client\.admin|startsWith\('\/api\/invites'\) && client && !client\.admin/,
       `${name} does not gate invites on admin for every method`);
-    // And the sign-in consults both lists.
-    assert.match(src, /invites\.has\(who\.email\)/, `${name} does not honour an invitation at sign-in`);
+    // And the sign-in consults both lists. This asserted that the string
+    // `invites.has(who.email)` appeared in each file, which was the best
+    // available check while the four sign-in checks were COPIED into both.
+    // They are one function now — so the property to assert is that neither
+    // coordinator has grown its own copy back.
+    assert.match(src, /#identify\(/, `${name} does not use the shared sign-in check`);
+    assert.doesNotMatch(
+      src,
+      /isAllowed\(who\.email/,
+      `${name} has its own copy of the allowlist check again — identity.js is the one place it belongs`,
+    );
     // Stored, or an invitation lasts until the next restart.
     assert.match(src, /invites/, `${name} does not persist invitations`);
   }
+
+  // And the shared function is the one that consults both lists.
+  const identity = read('src/fleet/coordinator/identity.js');
+  assert.match(identity, /invites\.has\(who\.email\)/, 'identity.js does not honour an invitation at sign-in');
+  assert.match(identity, /isAllowed\(who\.email/, 'identity.js does not consult the env allowlist');
 });
 
 // --- the email, which is a courtesy and not a credential --------------------

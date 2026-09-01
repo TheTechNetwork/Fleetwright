@@ -150,10 +150,42 @@ export class Authorizations {
     return { ok: true, email: entry.email, name: entry.name };
   }
 
+  /** Is this a client we have seen register? @param {string} clientId */
+  knows(clientId) {
+    return this.clients.has(clientId);
+  }
+
   /** Drop what has expired. Called on write, so it needs no timer. */
   sweep() {
     const now = this.now();
     for (const [code, entry] of this.codes) if (entry.expiresAt < now) this.codes.delete(code);
+  }
+
+  /**
+   * REGISTRATIONS PERSIST; CODES DO NOT, and the asymmetry is the point.
+   *
+   * A code lives ten minutes and losing one costs somebody a second tap — the
+   * same reasoning as `pendingGithub` in core.js. A registration is what a
+   * client stored in its own config, possibly weeks ago: forget it and the next
+   * sign-in fails at `issueCode`, AFTER a person has already handed their
+   * password to Apple or Google. A wasted sign-in is the one failure this flow
+   * must not have, and a Durable Object is evicted between messages as a matter
+   * of course.
+   */
+  serialise() {
+    return [...this.clients.entries()].map(([clientId, c]) => ({ clientId, ...c }));
+  }
+
+  /** @param {any[]} rows */
+  restore(rows) {
+    for (const row of rows || []) {
+      if (!row?.clientId || !Array.isArray(row.redirectUris)) continue;
+      // Re-checked on the way in rather than trusted. State outlives the rule
+      // that admitted it, and isSafeRedirect is the rule.
+      const redirectUris = row.redirectUris.map(String).filter((/** @type {string} */ u) => isSafeRedirect(u));
+      if (!redirectUris.length) continue;
+      this.clients.set(String(row.clientId), { redirectUris, name: String(row.name || 'an MCP client') });
+    }
   }
 }
 

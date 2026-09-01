@@ -20,6 +20,7 @@ import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
+import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -83,6 +84,13 @@ export class CoordinatorCore {
      * persisting it would mean writing who-is-authorizing-what to disk.
      */
     this.pendingGithub = new PendingAuthorizations({ now });
+    /**
+     * In-flight sign-ins from an MCP client, and the clients that have
+     * registered. The remote MCP endpoint's OAuth lives here rather than in the
+     * transport so BOTH coordinators get it from the same object — see
+     * src/mcp/routes.js for why that is not a stylistic preference.
+     */
+    this.mcpAuthorizations = new Authorizations({ now });
     this.registry = new HostRegistry({ now });
     // An ephemeral host that drops is retired by the registry; the key it
     // enrolled with has to go with it, which only the core can do.
