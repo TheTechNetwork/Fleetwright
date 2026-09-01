@@ -5,36 +5,26 @@ plugins {
   // applied separately; it is a compiler plugin rather than language support.
   id("com.android.application")
   id("org.jetbrains.kotlin.plugin.compose")
-  // Error reporting. The plugin's job here is ONE thing — uploading the
-  // ProGuard mapping so a release stack trace is readable — and everything
-  // else it offers is switched off in the `sentry {}` block below.
-  id("io.sentry.android.gradle") version "5.1.0"
 }
 
-// WHAT THE PLUGIN IS ALLOWED TO DO, which is much less than it does by default.
+// NO SENTRY GRADLE PLUGIN, and that is a decision rather than an omission.
 //
-// This app holds a fleet credential, a coordinator address and an email. The
-// Sentry Gradle plugin's auto-instrumentation rewrites bytecode to record
-// database queries, file IO and OkHttp calls — and this app's OkHttp calls are
-// intents carrying that credential. Tracing them would ship it.
-sentry {
-    // The mapping upload is the reason the plugin is here at all, and it needs
-    // an auth token. sentry.properties is NOT in this repository — see
-    // .gitignore. Without one the upload is skipped and the build still works,
-    // which is what a fork or a fresh clone gets.
-    includeProguardMapping.set(true)
-    autoUploadProguardMapping.set(true)
-    ignoredBuildTypes.set(setOf("debug"))
-
-    // OFF. Every one of these instruments something that carries a credential
-    // or a person's data, to answer questions nobody has asked of this app.
-    tracingInstrumentation {
-        enabled.set(false)
-    }
-    autoInstallation {
-        enabled.set(false)
-    }
-}
+// It was added and then removed the same afternoon: it failed the build with
+//
+//     Failed to apply plugin 'io.sentry.android.gradle'
+//     > Extension of type 'AppExtension' does not exist
+//
+// `AppExtension` is AGP's old entry point, which AGP 9 removed — the same
+// version bump the comment above is about. A newer plugin may well handle it.
+//
+// What settled it is that the plugin's only job here would be uploading the
+// ProGuard mapping so a release stack trace is readable, and THAT NEEDS AN AUTH
+// TOKEN THIS REPOSITORY DOES NOT HAVE. So as things stand it would buy nothing
+// and could only break the build. When somebody adds the token, add the plugin
+// back at a version that supports AGP 9 and check it on a real build.
+//
+// Until then a release crash reports with an obfuscated stack. That is worse
+// than a readable one and much better than no report.
 
 // Firebase, only when there is a config to read.
 //
@@ -197,9 +187,10 @@ dependencies {
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
 
-  // Error reporting. Pinned like everything else here — a range is a build
-  // that changes without a commit.
-  implementation("io.sentry:sentry-android:8.29.0")
+  // Error reporting. Pinned like everything else here — a range is a build that
+  // changes without a commit. The version is the one Maven Central actually
+  // publishes; the first attempt at this line invented a number.
+  implementation("io.sentry:sentry-android:8.54.0")
 
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship

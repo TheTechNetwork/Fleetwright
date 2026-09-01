@@ -60,9 +60,22 @@ jobs:
           # it is downloaded on every run of every matrix leg without this.
           cache: npm
 
-      # No runtime dependencies and no build step. The only install is the
-      # typescript devDependency used to check the JSDoc annotations.
       - run: npm install --no-audit --no-fund
+
+      # THE WORKER'S DEPENDENCIES, because the tests in test/ import
+      # worker/src/worker.js — openapi.test.js, worker-routes.test.js and
+      # mcp-remote.test.js all do, to assert the two coordinators agree.
+      #
+      # This job installed the root only, which was fine for as long as the
+      # comment above was true ("no runtime dependencies"). The moment the
+      # Worker gained one, every one of those tests failed with
+      # ERR_MODULE_NOT_FOUND — and verify.sh passed on my machine, because
+      # worker/node_modules was already there from installing it.
+      #
+      # A local check that cannot fail the way CI fails is a local check that
+      # certifies nothing. This is the line that makes them the same run.
+      - run: npm install --no-audit --no-fund
+        working-directory: worker
       # `npm test` builds the console first (pretest), because node cannot
       # import JSX and the component tests render the compiled output. A UI that
       # cannot be rendered in a test is a UI that ships broken — which is

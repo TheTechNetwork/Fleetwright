@@ -35,10 +35,14 @@ the credentials sheet are all on screen; a screenshot of any of them is the
 thing the app is careful about. iOS keeps a `beforeSend` as a backstop, because
 every switch above can be undone by a careless edit or a new SDK default.
 
-**Android's Gradle plugin** does one job — uploading the ProGuard mapping so a
-release stack trace is readable. `tracingInstrumentation` and `autoInstallation`
-are off: they rewrite bytecode to record database queries, file IO and OkHttp
-calls, and this app's OkHttp calls are intents carrying a credential.
+**Android has no Sentry Gradle plugin**, and that is a decision rather than an
+omission. It failed the build — `Extension of type 'AppExtension' does not
+exist`, AGP's old entry point, which AGP 9 removed. A newer plugin may well
+handle it, but its only job here would be uploading the ProGuard mapping, and
+that needs an auth token this repository does not have. It would buy nothing and
+could only break the build. Until somebody adds the token, a release crash
+reports with an obfuscated stack: worse than a readable one, much better than no
+report.
 
 ## A DSN is not a secret
 
@@ -65,10 +69,31 @@ tie an error to its request; `nodejs_als` provides that one API, while
 `nodejs_compat` pulls in the polyfill surface `wrangler.toml` spends a paragraph
 declining.
 
+## The versions, and a warning
+
+Every version in the first attempt at this was **invented**, and all three were
+wrong: `sentry-android` 8.29.0 (real: 8.54.0), the Gradle plugin 5.1.0 (real:
+6.20.0), `sentry-cocoa` 8.60.0 — a version that never existed, because that SDK
+went from 8.x to 9.x. CI caught all three, one per platform, which is the only
+reason they are right now. Check a registry rather than a memory.
+
+## What CI needed that it did not have
+
+The tests in `test/` import `worker/src/worker.js` — `openapi.test.js`,
+`worker-routes.test.js` and `mcp-remote.test.js` all do, to assert the two
+coordinators agree. The `test` job installed the root only, which was correct
+for as long as its comment ("no runtime dependencies") was true. The moment the
+Worker gained one, all three failed with `ERR_MODULE_NOT_FOUND` — while
+`verify.sh` passed locally, because `worker/node_modules` was already there.
+
+A local check that cannot fail the way CI fails certifies nothing. The job now
+installs the Worker's dependencies too.
+
 ## Still to do
 
 - **The Android DSN is a placeholder.** The wizard fetches it and the wizard is
   a Windows executable; `io.sentry.dsn` in `AndroidManifest.xml` reads
   `REPLACE_WITH_ANDROID_DSN` and the app will not report until it is filled in.
 - Source maps for the Worker and debug symbols for the apps are not wired into
-  CI. Each needs an auth token as a repository secret.
+  CI. Each needs an auth token as a repository secret — and the Android mapping
+  upload additionally needs a Gradle plugin that works with AGP 9.
