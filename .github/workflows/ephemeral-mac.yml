@@ -112,6 +112,27 @@ jobs:
           AGENT_FLEET_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
           MINUTES: ${{ inputs.minutes }}
           PIN: ${{ inputs.pin }}
+          # THE CREDENTIAL A RUNNER CAN ACTUALLY USE.
+          #
+          # The first version of this file said the host arrives with no Claude
+          # account and somebody connects one from the app. That is true of a
+          # permanent box and useless here: the point of a runner is that work
+          # is handed to it, watched, and its output collected. There is nobody
+          # at the other end to open a login page and paste a code back. A host
+          # that needs a human to become useful is not a runner.
+          #
+          # An API key is the credential designed for this. It needs no browser,
+          # it is revocable on its own, it bills separately from a subscription,
+          # and it is scoped to one thing rather than being an account login.
+          # That last property is why it does not break the standing rule about
+          # shared credentials: this is not somebody's Claude ACCOUNT travelling
+          # to a machine, it is a key that can be turned off without touching
+          # the account it belongs to.
+          #
+          # Unsandboxed sessions inherit this process's environment — credential
+          # seeding lives inside `if (cfg.sandbox)` — so putting it here is what
+          # puts it in front of the CLI.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
@@ -135,7 +156,14 @@ jobs:
           node bin/agent-fleet-sidecar &
           SIDECAR=$!
           echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
-          echo "::notice::It has no Claude account yet — connect one to this host from the app."
+          # SAID EITHER WAY, and said differently. A runner with no key is not
+          # broken, it is unusable — and those need different sentences, because
+          # the second one names something the person can go and fix.
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::notice::Sessions here authenticate with ANTHROPIC_API_KEY. Usage bills to that API account, not to a subscription."
+          else
+            echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start. Add one in Settings → Secrets → Actions."
+          fi"
           sleep "$(( MINUTES * 60 ))"
 
           # Politely, then not. A sidecar given the chance to close its socket

@@ -55,10 +55,40 @@ It is masked on the first line of the job anyway: `workflow_dispatch` inputs are
 not masked by default, and ten minutes of exposure in a public log is small
 rather than none.
 
-**It arrives with no Claude account**, and that is the guest rule applying to a
-machine: nothing is copied to it. Connect one from the app once it appears —
-`connect claude scope=me` opens a login in a pane on that host and hands back
-the URL, exactly as it does for any other host.
+### The credential, and why it is an API key
+
+The first version of this said the host arrives with no Claude account and
+somebody connects one from the app. That is true of a permanent box and useless
+here:
+
+> the concept of runners is MCP hands something off to the runner, watches it,
+> and gets output — so user input doesn't work
+
+**A host that needs a human to become useful is not a runner.** There is nobody
+at the other end to open a login page and paste a code back, and a design that
+requires one has quietly turned an automation surface into a second interactive
+box that happens to expire.
+
+So an ephemeral host authenticates with `ANTHROPIC_API_KEY`, from a repository
+secret. That is the credential designed for this shape: no browser, revocable on
+its own, billed separately, and scoped to one thing rather than being an account
+login.
+
+**It does not break the no-shared-credentials rule**, and the distinction is
+worth being precise about rather than waving at. That rule is about somebody's
+Claude *account* travelling to a machine or a person who should not have it.
+An API key is not an account login: it can be turned off without touching the
+account it belongs to, its usage is visible separately, and it admits nobody to
+anything except the API. What would break the rule is copying
+`accounts/<email>.json` to a runner, and nothing here does that.
+
+**Usage bills to the API account, not to a subscription.** Worth knowing before
+running many of these.
+
+It works because credential seeding lives inside `if (cfg.sandbox)` — an
+unsandboxed session inherits the environment of the process that started it, so
+a key in the job's environment is a key in front of the CLI. No linked account
+is involved at any point.
 
 **No sandbox.** Rootless podman on a macOS runner is a Linux VM inside a VM,
 slow where it works at all — and the sandbox protects a machine that persists.
@@ -91,3 +121,25 @@ what may run on their hardware). It is right for a build and wrong for the
 long-lived session this product is otherwise about. If a piece of work needs to
 reach something inside your network, it wants a permanent host — that is not a
 limitation of this feature, it is the line that makes the feature safe.
+
+## What this still does not do
+
+The credential was the blocker. The interaction model is the remaining half, and
+it is worth writing down before it is built rather than discovered:
+
+**A session here is still an interactive one.** `start` opens `claude` in a tmux
+pane and the fleet reads that pane. For hand-off-and-watch, the shape wanted is
+closer to `claude -p`: give it the work, let it run, collect the output, know
+when it is finished. `peek` reads a pane and `answer` types into one; neither is
+"tell me when this is done".
+
+**Nothing reports completion.** A runner session that has finished its work looks
+exactly like one sitting idle, which is the same ambiguity the watcher already
+cannot resolve on a permanent host — and on a runner it matters more, because
+the machine is being paid for by the minute.
+
+**MCP is where this lands.** The intent protocol is already the right shape for
+it (fixed verbs, typed parameters, structured replies), and an MCP server is a
+thin adapter over `/api/intent` rather than new architecture. `start` on a named
+ephemeral host, `peek` for output, and a completion signal that does not exist
+yet are the three pieces.
