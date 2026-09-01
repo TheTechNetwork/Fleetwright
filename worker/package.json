@@ -9,7 +9,7 @@
     "test": "node --test test/"
   },
   "devDependencies": {
-    "wrangler": "4.127.1"
+    "wrangler": "4.128.0"
   },
   "engines": {
     "node": ">=24"
