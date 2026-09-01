@@ -180,3 +180,102 @@ test('a blocking tool is capped below the transport\'s timeout', async () => {
   assert.match(r.body.result.content[0].text, /still running after 25s/);
   assert.match(r.body.result.content[0].text, /call fleet_await again/);
 });
+
+// --- the one page a person sees ---------------------------------------------
+
+test('the authorize page cannot be broken out of', async () => {
+  // `client_id` and `state` arrive in the QUERY STRING and are embedded inside
+  // a <script> element. JSON.stringify alone is not enough: a value containing
+  // "</script>" closes the element and everything after it is markup. This is
+  // not a theoretical objection — it is what the first version of this page did.
+  const { authorizePage } = await import('../src/mcp/authorize-page.js');
+  const page = authorizePage.render({
+    clientId: '</script><img src=x onerror=alert(1)>',
+    redirectUri: 'https://a.example/cb',
+    challenge: '',
+    state: ' alert(1)',
+    origin: 'https://fleet.example',
+    signIn: {},
+  });
+  assert.equal(page.includes('</script><img'), false, 'broke out of the script element');
+  // U+2028 and U+2029 are valid in JSON and terminate a JavaScript string.
+  assert.equal(page.includes(' '), false);
+  assert.match(page, /\\u003c/);
+});
+
+test('the page never asks for a password', async () => {
+  // A page of ours collecting credentials for somebody else is the shape of
+  // every phishing screen ever built. Apple and Google do the signing in.
+  const { authorizePage } = await import('../src/mcp/authorize-page.js');
+  const page = authorizePage.render({
+    clientId: 'mcp_1',
+    redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+    challenge: 'c',
+    state: 's',
+    origin: 'https://fleet.example',
+    signIn: { google: 'g.apps.googleusercontent.com', apple: 'network.thetech.fleetwright.web' },
+  });
+  assert.equal(/type=["']password["']/.test(page), false);
+  // And it NAMES who is asking. A consent screen that does not say what it is
+  // consenting to is one nobody can refuse meaningfully.
+  assert.match(page, /claude\.ai/);
+});
+
+test('a fleet with no sign-in configured says so instead of showing nothing', async () => {
+  const { authorizePage } = await import('../src/mcp/authorize-page.js');
+  const page = authorizePage.render({
+    clientId: 'mcp_1', redirectUri: 'https://a.example/cb', challenge: 'c', state: '', origin: 'https://f', signIn: {},
+  });
+  assert.match(page, /no sign-in configured/);
+});
+
+// --- the routes -------------------------------------------------------------
+
+test('an unauthenticated /mcp says how to authenticate', async () => {
+  // THE 401 IS THE ENTRY POINT. Without the header a client has no way to learn
+  // that signing in is possible, and reports the endpoint as broken rather than
+  // as protected.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  const r = await mcpRoutes(
+    { method: 'POST', path: '/mcp', origin: ORIGIN, query: new URLSearchParams(), body: {}, authorization: null },
+    { verifyCredential: async () => null },
+  );
+  assert.equal(r.status, 401);
+  assert.match(r.headers['www-authenticate'], /resource_metadata="https:\/\/fleet\.example\/\.well-known\/oauth-protected-resource"/);
+});
+
+test('authorize refuses a bad redirect before rendering anything', async () => {
+  // A page that collects a sign-in and THEN finds it cannot send the result
+  // anywhere has spent somebody's credentials on a screen that was never going
+  // to work.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  const q = new URLSearchParams({ client_id: 'mcp_1', redirect_uri: 'http://evil.example/cb', code_challenge_method: 'S256' });
+  const r = await mcpRoutes(
+    { method: 'GET', path: '/oauth/authorize', origin: ORIGIN, query: q, body: null, authorization: null },
+    { signIn: {} },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.html, /will not use/);
+  assert.equal(/accounts\.google\.com/.test(r.html), false, 'no sign-in should be offered on a dead flow');
+});
+
+test('authorize refuses a flow without PKCE', async () => {
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  const q = new URLSearchParams({ client_id: 'mcp_1', redirect_uri: 'https://a.example/cb' });
+  const r = await mcpRoutes(
+    { method: 'GET', path: '/oauth/authorize', origin: ORIGIN, query: q, body: null, authorization: null },
+    { signIn: {} },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.html, /without PKCE/);
+});
+
+test('a request that is not an MCP route falls through', async () => {
+  // The coordinators have their own routes; this must not swallow them.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  const r = await mcpRoutes(
+    { method: 'GET', path: '/api/state', origin: ORIGIN, query: new URLSearchParams(), body: null, authorization: null },
+    {},
+  );
+  assert.equal(r, null);
+});

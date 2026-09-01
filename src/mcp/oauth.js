@@ -96,6 +96,7 @@ export class Authorizations {
    * refusing to be discoverable, which is the one thing this endpoint is for.
    *
    * @param {{ redirect_uris?: string[], client_name?: string }} request
+   * @returns {{ ok: true, clientId: string, redirectUris: string[] } | { ok: false, error: string }}
    */
   register(request) {
     const redirectUris = (request?.redirect_uris || []).map(String).filter(Boolean);
@@ -113,6 +114,7 @@ export class Authorizations {
    * Start an authorization: the person has signed in and been allowed.
    *
    * @param {{ email: string, name?: string|null, clientId: string, redirectUri: string, challenge: string }} spec
+   * @returns {{ ok: true, code: string } | { ok: false, error: string }}
    */
   issueCode({ email, name = null, clientId, redirectUri, challenge }) {
     const client = this.clients.get(clientId);
@@ -133,6 +135,7 @@ export class Authorizations {
    * survives a failed exchange is one somebody can retry.
    *
    * @param {{ code: string, clientId: string, redirectUri: string, verifier: string }} spec
+   * @returns {Promise<{ ok: true, email: string, name: string|null } | { ok: false, error: string }>}
    */
   async redeem({ code, clientId, redirectUri, verifier }) {
     const entry = this.codes.get(code);
