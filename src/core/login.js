@@ -113,6 +113,62 @@ function sameActor(actor, startedBy) {
   return !a.startsWith('fleet:') && !b.startsWith('fleet:');
 }
 
+/** The keychain item the Claude CLI writes on macOS. */
+const MAC_KEYCHAIN_SERVICE = 'Claude Code-credentials';
+
+/**
+ * The credential a just-finished login produced.
+ *
+ * ON LINUX IT IS A FILE and always was: `<CLAUDE_CONFIG_DIR>/.credentials.json`,
+ * mode 0600. On macOS the CLI writes to the LOGIN KEYCHAIN instead — item
+ * "Claude Code-credentials" — and only falls back to the file when the keychain
+ * refuses the write, which is why this worked on every Linux host and failed
+ * the first time anybody linked an account on a Mac with:
+ *
+ *     The login finished but the credential could not be stored:
+ *     ENOENT ... open '.../pending-<email>/.credentials.json'
+ *
+ * `status()` said the login had SUCCEEDED, because it asks the CLI, and the CLI
+ * reads the keychain. So the flow got all the way to the last step and then
+ * looked in the one place the credential was not.
+ *
+ * THE KEYCHAIN IS NOT PER-CONFIG-DIR, and that is worth stating rather than
+ * hiding: CLAUDE_CONFIG_DIR isolates the config directory and nothing else, so
+ * on macOS a login for one account overwrites whatever keychain item was there
+ * — before this function is ever reached. That is a property of the CLI, not of
+ * this code. Taking the credential OUT of the shared slot and into the accounts
+ * store is the best available answer: the item is deleted after it is read, so
+ * the slot is empty rather than holding somebody's account, and the next login
+ * starts from nothing.
+ *
+ * @param {string} dir  the isolated CLAUDE_CONFIG_DIR for this attempt
+ * @returns {string} the credential JSON
+ */
+function readLinkedCredential(dir) {
+  try {
+    return readFileSync(path.join(dir, '.credentials.json'), 'utf8');
+  } catch (fileError) {
+    if (process.platform !== 'darwin') throw fileError;
+    const read = spawnSync('security', ['find-generic-password', '-s', MAC_KEYCHAIN_SERVICE, '-w'], {
+      encoding: 'utf8',
+    });
+    const raw = (read.stdout || '').trim();
+    if (read.status !== 0 || !raw) {
+      throw new Error(
+        'the CLI reported a successful login but wrote no credential this process can read.\n' +
+          `Not at ${path.join(dir, '.credentials.json')}, and not in the "${MAC_KEYCHAIN_SERVICE}" keychain item ` +
+          `(${(read.stderr || '').trim().slice(0, 120) || 'no such item'}).\n` +
+          'On macOS the keychain must be unlocked for the user this service runs as.',
+      );
+    }
+    // Cleared once it is ours. Leaving it would mean the account stays live in
+    // a slot shared by every login on this machine, which is the thing the
+    // isolated config dir exists to prevent and cannot on this platform.
+    spawnSync('security', ['delete-generic-password', '-s', MAC_KEYCHAIN_SERVICE], { encoding: 'utf8' });
+    return raw;
+  }
+}
+
 export class LoginFlow {
   /** @param {import('../config.js').Config} cfg */
   constructor(cfg) {
@@ -376,7 +432,7 @@ export class LoginFlow {
           // that writes to the box's own config and this login was never for
           // the box.
           try {
-            const raw = readFileSync(path.join(link.dir, '.credentials.json'), 'utf8');
+            const raw = readLinkedCredential(link.dir);
             // The identity travels with the credential. Under CLAUDE_CONFIG_DIR
             // the state file lands at <dir>/.claude.json (verified empirically),
             // and its oauthAccount block is what the CLI inside a sandbox reads
