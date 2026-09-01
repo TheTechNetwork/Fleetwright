@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "654943059314-99menpcghkdr6qmoupomkt5p56i1kj78.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "network.thetech.fleetwright",
+            "certificate_hash": "109c14b65159b6ddb3e9b2ae2c2b4afb04edef58"
+          }
+        },
+        {
           "client_id": "654943059314-nk63eobi4of850o4cjtlt0vlomiglahu.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
@@ -50,6 +58,14 @@
         }
       },
       "oauth_client": [
+        {
+          "client_id": "654943059314-gjjaoksj25hucinqgevi0ooh11stu7jh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "network.thetech.fleetwright.debug",
+            "certificate_hash": "109c14b65159b6ddb3e9b2ae2c2b4afb04edef58"
+          }
+        },
         {
           "client_id": "654943059314-h47viofegssor0ts8gdvdodlmfqh9pog.apps.googleusercontent.com",
           "client_type": 1,
