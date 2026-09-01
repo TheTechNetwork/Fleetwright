@@ -190,8 +190,8 @@ passes.
 | | `tools/*` | `logging` (`notifications/message`) | how established |
 |---|---|---|---|
 | this server | ✅ | ✅ declared and emitted | `test/mcp.test.js`, 35 tests — two spawn the binary and drive it over a real pipe |
-| **Claude Code 2.1.251** | ✅ **verified** | ❌ **client does not advertise `logging`** | `scripts/check-mcp-client.mjs`, 1 Sep 2026 — full round trip, tool called, intent reached a fleet |
-| Claude Desktop | untested here | untested here | — |
+| **Claude Code 2.1.251** | ✅ **verified** | ❌ **sent, and not surfaced to the model** | `scripts/check-mcp-client.mjs`, 1 Sep 2026 — three scenarios, wire captured |
+| Claude Desktop | untested here | untested here | GUI: see below |
 | any other client | untested here | untested here | — |
 
 **Claude Code, measured rather than assumed:**
@@ -206,10 +206,39 @@ result             : "sunlit-harbor running on deb132"   is_error: false
 logging/setLevel   : never sent
 ```
 
-Its capability object has **no `logging`**, so `notifications/message` is very
-likely dropped. That is a fact about a client, not a fault in either — and it is
-exactly why `fleet_await` is the guaranteed path and the notification is the
-courtesy. On this client, today, the courtesy does nothing.
+Its capability object has **no `logging`** — and rather than infer from that,
+the harness measured it. The server emitted one `notifications/message`
+carrying a marker; the model was asked to report any out-of-band content:
+
+```
+notifications sent: 1
+tools called      : fleet_start, fleet_peek
+answer            : "NONE RECEIVED — Everything that came back was a tool
+                     result: `started probe` from fleet_start, and `still
+                     compiling, nothing to report` from each of the three
+                     fleet_peek calls. No server-initiated notification, log
+                     message, or other out-of-band content."
+```
+
+**Sent, and not surfaced.** That is a fact about a client, not a fault in
+either — and it is exactly why `fleet_await` is the guaranteed path and the
+notification is the courtesy. On this client, today, the courtesy does nothing,
+and a design that relied on it would have looked fine in every unit test.
+
+**The first attempt at this experiment was confounded**, which is worth
+recording because a confounded run that looks like a result is how a matrix
+fills with confident nonsense. It let the model call `fleet_await`, whose return
+value contains the same "is waiting for an answer" text the notification
+carries — the model quoted it, and the run appeared to prove notifications
+arrive. It proved a tool result arrives.
+
+The fix separates the channels **by verb**: the watcher polls `status`, nothing
+the model can call does, and `peek` keeps the turn alive while saying nothing.
+The marker then has exactly one route to the model. Finding that also exposed a
+real gap — the notification did not carry the session's `detail` at all, so the
+experiment would have returned NONE RECEIVED whatever the client did. It carries
+it now, which is better regardless: *"probe is waiting… It says: …"* beats
+*"probe is waiting."*
 
 **The first run of that harness found a real bug**, which is the argument for
 having it. The server answered every `initialize` with a hardcoded
@@ -230,9 +259,18 @@ to be answered. It negotiates now, and a test holds it.
 node scripts/check-mcp-client.mjs
 ```
 
-It stands up a fake fleet on loopback, puts a tee between the client and the
-server so the **wire is the evidence**, runs `claude -p` with `--mcp-config`,
-and reports what the client actually did. Without the tee a failure is "the
+Three scenarios, each with its own fake fleet on loopback and a tee between
+client and server so the **wire is the evidence**:
+
+| scenario | what it establishes |
+|---|---|
+| round trip | a tool call reaches a fleet and the answer reaches the model |
+| refusal keeps its reason | a named refusal survives to the model rather than being flattened into "the tool failed" — the property the whole protocol is built around |
+| notifications | whether `notifications/message` is surfaced, measured with a marker that has only one possible route |
+
+Claude Code reported the refusal verbatim — *"deb132: claude is not logged in …
+That's the entire message — an error, so no session was created"* — which is the
+protocol's central promise arriving intact at the far end. Without the tee a failure is "the
 model did not use the tool", which is not something anybody can act on.
 
 **Not part of `verify.sh`.** It needs the `claude` CLI and a working credential,

@@ -154,7 +154,18 @@ export class McpServer {
         if (now && now !== this.seen.get(name)) {
           this.seen.set(name, now);
           if (session?.awaiting) {
-            this.#notify('warning', `${name} is waiting for an answer and will not go further without one.`, { session: name, state: 'awaiting' });
+            // CARRIES WHAT IT IS WAITING FOR. "probe is waiting" tells an agent
+            // to go and look; the question itself may be answerable without
+            // looking. It also makes the notification distinguishable from the
+            // tool result in a conformance run — the first attempt at measuring
+            // whether these arrive was confounded because both channels said
+            // the same words.
+            const asking = String(session.detail ?? session.text ?? '').trim();
+            this.#notify(
+              'warning',
+              `${name} is waiting for an answer and will not go further without one.${asking ? ` It says: ${asking}` : ''}`,
+              { session: name, state: 'awaiting', ...(asking ? { asking } : {}) },
+            );
           } else if (status === 'error') {
             this.#notify('error', `${name} failed. Its output is still readable with fleet_read_log.`, { session: name, state: 'error' });
           } else if (status === 'stopped') {
