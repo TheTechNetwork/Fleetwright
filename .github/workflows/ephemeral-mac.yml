@@ -1,0 +1,148 @@
+name: Ephemeral macOS host
+
+# A macOS runner, enrolled into the fleet for the length of one job.
+#
+# The coordinator side of this has been built for a while — a pin can admit an
+# EPHEMERAL host, a disconnect retires it and revokes its key, and the scheduler
+# refuses to place ordinary work on one. See docs/ephemeral-hosts.md. What was
+# missing was the runner side, which is this file.
+#
+# WHY A RUNNER IS ALREADY THE RIGHT SHAPE: the sidecar dials OUT, so no inbound
+# route is needed; a pin is already short-lived, single-use and host-bound; and
+# a host that vanishes is the case the registry was taught to handle. Nothing
+# here is a special path — it is an ordinary host with a very short life.
+#
+# THE PIN IS TYPED, NOT STORED. There is deliberately no credential in this
+# repository that can admit a machine to the fleet. A pin lasts ten minutes, is
+# single-use, and is minted by a person in the app who is looking at what they
+# are doing. Storing a long-lived credential here to make the run automatic
+# would trade that for the ability to admit a host from any workflow edit, and
+# admitting a host is not a thing a pull request should be able to do.
+on:
+  workflow_dispatch:
+    inputs:
+      pin:
+        description: 'Enrolment pin from the app (Fleet → Add a host). Ten minutes, single use.'
+        required: true
+        type: string
+      minutes:
+        description: 'How long to stay in the fleet. GitHub kills the job at 360.'
+        required: false
+        default: '60'
+        type: string
+      labels:
+        description: 'Labels for placement, comma separated.'
+        required: false
+        default: 'macos,xcode,ephemeral'
+        type: string
+      coordinator:
+        description: 'Coordinator URL.'
+        required: false
+        default: 'https://fleet.thetech.network'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # One per run, and never cancelled by a newer one: this job IS the host, and
+  # cancelling it takes somebody's session away mid-sentence.
+  group: ephemeral-mac-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    runs-on: macos-15
+    # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
+    # actually ends the job, via a sleep, so this is the value that applies when
+    # something has hung rather than the value that governs a normal run.
+    #
+    # Deliberately not `fromJSON(inputs.minutes) + 5`. Expressions are allowed
+    # here, but a workflow that computes its own timeout from an input is a
+    # workflow whose failure mode is an invalid expression at dispatch time —
+    # and this repository has already spent a merge learning that a key which
+    # quietly does not take an expression fails with no line number.
+    timeout-minutes: 360
+    steps:
+      - name: Mask the pin
+        # workflow_dispatch inputs are NOT masked. It is single-use and expires
+        # in ten minutes, so the exposure is small — but it is an admission
+        # credential printed into a public run log, and small is not none.
+        run: echo "::add-mask::${{ inputs.pin }}"
+
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.20.0'
+      - run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: The things a session needs
+        run: |
+          # tmux is how a session exists at all. The Claude CLI is what runs in
+          # it. Neither is preinstalled on a macOS runner.
+          brew install tmux
+          npm install -g @anthropic-ai/claude-code
+          tmux -V && claude --version
+
+      - name: Run as a host until the clock runs out
+        env:
+          # UNIQUE PER RUN, AND run_attempt IS NOT OPTIONAL. A re-run reuses
+          # run_id, and two hosts sharing one identity is the clone bug in a new
+          # costume — we have paid for that lesson once already.
+          AGENT_FLEET_HOST_ID: gha-mac-${{ github.run_id }}-${{ github.run_attempt }}
+          AGENT_FLEET_COORDINATOR_URL: ${{ inputs.coordinator }}
+          AGENT_FLEET_LABELS: ${{ inputs.labels }}
+          # NO SANDBOX. Rootless podman on a macOS runner means a Linux VM
+          # inside a VM, which is slow where it works at all — and the sandbox
+          # exists to protect a machine that persists. This one is destroyed in
+          # an hour by something more thorough than a container boundary.
+          AGENT_HUB_SANDBOX: '0'
+          AGENT_HUB_WORKDIR: ${{ runner.temp }}/work
+          AGENT_HUB_STATE_DIR: ${{ runner.temp }}/state
+          # EVERY ABSOLUTE DEFAULT HAS TO MOVE, not just the obvious one. These
+          # default to /var/lib and /run, which on a macOS runner are either
+          # unwritable without sudo or simply not there — and the failure is
+          # `enrol` dying on EACCES before the host ever appears in the fleet.
+          #
+          # The state directory holds agent-hub's generated API token, and the
+          # sidecar finds that token by reading AGENT_HUB_STATE_DIR itself. So
+          # both processes must be given the same one, which is why it is here
+          # rather than only on the hub.
+          AGENT_FLEET_HOST_KEY: ${{ runner.temp }}/state/host-key.json
+          AGENT_FLEET_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
+          MINUTES: ${{ inputs.minutes }}
+          PIN: ${{ inputs.pin }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+          chmod 700 "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+
+          # The session manager first: the sidecar talks to it on loopback and
+          # is useless without it.
+          node bin/agent-hub serve &
+          HUB=$!
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
+          done
+
+          node bin/agent-fleet-sidecar enrol "$PIN"
+
+          # THE JOB ENDING IS THE DISCONNECT, and the disconnect is what retires
+          # this host and revokes its key. So the sidecar runs in the
+          # foreground for exactly as long as we mean to be a host, and exiting
+          # normally is the cleanup — there is nothing to remember to do.
+          set +e
+          node bin/agent-fleet-sidecar &
+          SIDECAR=$!
+          echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
+          echo "::notice::It has no Claude account yet — connect one to this host from the app."
+          sleep "$(( MINUTES * 60 ))"
+
+          # Politely, then not. A sidecar given the chance to close its socket
+          # tells the coordinator it is going; one that is killed leaves the
+          # coordinator waiting for a heartbeat from a machine that no longer
+          # exists.
+          kill -TERM "$SIDECAR" 2>/dev/null || true
+          for _ in $(seq 1 10); do kill -0 "$SIDECAR" 2>/dev/null || break; sleep 1; done
+          kill -KILL "$SIDECAR" 2>/dev/null || true
+          kill -TERM "$HUB" 2>/dev/null || true
