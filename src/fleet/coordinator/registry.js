@@ -284,6 +284,32 @@ export class HostRegistry {
   }
 
   /**
+   * Fold sessions from a reply into what this host is known to hold.
+   *
+   * A health frame is the normal source and stays authoritative — this only
+   * fills the gap between a host confirming it started something and the frame
+   * that says so arriving. Merged by name rather than replacing the list: a
+   * single `start` reply describes one session, and treating it as the whole
+   * truth would erase every other session on that box until the next frame.
+   *
+   * @param {string} hostId
+   * @param {Array<any>} sessions
+   */
+  noteSessions(hostId, sessions) {
+    const host = this.hosts.get(hostId);
+    if (!host?.health || !Array.isArray(sessions)) return;
+    const known = Array.isArray(host.health.sessions) ? [...host.health.sessions] : [];
+    for (const s of sessions) {
+      if (!s || typeof s.name !== 'string') continue;
+      const at = known.findIndex((k) => k?.name === s.name);
+      const row = { name: s.name, status: String(s.status || 'running'), createdBy: s.createdBy ?? null };
+      if (at >= 0) known[at] = { ...known[at], ...row };
+      else known.push(row);
+    }
+    host.health.sessions = known;
+  }
+
+  /**
    * EVERY host claiming a session of this name.
    *
    * findSession returned the first match in Map order, and this codebase says

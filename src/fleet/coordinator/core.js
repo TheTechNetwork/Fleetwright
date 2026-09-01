@@ -851,7 +851,25 @@ export class CoordinatorCore {
     }
 
     try {
-      return explainUnknownVerb(await this.send(placement.host, spec), placement.host);
+      const answer = explainUnknownVerb(await this.send(placement.host, spec), placement.host);
+      // THE SESSION IS REAL THE MOMENT THE HOST SAYS SO, not when the next
+      // health frame happens to arrive.
+      //
+      // The registry learns which sessions exist only from those frames, and
+      // placement for `status`, `peek` and `await` reads that list — so `start`
+      // answered "Started X" and an await one call later was refused with "No
+      // host reports a session named X. It may exist on a host that is
+      // currently offline", about a session the same host had just confirmed
+      // creating. Pushing health after `start` narrowed the window; it did not
+      // close it, because the frame still has to travel.
+      //
+      // The reply already carries the record. Believing it costs nothing: the
+      // next real frame overwrites this, and a session the host invented is a
+      // session the host has.
+      if (answer?.ok !== false && Array.isArray(answer?.sessions)) {
+        this.registry.noteSessions(placement.host?.hostId || '', answer.sessions);
+      }
+      return answer;
     } catch (e) {
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }

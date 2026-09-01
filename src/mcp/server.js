@@ -589,7 +589,19 @@ export class McpServer {
     // starts the watcher. Harmless while they agreed; the next edit to one of
     // them is where that stops being true.
     if (reply?.ok !== false) {
-      const named = String(params.name || reply?.name || '');
+      // THE NAME THE FLEET CHOSE, when the caller did not choose one.
+      //
+      // This read `params.name || reply.name`, and a reply has no `name` — it
+      // carries `sessions: [record]`, the same shape that made fleet_await
+      // blind. So `start` with no name recorded NOTHING, and the session the
+      // fleet had just auto-named was unstoppable for the rest of the
+      // conversation: `stop` answered "not started in this conversation",
+      // which was false, about a session started fifteen seconds earlier.
+      //
+      // An agent worked this out from behaviour alone — the named session
+      // stopped, the auto-named one never did — after three attempts at the
+      // wrong fix, and left an idle session occupying a slot.
+      const named = String(params.name || sessionFrom(reply)?.name || '');
       if (named && (tool.verb === 'start' || tool.verb === 'resume')) {
         this.started.add(named);
         this.#watchStarted();

@@ -423,7 +423,13 @@ test('read_log is the session half of logs, and says why it is not peek', () => 
   // collecting a job's output.
   assert.equal('service' in tool.inputSchema.properties, false);
   assert.deepEqual(tool.inputSchema.required, ['name']);
-  assert.match(tool.description, /Survives the session ending/);
+  // It used to promise "Survives the session ending", and an agent that
+  // believed it followed the documented order — collect, then stop — and was
+  // answered "no container and no pane" by the tool that had promised to
+  // survive. Output lives in the container; a STOP removes it. The order is
+  // stated on both tools now.
+  assert.match(tool.description, /BEFORE YOU STOP THE SESSION/);
+  assert.match(String(toolsFor().find((t) => t.name === 'fleet_stop')?.description), /fleet_read_log FIRST/);
 });
 
 // --- the notification convention, followed ----------------------------------
