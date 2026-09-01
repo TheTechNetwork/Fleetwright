@@ -437,6 +437,15 @@ jobs:
   # External testers are the public, so this is NOT every commit on main. A
   # published release is a decision somebody made, which is the right shape for
   # a delivery that Apple reviews and that real people install.
+  #
+  # EVERY published release, prereleases included — that is the grammar:
+  #
+  #   prerelease published   external TestFlight only
+  #   release published      external TestFlight AND the App Store (below)
+  #
+  # So "mark as prerelease" is how a build goes in front of external testers
+  # without going in front of everybody, and clearing the box is the whole of
+  # the promotion. One flag, GitHub's own, meaning exactly what it says.
   distribute-external:
     name: distribute to external testers
     needs: testflight
@@ -461,3 +470,49 @@ jobs:
           # people who will read it.
           WHATS_NEW: ${{ github.event.release.body || github.event.release.name }}
         run: node tools/testflight-distribute.mjs
+
+  # THE APP STORE. Only a FULL release — a prerelease stops at external
+  # TestFlight above, which is what the prerelease box is for. This is the iOS
+  # half of the Android grammar (android.yml ships Play production on the same
+  # event): publishing a release IS the decision to ship to everybody, and
+  # nothing else in the pipeline is allowed to mean that.
+  #
+  # The tool creates the App Store version named by the build's own version
+  # train, attaches the build, carries the release notes over, and submits for
+  # App Review. releaseType is AFTER_APPROVAL, so approval is the last human
+  # step anywhere: when Apple says yes it is live, with no third state where a
+  # green pipeline and an unshipped app are both true.
+  #
+  # What it cannot do is finish the LISTING — description, screenshots,
+  # privacy, rating are once-ever answers given by hand in App Store Connect,
+  # and the first run of this job fails with Apple naming what is missing
+  # until they are. The checklist is in docs/ci.md.
+  #
+  # Re-runs are safe: an editable version is reused, a submitted one is left
+  # alone, and a version already on the store says so and asks for a
+  # MARKETING_VERSION bump by name.
+  release-app-store:
+    name: submit to the App Store
+    needs: testflight
+    if: >-
+      github.event_name == 'release' && !github.event.release.prerelease
+      && needs.testflight.outputs.uploaded == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Create the App Store version and submit it for review
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: network.thetech.fleetwright
+          BUILD_NUMBER: ${{ github.run_number }}
+          # The public "What's New in This Version", verbatim — the release
+          # body is the one text somebody wrote knowing the public would read
+          # it.
+          WHATS_NEW: ${{ github.event.release.body || github.event.release.name }}
+        run: node tools/appstore-release.mjs

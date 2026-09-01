@@ -14,6 +14,7 @@ never given.
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
 | `ios.yml` — `testflight` | published release | App Store Connect |
+| `ios.yml` — `release-app-store` | **full** release (not a prerelease) | App Store Connect |
 | `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
 
@@ -128,7 +129,13 @@ whatever it is given.
 | event | track | who |
 |---|---|---|
 | push to `main` | **open testing** (`beta`) | anybody who found the listing and joined |
+| **prerelease** published | **open testing** (`beta`) | the same testers — a rehearsal of the release path |
 | release published | **production** | everybody |
+
+A release marked *prerelease* stays on the commit track. The box literally
+says "not ready for production", and it used to ship to production anyway,
+because only the event name was consulted. Same grammar as iOS: prerelease
+means testers, clearing the box means everybody.
 
 The app is public — [listing](https://play.google.com/store/apps/details?id=network.thetech.fleetwright) —
 so a merge no longer lands somewhere private. Open testing is the right place
@@ -332,11 +339,20 @@ are notified by App Store Connect as usual.
 | audience | when | what happens |
 |---|---|---|
 | **internal** | every commit to `main` touching `apps/ios/**` | assigned to the internal group, available immediately |
-| **external** | only a **published GitHub release** | assigned to the external group, then submitted for Beta App Review |
+| **external** | any **published GitHub release**, prereleases included | assigned to the external group, then submitted for Beta App Review |
+| **the App Store** | only a **full release** (prerelease box clear) | App Store version created, build attached, submitted for App Review |
 
 External is not every commit on purpose. Those testers are the public, Apple
 reviews the first build, and a release is a decision somebody made — which is
 the right shape for a delivery real people install.
+
+The prerelease box is the whole staging mechanism: mark a release as a
+prerelease and it stops at external TestFlight; publish one with the box clear
+and the same pipeline goes all the way to the store. One flag, GitHub's own,
+meaning exactly what it says. Unticking the box on an existing release does
+**not** promote it — the workflow fires on `published`, and an edit is not a
+publish. Promotion is a new release, which also gets a new build number, which
+is what App Store Connect requires anyway.
 
 **Turn on automatic distribution for the internal group as well.** TestFlight →
 Internal Testing → the group → *Automatic distribution*. It is not redundant
@@ -381,6 +397,50 @@ Export compliance is answered in the bundle (`ITSAppUsesNonExemptEncryption:
 false`, correct because the app uses HTTPS and nothing else), so builds do not
 stop at "Missing Compliance" — which would otherwise leave a build that looks
 delivered and reaches nobody.
+
+### The App Store — production on a full release
+
+`tools/appstore-release.mjs` runs on a full release (prerelease box clear),
+after the same upload the TestFlight jobs use. It waits for the build to
+process, creates the App Store version — named by the build's own version
+train, i.e. `MARKETING_VERSION` at the tagged commit, read back from the build
+so the two cannot drift — attaches the build, carries the release body over as
+"What's New in This Version", and submits the version for App Review.
+
+`releaseType` is **AFTER_APPROVAL**: when Apple approves, it is live. The same
+choice as not defaulting `PLAY_ROLLOUT` — a shipment the pipeline cannot
+finish is a shipment it should not start, and "approved but waiting for a
+click nobody knows they owe" is that in different clothes. A phased release,
+if ever wanted, is a checkbox on the version in App Store Connect and does not
+change this job.
+
+Re-runs are safe, and are the recovery for everything slow or rejected:
+
+- build still processing after 45 minutes → **warning, green**, re-run later;
+- version exists and is editable (including **rejected** — fix, publish a new
+  release or re-run) → reused, newest build attached;
+- version already waiting for or in review → says so, green, done;
+- version already **on the store** → the one real refusal: bump
+  `MARKETING_VERSION` in `apps/ios/project.yml` and publish a new release.
+
+**The first submission fails until the listing exists**, and that is Apple
+naming decisions no API should make. Once, by hand, in App Store Connect, on
+the version page:
+
+| | |
+|---|---|
+| Description, promotional text, keywords, support URL | written for the store page |
+| Screenshots | 6.9" and 6.5" iPhone at minimum; from a running app, like the Play ones |
+| Privacy policy URL | `https://fleet.thetech.network/privacy`, same as Play |
+| App Privacy | **no data collected** — same answer and same caveat as Play's data safety form: it changes the day the FCM SDK ships a device identifier |
+| Age rating | the questionnaire; utility, no user-generated content → 4+ |
+| Category | Developer Tools |
+| Pricing and availability | free, all territories — set once, outlives versions |
+
+After a rejection the version drops back to editable: address the review
+notes, then re-run the job (same build) or publish a fresh release (new
+build). Nothing needs to be re-typed — the listing fields persist across
+versions.
 
 ### The app icon is generated
 
