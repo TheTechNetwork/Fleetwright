@@ -209,9 +209,41 @@ export function isSafeRedirect(uri) {
   if (url.protocol === 'https:') return true;
   if (url.protocol === 'http:') return url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]';
   // A custom scheme, which is how a desktop app receives one. No host to
-  // reason about, so the registration is the only check there can be.
-  return /^[a-z][a-z0-9+.-]*:$/.test(url.protocol) && url.protocol !== 'javascript:' && url.protocol !== 'data:';
+  // reason about, so the shape of the scheme is the only check there can be.
+  return /^[a-z][a-z0-9+.-]*:$/.test(url.protocol) && !NEVER_NAVIGATE.has(url.protocol);
 }
+
+/**
+ * Schemes this must never hand to a browser.
+ *
+ * THE CODE IS DELIVERED BY NAVIGATING TO THE REDIRECT — authorize-page.js sets
+ * `location.href` to it. So a `javascript:` or `vbscript:` redirect_uri does not
+ * redirect anywhere: it RUNS, in the coordinator's own origin, on a page that
+ * has just handled somebody's ID token. Registration is open by design, so
+ * anybody can put one there.
+ *
+ * This started as two exclusions, `javascript:` and `data:`, which is the shape
+ * CodeQL calls an incomplete scheme check and it was right to: the set was
+ * chosen by what came to mind. It is now every scheme a browser executes or that
+ * addresses local content.
+ *
+ * A DENYLIST IS THE WEAKER SHAPE and it is deliberate. The strong rule is
+ * RFC 8252 §7.1 — a private-use scheme must be reverse-DNS, `com.example.app:`
+ * — and every scheme here fails a dot test, so it would be a clean allowlist.
+ * It also refuses `vscode://` and `cursor://`, which are real clients that
+ * register real single-label schemes. Refusing them to satisfy a rule they were
+ * never going to follow trades a working integration for a tidier check.
+ */
+const NEVER_NAVIGATE = new Set([
+  'javascript:',
+  'vbscript:',
+  'data:',
+  'blob:',
+  'file:',
+  'filesystem:',
+  'about:',
+  'view-source:',
+]);
 
 /**
  * The PKCE challenge for a verifier: base64url(SHA-256(verifier)), unpadded.

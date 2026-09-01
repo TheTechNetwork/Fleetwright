@@ -45,6 +45,29 @@ export function isMcpPath(path) {
 }
 
 /**
+ * The token out of an `Authorization: Bearer …` header.
+ *
+ * NOT a regular expression, and that is the whole point. This was
+ * `/^Bearer\s+(.+)$/i`, in which `\s+` and `(.+)` can each claim the same run
+ * of spaces — so a header of "bearer" followed by several thousand spaces makes
+ * the engine try every split between them. Quadratic, on a header an anonymous
+ * caller chooses, on the ONE route that must answer before anybody is
+ * authenticated. Header size limits cap it rather than prevent it.
+ *
+ * Splitting at the first space is linear and says the same thing.
+ *
+ * @param {string|null} header
+ * @returns {string|null}
+ */
+function bearer(header) {
+  const raw = String(header || '');
+  const space = raw.indexOf(' ');
+  if (space < 0) return null;
+  if (raw.slice(0, space).toLowerCase() !== 'bearer') return null;
+  return raw.slice(space + 1).trim() || null;
+}
+
+/**
  * @typedef {object} Deps
  * @property {import('./oauth.js').Authorizations} authorizations
  * @property {(token: string) => Promise<{ email?: string, admin?: boolean }|null>} verifyCredential
@@ -172,7 +195,7 @@ export async function mcpRoutes(req, deps) {
       // there is none rather than leaving it waiting for events.
       return { status: 405, json: { error: 'this endpoint takes POST' } };
     }
-    const token = /^Bearer\s+(.+)$/i.exec(req.authorization || '')?.[1];
+    const token = bearer(req.authorization);
     const client = token ? await deps.verifyCredential(token) : null;
     if (!client?.email) {
       // THE 401 IS THE ENTRY POINT. Without this header a client has no way to

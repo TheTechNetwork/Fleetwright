@@ -107,8 +107,12 @@ test('register, sign in, spend the code, and talk MCP', async (t) => {
   // The Google client id out of the audience list, and no Apple button, because
   // no Services ID is configured. An Apple button that cannot work is worse
   // than none: it fails at Apple with `invalid_client` and explains nothing.
-  assert.equal(html.includes('123-abc.apps.googleusercontent.com'), true);
-  assert.equal(html.includes('appleid'), false);
+  //
+  // Matched WHERE IT IS USED, not merely present somewhere in the page. A bare
+  // includes() of a hostname passes if the string turns up in a comment, and
+  // CodeQL flags the shape for the same reason it is a weak assertion.
+  assert.match(html, /client_id: "123-abc\.apps\.googleusercontent\.com"/);
+  assert.equal(/appleid/.test(html), false);
 
   // Signing in for real needs Google to sign something, so the ID token is the
   // one thing stubbed — issueCode is what the POST would have called.

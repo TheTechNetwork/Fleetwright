@@ -43,9 +43,30 @@ test('a redirect must be somewhere a code can safely land', () => {
   assert.equal(isSafeRedirect('myapp://auth'), true);
 
   assert.equal(isSafeRedirect('http://evil.example/steal'), false);
-  assert.equal(isSafeRedirect('javascript:alert(1)'), false);
-  assert.equal(isSafeRedirect('data:text/html,hi'), false);
   assert.equal(isSafeRedirect('not a url'), false);
+
+  // THE CODE IS DELIVERED BY NAVIGATING TO THIS ADDRESS — authorize-page.js
+  // sets location.href to it. So these do not redirect anywhere: they RUN, in
+  // the coordinator's own origin, on the page that has just handled somebody's
+  // ID token. Registration is open, so anybody can put one there.
+  //
+  // The first version excluded `javascript:` and `data:`, which is a set chosen
+  // by what came to mind. CodeQL called it an incomplete scheme check and was
+  // right — `vbscript:` went straight through.
+  for (const scheme of [
+    'javascript:alert(1)',
+    'vbscript:msgbox(1)',
+    'data:text/html,hi',
+    'blob:https://fleet.example/x',
+    'file:///etc/passwd',
+    'about:blank',
+    'view-source:https://fleet.example/',
+  ]) {
+    assert.equal(isSafeRedirect(scheme), false, scheme);
+  }
+  // Case is not a way around it: the URL parser lowercases the scheme.
+  assert.equal(isSafeRedirect('JavaScript:alert(1)'), false);
+  assert.equal(isSafeRedirect('VBScript:msgbox(1)'), false);
 });
 
 test('registration grants nothing on its own', async () => {
@@ -166,19 +187,73 @@ test('a blocking tool is capped below the transport\'s timeout', async () => {
   // Over stdio a five-minute wait is a five-minute wait. Over HTTP an uncapped
   // one is a dropped connection, and a client cannot tell a slow session from a
   // broken server.
-  let asked = 0;
+  //
+  // ON AN INJECTED CLOCK. Proving a 25-second cap by waiting 25 seconds put
+  // exactly that into every run of the test suite — for a property a fake clock
+  // establishes precisely, and a real one only approximately.
+  let clock = 0;
   const r = await handleMcpRequest({
     body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fleet_await', arguments: { name: 'x', seconds: 900 } } },
     credential: 'fwk_a_b',
     coordinator: 'https://fleet.example',
-    fetch: async () => {
-      asked++;
-      return { status: 200, json: async () => ({ ok: true, session: { status: 'running' } }) };
+    now: () => clock,
+    sleep: async (/** @type {number} */ ms) => {
+      clock += ms;
     },
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, session: { status: 'running' } }) }),
   });
+  // It asked for 900 seconds and the transport's ceiling won.
+  assert.ok(clock <= 25_000, `waited ${clock}ms, which is past the ceiling`);
   // It answered rather than hanging, and told the caller how to keep waiting.
   assert.match(r.body.result.content[0].text, /still running after 25s/);
   assert.match(r.body.result.content[0].text, /call fleet_await again/);
+});
+
+test('the Authorization header is parsed without a regular expression', async () => {
+  // `/^Bearer\s+(.+)$/i` is quadratic: `\s+` and `(.+)` can each claim the same
+  // run of spaces, so the engine tries every split between them. On the ONE
+  // route that must answer before anybody is authenticated, with a header an
+  // anonymous caller chooses. Header size limits cap that rather than prevent it.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  const deps = /** @type {any} */ ({
+    authorizations: new Authorizations(),
+    verifyCredential: async (/** @type {string} */ t) => (t === 'good' ? { email: 'e@x.com' } : null),
+    verifyIdentity: async () => ({ ok: false, status: 401, text: 'no' }),
+    issueCredential: async () => ({ token: 'fwk_x' }),
+    save: () => {},
+    signIn: {},
+  });
+  /** @param {string|null} authorization */
+  const call = (authorization) =>
+    mcpRoutes(
+      {
+        method: 'POST',
+        path: '/mcp',
+        origin: ORIGIN,
+        query: new URLSearchParams(),
+        body: { jsonrpc: '2.0', id: 1, method: 'ping' },
+        authorization,
+      },
+      deps,
+    );
+
+  // The pathological input, answered promptly rather than eventually.
+  const started = Date.now();
+  const evil = await call(`bearer${' '.repeat(50_000)}`);
+  assert.equal(evil.status, 401);
+  assert.ok(Date.now() - started < 1000, 'parsing the header should not depend on its length squared');
+
+  // And it still parses the ordinary ones. The scheme is case-insensitive per
+  // RFC 7235; the token is not.
+  assert.equal((await call('Bearer good')).status, 200);
+  assert.equal((await call('bearer good')).status, 200);
+  // RFC 7235 allows 1*SP after the scheme, and the regex this replaced
+  // accepted it too — the trim keeps that tolerance without paying for it.
+  assert.equal((await call('Bearer  good')).status, 200);
+  assert.equal((await call('Bearer good ')).status, 200);
+  assert.equal((await call('Basic good')).status, 401);
+  assert.equal((await call('Bearer')).status, 401);
+  assert.equal((await call(null)).status, 401);
 });
 
 // --- the one page a person sees ---------------------------------------------

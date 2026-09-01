@@ -57,9 +57,16 @@ export const MAX_REMOTE_WAIT_MS = 25_000;
  * @param {string} opts.credential   the caller's device token
  * @param {string} opts.coordinator  origin to send intents to
  * @param {typeof fetch} [opts.fetch]
+ * @param {() => number} [opts.now]                 the clock, for tests
+ * @param {(ms: number) => Promise<void>} [opts.sleep]  the wait, for tests
+ *
+ * `now` and `sleep` are the same seam `fetch` is, and exist for the same
+ * reason: the only way to prove a 25-second cap with a real clock is to wait
+ * 25 seconds, on every run, forever. A test that slow is one people start
+ * skipping.
  * @returns {Promise<{ status: number, body: any|null }>}
  */
-export async function handleMcpRequest({ body, credential, coordinator, fetch: doFetch = fetch }) {
+export async function handleMcpRequest({ body, credential, coordinator, fetch: doFetch = fetch, now, sleep }) {
   if (!body || typeof body !== 'object') {
     return { status: 400, body: { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'not JSON-RPC' } } };
   }
@@ -76,6 +83,8 @@ export async function handleMcpRequest({ body, credential, coordinator, fetch: d
     // this transport has nowhere to put.
     watchMs: 0,
     maxWaitMs: MAX_REMOTE_WAIT_MS,
+    ...(now ? { now } : {}),
+    ...(sleep ? { sleep } : {}),
   });
 
   // A BATCH IS A LIST. The spec allows one, and a client that sends one to a
