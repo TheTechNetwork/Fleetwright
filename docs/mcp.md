@@ -189,20 +189,67 @@ passes.
 
 | | `tools/*` | `logging` (`notifications/message`) | how established |
 |---|---|---|---|
-| the protocol itself | required | optional, server-declared | [MCP spec](https://modelcontextprotocol.io), revision `2024-11-05` |
-| this server | ✅ | ✅ declared and emitted | `test/mcp.test.js` — 32 tests, two of which spawn the binary and drive it over a real pipe |
-| Claude Desktop | **untested here** | **untested here** | — |
-| Claude Code | **untested here** | **untested here** | — |
-| any other client | **untested here** | **untested here** | — |
+| this server | ✅ | ✅ declared and emitted | `test/mcp.test.js`, 35 tests — two spawn the binary and drive it over a real pipe |
+| **Claude Code 2.1.251** | ✅ **verified** | ❌ **client does not advertise `logging`** | `scripts/check-mcp-client.mjs`, 1 Sep 2026 — full round trip, tool called, intent reached a fleet |
+| Claude Desktop | untested here | untested here | — |
+| any other client | untested here | untested here | — |
 
-Filling those rows in means running the server against each client and watching
-what arrives. Until somebody has, the honest entry is the empty one — and
-`fleet_await` is why an unfilled row costs nothing: the guaranteed path does not
-depend on any of them.
+**Claude Code, measured rather than assumed:**
 
-**What a client does with a notification** it supports is still its own
-decision: surface it to the model, show it to the person, or log it. That is
-outside this server's reach and worth knowing before relying on the timing.
+```
+client             : claude-code 2.1.251
+protocol offered   : 2025-11-25   agreed: 2025-11-25
+client capabilities: {"roots":{"listChanged":true},"elicitation":{}}
+tools called       : fleet_list
+reached the fleet  : {"verb":"list","params":{}}
+result             : "sunlit-harbor running on deb132"   is_error: false
+logging/setLevel   : never sent
+```
+
+Its capability object has **no `logging`**, so `notifications/message` is very
+likely dropped. That is a fact about a client, not a fault in either — and it is
+exactly why `fleet_await` is the guaranteed path and the notification is the
+courtesy. On this client, today, the courtesy does nothing.
+
+**The first run of that harness found a real bug**, which is the argument for
+having it. The server answered every `initialize` with a hardcoded
+`2024-11-05`; Claude Code opens with `2025-11-25`, reported
+
+```
+Client.listTools() called but server does not advertise tools capability
+```
+
+and called nothing. Thirty-two unit tests passed throughout. The server was
+correct in isolation and invisible in practice — a hardcoded version is not
+following the convention, it is ignoring the half of the handshake that exists
+to be answered. It negotiates now, and a test holds it.
+
+## Automating this
+
+```sh
+node scripts/check-mcp-client.mjs
+```
+
+It stands up a fake fleet on loopback, puts a tee between the client and the
+server so the **wire is the evidence**, runs `claude -p` with `--mcp-config`,
+and reports what the client actually did. Without the tee a failure is "the
+model did not use the tool", which is not something anybody can act on.
+
+**Not part of `verify.sh`.** It needs the `claude` CLI and a working credential,
+and a check that fails on a contributor's laptop for want of a login is a check
+people learn to ignore. Run it when the server changes or the client updates,
+and paste the output into the table above.
+
+### Claude Desktop cannot be driven this way
+
+It is a GUI with no headless mode and no `--mcp-config`. What can be automated is
+everything up to it: the config file this document tells you to write is JSON
+that either parses or does not, and the command inside it either starts or does
+not — both of which `check-mcp-client.mjs` already covers, because Desktop
+launches the same binary the same way.
+
+What is left is a person watching what the app does with a notification, which
+is why that row says untested rather than a guess.
 
 **A tool that blocks needs no waking.** `fleet_await` returns the moment the
 session needs an answer, ends, or errors — and the return value *is* the

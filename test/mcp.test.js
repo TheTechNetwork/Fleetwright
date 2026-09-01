@@ -504,3 +504,42 @@ test('watching can be turned off entirely', async () => {
   assert.equal(server.watching, false);
   assert.equal(written.filter((m) => m.method === 'notifications/message').length, 0);
 });
+
+// --- the handshake ----------------------------------------------------------
+
+test('the protocol version is negotiated, not announced', async () => {
+  // THE BUG A REAL CLIENT FOUND AND THIRTY-TWO TESTS DID NOT. This server
+  // answered every initialize with a hardcoded '2024-11-05'. Claude Code
+  // 2.1.251 opens with '2025-11-25', and reported:
+  //
+  //   Client.listTools() called but server does not advertise tools capability
+  //
+  // — then called nothing. The server was correct in isolation and invisible in
+  // practice. A hardcoded version is not following the convention; it is
+  // ignoring the half of the handshake that exists to be answered.
+  const { server, written } = serverWith();
+  await server.handleLine(rpc(1, 'initialize', { protocolVersion: '2025-11-25' }));
+  assert.equal(written[0].result.protocolVersion, '2025-11-25');
+});
+
+test('a revision we know is echoed, and one we do not gets ours', async () => {
+  // The spec's rule: echo the client's version when supported, otherwise answer
+  // with your own and let the client decide whether to continue.
+  for (const [asked, expected] of [
+    ['2025-11-25', '2025-11-25'],
+    ['2024-11-05', '2024-11-05'],
+    ['1999-01-01', '2025-11-25'],
+    [undefined, '2025-11-25'],
+  ]) {
+    const { server, written } = serverWith();
+    await server.handleLine(rpc(1, 'initialize', asked ? { protocolVersion: asked } : {}));
+    assert.equal(written[0].result.protocolVersion, expected, `asked ${asked}`);
+  }
+});
+
+test('tools are advertised on every revision we accept', () => {
+  // The capability itself was never the problem, which is why this asserts the
+  // pairing rather than the field: a version mismatch is what made a correctly
+  // declared capability unreadable.
+  assert.ok(toolsFor().length > 0);
+});

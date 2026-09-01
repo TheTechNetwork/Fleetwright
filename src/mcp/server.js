@@ -21,8 +21,25 @@
 
 import { toolsFor, DEFAULT_DENY } from './tools.js';
 
-/** MCP revision this speaks. Echoed back at initialize. */
-const PROTOCOL = '2024-11-05';
+/**
+ * MCP revisions this server understands, newest first.
+ *
+ * NEGOTIATED, NOT ANNOUNCED. This used to be one constant answered to every
+ * client regardless of what they asked for, and Claude Code 2.1.251 — which
+ * opens with `2025-11-25` — responded by reporting
+ *
+ *     Client.listTools() called but server does not advertise tools capability
+ *
+ * and calling no tools at all. Every unit test passed; the server was simply
+ * invisible. A hardcoded version is not "following the convention", it is
+ * ignoring the half of the handshake that exists to be answered.
+ *
+ * The spec's rule is: echo the client's version if you support it, otherwise
+ * answer with your own and let the client decide. Nothing in `tools/list` or
+ * `tools/call` differs across these revisions, so supporting them is a matter
+ * of saying so.
+ */
+const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
 /**
  * @typedef {object} Options
@@ -305,9 +322,13 @@ export class McpServer {
   /** @param {any} message */
   async #dispatch(message) {
     switch (message.method) {
-      case 'initialize':
+      case 'initialize': {
+        // The client's revision when it is one we know; ours otherwise, which
+        // is what tells a client it is talking to something older.
+        const asked = String(message.params?.protocolVersion || '');
+        const agreed = PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0];
         return {
-          protocolVersion: PROTOCOL,
+          protocolVersion: agreed,
           // LOGGING, because that is the convention for a server with something
           // to say. Support varies — some clients surface these to the model,
           // some show them to the person, some drop them — and that is the
@@ -324,6 +345,7 @@ export class McpServer {
           // built, and it is honest about who is deciding.
           instructions: this.#instructions(),
         };
+      }
       // Notifications. Answered with undefined so nothing is written.
       case 'notifications/initialized':
       case 'notifications/cancelled':
