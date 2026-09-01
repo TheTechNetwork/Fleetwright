@@ -87,20 +87,38 @@ writeFileSync(
   }),
 );
 
-const run = spawnSync(
-  'claude',
-  [
-    '-p',
-    'List the fleet sessions using the MCP tool. Reply with only what the tool returned.',
-    '--mcp-config', config,
-    '--allowedTools', 'mcp__fleetwright__fleet_list',
-    '--output-format', 'json',
-  ],
-  { encoding: 'utf8', timeout: 180_000, cwd: ROOT },
-);
+// ASYNC, AND THIS IS NOT A STYLE CHOICE. The first version used spawnSync,
+// which blocks Node's event loop — so the fake fleet created above never
+// accepted a connection, and the harness reported
+//
+//   tools called      : fleet_list
+//   reached the fleet : NOTHING
+//
+// which reads as a broken server and was a broken harness. The manual version
+// of this ran the fleet as a SEPARATE PROCESS and worked, which is exactly how
+// a test tool ends up trusted while being wrong.
+const out = await new Promise((resolve) => {
+  const child = spawn(
+    'claude',
+    [
+      '-p',
+      'List the fleet sessions using the MCP tool. Reply with only what the tool returned.',
+      '--mcp-config', config,
+      '--allowedTools', 'mcp__fleetwright__fleet_list',
+      '--output-format', 'json',
+    ],
+    { cwd: ROOT },
+  );
+  let stdout = '';
+  child.stdout.on('data', (c) => (stdout += c));
+  child.stderr.on('data', () => {});
+  const killer = setTimeout(() => child.kill('SIGKILL'), 180_000);
+  child.on('close', () => {
+    clearTimeout(killer);
+    resolve(stdout);
+  });
+});
 fleet.close();
-
-const out = run.stdout || '';
 const parsed = (() => {
   try {
     return JSON.parse(out.slice(out.indexOf('{')));
