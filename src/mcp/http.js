@@ -34,6 +34,43 @@
 import { McpServer } from './server.js';
 
 /**
+ * What each credential has started, across requests.
+ *
+ * A NEW McpServer PER REQUEST MEANS NO MEMORY, and `stop` is scoped to "what
+ * you started in this conversation". Over HTTP that set began empty on every
+ * call, so a remote agent was refused permission to stop the session IT HAD
+ * STARTED ONE REQUEST EARLIER — told it "belongs to somebody who is probably
+ * still using it", which was false twice over.
+ *
+ * The instructions delivered over this same transport say to clean up. An
+ * agent could not comply, and on a paid-by-the-minute runner that is the exact
+ * failure the comment above `stop` uses to justify exposing it at all.
+ *
+ * A conversation over HTTP is a credential, so that is the key. Hashed rather
+ * than stored raw: this map outlives a request and there is no reason for a
+ * long-lived object to hold live tokens. Swept on write, so it needs no timer.
+ */
+const STARTED = new Map();
+const STARTED_TTL_MS = 12 * 60 * 60_000;
+
+/** @param {string} credential */
+async function startedFor(credential) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(credential));
+  const key = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const now = Date.now();
+  for (const [k, v] of STARTED) if (now - v.at > STARTED_TTL_MS) STARTED.delete(k);
+  const found = STARTED.get(key);
+  if (found) {
+    found.at = now;
+    return found.names;
+  }
+  /** @type {Set<string>} */
+  const names = new Set();
+  STARTED.set(key, { names, at: now });
+  return names;
+}
+
+/**
  * How long a blocking tool may wait before answering on a remote transport.
  *
  * Under a platform request limit rather than near it. A Worker gives a request
@@ -75,6 +112,8 @@ export async function handleMcpRequest({ body, credential, coordinator, fetch: d
     coordinator,
     credential,
     fetch: doFetch,
+    // Carried across requests, because this transport has no other memory.
+    started: await startedFor(credential),
     // NOTHING TO WRITE TO. Over stdio the server may speak unprompted; here
     // there is no open channel, so a stray write would be a silent no-op rather
     // than an error. Making it explicit stops somebody adding one and wondering.

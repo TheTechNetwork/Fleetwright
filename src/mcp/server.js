@@ -53,6 +53,7 @@ const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
  * @property {() => number} [now]
  * @property {(ms: number) => Promise<void>} [sleep]
  * @property {number} [watchMs]   how often to look at started sessions; 0 disables
+ * @property {Set<string>|null} [started]  sessions this caller started, when the transport keeps them
  * @property {number} [maxWaitMs]  ceiling on a blocking tool, for transports with
  *   a request timeout. Over stdio a long wait is just a long wait; over HTTP an
  *   uncapped one is a dropped connection, which a client cannot tell from a
@@ -86,25 +87,67 @@ function describeFailure(e) {
     : `Could not reach the fleet: ${message}. The fleet may be down or this coordinator unreachable; retrying is reasonable.`;
 }
 
+/**
+ * The session record out of a `status` reply.
+ *
+ * THE REPLY HAS NEVER HAD A `session` KEY. Both callers read
+ * `reply.session ?? reply` and then `.status`, which is `undefined` on every
+ * real fleet — the coordinator answers `{ ok, text, sessions: [record] }`, the
+ * shape `/status <name>` has always returned (src/adapters/commands.js).
+ *
+ * So `fleet_await` — the tool this server calls the path that works — could
+ * never see a session end, and polled until its own timeout while telling the
+ * caller it was "still running". The watcher shared the parse and therefore
+ * emitted no notification, ever, on a live fleet.
+ *
+ * IT PASSED BECAUSE THE FAKE FLEET INVENTED THE SHAPE. `check-mcp-client.mjs`
+ * answers `{ ok: true, session: { status: 'stopped' } }`, so the feature was
+ * correct against the harness and blind against the coordinator. That is a
+ * THIRD way that harness has lied, on top of the two already written down in
+ * it — and the reason its fake now answers in the real shape.
+ *
+ * Matched by name when there is one, because `list` returns many.
+ *
+ * @param {any} reply
+ * @param {string} [name]
+ */
+function sessionFrom(reply, name = '') {
+  const many = Array.isArray(reply?.sessions) ? reply.sessions : null;
+  if (many) {
+    const found = name ? many.find((/** @type {any} */ s) => s?.name === name) : many[0];
+    if (found) return found;
+  }
+  // `session` and the bare reply are kept as fallbacks rather than deleted: a
+  // host that answers either still works, and neither costs anything.
+  return reply?.session ?? reply ?? null;
+}
+
 export class McpServer {
   /** @param {Options} opts */
   constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
     now = () => Date.now(),
     sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)),
     watchMs = 10_000,
+    started = null,
     maxWaitMs = 0,
     setTimer = (/** @type {() => void} */ fn, /** @type {number} */ ms) => setTimeout(fn, ms).unref?.(),
   }) {
     this.coordinator = String(coordinator || '').replace(/\/+$/, '');
     this.credential = credential;
     this.budgetMinutes = budgetMinutes;
-    this.tools = toolsFor({ allow, budgetMinutes });
+    // The tools describe THIS transport. A ceiling the caller cannot see is a
+    // plan built on a number that will not be honoured.
+    this.tools = toolsFor({ allow, budgetMinutes, maxWaitSeconds: maxWaitMs ? Math.floor(maxWaitMs / 1000) : 900 });
     // SESSIONS THIS SERVER STARTED. `stop` is withheld in general — ending work
     // that is not yours is not something an agent should reach for unasked —
     // but an agent that STARTED a session must be able to end it, or the
     // instructions below are asking for something it cannot do.
+    // INJECTABLE, because a transport may have to supply the memory. Over
+    // stdio the conversation is the process and a fresh Set is right; over HTTP
+    // each request builds a new server, so the set is handed in per credential
+    // (src/mcp/http.js) or `stop` refuses what this caller just started.
     /** @type {Set<string>} */
-    this.started = new Set();
+    this.started = started || new Set();
     // WRAPPED, NEVER STORED BARE. `this.fetch = fetch` then `this.fetch(...)`
     // calls the global with an McpServer as its receiver, and Cloudflare's
     // runtime refuses that:
@@ -189,7 +232,7 @@ export class McpServer {
         try {
           /** @type {any} */
           const reply = await this.#intent('status', { name }, null);
-          session = reply?.session ?? reply;
+          session = sessionFrom(reply, name);
         } catch {
           // A fleet that cannot be reached is not news worth waking anybody
           // for; the next tick will say so if it persists.
@@ -276,7 +319,7 @@ export class McpServer {
       }
       if (reply?.ok === false) return this.#text(String(reply.text ?? 'refused'), true);
 
-      const session = reply?.session ?? reply;
+      const session = sessionFrom(reply, name);
       const status = String(session?.status ?? '');
       // NEEDS A PERSON. The one state where waiting longer changes nothing:
       // something is blocking on an answer, and nobody is going to give it.
@@ -360,6 +403,23 @@ export class McpServer {
       // rather than stdout matters: stdout IS the protocol, and a stray line
       // there desynchronises the client.
       this.log('mcp: ignored a line that was not JSON');
+      return;
+    }
+    // A BATCH IS A LIST, on this transport too. The array was handed straight
+    // to handleMessage, where `array.id` is undefined — so it was treated as a
+    // notification, answered with nothing, and the error swallowed. Silently:
+    // no reply, no stderr. The HTTP transport handled the same batch correctly,
+    // which made "the identical conversation in a different envelope" false in
+    // the one place it is written down. The revisions this server advertises
+    // require a server to accept one.
+    if (Array.isArray(message)) {
+      const replies = [];
+      for (const one of message) {
+        const reply = await this.handleMessage(one);
+        if (reply) replies.push(reply);
+      }
+      // All notifications: nothing to write. Answering `[]` is a JSON-RPC error.
+      if (replies.length) this.write(JSON.stringify(replies));
       return;
     }
     const reply = await this.handleMessage(message);
@@ -496,19 +556,12 @@ export class McpServer {
       return this.#text(describeFailure(e), true);
     }
 
-    // Remembered only on success, and forgotten when it is stopped — so the
-    // set is what is actually running because of this conversation.
-    if (reply?.ok !== false) {
-      const named = String(params.name || reply?.name || '');
-      if (tool.verb === 'start' || tool.verb === 'resume') {
-        if (named) this.started.add(named);
-      } else if (tool.verb === 'stop') {
-        this.started.delete(named);
-      }
-    }
-
     // Remembered only on success, and forgotten when stopped — so the set is
     // what is actually running because of this conversation.
+    //
+    // This block was here TWICE, near-identically, and only the surviving copy
+    // starts the watcher. Harmless while they agreed; the next edit to one of
+    // them is where that stops being true.
     if (reply?.ok !== false) {
       const named = String(params.name || reply?.name || '');
       if (named && (tool.verb === 'start' || tool.verb === 'resume')) {

@@ -74,11 +74,35 @@ const REPLAY_MAX = 512;
 const PEEK_CONCURRENCY = 4;
 
 /**
- * Verbs after which this host can do something it could not before, or the
- * reverse. Health is pushed immediately once one of these lands, so somebody
- * who just changed something is not answered from the frame before it.
+ * Verbs after which the coordinator's picture of this host is out of date.
+ *
+ * Health is pushed immediately once one of these lands, so somebody who just
+ * changed something is not answered from the frame before it.
+ *
+ * START, RESUME AND STOP ARE HERE FOR A SHARPER REASON than the others. The
+ * coordinator learns which sessions exist ONLY from these frames, and it
+ * places `status`, `peek` and `await` by that list. So for up to a full health
+ * interval after a successful `start`, the fleet answered
+ *
+ *     No host reports a session named "job2". It may exist on a host that is
+ *     currently offline
+ *
+ * about a session it had just confirmed starting — a plausible reason that was
+ * not the true one, which is worse than an opaque error. An agent following
+ * this server's own instructions does `start` then `await`, so it hit the
+ * window every time.
  */
-const CAPABILITY_VERBS = new Set(['connect', 'link', 'unlink', 'renew', 'update', 'upgrade']);
+const CAPABILITY_VERBS = new Set([
+  'connect',
+  'link',
+  'unlink',
+  'renew',
+  'update',
+  'upgrade',
+  'start',
+  'resume',
+  'stop',
+]);
 
 /**
  * @typedef {object} Transport

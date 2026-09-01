@@ -164,7 +164,7 @@ export class Authorizations {
   /**
    * REGISTRATIONS PERSIST; CODES DO NOT, and the asymmetry is the point.
    *
-   * A code lives ten minutes and losing one costs somebody a second tap — the
+   * A code lives five minutes and losing one costs somebody a second tap — the
    * same reasoning as `pendingGithub` in core.js. A registration is what a
    * client stored in its own config, possibly weeks ago: forget it and the next
    * sign-in fails at `issueCode`, AFTER a person has already handed their

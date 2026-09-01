@@ -236,6 +236,176 @@ test('wiring MCP in did not eat every other POST body', async (t) => {
   assert.match(body.text, /JWT/i);
 });
 
+// --- the reply shape the fleet actually sends --------------------------------
+//
+// Every test here answers `{ ok, text, sessions: [record] }`, which is what
+// `/status <name>` returns (src/adapters/commands.js). The previous tests, and
+// the conformance harness, answered `{ session: {...} }` — a key no layer of
+// this fleet produces. Everything passed and nothing worked.
+
+test('fleet_await sees a session end, in the shape the coordinator sends', async () => {
+  const { McpServer } = await import('../src/mcp/server.js');
+  let polls = 0;
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    sleep: async () => {},
+    fetch: async () => ({
+      status: 200,
+      json: async () => {
+        // Loud rather than endless: an await that cannot read the reply keeps
+        // polling until its own deadline, which with a no-op sleep is a spin.
+        if (polls > 20) throw new Error('fleet_await polled 20 times without noticing the session ended');
+        return {
+        ok: true,
+        text: 'job3 — stopped',
+        // Running twice, then stopped. An await that cannot read this polls to
+        // its own timeout and reports "still running" about a finished job —
+        // measured on a real fleet, on both transports.
+        sessions: [{ name: 'job3', status: ++polls > 2 ? 'stopped' : 'running' }],
+        };
+      },
+    }),
+  });
+  // A blind await does not fail, it SPINS — sleep is a no-op here and the
+  // deadline is five minutes away, so the old code hung the test runner rather
+  // than failing it. A hang is a bad signal: it looks like an infrastructure
+  // problem and gets retried. This makes the blindness loud.
+  const guard = setTimeout(() => {}, 0);
+  clearTimeout(guard);
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_await', arguments: { name: 'job3', seconds: 300 } },
+  });
+  const text = String(reply.result.content[0].text);
+  assert.equal(/still running/.test(text), false, 'it waited out the clock on a finished session');
+  assert.match(text, /job3/);
+  assert.ok(polls <= 4, `it should stop polling once the session ended, not ${polls} times`);
+});
+
+test('the watcher notifies from the same shape', async () => {
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @type {any[]} */
+  const written = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: (/** @type {string} */ line) => written.push(JSON.parse(line)),
+    watchMs: 1,
+    sleep: async () => {},
+    // unref'd, or the watcher's timer keeps the test runner alive forever —
+    // which is the same 'stdio server that will not exit' the watcher's own
+    // shutdown logic exists to avoid.
+    setTimer: (/** @type {() => void} */ fn) => setTimeout(fn, 1).unref?.(),
+    fetch: async (/** @type {any} */ _url, /** @type {any} */ init) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      if (body.verb === 'status') {
+        return {
+          status: 200,
+          json: async () => ({
+            ok: true,
+            sessions: [{ name: 'probe', status: 'running', awaiting: true, detail: 'needs an answer' }],
+          }),
+        };
+      }
+      return { status: 200, json: async () => ({ ok: true, text: 'started probe' }) };
+    },
+  });
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_start', arguments: { name: 'probe', brief: 'x' } },
+  });
+  await new Promise((r) => setTimeout(r, 60));
+  const notes = written.filter((m) => m.method === 'notifications/message');
+  assert.ok(notes.length > 0, 'the watcher emitted nothing — it could not read the status reply');
+  assert.match(String(notes[0].params.data.message), /needs an answer/);
+});
+
+test('over HTTP, an agent can stop what it started one request earlier', async () => {
+  // A new McpServer per request meant the ownership set was always empty, so
+  // `stop` refused the caller's OWN session — "it belongs to somebody who is
+  // probably still using it", which was false twice over. The instructions
+  // delivered over that same transport say to clean up.
+  const { handleMcpRequest } = await import('../src/mcp/http.js');
+  const credential = `fwk_${Math.random().toString(16).slice(2)}_stopscope`;
+  /** @type {string[]} */
+  const verbs = [];
+  const fetchStub = async (/** @type {any} */ _url, /** @type {any} */ init) => {
+    const body = JSON.parse(String(init?.body || '{}'));
+    verbs.push(body.verb);
+    return { status: 200, json: async () => ({ ok: true, text: `${body.verb} ok` }) };
+  };
+  /** @param {string} name @param {any} args */
+  const call = (name, args) =>
+    handleMcpRequest({
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+      credential,
+      coordinator: 'https://fleet.example',
+      fetch: /** @type {any} */ (fetchStub),
+    });
+
+  await call('fleet_start', { name: 'job1', brief: 'do a thing' });
+  const stopped = await call('fleet_stop', { name: 'job1' });
+  assert.equal(stopped.body.result.isError, undefined, String(stopped.body.result.content[0].text));
+  assert.ok(verbs.includes('stop'), 'the stop never reached the fleet');
+
+  // And the scoping still holds: somebody else's session is still refused.
+  const other = await call('fleet_stop', { name: 'not-mine' });
+  assert.equal(other.body.result.isError, true);
+  assert.match(String(other.body.result.content[0].text), /not yours to stop/);
+});
+
+test('a batch over stdio is answered, not silently dropped', async () => {
+  // handleLine handed the ARRAY to handleMessage, where `array.id` is
+  // undefined — so it was treated as a notification, answered with nothing, and
+  // the error swallowed. No reply, no stderr. HTTP handled the same batch
+  // correctly, which made "the identical conversation in a different envelope"
+  // false in the one place it is written down.
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @type {any[]} */
+  const written = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: (/** @type {string} */ line) => written.push(JSON.parse(line)),
+    watchMs: 0,
+  });
+  await server.handleLine(
+    JSON.stringify([
+      { jsonrpc: '2.0', id: 12, method: 'ping' },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 13, method: 'tools/list' },
+    ]),
+  );
+  assert.equal(written.length, 1, 'a batch gets one array reply');
+  assert.ok(Array.isArray(written[0]));
+  // Two replies, not three: the notification is not answered.
+  assert.deepEqual(written[0].map((/** @type {any} */ m) => m.id), [12, 13]);
+
+  // An all-notifications batch is answered with nothing at all.
+  written.length = 0;
+  await server.handleLine(JSON.stringify([{ jsonrpc: '2.0', method: 'notifications/initialized' }]));
+  assert.equal(written.length, 0);
+});
+
+test('the seconds ceiling advertised is the one the caller gets', async () => {
+  // 900 was advertised on both transports while HTTP capped a wait at 25s. An
+  // agent could ask for two minutes, plan around it, and be answered in
+  // twenty-five seconds — legible afterwards from the prose, invisible before.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const capped = toolsFor({ maxWaitSeconds: 25 }).find((t) => t.name === 'fleet_await');
+  assert.equal(capped?.inputSchema.properties.seconds.maximum, 25);
+  assert.match(String(capped?.inputSchema.properties.seconds.description), /call again/);
+  const uncapped = toolsFor().find((t) => t.name === 'fleet_await');
+  assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
+});
+
 // --- SSRF: the Host header must not choose where we send things -------------
 
 test('a spoofed Host cannot steer the coordinator\'s outbound request', async (t) => {
