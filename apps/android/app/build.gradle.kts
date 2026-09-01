@@ -7,6 +7,25 @@ plugins {
   id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// NO SENTRY GRADLE PLUGIN, and that is a decision rather than an omission.
+//
+// It was added and then removed the same afternoon: it failed the build with
+//
+//     Failed to apply plugin 'io.sentry.android.gradle'
+//     > Extension of type 'AppExtension' does not exist
+//
+// `AppExtension` is AGP's old entry point, which AGP 9 removed — the same
+// version bump the comment above is about. A newer plugin may well handle it.
+//
+// What settled it is that the plugin's only job here would be uploading the
+// ProGuard mapping so a release stack trace is readable, and THAT NEEDS AN AUTH
+// TOKEN THIS REPOSITORY DOES NOT HAVE. So as things stand it would buy nothing
+// and could only break the build. When somebody adds the token, add the plugin
+// back at a version that supports AGP 9 and check it on a real build.
+//
+// Until then a release crash reports with an obfuscated stack. That is worse
+// than a readable one and much better than no report.
+
 // Firebase, only when there is a config to read.
 //
 // The Google Services plugin FAILS THE BUILD when google-services.json is
@@ -167,6 +186,11 @@ dependencies {
   implementation(platform("androidx.compose:compose-bom:2026.08.00"))
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
+
+  // Error reporting. Pinned like everything else here — a range is a build that
+  // changes without a commit. The version is the one Maven Central actually
+  // publishes; the first attempt at this line invented a number.
+  implementation("io.sentry:sentry-android:8.54.0")
 
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship

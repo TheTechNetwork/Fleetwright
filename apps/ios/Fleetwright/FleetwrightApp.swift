@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import Sentry
 
 extension Notification.Name {
     /// A provider flow finished somewhere outside the app. Whoever is showing
@@ -48,8 +49,75 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        startErrorReporting()
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    /// Crash reporting, and the long list of things it must not send.
+    ///
+    /// A DSN is not a secret — it identifies a project and grants only the
+    /// ability to post events to it. The refusals below are the part that
+    /// matters, because this app holds a fleet credential, a coordinator
+    /// address and the signed-in email:
+    ///
+    /// - `attachScreenshot` and `attachViewHierarchy` stay OFF. The session
+    ///   list, the pane and the credentials sheet are all on screen, and a
+    ///   screenshot of any of them is exactly what this app is careful about.
+    /// - Network breadcrumbs stay OFF. This app's requests are intents to the
+    ///   coordinator, and a credential may travel in the query string —
+    ///   deliberately, because a Shortcut cannot set headers.
+    /// - `sendDefaultPii` stays OFF, so no IP address and no identifiers.
+    /// - Tracing is off entirely: the spans would be those same requests.
+    ///
+    /// And `beforeSend` is the backstop rather than the plan. Every switch
+    /// above can be undone by a careless edit or a new SDK default; a token
+    /// that reaches this closure is still removed.
+    private func startErrorReporting() {
+        // Absent means no reporting, which is what a fork or a fresh clone
+        // gets. One code path rather than an `if` somebody can get wrong.
+        let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String ?? ""
+        guard !dsn.isEmpty else { return }
+
+        SentrySDK.start { options in
+            options.dsn = dsn
+            options.sendDefaultPii = false
+            options.attachScreenshot = false
+            options.attachViewHierarchy = false
+            options.enableNetworkBreadcrumbs = false
+            options.enableNetworkTracking = false
+            options.enableCaptureFailedRequests = false
+            options.enableUserInteractionTracing = false
+            options.tracesSampleRate = 0.0
+            options.beforeSend = { event in
+                event.user = nil
+                event.request?.headers = nil
+                event.request?.cookies = nil
+                if let url = event.request?.url {
+                    event.request?.url = Self.scrubbed(url)
+                }
+                event.breadcrumbs = event.breadcrumbs?.map { crumb in
+                    if let url = crumb.data?["url"] as? String {
+                        crumb.data?["url"] = Self.scrubbed(url)
+                    }
+                    crumb.data?.removeValue(forKey: "headers")
+                    return crumb
+                }
+                return event
+            }
+        }
+    }
+
+    /// A URL with nothing secret left in it.
+    ///
+    /// The whole query is dropped rather than named parameters removed. A
+    /// denylist is a list somebody forgets to update the next time a token
+    /// learns a new spelling, and the path alone is the diagnostic value.
+    static func scrubbed(_ raw: String) -> String {
+        guard var parts = URLComponents(string: raw) else { return "[unparseable url]" }
+        parts.query = nil
+        parts.fragment = nil
+        return parts.string ?? "[unparseable url]"
     }
 
     @MainActor

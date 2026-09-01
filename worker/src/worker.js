@@ -11,13 +11,18 @@
 //
 // Both on one origin, because a host pins exactly one.
 
-import { Fleet } from './fleet-do.js';
+import { Fleet as FleetObject } from './fleet-do.js';
 import { demoReply } from './demo.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { isMcpPath } from '../../src/mcp/routes.js';
+import * as Sentry from '@sentry/cloudflare';
+import { sentryOptions } from './sentry.js';
 
-export { Fleet };
+// THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
+// live: the socket handling, the intent routing, the storage. An unhandled
+// throw in here used to be a 500 with a console line nobody was reading.
+export const Fleet = Sentry.instrumentDurableObjectWithSentry(sentryOptions, FleetObject);
 
 /**
  * Is this request on the demo hostname?
@@ -40,7 +45,7 @@ function isDemoHost(url, env) {
   return configured !== '' && url.hostname.toLowerCase() === configured;
 }
 
-export default {
+const handler = {
   /**
    * @param {Request} request
    * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, AGENT_FLEET_DEMO_HOST?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
@@ -308,6 +313,19 @@ export default {
     return env.FLEET.get(id).fetch(request);
   },
 };
+
+// WRAPPED LAST, so everything above is inside the reporting boundary.
+//
+// `withSentry` takes a function of env rather than a literal because a Worker
+// has no environment at module scope — the DSN arrives with the request. No DSN
+// configured means no reporting and no code path of its own: a fresh clone, a
+// contributor's `wrangler dev` and a self-hosted fleet all run this unchanged
+// and post nothing anywhere.
+//
+// What it may send is decided in ./sentry.js, and the short version is: not the
+// URL's query, not a header, not a body. This coordinator carries a credential
+// on nearly every request.
+export default Sentry.withSentry(sentryOptions, handler);
 
 
 /**

@@ -48,3 +48,13 @@ apps/ios/Fleetwright/Fleetwright.entitlements
 # Compiled from src/web/console/*.jsx by scripts/build-web.mjs. The tests import
 # from here because node cannot import JSX; `npm test` builds it first.
 build/
+
+# ERROR REPORTING AUTH TOKENS. A DSN is public and lives in the manifests; these
+# are not — they upload debug symbols and ProGuard mappings, and each one can
+# write to the Sentry project. The wizards create them and add them here; this
+# repository refuses them up front rather than after the first accidental
+# commit, because a token in a public history is a token to rotate.
+apps/android/sentry.properties
+apps/ios/.sentryclirc
+.sentryclirc
+sentry.properties
