@@ -236,6 +236,94 @@ test('wiring MCP in did not eat every other POST body', async (t) => {
   assert.match(body.text, /JWT/i);
 });
 
+// --- SSRF: the Host header must not choose where we send things -------------
+
+test('a spoofed Host cannot steer the coordinator\'s outbound request', async (t) => {
+  const { c, base } = await coordinator(t);
+  const { token } = await c.core.issueClient({ email: 'owner@example.com', name: 'The Owner' }, 'a test');
+
+  // Somewhere the coordinator must never be persuaded to send an intent. It
+  // records any hit, and the assertion is that it stays empty.
+  const { createServer } = await import('node:http');
+  /** @type {string[]} */
+  const hits = [];
+  const trap = createServer((req, res) => {
+    hits.push(String(req.url));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true,"text":"you reached the wrong machine"}');
+  });
+  await new Promise((r) => trap.listen(0, '127.0.0.1', () => r(null)));
+  const trapPort = /** @type {any} */ (trap.address()).port;
+  t.after(() => trap.close());
+
+  // node:http rather than fetch, because undici refuses to let a caller set
+  // Host — and an attacker is not using undici.
+  const { request } = await import('node:http');
+  const reply = await new Promise((resolve) => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_list', arguments: {} },
+    });
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port: Number(new URL(base).port),
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+          authorization: `Bearer ${token}`,
+          // THE ATTACK. If the outbound intent is built from this, the
+          // coordinator makes a request to a machine the caller named — with
+          // the coordinator's network position, from inside wherever it runs.
+          host: `127.0.0.1:${trapPort}`,
+        },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (chunk) => (text += chunk));
+        res.on('end', () => resolve(text));
+      },
+    );
+    req.end(body);
+  });
+
+  assert.deepEqual(hits, [], 'the Host header chose where the coordinator sent its intent');
+  // And it answered — from the real fleet, which has no hosts connected.
+  const parsed = JSON.parse(String(reply));
+  assert.equal(/you reached the wrong machine/.test(JSON.stringify(parsed)), false);
+});
+
+test('the discovery documents DO follow the Host header, and should', async (t) => {
+  const { base } = await coordinator(t);
+  // The other half of the rule, and the reason this is two values rather than
+  // one hardened one: a client must be pointed back at the address it actually
+  // used, or the flow it is about to start goes somewhere it cannot reach. A
+  // spoofed Host here only ever poisons the spoofer's own response.
+  const { request } = await import('node:http');
+  const doc = await new Promise((resolve) => {
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port: Number(new URL(base).port),
+        path: '/.well-known/oauth-protected-resource',
+        method: 'GET',
+        headers: { host: 'fleet.example.test' },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => resolve(text));
+      },
+    );
+    req.end();
+  });
+  assert.equal(JSON.parse(String(doc)).resource, 'http://fleet.example.test/mcp');
+});
+
 // --- the crash that only the Worker had -------------------------------------
 
 test('the global fetch is called with a receiver Cloudflare will accept', async () => {

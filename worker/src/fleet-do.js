@@ -174,9 +174,10 @@ export class Fleet {
    * OAuth dance in front of it; no new way to become somebody, no new kind of
    * credential, no new list of who is allowed.
    *
+   * @param {URL} url  the request's own URL, for the fallback public origin
    * @returns {import('../../src/mcp/routes.js').Deps}
    */
-  #mcpDeps() {
+  #mcpDeps(url) {
     const audiences = split(this.env.AGENT_FLEET_AUTH_AUDIENCES);
     return {
       authorizations: this.core.mcpAuthorizations,
@@ -189,6 +190,14 @@ export class Fleet {
       save: () => {
         this.state.waitUntil?.(this.#saveClients());
       },
+      // WHERE THIS OBJECT SENDS INTENTS, which is not where the client reached
+      // us. A Worker cannot call itself on loopback, so this is its public URL
+      // — pinned by configuration when set, because `url.origin` is derived
+      // from the request. Cloudflare only routes hostnames the operator
+      // configured, so the exposure is far smaller here than on the Node
+      // coordinator, but "smaller" is not a reason to keep the shape that was
+      // wrong there.
+      selfOrigin: this.env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin,
       signIn: {
         // Google's web client, picked out of the audience list rather than set
         // twice — a separate variable would eventually disagree with the list
@@ -239,7 +248,7 @@ export class Fleet {
           body: request.method === 'POST' ? await readMcpBody(request) : null,
           authorization: request.headers.get('authorization'),
         },
-        this.#mcpDeps(),
+        this.#mcpDeps(url),
       );
       if (answer) {
         // An absent header is dropped rather than written as the string
