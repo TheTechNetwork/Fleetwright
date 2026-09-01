@@ -38,10 +38,10 @@ const FANOUT = new Set(['list']);
 /**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
- * @param {{ maxPinAgeMs?: number, preferHost?: string, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
+ * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
  * @returns {Placement}
  */
-export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', requester = null } = {}) {
+export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', preferLabels = null, requester = null } = {}) {
   const verb = intent.verb;
   const name = intent.params?.name;
 
@@ -298,15 +298,32 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return { kind: 'host', host: chosen };
   }
 
-  const required = normaliseLabels(intent.params?.labels);
+  // TAGS TRAVEL BESIDE THE INTENT, NOT INSIDE IT.
+  //
+  // This used to read `intent.params.labels` — and no verb declares a `labels`
+  // parameter, so validateIntent refused it as `bad_params` and this filter was
+  // unreachable. Built, correct, and impossible to call.
+  //
+  // It cannot become a parameter either: adding one to an existing verb is a
+  // FLAG DAY (docs/intents.md — an old host answers bad_params AFTER the
+  // version handshake agreed, which is the worst-shaped failure this protocol
+  // has). Placement is not part of the intent anyway; `host` has always
+  // travelled this way, and a tag is the same kind of thing — a statement about
+  // WHERE, not about what to do.
+  const required = normaliseLabels(preferLabels);
   const matching = required.length
     ? candidates.filter((h) => required.every((l) => (h.health?.labels || []).includes(l)))
     : candidates;
   if (!matching.length) {
+    // Names what IS available. "No host carries macos" leaves somebody
+    // guessing whether they typed it wrong or the fleet simply has no Mac.
+    const seen = [...new Set(candidates.flatMap((h) => h.health?.labels || []))].sort();
     return {
       kind: 'refused',
       code: 'no_host_matches',
-      reason: `No connected host carries every label: ${required.join(', ')}`,
+      reason:
+        `No connected host carries every tag: ${required.join(', ')}. ` +
+        (seen.length ? `Tags in this fleet: ${seen.join(', ')}.` : 'No host reports any tags.'),
     };
   }
 
@@ -347,10 +364,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
 
   const durable = usable.filter((h) => !h.ephemeral);
   if (!durable.length && usable.length) {
+    // OFFERED, NOT CHOSEN, and the difference is the whole rule. A runner has
+    // the most free capacity in the fleet because it is empty and about to
+    // disappear; picking it by capacity would put work on a machine that takes
+    // the work with it. So it is named, and somebody decides.
     return {
       kind: 'refused',
       code: 'only_ephemeral_hosts',
       reason:
+        `${required.length ? `Nothing durable carries ${required.join(', ')}. ` : ''}` +
         `The only hosts that match are temporary: ${usable.map((h) => h.hostId).join(', ')}. ` +
         'Name one explicitly to use it — work started there is lost when it goes.',
     };

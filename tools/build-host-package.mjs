@@ -51,6 +51,7 @@ const VERBATIM = ['openapi.json', 'install', 'sandbox', 'src/web'];
 const ENTRIES = [
   ['bin/agent-hub', 'lib/agent-hub.mjs'],
   ['bin/agent-fleet-sidecar', 'lib/agent-fleet-sidecar.mjs'],
+  ['bin/agent-fleet-mcp', 'lib/agent-fleet-mcp.mjs'],
 ];
 
 rmSync(OUT, { recursive: true, force: true });

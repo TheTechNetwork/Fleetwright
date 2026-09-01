@@ -178,7 +178,13 @@ export const VERBS = Object.freeze({
       brief: { type: 'text', required: false, max: BRIEF_MAX },
     },
     mutating: true,
-    summary: 'Start a new session. No path — see the note above.',
+    // SELF-CONTAINED, because this string is now read out of context. The MCP
+    // server generates its tool descriptions from these summaries, so an agent
+    // sees this sentence and nothing around it — and "see the note above" is a
+    // reference to a comment in a file it will never open.
+    summary:
+      'Start a new session. There is no path parameter: a session works in a fixed directory, ' +
+      'so where it runs is a property of the host rather than something to ask for.',
   },
   resume: {
     params: {
@@ -215,7 +221,14 @@ export const VERBS = Object.freeze({
     // three journals into one stream would produce something nobody can read.
     // A caller names the host with the placement preference instead.
     mutating: false,
-    summary: 'The last lines of a service log on one host.',
+    // BOTH THINGS IT DOES. With `service` it is a service journal; with `name`
+    // it is that SESSION's own output — the container's stderr, which survives
+    // a session that has exited and has no pane left to read. The old summary
+    // named only the first, so anybody looking for what a job printed had no
+    // reason to think this was it.
+    summary:
+      'Read output. With `name`, a session\'s own console output — this survives after the session ends, ' +
+      'unlike its pane. With `service`, a service journal on one host.',
   },
   update: {
     params: {
