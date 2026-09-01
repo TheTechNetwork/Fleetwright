@@ -411,3 +411,96 @@ test('read_log is the session half of logs, and says why it is not peek', () => 
   assert.deepEqual(tool.inputSchema.required, ['name']);
   assert.match(tool.description, /Survives the session ending/);
 });
+
+// --- the notification convention, followed ----------------------------------
+
+test('logging is declared, so a client that supports it can find out', async () => {
+  // "The bar is implementing the protocols and documenting which clients
+  // implement them correctly." A server that keeps quiet because support varies
+  // has decided on every client's behalf; declaring the capability is how one
+  // that DOES support it discovers there is something to show.
+  const { server, written } = serverWith();
+  await server.handleLine(rpc(1, 'initialize'));
+  assert.deepEqual(written[0].result.capabilities.logging, {});
+});
+
+test('a level set by the client is accepted, not ignored', async () => {
+  // A server that declares the capability and then ignores setLevel is worse
+  // than one that never declared it.
+  const { server, written } = serverWith();
+  await server.handleLine(rpc(1, 'logging/setLevel', { level: 'debug' }));
+  assert.deepEqual(written[0].result, {});
+  assert.equal(server.logLevel, 'debug');
+});
+
+/** A server whose watcher can be driven a tick at a time. */
+function watchedServer(sequence) {
+  const written = [];
+  let i = 0;
+  /** @type {Array<() => void>} */
+  const timers = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: (line) => written.push(JSON.parse(line)),
+    watchMs: 1,
+    setTimer: (fn) => timers.push(fn),
+    fetch: async () => ({ status: 200, json: async () => sequence[Math.min(i++, sequence.length - 1)] }),
+  });
+  return { server, written, tick: async () => { const fn = timers.shift(); if (fn) await fn(); } };
+}
+
+test('a session that needs help is announced without being asked', async () => {
+  // The case that matters: an agent that has moved on and would otherwise never
+  // look again. fleet_await is the guaranteed path; this is the courtesy that
+  // reaches a client which is not currently in a tool call.
+  const { server, written, tick } = watchedServer([
+    { ok: true, text: 'started' },
+    { ok: true, session: { status: 'running', awaiting: true } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
+  await tick();
+
+  const note = written.find((m) => m.method === 'notifications/message');
+  assert.ok(note, 'expected a notification');
+  assert.equal(note.params.level, 'warning');
+  assert.equal(note.params.data.state, 'awaiting');
+  // A notification has no id. One with an id is a request, and a client that
+  // takes it as one will wait for a reply that never comes.
+  assert.equal('id' in note, false);
+});
+
+test('a finished session is announced once, and then stops being watched', async () => {
+  const { server, written, tick } = watchedServer([
+    { ok: true, text: 'started' },
+    { ok: true, session: { status: 'stopped' } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
+  await tick();
+  await tick();
+
+  const notes = written.filter((m) => m.method === 'notifications/message');
+  assert.equal(notes.length, 1, 'a session ends once');
+  assert.match(notes[0].params.data.message, /has ended/);
+  // And the watcher lets go: a timer alive after the last session is a stdio
+  // server that will not exit, which a client reads as a hung process.
+  assert.equal(server.started.size, 0);
+});
+
+test('nothing is announced about sessions this conversation did not start', async () => {
+  // Watching the fleet would mean narrating somebody else's work to an agent
+  // with no business in it — the same scope `stop` is held to.
+  const { server, written, tick } = watchedServer([{ ok: true, session: { status: 'running', awaiting: true } }]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_list', arguments: {} }));
+  await tick();
+  assert.equal(written.filter((m) => m.method === 'notifications/message').length, 0);
+});
+
+test('watching can be turned off entirely', async () => {
+  // For a client that shows notifications to the PERSON rather than the model,
+  // a session finishing is a line they did not ask for.
+  const { server, written } = serverWith({ ok: true, text: 'started' }, { watchMs: 0 });
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_start', arguments: { name: 'mine' } }));
+  assert.equal(server.watching, false);
+  assert.equal(written.filter((m) => m.method === 'notifications/message').length, 0);
+});

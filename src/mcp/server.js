@@ -35,11 +35,18 @@ const PROTOCOL = '2024-11-05';
  * @property {(m: string) => void} [log]
  * @property {() => number} [now]
  * @property {(ms: number) => Promise<void>} [sleep]
+ * @property {number} [watchMs]   how often to look at started sessions; 0 disables
+ * @property {(fn: () => void, ms: number) => any} [setTimer]
  */
 
 export class McpServer {
   /** @param {Options} opts */
-  constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {}, now = () => Date.now(), sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)) }) {
+  constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
+    now = () => Date.now(),
+    sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)),
+    watchMs = 10_000,
+    setTimer = (/** @type {() => void} */ fn, /** @type {number} */ ms) => setTimeout(fn, ms).unref?.(),
+  }) {
     this.coordinator = String(coordinator || '').replace(/\/+$/, '');
     this.credential = credential;
     this.budgetMinutes = budgetMinutes;
@@ -59,6 +66,93 @@ export class McpServer {
     // real time is a test nobody runs.
     this.now = now;
     this.sleep = sleep;
+    this.logLevel = 'info';
+    // How often the watcher looks. 0 turns it off — for a client that shows
+    // notifications to the person rather than the model, a session finishing is
+    // a line they did not ask for.
+    this.watchMs = watchMs;
+    this.setTimer = setTimer;
+    this.watching = false;
+    /** @type {Map<string, string>} */
+    this.seen = new Map();
+  }
+
+  /**
+   * Tell the client when a session needs a person or finishes.
+   *
+   * BEST EFFORT, AND THAT IS A REAL KIND OF FEATURE. A server cannot make a
+   * client wake a model — some surface these to it, some show them to the
+   * person, some drop them — but "not guaranteed" is the ordinary shape of an
+   * MCP capability, not a reason to leave the convention unfollowed. A client
+   * that supports logging gets told; one that does not is exactly where it was.
+   *
+   * `fleet_await` remains the path that always works. This is the courtesy on
+   * top of it, for the case that matters most: an agent that has moved on and
+   * would otherwise never look again.
+   *
+   * Only sessions started in this conversation are watched — the same set
+   * `stop` is scoped to. Watching the fleet would mean narrating somebody
+   * else's work to an agent that has no business in it.
+   */
+  /** @param {string} level @param {string} text @param {Record<string, any>} data */
+  #notify(level, text, data) {
+    this.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/message',
+        params: { level, logger: 'fleetwright', data: { message: text, ...data } },
+      }),
+    );
+  }
+
+  /**
+   * Watch what this conversation started, and say when something changes.
+   *
+   * Started lazily by the first `start`, and stopped when nothing is running —
+   * a timer left alive after the last session is a stdio server that will not
+   * exit, which looks to a client like a hung process.
+   */
+  #watchStarted() {
+    if (this.watching || !this.watchMs) return;
+    this.watching = true;
+    const tick = async () => {
+      if (!this.started.size) {
+        this.watching = false;
+        return;
+      }
+      for (const name of [...this.started]) {
+        /** @type {any} */
+        let session;
+        try {
+          /** @type {any} */
+          const reply = await this.#intent('status', { name }, null);
+          session = reply?.session ?? reply;
+        } catch {
+          // A fleet that cannot be reached is not news worth waking anybody
+          // for; the next tick will say so if it persists.
+          continue;
+        }
+        const status = String(session?.status ?? '');
+        const now = session?.awaiting ? 'awaiting' : status;
+        if (now && now !== this.seen.get(name)) {
+          this.seen.set(name, now);
+          if (session?.awaiting) {
+            this.#notify('warning', `${name} is waiting for an answer and will not go further without one.`, { session: name, state: 'awaiting' });
+          } else if (status === 'error') {
+            this.#notify('error', `${name} failed. Its output is still readable with fleet_read_log.`, { session: name, state: 'error' });
+          } else if (status === 'stopped') {
+            this.#notify('info', `${name} has ended. Collect its output with fleet_read_log.`, { session: name, state: 'stopped' });
+            this.started.delete(name);
+          }
+        }
+      }
+      if (this.started.size) {
+        this.timer = this.setTimer(tick, this.watchMs);
+      } else {
+        this.watching = false;
+      }
+    };
+    this.timer = this.setTimer(tick, this.watchMs);
   }
 
   /**
@@ -214,7 +308,14 @@ export class McpServer {
       case 'initialize':
         return {
           protocolVersion: PROTOCOL,
-          capabilities: { tools: {} },
+          // LOGGING, because that is the convention for a server with something
+          // to say. Support varies — some clients surface these to the model,
+          // some show them to the person, some drop them — and that is the
+          // ordinary shape of an MCP capability rather than a reason to skip
+          // one. Declaring it is how a client that DOES support it finds out.
+          //
+          // fleet_await stays the guaranteed path. This is the courtesy on top.
+          capabilities: { tools: {}, logging: {} },
           serverInfo: { name: 'fleetwright', version: '1' },
           // THE CONTRACT, HANDED TO THE MODEL. This is the answer to "nothing
           // reports completion": the fleet does not need a new signal if the
@@ -233,6 +334,11 @@ export class McpServer {
         };
       case 'tools/call':
         return await this.#call(message.params || {});
+      case 'logging/setLevel':
+        // Accepted and honoured. A server that declares the capability and
+        // then ignores the level is worse than one that never declared it.
+        this.logLevel = String(message.params?.level || 'info');
+        return {};
       case 'ping':
         return {};
       default: {
@@ -305,7 +411,10 @@ export class McpServer {
     // what is actually running because of this conversation.
     if (reply?.ok !== false) {
       const named = String(params.name || reply?.name || '');
-      if (named && (tool.verb === 'start' || tool.verb === 'resume')) this.started.add(named);
+      if (named && (tool.verb === 'start' || tool.verb === 'resume')) {
+        this.started.add(named);
+        this.#watchStarted();
+      }
       if (tool.verb === 'stop') this.started.delete(named);
     }
 

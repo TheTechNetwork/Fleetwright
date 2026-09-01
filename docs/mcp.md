@@ -149,16 +149,66 @@ instructions twenty tool calls ago is not reliably still holding them.
 
 > should mcp be able to notify llm a task needs help or a task is complete?
 
-**A server can send notifications; it cannot reliably wake a model.** A
-notification arrives on the transport, and whether it reaches the model is up to
-the client — one that is not currently in a turn is not listening. Building on
-that gives a feature that works in one client and silently does nothing in the
-next.
+Yes, and it does — **both ways**, because they answer different halves.
+
+The first version of this section argued that a server cannot reliably wake a
+model, so notifications were not worth sending. That was the wrong bar:
+
+> Best effort features are a real thing with documented clients that work better
+> or worse or untested — the point is follow a convention.
+>
+> The bar is implementing the protocols and documenting which clients implement
+> them correctly.
+
+A server that stays quiet because support varies has decided on every client's
+behalf. Declaring the capability is how a client that *does* support it finds
+out there is something to show — and "not guaranteed" is the ordinary shape of
+an MCP capability, not a defect.
+
+| | what it is | when it is the right one |
+|---|---|---|
+| **`fleet_await`** | a tool that blocks until the session needs an answer, ends or errors | always works, in every client. The guaranteed path |
+| **`notifications/message`** | the logging capability, emitted when a watched session changes state | reaches a client that is **not** currently in a tool call — an agent that has moved on and would otherwise never look again |
+
+Only sessions started in this conversation are watched — the same scope `stop`
+is held to. Watching the fleet would mean narrating somebody else's work to an
+agent with no business in it. The watcher stops when the last one ends: a timer
+alive after that is a stdio server that will not exit, which a client reads as a
+hung process.
+
+`AGENT_FLEET_MCP_WATCH_SECONDS=0` turns it off. For a client that shows
+notifications to the **person** rather than the model, a session finishing is a
+line they did not ask for.
+
+### Which clients implement what
+
+**Rows say how they were established.** An untested row says untested rather
+than guessing, because a support matrix whose entries are assumptions is worse
+than none — it is the same manufactured confidence as a checker that silently
+passes.
+
+| | `tools/*` | `logging` (`notifications/message`) | how established |
+|---|---|---|---|
+| the protocol itself | required | optional, server-declared | [MCP spec](https://modelcontextprotocol.io), revision `2024-11-05` |
+| this server | ✅ | ✅ declared and emitted | `test/mcp.test.js` — 32 tests, two of which spawn the binary and drive it over a real pipe |
+| Claude Desktop | **untested here** | **untested here** | — |
+| Claude Code | **untested here** | **untested here** | — |
+| any other client | **untested here** | **untested here** | — |
+
+Filling those rows in means running the server against each client and watching
+what arrives. Until somebody has, the honest entry is the empty one — and
+`fleet_await` is why an unfilled row costs nothing: the guaranteed path does not
+depend on any of them.
+
+**What a client does with a notification** it supports is still its own
+decision: surface it to the model, show it to the person, or log it. That is
+outside this server's reach and worth knowing before relying on the timing.
 
 **A tool that blocks needs no waking.** `fleet_await` returns the moment the
 session needs an answer, ends, or errors — and the return value *is* the
 notification. It works everywhere, because it is just a tool call that takes a
-while.
+while. That is why it stays the guaranteed path even now that notifications are
+sent as well.
 
 Both signals already existed and already wake a **person**: the host watcher
 detects a session blocked on a dialog, and `session.awaiting-input` and

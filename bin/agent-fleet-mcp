@@ -9,6 +9,10 @@
 //   AGENT_FLEET_COORDINATOR_URL   required — the fleet to talk to
 //   AGENT_FLEET_CREDENTIAL        required — a device token (fwk_…) from the app
 //   AGENT_FLEET_MCP_ALLOW         verbs to expose beyond the safe set, comma separated
+//   AGENT_FLEET_MCP_WATCH_SECONDS  how often to check started sessions and emit
+//                                 a notification when one needs help or ends
+//                                 (default 10; 0 turns it off). Best effort —
+//                                 see the client matrix in docs/mcp.md.
 //   AGENT_FLEET_MCP_BUDGET_MINUTES  how long work here should take (default 15).
 //                                 Stated to the agent rather than enforced: the
 //                                 lifecycle is its to manage, and a number it
@@ -52,6 +56,10 @@ const server = new McpServer({
   coordinator,
   credential,
   budgetMinutes: Number(process.env.AGENT_FLEET_MCP_BUDGET_MINUTES) || 15,
+  watchMs:
+    process.env.AGENT_FLEET_MCP_WATCH_SECONDS === '0'
+      ? 0
+      : (Number(process.env.AGENT_FLEET_MCP_WATCH_SECONDS) || 10) * 1000,
   allow: (process.env.AGENT_FLEET_MCP_ALLOW || '')
     .split(/[,\s]+/)
     .map((s) => s.trim())
