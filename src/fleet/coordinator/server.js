@@ -459,25 +459,32 @@ export class Coordinator {
       // it because a re-run reuses run_id.
       const hostId = `gha-${job.repository.replace(/[^A-Za-z0-9]+/g, '-')}-${job.runId}-${job.runAttempt}`;
 
-      // WHOSE RUNNER IT IS. A fleet may have several people wanting one at
-      // once, and an unowned temporary host is one everybody sees and nobody
-      // is responsible for. The OIDC token names the account that triggered
-      // the run — trustworthy, because GitHub signed it — and a configured map
-      // turns that into a fleet identity.
+      // WHOSE RUNNER IT IS, and this is deliberately NOT read from
+      // configuration. An owners map in the coordinator's environment would
+      // mean every person who wants a runner needs a deploy before they can
+      // have one — which is the opposite of the thing being built.
       //
-      // Unmapped is a REFUSAL, not an ownerless host. "I cannot tell who this
-      // belongs to" and "it belongs to nobody" are different facts, and only
-      // one of them should put a machine in somebody's fleet.
-      const owner = ownerForGithubActor(job.actor);
-      if (!owner) {
+      // The claim is an ordinary enrolment code, and using it here changes what
+      // it is FOR. It is no longer what admits the machine: the OIDC token did
+      // that, cryptographically, before this line. It only says who the runner
+      // belongs to — so a leaked one buys somebody the ability to give a fleet
+      // member a free Mac, rather than the ability to put a machine in a fleet.
+      //
+      // A claim is REQUIRED. An unowned temporary host is one everybody sees
+      // and nobody is responsible for, and "I cannot tell whose this is" is not
+      // the same fact as "it belongs to nobody".
+      const claimed = await this.core.enrollment.redeem(String(body?.claim || ''), 'host', '');
+      if (!claimed.ok) {
+        this.saveState();
         return json(res, 403, {
           ok: false,
-          error: { code: 'unknown_actor' },
+          error: { code: 'unclaimed' },
           text:
-            `${job.actor || 'that account'} is not mapped to anyone on this fleet. ` +
-            'Add it to AGENT_FLEET_ACTIONS_OWNERS as github-login=email.',
+            `${claimed.reason} A runner needs a claim so the fleet knows whose it is: ` +
+            'mint one in the app with "Temporary host" on, and pass it to the workflow.',
         });
       }
+      const owner = emailOf(claimed.entry.actor);
 
       const result = await this.core.hostIds.enrol({
         hostId,
@@ -953,24 +960,6 @@ function emailOf(actor) {
   return s.startsWith('fleet:') ? s.slice('fleet:'.length).toLowerCase() || null : null;
 }
 
-/**
- * The fleet identity behind a GitHub login.
- *
- * AGENT_FLEET_ACTIONS_OWNERS is `login=email,login=email`. A map rather than a
- * claim in the request, because the request is made by the runner and a runner
- * must not be able to say whose it is.
- *
- * @param {string} login
- */
-function ownerForGithubActor(login) {
-  const wanted = String(login || '').toLowerCase();
-  if (!wanted) return null;
-  for (const pair of splitList(process.env.AGENT_FLEET_ACTIONS_OWNERS)) {
-    const [name, email] = pair.split('=').map((x) => x.trim().toLowerCase());
-    if (name && email && name === wanted) return email;
-  }
-  return null;
-}
 
 
 /** @param {string|undefined} value */

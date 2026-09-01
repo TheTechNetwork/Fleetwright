@@ -22,9 +22,8 @@ on:
   workflow_dispatch:
     inputs:
       pin:
-        description: 'Optional. Leave empty to enrol with the job''s own GitHub OIDC token, which needs no pin at all.'
-        required: false
-        default: ''
+        description: 'Claim from the app (Fleet → Add a host, "Temporary host" on). Says whose runner this is; GitHub''s own token is what admits it.'
+        required: true
         type: string
       minutes:
         description: 'How long to stay in the fleet. GitHub kills the job at 360.'
@@ -161,11 +160,16 @@ jobs:
           # for it, and the coordinator derives the host id from the run rather
           # than accepting one — a job that could choose its own name could
           # choose a permanent host's, and re-enrolment replaces a key.
-          if [ -n "$PIN" ]; then
-            node bin/agent-fleet-sidecar enrol "$PIN"
-          else
-            node bin/agent-fleet-sidecar enrol-actions
-          fi
+          # TWO DIFFERENT QUESTIONS. GitHub's token proves this is a real job
+          # in an allowed repository — that is what admits the machine, and it
+          # cannot be stolen or reused. The claim only says which person the
+          # runner belongs to, so a leaked one buys somebody the ability to give
+          # a fleet member a free Mac rather than to put a machine in a fleet.
+          #
+          # Falls back to plain pin enrolment where the coordinator has no
+          # Actions repositories configured, so an older fleet still works.
+          node bin/agent-fleet-sidecar enrol-actions "$PIN" \
+            || node bin/agent-fleet-sidecar enrol "$PIN"
 
           # THE JOB ENDING IS THE DISCONNECT, and the disconnect is what retires
           # this host and revokes its key. So the sidecar runs in the

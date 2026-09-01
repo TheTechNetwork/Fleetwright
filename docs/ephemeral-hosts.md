@@ -128,8 +128,12 @@ could choose a permanent host's, and re-enrolment replaces a key.
 ```
 AGENT_FLEET_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
 AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/ephemeral-mac.yml@
-AGENT_FLEET_ACTIONS_OWNERS    github-login=email,github-login=email
 ```
+
+Both are **operator** decisions — which repositories may admit machines at all —
+and change about as often as the fleet gains a repository. There is deliberately
+no per-person configuration here: a fleet where each new user needs a coordinator
+deploy before they can have a runner is not the thing being built.
 
 ## Whose runner it is
 
@@ -143,14 +147,27 @@ that vanishes when a job you cannot see finishes.
 So an ephemeral host records an owner, derived from whatever admitted it and
 never claimed by the host:
 
-| admitted by | owner |
-|---|---|
-| a pin | the person who minted it — the actor travelled with the pin all along |
-| an Actions token | the account that triggered the run, mapped through `AGENT_FLEET_ACTIONS_OWNERS` |
+**Two different questions, answered by two different things:**
 
-**An unmapped GitHub account is a refusal, not an ownerless host.** "I cannot
-tell who this belongs to" and "it belongs to nobody" are different facts, and
-only one of them should put a machine in somebody's fleet.
+| | what proves it | what it costs if it leaks |
+|---|---|---|
+| is this a real job in a repository we allow? | the OIDC token GitHub mints for the job | nothing — it expires in minutes and cannot leave the job |
+| whose runner is it? | a **claim**: an ordinary enrolment code, minted in the app | somebody can give a fleet member a free Mac. Not: put a machine in the fleet |
+
+That split is the point. The code stops being what admits a machine — GitHub's
+token does that, cryptographically, before the claim is looked at — so it is no
+longer an admission credential at all. It is a name tag.
+
+**A claim is required.** An unowned temporary host is one everybody sees and
+nobody is responsible for, and "I cannot tell whose this is" is not the same fact
+as "it belongs to nobody".
+
+**The claim is the last thing anybody types**, and the reason it is still typed
+is that nothing dispatches the workflow on the person's behalf yet. The
+coordinator holds a GitHub App installation; when it dispatches the run itself,
+it knows who asked before the job exists and the claim can travel as an input
+nobody sees. That is the next step, and it is what makes this genuinely
+self-service rather than one-field-shorter.
 
 Placement then skips other people's runners entirely, and a fleet whose only
 match is one of them refuses with that reason — not `at_capacity`, which is what

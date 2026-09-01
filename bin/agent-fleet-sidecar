@@ -42,7 +42,7 @@ setLogStream(process.stderr);
 const sub = process.argv[2] || 'run';
 if (sub === 'doctor') await doctor();
 else if (sub === 'enrol' || sub === 'enroll') await doEnrol(process.argv[3]);
-else if (sub === 'enrol-actions' || sub === 'enroll-actions') await doEnrolActions();
+else if (sub === 'enrol-actions' || sub === 'enroll-actions') await doEnrolActions(process.argv[3]);
 else if (sub === 'identity') await identity();
 else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
 else await run();
@@ -52,9 +52,9 @@ function usage() {
 
   agent-fleet-sidecar            run
   agent-fleet-sidecar enrol PIN  present this box to the coordinator (six-digit pin from /enroll)
-  agent-fleet-sidecar enrol-actions
-                                 enrol from inside a GitHub Actions job, using the token
-                                 GitHub mints for that job. No pin, no stored secret.
+  agent-fleet-sidecar enrol-actions CLAIM
+                                 enrol from inside a GitHub Actions job. GitHub's own
+                                 token admits the machine; CLAIM says whose runner it is.
   agent-fleet-sidecar identity   print this box's key fingerprint
   agent-fleet-sidecar doctor     check this box can drive its agent-hub
 
@@ -230,7 +230,7 @@ async function run() {
  * variables are simply absent, which is the common failure and is worth naming
  * rather than reporting as a network error.
  */
-async function doEnrolActions() {
+async function doEnrolActions(claim) {
   const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const token = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!url || !token) {
@@ -257,7 +257,9 @@ async function doEnrolActions() {
     const reply = await fetch(new URL('/api/enroll/actions', cfg.coordinatorUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: idToken, publicJwk: key.publicJwk }),
+      // The OIDC token admits the machine. The claim says whose it is — see
+      // the route. Two different questions, answered by two different things.
+      body: JSON.stringify({ token: idToken, claim: claim || '', publicJwk: key.publicJwk }),
     });
     const body = await reply.json().catch(() => ({}));
     if (!reply.ok || !body?.ok) {
