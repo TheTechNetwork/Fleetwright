@@ -73,8 +73,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     name: 'fleet_await',
     verb: 'status',
     description:
-      'Wait for a session to finish, instead of polling. Returns as soon as it has ended, has errored, or ' +
-      'the timeout passes — whichever comes first. Use this after fleet_start rather than checking repeatedly.',
+      'Wait for a session to finish. Returns as soon as it has ended, has errored, or the wait runs out — ' +
+      'whichever comes first. Use this after fleet_start rather than calling fleet_peek in a loop. On a ' +
+      'connection that caps a single wait it says so and asks you to call again, which is not a failure.',
     // Not a protocol verb. `status` is what it asks the fleet, repeatedly, and
     // the waiting happens in this server — see McpServer#await. The parameters
     // are its own.
@@ -102,7 +103,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     verb: 'logs',
     description:
       "Read a session's console output — everything it printed, not just what is on screen now. " +
-      'Survives the session ending, so this is how you collect a result. `peek` shows the live pane instead.',
+      'READ IT BEFORE YOU STOP THE SESSION: the output lives in the container, so stopping one throws it ' +
+      'away and this answers "no container and no pane". `peek` shows the live pane instead, already ' +
+      'rendered; this is the raw stream and may carry terminal escapes.',
     // The session half only. `service` is a different question and has its own
     // tool; offering both here would rebuild the ambiguity this exists to end.
     omit: ['service'],
@@ -230,7 +233,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const notes = {
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
-        stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it.',
+        stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it. Collect the output with fleet_read_log FIRST — stopping a session throws its console output away.',
         peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',
       };
       const description = [OVERRIDE[verb]?.description || def.summary || verb, notes[verb]].filter(Boolean).join(' ');

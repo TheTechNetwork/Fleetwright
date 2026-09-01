@@ -236,6 +236,95 @@ test('wiring MCP in did not eat every other POST body', async (t) => {
   assert.match(body.text, /JWT/i);
 });
 
+// --- ownership, when the fleet chose the name -------------------------------
+
+test('a session the fleet named is still yours to stop', async () => {
+  // `start` with no name records the name the FLEET chose. This read
+  // `params.name || reply.name`, and a reply has no `name` — it carries
+  // `sessions: [record]`, the same shape that made fleet_await blind. So an
+  // unnamed start recorded nothing and its session was unstoppable for the
+  // rest of the conversation, refused with "not started in this conversation"
+  // about a session started seconds earlier.
+  //
+  // An agent worked this out from behaviour alone — the named session stopped,
+  // the auto-named one never did — and left an idle session holding a slot.
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @type {string[]} */
+  const verbs = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async (/** @type {any} */ _url, /** @type {any} */ init) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      verbs.push(body.verb);
+      return {
+        status: 200,
+        json: async () => ({
+          ok: true,
+          text: `${body.verb} ok`,
+          // The fleet names it when the caller does not.
+          sessions: [{ name: 'cc-tough-stoat', status: 'running' }],
+        }),
+      };
+    },
+  });
+  /** @param {string} name @param {any} args */
+  const call = (name, args) =>
+    server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+
+  await call('fleet_start', { brief: 'a note' });
+  const stopped = await call('fleet_stop', { name: 'cc-tough-stoat' });
+  assert.equal(stopped.result.isError, undefined, String(stopped.result.content[0].text));
+  assert.ok(verbs.includes('stop'), 'the stop never reached the fleet');
+});
+
+test('a started session is placeable before the next health frame', async () => {
+  // The registry learns sessions only from health frames, so `start` answered
+  // "Started X" and an await one call later was refused with "No host reports a
+  // session named X. It may exist on a host that is currently offline" — about
+  // a session the same host had just confirmed creating. Pushing health after
+  // start narrowed that window; the frame still has to travel.
+  const { HostRegistry } = await import('../src/fleet/coordinator/registry.js');
+  const reg = new HostRegistry({ now: () => 1000 });
+  reg.connect('deb13-staging', {});
+  reg.recordHealth('deb13-staging', {
+    hostId: 'deb13-staging',
+    protocol: 2,
+    labels: [],
+    maxSessions: 5,
+    running: 0,
+    free: 5,
+    resumable: [],
+    sessions: [{ name: 'older', status: 'stopped' }],
+    loadavg: [0, 0, 0],
+    loggedIn: true,
+    claudeAccounts: 1,
+    hub: { reachable: true },
+  });
+  assert.deepEqual(reg.findSessions('fresh'), []);
+
+  reg.noteSessions('deb13-staging', [{ name: 'fresh', status: 'running' }]);
+  assert.equal(reg.findSessions('fresh').length, 1);
+  // MERGED, NOT REPLACED. A start reply describes one session; treating it as
+  // the whole truth would erase every other session on that box.
+  assert.equal(reg.findSessions('older').length, 1);
+});
+
+test('read_log says to collect the output before stopping', async () => {
+  // "Survives the session ending, so this is how you collect a result" — but a
+  // STOP removes the container, and with it the output. An agent followed the
+  // documented order, stopped the session, and was told "no container and no
+  // pane" by the tool that had promised to survive.
+  const { toolsFor } = await import('../src/mcp/tools.js');
+  const tools = toolsFor();
+  const read = tools.find((t) => t.name === 'fleet_read_log');
+  assert.match(String(read?.description), /BEFORE YOU STOP/);
+  const stop = tools.find((t) => t.name === 'fleet_stop');
+  assert.match(String(stop?.description), /fleet_read_log FIRST/);
+});
+
 // --- parameters that quietly do nothing ------------------------------------
 
 test('brief says it is not the task', async () => {

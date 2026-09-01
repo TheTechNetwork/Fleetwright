@@ -323,7 +323,10 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       code: 'no_host_matches',
       reason:
         `No connected host carries every tag: ${required.join(', ')}. ` +
-        (seen.length ? `Tags in this fleet: ${seen.join(', ')}.` : 'No host reports any tags.'),
+        (seen.length
+          ? `Tags in this fleet: ${seen.join(', ')}.`
+          : 'No host reports any tags at all, so tag routing cannot match anything here — a host gets its ' +
+            'tags from AGENT_FLEET_LABELS in its sidecar config, and none of these have any set.'),
     };
   }
 
