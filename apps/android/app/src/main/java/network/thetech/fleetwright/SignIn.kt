@@ -5,6 +5,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 
@@ -109,8 +110,40 @@ object SignIn {
             CredentialManager.create(context).getCredential(context, request)
         } catch (e: GetCredentialCancellationException) {
             throw Cancelled()
+        } catch (e: NoCredentialException) {
+            // "No credentials available", which is Google's entire explanation
+            // and was this app's too — it rethrew e.message verbatim.
+            //
+            // IT ALMOST NEVER MEANS WHAT IT SAYS. With
+            // setFilterByAuthorizedAccounts(false) just above, a device with a
+            // Google account on it has a credential to offer. What is actually
+            // missing is the MATCH: Google will not mint an ID token for an app
+            // whose signing certificate it cannot tie to an OAuth client.
+            //
+            // AND THE WAY THAT HAPPENS IS PLAY APP SIGNING. Play re-signs the
+            // upload, so the certificate a user's device sees is Google's and
+            // not the one CI signed with. Sign-in then works perfectly in the
+            // APK you built and fails for every install from Play — reported
+            // exactly that way, on build 300, with "the release apk created by
+            // CI directly works" as the clue that identified it.
+            //
+            // The message above already learned to name the build, because the
+            // same screen had been reported twice about two different builds.
+            // This is the third report and a third cause, so it names the build,
+            // the client it asked for, and the two things that can be wrong.
+            throw Failure(
+                "Build ${BuildConfig.VERSION_CODE} asked Google for a sign-in and was told there are no " +
+                    "credentials available. That usually is not about your accounts. Either this device has " +
+                    "no Google account signed in, or — far more likely if you installed from Play — this " +
+                    "build's signing certificate is not registered. Play re-signs uploads with its own key, " +
+                    "so the SHA-1 from Play Console → Setup → App integrity → App signing key certificate " +
+                    "has to be added in Firebase as well as the one CI signs with. A CI-built APK working " +
+                    "while the Play build does not is that fault exactly.",
+            )
         } catch (e: GetCredentialException) {
-            throw Failure(e.message ?: "Google sign-in failed")
+            // Type and message. The type is the half that is searchable, and it
+            // was being dropped.
+            throw Failure("Google sign-in failed (${e::class.java.simpleName}): ${e.message ?: "no reason given"}")
         }
 
         val credential = response.credential
