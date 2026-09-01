@@ -403,6 +403,15 @@ private struct SessionRow: View {
                 } else if session.isResumable {
                     Button("Resume") { Task { await resume() } }.disabled(busy)
                 }
+                // THE WORKSPACE, on running and stopped sessions alike. The
+                // volume survives a stop — that is what makes a session
+                // resumable — so "collect what it produced" is a thing to do
+                // AFTER the work has finished, which is most of the time.
+                NavigationLink("Files") {
+                    FilesView(session: session.name, host: session.hostId, fleet: Fleet(settings: settings))
+                }
+                .disabled(busy)
+
                 if !session.isRunning {
                     // Forget deletes the conversation and the workspace, which
                     // is why it is confirmed and stop is not: stop is

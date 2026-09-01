@@ -440,6 +440,10 @@ export class Sidecar {
         // What a stored token can actually do, when it was just asked. Scope
         // names, an account, and what is absent — never the token.
         ...(r.check ? { check: r.check } : {}),
+        // A directory listing, as DATA. The rendered text is for a person; an
+        // app needs the names, kinds and sizes separately or it is reduced to
+        // parsing emoji out of a string.
+        ...(Array.isArray(r.entries) ? { entries: r.entries } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {

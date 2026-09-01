@@ -35,6 +35,8 @@
  * @typedef {object} Reply
  * @property {string} text                 plain text; adapters may format it
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
+ * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
+ *   directory listing, as data rather than as rendered text
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
@@ -569,7 +571,11 @@ export const COMMANDS = {
     run: (ctx, args) => {
       if (!args[0]) return { ok: false, text: 'Usage: /files <name> [path]' };
       const r = listFiles(ctx.cfg, args[0], args[1] || '.');
-      return { ok: r.ok, text: r.text };
+      // ENTRIES TRAVEL AS A FIELD, not only inside the prose. An app that
+      // recovered them by parsing the rendered list would break the first time
+      // the wording changed — the same argument that put the authorization URL
+      // in a field rather than in the message (see connect, above).
+      return { ok: r.ok, text: r.text, entries: r.entries };
     },
   },
 

@@ -167,6 +167,8 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     var binHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    /** The session whose workspace is open, if any. */
+    var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
 
     /**
      * @param keepStatus keep whatever is already on screen if the list call
@@ -261,6 +263,18 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                 pendingKindId = null
             },
             onStart = { request -> startInBackground(request) },
+        )
+    }
+
+    browsing?.let { session ->
+        FilesSheet(
+            fleet = fleet,
+            session = session.name,
+            // The host explicitly: a session lives on ONE box, and a browse
+            // that fanned out would read a directory that exists on two
+            // machines with different contents in it.
+            host = session.hostId,
+            onDismiss = { browsing = null },
         )
     }
 
@@ -394,6 +408,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                                 busy = false
                             }
                         },
+                        onFiles = { browsing = session },
                         onResume = {
                             scope.launch {
                                 busy = true
@@ -421,6 +436,7 @@ private fun SessionCard(
     onForget: () -> Unit,
     onAnswer: (Int) -> Unit,
     onPeek: () -> Unit,
+    onFiles: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     var confirmingForget by remember { mutableStateOf(false) }
@@ -513,6 +529,11 @@ private fun SessionCard(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
+                // THE WORKSPACE, on running and stopped sessions alike. The
+                // volume survives a stop — that is what makes a session
+                // resumable — so "collect what it produced" is a thing to do
+                // AFTER the work has finished, which is most of the time.
+                TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
                 if (session.status == "running") {
                     TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
                     session.rcUrl?.let { url ->

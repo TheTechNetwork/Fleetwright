@@ -199,8 +199,24 @@ it is very easy to re-enter one merge at a time.
   coordinator that could mint the pin itself could reboot the fleet, which is
   the whole reason the pin comes from the box.
 
-**Still open, in order:** the reporting in step 2, and the filesystem — still
-last, still for the reasons in step 4.
+**Still open, in order:** the reporting in step 2.
+
+**The filesystem closed on 1 Sep 2026**, last as planned and for the reasons in
+step 4 — see [filesystem.md](./filesystem.md) for the design pass it was waiting
+on. Shipped on coordinator, Worker, host, MCP, iOS and Android in one round,
+because the middle row of the table above is exactly what it would have been:
+five new verbs, and an app cannot show what the protocol cannot express.
+
+Two things worth recording from it, both of the kind this document exists for:
+
+- **The listing travels as a FIELD, not as text.** The first version returned
+  only the rendered lines, which would have left both apps parsing emoji out of
+  a string — the same mistake `connect` avoided by putting the authorization URL
+  in a field. Caught while writing the iOS client, one layer after the host.
+- **Neither app validates a path, deliberately**, and both say so in a comment.
+  The host confines it three times and is the only thing that can, since a
+  symlink is invisible from a phone. A `..` check in an app is something
+  somebody later relies on.
 
 `login`/`code` closed in the round after this one, as `connect`/`link`/`unlink`
 — see [connectors.md](./connectors.md). Worth recording one thing from it here,

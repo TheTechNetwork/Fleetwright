@@ -59,6 +59,8 @@ export class HubError extends Error {
  * @property {any[]} [buttons]
  * @property {{ catalogue: any[], connected: any[] }} [connections]
  * @property {{ ok: boolean, account?: string, granted?: string[]|null, wants?: string[]|null, missing?: string[]|null, message: string }} [check]
+ * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
+ *   directory listing, carried as data so an app never parses the rendered text
  */
 
 export class HubClient {

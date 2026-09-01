@@ -132,5 +132,14 @@ either. That is a portability fix in the CLI calls, not a change of engine.
 
 ## Status
 
-Coordinator, Worker, host and MCP: **done**. The apps are next — the verbs and
-the client methods exist for them to call.
+**Done** on coordinator, Worker, host, MCP, iOS and Android.
+
+The apps show a **Files** button on every session, running or stopped — the
+workspace volume survives a stop, which is what makes a session resumable, so
+"collect what it produced" is mostly a thing you do after the work has finished.
+Browse, read, delete; write and copy exist in both clients and have no screen
+yet, which is the honest state rather than a hidden feature.
+
+Neither app validates a path, deliberately, and both say so where somebody
+editing them will read it. The host confines it three times and is the only
+thing that can — a symlink is invisible from a phone.

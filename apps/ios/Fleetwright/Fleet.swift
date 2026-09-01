@@ -141,6 +141,23 @@ struct Fleet {
         /// credentials. Never a token — the host does not send one and there
         /// is no field here that could hold one.
         var connections: Connections?
+        /// A directory listing, as DATA. The rendered text is for a person;
+        /// parsing it back out of the prose is how an app breaks the first time
+        /// the wording changes — the same argument that put the authorization
+        /// URL in a field rather than in a message.
+        var entries: [Entry]?
+    }
+
+    /// One thing in a session's workspace.
+    struct Entry: Codable, Hashable, Identifiable {
+        var name: String
+        /// "dir", "file" or "link". A string rather than an enum because the
+        /// host decides what kinds exist and an app that crashed on an unknown
+        /// one would be an app that cannot be extended without a release.
+        var kind: String
+        var size: Int
+        var id: String { name }
+        var isDirectory: Bool { kind == "dir" }
     }
 
     /// The connector picker, rendered from what the HOST publishes.
@@ -401,6 +418,46 @@ struct Fleet {
     /// The verb that makes the app more than a list of names. Everything else
     /// tells you a session exists; this tells you whether it is stuck.
     func peek(_ name: String) async throws -> Reply { try await intent("peek", params: ["name": name]) }
+
+    // MARK: - The workspace
+    //
+    // Five calls rather than one taking an operation, matching the five verbs.
+    // Every one names a session, because a workspace belongs to one — there is
+    // no fleet-wide filesystem here and nothing addresses one.
+    //
+    // The host is carried explicitly on all of them. A session lives on ONE
+    // box, and a browse that fanned out would be reading a directory that
+    // exists on two machines with different contents in it.
+
+    /// List one directory. Paths are relative to the workspace root; empty is
+    /// the root itself.
+    func files(_ name: String, path: String = "", host: String? = nil) async throws -> Reply {
+        var params = ["name": name]
+        if !path.isEmpty { params["path"] = path }
+        return try await intent("files", params: params, host: host)
+    }
+
+    /// Read a text file. The host refuses binary and anything over 256KB, and
+    /// says which — so the app shows its reason rather than an empty screen.
+    func readFile(_ name: String, path: String, host: String? = nil) async throws -> Reply {
+        try await intent("readfile", params: ["name": name, "path": path], host: host)
+    }
+
+    /// Write a file, creating it and any missing directories.
+    func writeFile(_ name: String, path: String, content: String, host: String? = nil) async throws -> Reply {
+        try await intent("writefile", params: ["name": name, "path": path, "content": content], host: host)
+    }
+
+    /// Copy within the workspace. Both ends are confined by the host.
+    func copyFile(_ name: String, path: String, to: String, host: String? = nil) async throws -> Reply {
+        try await intent("copyfile", params: ["name": name, "path": path, "to": to], host: host)
+    }
+
+    /// Delete. NOT recoverable — `forget` is the recoverable one and takes the
+    /// whole workspace, which is why the UI asks before calling this.
+    func deleteFile(_ name: String, path: String, host: String? = nil) async throws -> Reply {
+        try await intent("deletefile", params: ["name": name, "path": path], host: host)
+    }
 
     /// Forget a session and delete its volumes. Not undoable, which is why the
     /// UI asks first.
