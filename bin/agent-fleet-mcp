@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+// The fleet, as an MCP server on stdio.
+//
+//   agent-fleet-mcp
+//
+// Configured entirely by environment, because that is what an MCP client hands
+// a server it launches:
+//
+//   AGENT_FLEET_COORDINATOR_URL   required — the fleet to talk to
+//   AGENT_FLEET_CREDENTIAL        required — a device token (fwk_…) from the app
+//   AGENT_FLEET_MCP_ALLOW         verbs to expose beyond the safe set, comma separated
+//
+// In Claude Desktop or Claude Code:
+//
+//   {
+//     "mcpServers": {
+//       "fleetwright": {
+//         "command": "agent-fleet-mcp",
+//         "env": {
+//           "AGENT_FLEET_COORDINATOR_URL": "https://fleet.example",
+//           "AGENT_FLEET_CREDENTIAL": "fwk_…"
+//         }
+//       }
+//     }
+//   }
+//
+// STDOUT IS THE PROTOCOL. Every diagnostic goes to stderr — a stray line on
+// stdout desynchronises the client, and the symptom is a server that "does not
+// work" with nothing to read.
+
+import { createInterface } from 'node:readline';
+import { McpServer } from '../src/mcp/server.js';
+
+const coordinator = process.env.AGENT_FLEET_COORDINATOR_URL;
+const credential = process.env.AGENT_FLEET_CREDENTIAL;
+
+if (!coordinator || !credential) {
+  process.stderr.write(
+    'agent-fleet-mcp needs two things:\n' +
+      '  AGENT_FLEET_COORDINATOR_URL   the fleet to talk to\n' +
+      '  AGENT_FLEET_CREDENTIAL        a device token from the app (Settings — it is shown once)\n\n' +
+      'It joins the fleet as that person: it can see and do exactly what they can, and nothing more.\n',
+  );
+  process.exit(2);
+}
+
+const server = new McpServer({
+  coordinator,
+  credential,
+  allow: (process.env.AGENT_FLEET_MCP_ALLOW || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
+  log: (m) => process.stderr.write(`${m}\n`),
+});
+
+const lines = createInterface({ input: process.stdin });
+// Serialised. Handling two calls at once would interleave replies, and the
+// client matches on id but the fleet does not need the concurrency.
+let queue = Promise.resolve();
+lines.on('line', (line) => {
+  queue = queue.then(() => server.handleLine(line)).catch((e) => {
+    process.stderr.write(`mcp: ${e.message}\n`);
+  });
+});
+lines.on('close', () => process.exit(0));

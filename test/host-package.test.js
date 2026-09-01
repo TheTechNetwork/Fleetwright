@@ -35,6 +35,7 @@ test('the release carries every file the code reaches for at runtime', () => {
     'sandbox/entrypoint.sh',
     'lib/agent-hub.mjs',
     'lib/agent-fleet-sidecar.mjs',
+    'lib/agent-fleet-mcp.mjs',
     'bin/agent-hub',
   ]) {
     assert.equal(existsSync(path.join(r, f)), true, `release is missing ${f}`);

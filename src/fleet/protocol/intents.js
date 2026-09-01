@@ -178,7 +178,13 @@ export const VERBS = Object.freeze({
       brief: { type: 'text', required: false, max: BRIEF_MAX },
     },
     mutating: true,
-    summary: 'Start a new session. No path — see the note above.',
+    // SELF-CONTAINED, because this string is now read out of context. The MCP
+    // server generates its tool descriptions from these summaries, so an agent
+    // sees this sentence and nothing around it — and "see the note above" is a
+    // reference to a comment in a file it will never open.
+    summary:
+      'Start a new session. There is no path parameter: a session works in a fixed directory, ' +
+      'so where it runs is a property of the host rather than something to ask for.',
   },
   resume: {
     params: {
