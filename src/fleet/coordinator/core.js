@@ -13,7 +13,7 @@
 // build breaks, which is the check that keeps it honest.
 
 import { HostRegistry } from './registry.js';
-import { ClientRegistry } from './clients.js';
+import { ClientRegistry, RUNNER_PREFIX } from './clients.js';
 import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
@@ -89,6 +89,14 @@ export class CoordinatorCore {
     this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
+    // REUSABLE, AND DELIBERATELY POWERLESS. A claim has to live in a repository
+    // secret and be spent on every run, so a single-use code cannot be it —
+    // and a device credential must not be, because that one authenticates API
+    // calls. Same machinery, separate store, separate prefix: the authenticator
+    // only ever consults `clients`, so one of these cannot authenticate
+    // anything even if a check is forgotten. All it does is answer "whose
+    // runner is this", after GitHub has already proved the job is real.
+    this.runnerTokens = new ClientRegistry({ now, prefix: RUNNER_PREFIX });
     // Who the admin has let in since the deploy. The env allowlist says who
     // this deployment BELONGS to and survives losing all state; this says who
     // that person has invited, and is the half that does not need a deploy.

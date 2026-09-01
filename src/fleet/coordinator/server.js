@@ -147,6 +147,9 @@ export class Coordinator {
     const state = JSON.parse(raw);
     this.core.hostIds.restore(state.hosts || []);
     this.core.clients.restore(state.clients || []);
+    // Separate store, separate slot. A runner token that did not survive a
+    // restart would break every repository holding one, silently, on a deploy.
+    this.core.runnerTokens.restore(state.runnerTokens || []);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // Push registrations too. The Worker has always kept these in Durable
@@ -233,6 +236,7 @@ export class Coordinator {
       {
         hosts: this.core.hostIds.serialise(),
         clients: this.core.clients.serialise(),
+        runnerTokens: this.core.runnerTokens.serialise(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         devices: [...this.core.devices.values()],
@@ -473,18 +477,27 @@ export class Coordinator {
       // A claim is REQUIRED. An unowned temporary host is one everybody sees
       // and nobody is responsible for, and "I cannot tell whose this is" is not
       // the same fact as "it belongs to nobody".
-      const claimed = await this.core.enrollment.redeem(String(body?.claim || ''), 'host', '');
-      if (!claimed.ok) {
-        this.saveState();
+      // A REUSABLE TOKEN, because a claim has to live in a repository or
+      // organisation secret and be spent on every run. A single-use code cannot
+      // do that job — the second run of any workflow would fail.
+      //
+      // It grants nothing on its own. The machine was admitted by GitHub's
+      // token before this line; all this answers is whose runner it is. So a
+      // leaked one lets somebody attribute a runner to a fleet member — from a
+      // repository they must already be able to run workflows in — rather than
+      // put a machine in the fleet or call the API as anybody.
+      const claim = await this.core.runnerTokens.verify(String(body?.claim || ''));
+      if (!claim || !claim.email) {
         return json(res, 403, {
           ok: false,
           error: { code: 'unclaimed' },
           text:
-            `${claimed.reason} A runner needs a claim so the fleet knows whose it is: ` +
-            'mint one in the app with "Temporary host" on, and pass it to the workflow.',
+            'That runner token is not one this fleet issued, or it has been revoked. ' +
+            'Mint one in the app under Hosts → Runner tokens and put it in the repository ' +
+            'or organisation secret the workflow reads.',
         });
       }
-      const owner = emailOf(claimed.entry.actor);
+      const owner = claim.email.toLowerCase();
 
       const result = await this.core.hostIds.enrol({
         hostId,
@@ -815,6 +828,53 @@ export class Coordinator {
 
     if (p === '/api/enroll' && req.method === 'GET') {
       return json(res, 200, { ok: true, codes: this.core.enrollment.outstanding() });
+    }
+
+    // Runner tokens: reusable, revocable, and powerless on their own.
+    //
+    // Lives in a GitHub secret — organisation-wide or per repository — so it is
+    // spent on every run rather than once. Which of those you choose decides
+    // who the runners belong to: an ORGANISATION secret means every runner from
+    // that org belongs to whoever minted the token, and a REPOSITORY (or
+    // environment) secret lets different repositories belong to different
+    // people. The fleet cannot tell the difference and does not need to.
+    if (p === '/api/runner-tokens' && req.method === 'POST') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, text: 'Sign in first — a runner token belongs to a person.' });
+      }
+      const body = await readJson(req);
+      const { client: issued, token } = await this.core.runnerTokens.issue(
+        body?.name ? String(body.name) : 'a repository',
+        {},
+      );
+      // The email is the whole payload: it is what a runner is attributed to.
+      issued.email = client.email.toLowerCase();
+      this.saveState();
+      // SHOWN ONCE, like every other secret this coordinator issues. There is
+      // no endpoint that returns it again, because a token that can be read
+      // back is one a compromised session can read back.
+      return json(res, 200, { ok: true, id: issued.id, token, email: issued.email });
+    }
+
+    if (p === '/api/runner-tokens' && req.method === 'GET') {
+      const mine = this.core.runnerTokens
+        .list()
+        .filter((t) => client?.admin || t.email === client?.email?.toLowerCase());
+      return json(res, 200, { ok: true, tokens: mine });
+    }
+
+    if (p.startsWith('/api/runner-tokens/') && req.method === 'DELETE') {
+      const id = p.slice('/api/runner-tokens/'.length);
+      const found = this.core.runnerTokens.list().find((t) => t.id === id);
+      // Somebody else's token is not yours to revoke, and saying "no such
+      // token" rather than "not yours" keeps the endpoint from listing what
+      // exists for anybody who can guess an id.
+      if (!found || !(client?.admin || found.email === client?.email?.toLowerCase())) {
+        return json(res, 404, { ok: false, text: 'No such runner token.' });
+      }
+      const gone = this.core.runnerTokens.revoke(id);
+      this.saveState();
+      return json(res, gone ? 200 : 404, { ok: gone, text: gone ? 'Revoked. Runs using it will no longer be attributed to you.' : 'No such runner token.' });
     }
 
     if (p === '/api/enroll' && req.method === 'POST') {

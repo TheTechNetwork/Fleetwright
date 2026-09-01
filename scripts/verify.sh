@@ -52,6 +52,37 @@ else
 ' "$out"; fail=1
 fi
 
+# THE CHECKS THAT WOULD HAVE CAUGHT WHAT SHIPPED BROKEN.
+#
+# Three bugs reached main and every one was invisible to everything that ran:
+# an expression in `permissions:` (invalid workflow, no line number, failed only
+# after merge), a stray quote in a `run:` block (killed a live macOS runner
+# after it had already enrolled), and a function called in the Worker and
+# defined nowhere (a ReferenceError in the production coordinator, on a route no
+# test reaches).
+#
+# None of them needed cleverness to catch. They needed something to look.
+printf 'workflows  ... '
+if out=$(node scripts/check-workflows.mjs 2>&1); then
+  printf '%s\n' "${out##*$'\n'}"
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
+# TS2304 ONLY — "Cannot find name". worker/src, tools/ and sandbox/ carry
+# pre-existing type complaints that are noise rather than defects, and demanding
+# all of them be fixed before any of them can be checked is how a check never
+# gets added. An identifier that does not exist is different: always a bug,
+# always a runtime throw, invisible until the line runs.
+printf 'names      ... '
+if out=$(npx tsc --noEmit -p tsconfig.names.json 2>&1 | grep 'TS2304' || true); then
+  if [ -n "$out" ]; then
+    printf 'FAILED\n%s\n' "$out"; fail=1
+  else
+    printf 'all defined\n'
+  fi
+fi
+
 printf 'installer  ... '
 if bash -n install/install.sh 2>/dev/null && sh -n install/bootstrap.sh 2>/dev/null; then
   printf 'parses\n'
