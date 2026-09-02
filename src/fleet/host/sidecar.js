@@ -636,9 +636,6 @@ export class Sidecar {
         // problem: a fleet that flags every older host as broken teaches
         // people to ignore the flag.
         credential: state.credential ?? null,
-        // What code this box is running, so the app can say "three commits
-        // behind" without anybody opening a terminal. updates already computed
-        // whether it is behind; this says what it IS.
         // What code this box is RUNNING, so the app can say "three commits
         // behind" without anybody opening a terminal. `updates` already says
         // whether it is behind; this says what it is. Injected like updates,
@@ -684,8 +681,7 @@ export class Sidecar {
     }
   }
 
-  /** @param {string} id */
-/**
+  /**
    * The two "out of date" answers, folded into one small object.
    *
    * Failures are swallowed to null. A health report that throws because git

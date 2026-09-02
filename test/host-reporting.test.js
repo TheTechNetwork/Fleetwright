@@ -62,3 +62,42 @@ test('a logged-out box reports no account rather than a blank one', () => {
   const entry = withHealth({ account: null, loggedIn: false });
   assert.equal(entry.health.account, null);
 });
+
+// --- the update check must not sit on the health path ------------------------
+
+test('health never blocks on git or apt', async () => {
+  // `updates` used to do the work inline: a `git fetch` and an apt list refresh,
+  // inside the function that builds a health frame. Frames go every fifteen
+  // seconds and are what the coordinator ranks hosts on, so most were instant
+  // and the one after a cache expiry was not — a host that went quiet for a
+  // moment every so often, with nothing pointing at why.
+  //
+  // ROADMAP asked for this and said why: "so the answer is ready when asked
+  // rather than computed while somebody waits".
+  const { readFileSync } = await import('node:fs');
+  const bin = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+
+  // The injected function reads a variable. It does not call anything.
+  assert.match(bin, /updates: \(\) => lastUpdates,/);
+
+  // And the work happens on a timer instead.
+  assert.match(bin, /setInterval\(refreshUpdates/);
+  assert.match(bin, /setTimeout\(refreshUpdates, 0\)/);
+
+  // Both unref'd, or the sidecar is a process that will not exit.
+  const timers = bin.match(/set(Timeout|Interval)\(refreshUpdates[^\n]*/g) || [];
+  assert.equal(timers.length, 2);
+  for (const t of timers) assert.match(t, /\.unref\?\.\(\)/, `${t} keeps the process alive`);
+});
+
+test('a failed update check keeps the last answer rather than erasing it', async () => {
+  // Null means CANNOT TELL in the health frame, and the app is careful not to
+  // render it as "no updates". Replacing a good answer with null on a transient
+  // network failure would report "cannot tell" to a fleet that could tell five
+  // minutes ago — worse than being slightly stale.
+  const { readFileSync } = await import('node:fs');
+  const bin = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const refresh = bin.slice(bin.indexOf('function refreshUpdates'), bin.indexOf('setTimeout(refreshUpdates'));
+  assert.match(refresh, /catch/);
+  assert.equal(/lastUpdates = null/.test(refresh), false, 'a failed check erases the previous answer');
+});
