@@ -143,7 +143,6 @@ class MainActivity : ComponentActivity() {
 fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
-    val context = LocalContext.current
     val outbox = remember { Outbox(context) }
     val fleet = remember { Fleet(settings, outbox) }
     // What is waiting, so the pending row can say how many.
@@ -196,6 +195,11 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             // fleet call that fails must not blank the session list that
             // already arrived.
             binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
+            // AFTER EVERY REFRESH, because a command held a moment ago must
+            // show up without waiting for the next flush. Every action on this
+            // screen refreshes when it finishes, so this is the one place that
+            // sees both a queue that grew and a queue that drained.
+            pending = outbox.held.size
             busy = false
         }
     }
@@ -374,6 +378,21 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             if (status.isNotBlank()) {
                 Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Text(status, Modifier.padding(12.dp), fontFamily = FontFamily.Monospace)
+                }
+            }
+
+            // WHAT IS WAITING, because a queue nobody can see is not a queue —
+            // it is a surprise arriving later. The count is enough here: the
+            // commands say what they are when they land, and a list of them on
+            // the main screen would be a second inbox to read.
+            if (pending > 0) {
+                Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(
+                        if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
+                        else "$pending commands are held on this phone and will be sent when the fleet answers.",
+                        Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
 

@@ -110,6 +110,22 @@ struct FleetView: View {
                             .textSelection(.enabled)
                     }
                 }
+                // WHAT IS WAITING, because a queue nobody can see is not a
+                // queue — it is a surprise arriving later. The count is enough:
+                // each command says what it is when it lands, and a list of
+                // them here would be a second inbox to read.
+                if !outbox.held.isEmpty {
+                    Section {
+                        Label(
+                            outbox.held.count == 1
+                                ? "1 command is held on this phone and will be sent when the fleet answers."
+                                : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
+                            systemImage: "tray.full"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                }
                 Section {
                     if sessions.isEmpty && !busy {
                         // ContentUnavailableView rather than a grey sentence:
