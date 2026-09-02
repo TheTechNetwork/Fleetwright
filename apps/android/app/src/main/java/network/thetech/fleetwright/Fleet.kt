@@ -24,7 +24,14 @@ import org.json.JSONObject
  * could call it — and a dependency here would be carried for the life of the
  * app to save about thirty lines.
  */
-class Fleet(private val settings: Settings) {
+class Fleet(
+    private val settings: Settings,
+    /**
+     * Where a command goes when the fleet cannot be reached. Null for a Fleet
+     * built for a one-off read, which carries no queue at all.
+     */
+    private val outbox: Outbox? = null,
+) {
 
     /** A session as the coordinator reports it, with its host attached. */
     data class Session(
@@ -692,11 +699,16 @@ class Fleet(private val settings: Settings) {
      *   `"2"`, and that refusal would arrive AFTER the version handshake had
      *   already agreed, which is the worst-shaped failure this protocol has.
      */
+    /** Send a held command again, under the id it was queued with. */
+    suspend fun resend(entry: Outbox.Held): Reply =
+        intent(entry.verb, entry.params, entry.host, idempotencyKey = entry.id)
+
     private suspend fun intent(
         verb: String,
         params: Map<String, String> = emptyMap(),
         host: String? = null,
         numeric: Map<String, Int> = emptyMap(),
+        idempotencyKey: String? = null,
     ): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
@@ -705,7 +717,10 @@ class Fleet(private val settings: Settings) {
                 .put("actor", "app:android")
                 // An idempotency key the SERVER honours: a retry of `start`
                 // returns the original outcome instead of a second session.
-                .put("id", "app-" + java.util.UUID.randomUUID().toString())
+                // Supplied by the caller when this command has been HELD, so
+                // a retry carries the id it was queued under. Minted here only
+                // for a command being sent for the first time.
+                .put("id", idempotencyKey ?: ("app-" + java.util.UUID.randomUUID().toString()))
             if (!host.isNullOrBlank()) body.put("host", host)
             try {
                 val json = post("/api/intent", body)
@@ -739,7 +754,21 @@ class Fleet(private val settings: Settings) {
                     },
                 )
             } catch (e: Exception) {
-                Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
+                // HELD, NOT LOST — but only when the fleet could not be
+                // REACHED. A refusal is an answer, and replaying an answer is
+                // how somebody's revoked credential retries all night. See
+                // isDeliveryFailure.
+                val entry =
+                    if (idempotencyKey == null && isDeliveryFailure(e)) outbox?.hold(verb, params, host) else null
+                if (entry != null) {
+                    Reply(
+                        ok = true,
+                        text = "Held on this phone. ${entry.summary} will be sent when the fleet answers again.",
+                        sessions = emptyList(),
+                    )
+                } else {
+                    Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
+                }
             }
         }
 

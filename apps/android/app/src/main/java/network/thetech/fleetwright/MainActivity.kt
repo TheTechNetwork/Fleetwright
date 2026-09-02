@@ -143,7 +143,11 @@ class MainActivity : ComponentActivity() {
 fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
-    val fleet = remember { Fleet(settings) }
+    val context = LocalContext.current
+    val outbox = remember { Outbox(context) }
+    val fleet = remember { Fleet(settings, outbox) }
+    // What is waiting, so the pending row can say how many.
+    var pending by remember { mutableStateOf(outbox.held.size) }
     val scope = rememberCoroutineScope()
 
     // rememberSaveable, not remember: a rotation destroys and recreates the
@@ -287,7 +291,25 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         )
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    // FLUSHED ON EVERY REFRESH, which is the moment we have just learned the
+    // fleet answers. Not on a timer: a timer retries into an outage, and the
+    // refresh already happens when the app is opened, pulled, or comes back.
+    LaunchedEffect(Unit) {
+        refresh()
+        val sent = outbox.flush { entry ->
+            runCatching {
+                val reply = fleet.resend(entry)
+                // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
+                // session is gone", "you cannot stop that" — and holding a
+                // command the fleet has already judged would retry it forever.
+                if (!reply.ok) status = reply.text
+            }
+        }
+        pending = outbox.held.size
+        // One extra refresh if anything landed, and only here: flush is not
+        // called from refresh on this side, so there is no recursion to break.
+        if (sent > 0) refresh(keepStatus = true)
+    }
 
     Scaffold(
         topBar = {

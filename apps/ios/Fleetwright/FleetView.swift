@@ -209,7 +209,37 @@ struct FleetView: View {
         }
     }
 
-    private var fleet: Fleet { Fleet(settings: settings) }
+    /// One queue for the screen, not one per computed Fleet — the whole point
+    /// is that it outlives the request that failed.
+    @State private var outbox = Outbox()
+    private var fleet: Fleet { Fleet(settings: settings, outbox: outbox) }
+
+    /// Try everything held, now that the fleet has just answered.
+    ///
+    /// ON REFRESH, NOT ON A TIMER. A timer retries into an outage; a refresh is
+    /// the moment we have just learned the fleet is reachable, and it already
+    /// happens when the app opens, is pulled, or comes back to the foreground.
+    /// Returns how many were sent, and does NOT refresh.
+    ///
+    /// The first version called refresh() at the end, and refresh() calls this
+    /// — mutual recursion that happened to terminate because the second pass
+    /// found an empty queue. "Happens to terminate" is not a property to ship;
+    /// the caller re-lists instead.
+    @discardableResult
+    private func flushOutbox() async -> Int {
+        await outbox.flush { entry in
+            do {
+                let reply = try await fleet.resend(entry)
+                // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
+                // session is gone", "you cannot stop that" — and holding a
+                // command it has already judged would retry it forever.
+                if reply.ok == false, let text = reply.text { status = text }
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+    }
 
     /// - Parameter keepStatus: keep whatever is already on screen if the list
     ///   call succeeds. Set after an action, whose reply text is the only
@@ -267,6 +297,12 @@ struct FleetView: View {
         do {
             let reply = try await fleet.list()
             sessions = reply.sessions ?? []
+            // The fleet just answered, so anything held can go now — and if
+            // any of it landed, the list we just fetched is already out of
+            // date. One extra list, not a second refresh: refresh calls this.
+            if reply.ok != false, await flushOutbox() > 0 {
+                sessions = (try? await fleet.list().sessions) as? [Fleet.Session] ?? sessions
+            }
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
