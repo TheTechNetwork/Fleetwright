@@ -92,6 +92,23 @@ test('a flush stops at the first thing it cannot send', () => {
   assert.match(kotlin, /return sent/);
 });
 
+test('both apps show what is being held', () => {
+  // A queue nobody can see is not a queue, it is a surprise arriving later.
+  // And this is the row docs/app-parity.md exists to catch: the same feature
+  // has shipped to one phone and not the other before, and been reported done
+  // on both.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const main = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url),
+    'utf8',
+  );
+  assert.match(view, /held on this phone/);
+  assert.match(main, /held on this phone/);
+  // And the count is kept current on refresh, not only after a flush — a
+  // command queued a moment ago has to appear without waiting for the fleet.
+  assert.match(main, /pending = outbox\.held\.size/);
+});
+
 test('nothing recurses between refresh and flush', () => {
   // The first iOS version had refresh() call flushOutbox() and flushOutbox()
   // call refresh(). It terminated because the second pass found an empty queue,
