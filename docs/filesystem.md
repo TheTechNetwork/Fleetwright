@@ -137,8 +137,18 @@ either. That is a portability fix in the CLI calls, not a change of engine.
 The apps show a **Files** button on every session, running or stopped — the
 workspace volume survives a stop, which is what makes a session resumable, so
 "collect what it produced" is mostly a thing you do after the work has finished.
-Browse, read, delete; write and copy exist in both clients and have no screen
-yet, which is the honest state rather than a hidden feature.
+Browse, read, **edit, create, copy and delete** — all five verbs have a screen
+on both phones.
+
+Two choices worth knowing. **Save is offered only when the text differs from
+what was read**, so a file opened and closed is never rewritten: that would move
+its mtime and show up in a repository as a modification nobody made. And a **new
+file is created empty, then opened** — the failure that matters is a name the
+host refuses, and it should happen before somebody has typed a page into it.
+
+A copy's destination is relative to the **workspace root**, not to the directory
+being browsed, and both dialogs say so. Guessing wrong puts somebody's file one
+directory off and the host cannot know which they meant.
 
 Neither app validates a path, deliberately, and both say so where somebody
 editing them will read it. The host confines it three times and is the only

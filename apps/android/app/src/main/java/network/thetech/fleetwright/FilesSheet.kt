@@ -1,7 +1,6 @@
 package network.thetech.fleetwright
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,6 +67,17 @@ fun FilesSheet(
     var problem by remember { mutableStateOf<String?>(null) }
     var reading by remember { mutableStateOf<Pair<String, String>?>(null) }
     var deleting by remember { mutableStateOf<Fleet.Entry?>(null) }
+    /** Where a copy is going. Null when nobody is copying. */
+    var copying by remember { mutableStateOf<Fleet.Entry?>(null) }
+    var destination by remember { mutableStateOf("") }
+    /** A new file being named, before it exists. */
+    var creating by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    /** The body being edited, alongside what was read, so Save can be offered
+     *  only when they differ — a file opened and closed is never rewritten,
+     *  which would change its mtime and show up as a modification nobody made. */
+    var draft by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
 
     suspend fun load() {
         loading = true
@@ -99,6 +111,10 @@ fun FilesSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            TextButton(onClick = { creating = true }, enabled = !saving) {
+                Icon(Icons.Filled.Add, contentDescription = null)
+                Text("  New file")
+            }
             Spacer(Modifier.padding(4.dp))
 
             problem?.let {
@@ -140,6 +156,7 @@ fun FilesSheet(
                                             problem = reply.text.ifBlank { "That file could not be read." }
                                         } else {
                                             problem = null
+                                            draft = reply.text
                                             reading = entry.name to reply.text
                                         }
                                     }
@@ -161,6 +178,13 @@ fun FilesSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        TextButton(onClick = {
+                            copying = entry
+                            // Prefilled with where it is, so the common case —
+                            // a copy beside the original — is an edit rather
+                            // than a retype.
+                            destination = joinPath(path, entry.name) + ".copy"
+                        }) { Text("Copy") }
                         IconButton(onClick = { deleting = entry }) {
                             Icon(Icons.Filled.Delete, contentDescription = "Delete ${entry.name}")
                         }
@@ -183,20 +207,106 @@ fun FilesSheet(
     reading?.let { (name, body) ->
         AlertDialog(
             onDismissRequest = { reading = null },
-            confirmButton = { TextButton(onClick = { reading = null }) { Text("Done") } },
+            // AN EDITOR, NOT A VIEWER, and Save goes through the same
+            // `writefile` the MCP server withholds by default. What makes that
+            // consistent is that a person tapping Save has decided; an agent
+            // reaching for it has not been asked.
+            confirmButton = {
+                TextButton(
+                    enabled = !saving && draft != body,
+                    onClick = {
+                        val target = joinPath(path, name)
+                        val toWrite = draft
+                        reading = null
+                        scope.launch {
+                            saving = true
+                            val reply = fleet.writeFile(session, target, toWrite, host)
+                            saving = false
+                            if (!reply.ok) problem = reply.text.ifBlank { "That could not be written." }
+                            load()
+                        }
+                    },
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { reading = null }) { Text("Close") } },
             title = { Text(name) },
             text = {
-                // MONOSPACED AND UNWRAPPED. This is source and output, and
-                // reflowing it moves the columns somebody is reading.
-                Text(
-                    body,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    // MONOSPACED. This is source and output, and a proportional
+                    // font moves the columns somebody is reading.
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .horizontalScroll(rememberScrollState()),
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                 )
             },
+        )
+    }
+
+    if (creating) {
+        AlertDialog(
+            onDismissRequest = { creating = false; newName = "" },
+            title = { Text("New file") },
+            text = {
+                Column {
+                    Text("Relative to this directory. Sub/directories are created as needed.")
+                    OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val name = newName
+                    creating = false
+                    newName = ""
+                    if (name.isNotBlank()) {
+                        scope.launch {
+                            // Created empty, then opened. The failure that
+                            // matters — a name the host refuses — should happen
+                            // before somebody has typed a page into it.
+                            saving = true
+                            val reply = fleet.writeFile(session, joinPath(path, name), "", host)
+                            saving = false
+                            if (!reply.ok) problem = reply.text.ifBlank { "That could not be created." }
+                            load()
+                        }
+                    }
+                }) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { creating = false; newName = "" }) { Text("Cancel") } },
+        )
+    }
+
+    copying?.let { source ->
+        AlertDialog(
+            onDismissRequest = { copying = null; destination = "" },
+            title = { Text("Copy ${source.name}") },
+            text = {
+                Column {
+                    // Relative to the WORKSPACE ROOT, not to here. Guessing
+                    // wrong puts somebody's file one directory off, and the
+                    // host cannot know which they meant.
+                    Text("Relative to the workspace root, not to this directory.")
+                    OutlinedTextField(value = destination, onValueChange = { destination = it }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val from = joinPath(path, source.name)
+                    val to = destination
+                    copying = null
+                    destination = ""
+                    if (to.isNotBlank()) {
+                        scope.launch {
+                            val reply = fleet.copyFile(session, from, to, host)
+                            if (!reply.ok) problem = reply.text.ifBlank { "That could not be copied." }
+                            load()
+                        }
+                    }
+                }) { Text("Copy") }
+            },
+            dismissButton = { TextButton(onClick = { copying = null; destination = "" }) { Text("Cancel") } },
         )
     }
 

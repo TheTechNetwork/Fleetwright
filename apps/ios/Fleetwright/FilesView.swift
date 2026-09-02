@@ -27,6 +27,14 @@ struct FilesView: View {
     /// is a detour from browsing, and coming back should not cost the place.
     @State private var reading: (name: String, body: String)?
     @State private var deleting: Fleet.Entry?
+    /// Where a copy is going. Nil when nobody is copying.
+    @State private var copying: Fleet.Entry?
+    @State private var destination = ""
+    /// A new file being named, before it exists.
+    @State private var creatingName = ""
+    @State private var creating = false
+    /// Set while a write is in flight, so Save cannot be tapped twice.
+    @State private var saving = false
 
     var body: some View {
         List {
@@ -62,9 +70,56 @@ struct FilesView: View {
         .refreshable { await load() }
         .overlay { if loading && entries.isEmpty { ProgressView() } }
         .task { await load() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { creating = true } label: { Image(systemName: "doc.badge.plus") }
+                    .accessibilityLabel("New file")
+            }
+        }
         .sheet(item: Binding(get: { reading.map { ReadFile(name: $0.name, body: $0.body) } },
                              set: { if $0 == nil { reading = nil } })) { file in
-            FileReader(file: file)
+            // AN EDITOR, NOT A VIEWER, and the save goes through the same
+            // `writefile` the MCP server withholds by default. What makes that
+            // consistent is that a person tapping Save has decided; an agent
+            // reaching for it has not been asked.
+            FileEditor(file: file, saving: saving) { body in
+                await save(path: join(path, file.name), body: body)
+            }
+        }
+        .alert("New file", isPresented: $creating) {
+            TextField("name.txt", text: $creatingName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Create") {
+                let name = creatingName
+                creatingName = ""
+                guard !name.isEmpty else { return }
+                Task {
+                    // Created empty, then opened. Two steps rather than one
+                    // screen that both names and fills a file, because the
+                    // failure that matters — a name the host refuses — should
+                    // happen before somebody has typed a page into it.
+                    await save(path: join(path, name), body: "")
+                    await load()
+                }
+            }
+            Button("Cancel", role: .cancel) { creatingName = "" }
+        } message: {
+            Text("Relative to this directory. Sub/directories are created as needed.")
+        }
+        .alert("Copy \(copying?.name ?? "")", isPresented: Binding(get: { copying != nil }, set: { if !$0 { copying = nil } })) {
+            TextField("new path", text: $destination)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Copy") {
+                if let source = copying { Task { await copy(source) } }
+            }
+            Button("Cancel", role: .cancel) { copying = nil; destination = "" }
+        } message: {
+            // The destination is relative to the WORKSPACE ROOT, not to here.
+            // Guessing wrong puts somebody's file one directory off, and the
+            // host cannot know which they meant.
+            Text("Relative to the workspace root, not to this directory.")
         }
         .confirmationDialog(
             deleting.map { "Delete \($0.name)?" } ?? "",
@@ -110,8 +165,18 @@ struct FilesView: View {
         }
     }
 
+    @ViewBuilder
     private func deleteButton(_ entry: Fleet.Entry) -> some View {
         Button(role: .destructive) { deleting = entry } label: { Label("Delete", systemImage: "trash") }
+        Button {
+            copying = entry
+            // Prefilled with where it is, so the common case — a copy beside
+            // the original — is an edit rather than a retype.
+            destination = join(path, entry.name) + ".copy"
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        .tint(.blue)
     }
 
     // MARK: - Talking to the fleet
@@ -150,6 +215,33 @@ struct FilesView: View {
         } catch {
             problem = error.localizedDescription
         }
+    }
+
+    /// Write a file and report what the host said about it.
+    private func save(path target: String, body: String) async {
+        saving = true
+        defer { saving = false }
+        do {
+            let reply = try await fleet.writeFile(session, path: target, content: body, host: host)
+            problem = reply.ok == false ? (reply.text ?? "That could not be written.") : nil
+        } catch {
+            problem = error.localizedDescription
+        }
+        await load()
+    }
+
+    private func copy(_ entry: Fleet.Entry) async {
+        let to = destination
+        copying = nil
+        destination = ""
+        guard !to.isEmpty else { return }
+        do {
+            let reply = try await fleet.copyFile(session, path: join(path, entry.name), to: to, host: host)
+            problem = reply.ok == false ? (reply.text ?? "That could not be copied.") : nil
+        } catch {
+            problem = error.localizedDescription
+        }
+        await load()
     }
 
     private func remove(_ entry: Fleet.Entry) async {
@@ -193,24 +285,44 @@ private struct ReadFile: Identifiable {
     var id: String { name }
 }
 
-private struct FileReader: View {
+private struct FileEditor: View {
     let file: ReadFile
+    let saving: Bool
+    let onSave: (String) async -> Void
+
     @Environment(\.dismiss) private var dismiss
+    @State private var body_: String = ""
+    /// What was read. Save is offered only when the text differs from it, so a
+    /// file opened and closed is never rewritten — which would change its
+    /// mtime and, on a repository, show up as a modification nobody made.
+    @State private var original: String = ""
 
     var body: some View {
         NavigationStack {
-            ScrollView([.horizontal, .vertical]) {
-                Text(file.body)
-                    // MONOSPACED AND UNWRAPPED. This is source and output, and
-                    // reflowing it moves the columns somebody is reading.
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-            }
-            .navigationTitle(file.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            TextEditor(text: $body_)
+                // MONOSPACED. This is source and output, and a proportional
+                // font moves the columns somebody is reading.
+                .font(.system(.footnote, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .navigationTitle(file.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task {
+                                await onSave(body_)
+                                dismiss()
+                            }
+                        }
+                        .disabled(saving || body_ == original)
+                    }
+                }
+                .task {
+                    body_ = file.body
+                    original = file.body
+                }
         }
     }
 }
