@@ -54,7 +54,11 @@ test('the workspace, inside a real container', { skip }, async (t) => {
 mkdir -p /work/src /work/empty
 printf 'hello\\nworld\\n' > /work/src/a.txt
 printf 'top\\n' > /work/README.md
-head -c 300 /dev/urandom > /work/blob.bin
+# A DETERMINISTIC BINARY, not 300 bytes of /dev/urandom.
+# Random bytes contain no NUL about 31% of the time -- (255/256)^300 -- so the
+# "refuses binary" test passed here and failed in CI, which is a flaky test
+# dressed as an engine difference. This is a PNG header: NULs by construction.
+printf 'PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\001\\000' > /work/blob.bin
 ln -s /etc/passwd /work/escape
 ln -s /etc /work/etcdir
 `;

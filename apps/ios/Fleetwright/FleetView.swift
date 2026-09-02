@@ -151,7 +151,8 @@ struct FleetView: View {
                         }
                     }
                     ForEach(sessions) { session in
-                        SessionRow(session: session, busy: busy, stop: { await act { try await fleet.stop(session.name) } },
+                        SessionRow(session: session, busy: busy, fleet: fleet,
+                                   stop: { await act { try await fleet.stop(session.name) } },
                                    resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
                                    forget: { await act { try await fleet.forget(session.name) } },
                                    answer: { option in
@@ -310,6 +311,10 @@ struct FleetView: View {
 private struct SessionRow: View {
     let session: Fleet.Session
     let busy: Bool
+    /// The client, for the one action that is a DESTINATION rather than a
+    /// closure: browsing pushes a screen, and a screen needs something to call
+    /// while it is open.
+    let fleet: Fleet
     let stop: () async -> Void
     let resume: () async -> Void
     let forget: () async -> Void
@@ -408,7 +413,7 @@ private struct SessionRow: View {
                 // resumable — so "collect what it produced" is a thing to do
                 // AFTER the work has finished, which is most of the time.
                 NavigationLink("Files") {
-                    FilesView(session: session.name, host: session.hostId, fleet: Fleet(settings: settings))
+                    FilesView(session: session.name, host: session.hostId, fleet: fleet)
                 }
                 .disabled(busy)
 
