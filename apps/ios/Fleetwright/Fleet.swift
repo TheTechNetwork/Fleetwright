@@ -9,6 +9,9 @@ import Security
 /// life of the app to save very little.
 struct Fleet {
     let settings: Settings
+    /// Where a command goes when the fleet cannot be reached. Optional so a
+    /// Fleet built for a one-off read carries no queue at all.
+    var outbox: Outbox?
 
     struct Session: Codable, Identifiable, Hashable {
         let name: String
@@ -668,11 +671,41 @@ struct Fleet {
     ///   Swift Strings for convenience and must be sent as JSON NUMBERS —
     ///   `validateIntent` requires a safe integer and refuses `"2"`, which
     ///   would be a rejection after the version handshake had already agreed.
+    /// Send a held command again, under the id it was queued with.
+    func resend(_ entry: Outbox.Held) async throws -> Reply {
+        try await intent(
+            entry.verb,
+            params: entry.params,
+            host: entry.host,
+            numeric: Set(entry.numeric),
+            idempotencyKey: entry.id
+        )
+    }
+
+    /// What the person asked for, in their words, for the pending list.
+    static func describe(verb: String, params: [String: String]) -> String {
+        let name = params["name"] ?? ""
+        switch verb {
+        case "start": return name.isEmpty ? "Starting a session" : "Starting \(name)"
+        case "stop": return "Stopping \(name)"
+        case "resume": return "Resuming \(name)"
+        case "forget": return "Forgetting \(name)"
+        case "restore": return "Restoring \(name)"
+        case "purge": return "Purging \(name)"
+        case "answer": return "Answering \(name)"
+        case "writefile": return "Writing \(params["path"] ?? "a file") in \(name)"
+        case "copyfile": return "Copying \(params["path"] ?? "a file") in \(name)"
+        case "deletefile": return "Deleting \(params["path"] ?? "a file") in \(name)"
+        default: return verb
+        }
+    }
+
     private func intent(
         _ verb: String,
         params: [String: String] = [:],
         host: String? = nil,
-        numeric: Set<String> = []
+        numeric: Set<String> = [],
+        idempotencyKey: String? = nil
     ) async throws -> Reply {
         var typed: [String: Any] = [:]
         for (key, value) in params {
@@ -684,11 +717,32 @@ struct Fleet {
             "actor": "app:ios",
             // An idempotency key the SERVER honours: a retry of `start` returns
             // the original outcome rather than starting a second session.
-            "id": "app-\(UUID().uuidString)",
+            //
+            // Supplied by the caller when this command has been HELD, so a
+            // retry carries the id it was queued under. Minted here only for a
+            // command being sent for the first time.
+            "id": idempotencyKey ?? "app-\(UUID().uuidString)",
         ]
         if let host, !host.isEmpty { body["host"] = host }
-        let data = try await post("/api/intent", body: body)
-        return try JSONDecoder().decode(Reply.self, from: data)
+        do {
+            let data = try await post("/api/intent", body: body)
+            return try JSONDecoder().decode(Reply.self, from: data)
+        } catch {
+            // HELD, NOT LOST — but only when the fleet could not be REACHED.
+            // A refusal is an answer, and replaying an answer is how somebody's
+            // revoked credential retries all night. See isDeliveryFailure.
+            guard idempotencyKey == nil,
+                  isDeliveryFailure(error),
+                  let outbox,
+                  let entry = outbox.hold(verb: verb, params: params, numeric: numeric, host: host,
+                                          summary: Self.describe(verb: verb, params: params))
+            else { throw error }
+            return Reply(
+                ok: true,
+                text: "Held on this phone. \(entry.summary) will be sent when the fleet answers again.",
+                sessions: nil
+            )
+        }
     }
 
     private func post(_ path: String, body: [String: Any], authenticated: Bool = true) async throws -> Data {
