@@ -13,6 +13,10 @@ reach any of it from a cold radio.
 > re-entering every secret. The App Store needed a unique name, so it got one.
 > See [docs/naming.md](docs/naming.md).
 
+**New box?** [docs/first-session.md](docs/first-session.md) is ten steps from
+clone to a running session, with no digressions. The essays are linked at the
+bottom of it.
+
 ## Get the app
 
 | | |
