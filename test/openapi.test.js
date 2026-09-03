@@ -67,7 +67,7 @@ function concrete(path, ids = {}) {
 async function seed(core) {
   await core.hostIds.enrol({ hostId: 'seeded-host', publicJwk: (await generateKeyPair()).publicJwk });
   const { client } = await core.clients.issue('a phone (someone@example.com)');
-  core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
   return { hostId: 'seeded-host', clientId: client.id };
 }
 

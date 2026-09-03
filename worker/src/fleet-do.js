@@ -751,13 +751,17 @@ export class Fleet {
 
     if (url.pathname === '/api/devices' && request.method === 'POST') {
       const body = await readJson(request);
-      const r = this.core.registerDevice({
+      const r = await this.core.registerDevice({
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
         // The credential this registration belongs to, so revoking a phone can
         // stop the fleet talking to it. The Node coordinator does the same.
         clientId: client?.id,
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
+        // The phone's public key. Validated during registration rather than at
+        // send time: a key that cannot be imported is a registration that fails
+        // on every notification forever.
+        pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) await this.#saveDevices();
       return json(r, r.ok ? 200 : 400);

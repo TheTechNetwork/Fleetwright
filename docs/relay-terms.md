@@ -104,18 +104,25 @@ every push on both platforms, including the ones this project already sends
 from its own coordinator. Nothing here can change that, and pretending
 otherwise would be worse than saying it.
 
-### What would remove the need to trust this
+### This is being replaced by something structural, and it is half built
 
-Encrypting the payload on the coordinator to a key held by the device, and
-decrypting it in an iOS Notification Service Extension and an Android data
-message handler. The relay would forward ciphertext it cannot read, and every
-promise in the section above would be structural instead of contractual — the
-difference this project keeps insisting on everywhere else.
+Everything above is a promise kept by not writing a log line. The stronger
+version encrypts the payload on the coordinator to a key held by one phone, so
+the relay forwards bytes it cannot read — and neither can Apple or Google, which
+is a bigger change than the relay was ever about.
 
-It is real work: a new app target, key exchange between coordinator and device,
-and a fallback for when decryption fails that is not a blank notification. It
-is **not** what ships first, and it is written down here so that "we do not log
-it" is understood as the weaker guarantee it is.
+**The coordinator half is done.** ECDH P-256 → HKDF-SHA256 → AES-256-GCM,
+exercised end to end in this repository against the same bytes a phone will
+receive. See [`push-encryption.md`](./push-encryption.md).
+
+**Neither app implements the other half yet** — an iOS Notification Service
+Extension and an Android data-message handler, plus key generation and storage
+in the Keychain and the Keystore. Until they do, no phone registers a key and
+every notification takes the plaintext fallback.
+
+So this document still describes what is true today, and the sections above are
+not softened on the strength of work that is only half finished. When both apps
+land, the promise stops being a promise.
 
 ---
 

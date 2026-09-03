@@ -84,6 +84,22 @@ routes = [
 # is set here and in no fork.
 AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
 
+# PUSH, WHICH IS OFF UNLESS THIS SAYS OTHERWISE.
+#
+# It used to turn itself on whenever an APNs key and an FCM service account
+# were present. That is a fine rule for one deployment and a bad one for a
+# fork: those credentials are OURS, they address OUR app's device tokens, and a
+# fork that acquires them by copying a config would be sending notifications to
+# our users' phones. Turning push on should be a line somebody wrote.
+#
+# A fork with this unset gets a coordinator that logs what it would have sent
+# and says so, which is a working fleet — the apps pull, and nothing pretends.
+#
+# This is also the seam a paid entitlement sits on later. If push is ever
+# something an account pays for, what changes is the value here and in whatever
+# issues it, not the plumbing underneath.
+AGENT_FLEET_PUSH = "1"
+
 # --- the GitHub App -----------------------------------------------------------
 # Identifiers, not credentials, and that is why they are here rather than in a
 # secret. A client id appears in the query string of every authorize URL the

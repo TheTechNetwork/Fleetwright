@@ -759,7 +759,7 @@ test('a registration that outlives its credential is still not notified', async 
   // its own test below — and mixing them here would have made a passing
   // revocation test out of an unrelated refusal.
   const { client } = await c.core.clients.issue('a phone (eli@thetech.network)', { admin: true });
-  c.core.registerDevice({ platform: 'ios', token: 'b'.repeat(64), clientId: client.id });
+  await c.core.registerDevice({ platform: 'ios', token: 'b'.repeat(64), clientId: client.id });
 
   /** @type {any[]} */
   const sent = [];
@@ -788,8 +788,8 @@ test('a notification goes to the person whose session it is, and nobody else', a
   const { coordinator: c } = await coordinator(t);
   const mine = await c.core.clients.issue('eli phone');
   const theirs = await c.core.clients.issue('guest phone');
-  c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: mine.client.id, actor: 'eli@thetech.network' });
-  c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: theirs.client.id, actor: 'guest@example.com' });
+  await c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: mine.client.id, actor: 'eli@thetech.network' });
+  await c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: theirs.client.id, actor: 'guest@example.com' });
 
   // The registry learns who owns what from a health frame, which is where
   // createdBy actually comes from — the event itself does not carry it. The

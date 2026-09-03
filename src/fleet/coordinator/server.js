@@ -971,11 +971,15 @@ export class Coordinator {
     // from. Both apps call this on every launch.
     if (p === '/api/devices' && req.method === 'POST') {
       const body = await readJson(req);
-      const r = this.core.registerDevice({
+      const r = await this.core.registerDevice({
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
         clientId: client?.id,
+        // The phone's public key, so its notifications are unreadable to Apple,
+        // Google and anything between. Absent from an app that predates this
+        // and the sender falls back — see docs/push-encryption.md.
+        pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) this.saveState();
       return json(res, r.ok ? 200 : 400, r);
