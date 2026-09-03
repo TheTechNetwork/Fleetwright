@@ -267,7 +267,20 @@ export class HttpAdapter {
     if (p === '/api/peek' && method === 'GET') {
       const name = url.searchParams.get('name') || '';
       const text = this.sessions.peek(name, 60);
-      if (text === null) return json(res, 404, { error: 'not running' });
+      if (text === null) {
+        // NAMES THE WAY BACK. `peek` is documented as "how you find out
+        // whether work is done" and answers "not running" on every session a
+        // returning user has — which is all of them, and the only ones whose
+        // output they want. Resuming restores the pane and the transcript.
+        const known = this.sessions.list().some((s) => s.name === name);
+        return json(res, 404, {
+          error: 'not running',
+          text: known
+            ? `"${name}" is not running, so there is no live pane to read. Resume it to bring the transcript ` +
+              'back — that is usually where the output you are looking for is.'
+            : `No session called "${name}".`,
+        });
+      }
       return json(res, 200, { name, text });
     }
 

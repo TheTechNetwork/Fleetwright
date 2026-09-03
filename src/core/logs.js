@@ -57,12 +57,27 @@ export function readSessionLogs(cfg, name, lines = 60) {
     if (r.status === 0) {
       const text = `${r.stdout}${r.stderr}`.trim();
       if (text) return { ok: true, text: `Container output for ${name}:\n${text}` };
-      return { ok: true, text: `The container for ${name} has printed nothing.` };
+      // AN EMPTY CONTAINER IS NOT AN ANSWER — fall through to the pane.
+      //
+      // This returned "the container has printed nothing" and stopped, and a
+      // returning beta tester got exactly that WHILE PEEK SHOWED A FULL PANE,
+      // seconds apart, on a session they had just resumed. A resumed session's
+      // work is in the pane and the transcript; the container it was restarted
+      // into has printed nothing yet, and both statements were true.
+      //
+      // The tool the product names for collecting output was the one that
+      // failed on the sessions a returning user actually has.
     }
   }
 
   if (hasSession(name)) {
     return { ok: true, text: `Pane for ${name}:\n${capturePane(name, lines)}` };
+  }
+  // Sandboxed, container alive, nothing printed, and no pane either. Rare, and
+  // worth its own sentence rather than the "nothing left to read" below, which
+  // would be wrong: there is something, it just has not said anything yet.
+  if (cfg.sandbox && podman(cfg, ['container', 'inspect', sandboxNames(name).container]).status === 0) {
+    return { ok: true, text: `${name} is running and has printed nothing yet.` };
   }
   return {
     ok: false,

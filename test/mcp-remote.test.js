@@ -382,6 +382,11 @@ test('fleet_health answers with capacity, not the word ok', async () => {
           // Claude account of its own, and two people who have linked theirs.
           loggedIn: false,
           claudeAccounts: 2,
+          hostId: 'deb13-staging',
+          // The countdown a tester learned from `verify` out of desperation,
+          // and the drift they met as "does not know that command".
+          credential: { state: 'valid', expiresAt: Date.now() + 11 * 60_000 },
+          updates: { appBehind: 2 },
         },
       }),
     }),
@@ -394,6 +399,10 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   });
   const text = String(reply.result.content[0].text);
   assert.notEqual(text, 'ok');
+  // WHICH BOX. This was #311, which I closed on the strength of a commit that
+  // only fixed the login banner beside it — caught by running the tool rather
+  // than by re-reading the diff.
+  assert.match(text, /^deb13-staging/m);
   assert.match(text, /2\/5 sessions running/);
   assert.match(text, /tags: linux/);
   // AND IT DOES NOT CALL A HEALTHY HOST BROKEN. This asserted `/NOT LOGGED IN/`
@@ -402,6 +411,11 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   // fleet was dead while `fleet_start` worked on the same machine.
   assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
   assert.match(text, /2 accounts linked/);
+  // Both facts travelled on every health frame and only `fleet_verify` and
+  // `agent-hub update` ever looked at them.
+  assert.match(text, /11 minutes left/);
+  assert.match(text, /2 commits behind/);
+  assert.match(text, /agent-hub update --restart/);
 });
 
 test('a host nobody has linked an account on says so, and says how to fix it', async () => {

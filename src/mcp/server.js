@@ -149,6 +149,14 @@ function sessionFrom(reply, name = '') {
  */
 function describeHealth(h) {
   const lines = [];
+  // WHICH BOX. On a two-host fleet this returned capacity, load and a login
+  // banner with no host name anywhere in it, and a beta tester could not tell
+  // which machine they were reading about.
+  //
+  // I closed that issue (#311) on the strength of the same commit that fixed
+  // the login banner, and the banner was all it fixed. Caught by running the
+  // tool afterwards rather than by re-reading the diff.
+  if (h.hostId) lines.push(String(h.hostId));
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
@@ -182,6 +190,33 @@ function describeHealth(h) {
     lines.push('claude: the box itself is logged in (this host predates per-person accounts)');
   }
   if (h.hub && h.hub.reachable === false) lines.push('hub: unreachable from the sidecar');
+
+  // THE COUNTDOWN, BEFORE IT MATTERS. A returning beta tester learned their
+  // token had eleven minutes left from `fleet_verify`, which they called out of
+  // desperation after everything else had misled them. By then they had spent
+  // most of the eleven minutes reading errors.
+  //
+  // The state travels on every health frame. Only `verify` ever looked at it.
+  if (h.credential?.state === 'expired') {
+    lines.push(
+      h.credential.refreshable === false
+        ? 'credential: EXPIRED and cannot renew itself — sessions started here come up signed out'
+        : 'credential: expired, and due to renew itself',
+    );
+  } else if (Number.isFinite(Number(h.credential?.expiresAt))) {
+    const mins = Math.round((Number(h.credential.expiresAt) - Date.now()) / 60_000);
+    if (mins <= 60) lines.push(`credential: ${mins <= 0 ? 'expiring now' : `${mins} minutes left`}`);
+  }
+
+  // AND WHETHER THIS BOX IS BEHIND. A host two releases back refuses verbs the
+  // coordinator offers, and nothing said so until somebody tripped over it —
+  // the tester met it as "does not know that command" on their sixth call.
+  if (Number(h.updates?.appBehind) > 0) {
+    lines.push(
+      `code: ${h.updates.appBehind} commit${h.updates.appBehind === 1 ? '' : 's'} behind — it may refuse newer verbs. ` +
+        'Run `agent-hub update --restart` on it.',
+    );
+  }
   return lines.length ? lines.join('\n') : 'ok';
 }
 
