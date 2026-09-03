@@ -153,7 +153,7 @@ anything. (`docs/wanted.md` has the full table.)
 | Sandbox: Android Studio + emulator (`/dev/kvm`) | wanted | `docs/wanted.md` |
 | Telnyx module (Inkbox-style) — own repo, published to npm, consumed here | wanted | `docs/wanted.md` |
 | Session config from app/TG | wanted | `docs/wanted.md` |
-| Prompt-efficiency helpers injected at session start (rules, helpers, our own tools) | **designed** | `docs/wanted.md` — host-side named profiles, then measure interruptions before arguing about contents |
+| Prompt-efficiency helpers injected at session start / **task at start** | **designed, blocked on one decision** | [`docs/task-at-start.md`](docs/task-at-start.md). The security half is settled — the coordinator NAMES a profile and never carries one. What is open is delivery: `start { profile }` is a new parameter on an existing verb, which this project treats as a flag day, and a beta tester met a host two releases behind this week. Recommendation is v3, carrying whatever else is waiting. Ranked #1 in both beta reports |
 
 ## 6b. The install should ask nothing
 

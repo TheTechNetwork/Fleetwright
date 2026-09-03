@@ -772,6 +772,27 @@ export class McpServer {
       if (landed && !String(reply?.text ?? '').includes(landed)) {
         reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
       }
+      // AND IT SAYS THE SESSION IS IDLE, which is the part nothing said.
+      //
+      // `brief` is stored and never delivered, so the loop these instructions
+      // teach — start, await, read_log — produces an idle REPL, an empty log
+      // and no error anywhere. A beta tester followed it exactly and lost the
+      // session to it; on a paid runner that loop burns money until the budget
+      // deadline.
+      //
+      // Delivering a task at start needs a protocol decision that is not made
+      // yet (docs/task-at-start.md, #325). Saying so does not, and silence is
+      // the expensive half: an agent told the session is idle stops waiting
+      // for output that is never coming.
+      if (tool.verb === 'start') {
+        reply = {
+          ...reply,
+          text:
+            `${reply?.text ?? ''}\n\nIT STARTED IDLE. Nothing here can hand it work — \`brief\` is a note for ` +
+            'people, not a prompt, and no verb sends text to a session. Somebody has to drive it, from the app or ' +
+            'its Remote Control link. Waiting on it will time out rather than finish.',
+        };
+      }
     }
 
     // THE EVIDENCE, WHERE THE QUESTION IS ASKED. `status` and `peek` are what

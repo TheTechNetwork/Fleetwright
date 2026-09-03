@@ -645,6 +645,39 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
 });
 
+// --- the dead end, made legible while the fix is undecided -------------------
+
+test('start says the session came up idle', async () => {
+  // `brief` is stored and never delivered, so the loop these instructions teach
+  // — start, await, read_log — produces an idle REPL, an empty log and no error
+  // anywhere. A beta tester followed it exactly and lost the session to it; on
+  // a paid runner that loop burns money until the budget deadline.
+  //
+  // Delivering a task at start needs a protocol decision nobody has made yet
+  // (docs/task-at-start.md, #325). Saying so does not, and the silence is the
+  // expensive half: an agent told the session is idle stops waiting for output
+  // that is never coming.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, text: 'Started "beta1".', hostId: 'deb132' }) }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_start', arguments: { name: 'beta1', brief: 'list the files' } },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /STARTED IDLE/);
+  assert.match(text, /brief` is a note for people, not a prompt/);
+  // And where it landed, which was its own finding (#327).
+  assert.match(text, /On deb132/);
+});
+
 // --- the evidence a caller was told to gather by hand ------------------------
 
 test('status publishes what the watcher observed, not a verdict', async () => {
