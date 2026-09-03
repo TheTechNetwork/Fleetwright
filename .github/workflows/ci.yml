@@ -80,6 +80,82 @@ jobs:
       # import JSX and the component tests render the compiled output. A UI that
       # cannot be rendered in a test is a UI that ships broken — which is
       # exactly how the hand-rolled version of this page shipped.
+      #
+      # AND IT IS THE ONLY THING IN THIS JOB, which it did not used to be.
+      # Everything else that lived here — the typecheck, two `-n` parses, a
+      # JSON comparison, a docker container, an installer run in a second
+      # container — cannot answer differently on Node 24 and Node 26, and the
+      # matrix ran every one of them twice for two identical results. They are
+      # the `checks` job below, once. See the comment on it.
+      - run: npm test
+
+  # EVERYTHING THAT CANNOT VARY BY NODE VERSION, once.
+  #
+  # The split is the whole point: `test` above is a matrix because the suite is
+  # the part whose answer depends on the runtime, and nothing else here is. A
+  # docker container behaves the same either way; so does `bash -n`; so does
+  # comparing two JSON documents. Running them on both legs bought a second
+  # identical answer and paid for it in wall-clock on every push.
+  #
+  # IT RUNS scripts/verify.sh, NOT A COPY OF IT. That script is what anybody
+  # working on this runs before committing, and CI reproducing its steps in
+  # YAML is how the two drift until "green locally, red on CI" becomes normal —
+  # this repository has already paid for that once, when the Worker gained a
+  # dependency the local run happened to have installed. VERIFY_SKIP_TESTS
+  # leaves the suite to the matrix and runs the other eight checks.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # Deep enough for commitlint to see the range below. The default is a
+          # single commit, against which `--from base --to head` resolves to
+          # nothing and passes — a lint that silently checks zero commits is
+          # worse than no lint, because the green tick says it looked.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          # The current release, not the floor. These checks are about this
+          # repository rather than about the range it supports, and the floor is
+          # exercised by the matrix above.
+          node-version: '26'
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      # The Worker's, because verify.sh bundles it and the bundle resolves its
+      # imports for real.
+      - run: npm install --no-audit --no-fund
+        working-directory: worker
+
+      # Typecheck, both Worker bundles, the openapi contract, the workflow
+      # sweep, the name check, and both shell parses — the same eight lines
+      # anybody sees locally, with the same names.
+      - name: Everything verify.sh checks, except the suite
+        env:
+          VERIFY_SKIP_TESTS: '1'
+        run: ./scripts/verify.sh
+
+      # THE COMMIT MESSAGES, on a pull request only.
+      #
+      # Not on main: a squash merge takes its body from the PR description,
+      # which is markdown with links in it and is not ours to reformat — and by
+      # then the commit exists, so a red check tells nobody anything they can
+      # act on. On a branch it is still fixable with `git rebase`.
+      #
+      # NOT CONVENTIONAL COMMITS. commitlint.config.mjs argues that out; the
+      # short version is that the subjects here are sentences and a generated
+      # `feat(mcp):` changelog would say less while looking more official. What
+      # is enforced is the shape: a subject that fits, a blank line, and lines
+      # that do not run off the side of a terminal.
+      #
+      # The checkout above is fetch-depth: 0, so both ends of the range are
+      # already here and there is nothing to fetch.
+      - name: Commit messages
+        if: github.event_name == 'pull_request'
+        run: |
+          npx commitlint \
+            --from "${{ github.event.pull_request.base.sha }}" \
+            --to "${{ github.event.pull_request.head.sha }}"
+
       # THE CONTAINER HALF OF THE SANDBOX, against Docker.
       #
       # test/files-container.test.js is the workspace browser running inside a
@@ -103,9 +179,6 @@ jobs:
         env:
           AGENT_HUB_PODMAN_BIN: docker
           AGENT_HUB_SANDBOX_IMAGE: debian:13-slim
-
-      - run: npm test
-      - run: npm run typecheck
 
       # The installer is the thing a new operator runs first, so a syntax error
       # in it is a worse bug than one in the service.
@@ -147,57 +220,13 @@ jobs:
       # before that gets as far as cloning anything.
       - run: sh -n install/bootstrap.sh
 
-      # The Worker inlines openapi.json at edit time rather than reading it at
-      # runtime, because it ships no files. So the copy in worker/src/worker.js
-      # can drift from the one in the repository root, and the drift would be
-      # invisible: both coordinators would serve a document, and they would be
-      # different documents. test/openapi.test.js asserts they match, and this
-      # is the second line of that defence for anyone editing by hand.
-      - name: The served contract matches the committed one
-        run: |
-          node -e '
-            const fs = require("fs");
-            const spec = fs.readFileSync("openapi.json", "utf8");
-            const worker = fs.readFileSync("worker/src/worker.js", "utf8");
-            const paths = Object.keys(JSON.parse(spec).paths).sort();
-            const inlined = worker.slice(worker.indexOf("const OPENAPI = JSON.stringify("));
-            const missing = paths.filter((p) => !inlined.includes(JSON.stringify(p)));
-            if (missing.length) {
-              console.log("::error::worker.js has not been rebuilt from openapi.json — missing " + missing.join(", "));
-              process.exit(1);
-            }
-            console.log("ok   " + paths.length + " paths, both copies agree");
-          '
-
-      # An unparseable workflow does not fail a check — it shows up as a run
-      # named after the FILE PATH, with no jobs, which is easy to miss entirely.
-      # This one cost a round trip to notice, so it is a check now.
-      #
-      # The permissions assertion is here for the same reason. A workflow with
-      # no `permissions:` block inherits the repository default, which is a
-      # setting in the web UI rather than anything visible in the diff — so the
-      # token a step gets is decided somewhere nobody reviewing the step will
-      # look. Every workflow declares its own, and this keeps the next one
-      # honest. Narrow it at the job level when a single job needs more.
-      - name: Workflows parse
-        run: |
-          npm i --no-save --no-audit --no-fund js-yaml
-          node -e '
-            const yaml = require("js-yaml"), fs = require("fs");
-            let bad = 0;
-            for (const f of fs.readdirSync(".github/workflows")) {
-              try {
-                const doc = yaml.load(fs.readFileSync(".github/workflows/" + f, "utf8"));
-                if (!doc.jobs || !Object.keys(doc.jobs).length) throw new Error("no jobs");
-                if (!doc.permissions) throw new Error("no top-level permissions: block — see the comment in ci.yml");
-                console.log("ok   " + f);
-              } catch (e) {
-                bad++;
-                console.log("::error file=.github/workflows/" + f + "::" + e.message.split("\n")[0]);
-              }
-            }
-            process.exit(bad ? 1 : 0);
-          '
+      # The openapi drift check and the workflow sweep USED TO BE HERE, as an
+      # inline `node -e` and an `npm i --no-save js-yaml`. Both are gone: they
+      # duplicated `scripts/sync-openapi.mjs --check` and
+      # `scripts/check-workflows.mjs`, which verify.sh above already runs — and
+      # the second one downloaded a package on every run of every matrix leg to
+      # do less than the checked-in script does. Two implementations of one
+      # check is how the weaker one becomes the one that passes.
 
   # Its own job, on its own Node. Renovate declares engines ^24.11.0, and on 26
   # npm warns EBADENGINE and the native re2 module does not load — at which

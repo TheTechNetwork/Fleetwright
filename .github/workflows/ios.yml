@@ -494,10 +494,27 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           AUDIENCE: external
           EXTERNAL_BETA_GROUP_NAME: ${{ vars.EXTERNAL_BETA_GROUP_NAME }}
-          # The release notes, which is what somebody actually wrote for the
-          # people who will read it.
-          WHATS_NEW: ${{ github.event.release.body || github.event.release.name }}
-        run: node tools/testflight-distribute.mjs
+        run: |
+          # THE NOTES COME FROM CHANGELOG.md, not from the release box.
+          #
+          # This used to be `github.event.release.body`, which is whatever was
+          # pasted when the release was cut — usually the PR description, which
+          # is written for a reviewer and reads like a diff. A tester opening
+          # "What to Test" on a phone needs the two or three sentences somebody
+          # wrote for them, and those live in the changelog, once, next to the
+          # version the build is stamped with.
+          #
+          # The release body is the FALLBACK, not the source: if the changelog
+          # has no section for this version the extractor exits non-zero and we
+          # fall back rather than shipping empty notes. 4000 is App Store
+          # Connect's limit for whatsNew.
+          WHATS_NEW="$(node scripts/release-notes.mjs --max 4000 2>/dev/null)" || true
+          if [ -z "$WHATS_NEW" ]; then
+            echo "::warning::CHANGELOG.md had no notes for this build — falling back to the release body."
+            WHATS_NEW="${{ github.event.release.body || github.event.release.name }}"
+          fi
+          export WHATS_NEW
+          node tools/testflight-distribute.mjs
 
   # THE APP STORE. Only a FULL release — a prerelease stops at external
   # TestFlight above, which is what the prerelease box is for. This is the iOS

@@ -272,10 +272,22 @@ jobs:
           PLAY_ROLLOUT: >-
             ${{ github.event_name == 'release' && !github.event.release.prerelease
                 && vars.PLAY_ROLLOUT || '' }}
-          # A push has no release to take notes from, so fall back to the commit
-          # subject. Empty notes are accepted by Play and tell a tester nothing.
-          RELEASE_NOTES: ${{ github.event.release.body || github.event.release.name || github.event.head_commit.message }}
+          # The last resort only. See the shell below: the notes come from
+          # CHANGELOG.md, and this is what is used when that file has no
+          # section for the version being built. Empty notes are accepted by
+          # Play and tell a tester nothing, so there has to be something.
+          FALLBACK_NOTES: ${{ github.event.release.body || github.event.release.name || github.event.head_commit.message }}
         run: |
+          # PLAY REFUSES MORE THAN 500 CHARACTERS PER LOCALE, and refusing is
+          # the good case — the bad one is a note cut mid-clause, which reads as
+          # a bug in the app rather than as a shortened note. The extractor
+          # trims at a paragraph boundary and says a fuller version exists.
+          RELEASE_NOTES="$(node scripts/release-notes.mjs --max 500 2>/dev/null)" || true
+          if [ -z "$RELEASE_NOTES" ]; then
+            echo "::warning::CHANGELOG.md had no notes for this build — falling back to the release body."
+            RELEASE_NOTES="$FALLBACK_NOTES"
+          fi
+          export RELEASE_NOTES
           if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
             echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set — skipping Play. See docs/ci.md."
             exit 0

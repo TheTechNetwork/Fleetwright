@@ -1,7 +1,7 @@
 {
   "name": "agent-fleet",
-  "version": "0.2.0",
-  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it — sandboxes, scheduling, and a phone that can reach any of it.",
+  "version": "0.2.1",
+  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it \u2014 sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -25,6 +25,7 @@
     "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.2",
     "@types/node": "26.4.1",
     "esbuild": "0.28.2",
     "js-yaml": "5.4.1",

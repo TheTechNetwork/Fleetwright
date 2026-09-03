@@ -12,8 +12,20 @@
 set -uo pipefail
 fail=0
 
+# VERIFY_SKIP_TESTS=1 runs everything EXCEPT the suite.
+#
+# For CI, and it is the reason CI can run this file rather than a copy of it.
+# The suite is the one part of this script whose answer depends on which Node
+# is running it, so it belongs in a version matrix; nothing else here does —
+# `bash -n`, an esbuild bundle and a JSON comparison do not change between
+# Node 24 and Node 26, and running them twice bought two identical answers.
+#
+# Skipping is ANNOUNCED rather than silent. A verification script that can
+# quietly do less than it says is the same failure this file's header is about.
 printf 'tests      ... '
-if out=$(npm test --silent 2>&1); then
+if [ -n "${VERIFY_SKIP_TESTS:-}" ]; then
+  printf 'skipped (VERIFY_SKIP_TESTS)\n'
+elif out=$(npm test --silent 2>&1); then
   printf '%s\n' "$(printf '%s' "$out" | grep -E '^# (pass|fail)' | tr '\n' ' ')"
 else
   printf 'FAILED\n%s\n' "$(printf '%s' "$out" | grep -E '^not ok' | head -10)"; fail=1
