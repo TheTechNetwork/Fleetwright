@@ -167,7 +167,11 @@ is DNS and four secrets.</p>
 <p><strong>Sign-in still works with the apps from the stores</strong> — you need no
 Apple or Google setup of your own for it. What you cannot self-host is
 <em>push</em>: a notification is addressed to one specific app, so waking these
-apps needs our credentials. Your fleet works without it, and says so.</p>
+apps needs our credentials. Your fleet works without it, and says so. A relay
+that delivers notifications for coordinators that are not ours is planned, and
+<a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/relay-terms.md">its terms are written down already</a> —
+nothing about a notification is kept, and the only stored state is a rate-limit
+counter.</p>
 
 <footer>
   <a href="https://github.com/TheTechNetwork/Fleetwright">Source</a> ·

@@ -64,24 +64,6 @@ It installs what is missing, generates the admin token, asks about Telegram, the
 coordinator, push and the sandbox, enrols the box in its fleet, and starts the
 services. Re-running it is how you upgrade.
 
-**And a coordinator to point it at.** It is a Cloudflare Worker — the only
-piece not on your own hardware, deployed to your own account:
-
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/TheTechNetwork/Fleetwright)
-
-It comes up **refusing every request** until you set an admin token, which is
-deliberate rather than unfinished: a coordinator with no credential is remote
-control of every box in the fleet for whoever finds the URL. The Worker says so
-and names the command. The rest is DNS and four secrets —
-[`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md).
-
-The button deploys `worker/wrangler.toml`, the coordinator. The second script in
-that directory, `wrangler.demo.toml`, is ours: the invented fleet App Store
-review looks at and the page at
-[fleetdemo.thetech.network/docs](https://fleetdemo.thetech.network/docs). It is
-separate so that the bundle holding the Durable Object and the App's client
-secret is not also the one serving an unauthenticated page.
-
 The one-liner fetches the repository to `/opt/agent-fleet` and runs the
 installer from there, so the clone is still what ends up on the box and
 `git -C /opt/agent-fleet log` still answers "what is this running". To do those

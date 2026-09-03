@@ -222,8 +222,15 @@ The alternative is building your own apps: your own bundle id, Firebase
 project, Apple team and store listings. That is a real cost and it is
 out of proportion to changing one hostname, which is why a **push relay** is on
 the roadmap ([#348](https://github.com/TheTechNetwork/Fleetwright/issues/348)):
-your coordinator posts "wake this device", we forward it, and the relay never
-sees what the notification is about.
+your coordinator posts a notification and we deliver it with our credentials.
+
+It carries the real payload — a contentless wake was the first design and it is
+useless, because the whole point is answering from a lock screen and a wake
+cannot carry the options to answer with. So the promise is about **retention**:
+nothing about a notification is written down, the device token is used and
+dropped, and the only stored state is a rate-limit counter per fleet. That is
+specified in [`relay-terms.md`](./relay-terms.md), written before the code
+exists, because it is the kind of promise one log line breaks.
 
 **The GitHub App callback is the third case, and it is only a convenience.**
 `authorizeUrl()` sends `redirect_uri` explicitly and GitHub matches it against
