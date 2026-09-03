@@ -624,7 +624,14 @@ export class SessionManager {
       // Say this explicitly: the whole reason the record survives is so the
       // conversation can come back, and nobody should have to guess that.
       message: updated.uuid
-        ? `Stopped "${name}". Its conversation is kept — /resume ${name} brings it back.`
+        // SAYS WHAT STOPPING COSTS, at the moment it costs it. The single most
+        // important fact for anybody who comes back later lived only in an MCP
+        // tool description: stopping discards the console output. A beta
+        // tester's past self stopped a session without knowing, and their
+        // present self recovered the result only because the transcript
+        // survives.
+        ? `Stopped "${name}". Its conversation is kept — /resume ${name} brings it back.\n` +
+          'Its console output is gone with the container; the transcript usually still has it.'
         : `Stopped "${name}".`,
       session: updated,
     };

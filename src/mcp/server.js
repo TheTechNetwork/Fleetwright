@@ -79,6 +79,21 @@ function describeFailure(e) {
   const message = String(/** @type {any} */ (e)?.message || e);
   // A TypeError from the runtime is this server misusing an API — never a
   // network condition. Nothing the caller varies will change it.
+  // A BODY THAT WILL NOT PARSE IS NOT AN OUTAGE. `Unexpected token 'e',
+  // "error code: 1101" is not valid JSON` was reported as "the fleet may be
+  // down; retrying is reasonable" — advice that could not work, for an error
+  // that was not what it said. The same mistake this function was written to
+  // fix, in a new place: naming the wrong layer.
+  //
+  // The parse failure is the evidence, so quote what actually arrived rather
+  // than a guess about why.
+  if (/is not valid JSON|Unexpected token|JSON\.parse/i.test(message)) {
+    return (
+      `The coordinator answered with something that is not JSON: ${message}. ` +
+      'That is a gateway or a server error rather than a refusal from the fleet — a Cloudflare "error code: 1101" ' +
+      'means the Worker threw. Retrying will not change it; whoever operates this coordinator needs its logs.'
+    );
+  }
   const internal = e instanceof TypeError || /Illegal invocation|is not a function|Cannot read /i.test(message);
   return internal
     ? `The MCP server itself failed before it could reach the fleet: ${message}. ` +
@@ -575,6 +590,39 @@ export class McpServer {
     }
 
     const { host, tag, ...params } = args;
+
+    // THE SERVER ENFORCES ITS OWN SCHEMA. It declared `required` and
+    // `additionalProperties: false` and checked neither, trusting the client to
+    // — so a caller who wrote `session:` instead of `name:` had it forwarded
+    // silently, and the missing `name` became the literal string "undefined"
+    // inside a refusal: `No host reports a session named "undefined"`.
+    //
+    // A beta tester spent their only documentation lookup working that out.
+    // The schema already holds the answer; nothing was reading it.
+    const declared = tool.inputSchema?.properties ?? {};
+    const unknown = Object.keys(params).filter((k) => !(k in declared));
+    if (unknown.length) {
+      const near = (/** @type {string} */ bad) => {
+        // Name the likely intent rather than only the mistake. `session` and
+        // `name` are the pair that cost the tester their lookup.
+        const options = Object.keys(declared).filter((k) => k !== 'host' && k !== 'tag');
+        const hit = options.find((o) => o.includes(bad) || bad.includes(o) || (bad === 'session' && o === 'name'));
+        return hit ? ` — did you mean \`${hit}\`?` : '';
+      };
+      return this.#text(
+        `${tool.name} takes no parameter ${unknown.map((u) => `\`${u}\``).join(', ')}${near(unknown[0])} ` +
+          `It takes: ${Object.keys(declared).join(', ')}.`,
+        true,
+      );
+    }
+    for (const need of tool.inputSchema?.required ?? []) {
+      // MISSING IS NOT "undefined". A required parameter absent is a question
+      // about the call, and answering it with a search for a session literally
+      // named "undefined" sends somebody looking at the fleet.
+      if (params[need] === undefined || params[need] === '') {
+        return this.#text(`${tool.name} needs \`${need}\`, and none was given.`, true);
+      }
+    }
 
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
     if (tool.local) return await this.#await(params, host ? String(host) : null);

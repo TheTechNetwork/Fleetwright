@@ -631,6 +631,82 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
 });
 
+// --- the server enforcing its own schema ------------------------------------
+
+test('a wrong parameter name is named, not forwarded', async () => {
+  // The schema declared `required` and `additionalProperties: false` and the
+  // server checked neither. A caller who wrote `session:` had it forwarded
+  // silently and the missing `name` became the literal string "undefined"
+  // inside a refusal — `No host reports a session named "undefined"` — which
+  // sent a beta tester looking at the fleet and cost them their only trip to
+  // the documentation.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const reached = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async (/** @type {any} */ _u, /** @type {any} */ init) => {
+      reached.push(JSON.parse(String(init?.body || '{}')));
+      return { status: 200, json: async () => ({ ok: true, text: 'ok' }) };
+    },
+  });
+  /** @param {any} args */
+  const call = async (args) => {
+    const r = await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_peek', arguments: args },
+    });
+    return String(r.result.content[0].text);
+  };
+
+  const wrong = await call({ session: 'x' });
+  assert.match(wrong, /takes no parameter/);
+  assert.match(wrong, /did you mean `name`/);
+  assert.equal(/undefined/.test(wrong), false, 'the old "undefined" refusal is back');
+  assert.deepEqual(reached, [], 'a malformed call was still sent to the fleet');
+
+  const missing = await call({});
+  assert.match(missing, /needs `name`/);
+  assert.deepEqual(reached, [], 'a call with no required parameter was still sent');
+
+  // And a correct call still goes through.
+  await call({ name: 'job' });
+  assert.equal(reached.length, 1);
+});
+
+test('a body that will not parse is not reported as an outage', async () => {
+  // `Unexpected token 'e', "error code: 1101" is not valid JSON` was reported
+  // as "the fleet may be down; retrying is reasonable". The fleet was fine,
+  // retrying could not work, and the advice burned one of the tester's calls.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token \'e\', "error code: 1101" is not valid JSON');
+      },
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_list', arguments: {} },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /not JSON/);
+  assert.match(text, /1101/);
+  assert.equal(/retrying is reasonable/.test(text), false, 'still advising a retry that cannot work');
+});
+
 // --- SSRF: the Host header must not choose where we send things -------------
 
 test('a spoofed Host cannot steer the coordinator\'s outbound request', async (t) => {
