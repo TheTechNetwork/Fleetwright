@@ -416,6 +416,26 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // function knew the difference.
   if (apns) return routingPusher({ ios: apns, other: logPusher(logger) });
   if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm });
+
+  // SWITCHED ON AND UNABLE TO SEND, which is the one combination that used to
+  // reach this line saying nothing at all.
+  //
+  // The comment above the switch says "unset is off and SAYS SO" and it was
+  // only true of the unset branch. A fleet that sets AGENT_FLEET_PUSH and has
+  // no credentials — which is EVERY FORK deploying this repository's committed
+  // wrangler.toml — fell through here silently, and neither apnsFromEnv nor
+  // fcmFromEnv warns when its credentials are simply absent, because absent is
+  // the ordinary case for the provider you are not using.
+  //
+  // So the silence was assembled out of three reasonable silences, which is how
+  // this failure always happens. push-encryption.md promises the opposite in as
+  // many words, and a document asserting something the code does not do is the
+  // failure app-parity.md exists to name.
+  logger.warn(
+    'push: AGENT_FLEET_PUSH is set but no provider is configured — notifications are logged, not sent. ' +
+      'APNs needs AGENT_FLEET_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs AGENT_FLEET_FCM_SERVICE_ACCOUNT. ' +
+      'Unset AGENT_FLEET_PUSH if that is deliberate.',
+  );
   return logPusher(logger);
 }
 

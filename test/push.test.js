@@ -244,7 +244,13 @@ test('a malformed service account falls back to logging rather than throwing', (
 
   assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
   assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
-  assert.equal(warned.length, 2);
+
+  // TWO WARNINGS EACH, and the second one is the point. The first names what is
+  // wrong with the service account; the second says the fleet ended up with no
+  // provider at all, which is the fact somebody waiting on a notification needs
+  // and which used to be silent.
+  assert.equal(warned.length, 4);
+  assert.equal(warned.filter((w) => /no provider is configured/.test(w)).length, 2);
 });
 
 /** A service account with a real key, since fcmPusher signs before it sends. */
@@ -648,6 +654,34 @@ test('push is off unless it is switched on, credentials or not', async () => {
   said.length = 0;
   fromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
   assert.equal(/disabled/.test(said.join('\n')), false, 'switched on and still disabled');
+});
+
+test('switched on with no provider is the loudest case, not the quietest', async () => {
+  // THE ONE COMBINATION THAT SAID NOTHING, and it is the state every fork
+  // deploying this repository's committed wrangler.toml lives in: the switch is
+  // on and no credentials exist.
+  //
+  // The silence was assembled out of three reasonable silences — the switch
+  // only logged on its unset branch, and neither provider warns when its
+  // credentials are simply absent, because absent is the ordinary case for the
+  // provider you are not using. That is how this failure always happens.
+  const { pusherFromEnv: fromEnv } = await import('../src/fleet/push.js');
+  /** @type {string[]} */
+  const said = [];
+  fromEnv({ AGENT_FLEET_PUSH: '1' }, {
+    info: (/** @type {any} */ m) => said.push(String(m)),
+    warn: (/** @type {any} */ m) => said.push(String(m)),
+  });
+
+  const text = said.join('\n');
+  assert.match(text, /no provider is configured/);
+  // NAMES THE VARIABLES, because the person reading this log is the one who can
+  // set them, and "push is not configured" sends them to a document.
+  assert.match(text, /AGENT_FLEET_APNS_KEY/);
+  assert.match(text, /AGENT_FLEET_FCM_SERVICE_ACCOUNT/);
+  // And says how to make it stop, so a fleet that meant it is not nagged into
+  // ignoring the line that will matter later.
+  assert.match(text, /Unset AGENT_FLEET_PUSH if that is deliberate/);
 });
 
 test('our deployment switches it on, and the switch is a var rather than a secret', () => {
