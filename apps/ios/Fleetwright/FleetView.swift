@@ -316,7 +316,10 @@ struct FleetView: View {
             // any of it landed, the list we just fetched is already out of
             // date. One extra list, not a second refresh: refresh calls this.
             if reply.ok != false, await flushOutbox() > 0 {
-                sessions = (try? await fleet.list().sessions) as? [Fleet.Session] ?? sessions
+                // `as? [Fleet.Session]` did nothing — the value is already
+                // that type, optional — and the compiler said so. Binding it
+                // says the same thing and says it once.
+                if let fresh = try? await fleet.list().sessions { sessions = fresh }
             }
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
