@@ -4,7 +4,7 @@
     "title": "Fleetwright coordinator",
     "version": "1.0.0",
     "summary": "Long-running Claude Code sessions on machines you own, driven from a phone.",
-    "description": "There are TWO implementations of this API \u2014 a Cloudflare Worker with a Durable Object, and a Node process \u2014 and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge \u2014 they did once, and `?token=fwk_` was full access.",
+    "description": "There are TWO implementations of this API — a Cloudflare Worker with a Durable Object, and a Node process — and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge — they did once, and `?token=fwk_` was full access.",
     "license": {
       "name": "See repository"
     }
@@ -162,7 +162,7 @@
               "unknown",
               "offline"
             ],
-            "description": "Four values, not three. `offline` is what a host becomes when its socket drops \u2014 a fact we know, distinct from `unknown`, which is what we say when we have not heard recently enough to be sure. A client that collapses them reports a box we KNOW is gone as a box we cannot see, which is the more alarming of the two and the less accurate."
+            "description": "Four values, not three. `offline` is what a host becomes when its socket drops — a fact we know, distinct from `unknown`, which is what we say when we have not heard recently enough to be sure. A client that collapses them reports a box we KNOW is gone as a box we cannot see, which is the more alarming of the two and the less accurate."
           },
           "reason": {
             "type": [
@@ -281,7 +281,7 @@
       },
       "Prompt": {
         "type": "object",
-        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text \u2014 see src/fleet/host/prompt.js.",
+        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text — see src/fleet/host/prompt.js.",
         "required": [
           "id",
           "kind",
@@ -451,7 +451,7 @@
           "identity"
         ],
         "summary": "Mint a six-digit pin",
-        "description": "An invitation, not a way in \u2014 it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
+        "description": "An invitation, not a way in — it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -479,7 +479,7 @@
                   },
                   "ephemeral": {
                     "type": "boolean",
-                    "description": "Admit a host that is expected to vanish: a disconnect retires the entry and revokes its key, and the scheduler will not place ordinary work on it. Decided here rather than claimed by the host \u2014 see docs/ephemeral-hosts.md."
+                    "description": "Admit a host that is expected to vanish: a disconnect retires the entry and revokes its key, and the scheduler will not place ordinary work on it. Decided here rather than claimed by the host — see docs/ephemeral-hosts.md."
                   }
                 }
               }
@@ -574,7 +574,7 @@
         },
         "responses": {
           "200": {
-            "description": "enrolled, re-enrolled or readmitted \u2014 `text` says which"
+            "description": "enrolled, re-enrolled or readmitted — `text` says which"
           },
           "400": {
             "description": "the key or the host id was not acceptable"
@@ -592,7 +592,7 @@
         ],
         "security": [],
         "summary": "A nonce to sign",
-        "description": "Unauthenticated by necessity \u2014 asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
+        "description": "Unauthenticated by necessity — asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -803,7 +803,7 @@
           "identity"
         ],
         "summary": "Which devices can reach this fleet",
-        "description": "Without secrets \u2014 the coordinator stores a hash, not a token.",
+        "description": "Without secrets — the coordinator stores a hash, not a token.",
         "responses": {
           "200": {
             "description": "devices"
@@ -903,26 +903,31 @@
                   "verb": {
                     "type": "string",
                     "enum": [
-                      "list",
-                      "status",
-                      "peek",
-                      "health",
-                      "start",
-                      "resume",
-                      "stop",
-                      "forget",
                       "answer",
+                      "connect",
+                      "copyfile",
+                      "deletefile",
+                      "files",
+                      "forget",
+                      "health",
+                      "link",
+                      "list",
                       "logs",
+                      "peek",
+                      "purge",
+                      "readfile",
+                      "reboot",
+                      "renew",
+                      "restore",
+                      "resume",
+                      "start",
+                      "status",
+                      "stop",
+                      "unlink",
                       "update",
                       "upgrade",
-                      "reboot",
-                      "connect",
-                      "link",
-                      "unlink",
-                      "restore",
-                      "purge",
                       "verify",
-                      "renew"
+                      "writefile"
                     ]
                   },
                   "params": {
@@ -938,7 +943,7 @@
                   },
                   "host": {
                     "type": "string",
-                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
+                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter — a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
                   }
                 }
               }
@@ -996,7 +1001,7 @@
           "devices"
         ],
         "summary": "Register for push",
-        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target \u2014 and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
+        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target — and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1095,7 +1100,7 @@
         ],
         "security": [],
         "summary": "Apple's server-to-server notification",
-        "description": "Apple POSTs a signed JWT here when a user changes mail forwarding, REVOKES this app from their Apple ID settings, or deletes their Apple Account. The last two mean a person has withdrawn consent, and every credential issued to that address is revoked \u2014 along with the push registrations that went with them.\n\nPublic by necessity: Apple holds no credential of ours, so the signature on the JWT is the entire authentication. Anyone may POST here; only a message signed by Apple, for this app's audience, does anything.\n\nAnswers 200 to anything it can verify, including notifications it deliberately ignores, because Apple retries on failure and there is nothing to gain from making it retry a message we understood.",
+        "description": "Apple POSTs a signed JWT here when a user changes mail forwarding, REVOKES this app from their Apple ID settings, or deletes their Apple Account. The last two mean a person has withdrawn consent, and every credential issued to that address is revoked — along with the push registrations that went with them.\n\nPublic by necessity: Apple holds no credential of ours, so the signature on the JWT is the entire authentication. Anyone may POST here; only a message signed by Apple, for this app's audience, does anything.\n\nAnswers 200 to anything it can verify, including notifications it deliberately ignores, because Apple retries on failure and there is nothing to gain from making it retry a message we understood.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1117,7 +1122,7 @@
         },
         "responses": {
           "200": {
-            "description": "verified \u2014 acted on, or deliberately ignored"
+            "description": "verified — acted on, or deliberately ignored"
           },
           "401": {
             "description": "the notification did not verify"
@@ -1131,7 +1136,7 @@
     "/oauth/github/callback": {
       "get": {
         "summary": "Finish a GitHub App authorization",
-        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
+        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity — a browser carries no fleet credential — and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
         "parameters": [
           {
             "name": "code",
@@ -1162,7 +1167,7 @@
             }
           },
           "400": {
-            "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "description": "Refused — unknown, expired or already-used state, or GitHub declined.",
             "content": {
               "text/html": {
                 "schema": {

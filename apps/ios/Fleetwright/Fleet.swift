@@ -9,6 +9,9 @@ import Security
 /// life of the app to save very little.
 struct Fleet {
     let settings: Settings
+    /// Where a command goes when the fleet cannot be reached. Optional so a
+    /// Fleet built for a one-off read carries no queue at all.
+    var outbox: Outbox?
 
     struct Session: Codable, Identifiable, Hashable {
         let name: String
@@ -141,6 +144,23 @@ struct Fleet {
         /// credentials. Never a token — the host does not send one and there
         /// is no field here that could hold one.
         var connections: Connections?
+        /// A directory listing, as DATA. The rendered text is for a person;
+        /// parsing it back out of the prose is how an app breaks the first time
+        /// the wording changes — the same argument that put the authorization
+        /// URL in a field rather than in a message.
+        var entries: [Entry]?
+    }
+
+    /// One thing in a session's workspace.
+    struct Entry: Codable, Hashable, Identifiable {
+        var name: String
+        /// "dir", "file" or "link". A string rather than an enum because the
+        /// host decides what kinds exist and an app that crashed on an unknown
+        /// one would be an app that cannot be extended without a release.
+        var kind: String
+        var size: Int
+        var id: String { name }
+        var isDirectory: Bool { kind == "dir" }
     }
 
     /// The connector picker, rendered from what the HOST publishes.
@@ -401,6 +421,46 @@ struct Fleet {
     /// The verb that makes the app more than a list of names. Everything else
     /// tells you a session exists; this tells you whether it is stuck.
     func peek(_ name: String) async throws -> Reply { try await intent("peek", params: ["name": name]) }
+
+    // MARK: - The workspace
+    //
+    // Five calls rather than one taking an operation, matching the five verbs.
+    // Every one names a session, because a workspace belongs to one — there is
+    // no fleet-wide filesystem here and nothing addresses one.
+    //
+    // The host is carried explicitly on all of them. A session lives on ONE
+    // box, and a browse that fanned out would be reading a directory that
+    // exists on two machines with different contents in it.
+
+    /// List one directory. Paths are relative to the workspace root; empty is
+    /// the root itself.
+    func files(_ name: String, path: String = "", host: String? = nil) async throws -> Reply {
+        var params = ["name": name]
+        if !path.isEmpty { params["path"] = path }
+        return try await intent("files", params: params, host: host)
+    }
+
+    /// Read a text file. The host refuses binary and anything over 256KB, and
+    /// says which — so the app shows its reason rather than an empty screen.
+    func readFile(_ name: String, path: String, host: String? = nil) async throws -> Reply {
+        try await intent("readfile", params: ["name": name, "path": path], host: host)
+    }
+
+    /// Write a file, creating it and any missing directories.
+    func writeFile(_ name: String, path: String, content: String, host: String? = nil) async throws -> Reply {
+        try await intent("writefile", params: ["name": name, "path": path, "content": content], host: host)
+    }
+
+    /// Copy within the workspace. Both ends are confined by the host.
+    func copyFile(_ name: String, path: String, to: String, host: String? = nil) async throws -> Reply {
+        try await intent("copyfile", params: ["name": name, "path": path, "to": to], host: host)
+    }
+
+    /// Delete. NOT recoverable — `forget` is the recoverable one and takes the
+    /// whole workspace, which is why the UI asks before calling this.
+    func deleteFile(_ name: String, path: String, host: String? = nil) async throws -> Reply {
+        try await intent("deletefile", params: ["name": name, "path": path], host: host)
+    }
 
     /// Forget a session and delete its volumes. Not undoable, which is why the
     /// UI asks first.
@@ -668,11 +728,41 @@ struct Fleet {
     ///   Swift Strings for convenience and must be sent as JSON NUMBERS —
     ///   `validateIntent` requires a safe integer and refuses `"2"`, which
     ///   would be a rejection after the version handshake had already agreed.
+    /// Send a held command again, under the id it was queued with.
+    func resend(_ entry: Outbox.Held) async throws -> Reply {
+        try await intent(
+            entry.verb,
+            params: entry.params,
+            host: entry.host,
+            numeric: Set(entry.numeric),
+            idempotencyKey: entry.id
+        )
+    }
+
+    /// What the person asked for, in their words, for the pending list.
+    static func describe(verb: String, params: [String: String]) -> String {
+        let name = params["name"] ?? ""
+        switch verb {
+        case "start": return name.isEmpty ? "Starting a session" : "Starting \(name)"
+        case "stop": return "Stopping \(name)"
+        case "resume": return "Resuming \(name)"
+        case "forget": return "Forgetting \(name)"
+        case "restore": return "Restoring \(name)"
+        case "purge": return "Purging \(name)"
+        case "answer": return "Answering \(name)"
+        case "writefile": return "Writing \(params["path"] ?? "a file") in \(name)"
+        case "copyfile": return "Copying \(params["path"] ?? "a file") in \(name)"
+        case "deletefile": return "Deleting \(params["path"] ?? "a file") in \(name)"
+        default: return verb
+        }
+    }
+
     private func intent(
         _ verb: String,
         params: [String: String] = [:],
         host: String? = nil,
-        numeric: Set<String> = []
+        numeric: Set<String> = [],
+        idempotencyKey: String? = nil
     ) async throws -> Reply {
         var typed: [String: Any] = [:]
         for (key, value) in params {
@@ -684,11 +774,32 @@ struct Fleet {
             "actor": "app:ios",
             // An idempotency key the SERVER honours: a retry of `start` returns
             // the original outcome rather than starting a second session.
-            "id": "app-\(UUID().uuidString)",
+            //
+            // Supplied by the caller when this command has been HELD, so a
+            // retry carries the id it was queued under. Minted here only for a
+            // command being sent for the first time.
+            "id": idempotencyKey ?? "app-\(UUID().uuidString)",
         ]
         if let host, !host.isEmpty { body["host"] = host }
-        let data = try await post("/api/intent", body: body)
-        return try JSONDecoder().decode(Reply.self, from: data)
+        do {
+            let data = try await post("/api/intent", body: body)
+            return try JSONDecoder().decode(Reply.self, from: data)
+        } catch {
+            // HELD, NOT LOST — but only when the fleet could not be REACHED.
+            // A refusal is an answer, and replaying an answer is how somebody's
+            // revoked credential retries all night. See isDeliveryFailure.
+            guard idempotencyKey == nil,
+                  isDeliveryFailure(error),
+                  let outbox,
+                  let entry = outbox.hold(verb: verb, params: params, numeric: numeric, host: host,
+                                          summary: Self.describe(verb: verb, params: params))
+            else { throw error }
+            return Reply(
+                ok: true,
+                text: "Held on this phone. \(entry.summary) will be sent when the fleet answers again.",
+                sessions: nil
+            )
+        }
     }
 
     private func post(_ path: String, body: [String: Any], authenticated: Bool = true) async throws -> Data {

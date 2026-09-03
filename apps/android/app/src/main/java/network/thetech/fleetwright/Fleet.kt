@@ -24,7 +24,14 @@ import org.json.JSONObject
  * could call it — and a dependency here would be carried for the life of the
  * app to save about thirty lines.
  */
-class Fleet(private val settings: Settings) {
+class Fleet(
+    private val settings: Settings,
+    /**
+     * Where a command goes when the fleet cannot be reached. Null for a Fleet
+     * built for a one-off read, which carries no queue at all.
+     */
+    private val outbox: Outbox? = null,
+) {
 
     /** A session as the coordinator reports it, with its host attached. */
     data class Session(
@@ -252,7 +259,28 @@ class Fleet(private val settings: Settings) {
         val connections: Connections? = null,
         /** What a stored token can do, when it was just asked. Never the token. */
         val check: Check? = null,
+        /**
+         * A directory listing, as DATA. The rendered text is for a person;
+         * parsing it back out of the prose is how an app breaks the first time
+         * the wording changes — the same argument that put the authorization
+         * URL in a field rather than in a message.
+         */
+        val entries: List<Entry> = emptyList(),
     )
+
+    /** One thing in a session's workspace. */
+    data class Entry(
+        val name: String,
+        /**
+         * "dir", "file" or "link". A string rather than an enum because the
+         * host decides what kinds exist, and an app that crashed on an unknown
+         * one could not be extended without a release.
+         */
+        val kind: String,
+        val size: Long,
+    ) {
+        val isDirectory: Boolean get() = kind == "dir"
+    }
 
     /**
      * @property granted scope names it HAS. Null where the provider will not
@@ -446,6 +474,40 @@ class Fleet(private val settings: Settings) {
      */
     suspend fun peek(name: String): Reply = intent("peek", mapOf("name" to name))
 
+    // --- the workspace -------------------------------------------------------
+    //
+    // Five calls rather than one taking an operation, matching the five verbs.
+    // Every one names a session, because a workspace belongs to one; and every
+    // one carries the host explicitly, because a session lives on ONE box and a
+    // browse that fanned out would read a directory that exists on two machines
+    // with different contents in it.
+
+    /** List one directory. Paths are relative to the workspace root. */
+    suspend fun files(name: String, path: String = "", host: String? = null): Reply =
+        intent("files", buildMap { put("name", name); if (path.isNotBlank()) put("path", path) }, host = host)
+
+    /**
+     * Read a text file. The host refuses binary and anything over 256KB and
+     * says which, so the app shows its reason rather than an empty screen.
+     */
+    suspend fun readFile(name: String, path: String, host: String? = null): Reply =
+        intent("readfile", mapOf("name" to name, "path" to path), host = host)
+
+    /** Write a file, creating it and any missing directories. */
+    suspend fun writeFile(name: String, path: String, content: String, host: String? = null): Reply =
+        intent("writefile", mapOf("name" to name, "path" to path, "content" to content), host = host)
+
+    /** Copy within the workspace. Both ends are confined by the host. */
+    suspend fun copyFile(name: String, path: String, to: String, host: String? = null): Reply =
+        intent("copyfile", mapOf("name" to name, "path" to path, "to" to to), host = host)
+
+    /**
+     * Delete. NOT recoverable — [forget] is the recoverable one and takes the
+     * whole workspace, which is why the UI asks before calling this.
+     */
+    suspend fun deleteFile(name: String, path: String, host: String? = null): Reply =
+        intent("deletefile", mapOf("name" to name, "path" to path), host = host)
+
     /** Forget a session and delete its volumes. Not undoable — the UI asks first. */
     /** Stop a session and put it in the bin. Recoverable — see [restore]. */
     suspend fun forget(name: String): Reply = intent("forget", mapOf("name" to name))
@@ -637,11 +699,16 @@ class Fleet(private val settings: Settings) {
      *   `"2"`, and that refusal would arrive AFTER the version handshake had
      *   already agreed, which is the worst-shaped failure this protocol has.
      */
+    /** Send a held command again, under the id it was queued with. */
+    suspend fun resend(entry: Outbox.Held): Reply =
+        intent(entry.verb, entry.params, entry.host, idempotencyKey = entry.id)
+
     private suspend fun intent(
         verb: String,
         params: Map<String, String> = emptyMap(),
         host: String? = null,
         numeric: Map<String, Int> = emptyMap(),
+        idempotencyKey: String? = null,
     ): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
@@ -650,7 +717,10 @@ class Fleet(private val settings: Settings) {
                 .put("actor", "app:android")
                 // An idempotency key the SERVER honours: a retry of `start`
                 // returns the original outcome instead of a second session.
-                .put("id", "app-" + java.util.UUID.randomUUID().toString())
+                // Supplied by the caller when this command has been HELD, so
+                // a retry carries the id it was queued under. Minted here only
+                // for a command being sent for the first time.
+                .put("id", idempotencyKey ?: ("app-" + java.util.UUID.randomUUID().toString()))
             if (!host.isNullOrBlank()) body.put("host", host)
             try {
                 val json = post("/api/intent", body)
@@ -659,6 +729,15 @@ class Fleet(private val settings: Settings) {
                     text = json.optString("text", ""),
                     sessions = parseSessions(json.optJSONArray("sessions")),
                     connections = parseConnections(json.optJSONObject("connections")),
+                    entries = json.optJSONArray("entries")?.let { a ->
+                        (0 until a.length()).mapNotNull { i ->
+                            a.optJSONObject(i)?.let { e ->
+                                val n = e.optString("name")
+                                if (n.isBlank()) null
+                                else Entry(n, e.optString("kind", "file"), e.optLong("size", 0L))
+                            }
+                        }
+                    } ?: emptyList(),
                     check = json.optJSONObject("check")?.let { c ->
                         fun list(key: String): List<String>? =
                             if (!c.has(key) || c.isNull(key)) null
@@ -675,7 +754,21 @@ class Fleet(private val settings: Settings) {
                     },
                 )
             } catch (e: Exception) {
-                Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
+                // HELD, NOT LOST — but only when the fleet could not be
+                // REACHED. A refusal is an answer, and replaying an answer is
+                // how somebody's revoked credential retries all night. See
+                // isDeliveryFailure.
+                val entry =
+                    if (idempotencyKey == null && isDeliveryFailure(e)) outbox?.hold(verb, params, host) else null
+                if (entry != null) {
+                    Reply(
+                        ok = true,
+                        text = "Held on this phone. ${entry.summary} will be sent when the fleet answers again.",
+                        sessions = emptyList(),
+                    )
+                } else {
+                    Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
+                }
             }
         }
 

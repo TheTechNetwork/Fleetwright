@@ -81,6 +81,25 @@ test('breadcrumbs are scrubbed too, because outbound calls carry the credential'
   assert.equal(flat.includes('authorization'), false);
 });
 
+test('the iOS breadcrumb scrub removes headers rather than marking them', async () => {
+  // The first version wrote "[redacted]" into the headers key and justified it
+  // as "removal would need a second API to guess at". That was an excuse for
+  // not looking: setDataValue:forKey: takes a nullable id, and its own
+  // implementation says "setValue:forKey: removes the key when value is nil".
+  //
+  // The difference is worth asserting. A marker is data this app INVENTED and
+  // sent to a third party, and the next person reading a breadcrumb has to work
+  // out whether Sentry captured a header called "[redacted]" or whether we put
+  // it there. Absent is unambiguous.
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../apps/ios/Fleetwright/FleetwrightApp.swift', import.meta.url), 'utf8');
+  assert.match(app, /crumb\.setData\(value: nil, key: "headers"\)/);
+  assert.equal(/setData\(value: "\[redacted\]"/.test(app), false, 'a marker is being invented and sent');
+  // And the deprecated setter is gone: "will become read-only in a future
+  // release" is a deadline, not an opinion.
+  assert.equal(/crumb\.data\?\[[^\]]+\] =/.test(app), false, 'assigning through the deprecated data setter');
+});
+
 test('no DSN means no reporting, with no second code path', () => {
   // A fresh clone, a contributor's `wrangler dev`, and a self-hosted fleet all
   // run this unchanged and must post nowhere. Sentry treats an absent DSN as

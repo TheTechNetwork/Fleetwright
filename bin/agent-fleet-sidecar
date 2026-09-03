@@ -126,7 +126,14 @@ async function run() {
           logger: log,
         })
       : new StdioTransport({ origin: cfg.coordinatorUrl });
-  const sidecar = new Sidecar({
+  /**
+ * What the last update check found. Read by every health frame; written only
+ * by the timer below.
+ * @type {{ appBehind: number|null, system: any, rebootRequired: boolean }|null}
+ */
+let lastUpdates = null;
+
+const sidecar = new Sidecar({
     hub,
     transport,
     hostId: cfg.hostId,
@@ -141,20 +148,20 @@ async function run() {
     logger: log,
     // Reported with health, so a phone can say "this box is 3 commits behind
     // and has 12 packages waiting" without anybody logging in to look.
-    updates: () => {
-      const hub = loadConfig();
-      const app = updateAvailable(hub);
-      // Refresh first, at most every six hours and only if permitted. A box
-      // that never refreshes its own lists answers "no updates" indefinitely,
-      // which is the reassuring kind of wrong.
-      refreshPackageLists(hub);
-      const system = systemUpdates();
-      return {
-        appBehind: app.ok ? app.behind : null,
-        system: describeSystemUpdates(system),
-        rebootRequired: system.rebootRequired,
-      };
-    },
+    // COMPUTED ON A TIMER, READ FROM MEMORY. This used to do the work inline,
+    // which meant a health frame — sent every fifteen seconds, and what the
+    // coordinator ranks hosts on — occasionally did a `git fetch` and an apt
+    // list refresh before it could be sent. Most frames were instant and the
+    // one after a cache expiry was not, so the symptom was a host that went
+    // quiet for a moment every so often and nothing that pointed at why.
+    //
+    // ROADMAP asked for exactly this and said why: "so the answer is ready
+    // when asked rather than computed while somebody waits".
+    //
+    // Null until the first pass finishes, which the health frame already
+    // treats as CANNOT TELL rather than as "no updates" — the distinction that
+    // stops a fleet reporting every host as current while it is still looking.
+    updates: () => lastUpdates,
     // The commit on disk right now. From updateStatus rather than a constant
     // baked at build time: the restart watcher can put this process on new
     // code without anything rebuilding, and what a person reading the app
@@ -164,6 +171,39 @@ async function run() {
       return st.ok ? { head: st.head ?? null, branch: st.branch ?? null } : null;
     },
   });
+
+  // --- the update check, off the health path -------------------------------
+  //
+  // Started AFTER the sidecar is constructed and never awaited: a box that
+  // cannot reach its git remote or its package mirror still runs sessions
+  // perfectly well, and holding startup on either would make an offline box
+  // look broken rather than offline.
+  const UPDATE_EVERY_MS = 15 * 60_000;
+
+  function refreshUpdates() {
+    try {
+      const hub = loadConfig();
+      const app = updateAvailable(hub);
+      // At most every six hours and only if permitted. A box that never
+      // refreshes its own lists answers "no updates" indefinitely, which is the
+      // reassuring kind of wrong.
+      refreshPackageLists(hub);
+      const system = systemUpdates();
+      lastUpdates = {
+        appBehind: app.ok ? app.behind : null,
+        system: describeSystemUpdates(system),
+        rebootRequired: system.rebootRequired,
+      };
+    } catch (e) {
+      // Left at whatever it was. A failed check is not news — the previous
+      // answer is stale rather than wrong, and replacing it with null would
+      // report "cannot tell" to a fleet that could tell five minutes ago.
+      log.warn(`sidecar: could not refresh the update check: ${e?.message || e}`);
+    }
+  }
+
+  setTimeout(refreshUpdates, 0).unref?.();
+  setInterval(refreshUpdates, UPDATE_EVERY_MS).unref?.();
 
   // The per-session hook sockets. The sidecar owns them, so it knows which
   // session a report came from and forwards it to agent-hub's loopback hook

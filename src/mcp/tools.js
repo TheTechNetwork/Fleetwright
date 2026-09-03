@@ -39,6 +39,16 @@ import { VERBS } from '../fleet/protocol/intents.js';
 export const DEFAULT_DENY = ([
   'reboot', 'upgrade', 'update', 'purge', 'forget', 'restore',
   'connect', 'link', 'unlink', 'renew', 'answer',
+  // THE WORKSPACE'S DESTRUCTIVE HALF. Browsing and reading are exposed —
+  // collecting what a job produced is the case this server exists for. Writing,
+  // copying and deleting are not, by the same rule as the rest of this list:
+  // it is a policy about what an agent reaches for unasked, not a lock. An
+  // operator who wants them says so with AGENT_FLEET_MCP_ALLOW.
+  //
+  // `deletefile` is the sharpest of the three and the reason the line is drawn
+  // here rather than after it: `forget` is recoverable for seven days and this
+  // is not recoverable at all.
+  'writefile', 'copyfile', 'deletefile',
 ]);
 
 // `stop` is NOT on that list, and that is a change rather than an oversight.

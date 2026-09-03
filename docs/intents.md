@@ -142,6 +142,35 @@ rule it follows.
 | `restore` | `name` | ✅ | `/restore <name>` |
 | `purge` | `name` | ✅ | `/purge <name>` |
 
+## The workspace
+
+Five verbs rather than one taking an `op`. A single `files` verb with
+`op=list|read|write|delete` would be a remote procedure call in an intent's
+clothes: the scheduler could not tell a read from a delete, `mutating` would
+have to be wrong on one side or the other, and the MCP server could not withhold
+the destructive half — which it does, by default.
+
+| verb | params | mutating | command |
+|---|---|---|---|
+| `files` | `name`, `path?` | | `/files <name> [path]` |
+| `readfile` | `name`, `path` | | `/readfile <name> <path>` |
+| `writefile` | `name`, `path`, `content` | ✅ | `/writefile <name> <path>` |
+| `copyfile` | `name`, `path`, `to` | ✅ | `/copyfile <name> <path> <to>` |
+| `deletefile` | `name`, `path` | ✅ | `/deletefile <name> <path>` |
+
+**`path` is the one exception to "no verb accepts a path", and a narrow one.**
+The original rule was about `start`: agent-hub's `/new <name> <path>` takes any
+path with no validation, so the parameter simply does not exist here and no
+validator has to be correct about it. That is unchanged — `start` still takes
+none. A workspace path is a different animal: relative by construction, confined
+to one podman volume holding nothing but that session's own work, and checked
+twice. See [filesystem.md](./filesystem.md).
+
+**`content` is `raw`, not `text`.** Every other prose parameter goes through
+`cleanText`, which collapses runs of whitespace and strips control characters —
+right for a title, catastrophic for a file, which would come back reindented and
+with its blank lines joined while reporting success.
+
 **`answer` is an ordinal and never text**, and that is the whole of its design.
 `send-keys` into a Claude Code pane reaches `!` bash mode, slash commands, and a
 root shell after one Ctrl-C — so a `reply { text }` verb would be strictly worse

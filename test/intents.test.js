@@ -42,6 +42,15 @@ test('the verb set is exactly what is documented', () => {
   assert.deepEqual(Object.keys(VERBS).sort(), [
     'answer',
     'connect',
+    // The workspace, five verbs, added together and named here on purpose:
+    // this is the visible edit the comment above asks for. Adding them cost no
+    // version bump — an older host answers `unknown_verb`, which strands
+    // nothing — while the `path` parameter they carry is new on NEW verbs
+    // rather than added to an existing one, which is the distinction that
+    // decides whether a bump is needed.
+    'copyfile',
+    'deletefile',
+    'files',
     'forget',
     'health',
     'link',
@@ -49,6 +58,7 @@ test('the verb set is exactly what is documented', () => {
     'logs',
     'peek',
     'purge',
+    'readfile',
     'reboot',
     'renew',
     'restore',
@@ -60,6 +70,7 @@ test('the verb set is exactly what is documented', () => {
     'update',
     'upgrade',
     'verify',
+    'writefile',
   ]);
 });
 
@@ -105,13 +116,38 @@ test('the credential parameter is not text, and refusals never quote it', () => 
   }
 });
 
-test('no verb accepts a path', () => {
-  // agent-hub's /new <name> <path> takes any path with no validation, and a
-  // sandboxed session's workdir is a fixed /work mount anyway. The parameter
-  // simply does not exist, so no validator has to be correct about it.
+test('no verb accepts a path into the HOST', () => {
+  // This used to say "no verb accepts a path", full stop, and the reasoning was
+  // about agent-hub's `/new <name> <path>`: it takes any path with no
+  // validation, a sandboxed session's workdir is a fixed /work mount anyway, so
+  // the parameter simply did not exist and no validator had to be correct.
+  //
+  // THAT PROPERTY IS UNCHANGED AND STILL WORTH ASSERTING. What changed is that
+  // the workspace verbs exist, and their `path` is a different animal: relative
+  // by construction, confined to ONE podman volume that holds nothing but a
+  // session's own work, checked in JS and then re-resolved inside the container
+  // where a symlink cannot lie about where it lands (src/core/files.js).
+  //
+  // So the rule is narrowed rather than dropped. A path may exist only on the
+  // verbs whose whole subject is the workspace, and `start` — the one the
+  // original note was about — still takes none.
+  const WORKSPACE = new Set(['files', 'readfile', 'writefile', 'copyfile', 'deletefile']);
   for (const [verb, spec] of Object.entries(VERBS)) {
     for (const key of Object.keys(spec.params)) {
+      if (WORKSPACE.has(verb) && (key === 'path' || key === 'to')) continue;
       assert.ok(!/path|dir|cwd|file/i.test(key), `${verb} exposes a path-shaped parameter "${key}"`);
+    }
+  }
+  // The original case, named so it cannot come back by accident.
+  for (const key of Object.keys(VERBS.start.params)) {
+    assert.ok(!/path|dir|cwd/i.test(key), `start exposes "${key}" — a session's workdir is not the caller's to choose`);
+  }
+  // And a workspace path is never optional about being relative: every one of
+  // them is declared `text`, so cleanText bounds it before anything resolves it.
+  for (const verb of WORKSPACE) {
+    for (const key of ['path', 'to']) {
+      const spec = VERBS[verb].params[key];
+      if (spec) assert.equal(spec.type, 'text', `${verb}.${key} should be text so it is bounded and cleaned`);
     }
   }
 });
@@ -132,9 +168,14 @@ test('only state-changing verbs are marked mutating', () => {
     // matters more here than anywhere: GitHub ROTATES a refresh token on every
     // exchange, so a deposit applied twice from one retry is a way to store
     // material that has already been spent.
-    ['answer', 'connect', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade'],
+    // writefile/copyfile/deletefile change what is in a session's workspace,
+    // which is state by any reading — and being mutating is what gets their
+    // idempotency key honoured, so a retried write cannot half-apply and a
+    // retried delete does not report "no such file" for what it just removed.
+    // files/readfile are reads and are deliberately absent.
+    ['answer', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
-  for (const readOnly of ['list', 'status', 'peek', 'health']) {
+  for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);
   }
 });

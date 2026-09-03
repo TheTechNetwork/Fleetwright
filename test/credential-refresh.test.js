@@ -31,7 +31,7 @@ const HOUR = 3_600_000;
 
 /**
  * A podman whose volumes already exist — the resume case, which the older stub
- * could not express because it answered `volume exists` with "no" always.
+ * could not express because it answered `volume inspect` with "no" always.
  *
  * @param {import('node:test').TestContext} t
  * @param {{ volumes?: string[], oauthAccount?: object|null }} [opts]
@@ -51,8 +51,8 @@ function stubPodman(t, { volumes = [], oauthAccount = null } = {}) {
     `#!/bin/sh
 echo "$@" >> ${log}
 case "$1 $2" in
-  "image exists") exit 0 ;;
-  "volume exists")
+  "image inspect") exit 0 ;;
+  "volume inspect")
     for known in ${volumes.map((v) => `'${v}'`).join(' ') || "''"}; do
       [ "$3" = "$known" ] && exit 0
     done

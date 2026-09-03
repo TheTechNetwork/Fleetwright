@@ -110,6 +110,22 @@ struct FleetView: View {
                             .textSelection(.enabled)
                     }
                 }
+                // WHAT IS WAITING, because a queue nobody can see is not a
+                // queue — it is a surprise arriving later. The count is enough:
+                // each command says what it is when it lands, and a list of
+                // them here would be a second inbox to read.
+                if !outbox.held.isEmpty {
+                    Section {
+                        Label(
+                            outbox.held.count == 1
+                                ? "1 command is held on this phone and will be sent when the fleet answers."
+                                : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
+                            systemImage: "tray.full"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                }
                 Section {
                     if sessions.isEmpty && !busy {
                         // ContentUnavailableView rather than a grey sentence:
@@ -151,7 +167,8 @@ struct FleetView: View {
                         }
                     }
                     ForEach(sessions) { session in
-                        SessionRow(session: session, busy: busy, stop: { await act { try await fleet.stop(session.name) } },
+                        SessionRow(session: session, busy: busy, fleet: fleet,
+                                   stop: { await act { try await fleet.stop(session.name) } },
                                    resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
                                    forget: { await act { try await fleet.forget(session.name) } },
                                    answer: { option in
@@ -208,7 +225,37 @@ struct FleetView: View {
         }
     }
 
-    private var fleet: Fleet { Fleet(settings: settings) }
+    /// One queue for the screen, not one per computed Fleet — the whole point
+    /// is that it outlives the request that failed.
+    @State private var outbox = Outbox()
+    private var fleet: Fleet { Fleet(settings: settings, outbox: outbox) }
+
+    /// Try everything held, now that the fleet has just answered.
+    ///
+    /// ON REFRESH, NOT ON A TIMER. A timer retries into an outage; a refresh is
+    /// the moment we have just learned the fleet is reachable, and it already
+    /// happens when the app opens, is pulled, or comes back to the foreground.
+    /// Returns how many were sent, and does NOT refresh.
+    ///
+    /// The first version called refresh() at the end, and refresh() calls this
+    /// — mutual recursion that happened to terminate because the second pass
+    /// found an empty queue. "Happens to terminate" is not a property to ship;
+    /// the caller re-lists instead.
+    @discardableResult
+    private func flushOutbox() async -> Int {
+        await outbox.flush { entry in
+            do {
+                let reply = try await fleet.resend(entry)
+                // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
+                // session is gone", "you cannot stop that" — and holding a
+                // command it has already judged would retry it forever.
+                if reply.ok == false, let text = reply.text { status = text }
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+    }
 
     /// - Parameter keepStatus: keep whatever is already on screen if the list
     ///   call succeeds. Set after an action, whose reply text is the only
@@ -266,6 +313,15 @@ struct FleetView: View {
         do {
             let reply = try await fleet.list()
             sessions = reply.sessions ?? []
+            // The fleet just answered, so anything held can go now — and if
+            // any of it landed, the list we just fetched is already out of
+            // date. One extra list, not a second refresh: refresh calls this.
+            if reply.ok != false, await flushOutbox() > 0 {
+                // `as? [Fleet.Session]` did nothing — the value is already
+                // that type, optional — and the compiler said so. Binding it
+                // says the same thing and says it once.
+                if let fresh = try? await fleet.list().sessions { sessions = fresh }
+            }
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
@@ -310,6 +366,10 @@ struct FleetView: View {
 private struct SessionRow: View {
     let session: Fleet.Session
     let busy: Bool
+    /// The client, for the one action that is a DESTINATION rather than a
+    /// closure: browsing pushes a screen, and a screen needs something to call
+    /// while it is open.
+    let fleet: Fleet
     let stop: () async -> Void
     let resume: () async -> Void
     let forget: () async -> Void
@@ -403,6 +463,15 @@ private struct SessionRow: View {
                 } else if session.isResumable {
                     Button("Resume") { Task { await resume() } }.disabled(busy)
                 }
+                // THE WORKSPACE, on running and stopped sessions alike. The
+                // volume survives a stop — that is what makes a session
+                // resumable — so "collect what it produced" is a thing to do
+                // AFTER the work has finished, which is most of the time.
+                NavigationLink("Files") {
+                    FilesView(session: session.name, host: session.hostId, fleet: fleet)
+                }
+                .disabled(busy)
+
                 if !session.isRunning {
                     // Forget deletes the conversation and the workspace, which
                     // is why it is confirmed and stop is not: stop is

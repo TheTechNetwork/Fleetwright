@@ -58,7 +58,7 @@ yet designed).
 | Session detail screen; notification actions | **partial** | answering works in-app; the notification *action* (answer without opening the app) is still to build |
 | Forget moves to a 7-day recycle bin, restorable | **done** | `/forget` bins, `/restore` brings it back, `/purge` is the old behaviour kept as its own word. The volumes stay, which is the feature and the cost — swept from every path that touches the bin and hourly besides. `AGENT_HUB_BIN_DAYS=0` restores the old behaviour for a box tight on disk |
 | TG settings setup / removal from the app | wanted | config, not protocol |
-| Filesystem: browse / copy / edit / delete in the workspace | wanted — **deliberately last** | largest new attack surface in the product; own design pass; may change the IARC content rating |
+| Filesystem: browse / copy / edit / delete in the workspace | **done** on coordinator, Worker, host and MCP; apps next | `docs/filesystem.md` is the design pass it was waiting for. A workspace is a podman volume, not a host directory, so every operation runs a container over that ONE volume — never the sibling holding the Claude credential. Three redundant bounds on the path (JS, then `realpath` inside the container which is what catches a symlink, then a `:ro` mount), no network, content on stdin so it is never parsed as shell. Five verbs rather than one with an `op`, so `mutating` can be true of the destructive three and the MCP server can withhold them by default. Re-run the IARC questionnaire before the next submission |
 
 ## 4. Voice and the hub surfaces
 
@@ -132,7 +132,7 @@ Not today. But it decides the shape of anything new that needs configuring:
 | `/update --restart` restarts every service, no SSH | **done** | #127 |
 | Sandbox image refresh | **done** | `/update` pulls and reports whether the digest moved; a session start also checks, stamped to six hours, bounded, never fatal, only when creating a volume |
 | Installer detects clones, offers clean vs update, uninstaller | **done** | #121 |
-| Scheduled system/app update checks, so the answer is ready when asked | wanted | pairs with host-version-in-app |
+| Scheduled system/app update checks, so the answer is ready when asked | **done** | The check ran INSIDE the health frame — a `git fetch` and an apt refresh on the path the coordinator ranks hosts by, every fifteen seconds. Most frames were instant and the one after a cache expiry was not, which reads as a host going quiet rather than as a slow check. A timer computes it now and health reads the last answer; a failed check keeps the previous one rather than erasing it to null, because null means CANNOT TELL and a fleet that forgets what it knew is worse than one that is slightly stale |
 | **Package the host** — versioned tarball + manifest instead of a monorepo checkout | **partial** | `docs/packaging.md`. Path-scoped "behind" **done** (a docs commit no longer makes a host say it is behind, or restart). Next: publish the tarball in CI, then teach `/update` the manifest with a git fallback |
 | CI runs the Worker in workerd; tail workflow; frame logging | **done** | born in the Aug-28 outage |
 | **A resumed session gets a current credential** | **done** | `docs/accounts.md`. The old rule — "a resume never re-seeds, which is what keeps a session on the account it began with" — kept the bytes in order to keep the account, and the bytes were never the account. A week-old session came back logged out on a box where a new one worked. The account is pinned now and the credential is not |

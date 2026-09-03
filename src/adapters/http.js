@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 
 import { cleanText, TITLE_MAX, BRIEF_MAX } from '../core/text.js';
+import { MAX_WRITE_BYTES } from '../core/files.js';
 import { dispatch } from './commands.js';
 import { describe } from '../core/login.js';
 import { log } from '../log.js';
@@ -195,6 +196,24 @@ export class HttpAdapter {
         const r = cleanText(body[field], { max, label: field });
         if (!r.ok) return json(res, 400, { ok: false, text: r.error });
         meta[field] = r.value;
+      }
+
+      // FILE CONTENT, WHICH DOES NOT GO THROUGH cleanText. That collapses runs
+      // of whitespace and strips control characters — right for a title and
+      // catastrophic for a file, which would come back reindented and with its
+      // blank lines joined, reported as written. Bounded and otherwise
+      // untouched, the same rule the protocol's `raw` type states.
+      if (body.content !== undefined && body.content !== null) {
+        if (typeof body.content !== 'string') {
+          return json(res, 400, { ok: false, text: 'content must be text' });
+        }
+        if (Buffer.byteLength(body.content) > MAX_WRITE_BYTES) {
+          return json(res, 400, { ok: false, text: 'content is larger than this will write' });
+        }
+        if (body.content.includes('\0')) {
+          return json(res, 400, { ok: false, text: 'content contains a null byte' });
+        }
+        meta.content = body.content;
       }
 
       // WHO ASKED, when the caller can say.

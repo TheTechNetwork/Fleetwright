@@ -143,7 +143,10 @@ class MainActivity : ComponentActivity() {
 fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
-    val fleet = remember { Fleet(settings) }
+    val outbox = remember { Outbox(context) }
+    val fleet = remember { Fleet(settings, outbox) }
+    // What is waiting, so the pending row can say how many.
+    var pending by remember { mutableStateOf(outbox.held.size) }
     val scope = rememberCoroutineScope()
 
     // rememberSaveable, not remember: a rotation destroys and recreates the
@@ -167,6 +170,8 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
     var binHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    /** The session whose workspace is open, if any. */
+    var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
 
     /**
      * @param keepStatus keep whatever is already on screen if the list call
@@ -190,6 +195,11 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             // fleet call that fails must not blank the session list that
             // already arrived.
             binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
+            // AFTER EVERY REFRESH, because a command held a moment ago must
+            // show up without waiting for the next flush. Every action on this
+            // screen refreshes when it finishes, so this is the one place that
+            // sees both a queue that grew and a queue that drained.
+            pending = outbox.held.size
             busy = false
         }
     }
@@ -264,6 +274,18 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         )
     }
 
+    browsing?.let { session ->
+        FilesSheet(
+            fleet = fleet,
+            session = session.name,
+            // The host explicitly: a session lives on ONE box, and a browse
+            // that fanned out would read a directory that exists on two
+            // machines with different contents in it.
+            host = session.hostId,
+            onDismiss = { browsing = null },
+        )
+    }
+
     if (showBin) {
         RecycleBinSheet(
             settings = settings,
@@ -273,7 +295,25 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         )
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    // FLUSHED ON EVERY REFRESH, which is the moment we have just learned the
+    // fleet answers. Not on a timer: a timer retries into an outage, and the
+    // refresh already happens when the app is opened, pulled, or comes back.
+    LaunchedEffect(Unit) {
+        refresh()
+        val sent = outbox.flush { entry ->
+            runCatching {
+                val reply = fleet.resend(entry)
+                // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
+                // session is gone", "you cannot stop that" — and holding a
+                // command the fleet has already judged would retry it forever.
+                if (!reply.ok) status = reply.text
+            }
+        }
+        pending = outbox.held.size
+        // One extra refresh if anything landed, and only here: flush is not
+        // called from refresh on this side, so there is no recursion to break.
+        if (sent > 0) refresh(keepStatus = true)
+    }
 
     Scaffold(
         topBar = {
@@ -341,6 +381,21 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                 }
             }
 
+            // WHAT IS WAITING, because a queue nobody can see is not a queue —
+            // it is a surprise arriving later. The count is enough here: the
+            // commands say what they are when they land, and a list of them on
+            // the main screen would be a second inbox to read.
+            if (pending > 0) {
+                Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(
+                        if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
+                        else "$pending commands are held on this phone and will be sent when the fleet answers.",
+                        Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
             if (sessions.isEmpty() && !busy) {
                 Column(
                     Modifier.padding(top = 24.dp),
@@ -394,6 +449,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                                 busy = false
                             }
                         },
+                        onFiles = { browsing = session },
                         onResume = {
                             scope.launch {
                                 busy = true
@@ -421,6 +477,7 @@ private fun SessionCard(
     onForget: () -> Unit,
     onAnswer: (Int) -> Unit,
     onPeek: () -> Unit,
+    onFiles: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     var confirmingForget by remember { mutableStateOf(false) }
@@ -513,6 +570,11 @@ private fun SessionCard(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
+                // THE WORKSPACE, on running and stopped sessions alike. The
+                // volume survives a stop — that is what makes a session
+                // resumable — so "collect what it produced" is a thing to do
+                // AFTER the work has finished, which is most of the time.
+                TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
                 if (session.status == "running") {
                     TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
                     session.rcUrl?.let { url ->

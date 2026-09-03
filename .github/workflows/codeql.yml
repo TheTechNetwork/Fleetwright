@@ -238,6 +238,28 @@ jobs:
       # anything compiled before this step is invisible to it.
       - uses: github/codeql-action/init@v4.37.9
         with:
+          # EXPECT THIS IN THE LOG, and leave it alone:
+          #
+          #   Cannot build an overlay database because build-mode is set to
+          #   "manual" instead of "none". Falling back to creating a normal
+          #   full database instead
+          #
+          # It is informational and the job passes. An overlay database is an
+          # incremental one, which is faster; `build-mode: none` would get us
+          # both it and a quieter log.
+          #
+          # IT WOULD ALSO ANALYSE LESS. Buildless extraction never runs the
+          # Kotlin compiler, so nothing GENERATED exists in the database —
+          # BuildConfig, the Compose compiler's output, R. That is not
+          # hypothetical here: this app's sign-in has broken twice on
+          # BuildConfig.GOOGLE_WEB_CLIENT_ID, once because resource shrinking
+          # removed what it read and once because AGP types it non-null while
+          # Gradle emits a literal null. A scanner that cannot see the file is
+          # a scanner that could not have found either.
+          #
+          # Two and a half minutes for a full database is a price worth paying
+          # for a database that contains the code. Do not trade it for the log
+          # line.
           languages: java-kotlin
           build-mode: manual
 
@@ -289,7 +311,21 @@ jobs:
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
-        run: brew install xcodegen
+        run: |
+          # UNTAP RATHER THAN SILENCE. GitHub's macOS image ships aws/tap
+          # tapped, Homebrew now requires tap trust, and every brew command
+          # prints a paragraph about it. We use brew for one formula and never
+          # touch aws/tap, so removing it is the honest fix.
+          #
+          # NOT HOMEBREW_NO_REQUIRE_TAP_TRUST=1, which turns off the check for
+          # every tap including ones we do use — and which Homebrew says it
+          # will remove. Silencing a security warning by disabling the security
+          # is the trade this repository keeps declining.
+          #
+          # `|| true` because a future image may not ship it, and a missing tap
+          # must not fail a build.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install xcodegen
 
       # Before init deliberately. Generating a pbxproj is not compilation, so it
       # does not need to be traced, and doing it first keeps the traced section
