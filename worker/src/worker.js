@@ -168,6 +168,30 @@ const handler = {
     //
     // Above the token gate on purpose. A box being installed has no credential
     // — acquiring one is what the install is for.
+    // THE PREREQUISITE STEP, WHICH IS A REDIRECT AND NOT A SHIM.
+    //
+    // /install serves six generated lines because it has something to inject:
+    // the address somebody typed, which is the answer to "which fleet". This
+    // has nothing to inject — a prerequisite is the same on every box — so it
+    // stays a redirect, and the old reasoning applies in full: the thing people
+    // paste into a root shell is served by the place that has the source, so it
+    // cannot go stale here and cannot be edited here.
+    //
+    // DERIVED FROM THE INSTALL URL rather than configured separately. Both come
+    // from one repository at one ref, which is a property worth having: you
+    // cannot end up running one fork's prerequisites and another's installer.
+    if (url.pathname === '/prereq' || url.pathname === '/prereq.sh') {
+      const installer = String(env.AGENT_FLEET_INSTALL_URL || '').trim();
+      if (!installer) {
+        return new Response(
+          'This coordinator does not publish an installer, so it has no prerequisites either.\n' +
+            'Set AGENT_FLEET_INSTALL_URL in wrangler.toml.\n',
+          { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
+        );
+      }
+      return Response.redirect(installer.replace(/\/[^/]*$/, '/prereq.sh'), 302);
+    }
+
     // WHOSE INSTALLER, and it is not a constant any more.
     //
     // This hardcoded upstream's raw URL, and `bootstrap.sh` then clones the

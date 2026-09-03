@@ -469,7 +469,7 @@ if [ -z "$NODE_BIN" ]; then
       ok "installed node $("$NODE_BIN" -v)"
     else
       die "node is not installed and could not be installed automatically ($(pkg_why)).
-       Install Node 24 or newer and re-run. If \`node -v\` already works for you,
+       Install Node $NODE_FLOOR or newer and re-run. If \`node -v\` already works for you,
        that is sudo's secure_path hiding it — point at it directly:
            sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
     fi
@@ -501,9 +501,15 @@ if [ -n "$NODE_BIN" ]; then
   # destroyed — which is what moving section 1b below buys — and to name the
   # command rather than the problem.
   [ "$NODE_MAJOR" -ge "$NODE_FLOOR" ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs $NODE_FLOOR or newer (package.json says >=$NODE_FLOOR).
-       Nothing has been changed on this box. Install a newer node and re-run:
-           curl -fsSL https://deb.nodesource.com/setup_${NODE_FLOOR}.x | sudo -E bash - && sudo apt install -y nodejs
-       Or with nvm, then point this script at it:
+       Nothing has been changed on this box.
+
+       The prerequisite step installs it, and is separate because it adds a
+       third-party apt repository — which is not a thing this installer does to
+       your machine on its own:
+           curl -fsSL ${AGENT_FLEET_COORDINATOR_URL:-https://fleet.thetech.network}/prereq | sudo sh
+
+       Or install node any other way — nvm, fnm, a backport — and re-run. If
+       you already have one that sudo cannot see:
            sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
   ok "node $("$NODE_BIN" -v) at $NODE_BIN"
 fi

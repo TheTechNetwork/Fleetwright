@@ -57,8 +57,17 @@ the per-session sandbox plumbing.
 installer, what it asks, what is deployable today and what is not.
 
 ```sh
+curl -fsSL https://fleet.thetech.network/prereq  | sudo sh   # once, if node is old
 curl -fsSL https://fleet.thetech.network/install | sudo sh
 ```
+
+The first line is separate on purpose, and is a no-op if this box already has
+Node 24. It is the one thing the installer will not do on your behalf: closing
+the gap between what Debian ships and what this needs means adding a
+**third-party apt repository and signing key** to your machine, which is a
+different kind of act from installing a package. The installer refuses *before
+it changes anything* and points at it, so a box is never taken apart and then
+turned away.
 
 **Curling a coordinator is how you join it.** That URL is a fleet's address, and
 `/install` serves a script that carries it through — so the installer never asks

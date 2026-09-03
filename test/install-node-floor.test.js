@@ -60,12 +60,20 @@ test('the message it prints names the same version it enforces', () => {
   // EVERY occurrence, not the first. A stale version left anywhere in this file
   // is a stale recommendation, and the first match is whichever line happens to
   // sort earliest — including a comment.
-  // Built from the floor rather than written out, so a bump cannot leave a
-  // nodesource URL pointing at the previous major.
-  assert.match(sh, /setup_\$\{NODE_FLOOR\}\.x/);
-  assert.equal(/setup_\d+\.x/.test(sh), false, 'a hardcoded nodesource version is back');
+  // THE WAY OUT IS THE PREREQUISITE STEP, not a nodesource command pasted into
+  // a refusal. The installer names a supported command; prereq.sh is what knows
+  // about apt repositories, and it is separate precisely so that adding one is
+  // a line somebody typed.
+  assert.match(sh, /\/prereq \| sudo sh/);
+  // COMMENTS ARE WHERE THE HISTORY LIVES, and one of them records that this
+  // script used to recommend nodesource's 22 line. Asserting over raw text
+  // would fire on the sentence explaining why it no longer does.
+  assert.equal(/nodesource/.test(sh.replace(/^\s*#.*$/gm, '')), false,
+    'install.sh is back to naming a third-party repository');
 
-  assert.match(sh, new RegExp(`Install Node ${wanted} or newer`), 'the could-not-install path names a different version');
+  // From the variable, like everything else — the could-not-install path used
+  // to carry its own literal, which is the fourth copy that made this drift.
+  assert.match(sh, /Install Node \$NODE_FLOOR or newer/, 'the could-not-install path names its own version');
 });
 
 test('the documents agree with the installer', () => {
@@ -113,4 +121,31 @@ test('nothing is destroyed before the install is known to be possible', async ()
   assert.ok(prerequisites > 0 && nodeGate > 0 && clean > 0, 'a landmark moved');
   assert.ok(nodeGate < clean, 'the node check runs after the clean — a box can be uninstalled and then refused');
   assert.ok(prerequisites < clean, 'the prerequisites run after the clean');
+});
+
+test('the prerequisite step installs the floor, and nothing else', () => {
+  // Its whole justification is being narrow: it exists because install.sh will
+  // not add a third-party apt repository on somebody's behalf. A prereq script
+  // that also installed podman, or wrote config, would be the installer again
+  // with the argument removed.
+  const sh = readFileSync(new URL('../install/prereq.sh', import.meta.url), 'utf8');
+  const wanted = floorOf(JSON.parse(read('package.json')).engines?.node);
+
+  assert.match(sh, new RegExp(`^FLOOR=${wanted}$`, 'm'), 'prereq.sh wants a different node than package.json');
+  assert.match(sh, /setup_\$\{FLOOR\}\.x/, 'the repository version is not built from the floor');
+
+  const body = sh.replace(/^\s*#.*$/gm, '');
+  for (const other of ['podman', 'tmux', 'systemctl', 'useradd', '/etc/']) {
+    assert.equal(body.includes(other), false, `prereq.sh is doing installer work: ${other}`);
+  }
+
+  // ALREADY FINE IS A NO-OP. A box with node 26 from nvm must not get a system
+  // node landing on top of it — this is run by people following instructions
+  // who will not check first.
+  assert.match(sh, /is already new enough — nothing to do/);
+  // And it says what it is about to do to the machine BEFORE doing it, which is
+  // the entire reason the step is separate.
+  assert.match(sh, /adds the NodeSource apt repository and its signing key/);
+  // Refuses on a box it cannot help rather than guessing.
+  assert.match(sh, /does not use apt/);
 });
