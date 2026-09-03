@@ -1,11 +1,28 @@
-# The coordinator, on Cloudflare.
+# OUR deployment of the coordinator, and nobody else's.
 #
-#   cd worker && npx wrangler deploy
+#   cd worker && npx wrangler deploy --config wrangler.production.toml
 #
-# §4's reasoning, unchanged: you own no port, no VM, no cert and no tunnel
-# daemon. Hosts open an outbound WebSocket and a Durable Object pins it; the
-# phone speaks HTTPS to the same origin. This is not a tunnel — nothing is
-# aimed at your boxes, they are ordinary clients.
+# WHY THIS FILE EXISTS. `wrangler.toml` used to be this file: our routes, our
+# allowlist, our Sentry project, our GitHub App, our invite sender — committed
+# as the repository's DEFAULT. A fork that followed the README's deploy button
+# and changed nothing got a coordinator that admitted four of our addresses to
+# their fleet, posted their errors to our Sentry, and served an installer that
+# put our code on their machines.
+#
+# The code was never wrong about any of it. `wrangler.toml` still says "Empty
+# ALLOW means nobody, deliberately" and sentry.js still says an unset DSN posts
+# nowhere. The committed VALUES defeated both. A guarantee the default config
+# overrides is not a guarantee.
+#
+# So the split is by ownership, not by capability: everything structural — the
+# Durable Object, the migrations, the rate limits — is identical in both files
+# and pinned equal by test/fork-safe-config.test.js, because a fork needs those
+# exactly as much as we do. What lives ONLY here is what is ours.
+#
+# THE ALLOWLIST IS NOT HERE EITHER. It is a `wrangler secret`, synced by CI —
+# it decides who can reach a fleet, it does not belong in a public repository,
+# and the secret block at the bottom of wrangler.toml has listed it as a secret
+# all along. The `[vars]` entry was the bug.
 
 name = "agent-fleet-coordinator"
 main = "src/worker.js"
@@ -55,76 +72,80 @@ compatibility_flags = ["nodejs_als"]
 # coordinator origin, so changing it means editing every host's
 # /etc/agent-fleet-sidecar.env. It is not a value to churn.
 #
-# NO ROUTES, WHICH MEANS THIS FILE IS SAFE TO DEPLOY AND DOES NOT REACH ANYBODY.
+# ONE DOMAIN, AND THE DEMO IS NO LONGER ON IT. `fleetdemo` used to be a second
+# custom domain on this same Worker, answered above the host routes so a request
+# there never reached enrolment, a websocket, sign-in, or the Durable Object.
+# That was true, and it was an argument about the ORDER of branches inside a
+# bundle that also holds the App's client secret and the APNs key.
 #
-# `routes` named `fleet.thetech.network` with `custom_domain = true`, in the
-# file this repository publishes as its default — so `wrangler deploy` from a
-# fork tried to bind a domain they do not own and failed, and the Deploy to
-# Cloudflare button on the README was broken for every fork.
+# It is a separate script now — `wrangler.demo.toml`, which has no Durable
+# Object binding and no secrets. See docs/coordinator-deploy.md.
 #
-# Add your own here, or deploy to workers.dev and point the apps at that. Ours
-# is in wrangler.production.toml, which is the file that is ours.
-#
-# `custom_domain = true` is what makes wrangler create the DNS record and the
-# certificate, so there is nothing to point anywhere by hand.
-#
-# routes = [
-#   { pattern = "fleet.example.org", custom_domain = true }
-# ]
-
+# `custom_domain = true` makes wrangler create the DNS record and the domain
+# binding on deploy, so there is nothing to point anywhere by hand.
+routes = [
+  { pattern = "fleet.thetech.network", custom_domain = true }
+]
 
 # --- plain configuration, deployed with the code -----------------------------
 #
-# NOTHING HERE IDENTIFIES A PARTICULAR DEPLOYMENT, and that is the point.
-#
-# This table used to hold our allowlist, our Sentry project, our GitHub App and
-# our invite sender. A fork that deployed this file unchanged got a coordinator
-# that admitted four of OUR addresses to their fleet — `trust.md` has
-# coordinator → host as trusted absolutely — posted their errors to our Sentry,
-# and served an installer that put our code on their machines.
-#
-# The code was never wrong about any of it. The comment beside the allowlist
-# still says "Empty ALLOW means nobody, deliberately", and sentry.js still says
-# an unset DSN posts nowhere. The committed VALUES defeated both, which is the
-# failure app-parity.md exists to name: a document asserting something the
-# configuration makes untrue.
-#
-# So this file is now the fork-safe default and ours lives in
-# wrangler.production.toml. Everything structural below — the Durable Object,
-# the migrations, the rate limits — is identical in both and pinned equal by
-# test/fork-safe-config.test.js, because a fork needs those exactly as much as
-# we do.
-#
-# WHAT TO SET, AND WHAT HAPPENS IF YOU DO NOT. Every one of these is absent
-# here on purpose, and every absence has a defined, honest behaviour:
-#
-#   AGENT_FLEET_AUTH_ISSUERS      who may vouch for a person. Unset → sign-in
-#   AGENT_FLEET_AUTH_AUDIENCES    and which app the ID token is for.  answers
-#                                 503 and says so. Copy ours verbatim if you
-#                                 want the App Store and Play builds to sign in
-#                                 to your coordinator — they are public
-#                                 identifiers and this needs no Apple or Google
-#                                 account of your own. See
-#                                 docs/coordinator-deploy.md.
-#   AGENT_FLEET_DOCS_URL          /docs. Unset → 404
-#   AGENT_FLEET_INSTALL_URL       /install. Unset → 404 naming this variable.
-#                                 bootstrap.sh clones the repository it is
-#                                 served from, so pointing this at somebody
-#                                 else's installs THEIR code on your machines
-#   AGENT_FLEET_PUSH              unset → notifications are logged, not sent,
-#                                 and the coordinator says so at startup
-#   AGENT_FLEET_GITHUB_*          unset → the paste route, which is a
-#                                 first-class answer rather than a fallback
-#   AGENT_FLEET_NAME              unset → invitations are not sent, and the
-#   AGENT_FLEET_INVITE_FROM       reply says which happened
-#   AGENT_FLEET_APP_IOS/_ANDROID  unset → an invitation with no app links
-#   SENTRY_DSN                    unset → no error reporting at all
-#
-# AGENT_FLEET_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
-# rather than a var. It decides who can reach a fleet; it does not belong in a
-# public repository, and the secret block at the bottom of this file has listed
-# it as a secret all along. The `[vars]` entry was the bug.
+# EVERY ENTRY BELOW IS OURS. The same names are absent from wrangler.toml, each
+# with a comment there saying what happens when it is unset — a fork sets its
+# own or gets a defined, honest behaviour, rather than inheriting these.
 [vars]
+# WHERE THE PRODUCT PAGE IS. /docs on the coordinator is a 302 to this and
+# nothing else — a coordinator holds the fleet and should not also be the
+# surface a stranger loads HTML from.
+AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
+
+# WHOSE INSTALLER /install HANDS OUT. `install/bootstrap.sh` clones the
+# repository it was served from, so this decides whose code ends up on the
+# machines somebody installs. Unset is a 404 that says so.
+AGENT_FLEET_INSTALL_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh"
+
+# PUSH, which is off unless this says otherwise. The credentials that make it
+# work are ours and they address our app's device tokens, so a fork acquiring
+# them by copying a config would be notifying our users' phones.
+AGENT_FLEET_PUSH = "1"
+
+# THE GITHUB APP. Identifiers rather than credentials — a client id is in the
+# query string of every authorize URL — but they are OURS, and a fork
+# inheriting them gets a flow that reaches GitHub and is refused there, because
+# their origin is not on our App's redirect list. Confidently broken, where
+# absent is honest. The CLIENT SECRET is a `wrangler secret`.
+AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
+AGENT_FLEET_GITHUB_APP_ID = "4758006"
+AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
+
+# WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
+# ARE safe for a fork to copy and are the best fork-parity property in the
+# project: the audiences are our bundle id and our Google web client, both
+# public by construction, and copying them means the App Store and Play builds
+# sign in to a fork's coordinator unchanged. No Firebase project, no Apple
+# Developer account. They are here rather than in wrangler.toml only because a
+# fork should make that choice deliberately.
+AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+
+# The fleet's name and the address invitations come from. Cloudflare Email
+# Sending needs a domain the account controls, so this is one of the three
+# things a fork genuinely cannot inherit.
+AGENT_FLEET_NAME = "the Fleetwright fleet"
+AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
+
+# Where an invitation says to get the app. Ours, and a fork's invitations should
+# not point at our store listings.
+AGENT_FLEET_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
+AGENT_FLEET_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
+
+# ERROR REPORTING. A DSN is not a credential — it grants only the ability to
+# send events — but it names OUR project, and a fork deploying it posts their
+# errors to us. Unset means no reporting at all, which sentry.js and
+# docs/error-reporting.md both promise and which only became true when this
+# moved out of the default config.
+SENTRY_DSN = "https://08d0e1e893370804857f8ce9e2f39f17@o4512012096765952.ingest.us.sentry.io/4512012108955648"
+SENTRY_ENVIRONMENT = "production"
+SENTRY_TRACES_SAMPLE_RATE = "0.05"
 
 [[send_email]]
 name = "EMAIL"

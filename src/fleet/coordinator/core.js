@@ -20,6 +20,7 @@ import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
+import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 
@@ -553,14 +554,30 @@ export class CoordinatorCore {
    * coordinator expecting `fid` fails AFTER the version handshake agreed, which
    * is the worst-shaped failure this protocol has.
    *
-   * @param {{ platform: string, token: string, actor?: string, clientId?: string }} reg
+   * `pushKey` is the phone's P-256 public key, and supplying it is what makes
+   * this device's notifications unreadable to Apple, Google and anything we
+   * ever put in between. OPTIONAL, and it has to stay optional: an installed
+   * app that predates encryption registers without one and must keep working,
+   * which is why the sender falls back rather than refusing. See
+   * docs/push-encryption.md.
+   *
+   * VALIDATED HERE rather than at send time. A key that cannot be imported is
+   * a registration that fails on every notification forever, and the moment to
+   * say so is while somebody is looking at a settings screen — not silently,
+   * hours later, when a session needs an answer.
+   *
+   * @param {{ platform: string, token: string, actor?: string, clientId?: string, pushKey?: string }} reg
    */
-  registerDevice({ platform, token, actor, clientId }) {
+  async registerDevice({ platform, token, actor, clientId, pushKey }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
     if (typeof token !== 'string' || token.length < 8 || token.length > 4096) {
       return { ok: false, error: 'a push token is required' };
+    }
+    if (pushKey !== undefined && pushKey !== null && pushKey !== '') {
+      const checked = await checkPublicKey(pushKey);
+      if (!checked.ok) return { ok: false, error: checked.error };
     }
     const existing = this.devices.get(token);
     const device = {
@@ -574,6 +591,14 @@ export class CoordinatorCore {
       // questions themselves. Revoking a lost phone removed its ability to ASK
       // and left its ability to be TOLD, which is the wrong half.
       ...(clientId ? { clientId } : {}),
+      // KEPT ONLY WHEN SUPPLIED THIS TIME, never inherited from `existing`.
+      //
+      // A phone that reinstalls loses its private key — it was in the Keychain
+      // or the Keystore and both go with the app — so carrying the old public
+      // key forward would encrypt every future notification to a key nobody
+      // holds. The failure would be silent and permanent: delivery succeeds,
+      // decryption fails, and the person sees the fallback text forever.
+      ...(pushKey ? { pushKey } : {}),
       registeredAt: existing?.registeredAt ?? this.now(),
     };
     this.devices.set(token, device);

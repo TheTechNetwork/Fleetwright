@@ -9,6 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { CoordinatorCore, describeEvent } from '../src/fleet/coordinator/core.js';
 import {
@@ -43,71 +44,94 @@ function core(opts = {}) {
 
 // --- registering a phone ----------------------------------------------------
 
-test('a device registers and is remembered by its push token', () => {
+test('a device registers and is remembered by its push token', async () => {
   const c = core();
-  const r = c.registerDevice({ platform: 'android', token: 'a'.repeat(40), actor: 'telegram:1' });
+  const r = await c.registerDevice({ platform: 'android', token: 'a'.repeat(40), actor: 'telegram:1' });
 
   assert.equal(r.ok, true);
   assert.equal(c.devices.size, 1);
 });
 
-test('re-registering the same token updates rather than duplicating', () => {
+test('re-registering the same token updates rather than duplicating', async () => {
   // A reinstall hands back the same token. Two registrations would mean two
   // notifications for one phone.
   const c = core();
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40), actor: 'telegram:2' });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40), actor: 'telegram:2' });
 
   assert.equal(c.devices.size, 1);
   assert.equal([...c.devices.values()][0].actor, 'telegram:2');
 });
 
-test('a phone that changes its push address does not become two phones', () => {
+test('a phone that changes its push address does not become two phones', async () => {
   // THE FCM TOKEN -> FID TRANSITION IN ONE TEST. Every phone crosses that line
   // once, on the update that changes what it registers, and the old address
   // does not stop working the moment the new one appears — FCM keeps accepting
   // a superseded registration token. Two live rows for one phone is every
   // notification delivered twice, which nobody reads as stale state.
   const c = core();
-  c.registerDevice({ platform: 'android', token: 'old-fcm-token-'.padEnd(40, 'x'), clientId: 'phone-1' });
-  c.registerDevice({ platform: 'android', token: 'new-fid-'.padEnd(40, 'y'), clientId: 'phone-1' });
+  await c.registerDevice({ platform: 'android', token: 'old-fcm-token-'.padEnd(40, 'x'), clientId: 'phone-1' });
+  await c.registerDevice({ platform: 'android', token: 'new-fid-'.padEnd(40, 'y'), clientId: 'phone-1' });
 
   assert.equal(c.devices.size, 1);
   assert.equal([...c.devices.values()][0].token.startsWith('new-fid'), true);
 });
 
-test('two phones on one account both keep their registration', () => {
+test('two phones on one account both keep their registration', async () => {
   // The guard above keys on the credential issued to a phone, not on the
   // person. Someone with a tablet and a phone is one actor and two devices.
   const c = core();
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40), clientId: 'phone-1', actor: 'fleet:e@x.com' });
-  c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), clientId: 'tablet-2', actor: 'fleet:e@x.com' });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40), clientId: 'phone-1', actor: 'fleet:e@x.com' });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), clientId: 'tablet-2', actor: 'fleet:e@x.com' });
 
   assert.equal(c.devices.size, 2);
 });
 
-test('an unidentified registration never deletes an existing one', () => {
+test('an unidentified registration never deletes an existing one', async () => {
   // No clientId means the coordinator cannot tell "the same phone with a new
   // address" from "a different phone". Cannot-tell is not the same as
   // supersedes, and guessing here deletes somebody else's registration.
   const c = core();
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
-  c.registerDevice({ platform: 'android', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'b'.repeat(40) });
 
   assert.equal(c.devices.size, 2);
 });
 
-test('a nonsense platform or token is refused', () => {
+test('a nonsense platform or token is refused', async () => {
   const c = core();
-  assert.equal(c.registerDevice({ platform: 'blackberry', token: 'a'.repeat(40) }).ok, false);
-  assert.equal(c.registerDevice({ platform: 'ios', token: 'short' }).ok, false);
-  assert.equal(c.registerDevice({ platform: 'ios', token: 'x'.repeat(5000) }).ok, false);
+  assert.equal((await c.registerDevice({ platform: 'blackberry', token: 'a'.repeat(40) })).ok, false);
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'short' })).ok, false);
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'x'.repeat(5000) })).ok, false);
+
+  // A KEY THAT CANNOT BE IMPORTED IS REFUSED AT REGISTRATION, not at send
+  // time. Accepting it would be a registration that fails on every
+  // notification forever, and the moment to say so is while somebody is
+  // looking at a settings screen — not silently, hours later, when a session
+  // needs an answer.
+  const bad = await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40), pushKey: 'not-base64!!' });
+  assert.equal(bad.ok, false);
+  assert.match(String(bad.error), /base64/);
+  // 65 bytes, right shape, not on the curve — the classic way to learn
+  // somebody's private key one bit at a time. WebCrypto catches it on import,
+  // which is exactly where it should be caught.
+  const offCurve = new Uint8Array(65);
+  offCurve[0] = 0x04;
+  offCurve.fill(0x01, 1);
+  const notAPoint = await c.registerDevice({
+    platform: 'ios',
+    token: 'c'.repeat(40),
+    pushKey: Buffer.from(offCurve).toString('base64'),
+  });
+  assert.equal(notAPoint.ok, false);
+  assert.match(String(notAPoint.error), /P-256/);
+
   assert.equal(c.devices.size, 0);
 });
 
-test('a device can be unregistered', () => {
+test('a device can be unregistered', async () => {
   const c = core();
-  c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
   assert.equal(c.unregisterDevice('b'.repeat(40)).ok, true);
   assert.equal(c.devices.size, 0);
 });
@@ -117,8 +141,8 @@ test('a device can be unregistered', () => {
 test('a session waiting for input notifies every registered device', async () => {
   const push = fakePusher();
   const c = core({ push });
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
-  c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'ios', token: 'b'.repeat(40) });
 
   await c.onHostMessage('unabandoned', {
     kind: 'event',
@@ -140,7 +164,7 @@ test('a session waiting for input notifies every registered device', async () =>
 test('an event nobody needs waking for is recorded but not pushed', async () => {
   const push = fakePusher();
   const c = core({ push });
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
 
   await c.onHostMessage('unabandoned', { kind: 'event', event: 'session.started', name: 'api' });
 
@@ -163,7 +187,7 @@ test('a push provider blowing up does not take the coordinator with it', async (
       },
     },
   });
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
 
   await c.onHostMessage('h', { kind: 'event', event: 'session.error', name: 'x', text: 'boom' });
 
@@ -218,9 +242,15 @@ test('a malformed service account falls back to logging rather than throwing', (
   const warned = [];
   const logger = { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) };
 
-  assert.ok(pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
-  assert.ok(pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
-  assert.equal(warned.length, 2);
+  assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
+  assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
+
+  // TWO WARNINGS EACH, and the second one is the point. The first names what is
+  // wrong with the service account; the second says the fleet ended up with no
+  // provider at all, which is the fact somebody waiting on a notification needs
+  // and which used to be silent.
+  assert.equal(warned.length, 4);
+  assert.equal(warned.filter((w) => /no provider is configured/.test(w)).length, 2);
 });
 
 /** A service account with a real key, since fcmPusher signs before it sends. */
@@ -309,7 +339,7 @@ test('what systemd does to a raw-JSON service account is rejected, not half-read
   /** @type {string[]} */
   const warned = [];
   const pusher = pusherFromEnv(
-    { AGENT_FLEET_FCM_SERVICE_ACCOUNT: mangled },
+    { AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: mangled },
     { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) },
   );
   assert.ok(pusher);
@@ -324,7 +354,7 @@ test('a base64 service account configures FCM end to end', () => {
     JSON.stringify({ project_id: 'proj-42', client_email: 'e', private_key: 'k' }),
     'utf8',
   ).toString('base64');
-  pusherFromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: encoded }, { info: (/** @type {any} */ m) => infos.push(String(m)), warn() {} });
+  pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: encoded }, { info: (/** @type {any} */ m) => infos.push(String(m)), warn() {} });
   assert.match(infos.join('\n'), /proj-42/);
 });
 
@@ -393,10 +423,10 @@ test('FCM reports dead tokens so they can be dropped rather than retried forever
   assert.deepEqual(r.dead, ['dead-token-aaaa']);
 });
 
-test('dead tokens are pruned from the registry', () => {
+test('dead tokens are pruned from the registry', async () => {
   const c = core();
-  c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
-  c.registerDevice({ platform: 'android', token: 'b'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  await c.registerDevice({ platform: 'android', token: 'b'.repeat(40) });
 
   assert.equal(c.pruneDevices(['a'.repeat(40)]), 1);
   assert.equal(c.devices.size, 1);
@@ -424,7 +454,7 @@ test('a test push reports what actually happened, not that it tried', async () =
   assert.equal(none.ok, false);
   assert.equal(none.error?.code, 'no_devices');
 
-  core.registerDevice({ platform: 'ios', token: 'a-real-looking-token' });
+  await core.registerDevice({ platform: 'ios', token: 'a-real-looking-token' });
 
   // logPusher reports sent: 0 — configured to log, so nothing was delivered.
   const logged = await core.testPush();
@@ -446,14 +476,14 @@ test('a test push that lands says so, and a dead token unregisters itself', asyn
     },
   });
 
-  core.registerDevice({ platform: 'android', token: 'alive-token-1' });
+  await core.registerDevice({ platform: 'android', token: 'alive-token-1' });
   const ok = await core.testPush();
   assert.equal(ok.ok, true);
   assert.equal(ok.sent, 1);
   assert.match(sent[0].message.body, /push is working/i);
   assert.equal(sent[0].message.data.event, 'test', 'the app can tell a test from a real event');
 
-  core.registerDevice({ platform: 'android', token: 'dead-token-01' });
+  await core.registerDevice({ platform: 'android', token: 'dead-token-01' });
   const gone = await core.testPush('dead-token-01');
   assert.equal(gone.ok, false);
   assert.match(gone.text, /dead/i);
@@ -468,8 +498,8 @@ test('a test push to one device does not wake the whole fleet', async () => {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     push: { async send(devices) { seen.push(devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } },
   });
-  core.registerDevice({ platform: 'ios', token: 'mine-token-01' });
-  core.registerDevice({ platform: 'ios', token: 'somebody-elses-token' });
+  await core.registerDevice({ platform: 'ios', token: 'mine-token-01' });
+  await core.registerDevice({ platform: 'ios', token: 'somebody-elses-token' });
 
   await core.testPush('mine-token-01');
   assert.deepEqual(seen, [['mine-token-01']]);
@@ -591,7 +621,80 @@ test('half a set of APNs credentials is refused rather than half-configured', ()
   /** @type {string[]} */
   const warned = [];
   const logger = { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) };
-  const pusher = pusherFromEnv({ AGENT_FLEET_APNS_KEY_ID: 'K', AGENT_FLEET_APNS_TEAM_ID: 'T' }, logger);
+  const pusher = pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_APNS_KEY_ID: 'K', AGENT_FLEET_APNS_TEAM_ID: 'T' }, logger);
   assert.ok(pusher);
   assert.match(warned.join('\n'), /all three/);
+});
+
+test('push is off unless it is switched on, credentials or not', async () => {
+  // It used to turn itself on whenever the credentials happened to be present.
+  // Fine for one deployment, wrong for a fork: those credentials are ours and
+  // they address our app's device tokens, so acquiring them by copying a config
+  // would mean a fork notifying our users' phones. Turning push on is a line
+  // somebody wrote.
+  const { pusherFromEnv: fromEnv } = await import('../src/fleet/push.js');
+  /** @type {string[]} */
+  const said = [];
+  const logger = { info: (/** @type {any} */ m) => said.push(String(m)), warn: (/** @type {any} */ m) => said.push(String(m)) };
+
+  const off = fromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+  assert.ok(off, 'a disabled fleet still gets a sender — it logs rather than sends');
+  // SAID OUT LOUD. Silence is how a fleet discovers on the day it matters that
+  // push was never wired up.
+  assert.match(said.join('\n'), /disabled \(AGENT_FLEET_PUSH is not set\)/);
+
+  // "0" and "false" are truthy strings in JavaScript, and a config where
+  // AGENT_FLEET_PUSH = "0" turned push ON would be a config nobody can read.
+  for (const value of ['0', 'false', 'no', 'off', '']) {
+    said.length = 0;
+    fromEnv({ AGENT_FLEET_PUSH: value, AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+    assert.match(said.join('\n'), /disabled/, `AGENT_FLEET_PUSH=${JSON.stringify(value)} enabled push`);
+  }
+
+  said.length = 0;
+  fromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+  assert.equal(/disabled/.test(said.join('\n')), false, 'switched on and still disabled');
+});
+
+test('switched on with no provider is the loudest case, not the quietest', async () => {
+  // THE ONE COMBINATION THAT SAID NOTHING, and it is the state every fork
+  // deploying this repository's committed wrangler.toml lives in: the switch is
+  // on and no credentials exist.
+  //
+  // The silence was assembled out of three reasonable silences — the switch
+  // only logged on its unset branch, and neither provider warns when its
+  // credentials are simply absent, because absent is the ordinary case for the
+  // provider you are not using. That is how this failure always happens.
+  const { pusherFromEnv: fromEnv } = await import('../src/fleet/push.js');
+  /** @type {string[]} */
+  const said = [];
+  fromEnv({ AGENT_FLEET_PUSH: '1' }, {
+    info: (/** @type {any} */ m) => said.push(String(m)),
+    warn: (/** @type {any} */ m) => said.push(String(m)),
+  });
+
+  const text = said.join('\n');
+  assert.match(text, /no provider is configured/);
+  // NAMES THE VARIABLES, because the person reading this log is the one who can
+  // set them, and "push is not configured" sends them to a document.
+  assert.match(text, /AGENT_FLEET_APNS_KEY/);
+  assert.match(text, /AGENT_FLEET_FCM_SERVICE_ACCOUNT/);
+  // And says how to make it stop, so a fleet that meant it is not nagged into
+  // ignoring the line that will matter later.
+  assert.match(text, /Unset AGENT_FLEET_PUSH if that is deliberate/);
+});
+
+test('our deployment switches it on, and the switch is a var rather than a secret', () => {
+  // A [vars] entry, not `wrangler secret put`: it authorises nothing and
+  // configures something, and Cloudflare keeps vars and secrets in ONE
+  // namespace — so a name that is both is a deploy that clobbers the secret.
+  // Ours, which is wrangler.production.toml — the default config deliberately
+  // sets no vars at all. See test/fork-safe-config.test.js.
+  const toml = readFileSync(new URL('../worker/wrangler.production.toml', import.meta.url), 'utf8');
+  const settings = toml.replace(/^\s*#.*$/gm, '');
+  assert.match(settings, /AGENT_FLEET_PUSH = "1"/, 'our own deployment has push off');
+  assert.ok(
+    settings.indexOf('[vars]') < settings.indexOf('AGENT_FLEET_PUSH'),
+    'AGENT_FLEET_PUSH fell out of [vars] — a table header above it moved it out of scope',
+  );
 });

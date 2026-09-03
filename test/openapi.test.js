@@ -67,7 +67,7 @@ function concrete(path, ids = {}) {
 async function seed(core) {
   await core.hostIds.enrol({ hostId: 'seeded-host', publicJwk: (await generateKeyPair()).publicJwk });
   const { client } = await core.clients.issue('a phone (someone@example.com)');
-  core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
   return { hostId: 'seeded-host', clientId: client.id };
 }
 
@@ -238,4 +238,35 @@ test('the enums in the document are the enums in the code', async () => {
   for (const s of ['running', 'stopped', 'error']) {
     if (sessions.includes(`'${s}'`)) assert.ok(status.includes(s), `sessions.js produces '${s}' and the document does not list it`);
   }
+});
+
+test('the document names whoever serves it, not whoever wrote it', async () => {
+  // `servers[0].url` is committed as our hostname — right for the file in this
+  // repository, wrong for every deploy of it. A fork's coordinator handed out a
+  // contract advertising OUR origin, so anything generated from it (a client, a
+  // Postman import, an agent reading the spec) was pointed at somebody else's
+  // fleet.
+  // ONE MODULE, IMPORTED BY BOTH. It was `export const` in worker.js, and
+  // workerd treats every named export of the entrypoint as a Worker binding —
+  // only `default` and Durable Object classes may be exported — so the Worker
+  // failed to LOAD. It bundled, it typechecked, and the whole suite passed;
+  // only the job that boots the real runtime saw it.
+  const { SPEC_ORIGIN: fromWorker } = await import('../src/fleet/coordinator/spec.js');
+
+  // EXACTLY ONCE in the document, because the substitution is a string replace
+  // rather than a parse — chosen so a 40 KB spec is not re-serialised on a hot
+  // path. A second occurrence would be left behind, pointing at us.
+  const raw = readFileSync(new URL('../openapi.json', import.meta.url), 'utf8');
+  const hits = raw.split(fromWorker).length - 1;
+  assert.equal(hits, 1, `openapi.json mentions ${fromWorker} ${hits} times; the replace only fixes the first`);
+  assert.equal(SPEC.servers[0].url, fromWorker, 'the constant is not what servers[0] actually says');
+
+  // AND THE ENTRYPOINT EXPORTS NOTHING BUT ITS HANDLER AND ITS DURABLE OBJECT.
+  // This is the assertion that would have caught the outage above, and it is
+  // cheap: a named export added to worker.js for any reason breaks the Worker
+  // at load, in a way nothing short of workerd can see.
+  const worker = readFileSync(new URL('../worker/src/worker.js', import.meta.url), 'utf8');
+  const exported = [...worker.matchAll(/^export\s+(?:const|let|var|function|class)\s+(\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exported, ['Fleet'], `worker.js exports ${exported.join(', ')} — workerd reads each as a binding`);
+  assert.match(worker, /^export default /m, 'worker.js has no default export — nothing would handle a request');
 });

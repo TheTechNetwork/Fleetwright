@@ -23,10 +23,47 @@
  * @property {Record<string, string>} [data]
  */
 
+import { sealTo } from './push-crypto.js';
+
 /**
  * @typedef {object} Pusher
- * @property {(devices: Array<{token: string, platform: string}>, message: PushMessage) => Promise<{sent: number, dead: string[]}>} send
+ * @property {(devices: Array<{token: string, platform: string, pushKey?: string}>, message: PushMessage) => Promise<{sent: number, dead: string[]}>} send
  */
+
+/**
+ * What actually goes on the wire for one device.
+ *
+ * THE FALLBACK IS THE INTERESTING HALF. A device that registered a public key
+ * gets an envelope and a deliberately empty-of-detail alert; one that did not —
+ * an app installed before encryption existed, and there are some — gets the
+ * plain title and body exactly as before. Refusing to send to it would be
+ * choosing "no notification" over "a notification Apple can read", which is the
+ * wrong trade for somebody waiting on a session.
+ *
+ * THE FALLBACK TEXT IS SHOWN WHEN DECRYPTION FAILS, so it has to be a sentence
+ * rather than a placeholder. An extension that times out, a phone restored from
+ * a backup with a key it no longer has, a version skew — all of them end here,
+ * and "New notification" in that moment is the contentless wake this design
+ * rejected. It says what is true without saying what about: something in the
+ * fleet needs a person, open the app.
+ *
+ * @param {{ pushKey?: string }} device
+ * @param {{ title: string, body: string, data?: Record<string, string> }} message
+ * @returns {Promise<{ encrypted: boolean, title: string, body: string, data: Record<string, string> }>}
+ */
+export async function envelopeFor(device, message) {
+  const data = { ...(message.data || {}) };
+  if (!device.pushKey) return { encrypted: false, title: message.title, body: message.body, data };
+  const sealed = await sealTo(device.pushKey, { title: message.title, body: message.body, data });
+  return {
+    encrypted: true,
+    title: 'Fleetwright',
+    body: 'Something needs you. Open to see.',
+    // `e`, short, because both services cap a payload at 4 KB and every byte of
+    // key name is a byte of ciphertext that does not fit.
+    data: { e: sealed },
+  };
+}
 
 /**
  * A sender that only writes to the log.
@@ -104,15 +141,33 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
       // One request per device: FCM v1 has no multicast in the REST API, and a
       // fleet has tens of devices, not thousands.
       for (const device of devices) {
+        const wire = await envelopeFor(device, message);
+        // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
+        // block is rendered by the system before the app is consulted, so an
+        // encrypted body would be displayed as base64. A data message is
+        // handed to onMessageReceived, which decrypts and posts the real
+        // notification itself.
+        //
+        // The cost is honest: a data message needs the app to run, so it is
+        // not delivered to a force-stopped app and Doze can delay it. HIGH
+        // priority is what buys a wake in Doze, and it is set either way.
         const payload = {
           message: {
             token: device.token,
-            notification: { title: message.title, body: message.body },
+            ...(wire.encrypted ? {} : { notification: { title: wire.title, body: wire.body } }),
             // Data rides alongside so the app can deep-link to the session
-            // rather than just opening.
-            data: message.data || {},
+            // rather than just opening. When encrypted it carries the whole
+            // notification instead.
+            data: wire.data,
             android: { priority: 'HIGH' },
-            apns: { payload: { aps: { sound: 'default' } } },
+            apns: {
+              // The alert is STILL SENT on the APNs side of the bridge, because
+              // iOS needs something to show if the extension fails — and
+              // mutable-content is what runs the extension at all.
+              payload: wire.encrypted
+                ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1 } }
+                : { aps: { sound: 'default' } },
+            },
           },
         };
         const res = await doFetch(url, {
@@ -205,9 +260,20 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
       const dead = [];
 
       for (const device of devices) {
+        const wire = await envelopeFor(device, message);
+        // `mutable-content: 1` IS WHAT RUNS THE EXTENSION. Without it iOS
+        // renders the alert below and the ciphertext is never opened — the
+        // person sees the fallback line and nothing else, forever, with
+        // delivery reporting success. Set only when there is something to
+        // decrypt, so an unencrypted notification does not pay for an
+        // extension launch that has no work to do.
         const payload = JSON.stringify({
-          aps: { alert: { title: message.title, body: message.body }, sound: 'default' },
-          ...(message.data || {}),
+          aps: {
+            alert: { title: wire.title, body: wire.body },
+            sound: 'default',
+            ...(wire.encrypted ? { 'mutable-content': 1 } : {}),
+          },
+          ...wire.data,
         });
         const res = await send(device.token, payload, {
           authorization,
@@ -315,6 +381,28 @@ export function routingPusher({ ios, other }) {
  */
 export function pusherFromEnv(env, logger, opts = {}) {
   const { apnsDeliver } = opts;
+
+  // OFF UNLESS ASKED FOR, and the credentials are not the switch.
+  //
+  // Push used to turn itself on whenever an APNs key and an FCM service
+  // account happened to be present, which is a fine rule for one deployment
+  // and a bad one for a fork: the credentials that would be there are OURS,
+  // and a fork that acquires them by copying a config is a fork sending
+  // notifications to our app's device tokens. Making it an explicit switch
+  // means turning push on is a line somebody wrote, not a side effect of
+  // having pasted a secret.
+  //
+  // It is also the seam a paid entitlement would sit on later — an account
+  // that has paid for the relay flips this rather than the plumbing changing.
+  //
+  // Unset is off and SAYS SO. Silence here is how a fleet discovers on the day
+  // it matters that push was never wired up, which is the exact failure
+  // logPusher's own comment is about.
+  if (!truthy(env.AGENT_FLEET_PUSH)) {
+    logger.info('push: disabled (AGENT_FLEET_PUSH is not set) — notifications are logged, not sent');
+    return logPusher(logger);
+  }
+
   const apns = apnsFromEnv(env, logger, apnsDeliver);
   const fcm = fcmFromEnv(env, logger);
 
@@ -328,7 +416,40 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // function knew the difference.
   if (apns) return routingPusher({ ios: apns, other: logPusher(logger) });
   if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm });
+
+  // SWITCHED ON AND UNABLE TO SEND, which is the one combination that used to
+  // reach this line saying nothing at all.
+  //
+  // The comment above the switch says "unset is off and SAYS SO" and it was
+  // only true of the unset branch. A fleet that sets AGENT_FLEET_PUSH and has
+  // no credentials — which is EVERY FORK deploying this repository's committed
+  // wrangler.toml — fell through here silently, and neither apnsFromEnv nor
+  // fcmFromEnv warns when its credentials are simply absent, because absent is
+  // the ordinary case for the provider you are not using.
+  //
+  // So the silence was assembled out of three reasonable silences, which is how
+  // this failure always happens. push-encryption.md promises the opposite in as
+  // many words, and a document asserting something the code does not do is the
+  // failure app-parity.md exists to name.
+  logger.warn(
+    'push: AGENT_FLEET_PUSH is set but no provider is configured — notifications are logged, not sent. ' +
+      'APNs needs AGENT_FLEET_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs AGENT_FLEET_FCM_SERVICE_ACCOUNT. ' +
+      'Unset AGENT_FLEET_PUSH if that is deliberate.',
+  );
   return logPusher(logger);
+}
+
+/**
+ * `1`, `true`, `yes`, `on` — anything else, including absent, is off.
+ *
+ * Deliberately not `Boolean(value)`: the string "0" and the string "false" are
+ * both truthy in JavaScript, and a config file where `AGENT_FLEET_PUSH = "0"`
+ * turns push ON is a config file nobody can read.
+ *
+ * @param {string|undefined} value
+ */
+function truthy(value) {
+  return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
 }
 
 /**

@@ -361,6 +361,30 @@ and restored when it was proven, rather than argued about. The evidence is
 somebody with the devices saying it worked, which is the only evidence this
 row could ever have had — no test in this repository can produce it.
 
+**And the row is narrower than "push works", which is worth saying while the
+correction is fresh.** Delivery is confirmed. A cold-start wake, a locked
+screen, a notification acted on four minutes late, and Android's Doze are
+separate facts — none of them has a row here, and none of them should be
+claimed until one does. The discipline that made the withdrawal worth having
+applies to the confirmation too.
+
+**The history is kept rather than deleted**, because the row being wrong is not
+what this table is for — it is for the row being *checked*. The delivery path
+was built and unit-tested end to end here for months while never having been
+confirmed on a real device, and the Play listing sold it as *"the point of
+carrying this in a pocket at all"* until a tester — who had praised this
+project's documentary honesty at length — called that **off-brand** and said as
+a reviewer they would call the listing overdrawn. They were right. The listing
+was corrected to what was true then, and it is a different sentence now for the
+same reason: it says what is true.
+
+**The claim is still narrower than it sounds**, and the discipline that made
+the correction worth having applies to the confirmation too: one delivery, to
+one phone, on one platform pair. It is no longer *unproven*. It is not yet
+*proven at every stage* — a cold-start wake, a locked screen, a notification
+acted on four minutes late, and Android's Doze are separate facts, and none of
+them has its own row here yet.
+
 **This table is the source; everything else defers to it.** The README, the
 ROADMAP and both store listings point here rather than restating it, because
 four sources of truth is none — and the way that failure showed up was not one

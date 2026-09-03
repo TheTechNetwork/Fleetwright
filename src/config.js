@@ -144,7 +144,24 @@ export function loadConfig(env = process.env) {
     // Set this to localhost/agent-session:latest to go back to building
     // locally — ensureSandboxImage builds anything localhost/ and pulls
     // anything else, so an offline or air-gapped box has a way out.
-    sandboxImage: str('AGENT_HUB_SANDBOX_IMAGE', 'ghcr.io/thetechnetwork/fleetwright-session:latest'),
+    // OWNER FROM THE ENVIRONMENT, because a fork publishes its own.
+    //
+    // .github/workflows/sandbox.yml pushes to
+    // `ghcr.io/${{ github.repository_owner }}/fleetwright-session` — so a fork's
+    // CI built and published an image that nothing ever pulled, while its boxes
+    // pulled ours. It degraded quietly rather than failing, because a failed
+    // pull falls back to building locally, so the only symptom was every fresh
+    // box spending minutes on a build whose result was sitting in their own
+    // registry.
+    //
+    // The default stays ours, which is right for this repository and for anyone
+    // who has not forked. AGENT_HUB_SANDBOX_IMAGE_OWNER is the short way to say
+    // "the same image, mine"; the full AGENT_HUB_SANDBOX_IMAGE still wins and
+    // is still how you point at `localhost/` to build.
+    sandboxImage: str(
+      'AGENT_HUB_SANDBOX_IMAGE',
+      `ghcr.io/${str('AGENT_HUB_SANDBOX_IMAGE_OWNER', 'thetechnetwork').toLowerCase()}/fleetwright-session:latest`,
+    ),
     // Build the image on demand if it is missing, rather than refusing to start
     // a session over something we know how to fix. The first session on a fresh
     // box pays a few minutes for it; every one after that is instant.

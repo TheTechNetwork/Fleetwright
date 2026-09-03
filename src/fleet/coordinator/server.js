@@ -32,6 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
+import { SPEC_ORIGIN } from './spec.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
@@ -462,7 +463,11 @@ export class Coordinator {
     // inlined, because this process has a filesystem and the Worker does not.
     if (p === '/openapi.json') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      return res.end(readFileSync(resource('openapi.json'), 'utf8'));
+      // NAMES WHOEVER IS SERVING IT, like the Worker. The committed
+      // `servers[0].url` is our hostname, which is right for the file and wrong
+      // for every deploy of it — a fork handed out a contract pointing at
+      // somebody else's fleet.
+      return res.end(readFileSync(resource('openapi.json'), 'utf8').replace(SPEC_ORIGIN, publicOrigin(req)));
     }
 
     // --- enrolment, before the token gate ------------------------------------
@@ -971,11 +976,15 @@ export class Coordinator {
     // from. Both apps call this on every launch.
     if (p === '/api/devices' && req.method === 'POST') {
       const body = await readJson(req);
-      const r = this.core.registerDevice({
+      const r = await this.core.registerDevice({
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
         clientId: client?.id,
+        // The phone's public key, so its notifications are unreadable to Apple,
+        // Google and anything between. Absent from an app that predates this
+        // and the sender falls back — see docs/push-encryption.md.
+        pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) this.saveState();
       return json(res, r.ok ? 200 : 400, r);
