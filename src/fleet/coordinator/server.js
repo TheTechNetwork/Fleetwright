@@ -32,6 +32,7 @@ import { CoordinatorCore } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
+import { SPEC_ORIGIN } from './spec.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
@@ -1193,17 +1194,6 @@ function readMcpBody(req) {
     req.on('error', () => resolve(null));
   });
 }
-
-/**
- * The origin the committed openapi.json names.
- *
- * Declared here rather than imported from worker/src/worker.js, which would
- * pull the whole Worker bundle into a Node process for one string. Pinned to
- * the document — and to the Worker's copy — by test/openapi.test.js, because
- * two constants that must be equal and are not compared is how the substitution
- * silently stops happening on one of the two coordinators.
- */
-export const SPEC_ORIGIN = 'https://fleet.thetech.network';
 
 /**
  * The origin a client actually reached us on.

@@ -18,6 +18,7 @@ import { isMcpPath } from '../../src/mcp/routes.js';
 import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
+import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
@@ -450,13 +451,6 @@ function json(body, status = 200, extra = {}) {
 // The API contract, inlined at build time so the Worker ships no files.
 // openapi.json in the repository root is the source; test/openapi.test.js
 // executes it against BOTH coordinators, which is the reason it exists.
-/**
- * The origin the committed document names, and the only thing substituted when
- * it is served. A constant rather than a literal at the call site so the same
- * string is used by the test that pins it to exactly one occurrence.
- */
-export const SPEC_ORIGIN = 'https://fleet.thetech.network';
-
 const OPENAPI = JSON.stringify({
   "openapi": "3.1.0",
   "info": {
