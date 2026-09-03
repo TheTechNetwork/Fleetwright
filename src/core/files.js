@@ -201,10 +201,15 @@ find . -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null | sort -t"$
     .filter((e) => e.name);
 
   const shown = entries.length;
+  // "(empty)" ANSWERED THREE DIFFERENT QUESTIONS: no files here, no workspace
+  // at all, and something went wrong. A beta tester got the shrug and could not
+  // tell which. Two of those three are answered elsewhere now — a missing
+  // volume refuses by name, and a failure carries its reason — so this only has
+  // to say the remaining one, and say it as a fact rather than a shrug.
   const text = shown
     ? entries.map((e) => `${e.kind === 'dir' ? '📁' : '📄'} ${e.name}${e.kind === 'file' ? `  ${human(e.size)}` : ''}`).join('\n') +
       (shown >= MAX_ENTRIES ? `\n\n(first ${MAX_ENTRIES} — this directory has more)` : '')
-    : '(empty)';
+    : `${dir === '.' ? 'The workspace' : dir} exists and has nothing in it.`;
   return { ok: true, text, entries };
 }
 

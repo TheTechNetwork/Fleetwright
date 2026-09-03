@@ -682,6 +682,19 @@ export class McpServer {
     // Refusals arrive as data, and they name a reason — that is the property
     // the protocol was built for and the one an agent most needs, so it is
     // passed through rather than flattened into "failed".
+    // WHERE IT LANDED. `start` answered "Started X in /home/user/agent-runs" and
+    // never said which box, so on a two-host fleet finding out cost a
+    // `fleet_list` and a scan — and the tool that then wants to read its log
+    // asks you which box it was. Both beta testers filed this.
+    //
+    // The reply carries the hostId; nothing was putting it on the screen.
+    if (reply?.ok !== false && (tool.verb === 'start' || tool.verb === 'resume')) {
+      const landed = reply?.hostId || sessionFrom(reply)?.hostId;
+      if (landed && !String(reply?.text ?? '').includes(landed)) {
+        reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
+      }
+    }
+
     const failed = reply?.ok === false;
     // THE PAYLOAD, WHEN THE TEXT DOES NOT CARRY IT. `health` answers
     // `{ ok: true, text: 'ok', health: {…} }`, and rendering `text` alone made

@@ -69,6 +69,8 @@ ln -s /etc /work/etcdir
     const r = listFiles(cfg, NAME, '.');
     assert.equal(r.ok, true, r.text);
     const names = r.entries.map((e) => e.name).sort();
+    // "(empty)" used to answer "no files", "no workspace" and "failed" alike.
+    assert.equal(/^\(empty\)$/.test(r.text), false, 'the ambiguous shrug is back');
     assert.deepEqual(names, ['README.md', 'blob.bin', 'empty', 'escape', 'etcdir', 'src']);
     // src is a directory and README.md is not, and the caller can tell.
     assert.equal(r.entries.find((e) => e.name === 'src').kind, 'dir');
@@ -158,6 +160,17 @@ ln -s /etc /work/etcdir
     assert.match(root.text, /forget/);
     // And the workspace is still there.
     assert.equal(listFiles(cfg, NAME, '.').ok, true);
+  });
+
+  await t.test('an empty directory says it is empty, not just "(empty)"', () => {
+    const r = listFiles(cfg, NAME, 'empty');
+    assert.equal(r.ok, true, r.text);
+    assert.match(r.text, /exists and has nothing in it/);
+    // And that is a different sentence from the one a missing workspace gets,
+    // which is the whole point — three situations, three answers.
+    const missing = listFiles(cfg, `${NAME}-nonexistent`, '.');
+    assert.equal(missing.ok, false);
+    assert.notEqual(missing.text, r.text);
   });
 
   await t.test('a missing session says so rather than inventing a path', () => {
