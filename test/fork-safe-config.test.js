@@ -52,6 +52,52 @@ function parse(toml) {
   return out;
 }
 
+test('all three configs are valid TOML, which the hand parser below cannot tell', () => {
+  // The `parse()` helper reads keys and ignores everything it does not
+  // understand — including a table defined twice, which is exactly what a
+  // generated production config produced: two `routes` blocks, both correct on
+  // their own. Every assertion in this file passed and `wrangler deploy` said
+  // "Invalid TOML document: trying to redefine an already defined table or
+  // value".
+  //
+  // Node has no TOML parser, and this repository ships one runtime dependency
+  // on purpose. So the check is structural rather than semantic: no top-level
+  // key and no table header may appear twice in one file. That is the class of
+  // error a hand parser is blind to and a real one refuses.
+  const ARRAY = Symbol('inside an array of tables');
+  for (const [name, toml] of [['wrangler.toml', DEFAULT], ['wrangler.production.toml', PRODUCTION], ['wrangler.demo.toml', DEMO]]) {
+    /** @type {Map<string, number>} */
+    const seen = new Map();
+    /** @type {string|symbol|null} */
+    let table = null;
+    for (const raw of toml.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const header = /^\[([^\[\]]+)\]$/.exec(line);
+      if (header) {
+        // `[[array]]` entries repeat legitimately; `[table]` does not.
+        table = header[1];
+        const at = (seen.get(`[${table}]`) || 0) + 1;
+        seen.set(`[${table}]`, at);
+        assert.equal(at, 1, `${name} defines [${table}] twice`);
+        continue;
+      }
+      // `[[array]]` entries repeat by design and so do the keys inside them —
+      // every `[[ratelimits]]` has its own `name`. Counting those as top-level
+      // keys made the first version of this test claim wrangler.toml sets
+      // `name` twice, which it does not.
+      if (/^\[\[/.test(line)) { table = ARRAY; continue; }
+      if (table === ARRAY) continue;
+      const kv = /^([A-Za-z0-9_]+)\s*=/.exec(line);
+      if (!kv) continue;
+      const key = `${typeof table === 'string' ? table : ''}.${kv[1]}`;
+      const at = (seen.get(key) || 0) + 1;
+      seen.set(key, at);
+      assert.equal(at, 1, `${name} sets ${kv[1]} twice${table ? ` in [${table}]` : ' at the top level'}`);
+    }
+  }
+});
+
 test('the default config names nobody, and could be deployed by anybody', () => {
   const bare = settings(DEFAULT);
 

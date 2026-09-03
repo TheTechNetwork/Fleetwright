@@ -88,10 +88,10 @@ routes = [
 ]
 
 # --- plain configuration, deployed with the code -----------------------------
-routes = [
-  { pattern = "fleet.thetech.network", custom_domain = true }
-]
-
+#
+# EVERY ENTRY BELOW IS OURS. The same names are absent from wrangler.toml, each
+# with a comment there saying what happens when it is unset — a fork sets its
+# own or gets a defined, honest behaviour, rather than inheriting these.
 [vars]
 # WHERE THE PRODUCT PAGE IS. /docs on the coordinator is a 302 to this and
 # nothing else — a coordinator holds the fleet and should not also be the
