@@ -498,9 +498,26 @@ export class McpServer {
       'reports "done" — a finished session looks exactly like an idle one — so deciding it is over is',
       'your job, not something you will be told.',
       '',
+      'A SESSION YOU START COMES UP IDLE, AND YOU CANNOT GIVE IT A TASK.',
+      'This is the first thing to know, because the obvious reading of fleet_start is wrong and the',
+      'failure is silent. `brief` is a note for whoever opens the session later — it is stored, never',
+      'typed in, never seen by the model in it. No verb sends text to a session. So a session you start',
+      'and then wait on will sit at an empty prompt until it times out, with an empty log and no error',
+      'anywhere. Two testers lost a session to that loop before anybody noticed it could not work.',
+      '',
+      'WHAT TO DO INSTEAD: start it, then hand the Remote Control URL from the reply to the person you',
+      'are working with. They can drive it and you cannot. That is a handoff, not a failure — the fleet',
+      'gets them a machine, and they bring the instructions.',
+      '',
+      'If nobody is going to drive it, do not start it.',
+      '',
+      'When a person IS driving, and you are watching on their behalf:',
       '  1. fleet_start, naming a host or a tag if you want a particular kind of machine',
-      '  2. fleet_await — it returns when the session needs an answer or ends. Do not poll.',
-      '  3. fleet_read_log to collect what it produced. This survives the session; its pane does not.',
+      '  2. fleet_await — returns when the session ends or errors, or the wait runs out. Do not poll.',
+      '     It cannot tell you a session is merely waiting at a prompt; fleet_status reports how long',
+      '     the pane has been still, which is evidence rather than an answer.',
+      '  3. fleet_read_log to collect what it produced — BEFORE stopping it, because stopping discards',
+      '     the container output. A resumed session brings its transcript back; a stopped one does not.',
       '  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',
       '',
       'You may only stop sessions you started in this conversation. Anything else belongs to a person',
@@ -789,8 +806,12 @@ export class McpServer {
           ...reply,
           text:
             `${reply?.text ?? ''}\n\nIT STARTED IDLE. Nothing here can hand it work — \`brief\` is a note for ` +
-            'people, not a prompt, and no verb sends text to a session. Somebody has to drive it, from the app or ' +
-            'its Remote Control link. Waiting on it will time out rather than finish.',
+            'people, not a prompt, and no verb sends text to a session. Waiting on it will time out rather ' +
+            'than finish.\n' +
+            (reply?.rcUrl
+              ? `Give this to the person who wants the work done and they can drive it: ${reply.rcUrl}`
+              : 'Whoever wants the work done has to drive it, from the app or the session\'s Remote Control link ' +
+                '— which appears on fleet_status once the session has published one.'),
         };
       }
     }

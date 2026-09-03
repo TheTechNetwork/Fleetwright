@@ -84,6 +84,29 @@ test('required stays required, and enums keep their values', () => {
   }
 });
 
+test('the instructions teach the handoff, not a loop that cannot work', async () => {
+  // The lifecycle they taught was start -> await -> read_log -> stop, which
+  // implies a session produces something. It does not: `brief` is stored and
+  // never delivered, so that loop ends at an idle REPL with an empty log and no
+  // error. Two beta testers lost a session to it.
+  //
+  // Until a task can be given at start (#325, a protocol decision), the
+  // instructions have to say what actually happens and what to do instead.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({ coordinator: 'https://f.example', credential: 'fwk_a', write: () => {}, watchMs: 0 });
+  const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+  const text = String(r.result.instructions);
+
+  assert.match(text, /COMES UP IDLE, AND YOU CANNOT GIVE IT A TASK/);
+  // The handoff, which is the useful half: the fleet gets them a machine and
+  // the person brings the instructions.
+  assert.match(text, /Remote Control URL/);
+  assert.match(text, /If nobody is going to drive it, do not start it/);
+  // And the two things a watcher gets wrong: await cannot see a prompt, and
+  // stopping discards the output.
+  assert.match(text, /BEFORE stopping it/);
+});
+
 test('the dangerous verbs are not exposed by default', () => {
   // Not a security boundary — whoever runs this holds a credential and can call
   // the API directly. It is about what an agent reaches for unasked, which is a
