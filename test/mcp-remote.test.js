@@ -631,6 +631,54 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
 });
 
+// --- what a withheld verb tells the person who could allow it ---------------
+
+test('a withheld verb names the lift, because the reader may be the operator', async () => {
+  // This said "ask the person running it to allow that verb explicitly" — and
+  // a beta tester WAS the person running it, with no way to learn a lift
+  // existed or what it was called. A refusal that hides its remedy from the
+  // one person who can apply it is worse than a flat no.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({ coordinator: 'https://fleet.example', credential: 'fwk_a_b', write: () => {}, watchMs: 0 });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_purge', arguments: { name: 'x' } },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /AGENT_FLEET_MCP_ALLOW=purge/);
+  assert.match(text, /not a lock/);
+});
+
+test('forget is exposed and scoped, purge is not exposed at all', async () => {
+  // The bin made `forget` recoverable, so withholding it only stopped people
+  // clearing up after themselves — twelve stale sessions in one beta fleet.
+  // `purge` is still permanent and still withheld.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const started = new Set();
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    started,
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, text: 'ok', sessions: [{ name: 'mine' }] }) }),
+  });
+  /** @param {string} tool @param {any} args */
+  const call = async (tool, args) => {
+    const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: tool, arguments: args } });
+    return String(r.result.content[0].text);
+  };
+
+  // Somebody else's session is refused, exactly as `stop` refuses it.
+  assert.match(await call('fleet_forget', { name: 'not-mine' }), /not yours to forget/);
+
+  // One this conversation started is not.
+  await call('fleet_start', { name: 'mine', brief: 'x' });
+  assert.equal(/not yours/.test(await call('fleet_forget', { name: 'mine' })), false);
+});
+
 // --- the server enforcing its own schema ------------------------------------
 
 test('a wrong parameter name is named, not forwarded', async () => {

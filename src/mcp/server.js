@@ -582,8 +582,16 @@ export class McpServer {
       const withheld = DEFAULT_DENY.includes(String(name || '').replace(/^fleet_/, ''));
       return this.#text(
         withheld
-          ? `${name} is not exposed by this server. It restarts machines, destroys conversations or moves credentials — ` +
-              'ask the person running it to allow that verb explicitly.'
+          ? `${name} is not exposed by this server. It restarts machines, permanently destroys work, or moves ` +
+              'credentials, so it is withheld from an agent by default — a policy about what to reach for ' +
+              'unasked, not a lock.\n' +
+              // NAMES THE LIFT. This said "ask the person running it", and a
+              // beta tester WAS the person running it — with no way to know a
+              // lift existed or what it was called. A refusal that hides its
+              // own remedy from the one person who can apply it is worse than
+              // a flat no.
+              `Whoever runs this server can allow it with AGENT_FLEET_MCP_ALLOW=${String(name).replace(/^fleet_/, '')} ` +
+              'in its environment. If that is you, that is the whole change.'
           : `No such tool: ${name}. Available: ${this.tools.map((t) => t.name).join(', ')}.`,
         true,
       );
@@ -633,9 +641,14 @@ export class McpServer {
     // because a name looked familiar. The check lives here rather than in the
     // coordinator because it is about this SESSION of the server, which is the
     // only place that knows what "you started it" means.
-    if (tool.verb === 'stop' && !this.started.has(String(params.name || ''))) {
+    // SCOPED EXACTLY AS `stop` IS, and for the same reason. `forget` is exposed
+    // now because the seven-day recycle bin made it the RECOVERABLE one — but
+    // an agent that could forget anything would eventually forget somebody's
+    // work because a name looked familiar. Clearing up after itself is tidy;
+    // clearing up after other people is not its call.
+    if ((tool.verb === 'stop' || tool.verb === 'forget') && !this.started.has(String(params.name || ''))) {
       return this.#text(
-        `${params.name || 'that session'} was not started in this conversation, so it is not yours to stop. ` +
+        `${params.name || 'that session'} was not started in this conversation, so it is not yours to ${tool.verb}. ` +
           'It belongs to somebody who is probably still using it.',
         true,
       );
@@ -676,7 +689,7 @@ export class McpServer {
         this.started.add(named);
         this.#watchStarted();
       }
-      if (tool.verb === 'stop') this.started.delete(named);
+      if (tool.verb === 'stop' || tool.verb === 'forget') this.started.delete(named);
     }
 
     // Refusals arrive as data, and they name a reason — that is the property

@@ -89,7 +89,7 @@ test('the dangerous verbs are not exposed by default', () => {
   // the API directly. It is about what an agent reaches for unasked, which is a
   // different question from what a person may do.
   const exposed = toolsFor().map((t) => t.verb);
-  for (const verb of ['reboot', 'purge', 'forget', 'connect', 'unlink', 'answer']) {
+  for (const verb of ['reboot', 'purge', 'connect', 'unlink', 'answer']) {
     assert.equal(exposed.includes(verb), false, `${verb} should not be exposed by default`);
   }
   assert.deepEqual(exposed.includes('list'), true);
@@ -99,6 +99,17 @@ test('the dangerous verbs are not exposed by default', () => {
   // that cannot be followed is a lie the moment it is read. It is scoped in the
   // server instead — see the test below.
   assert.deepEqual(exposed.includes('stop'), true);
+
+  // AND `forget` IS EXPOSED NOW, for the same reason and by the same rule.
+  // It was withheld as "destroys a conversation that cannot be recovered" —
+  // which stopped being true when the seven-day bin shipped. `forget` is the
+  // RECOVERABLE one; `purge` is not, and stays withheld above.
+  //
+  // Both beta testers hit this: twelve stale sessions in one fleet with no way
+  // to clear them, making unreadable the list screen that is the top complaint
+  // in both reports. A surface that lets somebody create clutter should let
+  // them bin it.
+  assert.deepEqual(exposed.includes('forget'), true);
 });
 
 test('a withheld verb can be allowed explicitly, one at a time', () => {
