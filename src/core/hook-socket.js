@@ -100,15 +100,20 @@ export function isValidSessionName(name) {
  *   owns this session, READ AT THE MOMENT OF THE REQUEST. That timing is the
  *   feature — see credential-broker.js. Absent means the broker is off and the
  *   route answers 404, which is what an older or non-sandboxed host does.
+ * @property {((name: string, provider: string) => number|null)} [expiryFor]
+ *   When this session owner's token for a provider runs out, as far as the
+ *   host can tell. Optional: absent means the check is skipped, which is what
+ *   a host that cannot answer should do rather than guessing.
  * @property {{ info: (m: string) => void, warn: (m: string) => void }} [logger]
  */
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, logger }) {
+  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, logger }) {
     this.dir = dir;
     this.onSessionStart = onSessionStart;
     this.secretsFor = secretsFor || null;
+    this.expiryFor = expiryFor || null;
     this.log = logger || { info: () => {}, warn: () => {} };
     /** @type {Map<string, import('node:http').Server>} */
     this.servers = new Map();
@@ -267,7 +272,14 @@ export class HookSocketServer {
     // READ NOW, NOT AT START. The whole point: a token rotated ten minutes ago
     // is the one this returns, and the session that asked did not have to be
     // restarted to see it.
-    const answer = answerCredentialRequest({ provider, secrets: this.secretsFor(name) });
+    const answer = answerCredentialRequest({
+      provider,
+      secrets: this.secretsFor(name),
+      // WHEN IT DIES, so a dead token is refused here rather than 401'd at
+      // GitHub. Null when the host cannot tell, which skips the check — a
+      // guess in this direction would refuse working credentials.
+      expiredAt: this.expiryFor ? this.expiryFor(name, provider) : null,
+    });
 
     // EVERY GRANT IS LOGGED, AND THE VALUE NEVER IS. What makes the broker
     // better than an environment variable is partly that asking leaves a trace;

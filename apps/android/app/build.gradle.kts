@@ -92,7 +92,23 @@ android {
     // base to keep working, and every API level supported below this is a
     // compatibility path somebody has to reason about forever. The cost is
     // real and worth stating: it excludes most phones in the field today.
-    minSdk = 36
+    // LOWERED FROM 36 (Android 16) TO 30 (Android 11), which is roughly the
+    // difference between "phones sold this year" and "phones people have".
+    //
+    // The old comment conceded the cost — "it excludes most phones in the
+    // field today" — and that was accepted once, on the grounds that every API
+    // level below is a compatibility path somebody reasons about forever. A
+    // beta tester could not install the app on their own phone and said so;
+    // the reasoning had never been re-examined against an actual user.
+    //
+    // NOTHING HERE NEEDED 36. Compose is 21+, Credential Manager 23+, Firebase
+    // Messaging 21+. The floor was conservatism rather than a requirement.
+    //
+    // And it is now ENFORCED rather than assumed: `NewApi` is an error below,
+    // so a call that needs more than minSdk fails the build instead of
+    // crashing on somebody's phone. That check is the reason this is safe to
+    // change without a drawer full of test devices.
+    minSdk = 30
     targetSdk = 37
     // Play refuses a versionCode it has already seen, so a constant allows
     // exactly one upload ever — the same trap as CURRENT_PROJECT_VERSION on
@@ -155,6 +171,17 @@ android {
         signingConfig = signingConfigs.getByName("release")
       }
     }
+  }
+
+  lint {
+    // THE ONLY THING MAKING minSdk = 30 SAFE. Without it, an API introduced
+    // after 30 compiles happily and throws NoSuchMethodError on a real phone —
+    // which is the failure mode nobody here would ever see, because nobody
+    // here is running Android 11.
+    //
+    // An error rather than a warning: a warning about a crash is a crash.
+    error += "NewApi"
+    abortOnError = true
   }
 
   compileOptions {

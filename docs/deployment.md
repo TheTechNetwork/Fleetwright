@@ -275,7 +275,22 @@ can be revoked without disturbing any other device. Sign-in needs
 On a box **joining a coordinator that already exists** — the Worker, or another
 machine — the enrolment pin is *asked for*, because it has to come from that
 coordinator: minted with the admin token, handed out by the app (Fleet → Add
-a host), or sent as `/enroll <pin>` in Telegram. Leave it blank and the box
+a host), or sent as `/enroll <pin>` in Telegram.
+
+**With the admin token, that is one curl** — written down here because a beta
+tester with no app and no Telegram had to find it by reading `openapi.json`,
+and nobody should need the API contract to join their own box to their own
+coordinator:
+
+```sh
+curl -sX POST https://your-coordinator/api/enroll \
+  -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+  -H 'content-type: application/json' -d '{"kind":"host"}'
+# {"ok":true,"pin":"...","expiresAt":...}
+```
+
+The pin is short-lived and single-use, so mint it when the box is ready to
+take it rather than in advance. Leave it blank and the box
 stays unenrolled — the sidecar keeps connecting and getting refused until
 someone runs `agent-fleet-sidecar enrol <pin>`, as the service user.
 

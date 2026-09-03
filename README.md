@@ -13,7 +13,15 @@ reach any of it from a cold radio.
 > re-entering every secret. The App Store needed a unique name, so it got one.
 > See [docs/naming.md](docs/naming.md).
 
+**New box?** [docs/first-session.md](docs/first-session.md) is ten steps from
+clone to a running session, with no digressions. The essays are linked at the
+bottom of it.
+
 ## Get the app
+
+> **What is proven, and what is not:**
+> [docs/app-parity.md](docs/app-parity.md#what-is-actually-proven-about-the-apps)
+> is the single table. Push has never been confirmed on a physical device.
 
 | | |
 |---|---|
@@ -111,6 +119,10 @@ used to check the JSDoc annotations.
 
 ```sh
 npm install
+# The Worker has its own dependencies, and the tests import it — three test
+# files assert the two coordinators agree, so they load worker/src/worker.js.
+# Skipping this gets you three failures that look like a broken clone.
+npm install --prefix worker
 npm test
 npm run typecheck
 

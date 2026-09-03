@@ -133,3 +133,43 @@ test('the route is absent when no reader was supplied', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- an expired token is not a credential -----------------------------------
+
+test('a token past its expiry is refused, not served', () => {
+  // A beta tester's session was handed a `ghu_` token that GitHub answered 401
+  // to on every call — API, git push, everything — and the only way to find out
+  // was to try. They read the helper, the socket protocol and the token prefix
+  // to reach "most likely expired". That diagnosis was available on the box.
+  //
+  // A GitHub App user-to-server token lives about eight hours. keepalive renews
+  // it; when renewal cannot happen — no client secret deposited, a spent
+  // refresh token, a box that was asleep — the stored token quietly dies and
+  // the broker went on serving it.
+  const answer = answerCredentialRequest({
+    provider: 'github',
+    secrets: { GH_TOKEN: 'ghu_dead', GITHUB_TOKEN: 'ghu_dead' },
+    expiredAt: Date.now() - 3 * 3600_000,
+  });
+  assert.equal(answer.ok, false);
+  assert.equal(answer.error, 'expired');
+  // Names the age and the fix, because "401 Bad credentials" names neither.
+  assert.match(answer.message, /3 hours ago/);
+  assert.match(answer.message, /reconnect it in the app|keepalive/);
+  // And never the token, expired or not.
+  assert.equal(/ghu_dead/.test(JSON.stringify(answer)), false);
+});
+
+test('a live token is served, and an unknown expiry does not refuse one', () => {
+  const live = answerCredentialRequest({
+    provider: 'github',
+    secrets: { GH_TOKEN: 'ghu_live' },
+    expiredAt: Date.now() + 3600_000,
+  });
+  assert.equal(live.ok, true);
+
+  // NULL IS CANNOT TELL, and guessing in this direction would refuse working
+  // credentials on every host that does not record renewal metadata.
+  const unknown = answerCredentialRequest({ provider: 'github', secrets: { GH_TOKEN: 'ghu_live' }, expiredAt: null });
+  assert.equal(unknown.ok, true);
+});

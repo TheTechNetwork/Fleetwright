@@ -153,6 +153,34 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     }
   }
 
+  // ONE ADDRESSING RULE. `logs` does two jobs — a service journal, which is
+  // per-box, and a SESSION's own output, which is not — and it was routed
+  // entirely as the first. So `peek`, `stop` and `status` found a session by
+  // name while `read_log` answered "Which box?" about the same session, and
+  // both beta testers filed it: the product asking somebody to remember on its
+  // behalf, when its siblings do not.
+  //
+  // With a name it is a session and resolves like one. Without a name it is a
+  // journal and still needs a box, which is the question actually worth asking.
+  if (verb === 'logs' && name) {
+    // findSessions returns RECORDS, not hosts — each carries the host it was
+    // found on. Reading them as hosts is the mistake the type checker caught.
+    const claims = registry.findSessions(name);
+    if (claims.length === 1) return { kind: 'host', host: claims[0].host };
+    if (claims.length > 1) {
+      return {
+        kind: 'refused',
+        code: 'ambiguous_session',
+        reason:
+          `More than one host has a session called "${name}": ${claims.map((c) => c.host.hostId).join(', ')}. ` +
+          'Name the host to say which.',
+      };
+    }
+    // None found: fall through to the per-box path below, which explains why
+    // rather than inventing a host — and a session the registry has not heard
+    // of yet is a different problem from an ambiguous one.
+  }
+
   if (
     verb === 'logs' ||
     verb === 'update' ||

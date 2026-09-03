@@ -111,6 +111,35 @@ jobs:
       # in it is a worse bug than one in the service.
       - run: bash -n install/install.sh
 
+      # AND IT RUNS, not merely parses.
+      #
+      # `bash -n` above has passed on every commit of a script that could not
+      # get past its own fourth line: previous_install() ended with a
+      # `[ -f ] &&` that is false on a box which has never had this installed,
+      # so the function returned 1, `set -e` killed the script, and a fresh
+      # install died silently. A beta tester found it with their first command.
+      # Syntax checking cannot see that; running it can.
+      #
+      # In a CLEAN CONTAINER, because the failure only exists where nothing is
+      # installed — on this runner, or on any machine that has run the
+      # installer once, the file it tests for might exist and the bug hides.
+      # That is the whole reason it survived: nobody who works on this has a
+      # box where it fails.
+      #
+      # --check is advertised as "nothing will be changed", so running it as
+      # root in a throwaway container costs nothing and asserts the claim.
+      - name: The installer runs on a machine that has never seen it
+        run: |
+          docker run --rm -v "$PWD:/src:ro" debian:13-slim sh -c '
+            set -e
+            apt-get update -qq >/dev/null 2>&1
+            apt-get install -y -qq bash >/dev/null 2>&1
+            cp -r /src /work
+            cd /work
+            bash install/install.sh --check
+            echo "--- installer --check exited 0 ---"
+          ' | tail -20
+
       # And the bootstrap is checked as SH, not bash. It is the one file here
       # that strangers execute out of a pipe under whatever /bin/sh is, and a
       # bashism in it fails on their box with "Bad substitution" and nothing

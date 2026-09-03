@@ -73,11 +73,15 @@ export const HOST_PROVIDERS = Object.freeze({
  *
  * @param {object} q
  * @param {string} q.provider           what is being asked for
+ * @param {number|null} [q.expiredAt]     when this token dies, or null when the
+ *   host cannot tell — null skips the check, because guessing in this direction
+ *   would refuse credentials that work
+ * @param {() => number} [q.now]
  * @param {Record<string, string>|null} q.secrets  the row's env, read just now; null = no row
  * @returns {{ ok: true, provider: string, env: Record<string, string> }
  *          | { ok: false, error: string, message: string }}
  */
-export function answerCredentialRequest({ provider, secrets }) {
+export function answerCredentialRequest({ provider, secrets, expiredAt = null, now = () => Date.now() }) {
   const p = PROVIDERS[provider];
   if (!p) {
     // Named rather than generic. A session asking for "githib" should be told
@@ -110,6 +114,34 @@ export function answerCredentialRequest({ provider, secrets }) {
       ok: false,
       error: 'not_connected',
       message: `${p.label} is not connected for this session. Connect it in the app and ask again — nothing needs restarting.`,
+    };
+  }
+  // AN EXPIRED TOKEN IS NOT A CREDENTIAL, and handing one over is worse than
+  // handing over nothing.
+  //
+  // A beta tester's session got a `ghu_` token that GitHub answered 401 to on
+  // every call — API, git push, everything — and the only way to find out was
+  // to try. They had to read the helper, the socket protocol and the token
+  // prefix to reach "most likely expired", which is a diagnosis this box could
+  // have handed them.
+  //
+  // A GitHub App user-to-server token lives about eight hours. keepalive
+  // renews it, and when renewal cannot happen — no client secret deposited, a
+  // spent refresh token, a box that was asleep — the stored token quietly goes
+  // dead and the broker kept serving it. Nothing was wrong with the broker,
+  // and nothing said anything was wrong at all.
+  //
+  // Refusing here moves the failure from GitHub's 401 to a sentence naming the
+  // provider, the age and the fix.
+  if (expiredAt !== null && expiredAt <= now()) {
+    const hours = Math.max(1, Math.round((now() - expiredAt) / 3_600_000));
+    return {
+      ok: false,
+      error: 'expired',
+      message:
+        `${p.label}'s token expired about ${hours} hour${hours === 1 ? '' : 's'} ago and this host could not renew it. ` +
+        'Anything needing authentication will get a 401 until it is replaced — reconnect it in the app, ' +
+        'or check `agent-hub keepalive` on this box for why the renewal failed.',
     };
   }
   return { ok: true, provider, env };

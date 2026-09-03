@@ -167,7 +167,15 @@ export class HostRegistry {
       // real fault with a real remedy; whose is missing is a per-session
       // question and is answered there, by name.
       host.state = 'degraded';
-      host.reason = 'nobody has linked a Claude account on this host';
+      // THE REMEDY IN THE SAME SENTENCE. This said only what was wrong, and a
+      // beta tester's first run ended here: the refusal names no next step,
+      // and linking from a shell is documented nowhere they would look.
+      //
+      // A refusal that names a reason is this protocol's central promise; a
+      // reason without a remedy is half of it.
+      host.reason =
+        'nobody has linked a Claude account on this host, so no session started here can do anything. ' +
+        'Link one from the app, with `/login for <email>` in Telegram, or on the box with `agent-hub login for <email>`';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this

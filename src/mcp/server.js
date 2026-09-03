@@ -79,6 +79,21 @@ function describeFailure(e) {
   const message = String(/** @type {any} */ (e)?.message || e);
   // A TypeError from the runtime is this server misusing an API — never a
   // network condition. Nothing the caller varies will change it.
+  // A BODY THAT WILL NOT PARSE IS NOT AN OUTAGE. `Unexpected token 'e',
+  // "error code: 1101" is not valid JSON` was reported as "the fleet may be
+  // down; retrying is reasonable" — advice that could not work, for an error
+  // that was not what it said. The same mistake this function was written to
+  // fix, in a new place: naming the wrong layer.
+  //
+  // The parse failure is the evidence, so quote what actually arrived rather
+  // than a guess about why.
+  if (/is not valid JSON|Unexpected token|JSON\.parse/i.test(message)) {
+    return (
+      `The coordinator answered with something that is not JSON: ${message}. ` +
+      'That is a gateway or a server error rather than a refusal from the fleet — a Cloudflare "error code: 1101" ' +
+      'means the Worker threw. Retrying will not change it; whoever operates this coordinator needs its logs.'
+    );
+  }
   const internal = e instanceof TypeError || /Illegal invocation|is not a function|Cannot read /i.test(message);
   return internal
     ? `The MCP server itself failed before it could reach the fleet: ${message}. ` +
@@ -139,13 +154,64 @@ function describeHealth(h) {
   }
   if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
   if (Array.isArray(h.labels)) lines.push(`tags: ${h.labels.length ? h.labels.join(', ') : 'none'}`);
-  // THE ONE THAT DECIDES WHETHER A SESSION CAN DO ANYTHING. A host with free
-  // capacity and no Claude login accepts a start and produces a session that
-  // cannot work, which is the confusing kind of healthy.
-  if (h.loggedIn === false) lines.push('claude: NOT LOGGED IN — a session here cannot do anything until somebody runs /login on it');
-  else if (h.loggedIn === true) lines.push(`claude: logged in${h.claudeAccounts ? ` (${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'})` : ''}`);
+  // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
+  //
+  // This said "NOT LOGGED IN — a session here cannot do anything" whenever
+  // `loggedIn` was false, which under one-account-per-person is the ORDINARY
+  // state of every box. The health frame's own comment says so: claudeAccounts
+  // replaced loggedIn as the thing to judge a host on, "a machine has no Claude
+  // account of its own any more". I read the field and ignored the paragraph
+  // beside it.
+  //
+  // Two beta testers hit it from opposite ends of the funnel. One believed the
+  // fleet was down and was a call away from giving up; the other filed it while
+  // `fleet_start` was working on the same box in the same minute. It is the
+  // most expensive sentence this server has ever printed.
+  //
+  // claudeAccounts is the real signal, and null is CANNOT TELL — an older host
+  // that does not send it must not be reported as broken.
+  if (typeof h.claudeAccounts === 'number') {
+    lines.push(
+      h.claudeAccounts > 0
+        ? `claude: ${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'} linked — sessions run as whoever starts them`
+        : 'claude: NOBODY HAS LINKED AN ACCOUNT — a session started here cannot do anything. ' +
+            'Link one from the app, from Telegram with /login for <email>, or on the box with `agent-hub login for <email>`',
+    );
+  } else if (h.loggedIn === true) {
+    // An older host with no claudeAccounts field. Its own login is all we know.
+    lines.push('claude: the box itself is logged in (this host predates per-person accounts)');
+  }
   if (h.hub && h.hub.reachable === false) lines.push('hub: unreachable from the sidecar');
   return lines.length ? lines.join('\n') : 'ok';
+}
+
+/**
+ * What the watcher has OBSERVED about a pane, as evidence rather than a verdict.
+ *
+ * A beta tester's sharpest request: "await detects ended-or-errored only, a
+ * finished session looks exactly like an idle one, and I peeked in a loop like
+ * everyone will. The fleet already watches panes well enough to answer resume
+ * dialogs — the same watcher could publish its OBSERVATION. Judgement stays
+ * mine; today even the evidence is manual."
+ *
+ * That is the right shape and the data was already here: `idleSince` and
+ * `atRest` have travelled on every reply since idle tracking shipped, and
+ * nothing rendered them. This does not decide a session is finished — deciding
+ * is the caller's, which is docs/mcp.md's whole argument — it says how long the
+ * pane has looked the same and whether it is sitting at a prompt.
+ *
+ * @param {any} session
+ */
+function describeStillness(session) {
+  if (!session || typeof session !== 'object') return '';
+  const since = Number(session.idleSince);
+  if (!Number.isFinite(since) || since <= 0) return '';
+  const mins = Math.max(0, Math.round((Date.now() - since) / 60_000));
+  const how = mins < 1 ? 'less than a minute' : mins < 90 ? `${mins} minutes` : `${Math.round(mins / 60)} hours`;
+  return session.atRest
+    ? `The pane has been unchanged for ${how}, sitting at a ready prompt — which usually means it finished, ` +
+        'and can also mean it is wedged. Reading it is the only way to tell.'
+    : `The pane has been unchanged for ${how}, and is not at a prompt.`;
 }
 
 export class McpServer {
@@ -366,8 +432,10 @@ export class McpServer {
         // NOT AN ERROR. Still running after the time asked for is an answer,
         // and calling it a failure would push an agent into stopping work that
         // is going fine.
+        const still = describeStillness(session);
         return this.#text(
           `${name} is still running after ${seconds}s. That is not a failure — it may just be slow. ` +
+            (still ? `${still} ` : '') +
             (this.maxWaitMs
               ? 'This connection caps a single wait, so call fleet_await again to keep waiting. '
               : '') +
@@ -545,14 +613,55 @@ export class McpServer {
       const withheld = DEFAULT_DENY.includes(String(name || '').replace(/^fleet_/, ''));
       return this.#text(
         withheld
-          ? `${name} is not exposed by this server. It restarts machines, destroys conversations or moves credentials — ` +
-              'ask the person running it to allow that verb explicitly.'
+          ? `${name} is not exposed by this server. It restarts machines, permanently destroys work, or moves ` +
+              'credentials, so it is withheld from an agent by default — a policy about what to reach for ' +
+              'unasked, not a lock.\n' +
+              // NAMES THE LIFT. This said "ask the person running it", and a
+              // beta tester WAS the person running it — with no way to know a
+              // lift existed or what it was called. A refusal that hides its
+              // own remedy from the one person who can apply it is worse than
+              // a flat no.
+              `Whoever runs this server can allow it with AGENT_FLEET_MCP_ALLOW=${String(name).replace(/^fleet_/, '')} ` +
+              'in its environment. If that is you, that is the whole change.'
           : `No such tool: ${name}. Available: ${this.tools.map((t) => t.name).join(', ')}.`,
         true,
       );
     }
 
     const { host, tag, ...params } = args;
+
+    // THE SERVER ENFORCES ITS OWN SCHEMA. It declared `required` and
+    // `additionalProperties: false` and checked neither, trusting the client to
+    // — so a caller who wrote `session:` instead of `name:` had it forwarded
+    // silently, and the missing `name` became the literal string "undefined"
+    // inside a refusal: `No host reports a session named "undefined"`.
+    //
+    // A beta tester spent their only documentation lookup working that out.
+    // The schema already holds the answer; nothing was reading it.
+    const declared = tool.inputSchema?.properties ?? {};
+    const unknown = Object.keys(params).filter((k) => !(k in declared));
+    if (unknown.length) {
+      const near = (/** @type {string} */ bad) => {
+        // Name the likely intent rather than only the mistake. `session` and
+        // `name` are the pair that cost the tester their lookup.
+        const options = Object.keys(declared).filter((k) => k !== 'host' && k !== 'tag');
+        const hit = options.find((o) => o.includes(bad) || bad.includes(o) || (bad === 'session' && o === 'name'));
+        return hit ? ` — did you mean \`${hit}\`?` : '';
+      };
+      return this.#text(
+        `${tool.name} takes no parameter ${unknown.map((u) => `\`${u}\``).join(', ')}${near(unknown[0])} ` +
+          `It takes: ${Object.keys(declared).join(', ')}.`,
+        true,
+      );
+    }
+    for (const need of tool.inputSchema?.required ?? []) {
+      // MISSING IS NOT "undefined". A required parameter absent is a question
+      // about the call, and answering it with a search for a session literally
+      // named "undefined" sends somebody looking at the fleet.
+      if (params[need] === undefined || params[need] === '') {
+        return this.#text(`${tool.name} needs \`${need}\`, and none was given.`, true);
+      }
+    }
 
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
     if (tool.local) return await this.#await(params, host ? String(host) : null);
@@ -563,9 +672,14 @@ export class McpServer {
     // because a name looked familiar. The check lives here rather than in the
     // coordinator because it is about this SESSION of the server, which is the
     // only place that knows what "you started it" means.
-    if (tool.verb === 'stop' && !this.started.has(String(params.name || ''))) {
+    // SCOPED EXACTLY AS `stop` IS, and for the same reason. `forget` is exposed
+    // now because the seven-day recycle bin made it the RECOVERABLE one — but
+    // an agent that could forget anything would eventually forget somebody's
+    // work because a name looked familiar. Clearing up after itself is tidy;
+    // clearing up after other people is not its call.
+    if ((tool.verb === 'stop' || tool.verb === 'forget') && !this.started.has(String(params.name || ''))) {
       return this.#text(
-        `${params.name || 'that session'} was not started in this conversation, so it is not yours to stop. ` +
+        `${params.name || 'that session'} was not started in this conversation, so it is not yours to ${tool.verb}. ` +
           'It belongs to somebody who is probably still using it.',
         true,
       );
@@ -606,12 +720,33 @@ export class McpServer {
         this.started.add(named);
         this.#watchStarted();
       }
-      if (tool.verb === 'stop') this.started.delete(named);
+      if (tool.verb === 'stop' || tool.verb === 'forget') this.started.delete(named);
     }
 
     // Refusals arrive as data, and they name a reason — that is the property
     // the protocol was built for and the one an agent most needs, so it is
     // passed through rather than flattened into "failed".
+    // WHERE IT LANDED. `start` answered "Started X in /home/user/agent-runs" and
+    // never said which box, so on a two-host fleet finding out cost a
+    // `fleet_list` and a scan — and the tool that then wants to read its log
+    // asks you which box it was. Both beta testers filed this.
+    //
+    // The reply carries the hostId; nothing was putting it on the screen.
+    if (reply?.ok !== false && (tool.verb === 'start' || tool.verb === 'resume')) {
+      const landed = reply?.hostId || sessionFrom(reply)?.hostId;
+      if (landed && !String(reply?.text ?? '').includes(landed)) {
+        reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
+      }
+    }
+
+    // THE EVIDENCE, WHERE THE QUESTION IS ASKED. `status` and `peek` are what
+    // somebody calls to find out whether work is done, and the watcher's
+    // observation was arriving on the same reply unrendered.
+    if (reply?.ok !== false && (tool.verb === 'status' || tool.verb === 'peek')) {
+      const still = describeStillness(sessionFrom(reply, String(params.name || '')));
+      if (still) reply = { ...reply, text: `${reply?.text ?? ''}\n\n${still}` };
+    }
+
     const failed = reply?.ok === false;
     // THE PAYLOAD, WHEN THE TEXT DOES NOT CARRY IT. `health` answers
     // `{ ok: true, text: 'ok', health: {…} }`, and rendering `text` alone made

@@ -14,6 +14,8 @@ import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
 import { adoptBoxAccount } from './core/accounts.js';
 import { pickSecretsFile } from './core/podman.js';
+import { Connections } from './core/connectors.js';
+import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
 import { HttpAdapter } from './adapters/http.js';
 import { TelegramAdapter } from './adapters/telegram.js';
@@ -66,6 +68,18 @@ export async function main() {
             const env = {};
             loadEnvFile(file, env);
             return env;
+          },
+          // WHEN THAT CREDENTIAL DIES. The broker used to serve whatever was
+          // stored, so a GitHub token that keepalive could not renew went on
+          // being handed out until GitHub answered 401 — which a beta tester
+          // then had to diagnose from a token prefix. This is the same row
+          // lookup, asking the renewal metadata instead of the secrets.
+          expiryFor: (name, provider) => {
+            const who = registry.get(name)?.createdBy ?? null;
+            // rowForActor, the same mapping the secrets lookup uses — an actor
+            // with no fleet identity gets the host row, which is what
+            // pickSecretsFile does one line above.
+            return new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
           },
           logger: log,
         })

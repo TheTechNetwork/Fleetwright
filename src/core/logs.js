@@ -68,7 +68,15 @@ export function readSessionLogs(cfg, name, lines = 60) {
     ok: false,
     text:
       `Nothing left to read for "${name}" — no container and no pane.\n` +
-      'A stopped session keeps its conversation; its output is gone with the container.',
+      // THE REMEDY, NOT ONLY THE LOSS. This stated the loss and stopped there,
+      // and a returning beta tester found the recovery by inference — resume
+      // restores the transcript, and the transcript usually holds the output
+      // they came for. An error that knows the way out and does not say it is
+      // the failure this project's refusals exist to avoid.
+      'A stopped session keeps its CONVERSATION even though its console output went with the container.\n' +
+        'Resume it — `/resume ' +
+        name +
+        '` — and the transcript comes back, usually with the output in it. Read it before stopping again.',
   };
 }
 

@@ -372,7 +372,17 @@ test('fleet_health answers with capacity, not the word ok', async () => {
       json: async () => ({
         ok: true,
         text: 'ok',
-        health: { running: 2, maxSessions: 5, free: 3, loadavg: [0.1, 0.2, 0.3], labels: ['linux'], loggedIn: false },
+        health: {
+          running: 2,
+          maxSessions: 5,
+          free: 3,
+          loadavg: [0.1, 0.2, 0.3],
+          labels: ['linux'],
+          // THE ORDINARY STATE OF EVERY BOX under one-account-per-person: no
+          // Claude account of its own, and two people who have linked theirs.
+          loggedIn: false,
+          claudeAccounts: 2,
+        },
       }),
     }),
   });
@@ -386,10 +396,61 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   assert.notEqual(text, 'ok');
   assert.match(text, /2\/5 sessions running/);
   assert.match(text, /tags: linux/);
-  // The one that decides whether a session can do anything at all. A host with
-  // free capacity and no login accepts a start and produces a session that
-  // cannot work — the confusing kind of healthy.
-  assert.match(text, /NOT LOGGED IN/);
+  // AND IT DOES NOT CALL A HEALTHY HOST BROKEN. This asserted `/NOT LOGGED IN/`
+  // and so pinned the bug in place: `loggedIn: false` is the ordinary state of
+  // every box now, and two beta testers read that banner and concluded the
+  // fleet was dead while `fleet_start` worked on the same machine.
+  assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
+  assert.match(text, /2 accounts linked/);
+});
+
+test('a host nobody has linked an account on says so, and says how to fix it', async () => {
+  // The fact that actually decides whether a session can do anything, and the
+  // remedy in the same sentence — a refusal that names no next step is what
+  // ended one tester's first run.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'ok', health: { running: 0, maxSessions: 5, free: 5, claudeAccounts: 0 } }),
+    }),
+  });
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_health', arguments: {} },
+  });
+  const text = String(reply.result.content[0].text);
+  assert.match(text, /NOBODY HAS LINKED AN ACCOUNT/);
+  assert.match(text, /login for/);
+});
+
+test('an older host that cannot answer is not reported as broken', async () => {
+  // claudeAccounts absent means CANNOT TELL. A fleet that flags every older
+  // host as broken teaches people to ignore the flag.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'ok', health: { running: 0, maxSessions: 5, free: 5, loggedIn: false } }),
+    }),
+  });
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_health', arguments: {} },
+  });
+  assert.equal(/NOT LOGGED IN|NOBODY HAS LINKED/.test(String(reply.result.content[0].text)), false);
 });
 
 test('tag says it places work rather than filtering a list', async () => {
@@ -568,6 +629,190 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.match(String(capped?.inputSchema.properties.seconds.description), /call again/);
   const uncapped = toolsFor().find((t) => t.name === 'fleet_await');
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
+});
+
+// --- the evidence a caller was told to gather by hand ------------------------
+
+test('status publishes what the watcher observed, not a verdict', async () => {
+  // "await detects ended-or-errored only, a finished session looks exactly like
+  // an idle one, and I peeked in a loop like everyone will. The same watcher
+  // could publish its OBSERVATION. Judgement stays mine; today even the
+  // evidence is manual." — beta report, ranked as hitting every session.
+  //
+  // idleSince and atRest have travelled on every reply since idle tracking
+  // shipped. Nothing rendered them.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({
+        ok: true,
+        text: 'job — running',
+        sessions: [{ name: 'job', status: 'running', idleSince: Date.now() - 9 * 60_000, atRest: true }],
+      }),
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_status', arguments: { name: 'job' } },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /unchanged for 9 minutes/);
+  assert.match(text, /ready prompt/);
+  // NOT A VERDICT. Deciding a session is finished is the caller's, which is
+  // docs/mcp.md's whole argument — so it names both readings.
+  assert.match(text, /can also mean it is wedged/);
+});
+
+test('a session with no idle evidence says nothing rather than guessing', async () => {
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'job — running', sessions: [{ name: 'job', status: 'running' }] }),
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_status', arguments: { name: 'job' } },
+  });
+  assert.equal(String(r.result.content[0].text).trim(), 'job — running');
+});
+
+// --- what a withheld verb tells the person who could allow it ---------------
+
+test('a withheld verb names the lift, because the reader may be the operator', async () => {
+  // This said "ask the person running it to allow that verb explicitly" — and
+  // a beta tester WAS the person running it, with no way to learn a lift
+  // existed or what it was called. A refusal that hides its remedy from the
+  // one person who can apply it is worse than a flat no.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({ coordinator: 'https://fleet.example', credential: 'fwk_a_b', write: () => {}, watchMs: 0 });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_purge', arguments: { name: 'x' } },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /AGENT_FLEET_MCP_ALLOW=purge/);
+  assert.match(text, /not a lock/);
+});
+
+test('forget is exposed and scoped, purge is not exposed at all', async () => {
+  // The bin made `forget` recoverable, so withholding it only stopped people
+  // clearing up after themselves — twelve stale sessions in one beta fleet.
+  // `purge` is still permanent and still withheld.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const started = new Set();
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    started,
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, text: 'ok', sessions: [{ name: 'mine' }] }) }),
+  });
+  /** @param {string} tool @param {any} args */
+  const call = async (tool, args) => {
+    const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: tool, arguments: args } });
+    return String(r.result.content[0].text);
+  };
+
+  // Somebody else's session is refused, exactly as `stop` refuses it.
+  assert.match(await call('fleet_forget', { name: 'not-mine' }), /not yours to forget/);
+
+  // One this conversation started is not.
+  await call('fleet_start', { name: 'mine', brief: 'x' });
+  assert.equal(/not yours/.test(await call('fleet_forget', { name: 'mine' })), false);
+});
+
+// --- the server enforcing its own schema ------------------------------------
+
+test('a wrong parameter name is named, not forwarded', async () => {
+  // The schema declared `required` and `additionalProperties: false` and the
+  // server checked neither. A caller who wrote `session:` had it forwarded
+  // silently and the missing `name` became the literal string "undefined"
+  // inside a refusal — `No host reports a session named "undefined"` — which
+  // sent a beta tester looking at the fleet and cost them their only trip to
+  // the documentation.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const reached = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async (/** @type {any} */ _u, /** @type {any} */ init) => {
+      reached.push(JSON.parse(String(init?.body || '{}')));
+      return { status: 200, json: async () => ({ ok: true, text: 'ok' }) };
+    },
+  });
+  /** @param {any} args */
+  const call = async (args) => {
+    const r = await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_peek', arguments: args },
+    });
+    return String(r.result.content[0].text);
+  };
+
+  const wrong = await call({ session: 'x' });
+  assert.match(wrong, /takes no parameter/);
+  assert.match(wrong, /did you mean `name`/);
+  assert.equal(/undefined/.test(wrong), false, 'the old "undefined" refusal is back');
+  assert.deepEqual(reached, [], 'a malformed call was still sent to the fleet');
+
+  const missing = await call({});
+  assert.match(missing, /needs `name`/);
+  assert.deepEqual(reached, [], 'a call with no required parameter was still sent');
+
+  // And a correct call still goes through.
+  await call({ name: 'job' });
+  assert.equal(reached.length, 1);
+});
+
+test('a body that will not parse is not reported as an outage', async () => {
+  // `Unexpected token 'e', "error code: 1101" is not valid JSON` was reported
+  // as "the fleet may be down; retrying is reasonable". The fleet was fine,
+  // retrying could not work, and the advice burned one of the tester's calls.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token \'e\', "error code: 1101" is not valid JSON');
+      },
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_list', arguments: {} },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /not JSON/);
+  assert.match(text, /1101/);
+  assert.equal(/retrying is reasonable/.test(text), false, 'still advising a retry that cannot work');
 });
 
 // --- SSRF: the Host header must not choose where we send things -------------

@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+# RUN THIS WITH BASH. `sh install.sh` fails at `set -o pipefail` with "Illegal
+# option -o pipefail" and explains nothing, and people type it — the docs say
+# to execute the file, but a habit is a habit. Two lines here beat the next
+# person losing ten minutes to a shell they did not choose.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "This installer needs bash. Run it as:  sudo bash install/install.sh" >&2
+  exit 2
+fi
+
 # agent-fleet installer — the whole thing, in one script.
 #
 #   curl -fsSL https://fleet.thetech.network/install | sudo sh
@@ -317,6 +327,21 @@ previous_install() {
   for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot; do
     [ -f "$f" ] && FOUND+=("sudoers   $f")
   done
+  # THE LAST COMMAND OF THIS FUNCTION DECIDES ITS EXIT STATUS, and the loop
+  # above ends in a `[ -f ] &&` that is FALSE on any box where the last file is
+  # absent — which is every box that has never had this installed. The function
+  # then returned 1, `set -euo pipefail` killed the script, and a fresh install
+  # died after four header lines with no message at all.
+  #
+  # Found by a beta tester on their first command. Both --check and the real
+  # install died there, so `curl … /install | sudo sh` took a bare machine to
+  # four lines and silence.
+  #
+  # `return 0` says what this function means: it REPORTS, and finding nothing
+  # is a perfectly good report. Every loop above has the same shape, so the
+  # explicit return is what makes the whole function safe rather than only its
+  # last line.
+  return 0
 }
 
 # A key that belongs to different hardware is the one case where continuing

@@ -37,8 +37,20 @@ import { VERBS } from '../fleet/protocol/intents.js';
  */
 /** @type {string[]} */
 export const DEFAULT_DENY = ([
-  'reboot', 'upgrade', 'update', 'purge', 'forget', 'restore',
+  'reboot', 'upgrade', 'update', 'restore',
   'connect', 'link', 'unlink', 'renew', 'answer',
+  // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
+  // cannot be recovered", and that stopped being true when the seven-day
+  // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is
+  // not. Withholding it left both beta testers unable to clean up after
+  // themselves: twelve stale sessions in one fleet, growing every visit, and
+  // the list screen they made unreadable is the top complaint in both reports.
+  //
+  // Scoped exactly as `stop` was rehabilitated: only sessions this
+  // conversation started. An agent that could forget anything would eventually
+  // forget somebody's work because a name looked familiar; an agent that can
+  // clear up after itself is just tidy.
+  'purge',
   // THE WORKSPACE'S DESTRUCTIVE HALF. Browsing and reading are exposed —
   // collecting what a job produced is the case this server exists for. Writing,
   // copying and deleting are not, by the same rule as the rest of this list:
@@ -49,6 +61,7 @@ export const DEFAULT_DENY = ([
   // here rather than after it: `forget` is recoverable for seven days and this
   // is not recoverable at all.
   'writefile', 'copyfile', 'deletefile',
+
 ]);
 
 // `stop` is NOT on that list, and that is a change rather than an oversight.
@@ -243,6 +256,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const notes = {
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
+        forget: 'Only sessions you started here. Recoverable for seven days — `restore` brings one back — which is why this is offered and `purge` is not.',
         stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it. Collect the output with fleet_read_log FIRST — stopping a session throws its console output away.',
         peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',
       };

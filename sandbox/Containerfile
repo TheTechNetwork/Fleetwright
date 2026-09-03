@@ -28,6 +28,26 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# THE GITHUB CLI, which this image shipped a PATH SHIM for and never installed.
+#
+# The shim below wraps `gh` so it gets a fresh token per invocation without one
+# ever entering the session's environment — and it execs "the first gh on PATH
+# that is not this shim". There wasn't one. A beta tester found it the only way
+# anybody could: `gh: command not found`, in a session, with a working broker
+# sitting behind it.
+#
+# The shim was right to refuse rather than pretend; what was missing is the
+# thing it wraps. From GitHub's own apt repository rather than a tarball, so it
+# updates with the rest of the image.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
 # The CLI. Pinned to a VERSION, not to `latest`, which was the default here and
 # is not a pin at all: two hosts building a week apart got different images, and
 # "reproducible" quietly meant "whatever npm had that morning".

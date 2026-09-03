@@ -323,3 +323,28 @@ Both apps said "GitHub does not report what a token was granted", which is true
 of Cloudflare and untrue of GitHub — it reports for classic tokens and not for
 app or fine-grained ones. That is a property of the token, not of the provider,
 and the catalogue's `wants` was already on screen to tell them apart.
+
+## What is actually proven about the apps
+
+Written because a beta tester found **four documents giving four answers** and
+could not tell what installing the beta would get them (#336). One table, and
+everything else defers to it.
+
+| | State | Evidence |
+|---|---|---|
+| Both apps compile | **yes** | CI builds them on every PR |
+| Both apps run | **in simulators/emulators only** | `app-testing.md` |
+| Sign in, hosts, sessions, pins, revocation | **built, exercised in simulator** | `app-testing.md` |
+| **Push delivered to a physical phone** | **never confirmed** | no document claims it; `deployment.md` says so explicitly |
+| App Store / Play distribution | **beta tracks live** | TestFlight and Play open testing |
+
+**Push is the one to be careful about.** The delivery path is built and
+unit-tested end to end in this repository and has never been confirmed on a
+real device. The Play listing sold it as *"the point of carrying this in a
+pocket at all"* until a tester — who had praised this project's documentary
+honesty at length — called that **off-brand**, and said as a reviewer they
+would call the listing overdrawn. They were right; the listing now says what
+is true.
+
+Anything above changes here first, and the README, ROADMAP and store listings
+follow. Four sources of truth is none.

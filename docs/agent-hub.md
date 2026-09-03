@@ -24,7 +24,12 @@ machine never needs a terminal.
                              state: one JSON file
 ```
 
-**Dependencies: `node` (18+), `tmux`, `claude`.** No database, no build step, no
+**Dependencies: `node` (>= 24 — see below), `tmux`, `claude`.**
+
+> **Upstream said 18+.** `package.json` in this repository requires `>= 24` and
+> that is the number to believe; the installer installs it. A beta tester found
+> three different answers across three files and could not tell which was real.
+ No database, no build step, no
 npm install, no cloud account. Clone it and run it.
 
 ---
