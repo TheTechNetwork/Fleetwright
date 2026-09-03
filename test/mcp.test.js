@@ -89,7 +89,7 @@ test('the dangerous verbs are not exposed by default', () => {
   // the API directly. It is about what an agent reaches for unasked, which is a
   // different question from what a person may do.
   const exposed = toolsFor().map((t) => t.verb);
-  for (const verb of ['reboot', 'purge', 'connect', 'unlink', 'answer']) {
+  for (const verb of ['reboot', 'upgrade', 'purge', 'connect', 'unlink', 'answer']) {
     assert.equal(exposed.includes(verb), false, `${verb} should not be exposed by default`);
   }
   assert.deepEqual(exposed.includes('list'), true);
@@ -110,6 +110,16 @@ test('the dangerous verbs are not exposed by default', () => {
   // in both reports. A surface that lets somebody create clutter should let
   // them bin it.
   assert.deepEqual(exposed.includes('forget'), true);
+
+  // AND `update` IS EXPOSED, on the same argument. The refusal lumped it in as
+  // "restarts machines", which is true of reboot and false of this:
+  // agent-hub.service sets KillMode=process precisely so restarting the service
+  // does not reap the tmux server holding every session — a comment that calls
+  // itself load-bearing and names the outage that taught it.
+  //
+  // Withholding it left a beta tester with a host two releases behind, refusing
+  // verbs, whose named fix needed a shell the product does not provide.
+  assert.deepEqual(exposed.includes('update'), true);
 });
 
 test('a withheld verb can be allowed explicitly, one at a time', () => {
