@@ -410,104 +410,14 @@ if [ -f /var/lib/agent-fleet/host-key.json ] && [ -f /var/lib/agent-fleet/machin
   fi
 fi
 
-previous_install
-if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
-  say "A previous install is already here"
-  for f in "${FOUND[@]}"; do printf '  %s\n' "$f"; done
-
-  # The identity is called out separately because it is the one thing here that
-  # cannot be recreated: removing it means this box is no longer the host the
-  # coordinator knows, and has to be enrolled again.
-  if [ -f /var/lib/agent-fleet/host-key.json ]; then
-    printf '\n  The IDENTITY line is this box'"'"'s place in the fleet. Clearing it means\n'
-    printf '  enrolling again, and removing the old entry from the coordinator.\n'
-  fi
-
-  if [ "$CLONE" = 1 ]; then
-    printf '\n  THIS BOX IS A CLONE. That identity was made on different hardware,\n'
-    printf '  so the machine it came from still holds the same private key. The\n'
-    printf '  coordinator cannot tell the two apart: they will take turns\n'
-    printf '  connecting and disconnecting each other, for ever, and neither box\n'
-    printf '  will log anything that explains it.\n'
-  fi
-
-  # A choice, not a yes/no. "Do you want to clean up?" is ambiguous about what
-  # happens if you say no, and this is the one prompt in the script where the
-  # wrong answer costs something that cannot be recovered.
-  #
-  # 1 is the default and is what re-running this has always done. 2 is only the
-  # default when the identity provably belongs to another machine, because
-  # there "keep it" is not a conservative choice — it is the broken one.
-  printf '\n  1) Update      keep the config, the identity and running sessions\n'
-  printf '  2) Clean       remove everything above, then install fresh\n'
-  if [ "$CLONE" = 1 ]; then
-    printf '\n     2 is recommended here: this identity is not this machine'"'"'s.\n'
-    CHOICE_DEFAULT=2
-  else
-    CHOICE_DEFAULT=1
-  fi
-
-  # --clean is the same thing without a terminal, and NOBODY THERE means 1 —
-  # an unattended install must never destroy an identity nobody was asked about.
-  #
-  # `! [ -t 0 ]` USED TO BE THAT TEST. It is correct for the documented
-  # one-liner, where bootstrap.sh has already attached /dev/tty — and wrong for
-  # every other way of piping this script in, where it silently chose Update on
-  # a box that may be a clone, which the prompt above calls out as the case
-  # where keeping is the broken answer. $ASK_IN asks the terminal, so the
-  # reasoning above is satisfied rather than dodged: skipped only when there is
-  # genuinely nobody.
-  if [ "$CLEAN" = yes ]; then
-    CHOICE=2
-  elif [ "$WIZARD" = no ] || [ -z "$ASK_IN" ]; then
-    CHOICE=1
-    printf '\n  Nobody to ask — updating. Pass --clean to remove instead.\n'
-  else
-    ask CHOICE "Choose" "$CHOICE_DEFAULT"
-  fi
-
-  case "$CHOICE" in
-    2)
-      # Said BEFORE the gate, as what WOULD happen — "Removing." printed while
-      # still asking whether to remove is the script claiming an action it has
-      # not taken and might not take.
-      printf '\n  This would remove everything listed above. ~%s/agent-runs,\n' "$RUN_USER"
-      printf '  running sessions and node/tmux/claude are left alone.\n'
-
-      # A second gate, and deliberately not [y/N]. A single keystroke is the
-      # wrong weight for the one action in this script that destroys something
-      # unrecoverable — the identity is a private key, and there is no copy.
-      # Typing a word cannot be done by leaning on the return key.
-      if [ -n "$ASK_IN" ]; then
-        if [ -f /var/lib/agent-fleet/host-key.json ]; then
-          printf '\n  This deletes the host key. There is no copy, and the coordinator\n'
-          printf '  will not recognise this box again until it is enrolled afresh.\n'
-        fi
-        ask SURE "Are you sure you want to delete? Type YES"
-        if [ "$SURE" != YES ]; then
-          ok "not deleting — updating instead, nothing above was changed"
-          CHOICE=1
-        fi
-      fi
-
-      if [ "$CHOICE" = 2 ]; then
-        say "Removing the previous install"
-        # One implementation, called rather than copied: the uninstaller is the
-        # thing that knows how to take a box apart, and a second copy of that
-        # knowledge here is the copy that goes stale.
-        "$DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
-        ok "cleaned — installing fresh"
-      fi
-      ;;
-    *)
-      ok "updating — nothing above was changed"
-      [ "$CLONE" = 1 ] && warn "the cloned identity is still in place; this box and its original will fight over it"
-      ;;
-  esac
-fi
-
 # --- 1. prerequisites -------------------------------------------------------
 say "Checking prerequisites"
+
+# THE NODE FLOOR, IN ONE PLACE. package.json is the source of truth and
+# test/install-node-floor.test.js pins this to it — they drifted once already,
+# with the manifest saying 24 while this script admitted 18, so `--check`
+# printed "ok" on a box that could not run any of it.
+NODE_FLOOR=24
 
 # Finding node is not as simple as `command -v`, and the reason has bitten every
 # operator who installs it the normal way. `sudo` replaces PATH with sudoers'
@@ -574,7 +484,7 @@ if [ -n "$NODE_BIN" ]; then
 
   # A distro whose nodejs package is older than we need. Say which, rather than
   # leaving someone to work out why a fresh install still fails.
-  # 24, WHICH IS WHAT package.json SAYS. This read 18 and recommended
+  # $NODE_FLOOR, WHICH IS WHAT package.json SAYS. This read 18 and recommended
   # nodesource's 22 line, so `--check` printed "ok node v20.19.2" on a box
   # that cannot run this — package.json has said `>=24` and docs/deployment.md
   # has said 24 for some time, and the gate that actually stops somebody never
@@ -584,9 +494,17 @@ if [ -n "$NODE_BIN" ]; then
   # Pinned to the manifest by test/install-node-floor.test.js, because the way
   # this drifted is that the two live in different files and only one of them is
   # read when the requirement changes.
-  [ "$NODE_MAJOR" -ge 24 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 24 or newer (package.json says >=24).
-       Your distribution's package is too old; use nodesource or nvm:
-           curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt install -y nodejs"
+  # REFUSED, AND NOT HEALED. Piping a third-party installer into root bash to
+  # add an apt repository and a signing key is a different kind of act from
+  # `apt-get install nodejs`, and it is not one this script gets to make on
+  # somebody's behalf. What it owes them is to refuse BEFORE anything is
+  # destroyed — which is what moving section 1b below buys — and to name the
+  # command rather than the problem.
+  [ "$NODE_MAJOR" -ge "$NODE_FLOOR" ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs $NODE_FLOOR or newer (package.json says >=$NODE_FLOOR).
+       Nothing has been changed on this box. Install a newer node and re-run:
+           curl -fsSL https://deb.nodesource.com/setup_${NODE_FLOOR}.x | sudo -E bash - && sudo apt install -y nodejs
+       Or with nvm, then point this script at it:
+           sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
   ok "node $("$NODE_BIN" -v) at $NODE_BIN"
 fi
 
@@ -740,6 +658,120 @@ fi
 if [ "$CHECK_ONLY" = 1 ]; then
   say "Prerequisites look fine. Nothing was changed — re-run without --check to install."
   exit 0
+fi
+
+# --- 1b. a previous install --------------------------------------------------
+#
+# AFTER THE PREREQUISITES, WHICH IS NOT WHERE THIS USED TO BE, and the move is
+# the whole point.
+#
+# It ran first, so a box could be taken apart — services stopped, identity
+# deleted, config removed — and THEN refused at the node version. That is
+# exactly what happened on deb13-staging: the clean succeeded, the prerequisite
+# check said node 20 is too old, and the box was left out of the fleet with no
+# way back in except by hand.
+#
+# docs/packaging.md already states the rule this violated, about the packaged
+# installer: "Nothing is removed until the new agent-hub has been SEEN to
+# start. Removing first would leave a box with neither." The same reasoning
+# governs the prerequisites, and only the packaged path had been taught it.
+#
+# Ordering is the entire fix. Anything that can refuse this install has to
+# refuse it before anything is destroyed.
+previous_install
+if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
+  say "A previous install is already here"
+  for f in "${FOUND[@]}"; do printf '  %s\n' "$f"; done
+
+  # The identity is called out separately because it is the one thing here that
+  # cannot be recreated: removing it means this box is no longer the host the
+  # coordinator knows, and has to be enrolled again.
+  if [ -f /var/lib/agent-fleet/host-key.json ]; then
+    printf '\n  The IDENTITY line is this box'"'"'s place in the fleet. Clearing it means\n'
+    printf '  enrolling again, and removing the old entry from the coordinator.\n'
+  fi
+
+  if [ "$CLONE" = 1 ]; then
+    printf '\n  THIS BOX IS A CLONE. That identity was made on different hardware,\n'
+    printf '  so the machine it came from still holds the same private key. The\n'
+    printf '  coordinator cannot tell the two apart: they will take turns\n'
+    printf '  connecting and disconnecting each other, for ever, and neither box\n'
+    printf '  will log anything that explains it.\n'
+  fi
+
+  # A choice, not a yes/no. "Do you want to clean up?" is ambiguous about what
+  # happens if you say no, and this is the one prompt in the script where the
+  # wrong answer costs something that cannot be recovered.
+  #
+  # 1 is the default and is what re-running this has always done. 2 is only the
+  # default when the identity provably belongs to another machine, because
+  # there "keep it" is not a conservative choice — it is the broken one.
+  printf '\n  1) Update      keep the config, the identity and running sessions\n'
+  printf '  2) Clean       remove everything above, then install fresh\n'
+  if [ "$CLONE" = 1 ]; then
+    printf '\n     2 is recommended here: this identity is not this machine'"'"'s.\n'
+    CHOICE_DEFAULT=2
+  else
+    CHOICE_DEFAULT=1
+  fi
+
+  # --clean is the same thing without a terminal, and NOBODY THERE means 1 —
+  # an unattended install must never destroy an identity nobody was asked about.
+  #
+  # `! [ -t 0 ]` USED TO BE THAT TEST. It is correct for the documented
+  # one-liner, where bootstrap.sh has already attached /dev/tty — and wrong for
+  # every other way of piping this script in, where it silently chose Update on
+  # a box that may be a clone, which the prompt above calls out as the case
+  # where keeping is the broken answer. $ASK_IN asks the terminal, so the
+  # reasoning above is satisfied rather than dodged: skipped only when there is
+  # genuinely nobody.
+  if [ "$CLEAN" = yes ]; then
+    CHOICE=2
+  elif [ "$WIZARD" = no ] || [ -z "$ASK_IN" ]; then
+    CHOICE=1
+    printf '\n  Nobody to ask — updating. Pass --clean to remove instead.\n'
+  else
+    ask CHOICE "Choose" "$CHOICE_DEFAULT"
+  fi
+
+  case "$CHOICE" in
+    2)
+      # Said BEFORE the gate, as what WOULD happen — "Removing." printed while
+      # still asking whether to remove is the script claiming an action it has
+      # not taken and might not take.
+      printf '\n  This would remove everything listed above. ~%s/agent-runs,\n' "$RUN_USER"
+      printf '  running sessions and node/tmux/claude are left alone.\n'
+
+      # A second gate, and deliberately not [y/N]. A single keystroke is the
+      # wrong weight for the one action in this script that destroys something
+      # unrecoverable — the identity is a private key, and there is no copy.
+      # Typing a word cannot be done by leaning on the return key.
+      if [ -n "$ASK_IN" ]; then
+        if [ -f /var/lib/agent-fleet/host-key.json ]; then
+          printf '\n  This deletes the host key. There is no copy, and the coordinator\n'
+          printf '  will not recognise this box again until it is enrolled afresh.\n'
+        fi
+        ask SURE "Are you sure you want to delete? Type YES"
+        if [ "$SURE" != YES ]; then
+          ok "not deleting — updating instead, nothing above was changed"
+          CHOICE=1
+        fi
+      fi
+
+      if [ "$CHOICE" = 2 ]; then
+        say "Removing the previous install"
+        # One implementation, called rather than copied: the uninstaller is the
+        # thing that knows how to take a box apart, and a second copy of that
+        # knowledge here is the copy that goes stale.
+        "$DIR/install/uninstall.sh" --yes || die "cleanup failed — nothing further was changed"
+        ok "cleaned — installing fresh"
+      fi
+      ;;
+    *)
+      ok "updating — nothing above was changed"
+      [ "$CLONE" = 1 ] && warn "the cloned identity is still in place; this box and its original will fight over it"
+      ;;
+  esac
 fi
 
 # --- 2. state directory -----------------------------------------------------

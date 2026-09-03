@@ -30,13 +30,17 @@ test('the installer refuses exactly what the manifest refuses', () => {
   const wanted = floorOf(JSON.parse(read('package.json')).engines?.node);
   const sh = read('install/install.sh');
 
-  const gate = /\[ "\$NODE_MAJOR" -ge (\d+) \]/.exec(sh);
-  assert.ok(gate, 'the installer no longer checks a node major at all');
+  // The floor is a variable now, named once, because it appears in the gate,
+  // two messages and a nodesource URL — four copies is four chances to drift.
+  const floor = /^NODE_FLOOR=(\d+)$/m.exec(sh);
+  assert.ok(floor, 'the installer no longer names a node floor');
   assert.equal(
-    Number(gate[1]),
+    Number(floor[1]),
     wanted,
-    `install.sh admits node ${gate[1]} while package.json needs ${wanted} — a box that installs cleanly and cannot run`,
+    `install.sh admits node ${floor[1]} while package.json needs ${wanted} — a box that installs cleanly and cannot run`,
   );
+  // And the gate uses it rather than a literal beside it.
+  assert.match(sh, /\[ "\$NODE_MAJOR" -ge "\$NODE_FLOOR" \]/);
 });
 
 test('the message it prints names the same version it enforces', () => {
@@ -47,9 +51,7 @@ test('the message it prints names the same version it enforces', () => {
   const wanted = floorOf(JSON.parse(read('package.json')).engines?.node);
   const sh = read('install/install.sh');
 
-  const said = /this needs (\d+) or newer/.exec(sh);
-  assert.ok(said, 'the refusal no longer says which version it wants');
-  assert.equal(Number(said[1]), wanted);
+  assert.match(sh, /this needs \$NODE_FLOOR or newer/, 'the refusal no longer says which version it wants');
 
   // And the nodesource line it hands somebody has to install a version that
   // passes. Recommending setup_22.x under a floor of 24 sends them round the
@@ -58,11 +60,10 @@ test('the message it prints names the same version it enforces', () => {
   // EVERY occurrence, not the first. A stale version left anywhere in this file
   // is a stale recommendation, and the first match is whichever line happens to
   // sort earliest — including a comment.
-  const suggested = [...sh.matchAll(/setup_(\d+)\.x/g)].map((m) => Number(m[1]));
-  assert.ok(suggested.length, 'the installer no longer suggests a way to get node');
-  for (const major of suggested) {
-    assert.ok(major >= wanted, `install.sh suggests nodesource ${major}.x under a floor of ${wanted}`);
-  }
+  // Built from the floor rather than written out, so a bump cannot leave a
+  // nodesource URL pointing at the previous major.
+  assert.match(sh, /setup_\$\{NODE_FLOOR\}\.x/);
+  assert.equal(/setup_\d+\.x/.test(sh), false, 'a hardcoded nodesource version is back');
 
   assert.match(sh, new RegExp(`Install Node ${wanted} or newer`), 'the could-not-install path names a different version');
 });
@@ -78,4 +79,38 @@ test('the documents agree with the installer', () => {
     new RegExp(`[Nn]ode[^.\n]*${wanted}`).test(deployment),
     `docs/deployment.md does not say node ${wanted}`,
   );
+});
+
+test('too old is refused, and the refusal says nothing was changed', () => {
+  // NOT HEALED, deliberately. Piping a third-party installer into root bash to
+  // add an apt repository and a signing key is a different act from
+  // `apt-get install nodejs`, and not one this script makes on somebody's
+  // behalf — which is the whole reason the ordering below matters instead.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const gate = sh.slice(sh.indexOf('REFUSED, AND NOT HEALED'));
+  assert.match(gate, /Nothing has been changed on this box/);
+  assert.match(gate, /AGENT_HUB_NODE_BIN/, 'no way out for somebody who already has a new node');
+  // And nothing pipes nodesource into a shell.
+  assert.equal(/nodesource[^\n]*\|\s*bash/.test(sh.replace(/^\s*#.*$/gm, '')), false,
+    'the installer pipes a third-party script into root bash');
+});
+
+test('nothing is destroyed before the install is known to be possible', async () => {
+  // A BOX WAS STRANDED BY THIS. The previous-install block ran first, so
+  // deb13-staging was taken apart — services stopped, identity deleted, config
+  // removed — and then refused at the node version. Out of the fleet, with no
+  // way back except by hand.
+  //
+  // docs/packaging.md already states the rule, about the packaged path:
+  // "Nothing is removed until the new agent-hub has been SEEN to start.
+  // Removing first would leave a box with neither." Only that path had been
+  // taught it.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const prerequisites = sh.indexOf('# --- 1. prerequisites');
+  const nodeGate = sh.indexOf('|| die "node $NODE_MAJOR');
+  const clean = sh.indexOf("uninstall.sh\" --yes");
+
+  assert.ok(prerequisites > 0 && nodeGate > 0 && clean > 0, 'a landmark moved');
+  assert.ok(nodeGate < clean, 'the node check runs after the clean — a box can be uninstalled and then refused');
+  assert.ok(prerequisites < clean, 'the prerequisites run after the clean');
 });
