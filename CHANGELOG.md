@@ -39,10 +39,6 @@ guessing, and reports back with the URL.
 - A **session kind** can carry a task and a host, so "start an orgi session"
   spoken to Siri or Assistant does the whole thing. On Android a kind could not
   name a host at all before this; now it can.
-- The **demo fleet and the product page** moved to their own Cloudflare Worker,
-  away from the coordinator that holds real sessions.
-- **`fleetdemo.thetech.network/docs`** is a page you can send somebody, and the
-  README has a Deploy to Cloudflare button.
 
 **For operators:** this is **protocol v3**. Update your hosts *before* the
 coordinator — a v3 host and a v2 coordinator refuse each other by name, so the
