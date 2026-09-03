@@ -352,5 +352,13 @@ and restored when it was proven, rather than argued about. The evidence is
 somebody with the devices saying it worked, which is the only evidence this
 row could ever have had — no test in this repository can produce it.
 
-Anything above changes here first, and the README, ROADMAP and store listings
-follow. Four sources of truth is none.
+**This table is the source; everything else defers to it.** The README, the
+ROADMAP and both store listings point here rather than restating it, because
+four sources of truth is none — and the way that failure showed up was not one
+document being wrong, it was four being checked against each other while none
+was checked against a phone.
+
+So the rule, which is the actual finding rather than any single row: **a claim
+about what the apps can do changes here first, with its evidence, and the
+places that link here do not paraphrase it.** A row that cannot name how it was
+established does not belong in the table.
