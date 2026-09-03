@@ -705,15 +705,30 @@ class Fleet(
      *
      * This is how a host gets in now: no shared token to copy onto every box,
      * one pin, ten minutes, single use.
-     */
-    /**
+     *
      * @param ephemeral admits a host that is EXPECTED to vanish — a CI runner.
      *   Decided here, when the pin is minted, rather than claimed by the host:
      *   a machine that could declare itself temporary is a machine that could
      *   decline to be cleaned up. See docs/ephemeral-hosts.md.
+     * @param hostId BINDS the pin to one machine's name, which is what
+     *   readmitting or re-keying an existing host requires. An unbound pin is
+     *   handed out to ADD a box and must not be spendable on taking over one
+     *   that already exists, so the coordinator refuses both cases unless the
+     *   pin names the host.
+     * @param readmit additionally permits bringing back a host that was
+     *   revoked, so undoing a removal is a decision somebody makes rather than
+     *   a side effect of holding a pin.
      */
-    suspend fun mintHostPin(ephemeral: Boolean = false): String = withContext(Dispatchers.IO) {
-        val json = post("/api/enroll", JSONObject().put("kind", "host").put("ephemeral", ephemeral))
+    suspend fun mintHostPin(
+        ephemeral: Boolean = false,
+        hostId: String? = null,
+        readmit: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("kind", "host").put("ephemeral", ephemeral)
+        // OMITTED WHEN ABSENT rather than sent as null: a null hostId binds the
+        // pin to nothing and reads, on the wire, as somebody having meant to.
+        if (!hostId.isNullOrBlank()) body.put("hostId", hostId).put("readmit", readmit)
+        val json = post("/api/enroll", body)
         json.optString("code").ifBlank {
             throw IllegalStateException(json.optString("text").ifBlank { "Could not mint a pin." })
         }
