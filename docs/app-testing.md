@@ -13,7 +13,7 @@ Precisely:
 |---|---|
 | Android | Builds, installs, **launches**. Driven through the whole checklist below on an API 37 AVD. |
 | iOS | Builds, installs, **launches**, lists sessions over HTTPS and over plain HTTP. Never signed for a device. |
-| Push — server | Sender, encoding, device registry, event fan-out: built and unit-tested. Nothing has ever reached a phone. |
+| Push — server | Sender, encoding, device registry, event fan-out. **Confirmed on real devices, 3 Sep 2026** — a notification reached both an iPhone and an Android phone. Reported by the maintainer running the fleet, which is the only kind of evidence this row could ever have had. |
 | Push — Android | **Wired.** FCM, registered on launch; see below. |
 | Push — iOS | **Wired.** Direct APNs, not FCM — registers with APNs and posts the token the sender now knows how to use; see below. |
 

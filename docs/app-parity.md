@@ -335,16 +335,22 @@ everything else defers to it.
 | Both apps compile | **yes** | CI builds them on every PR |
 | Both apps run | **in simulators/emulators only** | `app-testing.md` |
 | Sign in, hosts, sessions, pins, revocation | **built, exercised in simulator** | `app-testing.md` |
-| **Push delivered to a physical phone** | **never confirmed** | no document claims it; `deployment.md` says so explicitly |
+| **Push delivered to a physical phone** | **confirmed, 3 Sep 2026** | iPhone and Android phone, reported by the maintainer running the fleet |
 | App Store / Play distribution | **beta tracks live** | TestFlight and Play open testing |
 
-**Push is the one to be careful about.** The delivery path is built and
-unit-tested end to end in this repository and has never been confirmed on a
-real device. The Play listing sold it as *"the point of carrying this in a
-pocket at all"* until a tester — who had praised this project's documentary
-honesty at length — called that **off-brand**, and said as a reviewer they
-would call the listing overdrawn. They were right; the listing now says what
-is true.
+**Push was the one to be careful about, and no longer is.** A beta tester
+called the Play listing **off-brand** for selling it as *"the point of carrying
+this in a pocket at all"* while every internal document said it had never
+reached a phone. They were right at the time, and the listing was hedged.
+
+On 3 Sep 2026 it was confirmed on both an iPhone and an Android phone, so the
+listing says the confident thing again — because now it is true, which was
+always the condition rather than the wording.
+
+Worth keeping the shape of that: the claim was withdrawn when it was unproven
+and restored when it was proven, rather than argued about. The evidence is
+somebody with the devices saying it worked, which is the only evidence this
+row could ever have had — no test in this repository can produce it.
 
 Anything above changes here first, and the README, ROADMAP and store listings
 follow. Four sources of truth is none.

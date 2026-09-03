@@ -21,9 +21,13 @@ host, and sandboxed sessions with real root inside a container whose filesystem
 is thrown away on every stop. That much is validated on hardware — see
 [§10 of `design.md`](./design.md).
 
-The ⚠️ rows are the honest ones. Each is built and each is unproven in the one
-way that matters: no notification has been delivered to a real phone, and no app
-has been run by a person. Treat them as ready to *test*, not as working.
+The ⚠️ rows are the honest ones: built, and unproven in the one way that
+matters until somebody runs them.
+
+**Push is no longer one of them.** As of 3 Sep 2026 a notification has reached
+both an iPhone and an Android phone, reported by the maintainer running the
+fleet — which is the only kind of evidence that row could ever have had, and
+the thing it had been waiting on since the sender was written.
 
 ## Prerequisites
 
