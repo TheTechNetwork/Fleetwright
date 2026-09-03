@@ -19,6 +19,10 @@ bottom of it.
 
 ## Get the app
 
+> **What is proven, and what is not:**
+> [docs/app-parity.md](docs/app-parity.md#what-is-actually-proven-about-the-apps)
+> is the single table. Push has never been confirmed on a physical device.
+
 | | |
 |---|---|
 | **iPhone / iPad** | [TestFlight beta](https://testflight.apple.com/join/FyQnP8T9) — install Apple's TestFlight app first, and open the link on the device itself |

@@ -49,7 +49,7 @@ WHAT IT DOES
 • Resume a stopped session with a summary of where it left off.
 • Peek at the live pane output for any session, so you can read what it is actually doing before deciding anything.
 • Open a running session in Remote Control, and go from reading it to driving it.
-• Get a push notification the moment a session stops and waits on you — the point of carrying this in a pocket at all.
+• Register for push notifications when a session stops and waits on you. (In beta: the delivery path is built and unit-tested, and has not yet been confirmed on a physical device — see the release notes.)
 
 YOU BRING THE SERVER
 
