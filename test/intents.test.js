@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating } from '../src/fleet/protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating, checkParams } from '../src/fleet/protocol/intents.js';
 import { isValidName } from '../src/core/names.js';
 
 /** @param {object} patch */
@@ -426,4 +426,60 @@ test('the idempotency key is the callers, not generated per attempt', () => {
   const a = buildIntent({ id: 'idem-0000003', verb: 'stop', params: { name: 'x' }, issuedAt: 1 });
   const b = buildIntent({ id: 'idem-0000003', verb: 'stop', params: { name: 'x' }, issuedAt: 2 });
   assert.equal(a.id, b.id);
+});
+
+test('a caller\'s typo is refused, not thrown, and the refusal names the fix', async () => {
+  // REPORTED FROM PRODUCTION, and it is the beta tester's 1101.
+  //
+  //   Error: refusing to send a malformed intent: status takes no parameter "session"
+  //     buildIntent → CoordinatorCore.send → Array.map → dispatch → Fleet.fetch
+  //
+  // `buildIntent` throws, which is right for a programming error inside the
+  // coordinator and wrong for the case that actually happens: somebody posting
+  // `params: {session: "x"}`. It is called inside `send`, inside a `.map` over
+  // the fan-out, so the throw left dispatch synchronously and became a
+  // Cloudflare error page. The tester read that as the fleet being down and
+  // retried — and the coordinator had told them retrying was reasonable.
+  //
+  // It was their typo. Retrying could never have worked.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ log: { info() {}, warn() {}, error() {} } });
+
+  const reply = await core.dispatch({ verb: 'status', params: { session: 'cc-brave-otter' } });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error.code, 'bad_params');
+  assert.match(reply.text, /status takes no parameter "session"/);
+
+  // AND WHAT IT DOES TAKE. The old message named the mistake and not the fix,
+  // so the tester went and read a schema to learn the word is `name` — which
+  // they wrote up as the thing that cost them the most.
+  assert.match(reply.text, /it takes: name/);
+
+  // Refused BEFORE placement, so a scheduler never decides anything on the
+  // strength of a params object that was never valid. With no hosts connected,
+  // a well-formed status would have been refused with `no_hosts` instead —
+  // which is what proves this check ran first.
+  assert.equal((await core.dispatch({ verb: 'status', params: {} })).error.code, 'no_hosts');
+});
+
+test('a verb with no parameters says so rather than listing nothing', () => {
+  // "list takes no parameter \"nope\" — it takes:" trailing off is worse than
+  // no suggestion at all.
+  const r = checkParams('list', { nope: 1 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /it takes none/);
+});
+
+test('checkParams is the same rules validateIntent applies, not a second copy', () => {
+  // The whole reason the params check could be factored out is that there is
+  // one implementation. Two would be a coordinator that accepts what a host
+  // then refuses — the disagreement the fixed verb set exists to prevent.
+  for (const params of [{ session: 'x' }, { name: 'has space' }, { name: 'ok', mode: 'sideways' }, { option: 'x' }]) {
+    const direct = checkParams('answer', params);
+    const viaEnvelope = validateIntent({
+      v: PROTOCOL_VERSION, kind: 'intent', id: 'abcd1234', verb: 'answer', params, issuedAt: Date.now(),
+    });
+    assert.equal(direct.ok, viaEnvelope.ok, `disagreed about ${JSON.stringify(params)}`);
+    if (direct.ok === false && viaEnvelope.ok === false) assert.equal(direct.error, viaEnvelope.error);
+  }
 });

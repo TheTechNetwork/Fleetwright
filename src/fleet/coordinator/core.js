@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
@@ -748,6 +748,27 @@ export class CoordinatorCore {
   async dispatch(spec) {
     if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
       return { ok: false, error: { code: 'unknown_verb' }, text: `unknown verb ${JSON.stringify(spec.verb)}` };
+    }
+
+    // A CALLER'S TYPO IS A REFUSAL, NOT AN EXCEPTION.
+    //
+    // `buildIntent` throws on a malformed intent, which is right for a
+    // programming error inside this file and wrong for the case that actually
+    // happens: somebody posting `params: {session: "x"}` to /api/intent. It is
+    // called inside `send`, which is called inside a `.map` over the fan-out —
+    // so the throw left dispatch synchronously, past every handler, and became
+    // a Cloudflare error page.
+    //
+    // That is the "error code: 1101" a beta tester hit twice and reported as
+    // the fleet being down. It was their typo. Retrying could never have
+    // worked, and the coordinator told them retrying was reasonable.
+    //
+    // CHECKED HERE RATHER THAN IN `send` because the placement decision reads
+    // `params.name`: a bad params object should be refused before a scheduler
+    // makes any decision on the strength of it.
+    const shaped = checkParams(spec.verb, spec.params || {});
+    if (shaped.ok === false) {
+      return { ok: false, error: { code: shaped.code }, text: shaped.error };
     }
 
     // Recorded BEFORE placement, and only for verbs that change something.

@@ -620,6 +620,63 @@ export function isMutating(verb) {
  */
 
 /**
+ * The params half of validation, on its own.
+ *
+ * FACTORED OUT BECAUSE THE COORDINATOR NEEDS IT BEFORE IT HAS AN ENVELOPE.
+ * `buildIntent` THROWS on a malformed intent, which is right for a programming
+ * error inside the coordinator and wrong for the case that actually happens: a
+ * caller posting `params: {session: "x"}` to /api/intent. That threw out of
+ * `dispatch`, past every handler, and became a Cloudflare error page — the
+ * "error code: 1101" a beta tester hit twice and read as the fleet being down.
+ * It was their typo, and retrying could never have worked.
+ *
+ * @param {string} verb
+ * @param {unknown} params
+ * @returns {{ ok: true, params: Record<string, string|number> }
+ *   | { ok: false, code: string, error: string }}
+ */
+export function checkParams(verb, params) {
+  const spec = VERBS[verb];
+  if (!spec) return { ok: false, code: 'unknown_verb', error: `unknown verb ${JSON.stringify(String(verb).slice(0, 40))}` };
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return { ok: false, code: 'bad_params', error: 'params must be a JSON object' };
+  }
+
+  /** @type {Record<string, string|number>} */
+  const clean = {};
+  for (const [key, value] of Object.entries(params)) {
+    const ps = spec.params[key];
+    if (!ps) {
+      // AND WHAT IT DOES TAKE. The old message named the mistake and not the
+      // fix, so a caller who guessed `session` was told `status takes no
+      // parameter "session"` and had to go and read a schema to learn the word
+      // is `name`. Listing the declared parameters costs nothing: whoever sees
+      // this already named the verb, so it reveals nothing they did not have.
+      //
+      // Deliberately unlike the unknown_verb message above, which does NOT list
+      // the verb set — that reply can travel to somebody who was guessing.
+      const takes = Object.keys(spec.params);
+      return {
+        ok: false,
+        code: 'bad_params',
+        error:
+          `${verb} takes no parameter "${key.slice(0, 40)}"` +
+          (takes.length ? ` — it takes: ${takes.join(', ')}` : ' — it takes none'),
+      };
+    }
+    const checked = checkParam(verb, key, ps, value);
+    if (checked.ok === false) return checked;
+    clean[key] = checked.value;
+  }
+  for (const [key, ps] of Object.entries(spec.params)) {
+    if (ps.required && clean[key] === undefined) {
+      return { ok: false, code: 'bad_params', error: `${verb} requires "${key}"` };
+    }
+  }
+  return { ok: true, params: clean };
+}
+
+/**
  * Validate one envelope off the wire.
  *
  * Unknown parameters are REJECTED rather than ignored. Ignoring them is the
@@ -674,18 +731,9 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
     return bad('bad_params', 'params must be a JSON object');
   }
 
-  /** @type {Record<string, string|number>} */
-  const clean = {};
-  for (const [key, value] of Object.entries(params)) {
-    const ps = spec.params[key];
-    if (!ps) return bad('bad_params', `${env.verb} takes no parameter "${key.slice(0, 40)}"`);
-    const checked = checkParam(env.verb, key, ps, value);
-    if (checked.ok === false) return checked;
-    clean[key] = checked.value;
-  }
-  for (const [key, ps] of Object.entries(spec.params)) {
-    if (ps.required && clean[key] === undefined) return bad('bad_params', `${env.verb} requires "${key}"`);
-  }
+  const shaped = checkParams(env.verb, params);
+  if (shaped.ok === false) return shaped;
+  const clean = shaped.params;
 
   return {
     ok: true,
