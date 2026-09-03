@@ -153,7 +153,17 @@ async function doctor() {
   try {
     const parsed = JSON.parse(auth.stdout || '{}');
     authOk = parsed.loggedIn === true;
-    if (authOk) authDetail = `${parsed.email || '?'} (${parsed.subscriptionType || parsed.authMethod || '?'})`;
+    // `?` IS NOT AN ANSWER. This printed "logged in — ? (oauth_token)" when
+    // the CLI reports a session with no email on it, which a beta tester
+    // reasonably read as something being wrong. It is not: an account can be
+    // signed in and simply not expose an address here.
+    //
+    // Say which fact is missing rather than punctuating at somebody.
+    if (authOk) {
+      const who = parsed.email || 'an account that does not report an address';
+      const how = parsed.subscriptionType || parsed.authMethod || 'method not reported';
+      authDetail = `${who} (${how})`;
+    }
   } catch { /* leave as not-logged-in */ }
   ok('claude logged in', authOk, authDetail);
 
