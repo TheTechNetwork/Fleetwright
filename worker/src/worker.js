@@ -12,38 +12,17 @@
 // Both on one origin, because a host pins exactly one.
 
 import { Fleet as FleetObject } from './fleet-do.js';
-import { demoReply } from './demo.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { isMcpPath } from '../../src/mcp/routes.js';
 import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
+import { PRIVACY } from './pages.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
 // throw in here used to be a 500 with a console line nobody was reading.
 export const Fleet = Sentry.instrumentDurableObjectWithSentry(sentryOptions, FleetObject);
-
-/**
- * Is this request on the demo hostname?
- *
- * Configured rather than hardcoded, because a second deployment of this Worker
- * is entitled to a different demo domain, and because a literal here would be
- * one more place to forget when the hostname changes. Absent means "no demo
- * domain" — the correct answer for local dev and for anybody who has not set
- * one up, where the token path further down still works.
- *
- * EXACT MATCH, never a suffix test. `endsWith('fleetdemo.thetech.network')`
- * would also accept `notfleetdemo.thetech.network`, and a hostname check that
- * can be widened by prefixing it is not a check.
- *
- * @param {URL} url
- * @param {{ AGENT_FLEET_DEMO_HOST?: string }} env
- */
-function isDemoHost(url, env) {
-  const configured = String(env.AGENT_FLEET_DEMO_HOST || '').trim().toLowerCase();
-  return configured !== '' && url.hostname.toLowerCase() === configured;
-}
 
 /**
  * Reach the Durable Object, surviving a deploy that lands mid-request.
@@ -133,7 +112,7 @@ function isObjectReset(e) {
 const handler = {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DEMO_TOKEN?: string, AGENT_FLEET_DEMO_HOST?: string, DEMO_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> }, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DOCS_URL?: string, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -158,6 +137,26 @@ const handler = {
       return new Response(PRIVACY, {
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600' },
       });
+    }
+
+    // THE PRODUCT PAGE IS NOT SERVED HERE, and the redirect is the point.
+    //
+    // A coordinator is the thing holding the fleet. It should not also be the
+    // thing a stranger loads a marketing page from — that is a second,
+    // unauthenticated, cacheable surface attached to the script with the
+    // Durable Object binding and the App's client secret in it. The page lives
+    // on its own Worker (`wrangler.demo.toml`), which has neither.
+    //
+    // So this route hands out an address and no bytes. It is OFF unless
+    // AGENT_FLEET_DOCS_URL is set, because a self-hosted fleet is somebody's
+    // private coordinator on their own domain and has no product page to point
+    // at; ours sets it in wrangler.toml and every fork gets a 404.
+    //
+    // 302 rather than 301: a permanent redirect is cached by browsers in a way
+    // that outlives the deploy that set it, and this value is one line of
+    // configuration away from changing.
+    if (url.pathname === '/docs' && env.AGENT_FLEET_DOCS_URL) {
+      return Response.redirect(String(env.AGENT_FLEET_DOCS_URL), 302);
     }
 
     // The third, and the reason it is a redirect rather than a copy: the thing
@@ -251,43 +250,6 @@ const handler = {
       );
     }
 
-    // THE DEMO LIVES ON ITS OWN HOSTNAME, and that is the whole security
-    // property restated in a stronger form.
-    //
-    // It used to be only a token: hold `AGENT_FLEET_DEMO_TOKEN` and get
-    // invented data. That worked, but it meant every real route had to be
-    // reached and then not taken, and the argument for safety was "this branch
-    // runs first". On the demo hostname the argument is shorter — a request
-    // here NEVER REACHES THE ROUTES AT ALL. No host enrolment, no websocket,
-    // no sign-in, no Durable Object, and no credential that could change the
-    // answer.
-    //
-    // Note the position: ABOVE the host routes. If this sat where the token
-    // check sits, `/host/connect` on the demo domain would have returned
-    // earlier and joined the real fleet. "Demo" must not become a way in, and
-    // the way to guarantee that is to answer before the door exists rather
-    // than to remember not to open it.
-    //
-    // No credential is checked and none is needed: the data is three invented
-    // sessions on two invented machines, identical for everybody.
-    if (isDemoHost(url, env)) {
-      if (env.DEMO_RATE_LIMIT) {
-        const key = request.headers.get('cf-connecting-ip') || 'unknown';
-        const { success } = await env.DEMO_RATE_LIMIT.limit({ key });
-        if (!success) {
-          return json(
-            { ok: false, error: { code: 'rate_limited' }, demo: true, text: 'Too many demo requests. Try again in a minute.' },
-            429,
-          );
-        }
-      }
-      const demoBody = request.method === 'POST' ? await readJsonSafely(request) : null;
-      const demoAnswer = demoReply(url, request.method, demoBody);
-      return demoAnswer
-        ? json({ ...demoAnswer, demo: true })
-        : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
-    }
-
     // A host authenticates by SIGNATURE, inside the Durable Object, which is
     // the only thing holding the enrolled keys. There is no shared host token
     // any more: AGENT_FLEET_HOST_TOKEN was one string that every machine
@@ -303,41 +265,6 @@ const handler = {
     }
 
     const presented = credentialFrom(request.headers.get('authorization'), url);
-
-    // The demo token, if one is configured. Answered HERE, before the Durable
-    // Object is reached, which is the whole security property: there is no code
-    // path from a demo request to a host socket or a real session. Not "we are
-    // careful" — the object is never fetched.
-    //
-    // App Store review needs credentials that work, and the real API token can
-    // stop every session in the fleet. This is the other way to satisfy that.
-    //
-    // NEVER for a host route: "demo" must not become a way into the fleet. That
-    // used to be a condition here; it is now structural — every host route
-    // returned above, so control cannot reach this line on one.
-    if (env.AGENT_FLEET_DEMO_TOKEN && timingSafeEqual(presented, env.AGENT_FLEET_DEMO_TOKEN)) {
-      // A demo token equal to the real one would silently turn the whole
-      // coordinator into a toy. Refuse rather than guess which was meant.
-      if (timingSafeEqual(env.AGENT_FLEET_DEMO_TOKEN, env.AGENT_FLEET_API_TOKEN || '')) {
-        return json({ ok: false, error: { code: 'misconfigured' }, text: 'AGENT_FLEET_DEMO_TOKEN must differ from AGENT_FLEET_API_TOKEN' }, 500);
-      }
-      // The token is public, so the budget is per client address rather than
-      // per token — one abuser must not be able to lock out a reviewer.
-      // Absent binding means local dev, where there is nothing to protect.
-      if (env.DEMO_RATE_LIMIT) {
-        const key = request.headers.get('cf-connecting-ip') || 'unknown';
-        const { success } = await env.DEMO_RATE_LIMIT.limit({ key });
-        if (!success) {
-          return json(
-            { ok: false, error: { code: 'rate_limited' }, demo: true, text: 'Too many demo requests. Try again in a minute.' },
-            429,
-          );
-        }
-      }
-      const body = request.method === 'POST' ? await readJsonSafely(request) : null;
-      const reply = demoReply(url, request.method, body);
-      return reply ? json({ ...reply, demo: true }) : json({ ok: false, error: { code: 'not_found' }, demo: true }, 404);
-    }
 
     // Signing in cannot require being signed in. The Durable Object verifies
     // the identity token itself, so this route is reachable without a fleet
@@ -1678,69 +1605,6 @@ const OPENAPI = JSON.stringify({
   }
 });
 
-const PRIVACY = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fleetwright — Privacy</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem;
-         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  h1 { font-size: 1.6rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
-  code { font-size: 0.9em; }
-</style></head><body>
-<h1>Fleetwright — Privacy</h1>
-<p><strong>There is no Fleetwright service.</strong> It is a client for a
-coordinator you run yourself, there is no account to create here, and there is
-no analytics, advertising or tracking of any kind.</p>
-
-<p>Signing in uses <strong>your own Apple or Google account</strong>. Fleetwright
-does not create one, does not store a password, and never sees one.</p>
-
-<h2>Your email address</h2>
-<p>When you sign in, Apple or Google confirms your email address to your
-coordinator, which decides whether that address is allowed in and issues this
-device a credential of its own. The address is shown in Settings so you can see
-who the app is signed in as, and it is attached to the commands you send so your
-coordinator's records say who did what.</p>
-<p>It goes to your coordinator and nowhere else. Choose <em>Share My Email</em>
-on iOS: a hidden relay address cannot be matched against the list of people your
-coordinator allows, and signing in will be refused.</p>
-
-<h2>What stays on your device</h2>
-<p>The coordinator's address, the credential issued to this device, and the email
-address you signed in with. The credential is held in the iOS Keychain or behind
-an Android Keystore key that cannot be exported, and it is sent only to that
-coordinator, as an <code>Authorization</code> header over HTTPS.</p>
-
-<h2>What is sent to your coordinator</h2>
-<ul>
-  <li>The commands you issue — list, start, stop, resume a session.</li>
-  <li>The email address you signed in with, so the commands are attributable.</li>
-  <li>Your push notification token, if you enable notifications, so the
-      coordinator can tell you when a session needs an answer.</li>
-</ul>
-<p>That coordinator is infrastructure you operate. Its logs and its data are
-yours, and this app has no other destination.</p>
-
-<h2>Third parties</h2>
-<p>Two, and only for the two things that cannot be done without them: Apple or
-Google confirm who you are when you sign in, and Apple or Google deliver a push
-notification to your device. No advertising, no tracking, no analytics, and no
-third-party SDKs beyond the sign-in components each platform provides.</p>
-<p>Your coordinator is not a third party — it is infrastructure you operate.</p>
-
-<h2>Deleting your data</h2>
-<p>Deleting the app removes the credential, the coordinator address and the email
-address from the device. Revoking the device from your coordinator — from another
-signed-in device, or with the admin credential — stops it reaching the fleet at
-all and takes its push registration with it.</p>
-
-<h2>Source</h2>
-<p>The app and the coordinator are open source:
-<a href="https://github.com/TheTechNetwork/Fleetwright">github.com/TheTechNetwork/Fleetwright</a>.
-Every claim on this page can be checked against the code.</p>
-</body></html>`;
 
 /** @param {Request} request */
 async function readJsonSafely(request) {

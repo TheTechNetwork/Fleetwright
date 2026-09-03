@@ -232,7 +232,7 @@ test('the email binding is configured, and configuring it did not orphan a var',
   // `[[send_email]]` is a TOML TABLE HEADER, so it ends `[vars]` wherever it
   // lands. Put in the middle of that table it would silently move every
   // variable after it out of scope — the Worker would deploy, and the
-  // allowlist, the GitHub client id and the demo host would simply be
+  // allowlist, the GitHub client id and the docs redirect would simply be
   // undefined. Nothing here would fail; sign-in would just start refusing
   // everybody.
   //
@@ -253,8 +253,8 @@ test('the email binding is configured, and configuring it did not orphan a var',
     if (kv && table === 'vars') vars.add(kv[1]);
   }
 
-  for (const name of ['AGENT_FLEET_AUTH_ALLOW', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DEMO_HOST']) {
-    assert.ok(vars.has(name), `${name} fell out of [vars] — sign-in or the demo would break silently`);
+  for (const name of ['AGENT_FLEET_AUTH_ALLOW', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DOCS_URL']) {
+    assert.ok(vars.has(name), `${name} fell out of [vars] — sign-in or the docs link would break silently`);
   }
   assert.ok(vars.has('AGENT_FLEET_INVITE_FROM'), 'no sender address, so no invitation email can be sent');
   assert.match(toml, /\[\[send_email\]\]/, 'the email binding is not declared');

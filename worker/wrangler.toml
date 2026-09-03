@@ -55,36 +55,34 @@ compatibility_flags = ["nodejs_als"]
 # coordinator origin, so changing it means editing every host's
 # /etc/agent-fleet-sidecar.env. It is not a value to churn.
 #
-# TWO CUSTOM DOMAINS, ONE WORKER, and the second one is a boundary rather than
-# a convenience. `fleetdemo` answers only from the invented fleet in
-# worker/src/demo.js: worker.js checks the hostname ABOVE the host routes, so a
-# request there never reaches enrolment, a websocket, sign-in, or the Durable
-# Object. Same code, same deploy, and no credential that can cross between
-# them — which is a much shorter thing to verify than "the demo branch runs
-# first".
+# ONE DOMAIN, AND THE DEMO IS NO LONGER ON IT. `fleetdemo` used to be a second
+# custom domain on this same Worker, answered above the host routes so a request
+# there never reached enrolment, a websocket, sign-in, or the Durable Object.
+# That was true, and it was an argument about the ORDER of branches inside a
+# bundle that also holds the App's client secret and the APNs key.
+#
+# It is a separate script now — `wrangler.demo.toml`, which has no Durable
+# Object binding and no secrets. See docs/coordinator-deploy.md.
 #
 # `custom_domain = true` makes wrangler create the DNS record and the domain
-# binding on deploy, so adding a demo host is this line and nothing manual.
+# binding on deploy, so there is nothing to point anywhere by hand.
 routes = [
-  { pattern = "fleet.thetech.network", custom_domain = true },
-  { pattern = "fleetdemo.thetech.network", custom_domain = true }
+  { pattern = "fleet.thetech.network", custom_domain = true }
 ]
 
 # --- plain configuration, deployed with the code -----------------------------
 [vars]
-# The demo credential, and deliberately NOT a secret.
+# WHERE THE PRODUCT PAGE IS, and this Worker does not serve it.
 #
-# It authorises exactly one thing: reading the fabricated fleet in
-# worker/src/demo.js. Every reply is built from constants, the Durable Object
-# is never fetched, and /host/connect refuses it — so there is nothing for a
-# holder of this string to reach. Publishing it costs Worker invocations and
-# nothing else, and in exchange there is no secret to rotate, no manual step
-# before a deploy, and no way for App Store review to be blocked on somebody
-# being awake to paste a value.
+# /docs on the coordinator is a 302 to this address and nothing else. A
+# coordinator is the thing holding the fleet; it should not also be the surface
+# a stranger loads HTML from. The page lives on the demo Worker, which has no
+# fleet binding to reach.
 #
-# It is prefixed `demo-` so that a request carrying it is obvious in a log at a
-# glance, rather than being one opaque hex string among three.
-AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+# Absent means 404, which is the right answer for a self-hosted fleet: somebody
+# else's private coordinator has no product page to point at. Ours does, so it
+# is set here and in no fork.
+AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
 
 # --- the GitHub App -----------------------------------------------------------
 # Identifiers, not credentials, and that is why they are here rather than in a
@@ -125,15 +123,6 @@ AGENT_FLEET_GITHUB_APP_ID = "4758006"
 # requires the private key to authenticate.
 AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
-# Which hostname IS the demo. Named here rather than hardcoded in worker.js so
-# there is one place to change it, and so a second deployment of this Worker can
-# have its own — or none, which is what local dev and any fork gets by default.
-#
-# Setting this is what makes the demo structural instead of careful: on this
-# hostname there is no route to a host, a session or the Durable Object, so the
-# credential above stops being the thing standing between a curious person and
-# somebody's real work.
-AGENT_FLEET_DEMO_HOST = "fleetdemo.thetech.network"
 
 # --- who is allowed to sign in ----------------------------------------------
 # Identifiers, not credentials: the issuer is public, the audience is the client
@@ -238,25 +227,15 @@ name = "EMAIL"
 # invitation is not a thing to discover works only in production.
 remote = true
 
-# Rate limit for the demo token, since the token is public and the point of
-# publishing it was to stop it needing an operator. 60 requests a minute per
-# client address is far more than a person tapping around an app and far less
-# than anything worth doing with a hundred thousand free requests a day.
-#
-# Keyed on the client address rather than the token: a single abuser must not
-# be able to lock out an App Store reviewer by exhausting a shared budget.
-[[ratelimits]]
-name = "DEMO_RATE_LIMIT"
-namespace_id = "1001"
-simple = { limit = 60, period = 60 }
-
 # Signing in is the other route reachable without a credential, and it does real
 # work for an anonymous caller: fetch a key set, verify a JWT, and on success
 # write a client record. Ten a minute per address is more than a person tapping
 # a button and less than anything worth doing with somebody else's CPU.
 #
-# A separate namespace from the demo budget on purpose: sharing one would mean a
-# script hammering the demo fleet could stop real people signing in.
+# Namespace 1002 rather than 1001, which the demo Worker uses. The budgets
+# cannot be shared now that the scripts are not — a script hammering the demo
+# fleet reaches a different Worker entirely — but the numbers stay distinct so
+# nothing depends on that being remembered.
 [[ratelimits]]
 name = "SIGNIN_RATE_LIMIT"
 namespace_id = "1002"
@@ -303,8 +282,8 @@ enabled = true
 # deploy carrying a var CLOBBERS the secret of the same name. One place per
 # name, and for these the useful place is beside the .p8 they describe.
 #
-# AGENT_FLEET_DEMO_TOKEN is NOT here: it is a [vars] entry below, because it
-# guards nothing worth guarding. See the comment on it.
+# AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
+# it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
 # Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
 # running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and

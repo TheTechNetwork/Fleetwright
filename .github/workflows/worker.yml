@@ -114,6 +114,16 @@ jobs:
         working-directory: worker
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
 
+      # THE SECOND SCRIPT, and it is bundled separately because it IS separate.
+      # The demo and the product page were moved off the coordinator so that
+      # the bundle holding the Durable Object and the App's client secret is
+      # not also the one serving an unauthenticated page. A dry-run here is
+      # what notices if that ever stops being true — if `demo-worker.js` grows
+      # an import that drags the coordinator in, the bundle says so.
+      - name: Bundle the demo Worker without deploying it
+        working-directory: worker
+        run: npx wrangler deploy --config wrangler.demo.toml --dry-run --outdir /tmp/demo-build
+
       # The Worker, RUNNING, in workerd — the runtime it ships to. The fleet
       # went down on a bug that only exists in that runtime (a floating
       # storage-write rejection aborts the Durable Object), and nothing here
@@ -164,6 +174,15 @@ jobs:
           npm --prefix "$GITHUB_WORKSPACE" install --no-audit --no-fund
           npm install --no-audit --no-fund
           npx wrangler deploy
+
+          # The demo and the product page, on their own script. Deployed after
+          # the coordinator and in the same step on purpose: they are one
+          # commit's worth of change, and a page that describes a coordinator
+          # older than itself is the drift this split was meant to avoid.
+          #
+          # It has no secrets to sync — see the step below, which is entirely
+          # about the coordinator's.
+          npx wrangler deploy --config wrangler.demo.toml
 
       # The Worker's RUNTIME secrets are a different thing from the credentials
       # used to deploy it: they live in Cloudflare, not in GitHub, and

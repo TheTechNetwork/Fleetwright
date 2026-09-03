@@ -49,6 +49,17 @@ else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
+# The demo Worker, bundled SEPARATELY and with no `--external` at all — because
+# the point of it having its own script is that it needs nothing the platform
+# has to provide. If `demo-worker.js` ever grows an import that drags the
+# coordinator in, this is where it stops being true out loud.
+printf 'demo       ... '
+if out=$(cd worker && ./node_modules/.bin/esbuild src/demo-worker.js --bundle --format=esm --platform=neutral --outfile=/dev/null 2>&1); then
+  printf 'bundles\n'
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
 # The contract, and the copy of it the Worker ships. openapi.json is the source
 # and test/openapi.test.js executes it against BOTH coordinators — but the
 # Worker inlines its own copy, and a copy of a contract is a thing that drifts.

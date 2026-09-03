@@ -1,0 +1,59 @@
+# The public face: the demo fleet and the product page.
+#
+#   cd worker && npx wrangler deploy --config wrangler.demo.toml
+#
+# A SEPARATE SCRIPT FROM THE COORDINATOR, on purpose. The demo used to be a
+# hostname branch inside `wrangler.toml`'s Worker — answered above the host
+# routes, tested, and correct. It was still the same bundle that holds the
+# Durable Object, the GitHub App client secret and the APNs key, serving an
+# unauthenticated page to anybody who found it. The safety argument was about
+# the ORDER of branches, and order is a property of code that gets edited.
+#
+# Read this file as the security boundary: there is no `durable_objects`
+# binding, no `send_email`, no KV, and no secret. Nothing here can reach a
+# session, because nothing that could is in scope.
+name = "fleetwright-demo"
+main = "src/demo-worker.js"
+compatibility_date = "2026-01-15"
+
+# No compatibility_flags. The coordinator needs `nodejs_als` for Sentry; this
+# script has no error reporting because it has nothing worth reporting — three
+# constants and two HTML strings — and a flag it does not need is cold start it
+# does not need either.
+
+routes = [
+  { pattern = "fleetdemo.thetech.network", custom_domain = true }
+]
+
+[vars]
+# The demo credential, kept here because two apps ship a copy of it and
+# test/demo-button.test.js pins all three together.
+#
+# IT NOW AUTHORISES NOTHING, and that is an improvement rather than a
+# loose end. When the demo lived in the coordinator this string was what
+# separated a curious person from the real routes. On a Worker with no fleet
+# binding there is nothing to separate: `demo-worker.js` does not check it, and
+# a check that can only ever pass is a check nobody maintains. The apps keep
+# sending it because a client with no credential is not signed in, and the
+# string being obviously a demo one is worth more in a log than in a comparison.
+AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+
+# Named here as well as in the route so test/demo-button.test.js can compare it
+# to what the two apps compiled in. Three copies exist; nothing at runtime would
+# notice them drifting apart, and an app pointed at a domain that no longer
+# serves a demo fails in a way that reads as "the app is broken".
+AGENT_FLEET_DEMO_HOST = "fleetdemo.thetech.network"
+
+# 60 requests a minute per client address: far more than a person tapping
+# around an app, far less than anything worth doing with a hundred thousand
+# free requests a day.
+#
+# A SEPARATE NAMESPACE FROM THE COORDINATOR'S, which is now automatic rather
+# than remembered — the budgets cannot be shared because the scripts are not.
+[[ratelimits]]
+name = "DEMO_RATE_LIMIT"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[observability]
+enabled = true

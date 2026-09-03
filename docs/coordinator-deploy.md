@@ -102,24 +102,55 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
-## A demo fleet, on its own domain
+## A demo fleet, on its own Worker
 
-**`fleetdemo.thetech.network`**, same Worker, same deploy. `custom_domain =
-true` in `routes` means wrangler creates the DNS record and the domain binding
-itself — adding it was one line and nothing manual.
+**`fleetdemo.thetech.network`**, a separate script:
 
-The domain is the boundary, and that is a stronger claim than the token ever
-supported. `worker.js` matches `AGENT_FLEET_DEMO_HOST` **above the host
-routes**, so a request there never reaches enrolment, a websocket, sign-in, or
-the Durable Object. Not "the demo branch runs first" — the routes are not
-reached at all, and no credential presented on that hostname can change the
-answer.
+```
+cd worker && npx wrangler deploy --config wrangler.demo.toml
+```
 
-The position matters and is the reason the check is where it is: if it sat
-where the token check sits, `/host/connect` on the demo domain would have
-returned earlier and joined the real fleet. **Demo must not become a way in**,
-and the way to guarantee that is to answer before the door exists rather than
-to remember not to open it.
+It serves two things — the invented fleet in `worker/src/demo.js`, and the
+product page at `/docs`. Nothing else.
+
+**It used to be the same Worker on a second domain**, and the argument for that
+was real: `worker.js` matched `AGENT_FLEET_DEMO_HOST` above the host routes, so
+a request there never reached enrolment, a websocket, sign-in, or the Durable
+Object. It was tested, and the test asserted the *position* of the check.
+
+That is the problem with it. It was an argument about the **order of branches**
+inside a bundle that also holds the Durable Object binding, the GitHub App
+client secret and the APNs key — and order is a property of code that gets
+edited. The coordinator is the thing holding the fleet; it should not also be
+the unauthenticated, cacheable surface a stranger loads HTML from.
+
+Now there is no argument to make. `wrangler.demo.toml` has **no
+`durable_objects` binding, no `send_email`, no KV and no secrets**, and
+`demo-worker.js` imports exactly two files. A bug in it cannot reach a session
+because nothing that could is in scope. The config is short enough to read in
+one sitting, and reading it is the whole audit.
+
+Two smaller things fell out of it:
+
+- **The demo token now authorises nothing.** It is not checked, because on a
+  Worker with no fleet there is nothing to separate a curious person from —
+  and a check that can only ever pass is a check nobody maintains. Both apps
+  still send it, because a client with no credential is not signed in.
+- **The release cadences are separate.** The page describing the product
+  changes when the words are wrong; the coordinator changes when the fleet
+  does. Shipping the second to fix the first means a deploy that evicts every
+  live Durable Object, for a typo.
+
+### `/docs` on the coordinator is a redirect
+
+`AGENT_FLEET_DOCS_URL` in `wrangler.toml` points `/docs` at the demo Worker
+with a 302. **Unset means 404**, which is the right answer for a self-hosted
+fleet: somebody else's private coordinator on their own domain has no product
+page to point at. Ours is set; every fork gets nothing.
+
+302 rather than 301 — a permanent redirect is cached by browsers in a way that
+outlives the deploy that set it, and this value is one line of configuration
+away from changing.
 
 Both apps have a **"Look around the demo fleet"** button that points at it.
 There is no longer a paste-a-credential field in either app: asking somebody to
@@ -132,49 +163,39 @@ pointed at a domain that answers nothing.
 Getting back in when sign-in itself is broken is now curl with
 `AGENT_FLEET_API_TOKEN`, not a field on every user's settings screen.
 
-## A demo token, for App Store review
+## The demo token, which no longer authorises anything
 
 App Store review needs credentials that work, and no reviewer's address is on
 anybody's allowlist — so signing in cannot be the answer, and
-`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. So there is a
-third, optional token, and the apps have a collapsed "use a credential instead"
-field to put it in:
-
-It is a **`[vars]` entry in `wrangler.toml`, not a secret** — committed, and
-deployed with the code:
+`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. That is why a
+third token exists, in `wrangler.demo.toml`, committed rather than kept secret:
 
 ```toml
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 ```
 
-That is deliberate. The string authorises exactly one thing: reading the
-fabricated fleet. There is nothing behind it to reach, so publishing it costs
-Worker invocations and nothing else — and in exchange there is no secret to
-rotate, no manual step before a deploy, and no way for App Store review to be
-blocked on somebody being awake to paste a value.
+**`demo-worker.js` does not check it.** When the demo lived in the coordinator,
+this string was what separated a curious person from the real routes. On a
+Worker with no fleet binding there is nothing to separate — and a check that
+can only ever pass is a check nobody maintains, and the maintenance is where
+the bug would be. Both apps keep sending it: a client with no credential is not
+signed in, and a string obviously prefixed `demo-` is worth more in a log than
+in a comparison.
 
-It is rate limited to **60 requests a minute per client address** — far more
-than a person tapping around an app, far less than anything worth doing with a
-free tier. Keyed on the address rather than the token, so one abuser cannot
-lock out an App Store reviewer by exhausting a shared budget.
+The demo Worker is rate limited to **60 requests a minute per client address** —
+far more than a person tapping around an app, far less than anything worth
+doing with a free tier. Keyed on the address rather than the credential, so one
+abuser cannot lock out an App Store reviewer by exhausting a shared budget.
 
-A request bearing it is answered from `worker/src/demo.js` — two invented
-hosts, three invented sessions, one of them waiting on a person. Verbs like
-`start` and `stop` reply plausibly and change nothing.
+Everything it answers comes from `worker/src/demo.js` — two invented hosts,
+three invented sessions, one of them waiting on a person. Verbs like `start`
+and `stop` reply plausibly and change nothing. Every reply carries
+`"demo": true`, so a support question is never ambiguous about which fleet
+somebody was looking at.
 
-**The safety property is structural.** The match happens in `worker.js` before
-`env.FLEET` is touched, so there is no code path from a demo request to a
-Durable Object, a host socket or a real session. Not "it checks first" — the
-object is never fetched. It is also refused for `/host/connect`, so a host
-presenting it is rejected like any other wrong token, and the Worker returns
-500 if the demo and real tokens are ever set to the same value rather than
-silently turning the whole coordinator into a toy.
-
-Every reply carries `"demo": true`, so a support question is never ambiguous
-about which fleet somebody was looking at.
-
-Remove the var and none of this exists — the token stops being recognised
-and every request falls through to the real token check.
+Presented to the real coordinator it is now an **ordinary bad credential**,
+which is the answer it should always have had once the demo had a Worker of its
+own.
 
 ## Point a host at it
 

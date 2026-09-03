@@ -18,7 +18,15 @@ import { readFileSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
-const WRANGLER = read('worker/wrangler.toml');
+// SETTINGS, NOT PROSE. Both config files explain at length what they do NOT
+// contain, and a test that greps the raw text finds `durable_objects` in the
+// sentence promising there is no durable object. Comments are where the
+// reasoning lives; they must not be where an assertion looks.
+/** @param {string} toml */
+const settings = (toml) => toml.replace(/^\s*#.*$/gm, '');
+
+const WRANGLER = read('worker/wrangler.demo.toml');
+const COORDINATOR = read('worker/wrangler.toml');
 const IOS = read('apps/ios/Fleetwright/Demo.swift');
 const ANDROID = read('apps/android/app/src/main/java/network/thetech/fleetwright/Demo.kt');
 
@@ -52,48 +60,59 @@ test('the demo credential is the same in all three places', () => {
   }
 });
 
-test('the demo is not the real token, and not the real fleet', () => {
-  // A demo token equal to the API token would silently turn the whole
-  // coordinator into a toy; worker.js answers 500 rather than guessing which
-  // was meant, and this catches it before a deploy.
-  const demo = fromWrangler('AGENT_FLEET_DEMO_TOKEN');
-  const api = /^AGENT_FLEET_API_TOKEN\s*=\s*"([^"]+)"/m.exec(WRANGLER);
-  if (api) assert.notEqual(demo, api[1]);
-
-  // And the demo host must not be the production host, or the button would
-  // point people's phones at the real fleet.
+test('the demo host and the fleet host are different domains', () => {
   const demoHost = fromWrangler('AGENT_FLEET_DEMO_HOST');
   const routes = [...WRANGLER.matchAll(/pattern\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
   assert.ok(routes.includes(demoHost), 'the demo host has no route, so nothing would answer on it');
-  assert.ok(routes.length >= 2, 'the demo shares a Worker with the real fleet and needs its own domain');
-  assert.notEqual(demoHost, routes.find((r) => r !== demoHost), 'demo and production must be different hosts');
+
+  const fleetRoutes = [...COORDINATOR.matchAll(/pattern\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(fleetRoutes.includes(demoHost), false, 'the coordinator still answers on the demo domain');
+  for (const r of fleetRoutes) assert.equal(routes.includes(r), false, `${r} is served by both Workers`);
 });
 
-test('the demo hostname is matched exactly, never as a suffix', () => {
-  // `endsWith('fleetdemo.thetech.network')` would also accept
-  // `notfleetdemo.thetech.network`, and a hostname check that can be widened
-  // by prefixing it is not a check.
-  const src = read('worker/src/worker.js');
-  const fn = /function isDemoHost\([\s\S]*?\n}/.exec(src);
-  assert.ok(fn, 'isDemoHost is gone — the demo domain is no longer a boundary');
-  assert.match(fn[0], /===/);
-  assert.equal(/endsWith|includes|startsWith/.test(fn[0]), false, 'a suffix test is not a hostname check');
+test('the demo Worker cannot reach a fleet, because nothing that could is in scope', () => {
+  // THE WHOLE SECURITY PROPERTY, and it is now a property of the DEPLOYMENT
+  // rather than of the order of branches in a file.
+  //
+  // The demo used to be a hostname check inside the coordinator, answered
+  // above the host routes. That was correct, and it was an argument about
+  // order — in a bundle that also held the Durable Object binding, the GitHub
+  // App client secret and the APNs key. What replaced it is shorter to verify:
+  // this script has no binding to a fleet, so a bug in it cannot find one.
+  const demo = settings(read('worker/wrangler.demo.toml'));
+  assert.equal(/durable_objects/.test(demo), false, 'the demo Worker has a Durable Object binding');
+  assert.equal(/send_email|kv_namespaces|\[\[queues/.test(demo), false, 'the demo Worker has a stateful binding');
+  assert.match(demo, /main = "src\/demo-worker\.js"/);
+
+  // And the entrypoint imports the invented fleet, never the real one.
+  const src = read('worker/src/demo-worker.js');
+  const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(imports.sort(), ['./demo.js', './pages.js']);
 });
 
-test('the demo is answered before any route that reaches the fleet', () => {
-  // THE WHOLE SECURITY PROPERTY. If this check sat lower, /host/connect on the
-  // demo domain would have returned first and joined the real fleet — "demo"
-  // must not become a way in, and the guarantee is that the answer comes
-  // before the door exists rather than that somebody remembered not to open it.
+test('the coordinator no longer serves the demo at all', () => {
+  // Not "checks it first" — gone. A demo token presented to the real fleet is
+  // now an ordinary bad credential, which is the answer it should always have
+  // had once the demo had a Worker of its own.
   const src = read('worker/src/worker.js');
-  const demoAt = src.indexOf('if (isDemoHost(url, env))');
-  const hostRouteAt = src.indexOf("url.pathname === '/host/connect'");
-  const objectAt = src.indexOf('env.FLEET.idFromName');
-  assert.ok(demoAt > 0 && hostRouteAt > 0);
-  assert.ok(demoAt < hostRouteAt, 'a host route is reachable on the demo domain');
-  // /apple/notifications legitimately fetches the object above this; what must
-  // not happen is a host or session route doing so.
-  assert.ok(objectAt > 0);
+  assert.equal(/demoReply|isDemoHost|AGENT_FLEET_DEMO_TOKEN/.test(src), false,
+    'the coordinator still has a demo path');
+  assert.equal(/AGENT_FLEET_DEMO/.test(settings(COORDINATOR)), false,
+    'the coordinator config still carries demo settings');
+});
+
+test('the product page is a redirect from the coordinator, never bytes', () => {
+  // A coordinator holding the fleet should not also be an unauthenticated,
+  // cacheable HTML surface. /docs hands out an address; the demo Worker serves
+  // the page. Off unless AGENT_FLEET_DOCS_URL is set, so a fork 404s.
+  const src = read('worker/src/worker.js');
+  assert.match(src, /url\.pathname === '\/docs' && env\.AGENT_FLEET_DOCS_URL/);
+  assert.equal(/new Response\(DOCS/.test(src), false, 'the coordinator is serving the page itself');
+
+  const target = /^AGENT_FLEET_DOCS_URL\s*=\s*"([^"]+)"/m.exec(COORDINATOR);
+  assert.ok(target, 'our deploy does not point /docs anywhere');
+  assert.equal(new URL(target[1]).hostname, fromWrangler('AGENT_FLEET_DEMO_HOST'),
+    '/docs redirects somewhere other than the Worker that serves it');
 });
 
 test('the paste-a-credential field is gone from both apps', () => {
