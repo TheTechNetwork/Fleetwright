@@ -32,8 +32,34 @@ system** and is absent from the screen where the decision gets made. Session
 dates, who started one, the credential countdown — all present somewhere, none
 of them where somebody is choosing.
 
-Still open: the first-run tester is running, and `DEFAULT_DENY` blocking
-recovery actions (`forget`, `update`) needs a decision rather than a fix.
+**Round two — the first-run tester — found something neither of us predicted
+and it outranks the lot: `install.sh` is dead on `main`.** A fresh box exits 1
+after five header lines, before any prerequisite check, with no message. A
+trailing `[ -f … ] && …` is the last command in `previous_install()`, so on a
+box that has never had this installed the function returns 1 and
+`set -euo pipefail` kills the script. Verified here from a clean `git archive`,
+not taken on trust. The advertised `curl … | sudo sh` one-liner currently takes
+a bare machine to four lines and a silent failure.
+
+Both rounds independently hit the **same false "NOT LOGGED IN"**, which makes
+it an unfinished one-account-per-person migration rather than a wrong string:
+`fleet_status`, `fleet_health`, `agent-hub accounts` and `doctor` all still
+describe the healthy state as fatal, while `fleet_verify` has the correct
+sentence.
+
+And the two the first-run tester ranked daily, both arguing "I understand why,
+and I still want it": **task-at-start** (a `brief` that is stored and never
+delivered, so the documented MCP loop ends at an idle REPL) and **a done /
+needs-me / idle state** that does not have to be divined. They found our own
+compromise for the first on our own roadmap — §6's host-side prompt profiles.
+
+Their disagreement with the order below, kept because it is the sharpest thing
+either report said:
+
+> "All defensible, but they extend reach while the core loop still dead-ends at
+> an idle REPL."
+
+Every finding is filed as an issue and tagged `beta`.
 
 ## 1. Identity, trust, and accounts
 
