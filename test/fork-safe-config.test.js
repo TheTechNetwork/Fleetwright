@@ -168,10 +168,26 @@ test('the structural half is identical in both, key by key', () => {
 
   assert.deepEqual(structural(PRODUCTION), structural(DEFAULT));
 
-  // Named so the list cannot quietly become empty and pass.
-  const both = structural(DEFAULT).join('\n');
+  // Named so the list cannot quietly become empty and pass — `deepEqual([], [])`
+  // is true, and two files that both stopped declaring a Durable Object would
+  // agree perfectly.
+  //
+  // A STRING COMPARE, NOT A REGEX. This built one with
+  // `required.replace(/\./g, '\\.')`, which escapes dots and not backslashes —
+  // CodeQL called it incomplete escaping and was right in general even though
+  // every input here is a literal on the line above. The rule is worth taking
+  // seriously rather than suppressing: a half-escaped pattern is the kind of
+  // thing that stays correct until somebody adds an entry with a `+` in it.
+  //
+  // And the string form is more precise anyway. The regex matched the key
+  // ANYWHERE in the joined text, so `migrations.tag` would have been satisfied
+  // by a `[vars]` entry that happened to contain it.
+  const declared = structural(DEFAULT);
   for (const required of ['durable_objects.bindings.class_name', 'migrations.tag', 'ratelimits.namespace_id']) {
-    assert.match(both, new RegExp(required.replace(/\./g, '\\.')));
+    assert.ok(
+      declared.some((entry) => entry.startsWith(`${required}=`)),
+      `neither config declares ${required} — the structural comparison above is comparing two empty lists`,
+    );
   }
 
   // And the identity lines, which decide what gets replaced by a deploy.
