@@ -130,7 +130,47 @@ function sessionButtons(sessions, toCommand, toLabel) {
  * @param {import('../core/registry.js').SessionRecord} s
  */
 function label(s) {
-  return s.title ? `${s.name} · ${s.title}` : s.name;
+  // A TITLE IS A LABEL, NOT A TRANSCRIPT. Somebody pasted a whole task in as
+  // one and the list rendered its first line — "cc-eli-diskreport · Please run
+  // 'df -h' for overall disk usage, then run 'du -x…". The naming design is
+  // recognition-not-recall; a paragraph defeats it.
+  const title = s.title ? String(s.title).split('\n')[0].trim() : '';
+  const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
+  return short ? `${s.name} · ${short}` : s.name;
+}
+
+/**
+ * How long ago, in the shortest form that is still true.
+ *
+ * A RETURNING USER'S FIRST QUESTION, and the list could not answer it: twelve
+ * sessions, no dates, three of them called "disk usage report" with no way to
+ * tell which attempt was real. The fact was in the record the whole time.
+ *
+ * @param {number|null|undefined} at
+ */
+function ago(at) {
+  if (!at) return '';
+  const secs = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (secs < 90) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 90) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * What state a stopped session is in, as a word rather than a glyph.
+ *
+ * "Finished", "died" and "abandoned three weeks ago" shared one grey square.
+ * The distinction decides whether somebody resumes it, reads it or bins it.
+ *
+ * @param {import('../core/registry.js').SessionRecord} s
+ */
+function restState(s) {
+  if (s.status === 'error') return 'errored';
+  if (!s.uuid) return 'no saved conversation';
+  return 'stopped';
 }
 
 /**
@@ -531,12 +571,27 @@ export const COMMANDS = {
       const rest = all.filter((s) => s.status !== 'running');
       const lines = [`${running.length}/${ctx.cfg.maxSessions} running on ${ctx.cfg.hostname}`, ''];
       for (const s of running) {
-        lines.push(`▶ ${label(s)}${modeSuffix(ctx, s)}${s.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
+        const since = ago(s.createdAt);
+        lines.push(
+          `▶ ${label(s)}${modeSuffix(ctx, s)}` +
+            `${since || s.createdBy ? `\n   ${[since && `started ${since}`, s.createdBy].filter(Boolean).join(' · ')}` : ''}` +
+            `${s.rcUrl ? `\n   ${s.rcUrl}` : ''}`,
+        );
       }
       if (rest.length) {
         lines.push('', 'Resumable:');
         for (const s of rest) {
-          lines.push(`◼ ${label(s)}${s.uuid ? '' : '  (no saved conversation)'}`);
+          // WHO, WHEN AND WHAT STATE — all three already in the record, none of
+          // them on the screen where somebody chooses. A returning user found
+          // their own session only because past-them happened to put their name
+          // in it; three others shared a title and a glyph.
+          // `updatedAt`, not an invented lastActivityAt: it is the last time the
+          // record changed, which is the closest thing to "when did this stop
+          // mattering". stoppedAt is more precise when present.
+          const facts = [restState(s), ago(s.stoppedAt || s.updatedAt || s.createdAt), s.createdBy]
+            .filter(Boolean)
+            .join(' · ');
+          lines.push(`◼ ${label(s)}${facts ? `\n   ${facts}` : ''}`);
         }
       }
       // One tap per session: stop what's running, resume what isn't.
