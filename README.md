@@ -21,7 +21,7 @@ bottom of it.
 
 > **What is proven, and what is not:**
 > [docs/app-parity.md](docs/app-parity.md#what-is-actually-proven-about-the-apps)
-> is the single table. Push has never been confirmed on a physical device.
+> is the single table. Push is confirmed on both platforms as of 3 Sep 2026.
 
 | | |
 |---|---|
