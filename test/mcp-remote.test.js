@@ -815,6 +815,68 @@ test('a body that will not parse is not reported as an outage', async () => {
   assert.equal(/retrying is reasonable/.test(text), false, 'still advising a retry that cannot work');
 });
 
+// --- the Worker must not fetch its own hostname ------------------------------
+
+test('a localFetch is used instead of going out to the network', async () => {
+  // The MCP server speaks to the fleet over HTTP so the same code runs as a
+  // stdio binary on a laptop. Served in-process that means the coordinator
+  // calls itself — and on Cloudflare "itself" is its own public hostname, so
+  // every tool call became a subrequest re-entering the Worker from outside.
+  //
+  // That is the one path the Node coordinator does not have, and where a beta
+  // tester's `error code: 1101` appeared. Whether or not it is the cause, a
+  // Worker fetching its own hostname to reach code it is already running is
+  // worth removing: a subrequest, double the latency, and the reason there was
+  // an SSRF surface here at all.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  /** @type {string[]} */
+  const wentLocal = [];
+  /** @type {string[]} */
+  const wentOut = [];
+
+  const deps = /** @type {any} */ ({
+    authorizations: { knows: () => true },
+    verifyCredential: async () => ({ email: 'e@x.com' }),
+    verifyIdentity: async () => ({ ok: false, status: 401, text: 'no' }),
+    issueCredential: async () => ({ token: 'fwk_x' }),
+    save: () => {},
+    signIn: {},
+    selfOrigin: 'https://fleet.example',
+    localFetch: async (/** @type {any} */ u) => {
+      wentLocal.push(String(u));
+      return { status: 200, json: async () => ({ ok: true, text: 'listed' }) };
+    },
+  });
+
+  const globalFetch = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (
+    async (/** @type {any} */ u) => {
+      wentOut.push(String(u));
+      return { status: 200, json: async () => ({ ok: true, text: 'from the network' }) };
+    }
+  );
+  try {
+    const r = await mcpRoutes(
+      {
+        method: 'POST',
+        path: '/mcp',
+        origin: 'https://fleet.example',
+        query: new URLSearchParams(),
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fleet_list', arguments: {} } },
+        authorization: 'Bearer fwk_a_b',
+      },
+      deps,
+    );
+    assert.equal(r.status, 200);
+    assert.match(String(r.json.result.content[0].text), /listed/);
+  } finally {
+    globalThis.fetch = globalFetch;
+  }
+
+  assert.equal(wentLocal.length, 1, 'the in-process route was not used');
+  assert.deepEqual(wentOut, [], 'the Worker went out to the network to reach itself');
+});
+
 // --- SSRF: the Host header must not choose where we send things -------------
 
 test('a spoofed Host cannot steer the coordinator\'s outbound request', async (t) => {
