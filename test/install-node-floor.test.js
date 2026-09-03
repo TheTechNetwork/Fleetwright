@@ -201,3 +201,45 @@ test('Renovate can see the nvm pin, and would see a change to it', async () => {
   assert.match(sh, new RegExp(`NVM_RELEASE=${matched.groups.currentValue}\\b`));
   assert.match(sh, /nvm-sh\/nvm\/\$NVM_RELEASE\/install\.sh/);
 });
+
+test('the installer picks a node that WORKS, not the first one it finds', () => {
+  // REPORTED FROM A REAL INSTALL. find_node returned on its first hit, which is
+  // `command -v node`. On a box that has never had node, that misses and it
+  // falls through to the nvm and fnm search — which is why it worked on a clean
+  // host. On a box with the DISTRIBUTION's node installed, /usr/bin/node wins,
+  // and Debian ships 20: the installer refused a machine where prereq.sh had
+  // put 24 in the run user's home minutes earlier, and named the wrong node in
+  // the error.
+  //
+  // "Found something" is not the same question as "found the thing that works",
+  // and the two only diverge on boxes that are not fresh — which is every box
+  // after the first install.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  // Candidates are ENUMERATED rather than returned one at a time.
+  assert.match(sh, /^node_candidates\(\) \{/m, 'there is no candidate list to choose from');
+  assert.equal(/command -v node 2>\/dev\/null && return 0/.test(sh), false,
+    'find_node returns on its first hit again');
+
+  const fn = /find_node\(\) \{[\s\S]*?\n\}/.exec(sh);
+  assert.ok(fn, 'find_node is gone');
+  // It compares against the floor rather than accepting whatever it found.
+  assert.match(fn[0], /-ge "\$NODE_FLOOR"/);
+  // And falls back to the first candidate when none qualifies, so the refusal
+  // can say WHICH node it looked at rather than "node is not installed" on a
+  // box that plainly has one.
+  assert.match(fn[0], /\[ -n "\$first" \]/);
+
+  // The nvm and fnm roots are still searched — that is where prereq.sh puts it.
+  assert.match(sh, /\.nvm\/versions\/node/);
+  assert.match(sh, /sort -V/, 'v9.9.9 would beat v24.10.0');
+});
+
+test('prereq says so when the new node is not the one on PATH', () => {
+  // `node -v` in a shell can print something older, which reads as the script
+  // having lied. The installer uses an absolute path and does not care what is
+  // on PATH; a person comparing the two very much does.
+  const sh = readFileSync(new URL('../install/prereq.sh', import.meta.url), 'utf8');
+  assert.match(sh, /your shell's/);
+  assert.match(sh, /that is expected, and the services use the one above/);
+});

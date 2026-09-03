@@ -429,24 +429,57 @@ NODE_FLOOR=24
 #
 # So: ask the run user's own login shell, then look where the common installers
 # actually put things. Same treatment `claude` already gets below.
-find_node() {
-  command -v node 2>/dev/null && return 0
+# Every node this box has, in preference order. Emitting them all rather than
+# returning the first is what fixes the bug below.
+node_candidates() {
+  command -v node 2>/dev/null || true
   # The login shell of whoever invoked sudo — this is what picks up nvm's and
   # asdf's shell functions and shims.
-  as_user 'command -v node' 2>/dev/null && return 0
+  as_user 'command -v node' 2>/dev/null || true
   for candidate in \
       /usr/local/bin/node /usr/bin/node /snap/bin/node \
       "$USER_HOME/.local/bin/node" "$USER_HOME/.volta/bin/node" "$USER_HOME/.asdf/shims/node" \
       /home/linuxbrew/.linuxbrew/bin/node; do
-    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    [ -x "$candidate" ] && printf '%s\n' "$candidate"
   done
   # nvm and fnm keep one directory per version; take the newest. sort -V, not
   # sort — otherwise v9.9.9 beats v24.10.0.
   for root in "$USER_HOME/.nvm/versions/node" "$USER_HOME/.local/share/fnm/node-versions" "$USER_HOME/.fnm/node-versions"; do
     [ -d "$root" ] || continue
     newest="$(ls -1d "$root"/*/bin/node "$root"/*/installation/bin/node 2>/dev/null | sort -V | tail -1)"
-    [ -n "$newest" ] && [ -x "$newest" ] && { printf '%s\n' "$newest"; return 0; }
+    [ -n "$newest" ] && [ -x "$newest" ] && printf '%s\n' "$newest"
   done
+}
+
+# THE NEWEST-ENOUGH NODE, NOT THE FIRST ONE.
+#
+# This returned on the first hit, which is `command -v node`. On a box that has
+# never had node it falls through to the nvm and fnm search and works — which is
+# why it worked on a clean host. On a box with the DISTRIBUTION'S node
+# installed, /usr/bin/node wins, and Debian ships 20: the installer refused a
+# machine where prereq.sh had just put 24 in the run user's home, minutes
+# earlier, and named the wrong one in the error.
+#
+# Reported from a real install, and the shape is one this script has already
+# paid for once — "found something" is not the same question as "found the
+# thing that works", and the two only diverge on boxes that are not fresh.
+#
+# Falls back to the first candidate when none is new enough, so the refusal can
+# still say WHICH node it looked at rather than "node is not installed" on a box
+# that plainly has one.
+find_node() {
+  first=""
+  for candidate in $(node_candidates); do
+    [ -x "$candidate" ] || continue
+    [ -n "$first" ] || first="$candidate"
+    major="$(node_major "$candidate" 2>/dev/null || true)"
+    case "$major" in ''|*[!0-9]*) continue ;; esac
+    if [ "$major" -ge "$NODE_FLOOR" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  [ -n "$first" ] && { printf '%s\n' "$first"; return 0; }
   return 1
 }
 
