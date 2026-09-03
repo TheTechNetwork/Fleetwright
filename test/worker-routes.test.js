@@ -290,11 +290,52 @@ test('a real failure is still a real failure', async () => {
       },
     }),
   };
-  await assert.rejects(
-    worker.fetch(
-      new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
-      /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
-    ),
-    /undefined is not a function/,
+  // It used to assert the throw PROPAGATED, which was the right test until the
+  // top-level guard started answering JSON — a Worker that throws hands the
+  // caller a Cloudflare error page, and no client can read one.
+  //
+  // The property that matters is unchanged and is what this asserts now: a real
+  // fault is NOT mistaken for a Durable Object reset and quietly retried. It
+  // comes back as an internal error, once.
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
   );
+  assert.equal(res.status, 500);
+  const body = /** @type {any} */ (await res.json());
+  assert.equal(body.error.code, 'internal');
+  assert.equal(body.error.code === 'restarting', false, 'a genuine fault was treated as a redeploy');
+});
+
+// --- a throw is never an HTML error page ------------------------------------
+
+test('an unhandled throw answers JSON, not a Cloudflare error page', async () => {
+  // A beta tester got `Unexpected token 'e', "error code: 1101" is not valid
+  // JSON` from an MCP call. 1101 is Cloudflare's "the Worker threw", and what
+  // reaches the caller is Cloudflare's error PAGE — so every JSON client gets a
+  // parse error naming a token and has to work backwards from a five-character
+  // code to "something crashed upstream".
+  //
+  // This does not fix the throw (#313 is still unexplained and unreproduced).
+  // It fixes the shape: a caller gets a reason, and the exception still reaches
+  // the reporter.
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        throw new TypeError('something upstream exploded');
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/hosts', { headers: { authorization: 'Bearer a-token-at-least-16ch' } }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(res.status, 500);
+  const body = /** @type {any} */ (await res.json());
+  assert.equal(body.error.code, 'internal');
+  // Says whose fault it is, and that retrying will not help — the two facts the
+  // parse error withheld.
+  assert.match(body.text, /fault here/);
+  assert.match(body.text, /do it again/);
 });

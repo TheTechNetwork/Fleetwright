@@ -403,7 +403,62 @@ const handler = {
 // What it may send is decided in ./sentry.js, and the short version is: not the
 // URL's query, not a header, not a body. This coordinator carries a credential
 // on nearly every request.
-export default Sentry.withSentry(sentryOptions, handler);
+/**
+ * The handler, wrapped so a throw is never an HTML error page.
+ *
+ * A beta tester got `Unexpected token 'e', "error code: 1101" is not valid
+ * JSON` from an MCP tool call. 1101 is Cloudflare's "the Worker threw a
+ * JavaScript exception", and what reaches the caller in that case is
+ * Cloudflare's error PAGE — so every client parsing JSON gets a parse error
+ * naming a token, and has to work backwards from a five-character code to
+ * "something crashed upstream".
+ *
+ * THIS DOES NOT FIX THE THROW. The throw is still unexplained: the Node
+ * coordinator answers the same call cleanly and it has not been reproduced
+ * (#313). What it fixes is the shape of the failure — a caller gets JSON with
+ * a reason, and Sentry gets the exception with a stack, which is the pair that
+ * makes the next occurrence diagnosable instead of archaeological.
+ *
+ * REPORTED EXPLICITLY, because catching it means `withSentry` no longer will.
+ * Handling an error and reporting one are different jobs, and a catch that
+ * quietly does the first at the cost of the second turns a crash into a
+ * mystery — which is the failure this whole issue is about.
+ */
+const guarded = {
+  /**
+   * @param {Request} request
+   * @param {any} env
+   * @param {any} ctx
+   */
+  async fetch(request, env, ctx) {
+    try {
+      return await handler.fetch(request, env, ctx);
+    } catch (e) {
+      const message = String(/** @type {any} */ (e)?.message || e);
+      console.error(`worker: unhandled on ${new URL(request.url).pathname}: ${message}`);
+      // The stack, to the one place that keeps stacks. Without this the catch
+      // below would make every future 1101 invisible rather than merely
+      // confusing.
+      try {
+        Sentry.captureException(e);
+      } catch {
+        // Reporting must never be the thing that fails the request.
+      }
+      return json(
+        {
+          ok: false,
+          error: { code: 'internal' },
+          text:
+            'This coordinator threw while handling your request. That is a fault here rather than anything ' +
+            'about what you sent, and it has been reported — retrying the same call will most likely do it again.',
+        },
+        500,
+      );
+    }
+  },
+};
+
+export default Sentry.withSentry(sentryOptions, guarded);
 
 
 /**
