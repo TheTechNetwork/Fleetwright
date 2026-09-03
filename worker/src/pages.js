@@ -162,6 +162,10 @@ deliberate: a coordinator with no credential is remote control of every machine
 in the fleet for whoever finds the URL. The Worker says so, and names the
 command. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
 is DNS and four secrets.</p>
+<p><strong>Sign-in still works with the apps from the stores</strong> — you need no
+Apple or Google setup of your own for it. What you cannot self-host is
+<em>push</em>: a notification is addressed to one specific app, so waking these
+apps needs our credentials. Your fleet works without it, and says so.</p>
 
 <footer>
   <a href="https://github.com/TheTechNetwork/Fleetwright">Source</a> ·

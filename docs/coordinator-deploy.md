@@ -197,6 +197,48 @@ Presented to the real coordinator it is now an **ordinary bad credential**,
 which is the answer it should always have had once the demo had a Worker of its
 own.
 
+## What a fork needs, and what it does not
+
+Two questions everybody asks, and one of the answers is the opposite of what
+people assume.
+
+**Sign-in needs nothing of yours.** The apps mint ID tokens against our Google
+and Apple client IDs; a coordinator only verifies the signature against the
+provider's public keys and then checks issuer, audience and allowlist. All
+three are public identifiers, already committed in `wrangler.toml`. Copy
+`AGENT_FLEET_AUTH_ISSUERS` and `AGENT_FLEET_AUTH_AUDIENCES`, set your own
+`AGENT_FLEET_AUTH_ALLOW`, and people sign in to your fleet with the App Store
+and Play builds. **No Firebase project. No Apple Developer account.**
+
+**Push cannot be self-hosted, and that is structural.** A device token is
+issued for a *specific app*. `src/fleet/push.js` sends to
+`apns-topic: network.thetech.fleetwright` with an APNs key from our Apple team,
+and to FCM with a service account for our Firebase project. Your coordinator
+has neither, so it cannot wake our app on anybody's phone. Unset those secrets
+and push is logged instead of sent, and says so — the apps still work by
+pulling.
+
+The alternative is building your own apps: your own bundle id, Firebase
+project, Apple team and store listings. That is a real cost and it is
+out of proportion to changing one hostname, which is why a **push relay** is on
+the roadmap ([#348](https://github.com/TheTechNetwork/Fleetwright/issues/348)):
+your coordinator posts "wake this device", we forward it, and the relay never
+sees what the notification is about.
+
+**The GitHub App callback is the third case, and it is only a convenience.**
+`authorizeUrl()` sends `redirect_uri` explicitly and GitHub matches it against
+the App's registered list — on purpose, so one deployment cannot send its users
+to another's coordinator. Your origin is not on ours, so that flow refuses.
+Register your own GitHub App (free) and set `AGENT_FLEET_GITHUB_CLIENT_ID` plus
+the secret. Nothing else depends on it: `connect github` with a pasted token
+and `connect cloudflare` need no callback and work on any coordinator anywhere.
+
+**There is no shared coordinator and there is not going to be one.**
+[`trust.md`](./trust.md) has coordinator → host as *trusted absolutely*: a
+coordinator can start a dangerous-mode session on any host in its fleet and
+read the credential file out of it. That is a fine thing to hold over your own
+machines and not something to hold over a stranger's.
+
 ## Point a host at it
 
 In `/etc/agent-fleet-sidecar.env` on each box:
