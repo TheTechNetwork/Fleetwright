@@ -688,7 +688,9 @@ test('our deployment switches it on, and the switch is a var rather than a secre
   // A [vars] entry, not `wrangler secret put`: it authorises nothing and
   // configures something, and Cloudflare keeps vars and secrets in ONE
   // namespace — so a name that is both is a deploy that clobbers the secret.
-  const toml = readFileSync(new URL('../worker/wrangler.toml', import.meta.url), 'utf8');
+  // Ours, which is wrangler.production.toml — the default config deliberately
+  // sets no vars at all. See test/fork-safe-config.test.js.
+  const toml = readFileSync(new URL('../worker/wrangler.production.toml', import.meta.url), 'utf8');
   const settings = toml.replace(/^\s*#.*$/gm, '');
   assert.match(settings, /AGENT_FLEET_PUSH = "1"/, 'our own deployment has push off');
   assert.ok(

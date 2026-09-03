@@ -257,12 +257,33 @@ unchanged is not neutral — these are the values that do something:
 | `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
 | `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
 
-**This list is the defect, not the documentation of it.** A committed config
-that is one deploy away from admitting strangers to somebody's fleet is the
-wrong default no matter how well it is described, and the fix — a fork-safe
-`wrangler.toml` with our values in a production overlay — is
-[tracked separately](https://github.com/TheTechNetwork/Fleetwright/issues/353)
-because getting the Wrangler environment semantics wrong breaks our own deploy.
+**That list WAS the defect, and it is fixed rather than documented.** A
+committed config one deploy away from admitting strangers to somebody's fleet is
+the wrong default no matter how well it is described.
+
+There are two files now, split by ownership:
+
+| | |
+|---|---|
+| `worker/wrangler.toml` | **The fork-safe default.** No routes, an empty `[vars]`, and a comment naming every variable you might set with what happens if you do not. Deploying it unchanged gives a coordinator that admits nobody and reaches nobody — which is the right thing for a config that names no owner |
+| `worker/wrangler.production.toml` | **Ours**, and it says so in its first line. Deployed by CI when the `WRANGLER_CONFIG` repository variable names it, which our repository sets and a fork does not |
+
+Everything structural — the Durable Object, the migrations, the rate limits — is
+identical in both and pinned equal by `test/fork-safe-config.test.js`, because a
+fork needs those exactly as much as we do. Duplication is the cost; two copies
+that must agree and are never compared is how one of them silently stops
+matching, and for `[[migrations]]` that means a deploy that cannot find its
+class.
+
+**The allowlist is in neither.** It is a `wrangler secret`, synced by CI from a
+repository variable. It decides who can reach a fleet and does not belong in a
+public repository — and the secret block at the bottom of `wrangler.toml` has
+listed it as a secret all along. The `[vars]` entry was the bug, and because
+Cloudflare keeps vars and secrets in one namespace, every deploy was clobbering
+the synced secret with the committed list.
+
+Migrating our own deployment across this needs steps taken **before** the merge —
+see [`merge-checklist.md`](./merge-checklist.md).
 
 Two more, outside `wrangler.toml`:
 

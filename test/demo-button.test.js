@@ -26,7 +26,11 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const settings = (toml) => toml.replace(/^\s*#.*$/gm, '');
 
 const WRANGLER = read('worker/wrangler.demo.toml');
-const COORDINATOR = read('worker/wrangler.toml');
+// OUR values live in wrangler.production.toml now, not in wrangler.toml.
+// The default config is the fork-safe one — it names nobody, because a fork
+// that deployed the old file inherited our allowlist. See
+// test/fork-safe-config.test.js.
+const COORDINATOR = read('worker/wrangler.production.toml');
 const IOS = read('apps/ios/Fleetwright/Demo.swift');
 const ANDROID = read('apps/android/app/src/main/java/network/thetech/fleetwright/Demo.kt');
 

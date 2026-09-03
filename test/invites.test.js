@@ -239,7 +239,9 @@ test('the email binding is configured, and configuring it did not orphan a var',
   // So the file is PARSED rather than read, and the vars that must survive are
   // named. A test that only checked the binding exists would have passed on a
   // file that had broken authentication.
-  const toml = readFileSync(new URL('../worker/wrangler.toml', import.meta.url), 'utf8');
+  // OUR config. The default one has an empty [vars] on purpose, so the
+  // orphaning this guards against can only be observed here.
+  const toml = readFileSync(new URL('../worker/wrangler.production.toml', import.meta.url), 'utf8');
   // Minimal reader: table headers and `key = "value"` at top level, which is
   // all this assertion needs and avoids a dependency for one file.
   const vars = new Set();
@@ -253,9 +255,16 @@ test('the email binding is configured, and configuring it did not orphan a var',
     if (kv && table === 'vars') vars.add(kv[1]);
   }
 
-  for (const name of ['AGENT_FLEET_AUTH_ALLOW', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DOCS_URL']) {
+  // AGENT_FLEET_AUTH_ALLOW is NOT in this list any more, and its absence is the
+  // fix rather than an omission: it is a `wrangler secret` now, because it
+  // decides who can reach a fleet and does not belong in a public repository.
+  // A `[vars]` entry of that name would CLOBBER the secret on every deploy —
+  // Cloudflare keeps the two in one namespace — so it must stay absent.
+  for (const name of ['AGENT_FLEET_AUTH_AUDIENCES', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DOCS_URL']) {
     assert.ok(vars.has(name), `${name} fell out of [vars] — sign-in or the docs link would break silently`);
   }
+  assert.equal(vars.has('AGENT_FLEET_AUTH_ALLOW'), false,
+    'the allowlist is a var again, and a deploy would clobber the secret of the same name');
   assert.ok(vars.has('AGENT_FLEET_INVITE_FROM'), 'no sender address, so no invitation email can be sent');
   assert.match(toml, /\[\[send_email\]\]/, 'the email binding is not declared');
 });
