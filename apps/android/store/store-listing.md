@@ -67,7 +67,7 @@ DELIBERATELY SMALL
 
 No analytics. No advertising. No third-party trackers. The only network traffic is between this app and the coordinator address you typed in, and the only data it holds is that address, this device's credential, the address you signed in with, and whatever your coordinator returns.
 
-Requires Android 16 or later.
+Requires Android 11 or later.
 ```
 
 ---
