@@ -105,13 +105,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     if let url = crumb.data?["url"] as? String {
                         crumb.setData(value: Self.scrubbed(url), key: "url")
                     }
-                    // REDACTED RATHER THAN REMOVED. Removal would need a second
-                    // API to guess at, and a header that is visibly withheld is
-                    // better than one that silently was: somebody reading the
-                    // breadcrumb can tell scrubbing happened.
-                    if crumb.data?["headers"] != nil {
-                        crumb.setData(value: "[redacted]", key: "headers")
-                    }
+                    // REMOVED, not replaced with a marker. The first version
+                    // wrote "[redacted]" and justified it as "removal would
+                    // need a second API to guess at" — which was an excuse for
+                    // not looking. The same call removes: setDataValue:forKey:
+                    // takes a `nullable id`, and its implementation says so —
+                    // "setValue:forKey: removes the key when value is nil".
+                    //
+                    // Worth the difference. A marker is data this app INVENTED
+                    // and sent to a third party, and the next person reading a
+                    // breadcrumb has to work out whether Sentry captured a
+                    // header called "[redacted]" or whether we put it there.
+                    // Absent is unambiguous.
+                    crumb.setData(value: nil, key: "headers")
                     return crumb
                 }
                 return event
