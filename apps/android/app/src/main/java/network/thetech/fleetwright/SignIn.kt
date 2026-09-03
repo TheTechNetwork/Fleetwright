@@ -73,7 +73,26 @@ object SignIn {
      *
      * See app/build.gradle.kts, which reads it out of google-services.json.
      */
-    fun serverClientId(): String? = BuildConfig.GOOGLE_WEB_CLIENT_ID?.takeIf { it.isNotBlank() }
+    fun serverClientId(): String? {
+        // NOT AN UNNECESSARY SAFE CALL, whatever the compiler says about it.
+        //
+        // AGP declares BuildConfig fields non-null, so Kotlin believes this
+        // cannot be null. build.gradle.kts emits the literal `null` when there
+        // is no google-services.json — deliberately, so a fork building without
+        // Firebase gets a clear refusal at the button rather than a sign-in
+        // attempt with an empty client id.
+        //
+        // So the warning is Kotlin's type information being wrong, not this
+        // code. Deleting the `?.` to silence it would turn a working refusal
+        // into a NullPointerException on exactly the builds the null exists
+        // for — and those are the builds nobody here runs, which is how it
+        // would have shipped.
+        //
+        // The explicit nullable type is the honest fix: it tells Kotlin what
+        // the field can actually hold.
+        val configured: String? = BuildConfig.GOOGLE_WEB_CLIENT_ID
+        return configured?.takeIf { it.isNotBlank() }
+    }
 
     /**
      * Ask Google who this is, and return the raw ID token.

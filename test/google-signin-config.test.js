@@ -83,3 +83,25 @@ test('the app and the coordinator agree on the audience', () => {
     `google-services.json's web client (${id}) is not in AGENT_FLEET_AUTH_AUDIENCES`,
   );
 });
+
+test('the null a fork gets is still handled, whatever the compiler believes', () => {
+  // Kotlin warns "Unnecessary safe call on a non-null receiver" here, because
+  // AGP declares BuildConfig fields non-null. It is wrong: build.gradle.kts
+  // emits the literal `null` when there is no google-services.json, which is
+  // the whole point — a fork building without Firebase gets a clear refusal at
+  // the button rather than a sign-in attempt with an empty client id.
+  //
+  // Taking the compiler's advice would turn that refusal into a
+  // NullPointerException, on exactly the builds nobody here runs. So this pins
+  // both halves: Gradle still emits null, and SignIn still treats the field as
+  // nullable.
+  assert.match(GRADLE, /\?: "null"/, 'gradle no longer emits null for a missing google-services.json');
+  assert.match(
+    SIGNIN,
+    /val configured: String\? = BuildConfig\.GOOGLE_WEB_CLIENT_ID/,
+    'SignIn no longer treats the client id as nullable',
+  );
+  // And the refusal it produces names the build, because this screen has been
+  // reported three times about three different causes.
+  assert.match(SIGNIN, /Build \$\{BuildConfig\.VERSION_CODE\}/);
+});
