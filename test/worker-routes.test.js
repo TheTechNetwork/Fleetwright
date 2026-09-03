@@ -81,6 +81,29 @@ test('the shim is six lines and no installer, so the source still lives in the r
   }
 });
 
+test('/prereq redirects to the prerequisite script beside the installer', async () => {
+  // A redirect rather than a shim, and the difference is whether there is
+  // anything to inject. /install generates six lines because it carries the
+  // address somebody typed; a prerequisite is the same on every box, so the
+  // old reasoning applies in full — served by the place that has the source,
+  // so it cannot go stale here and cannot be edited here.
+  const res = await get('/prereq', {
+    AGENT_FLEET_INSTALL_URL: 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh',
+  });
+  assert.equal(res.status, 302);
+  assert.equal(
+    String(res.headers.get('location')),
+    'https://raw.githubusercontent.com/someone/theirs/main/install/prereq.sh',
+  );
+
+  // DERIVED FROM THE INSTALL URL, so both come from one repository at one ref.
+  // Running one fork's prerequisites and another's installer is not a state
+  // anybody should be able to reach by configuration.
+  const unset = await get('/prereq');
+  assert.equal(unset.status, 404);
+  assert.match(await unset.text(), /AGENT_FLEET_INSTALL_URL/);
+});
+
 test('the shim carries an address and never a credential', async () => {
   // THE ADDRESS IS NOT A SECRET — it is the URL somebody typed, and it is in
   // their shell history. Joining still costs a six-digit pin, minted by a
