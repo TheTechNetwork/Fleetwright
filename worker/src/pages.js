@@ -115,16 +115,18 @@ finding a laptop.</p>
 
 <h2>What it does</h2>
 <ul>
-  <li>Start a session on any machine in your fleet, and see every session across all of them in one list.</li>
+  <li>Start a session on any machine in your fleet — with a task, or idle — and see every session across all of them in one list.</li>
   <li>Get a notification when a session stops or is waiting for an answer — and answer it from the notification.</li>
   <li>Read what a session is doing, browse and edit the files it is working on, and stop it when it is done.</li>
   <li>Drive the fleet from Claude itself, over MCP.</li>
 </ul>
 
 <div class="note">
-  <p><b>A session needs a person.</b> Fleetwright starts sessions and watches
-  them; it does not write their instructions. A session you start comes up
-  waiting for you, and you drive it from the app or its Remote Control link.</p>
+  <p><b>Fleetwright does not write a session's instructions.</b> You start one
+  on a <em>task</em> — a file on the machine that runs it, chosen by name — and
+  it comes up already working. Pick no task and it waits for you instead, and
+  says so. Either way, what a session is told to do is decided on the machine,
+  not by anything in between.</p>
 </div>
 
 <h2>What it does not do</h2>
