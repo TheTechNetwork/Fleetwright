@@ -102,24 +102,55 @@ npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
-## A demo fleet, on its own domain
+## A demo fleet, on its own Worker
 
-**`fleetdemo.thetech.network`**, same Worker, same deploy. `custom_domain =
-true` in `routes` means wrangler creates the DNS record and the domain binding
-itself — adding it was one line and nothing manual.
+**`fleetdemo.thetech.network`**, a separate script:
 
-The domain is the boundary, and that is a stronger claim than the token ever
-supported. `worker.js` matches `AGENT_FLEET_DEMO_HOST` **above the host
-routes**, so a request there never reaches enrolment, a websocket, sign-in, or
-the Durable Object. Not "the demo branch runs first" — the routes are not
-reached at all, and no credential presented on that hostname can change the
-answer.
+```
+cd worker && npx wrangler deploy --config wrangler.demo.toml
+```
 
-The position matters and is the reason the check is where it is: if it sat
-where the token check sits, `/host/connect` on the demo domain would have
-returned earlier and joined the real fleet. **Demo must not become a way in**,
-and the way to guarantee that is to answer before the door exists rather than
-to remember not to open it.
+It serves two things — the invented fleet in `worker/src/demo.js`, and the
+product page at `/docs`. Nothing else.
+
+**It used to be the same Worker on a second domain**, and the argument for that
+was real: `worker.js` matched `AGENT_FLEET_DEMO_HOST` above the host routes, so
+a request there never reached enrolment, a websocket, sign-in, or the Durable
+Object. It was tested, and the test asserted the *position* of the check.
+
+That is the problem with it. It was an argument about the **order of branches**
+inside a bundle that also holds the Durable Object binding, the GitHub App
+client secret and the APNs key — and order is a property of code that gets
+edited. The coordinator is the thing holding the fleet; it should not also be
+the unauthenticated, cacheable surface a stranger loads HTML from.
+
+Now there is no argument to make. `wrangler.demo.toml` has **no
+`durable_objects` binding, no `send_email`, no KV and no secrets**, and
+`demo-worker.js` imports exactly two files. A bug in it cannot reach a session
+because nothing that could is in scope. The config is short enough to read in
+one sitting, and reading it is the whole audit.
+
+Two smaller things fell out of it:
+
+- **The demo token now authorises nothing.** It is not checked, because on a
+  Worker with no fleet there is nothing to separate a curious person from —
+  and a check that can only ever pass is a check nobody maintains. Both apps
+  still send it, because a client with no credential is not signed in.
+- **The release cadences are separate.** The page describing the product
+  changes when the words are wrong; the coordinator changes when the fleet
+  does. Shipping the second to fix the first means a deploy that evicts every
+  live Durable Object, for a typo.
+
+### `/docs` on the coordinator is a redirect
+
+`AGENT_FLEET_DOCS_URL` in `wrangler.toml` points `/docs` at the demo Worker
+with a 302. **Unset means 404**, which is the right answer for a self-hosted
+fleet: somebody else's private coordinator on their own domain has no product
+page to point at. Ours is set; every fork gets nothing.
+
+302 rather than 301 — a permanent redirect is cached by browsers in a way that
+outlives the deploy that set it, and this value is one line of configuration
+away from changing.
 
 Both apps have a **"Look around the demo fleet"** button that points at it.
 There is no longer a paste-a-credential field in either app: asking somebody to
@@ -132,49 +163,146 @@ pointed at a domain that answers nothing.
 Getting back in when sign-in itself is broken is now curl with
 `AGENT_FLEET_API_TOKEN`, not a field on every user's settings screen.
 
-## A demo token, for App Store review
+## The demo token, which no longer authorises anything
 
 App Store review needs credentials that work, and no reviewer's address is on
 anybody's allowlist — so signing in cannot be the answer, and
-`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. So there is a
-third, optional token, and the apps have a collapsed "use a credential instead"
-field to put it in:
-
-It is a **`[vars]` entry in `wrangler.toml`, not a secret** — committed, and
-deployed with the code:
+`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. That is why a
+third token exists, in `wrangler.demo.toml`, committed rather than kept secret:
 
 ```toml
 AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 ```
 
-That is deliberate. The string authorises exactly one thing: reading the
-fabricated fleet. There is nothing behind it to reach, so publishing it costs
-Worker invocations and nothing else — and in exchange there is no secret to
-rotate, no manual step before a deploy, and no way for App Store review to be
-blocked on somebody being awake to paste a value.
+**`demo-worker.js` does not check it.** When the demo lived in the coordinator,
+this string was what separated a curious person from the real routes. On a
+Worker with no fleet binding there is nothing to separate — and a check that
+can only ever pass is a check nobody maintains, and the maintenance is where
+the bug would be. Both apps keep sending it: a client with no credential is not
+signed in, and a string obviously prefixed `demo-` is worth more in a log than
+in a comparison.
 
-It is rate limited to **60 requests a minute per client address** — far more
-than a person tapping around an app, far less than anything worth doing with a
-free tier. Keyed on the address rather than the token, so one abuser cannot
-lock out an App Store reviewer by exhausting a shared budget.
+The demo Worker is rate limited to **60 requests a minute per client address** —
+far more than a person tapping around an app, far less than anything worth
+doing with a free tier. Keyed on the address rather than the credential, so one
+abuser cannot lock out an App Store reviewer by exhausting a shared budget.
 
-A request bearing it is answered from `worker/src/demo.js` — two invented
-hosts, three invented sessions, one of them waiting on a person. Verbs like
-`start` and `stop` reply plausibly and change nothing.
+Everything it answers comes from `worker/src/demo.js` — two invented hosts,
+three invented sessions, one of them waiting on a person. Verbs like `start`
+and `stop` reply plausibly and change nothing. Every reply carries
+`"demo": true`, so a support question is never ambiguous about which fleet
+somebody was looking at.
 
-**The safety property is structural.** The match happens in `worker.js` before
-`env.FLEET` is touched, so there is no code path from a demo request to a
-Durable Object, a host socket or a real session. Not "it checks first" — the
-object is never fetched. It is also refused for `/host/connect`, so a host
-presenting it is rejected like any other wrong token, and the Worker returns
-500 if the demo and real tokens are ever set to the same value rather than
-silently turning the whole coordinator into a toy.
+Presented to the real coordinator it is now an **ordinary bad credential**,
+which is the answer it should always have had once the demo had a Worker of its
+own.
 
-Every reply carries `"demo": true`, so a support question is never ambiguous
-about which fleet somebody was looking at.
+## What a fork needs, and what it does not
 
-Remove the var and none of this exists — the token stops being recognised
-and every request falls through to the real token check.
+Two questions everybody asks, and one of the answers is the opposite of what
+people assume.
+
+**Sign-in needs nothing of yours.** The apps mint ID tokens against our Google
+and Apple client IDs; a coordinator only verifies the signature against the
+provider's public keys and then checks issuer, audience and allowlist. All
+three are public identifiers, already committed in `wrangler.toml`. Copy
+`AGENT_FLEET_AUTH_ISSUERS` and `AGENT_FLEET_AUTH_AUDIENCES`, set your own
+`AGENT_FLEET_AUTH_ALLOW`, and people sign in to your fleet with the App Store
+and Play builds. **No Firebase project. No Apple Developer account.**
+
+**Push cannot be self-hosted, and that is structural.** A device token is
+issued for a *specific app*. `src/fleet/push.js` sends to
+`apns-topic: network.thetech.fleetwright` with an APNs key from our Apple team,
+and to FCM with a service account for our Firebase project. Your coordinator
+has neither, so it cannot wake our app on anybody's phone. Unset those secrets
+and push is logged instead of sent, and says so — the apps still work by
+pulling.
+
+The alternative is building your own apps: your own bundle id, Firebase
+project, Apple team and store listings. That is a real cost and it is
+out of proportion to changing one hostname, which is why a **push relay** is on
+the roadmap ([#348](https://github.com/TheTechNetwork/Fleetwright/issues/348)):
+your coordinator posts a notification and we deliver it with our credentials.
+
+It carries the real payload — a contentless wake was the first design and it is
+useless, because the whole point is answering from a lock screen and a wake
+cannot carry the options to answer with. So the promise is about **retention**:
+nothing about a notification is written down, the device token is used and
+dropped, and the only stored state is a rate-limit counter per fleet. That is
+specified in [`relay-terms.md`](./relay-terms.md), written before the code
+exists, because it is the kind of promise one log line breaks.
+
+**The GitHub App callback is the third case, and it is only a convenience.**
+`authorizeUrl()` sends `redirect_uri` explicitly and GitHub matches it against
+the App's registered list — on purpose, so one deployment cannot send its users
+to another's coordinator. Your origin is not on ours, so that flow refuses.
+Register your own GitHub App (free) and set `AGENT_FLEET_GITHUB_CLIENT_ID` plus
+the secret. Nothing else depends on it: `connect github` with a pasted token
+and `connect cloudflare` need no callback and work on any coordinator anywhere.
+
+### What a fork must change, and what happens if it does not
+
+`wrangler.toml` in this repository is **our** deployment's config. Deploying it
+unchanged is not neutral — these are the values that do something:
+
+| Setting | Unchanged, a fork gets |
+|---|---|
+| `AGENT_FLEET_AUTH_ALLOW` | **Four of our addresses admitted to their fleet.** `trust.md` has coordinator → host as *trusted absolutely*, so this is the one to change first |
+| `routes` (`custom_domain`) | `wrangler deploy` tries to bind a domain they do not own, and fails |
+| `SENTRY_DSN` | Their errors posted to **our** Sentry project |
+| `AGENT_FLEET_INSTALL_URL` | Their `/install` hands a root shell a script that installs **our** code. Unset is a 404 that says so; this is why it is a variable rather than a constant |
+| `AGENT_FLEET_DOCS_URL` | Their `/docs` redirects to our product page |
+| `AGENT_FLEET_GITHUB_*` | The App flow reaches GitHub and is refused there, because their origin is not on our App's redirect list. Confidently broken, where absent would be honest — register your own App, it is free |
+| `AGENT_FLEET_INVITE_FROM`, `[[send_email]]` | Invitations fail at send time; Cloudflare Email Sending needs a domain they control |
+| `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
+| `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
+
+**That list WAS the defect, and it is fixed rather than documented.** A
+committed config one deploy away from admitting strangers to somebody's fleet is
+the wrong default no matter how well it is described.
+
+There are two files now, split by ownership:
+
+| | |
+|---|---|
+| `worker/wrangler.toml` | **The fork-safe default.** No routes, an empty `[vars]`, and a comment naming every variable you might set with what happens if you do not. Deploying it unchanged gives a coordinator that admits nobody and reaches nobody — which is the right thing for a config that names no owner |
+| `worker/wrangler.production.toml` | **Ours**, and it says so in its first line. Deployed by CI when the `WRANGLER_CONFIG` repository variable names it, which our repository sets and a fork does not |
+
+Everything structural — the Durable Object, the migrations, the rate limits — is
+identical in both and pinned equal by `test/fork-safe-config.test.js`, because a
+fork needs those exactly as much as we do. Duplication is the cost; two copies
+that must agree and are never compared is how one of them silently stops
+matching, and for `[[migrations]]` that means a deploy that cannot find its
+class.
+
+**The allowlist is in neither.** It is a `wrangler secret`, synced by CI from a
+repository variable. It decides who can reach a fleet and does not belong in a
+public repository — and the secret block at the bottom of `wrangler.toml` has
+listed it as a secret all along. The `[vars]` entry was the bug, and because
+Cloudflare keeps vars and secrets in one namespace, every deploy was clobbering
+the synced secret with the committed list.
+
+Migrating our own deployment across this needs steps taken **before** the merge —
+see [`merge-checklist.md`](./merge-checklist.md).
+
+Two more, outside `wrangler.toml`:
+
+- **The sandbox image.** `sandbox.yml` publishes to
+  `ghcr.io/<your-org>/fleetwright-session`, and the hub used to pull ours
+  regardless — so a fork's CI built an image nothing consumed while its boxes
+  rebuilt locally every time. Set `AGENT_HUB_SANDBOX_IMAGE_OWNER` to your own
+  org, or `AGENT_HUB_SANDBOX_IMAGE` to a full reference.
+- **The apps.** Both are ours: bundle id, Firebase project, signing certificates
+  and store listings. A fork's users install our builds and type their own
+  coordinator address, which works and is the best fork-parity property here.
+  Rebuilding them is a different exercise — a new bundle id breaks the committed
+  `google-services.json`, and iOS device builds need an Apple team.
+
+**There is no shared coordinator and there is not going to be one.**
+[`trust.md`](./trust.md) has coordinator → host as *trusted absolutely*: a
+coordinator can start a dangerous-mode session on any host in its fleet and
+read the credential file out of it. That is a fine thing to hold over your own
+machines and not something to hold over a stranger's.
 
 ## Point a host at it
 

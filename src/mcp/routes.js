@@ -76,6 +76,8 @@ function bearer(header) {
  * @property {() => void} save
  * @property {{ google?: string|null, apple?: string|null }} signIn  client ids for the page
  * @property {string} selfOrigin  where to send intents — see below
+ * @property {typeof fetch} [localFetch]  how to reach the coordinator, when it
+ *   is not over the network. The Worker supplies one; see below.
  */
 
 /**
@@ -230,6 +232,25 @@ export async function mcpRoutes(req, deps) {
       credential: /** @type {string} */ (token),
       // NOT `origin`. See the note above the function.
       coordinator: deps.selfOrigin,
+      // AND ON THE WORKER, NOT OVER THE NETWORK AT ALL.
+      //
+      // The MCP server speaks to the fleet over HTTP so the same code can run
+      // as a stdio binary on a laptop. Served in-process that means the
+      // coordinator calls itself — and on Cloudflare "itself" is its own public
+      // hostname, so every tool call became a subrequest that re-entered the
+      // Worker from the outside.
+      //
+      // That is the one path the Node coordinator does not have, and it is
+      // where a beta tester's `error code: 1101` — Cloudflare for "the Worker
+      // threw" — appeared. Unproven: the deployed Worker answers /api/intent
+      // and /mcp cleanly for every unauthenticated probe, and the authenticated
+      // path needs a credential nobody has handed this session.
+      //
+      // Proven or not, a Worker fetching its own hostname to reach code it is
+      // already running is worth removing on its own terms: it spends a
+      // subrequest, doubles the latency of every tool call, and is the reason
+      // there was an SSRF surface to fix here at all.
+      ...(deps.localFetch ? { fetch: deps.localFetch } : {}),
     });
     return { status, json: body };
   }

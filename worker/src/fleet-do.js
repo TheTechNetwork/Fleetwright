@@ -198,6 +198,29 @@ export class Fleet {
       // coordinator, but "smaller" is not a reason to keep the shape that was
       // wrong there.
       selfOrigin: this.env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin,
+      // REACH THE COORDINATOR WITHOUT LEAVING THE PROCESS.
+      //
+      // We are already inside the object that answers /api/intent. Going out to
+      // our own public hostname to ask it something is a subrequest that
+      // re-enters this Worker from the internet — a whole round trip to reach
+      // code on this stack — and it is the only path the Node coordinator does
+      // not have. A beta tester's 1101 appeared on exactly that path.
+      //
+      // THE SAME ROUTE, NOT A SHORTCUT. It calls this.fetch with a synthesised
+      // request rather than core.dispatch directly, so the credential check,
+      // the visibility rules and the placement logic are the ones /api/intent
+      // already runs. A second way in is how two ways in come to disagree, and
+      // this file has that scar already.
+      localFetch: async (/** @type {any} */ input, /** @type {any} */ init) => {
+        const target = new URL(String(input));
+        return this.fetch(
+          new Request(target.toString(), {
+            method: init?.method || 'GET',
+            headers: init?.headers,
+            body: init?.body,
+          }),
+        );
+      },
       signIn: {
         // Google's web client, picked out of the audience list rather than set
         // twice — a separate variable would eventually disagree with the list
@@ -728,13 +751,17 @@ export class Fleet {
 
     if (url.pathname === '/api/devices' && request.method === 'POST') {
       const body = await readJson(request);
-      const r = this.core.registerDevice({
+      const r = await this.core.registerDevice({
         platform: String(body?.platform || ''),
         token: String(body?.token || ''),
         // The credential this registration belongs to, so revoking a phone can
         // stop the fleet talking to it. The Node coordinator does the same.
         clientId: client?.id,
         actor: client?.email || (body?.actor ? String(body.actor) : undefined),
+        // The phone's public key. Validated during registration rather than at
+        // send time: a key that cannot be imported is a registration that fails
+        // on every notification forever.
+        pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) await this.#saveDevices();
       return json(r, r.ok ? 200 : 400);

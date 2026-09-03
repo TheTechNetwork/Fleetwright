@@ -1,4 +1,4 @@
-# The intent protocol, v2
+# The intent protocol, v3
 
 The contract between the coordinator and a fleet host. This is the first thing
 built, ahead of anything that would use it, because §5 of `design.md` flags it as
@@ -233,11 +233,44 @@ Two limits the host imposes on this table, both covered in
 serves a fixed 60), and `actor` cannot reach agent-hub's `createdBy` at all
 (it hardcodes `web` for every HTTP caller).
 
-### Why v2, and what a v3 would cost
+### v3, and what a version bump costs
 
 The jump from eight verbs to thirteen was **one** version bump, and that was
 the whole reason they were designed together rather than shipped as they were
 asked for.
+
+**v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside
+it.** The second flag day, spent on the highest-ranked finding in both beta
+reports — a session could not be given anything to do. `brief` was stored and
+never delivered, so the loop the MCP server's own instructions taught (start →
+await → read the log) produced an idle REPL, an empty log, and no error
+anywhere, which is the worst shape a failure can have.
+
+The two halves cost differently and shipped together on purpose:
+
+- `profiles` is a **new verb**, so it is free — an old host answers
+  `unknown_verb`, which strands nothing.
+- `start { profile }` is a **new parameter**, which is the flag day. It is what
+  the version number was actually spent on.
+
+A second verb (`launch`) would have dodged the number. It was rejected:
+`start` and `launch` would accumulate separate parameters forever, and the only
+thing the second one buys is not writing down that the protocol changed.
+
+**Upgrade hosts first, then the coordinator.** A v3 host answers
+`unsupported_version` to a v2 coordinator and a v2 host answers it to a v3 one,
+so the fleet is visibly down either way rather than subtly wrong. The window is
+loud, which is the property to preserve; `agent-fleet update --restart` from
+the app is how a host crosses it without a shell.
+
+**The content never travels.** A profile is a file on the host —
+`/var/lib/agent-hub/profiles/<name>.md` — and the intent carries its name. That
+is [`wanted.md`](./wanted.md)'s rule kept rather than bent: *the coordinator may
+NAME a profile; it may never CARRY one.* Injected text is instructions to an
+agent with root in a container, so a coordinator that chose the words would be
+writing that agent's instructions — a much larger capability than the rest of
+this verb set combined, and the `reply { text }` argument in different clothes.
+There is still no way to send text into a session, at start or later.
 
 The asymmetry is worth knowing by heart, because it decides how much a change
 costs:

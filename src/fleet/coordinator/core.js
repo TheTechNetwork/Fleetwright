@@ -18,8 +18,9 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
+import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 
@@ -378,12 +379,41 @@ export class CoordinatorCore {
 
   /** @param {Record<string, any>} event */
   async #notify(event) {
-    // Filtered here as well as on revocation. The cascade above is the fix; this
-    // is the belt — a registration that somehow outlives its credential must
-    // not be told what a session is asking.
-    const devices = [...this.devices.values()].filter(
-      (d) => !d.clientId || !this.clients.clients.get(d.clientId)?.revokedAt,
-    );
+    // WHOSE SESSION THIS IS, resolved from the registry rather than carried on
+    // the event, because the host does not send it. A session the fleet has not
+    // heard of yet, or one nobody is recorded as having started, is
+    // unattributed — which everywhere else in this file means "the fleet's,
+    // which is to say the admin's".
+    const owner = event.name ? (this.registry.findSessions(event.name)[0]?.createdBy ?? null) : null;
+
+    // FILTERED FOR WHOSE PHONE IT IS, which it was not.
+    //
+    // This filtered on revocation alone, so every registered device in the
+    // fleet received every session's notification — the session name, the host,
+    // and since prompts started carrying the question, the QUESTION. On a lock
+    // screen. docs/security.md says a member is "Explicitly NOT trusted to: See
+    // or act on another member's sessions", and `list`, `/api/hosts` and
+    // `/api/events` all enforce that. Push was a fourth route and was not.
+    //
+    // It is the worst of the four to have missed. The others require somebody
+    // to go and look; this one arrives.
+    //
+    // A HOST-LEVEL EVENT STILL GOES TO EVERYONE, matching visibleEvents: which
+    // machines exist and what state they are in is fleet topology, not
+    // somebody's private work, and a box going offline is exactly the thing
+    // everybody needs to be told about.
+    const devices = [...this.devices.values()].filter((d) => {
+      const client = d.clientId ? this.clients.clients.get(d.clientId) : null;
+      // Belt as well as braces: a registration that somehow outlives its
+      // credential must not be told what a session is asking.
+      if (d.clientId && client?.revokedAt) return false;
+      if (!event.name) return true;
+      // No clientId means it was registered with the admin token, and an
+      // unattributed registration belongs to whoever operates the box — the
+      // same rule ownedBy() applies to an unattributed record.
+      if (!d.clientId || client?.admin) return true;
+      return ownedBy(owner, { email: String(d.actor || '').replace(/^fleet:/, ''), admin: false });
+    });
     if (!devices.length) return;
     const body = describeEvent(event);
     try {
@@ -524,14 +554,30 @@ export class CoordinatorCore {
    * coordinator expecting `fid` fails AFTER the version handshake agreed, which
    * is the worst-shaped failure this protocol has.
    *
-   * @param {{ platform: string, token: string, actor?: string, clientId?: string }} reg
+   * `pushKey` is the phone's P-256 public key, and supplying it is what makes
+   * this device's notifications unreadable to Apple, Google and anything we
+   * ever put in between. OPTIONAL, and it has to stay optional: an installed
+   * app that predates encryption registers without one and must keep working,
+   * which is why the sender falls back rather than refusing. See
+   * docs/push-encryption.md.
+   *
+   * VALIDATED HERE rather than at send time. A key that cannot be imported is
+   * a registration that fails on every notification forever, and the moment to
+   * say so is while somebody is looking at a settings screen — not silently,
+   * hours later, when a session needs an answer.
+   *
+   * @param {{ platform: string, token: string, actor?: string, clientId?: string, pushKey?: string }} reg
    */
-  registerDevice({ platform, token, actor, clientId }) {
+  async registerDevice({ platform, token, actor, clientId, pushKey }) {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
     if (typeof token !== 'string' || token.length < 8 || token.length > 4096) {
       return { ok: false, error: 'a push token is required' };
+    }
+    if (pushKey !== undefined && pushKey !== null && pushKey !== '') {
+      const checked = await checkPublicKey(pushKey);
+      if (!checked.ok) return { ok: false, error: checked.error };
     }
     const existing = this.devices.get(token);
     const device = {
@@ -545,6 +591,14 @@ export class CoordinatorCore {
       // questions themselves. Revoking a lost phone removed its ability to ASK
       // and left its ability to be TOLD, which is the wrong half.
       ...(clientId ? { clientId } : {}),
+      // KEPT ONLY WHEN SUPPLIED THIS TIME, never inherited from `existing`.
+      //
+      // A phone that reinstalls loses its private key — it was in the Keychain
+      // or the Keystore and both go with the app — so carrying the old public
+      // key forward would encrypt every future notification to a key nobody
+      // holds. The failure would be silent and permanent: delivery succeeds,
+      // decryption fails, and the person sees the fallback text forever.
+      ...(pushKey ? { pushKey } : {}),
       registeredAt: existing?.registeredAt ?? this.now(),
     };
     this.devices.set(token, device);
@@ -696,6 +750,27 @@ export class CoordinatorCore {
       return { ok: false, error: { code: 'unknown_verb' }, text: `unknown verb ${JSON.stringify(spec.verb)}` };
     }
 
+    // A CALLER'S TYPO IS A REFUSAL, NOT AN EXCEPTION.
+    //
+    // `buildIntent` throws on a malformed intent, which is right for a
+    // programming error inside this file and wrong for the case that actually
+    // happens: somebody posting `params: {session: "x"}` to /api/intent. It is
+    // called inside `send`, which is called inside a `.map` over the fan-out —
+    // so the throw left dispatch synchronously, past every handler, and became
+    // a Cloudflare error page.
+    //
+    // That is the "error code: 1101" a beta tester hit twice and reported as
+    // the fleet being down. It was their typo. Retrying could never have
+    // worked, and the coordinator told them retrying was reasonable.
+    //
+    // CHECKED HERE RATHER THAN IN `send` because the placement decision reads
+    // `params.name`: a bad params object should be refused before a scheduler
+    // makes any decision on the strength of it.
+    const shaped = checkParams(spec.verb, spec.params || {});
+    if (shaped.ok === false) {
+      return { ok: false, error: { code: shaped.code }, text: shaped.error };
+    }
+
     // Recorded BEFORE placement, and only for verbs that change something.
     //
     // Before placement, not after the work: an intent that was REFUSED — no
@@ -837,10 +912,22 @@ export class CoordinatorCore {
       // say "missing on deb14" instead of implying the fleet is uniform.
       const connections = mergeConnections(results);
 
+      // THE SAME QUESTION FOR PROFILES, and the attribution is the answer
+      // rather than decoration: a profile lives on one box, and `start` on a
+      // host that does not have it is refused. A merged list that lost which
+      // machine each came from would be a picker that sends people at the wrong
+      // one. Undefined rather than [] when no host answered with the key at
+      // all — a fleet of hosts too old to know the verb has not told us there
+      // are no profiles, and null is cannot-tell.
+      const profiles = results.some((r) => Array.isArray(r.profiles))
+        ? results.flatMap((r) => (r.profiles || []).map((/** @type {any} */ p) => ({ ...p, hostId: r.hostId })))
+        : undefined;
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
         ...(connections ? { connections } : {}),
+        ...(profiles ? { profiles } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.

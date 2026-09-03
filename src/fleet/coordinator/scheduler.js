@@ -23,8 +23,14 @@
 // landed elsewhere would report success against nothing.
 const PINNED = new Set(['resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge']);
 
+// PROFILES FANS OUT, and for the same reason `connect` does: the interesting
+// part is where the hosts DISAGREE. A profile is a file on one box, so asking
+// one machine what profiles exist answers with whatever that machine happens to
+// have and hides the one a person is looking for. It also decides where work
+// can go — `start { profile: 'x' }` is refused by a host without it — so a
+// picker built from one host's answer sends people at the wrong machine.
 /** Verbs answered by asking every host and merging. */
-const FANOUT = new Set(['list']);
+const FANOUT = new Set(['list', 'profiles']);
 
 /**
  * @typedef {object} Placement

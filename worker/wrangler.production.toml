@@ -1,0 +1,218 @@
+# OUR deployment of the coordinator, and nobody else's.
+#
+#   cd worker && npx wrangler deploy --config wrangler.production.toml
+#
+# WHY THIS FILE EXISTS. `wrangler.toml` used to be this file: our routes, our
+# allowlist, our Sentry project, our GitHub App, our invite sender — committed
+# as the repository's DEFAULT. A fork that followed the README's deploy button
+# and changed nothing got a coordinator that admitted four of our addresses to
+# their fleet, posted their errors to our Sentry, and served an installer that
+# put our code on their machines.
+#
+# The code was never wrong about any of it. `wrangler.toml` still says "Empty
+# ALLOW means nobody, deliberately" and sentry.js still says an unset DSN posts
+# nowhere. The committed VALUES defeated both. A guarantee the default config
+# overrides is not a guarantee.
+#
+# So the split is by ownership, not by capability: everything structural — the
+# Durable Object, the migrations, the rate limits — is identical in both files
+# and pinned equal by test/fork-safe-config.test.js, because a fork needs those
+# exactly as much as we do. What lives ONLY here is what is ours.
+#
+# THE ALLOWLIST IS NOT HERE EITHER. It is a `wrangler secret`, synced by CI —
+# it decides who can reach a fleet, it does not belong in a public repository,
+# and the secret block at the bottom of wrangler.toml has listed it as a secret
+# all along. The `[vars]` entry was the bug.
+
+name = "agent-fleet-coordinator"
+main = "src/worker.js"
+compatibility_date = "2026-01-15"
+
+# nodejs_als, NOT nodejs_compat, and the difference is the whole of the note
+# below. The Sentry SDK needs AsyncLocalStorage to associate an error with the
+# request that caused it; `nodejs_als` provides exactly that one API, while
+# `nodejs_compat` pulls in the whole polyfill surface this file spent a
+# paragraph declining. The objection was cold start, and it still stands — this
+# is the smallest flag that answers it.
+compatibility_flags = ["nodejs_als"]
+
+# nodejs_compat is not enabled, and that is a choice rather than a limitation.
+#
+# Workers runs npm packages and, with this flag, most of the node: built-ins —
+# so nothing here is off-limits. What the flag costs is bundle size and cold
+# start, and §4 picked this platform for a requirement measured in exactly that:
+# "Hey Siri, resume bigjob" from cellular, on a cold radio, in under a second.
+#
+# The code the Worker imports — coordinator/core.js and push.js, and what they
+# import in turn — happens to need only fetch and crypto.subtle, both of which
+# are standard here and in Node. So the flag buys nothing today.
+#
+# If something genuinely needs a node: built-in or an npm package that pulls
+# one in, add:
+#
+#     compatibility_flags = ["nodejs_compat", "nodejs_als"]
+#
+# UPDATE, 1 Sep 2026: `nodejs_als` is now set, for Sentry. That is the narrow
+# flag — one API, AsyncLocalStorage — and the reasoning above is unchanged for
+# the broad one. What error reporting DOES cost is bundle: 145 KB minified
+# before it and 327 KB after, measured rather than estimated. If a cold start
+# on cellular ever misses the second this file is written around, the SDK is
+# the first thing to try removing, and SENTRY_DSN being unset already disables
+# it without a deploy of code.
+#
+# and it will work. There is no rule being enforced; `wrangler deploy --dry-run`
+# in CI simply reports the truth either way.
+
+# The origin a host pins and a phone talks to. custom_domain = true makes
+# Cloudflare create and manage the DNS record and the certificate for it, which
+# is the difference between this and a plain route — there is nothing to point
+# anywhere by hand.
+#
+# The hostname matters more here than it looks: §5 has the host agent PIN the
+# coordinator origin, so changing it means editing every host's
+# /etc/agent-fleet-sidecar.env. It is not a value to churn.
+#
+# ONE DOMAIN, AND THE DEMO IS NO LONGER ON IT. `fleetdemo` used to be a second
+# custom domain on this same Worker, answered above the host routes so a request
+# there never reached enrolment, a websocket, sign-in, or the Durable Object.
+# That was true, and it was an argument about the ORDER of branches inside a
+# bundle that also holds the App's client secret and the APNs key.
+#
+# It is a separate script now — `wrangler.demo.toml`, which has no Durable
+# Object binding and no secrets. See docs/coordinator-deploy.md.
+#
+# `custom_domain = true` makes wrangler create the DNS record and the domain
+# binding on deploy, so there is nothing to point anywhere by hand.
+routes = [
+  { pattern = "fleet.thetech.network", custom_domain = true }
+]
+
+# --- plain configuration, deployed with the code -----------------------------
+#
+# EVERY ENTRY BELOW IS OURS. The same names are absent from wrangler.toml, each
+# with a comment there saying what happens when it is unset — a fork sets its
+# own or gets a defined, honest behaviour, rather than inheriting these.
+[vars]
+# WHERE THE PRODUCT PAGE IS. /docs on the coordinator is a 302 to this and
+# nothing else — a coordinator holds the fleet and should not also be the
+# surface a stranger loads HTML from.
+AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
+
+# WHOSE INSTALLER /install HANDS OUT. `install/bootstrap.sh` clones the
+# repository it was served from, so this decides whose code ends up on the
+# machines somebody installs. Unset is a 404 that says so.
+AGENT_FLEET_INSTALL_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh"
+
+# PUSH, which is off unless this says otherwise. The credentials that make it
+# work are ours and they address our app's device tokens, so a fork acquiring
+# them by copying a config would be notifying our users' phones.
+AGENT_FLEET_PUSH = "1"
+
+# THE GITHUB APP. Identifiers rather than credentials — a client id is in the
+# query string of every authorize URL — but they are OURS, and a fork
+# inheriting them gets a flow that reaches GitHub and is refused there, because
+# their origin is not on our App's redirect list. Confidently broken, where
+# absent is honest. The CLIENT SECRET is a `wrangler secret`.
+AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
+AGENT_FLEET_GITHUB_APP_ID = "4758006"
+AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
+
+# WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
+# ARE safe for a fork to copy and are the best fork-parity property in the
+# project: the audiences are our bundle id and our Google web client, both
+# public by construction, and copying them means the App Store and Play builds
+# sign in to a fork's coordinator unchanged. No Firebase project, no Apple
+# Developer account. They are here rather than in wrangler.toml only because a
+# fork should make that choice deliberately.
+AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+
+# The fleet's name and the address invitations come from. Cloudflare Email
+# Sending needs a domain the account controls, so this is one of the three
+# things a fork genuinely cannot inherit.
+AGENT_FLEET_NAME = "the Fleetwright fleet"
+AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
+
+# Where an invitation says to get the app. Ours, and a fork's invitations should
+# not point at our store listings.
+AGENT_FLEET_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
+AGENT_FLEET_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
+
+# ERROR REPORTING. A DSN is not a credential — it grants only the ability to
+# send events — but it names OUR project, and a fork deploying it posts their
+# errors to us. Unset means no reporting at all, which sentry.js and
+# docs/error-reporting.md both promise and which only became true when this
+# moved out of the default config.
+SENTRY_DSN = "https://08d0e1e893370804857f8ce9e2f39f17@o4512012096765952.ingest.us.sentry.io/4512012108955648"
+SENTRY_ENVIRONMENT = "production"
+SENTRY_TRACES_SAMPLE_RATE = "0.05"
+
+[[send_email]]
+name = "EMAIL"
+# `remote = true` so a local `wrangler dev` sends through the real service
+# rather than failing on a binding the local runtime cannot provide. Sending an
+# invitation is not a thing to discover works only in production.
+remote = true
+
+# Signing in is the other route reachable without a credential, and it does real
+# work for an anonymous caller: fetch a key set, verify a JWT, and on success
+# write a client record. Ten a minute per address is more than a person tapping
+# a button and less than anything worth doing with somebody else's CPU.
+#
+# Namespace 1002 rather than 1001, which the demo Worker uses. The budgets
+# cannot be shared now that the scripts are not — a script hammering the demo
+# fleet reaches a different Worker entirely — but the numbers stay distinct so
+# nothing depends on that being remembered.
+[[ratelimits]]
+name = "SIGNIN_RATE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
+[[durable_objects.bindings]]
+name = "FLEET"
+class_name = "Fleet"
+
+# One DO instance holds every host socket and the device registry, so there is
+# exactly one place that knows the fleet. A fleet is tens of hosts, not
+# thousands — sharding this would add a consistency problem to buy headroom
+# nobody needs.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Fleet"]
+
+[observability]
+enabled = true
+
+# --- secrets, set with `wrangler secret put NAME` ----------------------------
+#
+#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
+#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
+#                                     https://appleid.apple.com https://accounts.google.com
+#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
+#                                     iOS bundle id, the Android web client id
+#   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
+#                                     @domain. EMPTY ALLOWS NOBODY, on purpose
+#
+# THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
+# they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
+# was one string every machine presented — indistinguishable hosts, no way to
+# revoke one, replayable by anything that saw a single connection.
+#   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
+#                                     base64 of it), for push
+#   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
+#   AGENT_FLEET_APNS_KEY_ID           which key that is
+#   AGENT_FLEET_APNS_TEAM_ID          the team it belongs to
+#
+# The key id and team id are identifiers rather than credentials, and were
+# briefly a [vars] entry for that reason. They are secrets now because a name
+# cannot be both: Cloudflare keeps vars and secrets in one namespace, so a
+# deploy carrying a var CLOBBERS the secret of the same name. One place per
+# name, and for these the useful place is beside the .p8 they describe.
+#
+# AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
+# it belongs to wrangler.demo.toml, along with the fleet it describes.
+#
+# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
+# running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
+# says so, which leaves the admin token as the only way in. Without the FCM
+# service account, push is logged instead of sent, and says so.

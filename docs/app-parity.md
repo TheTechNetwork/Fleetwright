@@ -186,6 +186,15 @@ it is very easy to re-enter one merge at a time.
 | journals and session output | ✅ | ✅ | ✅ |
 | update / upgrade a box | one tap | one tap | ✅ |
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
+| **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
+| **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
+
+**A gap this table caught, in the round that added the row above.** Android's
+`SessionKind` had no `host` field at all, while iOS has had one since placement
+shipped — so a kind naming a box did nothing on Android, silently. A setting
+that works on one phone and not the other is worse than one that works on
+neither, because nobody goes looking. Both now carry `host` and `profile`, and
+the iOS voice path was passing neither: spoken, only `mode` survived.
 
 **The two things that stayed hard, and stayed correct:**
 
@@ -352,5 +361,37 @@ and restored when it was proven, rather than argued about. The evidence is
 somebody with the devices saying it worked, which is the only evidence this
 row could ever have had — no test in this repository can produce it.
 
-Anything above changes here first, and the README, ROADMAP and store listings
-follow. Four sources of truth is none.
+**And the row is narrower than "push works", which is worth saying while the
+correction is fresh.** Delivery is confirmed. A cold-start wake, a locked
+screen, a notification acted on four minutes late, and Android's Doze are
+separate facts — none of them has a row here, and none of them should be
+claimed until one does. The discipline that made the withdrawal worth having
+applies to the confirmation too.
+
+**The history is kept rather than deleted**, because the row being wrong is not
+what this table is for — it is for the row being *checked*. The delivery path
+was built and unit-tested end to end here for months while never having been
+confirmed on a real device, and the Play listing sold it as *"the point of
+carrying this in a pocket at all"* until a tester — who had praised this
+project's documentary honesty at length — called that **off-brand** and said as
+a reviewer they would call the listing overdrawn. They were right. The listing
+was corrected to what was true then, and it is a different sentence now for the
+same reason: it says what is true.
+
+**The claim is still narrower than it sounds**, and the discipline that made
+the correction worth having applies to the confirmation too: one delivery, to
+one phone, on one platform pair. It is no longer *unproven*. It is not yet
+*proven at every stage* — a cold-start wake, a locked screen, a notification
+acted on four minutes late, and Android's Doze are separate facts, and none of
+them has its own row here yet.
+
+**This table is the source; everything else defers to it.** The README, the
+ROADMAP and both store listings point here rather than restating it, because
+four sources of truth is none — and the way that failure showed up was not one
+document being wrong, it was four being checked against each other while none
+was checked against a phone.
+
+So the rule, which is the actual finding rather than any single row: **a claim
+about what the apps can do changes here first, with its evidence, and the
+places that link here do not paraphrase it.** A row that cannot name how it was
+established does not belong in the table.

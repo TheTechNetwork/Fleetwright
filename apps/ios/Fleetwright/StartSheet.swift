@@ -25,6 +25,10 @@ struct StartRequest {
     let brief: String?
     let mode: String?
     let host: String?
+    /// WHAT IT WILL DO, by name. nil means the session comes up idle at an
+    /// empty prompt and somebody has to drive it — which is what every session
+    /// did before protocol v3, and what nothing said out loud.
+    let profile: String?
 }
 
 struct StartSheet: View {
@@ -37,6 +41,12 @@ struct StartSheet: View {
     @State private var kind: SessionKind?
     @State private var host = ""
     @State private var hosts: [String] = []
+    @State private var profiles: [Fleet.Profile] = []
+    /// Distinct from `profiles.isEmpty`. A fleet with no profiles has ANSWERED;
+    /// a fleet whose hosts are too old to know the verb has not, and the two
+    /// deserve different screens — null is cannot-tell, empty is nothing.
+    @State private var profilesAnswered = false
+    @State private var profile = ""
     @State private var suggesting = false
     @State private var error = ""
 
@@ -85,6 +95,44 @@ struct StartSheet: View {
                     }
                 }
 
+                // WHAT IT WILL DO, and it is above Kind and Where because it
+                // is the question that decides whether starting is worth doing
+                // at all. A session with no profile comes up idle: correct,
+                // sometimes wanted, and never what somebody expects from a
+                // button labelled Start.
+                //
+                // Only shown once the fleet has ANSWERED. Rendering an empty
+                // picker while the request is in flight offers "Nothing yet" as
+                // if it were the fleet's answer, and somebody taps Start.
+                if profilesAnswered, !profiles.isEmpty {
+                    Section {
+                        Picker("Task", selection: $profile) {
+                            Text("Nothing — I will drive it").tag("")
+                            ForEach(profiles) { p in
+                                // The summary, not the name, because the name is
+                                // a filename and the summary is the sentence
+                                // somebody wrote to be recognised by.
+                                Text(p.summary.isEmpty ? p.name : p.summary).tag(p.name)
+                            }
+                        }
+                        // Where it can run is decided by where the file IS. A
+                        // profile picked on a fleet where only one box has it
+                        // pins the host, because `start` elsewhere is refused —
+                        // and a refusal a person cannot act on is worse than a
+                        // picker that moved on its own and says so.
+                        .onChange(of: profile) { _, now in
+                            let owners = Set(profiles.filter { $0.name == now }.compactMap(\.hostId))
+                            if owners.count == 1, let only = owners.first { host = only }
+                        }
+                    } header: {
+                        Text("Task")
+                    } footer: {
+                        Text(profile.isEmpty
+                             ? "It will start idle, waiting for you. Nothing is asked of it until you open it."
+                             : "It starts with this as its first message. The task lives on the host — this app never sends the words.")
+                    }
+                }
+
                 if !kinds.isEmpty {
                     Section("Kind") {
                         Picker("Kind", selection: $kind) {
@@ -96,6 +144,13 @@ struct StartSheet: View {
                         // a decision made last month that cannot be revisited.
                         .onChange(of: kind) { _, now in
                             if let kindHost = now?.host, !kindHost.isEmpty { host = kindHost }
+                            // And a kind that names a task fills that too, on
+                            // the same terms — but only if the fleet still has
+                            // it. A kind naming a profile somebody deleted would
+                            // otherwise pre-fill a start that is refused.
+                            if let kindProfile = now?.profile, profiles.contains(where: { $0.name == kindProfile }) {
+                                profile = kindProfile
+                            }
                         }
                     }
                 }
@@ -119,7 +174,16 @@ struct StartSheet: View {
                 // The enrolled list, which the settings screen already uses.
                 // Loaded here rather than passed in so the sheet works from
                 // every place that presents it, App Intents included.
-                hosts = (try? await Fleet(settings: settings).enrolledHosts().map(\.hostId)) ?? []
+                let fleet = Fleet(settings: settings)
+                hosts = (try? await fleet.enrolledHosts().map(\.hostId)) ?? []
+                // A THROW IS NOT AN EMPTY FLEET. Hosts too old to know the verb
+                // refuse it by name, and so does a coordinator that has not been
+                // updated — treating either as "no profiles" would quietly hide
+                // a picker that should exist. Unanswered means no section at all.
+                if let found = try? await fleet.profiles() {
+                    profiles = found
+                    profilesAnswered = true
+                }
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
@@ -202,7 +266,8 @@ struct StartSheet: View {
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
             mode: kind?.mode,
-            host: host.isEmpty ? nil : host
+            host: host.isEmpty ? nil : host,
+            profile: profile.isEmpty ? nil : profile
         ))
         dismiss()
     }

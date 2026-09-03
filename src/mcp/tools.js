@@ -37,7 +37,21 @@ import { VERBS } from '../fleet/protocol/intents.js';
  */
 /** @type {string[]} */
 export const DEFAULT_DENY = ([
-  'reboot', 'upgrade', 'update', 'restore',
+  // `reboot` ends every session on the box. `upgrade` is system packages and
+  // can demand a reboot to finish. `restore` un-bins somebody else's work.
+  //
+  // `update` USED TO BE HERE AND IS NOT ANY MORE, and the reason is a design
+  // decision this project already made and wrote down. The refusal lumped it
+  // in as "restarts machines", which is true of reboot and false of this:
+  // agent-hub.service sets KillMode=process specifically so restarting the
+  // service does NOT reap the tmux server holding every session. That comment
+  // calls itself load-bearing and names the outage that taught it.
+  //
+  // So `update` pulls this project's code and restarts its own service without
+  // ending anybody's work — and withholding it left a beta tester with a host
+  // two releases behind, refusing verbs, whose named fix required a shell the
+  // product does not provide. A dead end rather than a policy.
+  'reboot', 'upgrade', 'restore',
   'connect', 'link', 'unlink', 'renew', 'answer',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
@@ -256,6 +270,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const notes = {
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
+        update: 'Pulls this project\'s code on one host and can restart its services. Sessions SURVIVE that restart — agent-hub keeps the tmux server outside its own cgroup for exactly this reason. Use it when a host refuses a verb because it is behind.',
         forget: 'Only sessions you started here. Recoverable for seven days — `restore` brings one back — which is why this is offered and `purge` is not.',
         stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it. Collect the output with fleet_read_log FIRST — stopping a session throws its console output away.',
         peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',

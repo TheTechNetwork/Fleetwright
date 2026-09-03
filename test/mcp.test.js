@@ -84,12 +84,41 @@ test('required stays required, and enums keep their values', () => {
   }
 });
 
+test('the instructions teach the profile, and the handoff when none fits', async () => {
+  // The lifecycle they taught was start -> await -> read_log -> stop, which
+  // implies a session produces something. Started with nothing to do it does
+  // not: the loop ends at an idle REPL with an empty log and no error, and two
+  // beta testers lost a session to it.
+  //
+  // v3 answered the protocol half (#325): `start` takes a `profile`, and the
+  // instructions have to lead with it — an agent that does not know profiles
+  // exist starts idle sessions exactly as before, because the tool call it
+  // makes is the same one.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({ coordinator: 'https://f.example', credential: 'fwk_a', write: () => {}, watchMs: 0 });
+  const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+  const text = String(r.result.instructions);
+
+  assert.match(text, /GIVE A SESSION A PROFILE OR IT COMES UP IDLE/);
+  assert.match(text, /fleet_profiles/, 'a profile you can only name by guessing is not a feature');
+  // The words never travel, and the reason is worth carrying: a caller that
+  // could supply them would be writing the instructions of an agent with root.
+  assert.match(text, /cannot supply the words yourself/);
+  // The handoff survives, because no profile will fit every job. It is the
+  // fallback now rather than the only answer.
+  assert.match(text, /Remote Control URL/);
+  assert.match(text, /do not start it/);
+  // And the two things a watcher gets wrong: await cannot see a prompt, and
+  // stopping discards the output.
+  assert.match(text, /BEFORE stopping it/);
+});
+
 test('the dangerous verbs are not exposed by default', () => {
   // Not a security boundary — whoever runs this holds a credential and can call
   // the API directly. It is about what an agent reaches for unasked, which is a
   // different question from what a person may do.
   const exposed = toolsFor().map((t) => t.verb);
-  for (const verb of ['reboot', 'purge', 'connect', 'unlink', 'answer']) {
+  for (const verb of ['reboot', 'upgrade', 'purge', 'connect', 'unlink', 'answer']) {
     assert.equal(exposed.includes(verb), false, `${verb} should not be exposed by default`);
   }
   assert.deepEqual(exposed.includes('list'), true);
@@ -110,6 +139,16 @@ test('the dangerous verbs are not exposed by default', () => {
   // in both reports. A surface that lets somebody create clutter should let
   // them bin it.
   assert.deepEqual(exposed.includes('forget'), true);
+
+  // AND `update` IS EXPOSED, on the same argument. The refusal lumped it in as
+  // "restarts machines", which is true of reboot and false of this:
+  // agent-hub.service sets KillMode=process precisely so restarting the service
+  // does not reap the tmux server holding every session — a comment that calls
+  // itself load-bearing and names the outage that taught it.
+  //
+  // Withholding it left a beta tester with a host two releases behind, refusing
+  // verbs, whose named fix needed a shell the product does not provide.
+  assert.deepEqual(exposed.includes('update'), true);
 });
 
 test('a withheld verb can be allowed explicitly, one at a time', () => {

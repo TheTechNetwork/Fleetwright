@@ -115,7 +115,7 @@ android {
     // iOS. The CI run number only increases and is already past 99, so it
     // stays ahead of anything uploaded by hand while this was 1.
     versionCode = providers.environmentVariable("ANDROID_VERSION_CODE").orNull?.toInt() ?: 1
-    versionName = "0.2.0"
+    versionName = "0.2.1"
   }
 
   // Only declared when the environment actually has a keystore. A signingConfig

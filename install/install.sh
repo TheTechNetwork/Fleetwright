@@ -505,7 +505,7 @@ if [ -z "$NODE_BIN" ]; then
       ok "installed node $("$NODE_BIN" -v)"
     else
       die "node is not installed and could not be installed automatically ($(pkg_why)).
-       Install Node 18 or newer and re-run. If \`node -v\` already works for you,
+       Install Node 24 or newer and re-run. If \`node -v\` already works for you,
        that is sudo's secure_path hiding it — point at it directly:
            sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
     fi
@@ -520,9 +520,19 @@ if [ -n "$NODE_BIN" ]; then
 
   # A distro whose nodejs package is older than we need. Say which, rather than
   # leaving someone to work out why a fresh install still fails.
-  [ "$NODE_MAJOR" -ge 18 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 18 or newer (it uses global fetch).
+  # 24, WHICH IS WHAT package.json SAYS. This read 18 and recommended
+  # nodesource's 22 line, so `--check` printed "ok node v20.19.2" on a box
+  # that cannot run this — package.json has said `>=24` and docs/deployment.md
+  # has said 24 for some time, and the gate that actually stops somebody never
+  # moved. A floor nobody enforces is a hope, and this one was a hope that
+  # printed the word "ok".
+  #
+  # Pinned to the manifest by test/install-node-floor.test.js, because the way
+  # this drifted is that the two live in different files and only one of them is
+  # read when the requirement changes.
+  [ "$NODE_MAJOR" -ge 24 ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs 24 or newer (package.json says >=24).
        Your distribution's package is too old; use nodesource or nvm:
-           curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs"
+           curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt install -y nodejs"
   ok "node $("$NODE_BIN" -v) at $NODE_BIN"
 fi
 
@@ -683,6 +693,37 @@ say "Creating state directory"
 STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
 install -d -o "$RUN_USER" -m 0750 "$STATE_DIR"
 ok "$STATE_DIR"
+
+# TASK PROFILES. A session started with no profile comes up idle, waiting for a
+# person; a profile is a file here whose content becomes its first message.
+#
+# THE DIRECTORY IS CREATED EVEN THOUGH IT IS OPTIONAL, and one example is
+# written into it, because a feature nobody can see is a feature nobody uses:
+# `/profiles` on a box with no directory says "add one as …/<name>.md", and a
+# path in an error message is a worse instruction than a file to copy.
+#
+# 0750, and content only ever put here by somebody with a shell on this box.
+# That is the whole security argument for the feature — the coordinator names a
+# profile and can never carry one, so what a session is told to do is chosen
+# here rather than over the wire.
+#
+# NEVER OVERWRITTEN. Re-running the installer is how you upgrade, and clobbering
+# a profile somebody wrote would be an upgrade that changes what their sessions
+# are told to do.
+PROFILE_DIR="${AGENT_HUB_PROFILE_DIR:-$STATE_DIR/profiles}"
+install -d -o "$RUN_USER" -m 0750 "$PROFILE_DIR"
+for f in "$DIR"/install/profiles/*.md; do
+  [ -e "$f" ] || continue
+  base="$(basename "$f")"
+  # README.md is the note explaining the directory, not a profile — and
+  # src/core/profiles.js excludes it by name for the same reason. It is not
+  # copied at all: a note about the shipped examples belongs beside them in the
+  # repository, not in the directory a session's instructions are read from.
+  [ "$base" = "README.md" ] && continue
+  [ -e "$PROFILE_DIR/$base" ] && continue
+  install -m 0640 -o "$RUN_USER" "$f" "$PROFILE_DIR/$base"
+done
+ok "$PROFILE_DIR"
 
 # --- 3. environment file ----------------------------------------------------
 say "Configuration"
@@ -1019,7 +1060,12 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
   #
   # Building locally is still supported and is the fallback below, for an
   # offline box or a Containerfile somebody is editing.
-  IMAGE="${AGENT_HUB_SANDBOX_IMAGE:-ghcr.io/thetechnetwork/fleetwright-session:latest}"
+  # The owner is separable, because a fork's CI publishes to its own namespace
+  # and this line was pulling ours. See src/config.js — same two variables, same
+  # precedence, because the hub and the installer disagreeing about which image
+  # a box runs is a difference nobody would think to look for.
+  IMAGE_OWNER="${AGENT_HUB_SANDBOX_IMAGE_OWNER:-thetechnetwork}"
+  IMAGE="${AGENT_HUB_SANDBOX_IMAGE:-ghcr.io/${IMAGE_OWNER}/fleetwright-session:latest}"
   say "Fetching the sandbox image"
   if as_user "podman image exists '$IMAGE'" 2>/dev/null \
      && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then

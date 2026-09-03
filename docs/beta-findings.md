@@ -181,6 +181,12 @@ And they found the compromise on our own roadmap: **section 6's host-side named
 profiles**. A `kind` carrying a stored, host-configured prompt is task-at-start
 without free text ever crossing the intent protocol.
 
+**SHIPPED, as protocol v3** ([#325](https://github.com/TheTechNetwork/Fleetwright/issues/325)):
+`start { profile }` names a file on the host and its content becomes the
+session's first message; `profiles` lists what a host has. It cost a flag day —
+a parameter on an existing verb — which is the judgement this finding was
+waiting on. See [`task-at-start.md`](./task-at-start.md).
+
 **J2 - a state nobody should have to divine.** `await` detects ended-or-errored
 only; a finished session looks like an idle one. The proposal is not that the
 fleet decide - publish the **watcher's observation**, "pane unchanged for 9m,

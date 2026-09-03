@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating } from '../src/fleet/protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating, checkParams } from '../src/fleet/protocol/intents.js';
 import { isValidName } from '../src/core/names.js';
 
 /** @param {object} patch */
@@ -57,6 +57,12 @@ test('the verb set is exactly what is documented', () => {
     'list',
     'logs',
     'peek',
+    // v3, and the FREE half of it: an old host answers `unknown_verb`, which
+    // strands nothing. The costly half is `start { profile }` — a parameter on
+    // an existing verb, which is what the version number was actually spent on.
+    // They ship together because a profile you can only name by guessing is not
+    // a feature.
+    'profiles',
     'purge',
     'readfile',
     'reboot',
@@ -131,16 +137,32 @@ test('no verb accepts a path into the HOST', () => {
   // So the rule is narrowed rather than dropped. A path may exist only on the
   // verbs whose whole subject is the workspace, and `start` — the one the
   // original note was about — still takes none.
+  //
+  // MATCHED ON WORDS, NOT SUBSTRINGS, and that is a correction rather than a
+  // relaxation. The old test was `/path|dir|cwd|file/i`, which flags `profile`
+  // — for the "file" inside it, and for nothing else. A substring test that
+  // fires on an unrelated word is a test people learn to argue with, which is
+  // worse than one that is slightly narrower.
+  //
+  // `profile` is allowed on its own merits, and they are not the same merits as
+  // the workspace paths': it never becomes a path the CALLER chose. It is a
+  // bounded name, in one fixed directory on the host, with no dot in its
+  // charset so `..` cannot be spelled — and the words it selects were put there
+  // by somebody with a shell on that box. See src/core/profiles.js.
+  const words = (/** @type {string} */ key) =>
+    key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const PATHY = new Set(['path', 'dir', 'directory', 'cwd', 'file', 'filename', 'folder']);
   const WORKSPACE = new Set(['files', 'readfile', 'writefile', 'copyfile', 'deletefile']);
   for (const [verb, spec] of Object.entries(VERBS)) {
     for (const key of Object.keys(spec.params)) {
       if (WORKSPACE.has(verb) && (key === 'path' || key === 'to')) continue;
-      assert.ok(!/path|dir|cwd|file/i.test(key), `${verb} exposes a path-shaped parameter "${key}"`);
+      assert.ok(!words(key).some((w) => PATHY.has(w)), `${verb} exposes a path-shaped parameter "${key}"`);
     }
   }
   // The original case, named so it cannot come back by accident.
   for (const key of Object.keys(VERBS.start.params)) {
-    assert.ok(!/path|dir|cwd/i.test(key), `start exposes "${key}" — a session's workdir is not the caller's to choose`);
+    assert.ok(!words(key).some((w) => w === 'path' || w === 'dir' || w === 'cwd'),
+      `start exposes "${key}" — a session's workdir is not the caller's to choose`);
   }
   // And a workspace path is never optional about being relative: every one of
   // them is declared `text`, so cleanText bounds it before anything resolves it.
@@ -404,4 +426,60 @@ test('the idempotency key is the callers, not generated per attempt', () => {
   const a = buildIntent({ id: 'idem-0000003', verb: 'stop', params: { name: 'x' }, issuedAt: 1 });
   const b = buildIntent({ id: 'idem-0000003', verb: 'stop', params: { name: 'x' }, issuedAt: 2 });
   assert.equal(a.id, b.id);
+});
+
+test('a caller\'s typo is refused, not thrown, and the refusal names the fix', async () => {
+  // REPORTED FROM PRODUCTION, and it is the beta tester's 1101.
+  //
+  //   Error: refusing to send a malformed intent: status takes no parameter "session"
+  //     buildIntent → CoordinatorCore.send → Array.map → dispatch → Fleet.fetch
+  //
+  // `buildIntent` throws, which is right for a programming error inside the
+  // coordinator and wrong for the case that actually happens: somebody posting
+  // `params: {session: "x"}`. It is called inside `send`, inside a `.map` over
+  // the fan-out, so the throw left dispatch synchronously and became a
+  // Cloudflare error page. The tester read that as the fleet being down and
+  // retried — and the coordinator had told them retrying was reasonable.
+  //
+  // It was their typo. Retrying could never have worked.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ log: { info() {}, warn() {}, error() {} } });
+
+  const reply = await core.dispatch({ verb: 'status', params: { session: 'cc-brave-otter' } });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error.code, 'bad_params');
+  assert.match(reply.text, /status takes no parameter "session"/);
+
+  // AND WHAT IT DOES TAKE. The old message named the mistake and not the fix,
+  // so the tester went and read a schema to learn the word is `name` — which
+  // they wrote up as the thing that cost them the most.
+  assert.match(reply.text, /it takes: name/);
+
+  // Refused BEFORE placement, so a scheduler never decides anything on the
+  // strength of a params object that was never valid. With no hosts connected,
+  // a well-formed status would have been refused with `no_hosts` instead —
+  // which is what proves this check ran first.
+  assert.equal((await core.dispatch({ verb: 'status', params: {} })).error.code, 'no_hosts');
+});
+
+test('a verb with no parameters says so rather than listing nothing', () => {
+  // "list takes no parameter \"nope\" — it takes:" trailing off is worse than
+  // no suggestion at all.
+  const r = checkParams('list', { nope: 1 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /it takes none/);
+});
+
+test('checkParams is the same rules validateIntent applies, not a second copy', () => {
+  // The whole reason the params check could be factored out is that there is
+  // one implementation. Two would be a coordinator that accepts what a host
+  // then refuses — the disagreement the fixed verb set exists to prevent.
+  for (const params of [{ session: 'x' }, { name: 'has space' }, { name: 'ok', mode: 'sideways' }, { option: 'x' }]) {
+    const direct = checkParams('answer', params);
+    const viaEnvelope = validateIntent({
+      v: PROTOCOL_VERSION, kind: 'intent', id: 'abcd1234', verb: 'answer', params, issuedAt: Date.now(),
+    });
+    assert.equal(direct.ok, viaEnvelope.ok, `disagreed about ${JSON.stringify(params)}`);
+    if (direct.ok === false && viaEnvelope.ok === false) assert.equal(direct.error, viaEnvelope.error);
+  }
 });

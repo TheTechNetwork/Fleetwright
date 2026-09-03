@@ -18,6 +18,63 @@ never given.
 | `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
 
+## Cutting a release
+
+Three files carry the version and `test/version.test.js` refuses a release
+where they disagree — `package.json`, `MARKETING_VERSION` in
+`apps/ios/project.yml`, `versionName` in `apps/android/app/build.gradle.kts`.
+The fourth is `CHANGELOG.md`, whose top section must be that same version.
+
+1. Bump the three, write the changelog section, merge.
+2. Publish a GitHub release on that commit. **Prerelease** ships external
+   TestFlight and the Play commit track; a **full release** ships the App Store
+   and Play production as well. That grammar is the whole decision — nothing
+   else in the pipeline is allowed to mean "ship to everybody".
+
+**The notes come from `CHANGELOG.md`, not from the release box.** Both app
+pipelines call `scripts/release-notes.mjs`, which extracts the top section and
+fits it to the store's limit: 4000 characters for App Store Connect's
+`whatsNew`, 500 for Play per locale — trimmed at a paragraph boundary with a
+pointer to the full notes, because a note cut mid-clause reads as a bug in the
+app rather than as a shortened note.
+
+The release body is the **fallback**, used only when the changelog has no
+section for the version being built, and the run says so with a warning. It
+used to be the source, which meant a tester's "What to Test" was whatever was
+pasted into the release box — usually the PR description, written for a
+reviewer.
+
+To see exactly what a store will receive:
+
+```sh
+node scripts/release-notes.mjs --max 500     # what Play gets
+node scripts/release-notes.mjs --max 4000    # what TestFlight gets
+```
+
+## Commit messages
+
+`commitlint` runs on pull requests only — on main the commit already exists and
+a red check tells nobody anything they can act on.
+
+**It is not conventional commits, deliberately.** `commitlint.config.mjs`
+argues that out at length; the short version is that the subjects in this
+history are sentences a person can read, and a generated `feat(mcp): add
+profile param` changelog would say less while looking more official. Switching
+later costs one line — extend `@commitlint/config-conventional` and delete the
+overrides — because every rule in that file is a standard commitlint rule.
+
+What it enforces is shape rather than vocabulary: a subject under 80
+characters with no full stop, a blank line before the body, and body lines that
+do not run off the side of a terminal. A missing body is a **warning**: a
+one-line change exists, and failing it would teach people to write a body that
+says nothing, which is worse than none because it looks like an explanation.
+
+Locally:
+
+```sh
+npx commitlint --from origin/main --to HEAD
+```
+
 ## The one that matters most needs nothing
 
 `ios.yml`'s **build** job compiles the iOS app on a macOS runner. design.md §9

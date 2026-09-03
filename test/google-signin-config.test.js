@@ -10,7 +10,10 @@ const SIGNIN_SRC = readFileSync(new URL('../apps/android/app/src/main/java/netwo
 // annoys first.
 const SIGNIN = SIGNIN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 const GRADLE = readFileSync(new URL('../apps/android/app/build.gradle.kts', import.meta.url), 'utf8');
-const WRANGLER = readFileSync(new URL('../worker/wrangler.toml', import.meta.url), 'utf8');
+// OUR deployment's config. The default wrangler.toml sets no vars at all —
+// it is the fork-safe file, and a fork picks its own audiences (or copies
+// ours, which is safe and is the point). See test/fork-safe-config.test.js.
+const WRANGLER = readFileSync(new URL('../worker/wrangler.production.toml', import.meta.url), 'utf8');
 
 /** The web OAuth client — client_type 3. The type 1 entries beside it are the
  *  Android clients, which authorise the request rather than being what the

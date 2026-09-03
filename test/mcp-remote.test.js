@@ -382,6 +382,11 @@ test('fleet_health answers with capacity, not the word ok', async () => {
           // Claude account of its own, and two people who have linked theirs.
           loggedIn: false,
           claudeAccounts: 2,
+          hostId: 'deb13-staging',
+          // The countdown a tester learned from `verify` out of desperation,
+          // and the drift they met as "does not know that command".
+          credential: { state: 'valid', expiresAt: Date.now() + 11 * 60_000 },
+          updates: { appBehind: 2 },
         },
       }),
     }),
@@ -394,6 +399,10 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   });
   const text = String(reply.result.content[0].text);
   assert.notEqual(text, 'ok');
+  // WHICH BOX. This was #311, which I closed on the strength of a commit that
+  // only fixed the login banner beside it — caught by running the tool rather
+  // than by re-reading the diff.
+  assert.match(text, /^deb13-staging/m);
   assert.match(text, /2\/5 sessions running/);
   assert.match(text, /tags: linux/);
   // AND IT DOES NOT CALL A HEALTHY HOST BROKEN. This asserted `/NOT LOGGED IN/`
@@ -402,6 +411,11 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   // fleet was dead while `fleet_start` worked on the same machine.
   assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
   assert.match(text, /2 accounts linked/);
+  // Both facts travelled on every health frame and only `fleet_verify` and
+  // `agent-hub update` ever looked at them.
+  assert.match(text, /11 minutes left/);
+  assert.match(text, /2 commits behind/);
+  assert.match(text, /agent-hub update --restart/);
 });
 
 test('a host nobody has linked an account on says so, and says how to fix it', async () => {
@@ -631,6 +645,52 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
 });
 
+// --- the dead end, made legible while the fix is undecided -------------------
+
+test('start says whether the session has anything to do', async () => {
+  // Started with no profile, the loop these instructions teach — start, await,
+  // read_log — produces an idle REPL, an empty log and no error anywhere. A
+  // beta tester followed it exactly and lost the session to it; on a paid
+  // runner that loop burns money until the budget deadline.
+  //
+  // v3 gave `start` a `profile`, so there is now a right answer to point at
+  // rather than only a dead end to name. BOTH branches are asserted, because
+  // "started" reads as "working" either way and only one of them is.
+  const { McpServer } = await import('../src/mcp/server.js');
+  /** @param {Record<string, unknown>} args */
+  const start = async (args) => {
+    const server = new McpServer({
+      coordinator: 'https://fleet.example',
+      credential: 'fwk_a_b',
+      write: () => {},
+      watchMs: 0,
+      fetch: async () => ({ status: 200, json: async () => ({ ok: true, text: 'Started "beta1".', hostId: 'deb132' }) }),
+    });
+    const r = await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fleet_start', arguments: { name: 'beta1', ...args } },
+    });
+    return String(r.result.content[0].text);
+  };
+
+  const idle = await start({ brief: 'list the files' });
+  assert.match(idle, /STARTED IDLE/);
+  assert.match(idle, /fleet_profiles/, 'names the dead end without naming the way out of it');
+  // And where it landed, which was its own finding (#327).
+  assert.match(idle, /On deb132/);
+
+  // With a profile the session is working, and saying "it started idle" here
+  // would be worse than saying nothing: an agent that believes it must find a
+  // person stops watching work that is actually running.
+  const working = await start({ profile: 'reviewer' });
+  assert.equal(/STARTED IDLE/.test(working), false);
+  assert.match(working, /"reviewer" profile/);
+  assert.match(working, /read_log BEFORE you stop it/i);
+  assert.match(working, /On deb132/);
+});
+
 // --- the evidence a caller was told to gather by hand ------------------------
 
 test('status publishes what the watcher observed, not a verdict', async () => {
@@ -813,6 +873,68 @@ test('a body that will not parse is not reported as an outage', async () => {
   assert.match(text, /not JSON/);
   assert.match(text, /1101/);
   assert.equal(/retrying is reasonable/.test(text), false, 'still advising a retry that cannot work');
+});
+
+// --- the Worker must not fetch its own hostname ------------------------------
+
+test('a localFetch is used instead of going out to the network', async () => {
+  // The MCP server speaks to the fleet over HTTP so the same code runs as a
+  // stdio binary on a laptop. Served in-process that means the coordinator
+  // calls itself — and on Cloudflare "itself" is its own public hostname, so
+  // every tool call became a subrequest re-entering the Worker from outside.
+  //
+  // That is the one path the Node coordinator does not have, and where a beta
+  // tester's `error code: 1101` appeared. Whether or not it is the cause, a
+  // Worker fetching its own hostname to reach code it is already running is
+  // worth removing: a subrequest, double the latency, and the reason there was
+  // an SSRF surface here at all.
+  const { mcpRoutes } = await import('../src/mcp/routes.js');
+  /** @type {string[]} */
+  const wentLocal = [];
+  /** @type {string[]} */
+  const wentOut = [];
+
+  const deps = /** @type {any} */ ({
+    authorizations: { knows: () => true },
+    verifyCredential: async () => ({ email: 'e@x.com' }),
+    verifyIdentity: async () => ({ ok: false, status: 401, text: 'no' }),
+    issueCredential: async () => ({ token: 'fwk_x' }),
+    save: () => {},
+    signIn: {},
+    selfOrigin: 'https://fleet.example',
+    localFetch: async (/** @type {any} */ u) => {
+      wentLocal.push(String(u));
+      return { status: 200, json: async () => ({ ok: true, text: 'listed' }) };
+    },
+  });
+
+  const globalFetch = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (
+    async (/** @type {any} */ u) => {
+      wentOut.push(String(u));
+      return { status: 200, json: async () => ({ ok: true, text: 'from the network' }) };
+    }
+  );
+  try {
+    const r = await mcpRoutes(
+      {
+        method: 'POST',
+        path: '/mcp',
+        origin: 'https://fleet.example',
+        query: new URLSearchParams(),
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fleet_list', arguments: {} } },
+        authorization: 'Bearer fwk_a_b',
+      },
+      deps,
+    );
+    assert.equal(r.status, 200);
+    assert.match(String(r.json.result.content[0].text), /listed/);
+  } finally {
+    globalThis.fetch = globalFetch;
+  }
+
+  assert.equal(wentLocal.length, 1, 'the in-process route was not used');
+  assert.deepEqual(wentOut, [], 'the Worker went out to the network to reach itself');
 });
 
 // --- SSRF: the Host header must not choose where we send things -------------

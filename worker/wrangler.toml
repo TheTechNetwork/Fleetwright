@@ -55,181 +55,76 @@ compatibility_flags = ["nodejs_als"]
 # coordinator origin, so changing it means editing every host's
 # /etc/agent-fleet-sidecar.env. It is not a value to churn.
 #
-# TWO CUSTOM DOMAINS, ONE WORKER, and the second one is a boundary rather than
-# a convenience. `fleetdemo` answers only from the invented fleet in
-# worker/src/demo.js: worker.js checks the hostname ABOVE the host routes, so a
-# request there never reaches enrolment, a websocket, sign-in, or the Durable
-# Object. Same code, same deploy, and no credential that can cross between
-# them — which is a much shorter thing to verify than "the demo branch runs
-# first".
+# NO ROUTES, WHICH MEANS THIS FILE IS SAFE TO DEPLOY AND DOES NOT REACH ANYBODY.
 #
-# `custom_domain = true` makes wrangler create the DNS record and the domain
-# binding on deploy, so adding a demo host is this line and nothing manual.
-routes = [
-  { pattern = "fleet.thetech.network", custom_domain = true },
-  { pattern = "fleetdemo.thetech.network", custom_domain = true }
-]
+# `routes` named `fleet.thetech.network` with `custom_domain = true`, in the
+# file this repository publishes as its default — so `wrangler deploy` from a
+# fork tried to bind a domain they do not own and failed, and the Deploy to
+# Cloudflare button on the README was broken for every fork.
+#
+# Add your own here, or deploy to workers.dev and point the apps at that. Ours
+# is in wrangler.production.toml, which is the file that is ours.
+#
+# `custom_domain = true` is what makes wrangler create the DNS record and the
+# certificate, so there is nothing to point anywhere by hand.
+#
+# routes = [
+#   { pattern = "fleet.example.org", custom_domain = true }
+# ]
+
 
 # --- plain configuration, deployed with the code -----------------------------
+#
+# NOTHING HERE IDENTIFIES A PARTICULAR DEPLOYMENT, and that is the point.
+#
+# This table used to hold our allowlist, our Sentry project, our GitHub App and
+# our invite sender. A fork that deployed this file unchanged got a coordinator
+# that admitted four of OUR addresses to their fleet — `trust.md` has
+# coordinator → host as trusted absolutely — posted their errors to our Sentry,
+# and served an installer that put our code on their machines.
+#
+# The code was never wrong about any of it. The comment beside the allowlist
+# still says "Empty ALLOW means nobody, deliberately", and sentry.js still says
+# an unset DSN posts nowhere. The committed VALUES defeated both, which is the
+# failure app-parity.md exists to name: a document asserting something the
+# configuration makes untrue.
+#
+# So this file is now the fork-safe default and ours lives in
+# wrangler.production.toml. Everything structural below — the Durable Object,
+# the migrations, the rate limits — is identical in both and pinned equal by
+# test/fork-safe-config.test.js, because a fork needs those exactly as much as
+# we do.
+#
+# WHAT TO SET, AND WHAT HAPPENS IF YOU DO NOT. Every one of these is absent
+# here on purpose, and every absence has a defined, honest behaviour:
+#
+#   AGENT_FLEET_AUTH_ISSUERS      who may vouch for a person. Unset → sign-in
+#   AGENT_FLEET_AUTH_AUDIENCES    and which app the ID token is for.  answers
+#                                 503 and says so. Copy ours verbatim if you
+#                                 want the App Store and Play builds to sign in
+#                                 to your coordinator — they are public
+#                                 identifiers and this needs no Apple or Google
+#                                 account of your own. See
+#                                 docs/coordinator-deploy.md.
+#   AGENT_FLEET_DOCS_URL          /docs. Unset → 404
+#   AGENT_FLEET_INSTALL_URL       /install. Unset → 404 naming this variable.
+#                                 bootstrap.sh clones the repository it is
+#                                 served from, so pointing this at somebody
+#                                 else's installs THEIR code on your machines
+#   AGENT_FLEET_PUSH              unset → notifications are logged, not sent,
+#                                 and the coordinator says so at startup
+#   AGENT_FLEET_GITHUB_*          unset → the paste route, which is a
+#                                 first-class answer rather than a fallback
+#   AGENT_FLEET_NAME              unset → invitations are not sent, and the
+#   AGENT_FLEET_INVITE_FROM       reply says which happened
+#   AGENT_FLEET_APP_IOS/_ANDROID  unset → an invitation with no app links
+#   SENTRY_DSN                    unset → no error reporting at all
+#
+# AGENT_FLEET_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
+# rather than a var. It decides who can reach a fleet; it does not belong in a
+# public repository, and the secret block at the bottom of this file has listed
+# it as a secret all along. The `[vars]` entry was the bug.
 [vars]
-# The demo credential, and deliberately NOT a secret.
-#
-# It authorises exactly one thing: reading the fabricated fleet in
-# worker/src/demo.js. Every reply is built from constants, the Durable Object
-# is never fetched, and /host/connect refuses it — so there is nothing for a
-# holder of this string to reach. Publishing it costs Worker invocations and
-# nothing else, and in exchange there is no secret to rotate, no manual step
-# before a deploy, and no way for App Store review to be blocked on somebody
-# being awake to paste a value.
-#
-# It is prefixed `demo-` so that a request carrying it is obvious in a log at a
-# glance, rather than being one opaque hex string among three.
-AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
-
-# --- the GitHub App -----------------------------------------------------------
-# Identifiers, not credentials, and that is why they are here rather than in a
-# secret. A client id appears in the query string of every authorize URL the
-# app hands out — it is public by construction, and pretending otherwise would
-# be the shared-secret habit wearing a different hat.
-#
-# The CLIENT SECRET is a secret and lives in `wrangler secret put`:
-#
-#   wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET
-#
-# It is worth being exact about what that secret is and is not. On its own it
-# authorises nothing — it cannot read a repository, mint a token, or identify
-# anybody. It is only useful alongside an authorization code the person just
-# produced, or a refresh token they already granted. That is what makes it
-# tolerable in a coordinator, when the App's PRIVATE KEY is not: the private
-# key mints installation tokens for every installation of the App, which is
-# every member and every org that ever installed it. See docs/github-app.md.
-#
-# Absent means "no App configured", which is not an error: the paste route is a
-# first-class answer, not a fallback, and a fresh clone of this repo has no App
-# and should still work.
-AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
-
-# Kept because installation tokens will want it — though GitHub now accepts the
-# CLIENT ID as the JWT issuer in its place, so this may turn out to be the last
-# thing that needs it. Recorded rather than dropped: an id that is hard to find
-# again costs more than a line here.
-AGENT_FLEET_GITHUB_APP_ID = "4758006"
-
-# The slug, which is what the INSTALL url is built from:
-#
-#   https://github.com/apps/fleetwright-agents/installations/new
-#
-# Not derivable from the name without guessing at GitHub's slugifying — "Fleetwright
-# Agents" became `fleetwright-agents`, and the OAuth path needs no slug at all,
-# so this exists purely so the install link can be built without a lookup that
-# requires the private key to authenticate.
-AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
-
-# Which hostname IS the demo. Named here rather than hardcoded in worker.js so
-# there is one place to change it, and so a second deployment of this Worker can
-# have its own — or none, which is what local dev and any fork gets by default.
-#
-# Setting this is what makes the demo structural instead of careful: on this
-# hostname there is no route to a host, a session or the Durable Object, so the
-# credential above stops being the thing standing between a curious person and
-# somebody's real work.
-AGENT_FLEET_DEMO_HOST = "fleetdemo.thetech.network"
-
-# --- who is allowed to sign in ----------------------------------------------
-# Identifiers, not credentials: the issuer is public, the audience is the client
-# id an app ships anyway, and the allowlist is a list of colleagues. Keeping
-# them here means changing who can reach a fleet is a reviewable diff rather
-# than a value somebody edited in a web form at midnight.
-#
-# Empty ALLOW means nobody, deliberately — see src/fleet/coordinator/oidc.js.
-AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
-
-# TWO audiences, because the two providers issue for different things. Apple
-# issues for the iOS BUNDLE ID; Google issues for the OAuth WEB client id
-# (client_type 3 in google-services.json) that the Android app names as its
-# server client — NOT for either of the Android client ids sitting next to it
-# in that file, which are what the request is authorised by rather than what
-# the token is issued for. `aud` is what gets verified.
-AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
-
-# Matched against the VERIFIED EMAIL in the ID token, so it must be the address
-# actually signed in with, not the one that ought to work. A bare `@domain`
-# entry matches the whole domain; anything else must match in full.
-#
-# `@thetech.network` alone would refuse the person who owns this fleet — the
-# Google account here is a gmail one, and the refusal reads "… is not on this
-# fleet's list", which is accurate and sounds like a bug. Sign in with Apple
-# will present whatever address that Apple ID uses, which may be a third one
-# again; add it when it is known rather than guessing at it now.
-#
-# THE TWO GUESTS. Added now because the thing that made a guest safe finally
-# exists: a member sees only the sessions their own verified identity created
-# (#182), and brings their own Claude, GitHub and Cloudflare credentials rather
-# than inheriting anybody's (#175, #181). Before those, "invite somebody" meant
-# handing over the fleet.
-#
-# Whole addresses, never a domain: gmail.com as a domain entry would allow
-# every Google account on earth.
-AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com,reservedjyumi@gmail.com,e6591050@gmail.com"
-
-# Inviting somebody by email. BOTH ARE OPTIONAL and the invitation works
-# without them — the list is the authority and the mail is a courtesy, so a
-# deployment with neither set simply reports that no email was sent and the
-# person doing the inviting sends the app themselves.
-#
-#   AGENT_FLEET_INVITE_FROM   an address on a domain THIS ACCOUNT CONTROLS.
-#                             Cloudflare refuses anything else, and that
-#                             refusal is surfaced to whoever tapped Invite
-#                             rather than left in a log.
-#   AGENT_FLEET_NAME          what to call this fleet in the message
-#   AGENT_FLEET_APP_IOS       where to get the app, per phone. Two values and
-#   AGENT_FLEET_APP_ANDROID   not one, because the recipient's phone decides
-#                             which link is the real one and an invitation is
-#                             the one message that cannot know that in advance.
-#                             Either may be left unset; with neither, the
-#                             message says so rather than arriving with no way
-#                             to act on it.
-#
-# The `send_email` binding below is what actually sends. Email Sending is
-# enabled on this account and the plan covers arbitrary recipients, so an
-# invitation reaches somebody who has never been near this fleet — which is the
-# only kind of person worth emailing an invitation to.
-#
-# THE SENDER MUST BE AN ADDRESS THIS ACCOUNT CAN SEND AS — a domain set up for
-# Email Sending. It is the coordinator's own domain, which is worth having: an
-# invitation arriving from the address the fleet already answers on is one the
-# recipient can check, and one fewer domain for somebody to wonder about.
-#
-# `invites@` rather than `noreply@`: nobody replies to either, and only one of
-# them says what it is.
-#
-# Cloudflare refuses a sender this account cannot send as, and that refusal is
-# surfaced to whoever tapped Invite rather than left in a log — so a wrong value
-# here costs one confusing invitation and not a silent hole.
-AGENT_FLEET_NAME = "the Fleetwright fleet"
-AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
-
-# ERROR REPORTING. A DSN is not a secret — it identifies a project and grants
-# only the ability to send it events, which is why it lives here as a var rather
-# than in `wrangler secret`. Unset means no reporting at all: a fresh clone, a
-# contributor's `wrangler dev` and a self-hosted fleet post nowhere, and turning
-# it off in an incident is a var change rather than a code deploy.
-#
-# WHAT IT MAY SEND IS DECIDED IN src/sentry.js, and the answer is: not the URL's
-# query, not a header, not a body. This coordinator carries a device credential
-# on nearly every request — one of them in the query string, deliberately, for
-# Shortcuts.
-SENTRY_DSN = "https://08d0e1e893370804857f8ce9e2f39f17@o4512012096765952.ingest.us.sentry.io/4512012108955648"
-SENTRY_ENVIRONMENT = "production"
-# Not 1.0. Every host sends a health frame every fifteen seconds and every phone
-# polls; tracing all of it spends the quota an actual incident needs.
-SENTRY_TRACES_SAMPLE_RATE = "0.05"
-# Where to get the app. iOS is a TestFlight beta rather than the App Store, and
-# the invitation says so on its own — a TestFlight link needs Apple's TestFlight
-# app installed first and only opens on the device, which is invisible to anyone
-# who has not used one before.
-AGENT_FLEET_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
-AGENT_FLEET_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
 
 [[send_email]]
 name = "EMAIL"
@@ -238,25 +133,15 @@ name = "EMAIL"
 # invitation is not a thing to discover works only in production.
 remote = true
 
-# Rate limit for the demo token, since the token is public and the point of
-# publishing it was to stop it needing an operator. 60 requests a minute per
-# client address is far more than a person tapping around an app and far less
-# than anything worth doing with a hundred thousand free requests a day.
-#
-# Keyed on the client address rather than the token: a single abuser must not
-# be able to lock out an App Store reviewer by exhausting a shared budget.
-[[ratelimits]]
-name = "DEMO_RATE_LIMIT"
-namespace_id = "1001"
-simple = { limit = 60, period = 60 }
-
 # Signing in is the other route reachable without a credential, and it does real
 # work for an anonymous caller: fetch a key set, verify a JWT, and on success
 # write a client record. Ten a minute per address is more than a person tapping
 # a button and less than anything worth doing with somebody else's CPU.
 #
-# A separate namespace from the demo budget on purpose: sharing one would mean a
-# script hammering the demo fleet could stop real people signing in.
+# Namespace 1002 rather than 1001, which the demo Worker uses. The budgets
+# cannot be shared now that the scripts are not — a script hammering the demo
+# fleet reaches a different Worker entirely — but the numbers stay distinct so
+# nothing depends on that being remembered.
 [[ratelimits]]
 name = "SIGNIN_RATE_LIMIT"
 namespace_id = "1002"
@@ -303,8 +188,8 @@ enabled = true
 # deploy carrying a var CLOBBERS the secret of the same name. One place per
 # name, and for these the useful place is beside the .p8 they describe.
 #
-# AGENT_FLEET_DEMO_TOKEN is NOT here: it is a [vars] entry below, because it
-# guards nothing worth guarding. See the comment on it.
+# AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
+# it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
 # Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
 # running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and

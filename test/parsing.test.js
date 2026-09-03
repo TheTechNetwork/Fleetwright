@@ -15,13 +15,35 @@ import { dewrapPane } from '../src/core/pane.js';
 import { isValidName, generateName } from '../src/core/names.js';
 
 test('parse separates verb, positionals and flags in any order', () => {
-  assert.deepEqual(parse('/new api --safe'), { name: 'new', args: ['api'], flags: new Set(['safe']) });
-  assert.deepEqual(parse('/new --safe api'), { name: 'new', args: ['api'], flags: new Set(['safe']) });
+  const none = new Map();
+  assert.deepEqual(parse('/new api --safe'), { name: 'new', args: ['api'], flags: new Set(['safe']), values: none });
+  assert.deepEqual(parse('/new --safe api'), { name: 'new', args: ['api'], flags: new Set(['safe']), values: none });
   assert.deepEqual(parse('new api /srv/work'), {
     name: 'new',
     args: ['api', '/srv/work'],
     flags: new Set(),
+    values: none,
   });
+});
+
+test('a flag may carry a value, and it does not become a positional', () => {
+  // `--profile reviewer` was the obvious spelling and is the wrong one: /new
+  // already has two positionals, so a following word cannot be told apart from
+  // a session name. `=` makes it one token and removes the ambiguity entirely.
+  const r = parse('/new api --safe --profile=reviewer');
+  assert.deepEqual(r.args, ['api'], 'the value leaked into the positionals');
+  assert.equal(r.flags.has('safe'), true);
+  assert.equal(r.values.get('profile'), 'reviewer');
+
+  // The em-dash tolerance applies to this form too. A phone keyboard rewrites
+  // `--` as you type it, and a flag that silently does nothing is the worst way
+  // for a flag to fail — which this repository has already paid for once.
+  assert.equal(parse('/new —profile=reviewer').values.get('profile'), 'reviewer');
+
+  // A value containing `=` keeps every character after the first one: splitting
+  // on the last would corrupt the value, and splitting on all of them would
+  // silently drop most of it.
+  assert.equal(parse('/x --k=a=b').values.get('k'), 'a=b');
 });
 
 test('parse accepts the Telegram group form /cmd@botname', () => {

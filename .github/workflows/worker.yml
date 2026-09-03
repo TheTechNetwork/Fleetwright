@@ -114,6 +114,24 @@ jobs:
         working-directory: worker
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
 
+      # THE SECOND SCRIPT, and it is bundled separately because it IS separate.
+      # The demo and the product page were moved off the coordinator so that
+      # the bundle holding the Durable Object and the App's client secret is
+      # not also the one serving an unauthenticated page. A dry-run here is
+      # what notices if that ever stops being true — if `demo-worker.js` grows
+      # an import that drags the coordinator in, the bundle says so.
+      - name: Bundle the demo Worker without deploying it
+        working-directory: worker
+        run: npx wrangler deploy --config wrangler.demo.toml --dry-run --outdir /tmp/demo-build
+
+      # THE CONFIG THAT ACTUALLY DEPLOYS. wrangler.toml above is the fork-safe
+      # default; wrangler.production.toml is ours and is what the deploy job
+      # uses. A syntax error in the file nobody dry-runs is a syntax error
+      # discovered by a failed production deploy.
+      - name: Bundle our production config without deploying it
+        working-directory: worker
+        run: npx wrangler deploy --config wrangler.production.toml --dry-run --outdir /tmp/prod-build
+
       # The Worker, RUNNING, in workerd — the runtime it ships to. The fleet
       # went down on a bug that only exists in that runtime (a floating
       # storage-write rejection aborts the Durable Object), and nothing here
@@ -158,12 +176,34 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
         run: |
           # Root first: the Worker bundles ../../src, which imports `jose` from
           # the repository root's node_modules. See the check job.
           npm --prefix "$GITHUB_WORKSPACE" install --no-audit --no-fund
           npm install --no-audit --no-fund
-          npx wrangler deploy
+
+          # WHICH CONFIG, and the default is the SAFE one.
+          #
+          # `wrangler.toml` is the fork-safe file: no routes, no allowlist, no
+          # Sentry project, no GitHub App. `wrangler.production.toml` is ours.
+          # A fork running this workflow must not deploy our config, so the path
+          # comes from a repository variable that this repository sets and a
+          # fork does not — and the fallback is the file that names nobody.
+          #
+          # A repository VARIABLE rather than a secret: it is a filename, and a
+          # secret would be unreadable in the log at the moment somebody is
+          # trying to work out which config a deploy used.
+          npx wrangler deploy --config "${WRANGLER_CONFIG:-wrangler.toml}"
+
+          # The demo and the product page, on their own script. Deployed after
+          # the coordinator and in the same step on purpose: they are one
+          # commit's worth of change, and a page that describes a coordinator
+          # older than itself is the drift this split was meant to avoid.
+          #
+          # It has no secrets to sync — see the step below, which is entirely
+          # about the coordinator's.
+          npx wrangler deploy --config wrangler.demo.toml
 
       # The Worker's RUNTIME secrets are a different thing from the credentials
       # used to deploy it: they live in Cloudflare, not in GitHub, and
@@ -182,12 +222,18 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           AGENT_FLEET_API_TOKEN: ${{ secrets.AGENT_FLEET_API_TOKEN }}
-          # Sign-in. Not credentials — an issuer list, an audience list and an
-          # allowlist of addresses — but they live beside the secrets because
-          # they are the difference between "nobody can sign in" and "anybody
-          # with a Google account can".
-          AGENT_FLEET_AUTH_ISSUERS: ${{ vars.AGENT_FLEET_AUTH_ISSUERS }}
-          AGENT_FLEET_AUTH_AUDIENCES: ${{ vars.AGENT_FLEET_AUTH_AUDIENCES }}
+          # WHO IS ALLOWED IN, and it is a secret rather than a var for one
+          # reason: it decides who can reach a fleet, and this repository is
+          # public. It was BOTH — synced here and also set in the committed
+          # config — and Cloudflare keeps vars and secrets in one namespace, so
+          # every deploy clobbered the secret with the committed list. The sync
+          # has been running and having no effect.
+          #
+          # ONE HOME PER NAME is the rule the config file states, and
+          # AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are gone from here for the
+          # same reason in the other direction: they are public identifiers,
+          # they live in wrangler.production.toml as vars, and syncing them here
+          # as well made a second home that the first one silently overwrote.
           AGENT_FLEET_AUTH_ALLOW: ${{ vars.AGENT_FLEET_AUTH_ALLOW }}
           AGENT_FLEET_FCM_SERVICE_ACCOUNT: ${{ secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
           AGENT_FLEET_APNS_KEY: ${{ secrets.AGENT_FLEET_APNS_KEY }}
@@ -206,7 +252,7 @@ jobs:
           missing=""
           for name in AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT \
                       AGENT_FLEET_APNS_KEY AGENT_FLEET_APNS_KEY_ID AGENT_FLEET_APNS_TEAM_ID \
-                      AGENT_FLEET_AUTH_ISSUERS AGENT_FLEET_AUTH_AUDIENCES AGENT_FLEET_AUTH_ALLOW \
+                      AGENT_FLEET_AUTH_ALLOW \
                       AGENT_FLEET_GITHUB_CLIENT_SECRET; do
             value="$(printenv "$name" || true)"
             if [ -z "$value" ]; then
@@ -221,8 +267,10 @@ jobs:
           if [ -n "$missing" ]; then
             echo "::warning::Not set as repository secrets, so left as they are in Cloudflare:$missing"
             echo "The coordinator answers 503 to everything until AGENT_FLEET_API_TOKEN exists, and 503 to"
-            echo "sign-in until AGENT_FLEET_AUTH_ISSUERS and AGENT_FLEET_AUTH_AUDIENCES do. Hosts need"
-            echo "neither: they enrol with a pin and authenticate by signature."
+            echo "sign-in until AGENT_FLEET_AUTH_ISSUERS and AGENT_FLEET_AUTH_AUDIENCES are set — those are"
+            echo "[vars] in the config rather than secrets. AGENT_FLEET_AUTH_ALLOW is a secret, and an EMPTY"
+            echo "one admits nobody: the safe default, and also a fleet nobody can sign in to."
+            echo "Hosts need none of it: they enrol with a pin and authenticate by signature."
           fi
 
       - name: Where it landed

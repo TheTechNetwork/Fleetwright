@@ -149,6 +149,14 @@ function sessionFrom(reply, name = '') {
  */
 function describeHealth(h) {
   const lines = [];
+  // WHICH BOX. On a two-host fleet this returned capacity, load and a login
+  // banner with no host name anywhere in it, and a beta tester could not tell
+  // which machine they were reading about.
+  //
+  // I closed that issue (#311) on the strength of the same commit that fixed
+  // the login banner, and the banner was all it fixed. Caught by running the
+  // tool afterwards rather than by re-reading the diff.
+  if (h.hostId) lines.push(String(h.hostId));
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
@@ -182,6 +190,33 @@ function describeHealth(h) {
     lines.push('claude: the box itself is logged in (this host predates per-person accounts)');
   }
   if (h.hub && h.hub.reachable === false) lines.push('hub: unreachable from the sidecar');
+
+  // THE COUNTDOWN, BEFORE IT MATTERS. A returning beta tester learned their
+  // token had eleven minutes left from `fleet_verify`, which they called out of
+  // desperation after everything else had misled them. By then they had spent
+  // most of the eleven minutes reading errors.
+  //
+  // The state travels on every health frame. Only `verify` ever looked at it.
+  if (h.credential?.state === 'expired') {
+    lines.push(
+      h.credential.refreshable === false
+        ? 'credential: EXPIRED and cannot renew itself — sessions started here come up signed out'
+        : 'credential: expired, and due to renew itself',
+    );
+  } else if (Number.isFinite(Number(h.credential?.expiresAt))) {
+    const mins = Math.round((Number(h.credential.expiresAt) - Date.now()) / 60_000);
+    if (mins <= 60) lines.push(`credential: ${mins <= 0 ? 'expiring now' : `${mins} minutes left`}`);
+  }
+
+  // AND WHETHER THIS BOX IS BEHIND. A host two releases back refuses verbs the
+  // coordinator offers, and nothing said so until somebody tripped over it —
+  // the tester met it as "does not know that command" on their sixth call.
+  if (Number(h.updates?.appBehind) > 0) {
+    lines.push(
+      `code: ${h.updates.appBehind} commit${h.updates.appBehind === 1 ? '' : 's'} behind — it may refuse newer verbs. ` +
+        'Run `agent-hub update --restart` on it.',
+    );
+  }
   return lines.length ? lines.join('\n') : 'ok';
 }
 
@@ -463,9 +498,28 @@ export class McpServer {
       'reports "done" — a finished session looks exactly like an idle one — so deciding it is over is',
       'your job, not something you will be told.',
       '',
-      '  1. fleet_start, naming a host or a tag if you want a particular kind of machine',
-      '  2. fleet_await — it returns when the session needs an answer or ends. Do not poll.',
-      '  3. fleet_read_log to collect what it produced. This survives the session; its pane does not.',
+      'GIVE A SESSION A PROFILE OR IT COMES UP IDLE.',
+      'This is the first thing to know, because the failure is silent. `fleet_start` with no `profile`',
+      'opens an empty prompt: the session exists, nothing errored, and nothing was asked of it. Waiting',
+      'on one produces an empty log and no error anywhere. Two testers lost a session to that loop.',
+      '',
+      'A PROFILE IS A FILE ON THE HOST, chosen by name. Its content becomes the session\'s first',
+      'message. Call fleet_profiles to see what a host has; you cannot supply the words yourself, and',
+      'that is deliberate rather than missing — a session runs as root in a container, so what it is',
+      'told to do lives on the machine it runs on and gets there by somebody with a shell.',
+      '',
+      'IF NO PROFILE FITS, HAND IT OVER RATHER THAN GUESSING. Start it and give the Remote Control URL',
+      'from the reply to the person you are working with: they can drive it and you cannot. That is a',
+      'handoff, not a failure — the fleet gets them a machine, they bring the instructions. If nobody is',
+      'going to drive it and no profile fits, do not start it.',
+      '',
+      'Watching one that is actually working:',
+      '  1. fleet_start with a `profile`, naming a host or a tag for a particular kind of machine',
+      '  2. fleet_await — returns when the session ends or errors, or the wait runs out. Do not poll.',
+      '     It cannot tell you a session is merely waiting at a prompt; fleet_status reports how long',
+      '     the pane has been still, which is evidence rather than an answer.',
+      '  3. fleet_read_log to collect what it produced — BEFORE stopping it, because stopping discards',
+      '     the container output. A resumed session brings its transcript back; a stopped one does not.',
       '  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',
       '',
       'You may only stop sessions you started in this conversation. Anything else belongs to a person',
@@ -736,6 +790,35 @@ export class McpServer {
       const landed = reply?.hostId || sessionFrom(reply)?.hostId;
       if (landed && !String(reply?.text ?? '').includes(landed)) {
         reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
+      }
+      // AND IT SAYS WHETHER THE SESSION HAS ANYTHING TO DO, which is the part
+      // nothing said.
+      //
+      // Started with no profile, the loop these instructions teach — start,
+      // await, read_log — produces an idle REPL, an empty log and no error
+      // anywhere. A beta tester followed it exactly and lost the session to it;
+      // on a paid runner that loop burns money until the budget deadline.
+      //
+      // v3 gave `start` a `profile`, so there is now a right answer to point
+      // at rather than only a dead end to name. Both branches are printed,
+      // because "started" reads as "working" either way and only one of them
+      // is: an agent told the session is idle stops waiting for output that is
+      // never coming, and an agent told it is working stops hunting for a
+      // Remote Control URL it does not need.
+      if (tool.verb === 'start') {
+        reply = {
+          ...reply,
+          text: params.profile
+            ? `${reply?.text ?? ''}\n\nIt is working on the "${params.profile}" profile — that is its first ` +
+              'message, already delivered. fleet_await, then fleet_read_log BEFORE you stop it.'
+            : `${reply?.text ?? ''}\n\nIT STARTED IDLE — nothing has been asked of it. Waiting on it will ` +
+              'time out rather than finish.\n' +
+              'Either start it with a `profile` (fleet_profiles lists what this host has), or hand it to a ' +
+              'person: ' +
+              (reply?.rcUrl
+                ? reply.rcUrl
+                : 'its Remote Control link appears on fleet_status once the session has published one.'),
+        };
       }
     }
 

@@ -32,6 +32,27 @@ data class SessionKind(
     val mode: String? = null,
     /** Prefixed onto a generated title, so a list groups by eye. */
     val titlePrefix: String = "",
+    /**
+     * Where it lands. Empty means "wherever the scheduler puts it", which is
+     * the right default — most people have one host and should never meet this.
+     *
+     * PRESENT ON iOS SINCE PLACEMENT SHIPPED AND MISSING HERE, which is the
+     * gap docs/app-parity.md exists to catch: a kind naming a box did nothing
+     * on Android, silently, and a setting that works on one phone and not the
+     * other is worse than one that works on neither.
+     */
+    val host: String = "",
+    /**
+     * WHAT A SESSION OF THIS KIND DOES, by name.
+     *
+     * The field that makes a kind a configuration rather than a label: "orgi"
+     * can mean "bootstrap the org repos" without anybody typing a task. The
+     * words are not here and cannot be — a profile is a file on the host, and
+     * this is its name. Empty means the session comes up idle, which stays the
+     * default: a kind that silently gave a session work would be a surprise the
+     * first time somebody reused an old word.
+     */
+    val profile: String = "",
 ) {
     val displayName: String get() = word.ifBlank { "session" }
 }
@@ -53,6 +74,11 @@ object SessionKinds {
                     word = o.optString("word"),
                     mode = o.optString("mode").ifBlank { null },
                     titlePrefix = o.optString("titlePrefix"),
+                    // A kind stored before these existed reads as "", which is
+                    // the same as not set. Losing somebody's kinds on upgrade
+                    // is the failure this whole loader is written around.
+                    host = o.optString("host"),
+                    profile = o.optString("profile"),
                 )
             }
             out
@@ -67,7 +93,9 @@ object SessionKinds {
                     .put("id", it.id)
                     .put("word", it.word)
                     .put("mode", it.mode ?: "")
-                    .put("titlePrefix", it.titlePrefix),
+                    .put("titlePrefix", it.titlePrefix)
+                    .put("host", it.host)
+                    .put("profile", it.profile),
             )
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

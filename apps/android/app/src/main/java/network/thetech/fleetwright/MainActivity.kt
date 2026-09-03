@@ -218,7 +218,15 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
      * request that has already left.
      */
     fun startInBackground(request: StartRequest) {
-        status = "Starting a session. You will get a notification when it is ready."
+        // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO, because "ready" reads as
+        // "working" and only one of these is. A session with no profile is
+        // waiting for a person, and somebody who walks away expecting output
+        // comes back to an empty prompt.
+        status = if (request.profile == null) {
+            "Starting a session. It will come up idle, waiting for you."
+        } else {
+            "Starting a session. You will get a notification when it is ready."
+        }
         scope.launch {
             val text = try {
                 val reply = fleet.start(
@@ -226,6 +234,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
                     brief = request.brief,
                     mode = request.mode,
                     host = request.host,
+                    profile = request.profile,
                 )
                 LocalNotice.post(context, "Session ready", reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }
@@ -933,7 +942,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedButton(onClick = { showKinds = true }) { Text("Session kinds") }
-        if (showKinds) KindsSheet(onDismiss = { showKinds = false })
+        if (showKinds) KindsSheet(settings = settings, onDismiss = { showKinds = false })
 
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
 

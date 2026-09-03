@@ -2,9 +2,17 @@
 
 > **This is the upstream agent-hub README, kept as the session manager's manual.**
 > Commands, permission modes, resume behaviour and the web UI below are all
-> current. The *Install* section is upstream's and clones the upstream repo — to
-> install from **this** project, follow [`deployment.md`](./deployment.md)
-> instead. Provenance and divergences: [`upstream-agent-hub.md`](./upstream-agent-hub.md).
+> current.
+>
+> **What is NOT current, and is upstream's rather than ours:** the *Install*
+> section (it clones the upstream repo — use [`deployment.md`](./deployment.md)
+> or the ten-step [`first-session.md`](./first-session.md)), and any version or
+> dependency claim on this page. A beta tester found node "18+" here against
+> `>= 24` in two other files and could not tell which to believe.
+>
+> The rule for this file: **if a statement is about how to install or what to
+> install, it is upstream's and this repository's own docs win.** Provenance and
+> divergences: [`upstream-agent-hub.md`](./upstream-agent-hub.md).
 
 Start, resume and stop **Claude Code** sessions on a box you own — from Telegram
 or a browser, without SSH.
@@ -80,7 +88,8 @@ dispatcher, so nothing can work in one surface and be missing from another.
 
 | Command | What it does |
 |---|---|
-| `/new [name] [path] [--safe]` | Start a session. Name optional, path defaults to the workdir. |
+| `/new [name] [path] [--safe] [--profile=<name>]` | Start a session. Name optional, path defaults to the workdir. **Without a profile it comes up idle** — waiting for a person, not working. |
+| `/profiles` | The task profiles on this box. Each is a `<name>.md` file under `AGENT_HUB_PROFILE_DIR`; its content becomes a new session's first message. Adding one needs a shell here, which is what stops a coordinator from writing a session's instructions. |
 | `/resume <name> [summary\|full]` | Bring a stopped session back **with its conversation**. |
 | `/stop <name>` | Stop it. The conversation is kept so `/resume` still works. |
 | `/list` | Everything — running and resumable. |

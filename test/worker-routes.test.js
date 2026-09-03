@@ -44,21 +44,41 @@ test('the privacy policy is public, because App Store Connect requires one', asy
   assert.match(String(res.headers.get('content-type')), /text\/html/);
 });
 
-test('the install one-liner redirects to the script in this repository', async () => {
+test('the install one-liner redirects to whichever repository this deploy names', async () => {
   // A box being installed has no credential — acquiring one is what the install
   // is for — so this has to sit above the token gate.
+  const mine = 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh';
   for (const path of ['/install', '/install.sh']) {
-    const res = await get(path);
+    const res = await get(path, { AGENT_FLEET_INSTALL_URL: mine });
     assert.equal(res.status, 302, path);
-    assert.match(String(res.headers.get('location')), /install\/bootstrap\.sh$/);
+    assert.equal(String(res.headers.get('location')), mine);
   }
+});
+
+test('an unconfigured coordinator publishes no installer at all', async () => {
+  // THE ONE INHERITED CONSTANT THAT ENDS UP EXECUTING. This route hardcoded
+  // upstream's raw URL, and bootstrap.sh clones the repository it came from —
+  // so a fork's own coordinator, on a fork's own domain, handed a root shell a
+  // script that installed SOMEBODY ELSE'S CODE. Silently, with nothing for the
+  // person pasting it to notice.
+  //
+  // Refusing is the only safe default. Redirecting to upstream when unset would
+  // keep the bug as the behaviour, and a working command that does the wrong
+  // thing is worse than an error.
+  const res = await get('/install');
+  assert.equal(res.status, 404);
+  const text = await res.text();
+  // NAMES THE VARIABLE and says why it matters, because the person reading this
+  // is the one who can set it and "not found" sends them nowhere.
+  assert.match(text, /AGENT_FLEET_INSTALL_URL/);
+  assert.match(text, /clones the repository it is served from/);
 });
 
 test('a redirect, not a copy of the script', async () => {
   // The thing people paste into a root shell should be served by the place that
   // has the source. A Worker that returned the script itself could go stale
   // here, and could be edited here.
-  const res = await get('/install');
+  const res = await get('/install', { AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
   assert.equal((await res.text()).includes('#!/bin/sh'), false);
 });
 
@@ -290,11 +310,52 @@ test('a real failure is still a real failure', async () => {
       },
     }),
   };
-  await assert.rejects(
-    worker.fetch(
-      new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
-      /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
-    ),
-    /undefined is not a function/,
+  // It used to assert the throw PROPAGATED, which was the right test until the
+  // top-level guard started answering JSON — a Worker that throws hands the
+  // caller a Cloudflare error page, and no client can read one.
+  //
+  // The property that matters is unchanged and is what this asserts now: a real
+  // fault is NOT mistaken for a Durable Object reset and quietly retried. It
+  // comes back as an internal error, once.
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
   );
+  assert.equal(res.status, 500);
+  const body = /** @type {any} */ (await res.json());
+  assert.equal(body.error.code, 'internal');
+  assert.equal(body.error.code === 'restarting', false, 'a genuine fault was treated as a redeploy');
+});
+
+// --- a throw is never an HTML error page ------------------------------------
+
+test('an unhandled throw answers JSON, not a Cloudflare error page', async () => {
+  // A beta tester got `Unexpected token 'e', "error code: 1101" is not valid
+  // JSON` from an MCP call. 1101 is Cloudflare's "the Worker threw", and what
+  // reaches the caller is Cloudflare's error PAGE — so every JSON client gets a
+  // parse error naming a token and has to work backwards from a five-character
+  // code to "something crashed upstream".
+  //
+  // This does not fix the throw (#313 is still unexplained and unreproduced).
+  // It fixes the shape: a caller gets a reason, and the exception still reaches
+  // the reporter.
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        throw new TypeError('something upstream exploded');
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/hosts', { headers: { authorization: 'Bearer a-token-at-least-16ch' } }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(res.status, 500);
+  const body = /** @type {any} */ (await res.json());
+  assert.equal(body.error.code, 'internal');
+  // Says whose fault it is, and that retrying will not help — the two facts the
+  // parse error withheld.
+  assert.match(body.text, /fault here/);
+  assert.match(body.text, /do it again/);
 });

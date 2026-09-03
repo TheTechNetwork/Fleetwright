@@ -198,6 +198,23 @@ export class HttpAdapter {
         meta[field] = r.value;
       }
 
+      // WHICH TASK PROFILE, which is a NAME rather than prose and so does not
+      // go through cleanText — that collapses whitespace and strips control
+      // characters, which would silently turn a wrong name into a different
+      // wrong name. A name is exactly right or it is refused.
+      //
+      // It is accepted as a field as well as on the command line so that the
+      // web UI and the fleet do not have to spell it differently. The content
+      // is never accepted here in any form: it is a file on this box, because a
+      // caller that could supply the words would be writing the instructions of
+      // an agent with root in a container.
+      if (body.profile !== undefined && body.profile !== null) {
+        if (typeof body.profile !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(body.profile)) {
+          return json(res, 400, { ok: false, text: 'profile must be a plain name — letters, digits, dash, underscore' });
+        }
+        meta.profile = body.profile;
+      }
+
       // FILE CONTENT, WHICH DOES NOT GO THROUGH cleanText. That collapses runs
       // of whitespace and strips control characters — right for a title and
       // catastrophic for a file, which would come back reindented and with its
@@ -267,7 +284,20 @@ export class HttpAdapter {
     if (p === '/api/peek' && method === 'GET') {
       const name = url.searchParams.get('name') || '';
       const text = this.sessions.peek(name, 60);
-      if (text === null) return json(res, 404, { error: 'not running' });
+      if (text === null) {
+        // NAMES THE WAY BACK. `peek` is documented as "how you find out
+        // whether work is done" and answers "not running" on every session a
+        // returning user has — which is all of them, and the only ones whose
+        // output they want. Resuming restores the pane and the transcript.
+        const known = this.sessions.list().some((s) => s.name === name);
+        return json(res, 404, {
+          error: 'not running',
+          text: known
+            ? `"${name}" is not running, so there is no live pane to read. Resume it to bring the transcript ` +
+              'back — that is usually where the output you are looking for is.'
+            : `No session called "${name}".`,
+        });
+      }
       return json(res, 200, { name, text });
     }
 

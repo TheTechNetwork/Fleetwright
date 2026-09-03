@@ -149,6 +149,32 @@ struct Fleet {
         /// the wording changes — the same argument that put the authorization
         /// URL in a field rather than in a message.
         var entries: [Entry]?
+        /// What a session could be started ON, as DATA and with the host each
+        /// one lives on. Same reasoning as `entries`: a picker built by parsing
+        /// the rendered text would be a picker built from column padding.
+        var profiles: [Profile]?
+    }
+
+    /// A task profile: a file on ONE host whose content becomes a new session's
+    /// first message.
+    ///
+    /// THE CONTENT IS NOT HERE AND NEVER WILL BE. The protocol carries a name;
+    /// the words live on the box and get there by somebody with a shell on it.
+    /// A phone that could supply them would be writing the instructions of an
+    /// agent running as root in a container — see docs/task-at-start.md.
+    struct Profile: Codable, Hashable, Identifiable {
+        let name: String
+        /// The first line of the file, for a list. Not the task — the task is
+        /// the whole file, which stays on the host.
+        var summary: String = ""
+        var chars: Int = 0
+        /// Which machine has it. Load-bearing rather than decorative: `start`
+        /// on a host that does not have this profile is refused, so a picker
+        /// that lost the attribution would send people at the wrong box.
+        var hostId: String?
+        /// Two hosts may both have a profile called "reviewer" and they are not
+        /// the same file, so the name alone is not an identity.
+        var id: String { "\(hostId ?? "")/\(name)" }
     }
 
     /// One thing in a session's workspace.
@@ -272,13 +298,23 @@ struct Fleet {
         title: String? = nil,
         brief: String? = nil,
         mode: String? = nil,
-        host: String? = nil
+        host: String? = nil,
+        profile: String? = nil
     ) async throws -> Reply {
         var params: [String: String] = [:]
         if let name { params["name"] = name }
         if let title, !title.isEmpty { params["title"] = title }
         if let brief, !brief.isEmpty { params["brief"] = brief }
         if let mode, !mode.isEmpty { params["mode"] = mode }
+        // WHAT THE SESSION WILL BE DOING, by name. Without it the session comes
+        // up idle at an empty prompt — which is what every session did before
+        // protocol v3, and what nothing said out loud.
+        //
+        // A NAME, never the words: the file is on the host. An unknown one is
+        // refused by that host, listing what it does have, so a stale picker
+        // fails with something a person can act on rather than starting a
+        // session that sits there.
+        if let profile, !profile.isEmpty { params["profile"] = profile }
         // `host` is a placement PREFERENCE and rides beside the intent, never
         // inside it — `start` declares no host parameter, and a host receiving
         // one would refuse the whole intent. The coordinator refuses a bad
@@ -288,6 +324,21 @@ struct Fleet {
         return try await intent("start", params: params, host: host)
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
+
+    /// What every host in the fleet can start a session on.
+    ///
+    /// Fans out, because a profile is a file on one box: asking a single
+    /// machine answers with whatever that machine happens to have and hides the
+    /// one somebody is looking for. Each entry carries its `hostId` for the
+    /// same reason.
+    ///
+    /// An empty list is an ANSWER — this fleet has no profiles, so every
+    /// session starts idle. A host too old to know the verb refuses it by name
+    /// (`unknown_verb`), and that is a different thing, which is why the sheet
+    /// treats a throw as "no picker" rather than as "no profiles".
+    func profiles() async throws -> [Profile] {
+        try await intent("profiles", params: [:]).profiles ?? []
+    }
 
     /// One host in detail, or the fleet when no name is given.
     func status(_ name: String? = nil) async throws -> Reply {
