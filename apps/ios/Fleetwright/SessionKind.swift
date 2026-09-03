@@ -36,6 +36,23 @@ struct SessionKind: Codable, Identifiable, Hashable {
     /// anybody sorting it. "dev" gives "dev: refactor auth".
     var titlePrefix: String = ""
 
+    /// WHAT A SESSION OF THIS KIND DOES, by name.
+    ///
+    /// This is the field that makes a kind a configuration rather than a label:
+    /// "start an orgi session" can mean "bootstrap the org repos on the mac
+    /// box" without anybody typing a task. The words are not here and cannot
+    /// be — a profile is a file on the host, and this is its name.
+    ///
+    /// Empty means the session comes up idle, which stays the default: most
+    /// kinds are about WHERE and HOW, and a kind that silently gave a session
+    /// work would be a surprise the first time somebody reused an old word.
+    ///
+    /// Decoded from an older stored kind as "", because Codable synthesises a
+    /// default for a var with an initialiser — a kind saved before this field
+    /// existed still loads. Losing every kind on upgrade is exactly the
+    /// failure the save path below is written around.
+    var profile: String = ""
+
     var displayName: String { word.isEmpty ? "session" : word }
 }
 

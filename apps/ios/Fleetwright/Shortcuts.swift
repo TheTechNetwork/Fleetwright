@@ -211,7 +211,21 @@ enum StartSession {
                 name: nil,
                 title: title.isEmpty ? nil : title,
                 brief: about.isEmpty ? nil : about,
-                mode: chosen?.mode
+                mode: chosen?.mode,
+                // A KIND'S HOST AND TASK, WHICH THIS PATH USED TO DROP.
+                //
+                // The sheet honours both; spoken, only `mode` survived — so
+                // "start a dev session" by voice landed wherever the scheduler
+                // chose, which is the failure this app keeps paying for: a
+                // setting that works on one surface and is silently ignored on
+                // another. A kind is a configuration or it is a label, and
+                // half-applying it is the worst of the two.
+                //
+                // Task especially: voice is the surface with no screen to drive
+                // the session from afterwards, so a spoken start that comes up
+                // idle is a session nobody is going to reach.
+                host: chosen?.host.isEmpty == false ? chosen?.host : nil,
+                profile: chosen?.profile.isEmpty == false ? chosen?.profile : nil
             )
             // The spoken reply the host wrote, not a sentence invented here. A
             // UI can ignore prose; an assistant cannot invent it.

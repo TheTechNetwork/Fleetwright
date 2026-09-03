@@ -186,6 +186,15 @@ it is very easy to re-enter one merge at a time.
 | journals and session output | ✅ | ✅ | ✅ |
 | update / upgrade a box | one tap | one tap | ✅ |
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
+| **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
+| **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
+
+**A gap this table caught, in the round that added the row above.** Android's
+`SessionKind` had no `host` field at all, while iOS has had one since placement
+shipped — so a kind naming a box did nothing on Android, silently. A setting
+that works on one phone and not the other is worse than one that works on
+neither, because nobody goes looking. Both now carry `host` and `profile`, and
+the iOS voice path was passing neither: spoken, only `mode` survived.
 
 **The two things that stayed hard, and stayed correct:**
 

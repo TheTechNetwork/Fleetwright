@@ -444,6 +444,10 @@ export class Sidecar {
         // app needs the names, kinds and sizes separately or it is reduced to
         // parsing emoji out of a string.
         ...(Array.isArray(r.entries) ? { entries: r.entries } : {}),
+        // The task profiles this box has, as data. Same reasoning as entries:
+        // the rendered text is padded for a terminal, and a picker built by
+        // parsing padding is a picker that breaks on a long name.
+        ...(Array.isArray(r.profiles) ? { profiles: r.profiles } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {

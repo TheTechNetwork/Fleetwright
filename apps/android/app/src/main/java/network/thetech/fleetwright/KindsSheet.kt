@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,10 +36,19 @@ import androidx.compose.ui.unit.dp
  * consistency serving us rather than the person holding the phone.
  */
 @Composable
-fun KindsSheet(onDismiss: () -> Unit) {
+fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val kinds = remember { mutableStateListOf<SessionKind>().apply { addAll(SessionKinds.all(context)) } }
     var newWord by remember { mutableStateOf("") }
+    // BY NAME, DEDUPLICATED ACROSS HOSTS. A kind is a word somebody says, not a
+    // placement: two boxes may both have a profile called "reviewer", and a
+    // kind that pinned one of them would send "start a reviewer session" at a
+    // machine that happens to be busy. The start sheet resolves the host from
+    // where the file actually is.
+    var offered by remember { mutableStateOf(listOf<String>()) }
+    LaunchedEffect(Unit) {
+        offered = Fleet(settings).profiles().orEmpty().map { it.name }.distinct().sorted()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -49,7 +60,8 @@ fun KindsSheet(onDismiss: () -> Unit) {
             ) {
                 Text(
                     "Say \"start a dev session\". A word here becomes a shortcut straight away — "
-                        + "nothing else to set up.",
+                        + "nothing else to set up. A task makes the word do something: spoken, that is the "
+                        + "only way a session gets one, because there is no screen to drive it from afterwards.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 kinds.forEachIndexed { i, k ->
@@ -73,6 +85,28 @@ fun KindsSheet(onDismiss: () -> Unit) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // A TEXT FIELD WOULD HAVE BEEN SMALLER AND WRONG: a
+                    // mistyped profile name saves fine, pre-fills nothing, and
+                    // the kind quietly starts idle sessions forever — a setting
+                    // that looks applied and is not.
+                    //
+                    // Only when the fleet has answered with something. A picker
+                    // whose only entry is "Nothing" is furniture, and on a fleet
+                    // with no profiles it would imply a broken feature.
+                    if (offered.isNotEmpty()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AssistChip(
+                                onClick = { kinds[i] = k.copy(profile = "") },
+                                label = { Text(if (k.profile.isBlank()) "Idle \u2713" else "Idle") },
+                            )
+                            offered.forEach { name ->
+                                AssistChip(
+                                    onClick = { kinds[i] = k.copy(profile = if (k.profile == name) "" else name) },
+                                    label = { Text(if (k.profile == name) "$name \u2713" else name) },
+                                )
+                            }
+                        }
+                    }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(

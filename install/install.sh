@@ -702,9 +702,17 @@ ok "$STATE_DIR"
 # are told to do.
 PROFILE_DIR="${AGENT_HUB_PROFILE_DIR:-$STATE_DIR/profiles}"
 install -d -o "$RUN_USER" -m 0750 "$PROFILE_DIR"
-if [ ! -e "$PROFILE_DIR/orient.md" ]; then
-  install -m 0640 -o "$RUN_USER" "$DIR/install/profiles/orient.md" "$PROFILE_DIR/orient.md"
-fi
+for f in "$DIR"/install/profiles/*.md; do
+  [ -e "$f" ] || continue
+  base="$(basename "$f")"
+  # README.md is the note explaining the directory, not a profile — and
+  # src/core/profiles.js excludes it by name for the same reason. It is not
+  # copied at all: a note about the shipped examples belongs beside them in the
+  # repository, not in the directory a session's instructions are read from.
+  [ "$base" = "README.md" ] && continue
+  [ -e "$PROFILE_DIR/$base" ] && continue
+  install -m 0640 -o "$RUN_USER" "$f" "$PROFILE_DIR/$base"
+done
 ok "$PROFILE_DIR"
 
 # --- 3. environment file ----------------------------------------------------

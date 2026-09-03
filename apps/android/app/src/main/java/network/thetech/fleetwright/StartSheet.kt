@@ -35,6 +35,12 @@ data class StartRequest(
     val brief: String?,
     val mode: String?,
     val host: String?,
+    /**
+     * WHAT IT WILL DO, by name. Null means the session comes up idle at an
+     * empty prompt and somebody has to drive it — which is what every session
+     * did before protocol v3, and what nothing said out loud.
+     */
+    val profile: String? = null,
 )
 
 /**
@@ -70,6 +76,12 @@ fun StartSheet(
     }
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
+    // NULL UNTIL THE FLEET ANSWERS, and that is the whole reason it is nullable
+    // rather than an empty list. Rendering a picker while the request is in
+    // flight offers "Nothing yet" as if it were the fleet's answer, and
+    // somebody taps Start.
+    var profiles by remember { mutableStateOf<List<Fleet.Profile>?>(null) }
+    var profile by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
@@ -93,6 +105,10 @@ fun StartSheet(
         // The enrolled list the settings screen already uses. Loaded here so
         // the sheet works from every entry point, launcher shortcuts included.
         hosts = runCatching { Fleet(settings).enrolledHosts().map { it.hostId } }.getOrDefault(emptyList())
+        // Nullable all the way through: Fleet.profiles() answers null when
+        // nobody could say — an old coordinator, or hosts that refuse the verb
+        // by name — and that is not the same as a fleet with no profiles.
+        profiles = Fleet(settings).profiles()
     }
 
     AlertDialog(
@@ -125,12 +141,73 @@ fun StartSheet(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // WHAT IT WILL DO, and it is above Kind and Where because it
+                // is the question that decides whether starting is worth doing
+                // at all. A session with no task comes up idle: correct,
+                // sometimes wanted, and never what somebody expects from a
+                // button labelled Start.
+                val offered = profiles.orEmpty()
+                if (offered.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Task", style = MaterialTheme.typography.labelMedium)
+                        AssistChip(
+                            onClick = { profile = "" },
+                            label = {
+                                Text(
+                                    if (profile.isEmpty()) "I will drive it \u2713" else "I will drive it",
+                                )
+                            },
+                        )
+                        offered.forEach { p ->
+                            AssistChip(
+                                onClick = {
+                                    profile = if (profile == p.name) "" else p.name
+                                    // Where it can run is decided by where the
+                                    // file IS. A profile only one box has pins
+                                    // the host, because `start` elsewhere is
+                                    // refused — and a refusal a person cannot
+                                    // act on is worse than a picker that moved
+                                    // on its own.
+                                    val owners = offered.filter { it.name == profile }.mapNotNull { it.hostId }.toSet()
+                                    if (owners.size == 1) host = owners.first()
+                                },
+                                // The summary, not the name: the name is a
+                                // filename and the summary is the sentence
+                                // somebody wrote to be recognised by.
+                                label = {
+                                    val shown = p.summary.ifBlank { p.name }
+                                    Text(if (profile == p.name) "$shown \u2713" else shown)
+                                },
+                            )
+                        }
+                        Text(
+                            if (profile.isEmpty())
+                                "It will start idle, waiting for you."
+                            else
+                                "It starts with this as its first message. The task lives on the host — this app never sends the words.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 if (kinds.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Kind", style = MaterialTheme.typography.labelMedium)
                         kinds.forEach { k ->
                             AssistChip(
-                                onClick = { kind = if (kind?.id == k.id) null else k },
+                                onClick = {
+                                    kind = if (kind?.id == k.id) null else k
+                                    // A kind that names a host or a task fills
+                                    // both pickers, and they stay editable: a
+                                    // kind is a default, not a decision made
+                                    // last month that cannot be revisited.
+                                    kind?.let { chosen ->
+                                        if (chosen.host.isNotBlank()) host = chosen.host
+                                        // Only if the fleet still has it — a
+                                        // kind naming a deleted profile would
+                                        // otherwise pre-fill a refused start.
+                                        if (offered.any { it.name == chosen.profile }) profile = chosen.profile
+                                    }
+                                },
                                 label = { Text(if (kind?.id == k.id) "${k.displayName} ✓" else k.displayName) },
                             )
                         }
@@ -179,6 +256,7 @@ fun StartSheet(
                             brief = brief.trim().ifBlank { null },
                             mode = kind?.mode,
                             host = host.ifBlank { null },
+                            profile = profile.ifBlank { null },
                         ),
                     )
                     onDismiss()

@@ -276,7 +276,13 @@ struct FleetView: View {
     /// a dismissed view is one that may not finish — and this is a mutating
     /// request that has already left.
     private func startInBackground(_ request: StartRequest) {
-        status = "Starting a session. You will get a notification when it is ready."
+        // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO, because "ready" reads as
+        // "working" and only one of these is. A session with no profile is
+        // waiting for a person, and somebody who walks away expecting output
+        // comes back to an empty prompt.
+        status = request.profile == nil
+            ? "Starting a session. It will come up idle, waiting for you."
+            : "Starting a session. You will get a notification when it is ready."
         Task {
             do {
                 let reply = try await Fleet(settings: settings).start(
@@ -284,7 +290,8 @@ struct FleetView: View {
                     title: request.title,
                     brief: request.brief,
                     mode: request.mode,
-                    host: request.host
+                    host: request.host,
+                    profile: request.profile
                 )
                 let text = reply.text ?? "Started."
                 await MainActor.run { status = text }
@@ -1062,7 +1069,7 @@ private struct SettingsView: View {
                 // to your screen.
                 if shows(.you) {
                 Section {
-                    NavigationLink("Session kinds") { SessionKindsView() }
+                    NavigationLink("Session kinds") { SessionKindsView(settings: settings) }
                     // Two taps to a phrase with no app name in it at all.
                     //
                     // Apple requires the app name in the phrases WE ship, which
@@ -1213,8 +1220,16 @@ private struct StatusBadge: View {
 /// "dev", once more a month later — and anything cleverer than a list and a
 /// text field is design nobody asked for on a screen nobody looks at.
 struct SessionKindsView: View {
+    /// Passed in only so the task picker can ask the fleet what profiles exist.
+    /// A TEXT FIELD WOULD HAVE BEEN SMALLER AND WRONG: a mistyped profile name
+    /// saves fine, pre-fills nothing, and the kind quietly starts idle sessions
+    /// forever — a setting that looks applied and is not, which is the exact
+    /// shape this app keeps paying for.
+    let settings: Settings
+
     @State private var kinds: [SessionKind] = SessionKinds.all()
     @State private var newWord = ""
+    @State private var profiles: [Fleet.Profile] = []
 
     var body: some View {
         Form {
@@ -1227,6 +1242,17 @@ struct SessionKindsView: View {
                         TextField("Title prefix (optional)", text: $kind.titlePrefix)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        // Only when the fleet has answered with something. A
+                        // picker whose only entry is "Nothing" is furniture,
+                        // and on a fleet with no profiles it would be furniture
+                        // that implies a feature is broken.
+                        if !profiles.isEmpty {
+                            Picker("Task", selection: $kind.profile) {
+                                Text("Nothing — start idle").tag("")
+                                ForEach(uniqueProfiles, id: \.self) { name in Text(name).tag(name) }
+                            }
+                            .font(.footnote)
+                        }
                     }
                 }
                 .onDelete { idx in
@@ -1253,15 +1279,28 @@ struct SessionKindsView: View {
                 // word and then wonder why Siri has not heard of it.
                 Text("""
                 Say "start a dev session on my fleet". A new word can take a moment before \
-                Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth".
+                Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth". \
+                A task makes the word do something: spoken, that is the only way a session gets \
+                one, because there is no screen to drive it from afterwards.
                 """)
             }
         }
         .navigationTitle("Session kinds")
+        .task { profiles = (try? await Fleet(settings: settings).profiles()) ?? [] }
         // Saved on the way out rather than on every keystroke: this writes the
         // whole list, and doing that per character would rewrite it a hundred
         // times while somebody types one word.
         .onDisappear { SessionKinds.save(kinds) }
+    }
+
+    /// By NAME, deduplicated across hosts.
+    ///
+    /// A kind is a word somebody says, not a placement: two boxes may both have
+    /// a profile called "reviewer", and a kind that pinned one of them would
+    /// send "start a reviewer session" at a machine that happens to be busy.
+    /// The start sheet resolves the host from where the file actually is.
+    private var uniqueProfiles: [String] {
+        Array(Set(profiles.map(\.name))).sorted()
     }
 }
 

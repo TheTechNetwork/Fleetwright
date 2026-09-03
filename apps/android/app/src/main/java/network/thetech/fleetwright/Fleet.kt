@@ -266,6 +266,38 @@ class Fleet(
          * URL in a field rather than in a message.
          */
         val entries: List<Entry> = emptyList(),
+        /**
+         * What a session could be started ON, as DATA and with the host each
+         * one lives on. Same reasoning as [entries]: a picker built by parsing
+         * the rendered text would be a picker built from column padding.
+         *
+         * NULL IS NOT EMPTY. Null means nobody answered the question — a
+         * coordinator or a host too old to know the verb — and empty means this
+         * fleet genuinely has no profiles. A picker has to tell those apart or
+         * it offers "nothing yet" as if it were the fleet's answer.
+         */
+        val profiles: List<Profile>? = null,
+    )
+
+    /**
+     * A task profile: a file on ONE host whose content becomes a new session's
+     * first message.
+     *
+     * THE CONTENT IS NOT HERE AND NEVER WILL BE. The protocol carries a name;
+     * the words live on the box and get there by somebody with a shell on it. A
+     * phone that could supply them would be writing the instructions of an
+     * agent running as root in a container — see docs/task-at-start.md.
+     *
+     * @property hostId which machine has it. Load-bearing rather than
+     *   decorative: `start` on a host that does not have this profile is
+     *   refused, so a picker that lost the attribution sends people at the
+     *   wrong box.
+     */
+    data class Profile(
+        val name: String,
+        val summary: String = "",
+        val chars: Int = 0,
+        val hostId: String? = null,
     )
 
     /** One thing in a session's workspace. */
@@ -395,6 +427,7 @@ class Fleet(
         brief: String? = null,
         mode: String? = null,
         host: String? = null,
+        profile: String? = null,
     ): Reply = intent(
         "start",
         buildMap {
@@ -402,6 +435,14 @@ class Fleet(
             if (!title.isNullOrBlank()) put("title", title)
             if (!brief.isNullOrBlank()) put("brief", brief)
             if (!mode.isNullOrBlank()) put("mode", mode)
+            // WHAT THE SESSION WILL BE DOING, by name. Without it the session
+            // comes up idle at an empty prompt — which is what every session
+            // did before protocol v3, and what nothing said out loud.
+            //
+            // A NAME, never the words: the file is on the host. An unknown one
+            // is refused by that host, listing what it does have, so a stale
+            // picker fails with something a person can act on.
+            if (!profile.isNullOrBlank()) put("profile", profile)
         },
         // A placement PREFERENCE, beside the intent and never inside it —
         // `start` declares no host parameter, and a host receiving one would
@@ -410,6 +451,20 @@ class Fleet(
     )
 
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
+
+    /**
+     * What every host in the fleet can start a session on.
+     *
+     * Fans out, because a profile is a file on one box: asking a single machine
+     * answers with whatever that machine happens to have and hides the one
+     * somebody is looking for.
+     *
+     * Returns null when nobody answered the question — an old coordinator, or
+     * hosts that refuse the verb by name. That is a different thing from a
+     * fleet with no profiles, and the caller shows no picker rather than an
+     * empty one.
+     */
+    suspend fun profiles(): List<Profile>? = runCatching { intent("profiles", emptyMap()).profiles }.getOrNull()
 
     /** One session in detail, or the fleet when no name is given. */
     suspend fun status(name: String? = null): Reply =
@@ -738,6 +793,24 @@ class Fleet(
                             }
                         }
                     } ?: emptyList(),
+                    // ABSENT STAYS NULL. `optJSONArray` returns null for a
+                    // missing key and for an explicit null alike, which is
+                    // exactly the distinction wanted here: no key means nobody
+                    // answered, `[]` means nothing to offer.
+                    profiles = json.optJSONArray("profiles")?.let { a ->
+                        (0 until a.length()).mapNotNull { i ->
+                            a.optJSONObject(i)?.let { p ->
+                                val n = p.optString("name")
+                                if (n.isBlank()) null
+                                else Profile(
+                                    name = n,
+                                    summary = p.optString("summary", ""),
+                                    chars = p.optInt("chars", 0),
+                                    hostId = p.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                                )
+                            }
+                        }
+                    },
                     check = json.optJSONObject("check")?.let { c ->
                         fun list(key: String): List<String>? =
                             if (!c.has(key) || c.isNull(key)) null

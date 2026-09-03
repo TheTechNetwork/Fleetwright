@@ -837,10 +837,22 @@ export class CoordinatorCore {
       // say "missing on deb14" instead of implying the fleet is uniform.
       const connections = mergeConnections(results);
 
+      // THE SAME QUESTION FOR PROFILES, and the attribution is the answer
+      // rather than decoration: a profile lives on one box, and `start` on a
+      // host that does not have it is refused. A merged list that lost which
+      // machine each came from would be a picker that sends people at the wrong
+      // one. Undefined rather than [] when no host answered with the key at
+      // all — a fleet of hosts too old to know the verb has not told us there
+      // are no profiles, and null is cannot-tell.
+      const profiles = results.some((r) => Array.isArray(r.profiles))
+        ? results.flatMap((r) => (r.profiles || []).map((/** @type {any} */ p) => ({ ...p, hostId: r.hostId })))
+        : undefined;
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
         ...(connections ? { connections } : {}),
+        ...(profiles ? { profiles } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.

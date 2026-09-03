@@ -41,6 +41,9 @@
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, as data rather than as rendered text
+ * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
+ *   the task profiles on this box, as data. A picker rendered from the rendered
+ *   text would be a picker built by parsing column padding
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
@@ -555,6 +558,10 @@ export const COMMANDS = {
           text:
             'No task profiles on this box, so every session here starts idle.\n' +
             `Add one as ${ctx.cfg.profileDir}/<name>.md — its content becomes the session's first message.`,
+          // EMPTY, NOT ABSENT. "This host has none" and "this host does not
+          // know the verb" are different answers and a picker has to tell them
+          // apart — null is cannot-tell, [] is nothing.
+          profiles: [],
         };
       }
       // The name first and left-aligned: it is the thing that gets typed back.
@@ -563,6 +570,9 @@ export const COMMANDS = {
       return {
         ok: true,
         text: `${have.length} profile${have.length === 1 ? '' : 's'} on this box:\n${lines.join('\n')}`,
+        // AS DATA TOO. An app rendering a picker from the text above would be
+        // parsing column padding, and the padding is there for a terminal.
+        profiles: have,
         // Tappable, because the whole point is that choosing one is easier than
         // typing a task — and a list you have to retype is a list.
         buttons: have.slice(0, 8).map((p) => ({ label: p.name, command: `/new --profile=${p.name}` })),
