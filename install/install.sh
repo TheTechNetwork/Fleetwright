@@ -156,16 +156,58 @@ while [ $# -gt 0 ]; do
       printf '  --check       verify prerequisites and change nothing\n'
       printf '  --wizard      force the interactive setup even without a terminal\n'
       printf '  --no-wizard   never ask; write templates and print the next steps\n'
+      printf '  --upgrade     an already-enrolled box onto new code: no questions,\n'
+      printf '                restarts the services, and checks the protocol matches\n'
       exit 0 ;;
+    --upgrade)
+      # AN ALREADY-CONFIGURED BOX, BROUGHT ONTO NEW CODE, WITH NO QUESTIONS.
+      #
+      # `AGENT_HUB_NONINTERACTIVE=1` has always existed and does half the job:
+      # it skips the wizard, which is also where the services get restarted. So
+      # an unattended run put the new code on disk and left the old code
+      # RUNNING, reporting success — the exact failure update.js is written
+      # around ("the new code is on disk but this process is still the old
+      # one"). This flag is the other half.
+      UPGRADE=1; WIZARD=no ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
   shift
 done
+# WHERE AN ANSWER COMES FROM, WHICH IS NOT ALWAYS STDIN.
+#
+# A piped install has no stdin of its own — the shell is reading the script
+# through it — so `read` sees EOF and every question silently takes its default.
+#
+# bootstrap.sh ALREADY HANDLES THAT for the documented one-liner: it opens
+# /dev/tty and re-execs this script with stdin attached to it, so
+# `curl … | sudo sh` has always reached the wizard. This is not a fix for that,
+# and it would be wrong to describe it as one.
+#
+# What it fixes is the DEPENDENCE. Being askable was a property of how this
+# script happened to be invoked, so every other way of running it —
+# `sh -c "$(curl …)"`, piping straight into install.sh, any wrapper — got a
+# silent wizard that took defaults on somebody's box. Opening the terminal here
+# means the script that asks the questions is the one that finds the person.
+#
+# Empty means there is genuinely nobody: cron, a CI job, a container build. Then
+# `ask` returns the default without printing a prompt nobody will see.
+if [ -t 0 ]; then ASK_IN=/dev/stdin
+elif [ -r /dev/tty ]; then ASK_IN=/dev/tty
+else ASK_IN=""; fi
+
+UPGRADE="${UPGRADE:-0}"
+[ "${AGENT_HUB_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
 [ "${AGENT_HUB_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
 if [ "$WIZARD" = auto ]; then
-  # A terminal on stdin AND stdout. `curl | bash` has neither, and asking
-  # questions nobody can answer is worse than not asking.
-  if [ -t 0 ] && [ -t 1 ]; then WIZARD=yes; else WIZARD=no; fi
+  # SOMEWHERE TO ASK, AND SOMEWHERE TO SHOW IT.
+  #
+  # This was `[ -t 0 ] && [ -t 1 ]`, which is right whenever stdin is the
+  # terminal — including the documented one-liner, because bootstrap.sh
+  # reattaches /dev/tty before running this. $ASK_IN widens it to every other
+  # way of piping the script in, where a person is watching and stdin is not
+  # theirs. Asking questions nobody can answer is still worse than not asking,
+  # and that is still what the empty case is for.
+  if [ -n "$ASK_IN" ] && [ -t 1 ]; then WIZARD=yes; else WIZARD=no; fi
 fi
 [ "$CHECK_ONLY" = 1 ] && WIZARD=no
 
@@ -178,11 +220,13 @@ fi
 # somebody else's job.
 # --- asking things ----------------------------------------------------------
 
+
 ask() { # ask VAR "prompt" [default]
   __var="$1"; __prompt="$2"; __default="${3:-}"
+  if [ -z "$ASK_IN" ]; then printf -v "$__var" '%s' "${3:-}"; return 0; fi
   if [ -n "$__default" ]; then printf '  %s [%s]: ' "$__prompt" "$__default"
   else printf '  %s: ' "$__prompt"; fi
-  IFS= read -r __reply || __reply=""
+  IFS= read -r __reply <"$ASK_IN" || __reply=""
   [ -z "$__reply" ] && __reply="$__default"
   printf -v "$__var" '%s' "$__reply"
 }
@@ -193,8 +237,10 @@ confirm() { # confirm "prompt" [Y|N]  → 0 for yes
     Y|y) __hint="[Y/n]" ;;
     *)   __hint="[y/N]" ;;
   esac
+  if [ -z "$ASK_IN" ]; then __reply="$__default"; else
   printf '  %s %s: ' "$1" "$__hint"
-  IFS= read -r __reply || __reply=""
+  IFS= read -r __reply <"$ASK_IN" || __reply=""
+  fi
   [ -z "$__reply" ] && __reply="$__default"
   case "$__reply" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
@@ -401,13 +447,21 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
     CHOICE_DEFAULT=1
   fi
 
-  # --clean is the same thing without a terminal, and no terminal means 1 —
-  # a piped install must never destroy an identity nobody was asked about.
+  # --clean is the same thing without a terminal, and NOBODY THERE means 1 —
+  # an unattended install must never destroy an identity nobody was asked about.
+  #
+  # `! [ -t 0 ]` USED TO BE THAT TEST. It is correct for the documented
+  # one-liner, where bootstrap.sh has already attached /dev/tty — and wrong for
+  # every other way of piping this script in, where it silently chose Update on
+  # a box that may be a clone, which the prompt above calls out as the case
+  # where keeping is the broken answer. $ASK_IN asks the terminal, so the
+  # reasoning above is satisfied rather than dodged: skipped only when there is
+  # genuinely nobody.
   if [ "$CLEAN" = yes ]; then
     CHOICE=2
-  elif [ "$WIZARD" = no ] || ! [ -t 0 ]; then
+  elif [ "$WIZARD" = no ] || [ -z "$ASK_IN" ]; then
     CHOICE=1
-    printf '\n  No terminal to ask on — updating. Pass --clean to remove instead.\n'
+    printf '\n  Nobody to ask — updating. Pass --clean to remove instead.\n'
   else
     ask CHOICE "Choose" "$CHOICE_DEFAULT"
   fi
@@ -424,7 +478,7 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
       # wrong weight for the one action in this script that destroys something
       # unrecoverable — the identity is a private key, and there is no copy.
       # Typing a word cannot be done by leaning on the return key.
-      if [ -t 0 ]; then
+      if [ -n "$ASK_IN" ]; then
         if [ -f /var/lib/agent-fleet/host-key.json ]; then
           printf '\n  This deletes the host key. There is no copy, and the coordinator\n'
           printf '  will not recognise this box again until it is enrolled afresh.\n'
@@ -1222,6 +1276,25 @@ done
 # Skipped entirely without a terminal, in which case the old next-steps text is
 # printed instead and nothing changes.
 
+# THE FLEET THIS BOX IS JOINING, IF THE SCRIPT ARRIVED KNOWING IT.
+#
+# `/install` on a coordinator serves a six-line shim that exports this before
+# fetching the installer, so
+#
+#     curl -fsSL https://fleet.example/install | sudo sh
+#
+# carries "which fleet" all the way through. Curling a coordinator IS joining
+# that coordinator, and the installer should not then ask.
+#
+# Empty for a clone, a re-run, or anyone who fetched the installer from the
+# repository — all of which still get the questions.
+JOINING="${AGENT_FLEET_COORDINATOR_URL:-}"
+case "$JOINING" in
+  # Local and stdio are not a fleet somebody is joining; they are what the
+  # wizard offers to set up, so leave the questions alone.
+  ''|stdio:*|http://127.0.0.1*|http://localhost*) JOINING="" ;;
+esac
+
 FLEET_LOCAL=0
 if [ "$WIZARD" = yes ]; then
   say "Setup"
@@ -1229,7 +1302,13 @@ if [ "$WIZARD" = yes ]; then
   printf '  left alone, and you can re-run this at any time.\n\n'
 
   # --- Telegram ------------------------------------------------------------
-  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ]; then
+  #
+  # NOT ASKED WHEN THE FLEET IS ALREADY DECIDED. Arriving with
+  # AGENT_FLEET_COORDINATOR_URL set means somebody ran the one-liner off a
+  # coordinator — they are joining a fleet and will drive it from the app, and
+  # a question about a chat bot in the middle of that is a question about
+  # something else. The keys stay in the env file for anyone who wants them.
+  if [ -z "$JOINING" ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ]; then
     printf '  Telegram is the recommended way to drive this: outbound only, no port to\n'
     printf '  open. Create a bot by messaging @BotFather and sending /newbot.\n'
     ask TG_TOKEN "Telegram bot token (blank to skip Telegram)"
@@ -1248,7 +1327,23 @@ if [ "$WIZARD" = yes ]; then
   fi
 
   # --- is this box the coordinator too? ------------------------------------
-  if [ -z "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] \
+  #
+  # NOT ASKED WHEN THE ANSWER ARRIVED WITH THE SCRIPT. `curl .../install | sudo
+  # sh` off a coordinator sets AGENT_FLEET_COORDINATOR_URL, and the address in
+  # what somebody typed IS the answer to "which fleet" — asking again is asking
+  # them to repeat themselves, and offering to run a second coordinator here is
+  # offering the opposite of what they asked for.
+  if [ -n "$JOINING" ]; then
+    set_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL "$JOINING"
+    "$NODE_BIN" -e '
+      const fs = require("fs");
+      const [f, url] = process.argv.slice(1);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+        .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, `AGENT_FLEET_COORDINATOR_URL=${url}`)
+        .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+    ' "$SIDECAR_ENV" "$JOINING"
+    ok "joining $JOINING"
+  elif [ -z "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] \
      || [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "stdio:local" ]; then
     printf '\n  A fleet needs a coordinator somewhere. For one machine, this box can be\n'
     printf '  both — the coordinator and a host.\n'
@@ -1758,6 +1853,97 @@ fi
 # Everything that was skipped, together, at the end. One warning in the middle
 # of two hundred lines is a warning nobody read — and on a platform this only
 # partly supports, the list IS the useful output.
+# --- 9. --upgrade: apply the code, and say whether it can talk ---------------
+#
+# The wizard block above is where services get restarted, and it only runs with
+# a terminal. So `AGENT_HUB_NONINTERACTIVE=1` — which has existed all along —
+# put new code on disk and left the OLD CODE RUNNING while reporting success.
+# That is the failure src/core/update.js is written around, in the one place
+# nobody was looking.
+#
+# This is deliberately NOT the wizard with the questions removed. Running a
+# wizard with no stdin means every prompt silently takes its default on a
+# machine somebody is not watching, and "took a default" is not a thing to
+# discover on a production box. It does three things and refuses to guess at
+# anything else.
+if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
+  say "Applying the upgrade"
+
+  # ALREADY ENROLLED, OR THIS IS THE WRONG COMMAND. Enrolling a new box needs a
+  # six-digit pin minted by a person in the app — short-lived, single-use, and
+  # deliberately not something a script can obtain. So --upgrade refuses rather
+  # than half-installing, and names what is missing instead of leaving somebody
+  # to work out why nothing connected.
+  UPGRADE_MISSING=""
+  [ -f "$SIDECAR_ENV" ] || UPGRADE_MISSING="$UPGRADE_MISSING $SIDECAR_ENV"
+  [ -f /var/lib/agent-fleet/host-key.json ] || UPGRADE_MISSING="$UPGRADE_MISSING /var/lib/agent-fleet/host-key.json"
+  if [ -n "$UPGRADE_MISSING" ]; then
+    die "--upgrade is for a box that is already in a fleet, and this one is not.
+       Missing:$UPGRADE_MISSING
+       Run the installer with a terminal to set it up and enrol it, or enrol by hand:
+           agent-fleet-sidecar enrol <pin>"
+  fi
+
+  # Only what is actually installed. A box with no local coordinator has no
+  # unit to restart, and trying is a failure message about a thing that is
+  # absent on purpose.
+  for unit in agent-hub agent-fleet-coordinator agent-fleet-sidecar; do
+    if [ "$PLATFORM" = macos ]; then
+      label="system/network.thetech.$unit"
+      plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
+      [ -f "$plist" ] || continue
+      launchctl bootout "$label" >/dev/null 2>&1 || true
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+        ok "$unit restarted, on the new code"
+      else
+        warn "$unit did not come back — tail /var/log/$unit.log"
+      fi
+      continue
+    fi
+    systemctl list-unit-files "$unit.service" >/dev/null 2>&1 || continue
+    systemctl cat "$unit.service" >/dev/null 2>&1 || continue
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl restart "$unit" >/dev/null 2>&1; then
+      ok "$unit restarted, on the new code"
+    else
+      warn "$unit did not come back:"
+      journalctl -u "$unit" -n 12 --no-pager 2>/dev/null | sed 's/^/       /' || true
+    fi
+  done
+
+  # THE PROTOCOL, WHICH IS THE WHOLE REASON THIS FLAG EXISTS.
+  #
+  # The coordinator and a host agree on a version number, EXACTLY — a mismatch
+  # is refused per intent with `unsupported_version`. And the coordinator does
+  # not check it on connect or on health, so a host one version behind stays
+  # CONNECTED AND GREEN while every action against it fails. The fleet looks up
+  # and nothing works, which is the worst shape a failure can have.
+  #
+  # An upgrade is exactly when that gap opens, so this is where it gets said.
+  say "Checking the protocol"
+  UPGRADE_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
+  UPGRADE_MINE="$("$NODE_BIN" -e "import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))" 2>/dev/null || true)"
+  if [ -z "$UPGRADE_MINE" ]; then
+    warn "could not read this box's protocol version from $DIR — skipping the check"
+  elif [ -z "$UPGRADE_URL" ]; then
+    ok "this box speaks protocol v$UPGRADE_MINE (no coordinator configured, so nothing to compare)"
+  else
+    # /healthz needs no credential and answers {ok, protocol}. Deliberately not
+    # an authenticated route: the point is to be readable from a box that is
+    # being repaired.
+    UPGRADE_THEIRS="$(curl -fsS --max-time 10 "${UPGRADE_URL%/}/healthz" 2>/dev/null       | sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    if [ -z "$UPGRADE_THEIRS" ]; then
+      warn "could not reach $UPGRADE_URL to compare protocol versions — this box speaks v$UPGRADE_MINE"
+    elif [ "$UPGRADE_THEIRS" = "$UPGRADE_MINE" ]; then
+      ok "protocol v$UPGRADE_MINE, and the coordinator agrees"
+    else
+      warn "PROTOCOL MISMATCH: this box speaks v$UPGRADE_MINE, $UPGRADE_URL speaks v$UPGRADE_THEIRS.
+       The box will connect and look healthy, and EVERY command to it will be refused
+       with unsupported_version until both ends match. Upgrade whichever is behind."
+    fi
+  fi
+fi
+
 if [ ${#MISSING[@]} -gt 0 ]; then
   say "Not set up on this platform"
   printf '  This is a %s box, and parts of this are still Linux-only:\n\n' "$PLATFORM"
