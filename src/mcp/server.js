@@ -139,11 +139,33 @@ function describeHealth(h) {
   }
   if (Array.isArray(h.loadavg) && h.loadavg.length) lines.push(`load ${h.loadavg.map(Number).join(' ')}`);
   if (Array.isArray(h.labels)) lines.push(`tags: ${h.labels.length ? h.labels.join(', ') : 'none'}`);
-  // THE ONE THAT DECIDES WHETHER A SESSION CAN DO ANYTHING. A host with free
-  // capacity and no Claude login accepts a start and produces a session that
-  // cannot work, which is the confusing kind of healthy.
-  if (h.loggedIn === false) lines.push('claude: NOT LOGGED IN — a session here cannot do anything until somebody runs /login on it');
-  else if (h.loggedIn === true) lines.push(`claude: logged in${h.claudeAccounts ? ` (${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'})` : ''}`);
+  // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
+  //
+  // This said "NOT LOGGED IN — a session here cannot do anything" whenever
+  // `loggedIn` was false, which under one-account-per-person is the ORDINARY
+  // state of every box. The health frame's own comment says so: claudeAccounts
+  // replaced loggedIn as the thing to judge a host on, "a machine has no Claude
+  // account of its own any more". I read the field and ignored the paragraph
+  // beside it.
+  //
+  // Two beta testers hit it from opposite ends of the funnel. One believed the
+  // fleet was down and was a call away from giving up; the other filed it while
+  // `fleet_start` was working on the same box in the same minute. It is the
+  // most expensive sentence this server has ever printed.
+  //
+  // claudeAccounts is the real signal, and null is CANNOT TELL — an older host
+  // that does not send it must not be reported as broken.
+  if (typeof h.claudeAccounts === 'number') {
+    lines.push(
+      h.claudeAccounts > 0
+        ? `claude: ${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'} linked — sessions run as whoever starts them`
+        : 'claude: NOBODY HAS LINKED AN ACCOUNT — a session started here cannot do anything. ' +
+            'Link one from the app, from Telegram with /login for <email>, or on the box with `agent-hub login for <email>`',
+    );
+  } else if (h.loggedIn === true) {
+    // An older host with no claudeAccounts field. Its own login is all we know.
+    lines.push('claude: the box itself is logged in (this host predates per-person accounts)');
+  }
   if (h.hub && h.hub.reachable === false) lines.push('hub: unreachable from the sidecar');
   return lines.length ? lines.join('\n') : 'ok';
 }

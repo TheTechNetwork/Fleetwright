@@ -382,6 +382,35 @@ function describeBin(bin) {
 }
 
 /**
+ * Whether a session started here could do anything, in one line.
+ *
+ * `login.status().loggedIn` is about the BOX's own Claude account, which under
+ * one-account-per-person is normally absent and normally fine. Reporting that
+ * as "NOT LOGGED IN" is the single most expensive string this project has
+ * shipped: two independent beta testers read it, concluded the fleet was
+ * broken, and one of them nearly stopped there while `start` worked.
+ *
+ * @param {any} ctx
+ */
+function describeAccounts(ctx) {
+  const linked = (() => {
+    try {
+      return ctx.accounts?.list?.() ?? [];
+    } catch {
+      return [];
+    }
+  })();
+  if (linked.length) {
+    return `${linked.length} account${linked.length === 1 ? '' : 's'} linked — a session runs as whoever starts it`;
+  }
+  const auth = ctx.login.status();
+  if (auth.loggedIn) {
+    return `the box itself is signed in as ${auth.email || 'an account it cannot name'}, but nobody has linked a personal account`;
+  }
+  return 'NOBODY HAS LINKED AN ACCOUNT — sessions started here cannot do anything. Link one with `/login for <email>`';
+}
+
+/**
  * `short` is the one-line description registered with Telegram's setMyCommands,
  * which is what makes the client autocomplete these as you type "/". Telegram
  * caps it at 256 characters and shows it inline, so keep it to a few words —
@@ -539,7 +568,12 @@ export const COMMANDS = {
             `agent-hub on ${ctx.cfg.hostname}`,
             `${running}/${ctx.cfg.maxSessions} sessions running, ${all.length} known`,
             `workdir: ${ctx.cfg.workdir}`,
-            `claude: ${auth.loggedIn ? `logged in as ${auth.email || 'unknown'}` : 'NOT LOGGED IN — run /login'}`,
+            // NOT `loggedIn`. The box having no Claude account of its own is
+            // the ORDINARY state under one-account-per-person; reporting it as
+            // "NOT LOGGED IN — run /login" told a beta tester the fleet was
+            // dead while sessions started fine. What matters is whether anybody
+            // has linked an account, because that is what a session runs as.
+            `claude: ${describeAccounts(ctx)}`,
           ].join('\n'),
         };
       }
@@ -727,9 +761,17 @@ export const COMMANDS = {
       const linked = store.list();
       return {
         ok: true,
+        // THE SHARED FALLBACK NO LONGER EXISTS. Both sentences here described
+        // it, months after one-account-per-person removed it — so this command
+        // told people every session was covered while the coordinator on the
+        // same box refused to place work for exactly the opposite reason. Two
+        // components, one machine, contradictory stories, and a beta tester
+        // stuck between them.
         text: linked.length
-          ? `Linked accounts:\n${linked.map((e) => `  ${e}`).join('\n')}\n\nEveryone else uses the shared account.`
-          : 'Nobody has linked a personal account \u2014 every session uses the shared one. Link with /login for <email>.',
+          ? `Linked accounts:\n${linked.map((e) => `  ${e}`).join('\n')}\n\n` +
+            'A session runs on the account of whoever starts it. Anybody not on this list cannot start one here.'
+          : 'Nobody has linked an account on this box, so no session started here can do anything yet.\n' +
+            'Link one with:  /login for <email>   (or `agent-hub login for <email>` on the box itself)',
       };
     },
   },

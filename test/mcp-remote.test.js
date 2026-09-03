@@ -372,7 +372,17 @@ test('fleet_health answers with capacity, not the word ok', async () => {
       json: async () => ({
         ok: true,
         text: 'ok',
-        health: { running: 2, maxSessions: 5, free: 3, loadavg: [0.1, 0.2, 0.3], labels: ['linux'], loggedIn: false },
+        health: {
+          running: 2,
+          maxSessions: 5,
+          free: 3,
+          loadavg: [0.1, 0.2, 0.3],
+          labels: ['linux'],
+          // THE ORDINARY STATE OF EVERY BOX under one-account-per-person: no
+          // Claude account of its own, and two people who have linked theirs.
+          loggedIn: false,
+          claudeAccounts: 2,
+        },
       }),
     }),
   });
@@ -386,10 +396,61 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   assert.notEqual(text, 'ok');
   assert.match(text, /2\/5 sessions running/);
   assert.match(text, /tags: linux/);
-  // The one that decides whether a session can do anything at all. A host with
-  // free capacity and no login accepts a start and produces a session that
-  // cannot work — the confusing kind of healthy.
-  assert.match(text, /NOT LOGGED IN/);
+  // AND IT DOES NOT CALL A HEALTHY HOST BROKEN. This asserted `/NOT LOGGED IN/`
+  // and so pinned the bug in place: `loggedIn: false` is the ordinary state of
+  // every box now, and two beta testers read that banner and concluded the
+  // fleet was dead while `fleet_start` worked on the same machine.
+  assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
+  assert.match(text, /2 accounts linked/);
+});
+
+test('a host nobody has linked an account on says so, and says how to fix it', async () => {
+  // The fact that actually decides whether a session can do anything, and the
+  // remedy in the same sentence — a refusal that names no next step is what
+  // ended one tester's first run.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'ok', health: { running: 0, maxSessions: 5, free: 5, claudeAccounts: 0 } }),
+    }),
+  });
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_health', arguments: {} },
+  });
+  const text = String(reply.result.content[0].text);
+  assert.match(text, /NOBODY HAS LINKED AN ACCOUNT/);
+  assert.match(text, /login for/);
+});
+
+test('an older host that cannot answer is not reported as broken', async () => {
+  // claudeAccounts absent means CANNOT TELL. A fleet that flags every older
+  // host as broken teaches people to ignore the flag.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'ok', health: { running: 0, maxSessions: 5, free: 5, loggedIn: false } }),
+    }),
+  });
+  const reply = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_health', arguments: {} },
+  });
+  assert.equal(/NOT LOGGED IN|NOBODY HAS LINKED/.test(String(reply.result.content[0].text)), false);
 });
 
 test('tag says it places work rather than filtering a list', async () => {
