@@ -1,5 +1,8 @@
 # Beta findings, round one
 
+**Every row below is filed as an issue, tagged `beta`.** #304 is the only
+`beta-blocking` one: a fresh box cannot install.
+
 Two testers, told nothing about the design and asked not to be reasonable about
 effort. The returning-user run is complete (`RETURNING-USER-REPORT.md` on
 `claude/fleetwright-returning-user-3z0b2m`); the first-run tester is still going.
@@ -25,20 +28,20 @@ which is the kind that survives a test suite.
 
 | # | Finding | Severity | Evidence |
 |---|---|---|---|
-| **A1** | **The MCP server never validates arguments against its own tool schema.** The schema declares `required: ['name']` and `additionalProperties: false`; nothing enforces either. An unknown parameter is forwarded silently and a missing required one becomes the string `"undefined"` in a refusal. | **high** | Reproduced locally: `fleet_peek {session:'x'}` → `No host reports a session named "undefined"`. Cost the tester their only documentation lookup. |
-| **A2** | **`fleet_health` reports a host's health without naming the host.** `describeHealth` renders capacity, load, tags and login state and never says which box. Useless on a two-host fleet. | **high** | Report §1 step 2. |
-| **A3** | **The login banner is wrong, and it is the most expensive text in the product.** `describeHealth` renders `loggedIn === false` as "NOT LOGGED IN — a session here cannot do anything". The health frame's own comment says the opposite: `claudeAccounts` replaced `loggedIn` as the thing to judge a host on, because *"a machine has no Claude account of its own any more, so `loggedIn: false` is the ordinary state of every box"*. I read the field and ignored the paragraph beside it. | **critical** | Report §1 steps 12–13: both hosts showed NOT LOGGED IN; `fleet_verify` then reported the credential valid and sessions working. A returning user who trusted the front screen walks away from a working recovery path. |
-| **A4** | **`describeFailure` diagnoses a non-JSON response as a network problem.** A body that fails to parse produced *"The fleet may be down or this coordinator unreachable; retrying is reasonable"* — for a client-side error where retrying could never work. | **high** | Report §1 step 3. Same mistake as the bug `describeFailure` was written to fix: naming the wrong layer. |
+| **A1** ([#310](https://github.com/TheTechNetwork/Fleetwright/issues/310)) | **The MCP server never validates arguments against its own tool schema.** The schema declares `required: ['name']` and `additionalProperties: false`; nothing enforces either. An unknown parameter is forwarded silently and a missing required one becomes the string `"undefined"` in a refusal. | **high** | Reproduced locally: `fleet_peek {session:'x'}` → `No host reports a session named "undefined"`. Cost the tester their only documentation lookup. |
+| **A2** ([#311](https://github.com/TheTechNetwork/Fleetwright/issues/311)) | **`fleet_health` reports a host's health without naming the host.** `describeHealth` renders capacity, load, tags and login state and never says which box. Useless on a two-host fleet. | **high** | Report §1 step 2. |
+| **A3** (see [#305](https://github.com/TheTechNetwork/Fleetwright/issues/305)) | **The login banner is wrong, and it is the most expensive text in the product.** `describeHealth` renders `loggedIn === false` as "NOT LOGGED IN — a session here cannot do anything". The health frame's own comment says the opposite: `claudeAccounts` replaced `loggedIn` as the thing to judge a host on, because *"a machine has no Claude account of its own any more, so `loggedIn: false` is the ordinary state of every box"*. I read the field and ignored the paragraph beside it. | **critical** | Report §1 steps 12–13: both hosts showed NOT LOGGED IN; `fleet_verify` then reported the credential valid and sessions working. A returning user who trusted the front screen walks away from a working recovery path. |
+| **A4** ([#312](https://github.com/TheTechNetwork/Fleetwright/issues/312)) | **`describeFailure` diagnoses a non-JSON response as a network problem.** A body that fails to parse produced *"The fleet may be down or this coordinator unreachable; retrying is reasonable"* — for a client-side error where retrying could never work. | **high** | Report §1 step 3. Same mistake as the bug `describeFailure` was written to fix: naming the wrong layer. |
 
 ## B. Product bugs
 
 | # | Finding | Severity | Evidence |
 |---|---|---|---|
-| **B1** | **A Worker exception on `/api/intent`.** `Unexpected token 'e', "error code: 1101" is not valid JSON` — Cloudflare 1101 is *"Worker threw a JavaScript exception"*. An unknown parameter should be refused as `bad_params`, which is JSON. **Not reproduced locally**; the Node coordinator answers cleanly. Production-only, and unexplained. | **critical** | Report §1 step 3. Needs a real reproduction against the deployed Worker before any fix. |
-| **B2** | **`fleet_read_log` reports "printed nothing" while `peek` shows a full pane.** After a resume, the output is in the pane and the transcript; `read_log` reads container stderr and finds nothing. The tool the product names for durable capture is the one that fails on exactly the sessions a returning user has. | **high** | Report §1 step 16. |
-| **B3** | **`fleet_read_log` asks "Which box?" when its siblings do not.** `fleet_status` and `fleet_stop` resolve a session name fleet-wide; `read_log` demands the host. | **medium** | Report §1 steps 8, 41–43. |
-| **B4** | **The "output is gone" error states the loss and withholds the recovery.** Resuming a stopped session restores the transcript, which usually contains the output. The error knows the loss and not the remedy — against this project's own rule that a refusal names what to do next. | **high** | Report §1 step 10, §4. The tester found the path by inference. |
-| **B5** | **`peek` is documented as "how you find out whether work is done" and is useless on a stopped session.** Which is every session a returning user has. | **medium** | Report §1 step 7. |
+| **B1** ([#313](https://github.com/TheTechNetwork/Fleetwright/issues/313)) | **A Worker exception on `/api/intent`.** `Unexpected token 'e', "error code: 1101" is not valid JSON` — Cloudflare 1101 is *"Worker threw a JavaScript exception"*. An unknown parameter should be refused as `bad_params`, which is JSON. **Not reproduced locally**; the Node coordinator answers cleanly. Production-only, and unexplained. | **critical** | Report §1 step 3. Needs a real reproduction against the deployed Worker before any fix. |
+| **B2** ([#314](https://github.com/TheTechNetwork/Fleetwright/issues/314)) | **`fleet_read_log` reports "printed nothing" while `peek` shows a full pane.** After a resume, the output is in the pane and the transcript; `read_log` reads container stderr and finds nothing. The tool the product names for durable capture is the one that fails on exactly the sessions a returning user has. | **high** | Report §1 step 16. |
+| **B3** (see [#328](https://github.com/TheTechNetwork/Fleetwright/issues/328)) | **`fleet_read_log` asks "Which box?" when its siblings do not.** `fleet_status` and `fleet_stop` resolve a session name fleet-wide; `read_log` demands the host. | **medium** | Report §1 steps 8, 41–43. |
+| **B4** ([#315](https://github.com/TheTechNetwork/Fleetwright/issues/315)) | **The "output is gone" error states the loss and withholds the recovery.** Resuming a stopped session restores the transcript, which usually contains the output. The error knows the loss and not the remedy — against this project's own rule that a refusal names what to do next. | **high** | Report §1 step 10, §4. The tester found the path by inference. |
+| **B5** ([#331](https://github.com/TheTechNetwork/Fleetwright/issues/331)) | **`peek` is documented as "how you find out whether work is done" and is useless on a stopped session.** Which is every session a returning user has. | **medium** | Report §1 step 7. |
 
 ## C. What the product cannot tell you
 
@@ -47,12 +50,12 @@ system and is absent from the screen where the decision is made.
 
 | # | Finding | Severity | Evidence |
 |---|---|---|---|
-| **C1** | **`fleet_list` answers "what exists", not "what state are things in".** Twelve sessions, one identical glyph, no dates, no owner. Finished, dead and abandoned share a symbol. | **critical** | Report §5 item 1: fixing this one screen removes steps 2, 6, 9 and a three-way guess. |
-| **C2** | **No timestamps on sessions, anywhere.** Three sessions named "disk usage report"; no way to tell which was the real attempt. | **high** | Report §2. |
-| **C3** | **`started by` exists in `status` and not in `list`** — the screen where the choosing happens. | **high** | Report §2. |
-| **C4** | **The credential countdown is only in `fleet_verify`.** "Signed in (11m left)" was decisive and reachable only from a tool called out of desperation. | **high** | Report §1 step 13. |
-| **C5** | **Host drift is not announced.** `deb13-staging` was two versions behind and rejected `fleet_files`; nothing said so until the tester tripped over it. | **medium** | Report §1 step 11. The error itself is the best in the product — it names the fix. |
-| **C6** | **"Stopping discards output" lives in a tool description, not in the product.** It is the single most important fact for a returning user, and `fleet_stop`'s confirmation does not mention it. | **high** | Report §3. |
+| **C1** ([#317](https://github.com/TheTechNetwork/Fleetwright/issues/317)) | **`fleet_list` answers "what exists", not "what state are things in".** Twelve sessions, one identical glyph, no dates, no owner. Finished, dead and abandoned share a symbol. | **critical** | Report §5 item 1: fixing this one screen removes steps 2, 6, 9 and a three-way guess. |
+| **C2** ([#318](https://github.com/TheTechNetwork/Fleetwright/issues/318)) | **No timestamps on sessions, anywhere.** Three sessions named "disk usage report"; no way to tell which was the real attempt. | **high** | Report §2. |
+| **C3** ([#319](https://github.com/TheTechNetwork/Fleetwright/issues/319)) | **`started by` exists in `status` and not in `list`** — the screen where the choosing happens. | **high** | Report §2. |
+| **C4** ([#320](https://github.com/TheTechNetwork/Fleetwright/issues/320)) | **The credential countdown is only in `fleet_verify`.** "Signed in (11m left)" was decisive and reachable only from a tool called out of desperation. | **high** | Report §1 step 13. |
+| **C5** ([#321](https://github.com/TheTechNetwork/Fleetwright/issues/321)) | **Host drift is not announced.** `deb13-staging` was two versions behind and rejected `fleet_files`; nothing said so until the tester tripped over it. | **medium** | Report §1 step 11. The error itself is the best in the product — it names the fix. |
+| **C6** ([#316](https://github.com/TheTechNetwork/Fleetwright/issues/316)) | **"Stopping discards output" lives in a tool description, not in the product.** It is the single most important fact for a returning user, and `fleet_stop`'s confirmation does not mention it. | **high** | Report §3. |
 
 ## D. The deny list blocks recovery
 
@@ -65,9 +68,9 @@ driving through an app.
 
 | # | Finding | Severity |
 |---|---|---|
-| **D1** | **Stale sessions have no exit.** Twelve resumables accumulated in three weeks; `forget` and `purge` are denied, so the pile grows every visit and compounds C1. | **high** |
-| **D2** | **A drifted host cannot be fixed from the product.** The error names `agent-hub update --restart`; `update` is denied, and the product provides no shell. | **high** |
-| **D3** | **Nothing tells you a lift exists.** The refusal says "ask the person running it to allow that verb explicitly" — but the tester *is* the person running it, and `AGENT_FLEET_MCP_ALLOW` is named nowhere they would look. | **medium** |
+| **D1** ([#322](https://github.com/TheTechNetwork/Fleetwright/issues/322)) | **Stale sessions have no exit.** Twelve resumables accumulated in three weeks; `forget` and `purge` are denied, so the pile grows every visit and compounds C1. | **high** |
+| **D2** ([#323](https://github.com/TheTechNetwork/Fleetwright/issues/323)) | **A drifted host cannot be fixed from the product.** The error names `agent-hub update --restart`; `update` is denied, and the product provides no shell. | **high** |
+| **D3** ([#324](https://github.com/TheTechNetwork/Fleetwright/issues/324)) | **Nothing tells you a lift exists.** The refusal says "ask the person running it to allow that verb explicitly" — but the tester *is* the person running it, and `AGENT_FLEET_MCP_ALLOW` is named nowhere they would look. | **medium** |
 
 ---
 
@@ -101,9 +104,9 @@ clean Linux box, then driving the live fleet through MCP. Full text on
 
 | # | Finding | Severity |
 |---|---|---|
-| **E1** | **A fresh box cannot install.** `install.sh` exits 1 after five header lines, before any prerequisite check, with no message. `previous_install()` ends with `[ -f /etc/sudoers.d/agent-hub-reboot ] && FOUND+=(...)`; on a box that never had this installed the test is false, that `&&` list is the function's last command, so the function returns 1 and `set -euo pipefail` kills the script. Both `--check` and the real install die there, so the advertised one-liner takes a bare machine to four lines and a silent failure. | **blocking** |
-| **E2** | **Fresh-clone `npm test` fails** — three files, `Cannot find package '@sentry/cloudflare'`. The fix is `cd worker && npm install`, which the README's "Running things" section does not mention: the section that says there is one runtime dependency. CI was fixed for this; a human following the README was not. | **high** |
-| **E3** | **`sh install/install.sh` fails with `Illegal option -o pipefail`** and no explanation. People will type it. | **low** |
+| **E1** ([#304](https://github.com/TheTechNetwork/Fleetwright/issues/304)) | **A fresh box cannot install.** `install.sh` exits 1 after five header lines, before any prerequisite check, with no message. `previous_install()` ends with `[ -f /etc/sudoers.d/agent-hub-reboot ] && FOUND+=(...)`; on a box that never had this installed the test is false, that `&&` list is the function's last command, so the function returns 1 and `set -euo pipefail` kills the script. Both `--check` and the real install die there, so the advertised one-liner takes a bare machine to four lines and a silent failure. | **blocking** |
+| **E2** ([#309](https://github.com/TheTechNetwork/Fleetwright/issues/309)) | **Fresh-clone `npm test` fails** — three files, `Cannot find package '@sentry/cloudflare'`. The fix is `cd worker && npm install`, which the README's "Running things" section does not mention: the section that says there is one runtime dependency. CI was fixed for this; a human following the README was not. | **high** |
+| **E3** ([#339](https://github.com/TheTechNetwork/Fleetwright/issues/339)) | **`sh install/install.sh` fails with `Illegal option -o pipefail`** and no explanation. People will type it. | **low** |
 
 **E1 verified here rather than taken on trust:** `git archive main` into a
 clean directory, `bash install/install.sh --check` -> exit **1**, five lines,
@@ -125,36 +128,36 @@ wrong string.
 
 | # | Finding | Severity |
 |---|---|---|
-| **F1** | `fleet_status` / `fleet_health` say **"NOT LOGGED IN - a session here cannot do anything"** about hosts where `fleet_start` works immediately. `fleet_verify` gets it right: *"This box has no Claude account of its own, which is normal."* | **critical** |
-| **F2** | `agent-hub accounts` still advertises the **shared-account fallback that was removed** - "every session uses the shared one" - while the coordinator on the same box refuses placement for the opposite reason. Two components, one machine, contradictory stories. | **high** |
-| **F3** | `agent-hub doctor` prints `ok claude logged in - ? (oauth_token)`; the hub log says `logged in as unknown`. | **medium** |
-| **F4** | **The refusal names no remedy.** `nobody has linked a Claude account on this host`, and linking from a shell is documented nowhere a user would look. `deployment.md` still calls logging the box in "the one step that genuinely needs a person" and never mentions linking. **This is where the tester's local first run ended.** | **critical** |
+| **F1** ([#305](https://github.com/TheTechNetwork/Fleetwright/issues/305)) | `fleet_status` / `fleet_health` say **"NOT LOGGED IN - a session here cannot do anything"** about hosts where `fleet_start` works immediately. `fleet_verify` gets it right: *"This box has no Claude account of its own, which is normal."* | **critical** |
+| **F2** ([#307](https://github.com/TheTechNetwork/Fleetwright/issues/307)) | `agent-hub accounts` still advertises the **shared-account fallback that was removed** - "every session uses the shared one" - while the coordinator on the same box refuses placement for the opposite reason. Two components, one machine, contradictory stories. | **high** |
+| **F3** ([#308](https://github.com/TheTechNetwork/Fleetwright/issues/308)) | `agent-hub doctor` prints `ok claude logged in - ? (oauth_token)`; the hub log says `logged in as unknown`. | **medium** |
+| **F4** ([#306](https://github.com/TheTechNetwork/Fleetwright/issues/306)) | **The refusal names no remedy.** `nobody has linked a Claude account on this host`, and linking from a shell is documented nowhere a user would look. `deployment.md` still calls logging the box in "the one step that genuinely needs a person" and never mentions linking. **This is where the tester's local first run ended.** | **critical** |
 
 ## G. First-run friction
 
 | # | Finding | Severity |
 |---|---|---|
-| **G1** | **Minting an enrolment pin is undocumented.** `deployment.md` offers app, Telegram or admin token; with neither app nor Telegram the tester found `POST /api/enroll` by reading `openapi.json`. | **high** |
-| **G2** | **Node version has three answers**: `package.json` `>=24`, `deployment.md` ">= 24", `agent-hub.md` "18+". Node 22 ran everything. | **medium** |
-| **G3** | **No "fresh box to first session" checklist.** The setup docs are essays - good ones - with "type this" interleaved with 40-line digressions, and `accounts.md` opens by declaring part of itself superseded. | **high** |
-| **G4** | **`agent-hub.md` is upstream's README**, with upstream's install steps and version claims, banner'd only on the install section. | **low** |
+| **G1** ([#332](https://github.com/TheTechNetwork/Fleetwright/issues/332)) | **Minting an enrolment pin is undocumented.** `deployment.md` offers app, Telegram or admin token; with neither app nor Telegram the tester found `POST /api/enroll` by reading `openapi.json`. | **high** |
+| **G2** ([#334](https://github.com/TheTechNetwork/Fleetwright/issues/334)) | **Node version has three answers**: `package.json` `>=24`, `deployment.md` ">= 24", `agent-hub.md` "18+". Node 22 ran everything. | **medium** |
+| **G3** ([#333](https://github.com/TheTechNetwork/Fleetwright/issues/333)) | **No "fresh box to first session" checklist.** The setup docs are essays - good ones - with "type this" interleaved with 40-line digressions, and `accounts.md` opens by declaring part of itself superseded. | **high** |
+| **G4** ([#335](https://github.com/TheTechNetwork/Fleetwright/issues/335)) | **`agent-hub.md` is upstream's README**, with upstream's install steps and version claims, banner'd only on the install section. | **low** |
 
 ## H. Documents disagree about what is real
 
 | # | Finding | Severity |
 |---|---|---|
-| **H1** | **Four documents, four app maturity levels.** README links live TestFlight/Play; ROADMAP section 3 says shipped; `deployment.md` says "no notification has been delivered to a real phone, and no app has been run by a person"; `app-testing.md` says both apps have been run in simulators. | **high** |
-| **H2** | **The Play listing sells push** - "the point of carrying this in a pocket at all" - the one feature every internal doc agrees has never reached a phone. The tester, who praised this project's documentary honesty at length, called this **"off-brand"** and said as a reviewer they would call the listing overdrawn. | **high** |
-| **H3** | **"Requires Android 16 or later"** excludes most Android phones alive in 2026, including the tester's. If there is a reason, say it; if it is targetSdk conservatism, it gives up the install base for nothing. | **medium** |
+| **H1** ([#336](https://github.com/TheTechNetwork/Fleetwright/issues/336)) | **Four documents, four app maturity levels.** README links live TestFlight/Play; ROADMAP section 3 says shipped; `deployment.md` says "no notification has been delivered to a real phone, and no app has been run by a person"; `app-testing.md` says both apps have been run in simulators. | **high** |
+| **H2** ([#337](https://github.com/TheTechNetwork/Fleetwright/issues/337)) | **The Play listing sells push** - "the point of carrying this in a pocket at all" - the one feature every internal doc agrees has never reached a phone. The tester, who praised this project's documentary honesty at length, called this **"off-brand"** and said as a reviewer they would call the listing overdrawn. | **high** |
+| **H3** ([#338](https://github.com/TheTechNetwork/Fleetwright/issues/338)) | **"Requires Android 16 or later"** excludes most Android phones alive in 2026, including the tester's. If there is a reason, say it; if it is targetSdk conservatism, it gives up the install base for nothing. | **medium** |
 
 ## I. MCP ergonomics (round two's additions to C)
 
 | # | Finding | Severity |
 |---|---|---|
-| **I1** | **`fleet_start` does not say which host it picked.** Two boxes; finding out costs a `fleet_list` and a scan. | **high** |
-| **I2** | **One addressing rule, please.** `peek`, `stop` and `verify` resolve a session by name; `read_log` and `logs` demand the host. Round one hit this too (B3). | **high** |
-| **I3** | **`fleet_files` answers `(empty)`** for "no files", "no workspace" and "failed" alike. | **medium** |
-| **I4** | **Session titles truncate mid-command** in `fleet_list` - somebody pasted a task as the title. The naming design is right; the rendering undercuts it. | **low** |
+| **I1** ([#327](https://github.com/TheTechNetwork/Fleetwright/issues/327)) | **`fleet_start` does not say which host it picked.** Two boxes; finding out costs a `fleet_list` and a scan. | **high** |
+| **I2** ([#328](https://github.com/TheTechNetwork/Fleetwright/issues/328)) | **One addressing rule, please.** `peek`, `stop` and `verify` resolve a session by name; `read_log` and `logs` demand the host. Round one hit this too (B3). | **high** |
+| **I3** ([#329](https://github.com/TheTechNetwork/Fleetwright/issues/329)) | **`fleet_files` answers `(empty)`** for "no files", "no workspace" and "failed" alike. | **medium** |
+| **I4** ([#330](https://github.com/TheTechNetwork/Fleetwright/issues/330)) | **Session titles truncate mid-command** in `fleet_list` - somebody pasted a task as the title. The naming design is right; the rendering undercuts it. | **low** |
 
 ## J. The two things that block the product's own pitch
 
