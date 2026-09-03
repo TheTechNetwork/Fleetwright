@@ -185,6 +185,35 @@ function describeHealth(h) {
   return lines.length ? lines.join('\n') : 'ok';
 }
 
+/**
+ * What the watcher has OBSERVED about a pane, as evidence rather than a verdict.
+ *
+ * A beta tester's sharpest request: "await detects ended-or-errored only, a
+ * finished session looks exactly like an idle one, and I peeked in a loop like
+ * everyone will. The fleet already watches panes well enough to answer resume
+ * dialogs — the same watcher could publish its OBSERVATION. Judgement stays
+ * mine; today even the evidence is manual."
+ *
+ * That is the right shape and the data was already here: `idleSince` and
+ * `atRest` have travelled on every reply since idle tracking shipped, and
+ * nothing rendered them. This does not decide a session is finished — deciding
+ * is the caller's, which is docs/mcp.md's whole argument — it says how long the
+ * pane has looked the same and whether it is sitting at a prompt.
+ *
+ * @param {any} session
+ */
+function describeStillness(session) {
+  if (!session || typeof session !== 'object') return '';
+  const since = Number(session.idleSince);
+  if (!Number.isFinite(since) || since <= 0) return '';
+  const mins = Math.max(0, Math.round((Date.now() - since) / 60_000));
+  const how = mins < 1 ? 'less than a minute' : mins < 90 ? `${mins} minutes` : `${Math.round(mins / 60)} hours`;
+  return session.atRest
+    ? `The pane has been unchanged for ${how}, sitting at a ready prompt — which usually means it finished, ` +
+        'and can also mean it is wedged. Reading it is the only way to tell.'
+    : `The pane has been unchanged for ${how}, and is not at a prompt.`;
+}
+
 export class McpServer {
   /** @param {Options} opts */
   constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
@@ -403,8 +432,10 @@ export class McpServer {
         // NOT AN ERROR. Still running after the time asked for is an answer,
         // and calling it a failure would push an agent into stopping work that
         // is going fine.
+        const still = describeStillness(session);
         return this.#text(
           `${name} is still running after ${seconds}s. That is not a failure — it may just be slow. ` +
+            (still ? `${still} ` : '') +
             (this.maxWaitMs
               ? 'This connection caps a single wait, so call fleet_await again to keep waiting. '
               : '') +
@@ -706,6 +737,14 @@ export class McpServer {
       if (landed && !String(reply?.text ?? '').includes(landed)) {
         reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
       }
+    }
+
+    // THE EVIDENCE, WHERE THE QUESTION IS ASKED. `status` and `peek` are what
+    // somebody calls to find out whether work is done, and the watcher's
+    // observation was arriving on the same reply unrendered.
+    if (reply?.ok !== false && (tool.verb === 'status' || tool.verb === 'peek')) {
+      const still = describeStillness(sessionFrom(reply, String(params.name || '')));
+      if (still) reply = { ...reply, text: `${reply?.text ?? ''}\n\n${still}` };
     }
 
     const failed = reply?.ok === false;

@@ -631,6 +631,66 @@ test('the seconds ceiling advertised is the one the caller gets', async () => {
   assert.equal(uncapped?.inputSchema.properties.seconds.maximum, 900);
 });
 
+// --- the evidence a caller was told to gather by hand ------------------------
+
+test('status publishes what the watcher observed, not a verdict', async () => {
+  // "await detects ended-or-errored only, a finished session looks exactly like
+  // an idle one, and I peeked in a loop like everyone will. The same watcher
+  // could publish its OBSERVATION. Judgement stays mine; today even the
+  // evidence is manual." — beta report, ranked as hitting every session.
+  //
+  // idleSince and atRest have travelled on every reply since idle tracking
+  // shipped. Nothing rendered them.
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({
+        ok: true,
+        text: 'job — running',
+        sessions: [{ name: 'job', status: 'running', idleSince: Date.now() - 9 * 60_000, atRest: true }],
+      }),
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_status', arguments: { name: 'job' } },
+  });
+  const text = String(r.result.content[0].text);
+  assert.match(text, /unchanged for 9 minutes/);
+  assert.match(text, /ready prompt/);
+  // NOT A VERDICT. Deciding a session is finished is the caller's, which is
+  // docs/mcp.md's whole argument — so it names both readings.
+  assert.match(text, /can also mean it is wedged/);
+});
+
+test('a session with no idle evidence says nothing rather than guessing', async () => {
+  const { McpServer } = await import('../src/mcp/server.js');
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_a_b',
+    write: () => {},
+    watchMs: 0,
+    fetch: async () => ({
+      status: 200,
+      json: async () => ({ ok: true, text: 'job — running', sessions: [{ name: 'job', status: 'running' }] }),
+    }),
+  });
+  const r = await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'fleet_status', arguments: { name: 'job' } },
+  });
+  assert.equal(String(r.result.content[0].text).trim(), 'job — running');
+});
+
 // --- what a withheld verb tells the person who could allow it ---------------
 
 test('a withheld verb names the lift, because the reader may be the operator', async () => {
