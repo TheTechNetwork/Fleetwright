@@ -378,12 +378,41 @@ export class CoordinatorCore {
 
   /** @param {Record<string, any>} event */
   async #notify(event) {
-    // Filtered here as well as on revocation. The cascade above is the fix; this
-    // is the belt — a registration that somehow outlives its credential must
-    // not be told what a session is asking.
-    const devices = [...this.devices.values()].filter(
-      (d) => !d.clientId || !this.clients.clients.get(d.clientId)?.revokedAt,
-    );
+    // WHOSE SESSION THIS IS, resolved from the registry rather than carried on
+    // the event, because the host does not send it. A session the fleet has not
+    // heard of yet, or one nobody is recorded as having started, is
+    // unattributed — which everywhere else in this file means "the fleet's,
+    // which is to say the admin's".
+    const owner = event.name ? (this.registry.findSessions(event.name)[0]?.createdBy ?? null) : null;
+
+    // FILTERED FOR WHOSE PHONE IT IS, which it was not.
+    //
+    // This filtered on revocation alone, so every registered device in the
+    // fleet received every session's notification — the session name, the host,
+    // and since prompts started carrying the question, the QUESTION. On a lock
+    // screen. docs/security.md says a member is "Explicitly NOT trusted to: See
+    // or act on another member's sessions", and `list`, `/api/hosts` and
+    // `/api/events` all enforce that. Push was a fourth route and was not.
+    //
+    // It is the worst of the four to have missed. The others require somebody
+    // to go and look; this one arrives.
+    //
+    // A HOST-LEVEL EVENT STILL GOES TO EVERYONE, matching visibleEvents: which
+    // machines exist and what state they are in is fleet topology, not
+    // somebody's private work, and a box going offline is exactly the thing
+    // everybody needs to be told about.
+    const devices = [...this.devices.values()].filter((d) => {
+      const client = d.clientId ? this.clients.clients.get(d.clientId) : null;
+      // Belt as well as braces: a registration that somehow outlives its
+      // credential must not be told what a session is asking.
+      if (d.clientId && client?.revokedAt) return false;
+      if (!event.name) return true;
+      // No clientId means it was registered with the admin token, and an
+      // unattributed registration belongs to whoever operates the box — the
+      // same rule ownedBy() applies to an unattributed record.
+      if (!d.clientId || client?.admin) return true;
+      return ownedBy(owner, { email: String(d.actor || '').replace(/^fleet:/, ''), admin: false });
+    });
     if (!devices.length) return;
     const body = describeEvent(event);
     try {

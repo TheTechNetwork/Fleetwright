@@ -754,7 +754,11 @@ test('a registration that outlives its credential is still not notified', async 
   // state file, say. A device must never be told what a session is asking on a
   // credential that no longer exists.
   const { coordinator: c } = await coordinator(t);
-  const { client } = await c.core.clients.issue('a phone (eli@thetech.network)');
+  // ADMIN, so this test is about revocation and nothing else. A member's phone
+  // is filtered by session ownership as well, which is a different rule with
+  // its own test below — and mixing them here would have made a passing
+  // revocation test out of an unrelated refusal.
+  const { client } = await c.core.clients.issue('a phone (eli@thetech.network)', { admin: true });
   c.core.registerDevice({ platform: 'ios', token: 'b'.repeat(64), clientId: client.id });
 
   /** @type {any[]} */
@@ -769,6 +773,48 @@ test('a registration that outlives its credential is still not notified', async 
   c.core.clients.revoke(client.id); // revoked WITHOUT the cascade
   await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
   assert.deepEqual(sent, [], 'nothing reaches a device whose credential is revoked');
+});
+
+test('a notification goes to the person whose session it is, and nobody else', async (t) => {
+  // THE FOURTH ROUTE AROUND THE VISIBILITY RULE, and the worst one to have
+  // missed. `list`, `/api/hosts` and `/api/events` all filter by owner;
+  // #notify filtered only on revocation, so every registered phone in the fleet
+  // received every session's name, host and — since prompts started carrying
+  // the question — the question, on a lock screen.
+  //
+  // docs/security.md: a member is "Explicitly NOT trusted to: See or act on
+  // another member's sessions". The other three routes require somebody to go
+  // and look. This one arrives.
+  const { coordinator: c } = await coordinator(t);
+  const mine = await c.core.clients.issue('eli phone');
+  const theirs = await c.core.clients.issue('guest phone');
+  c.core.registerDevice({ platform: 'ios', token: 'm'.repeat(64), clientId: mine.client.id, actor: 'eli@thetech.network' });
+  c.core.registerDevice({ platform: 'android', token: 't'.repeat(64), clientId: theirs.client.id, actor: 'guest@example.com' });
+
+  // The registry learns who owns what from a health frame, which is where
+  // createdBy actually comes from — the event itself does not carry it. The
+  // host has to be connected first: recordHealth silently ignores a frame from
+  // a box the registry has never heard of.
+  c.core.registry.connect('box', async () => ({}));
+  await c.core.onHostMessage('box', {
+    kind: 'health',
+    hostId: 'box',
+    health: { sessions: [{ name: 'x', status: 'running', createdBy: 'fleet:eli@thetech.network' }] },
+  });
+
+  /** @type {any[]} */
+  let sent = [];
+  c.core.push = { send: async (/** @type {any[]} */ d) => { sent.push(...d); return { ok: true }; } };
+
+  await c.core.onHostMessage('box', { kind: 'event', event: 'session.awaiting-input', name: 'x', text: 'a question' });
+  assert.deepEqual(sent.map((d) => d.actor), ['eli@thetech.network'], "a guest's phone was told what somebody else's session is asking");
+
+  // A HOST EVENT STILL GOES TO EVERYONE. Which machines exist and what state
+  // they are in is fleet topology, not somebody's private work — and a box
+  // going offline is exactly the thing everybody needs to be told about.
+  sent = [];
+  await c.core.onHostMessage('box', { kind: 'event', event: 'host.degraded', text: 'claude is not logged in' });
+  assert.equal(sent.length, 2, 'a host event was withheld from somebody');
 });
 
 test('what happened while you were asleep survives a restart', async (t) => {
