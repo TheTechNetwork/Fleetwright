@@ -19,6 +19,7 @@ import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
+import { normaliseOrigin } from '../../src/fleet/coordinator/github-oauth.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
@@ -191,7 +192,62 @@ const handler = {
           { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
         );
       }
-      return Response.redirect(target, 302);
+      // NOT A REDIRECT ANY MORE, and the six lines it became are the whole of
+      // the one-liner working.
+      //
+      // It used to 302 to the installer in the repository, on the reasoning
+      // that "the thing people paste into a root shell should be served by the
+      // place that has the source, so it cannot go stale here and cannot be
+      // edited here either". That reasoning still holds and is unchanged: the
+      // INSTALLER still comes from the repository, and nothing below is
+      // installer logic.
+      //
+      // What the redirect could not do is say WHICH FLEET. Somebody types
+      //
+      //     curl -fsSL https://fleet.example/install | sudo sh
+      //
+      // and the coordinator's address is right there in what they typed — and
+      // then thrown away, because curl follows the redirect and pipes a script
+      // that has never heard of it. So the installer asked for a coordinator
+      // URL that the person had already given, one question into a flow that
+      // should have been none.
+      //
+      // THE TRUST BOUNDARY IS UNCHANGED. A redirect already meant "this
+      // coordinator chooses what you run as root" — it could send you
+      // anywhere. Serving six lines that fetch the same script is the same
+      // authority, spent more usefully.
+      const origin = normaliseOrigin(env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin);
+      // A HOST HEADER IS THE CLIENT'S TEXT. Without a configured public origin
+      // this is whatever was sent, and it is about to be interpolated into a
+      // shell script running as root. normaliseOrigin returns scheme://host:port
+      // and nothing else — no path, no userinfo, no query — and the charset
+      // check is the second lock on the same door.
+      if (!origin || !/^https?:\/\/[A-Za-z0-9.:\-]+$/.test(origin)) {
+        return new Response('This coordinator cannot work out its own address. Set AGENT_FLEET_PUBLIC_ORIGIN.\n', {
+          status: 500,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
+      }
+      return new Response(
+        `#!/bin/sh
+# Fleetwright — joining ${origin}
+#
+# Six lines, so that the address you typed survives into the installer. The
+# installer itself is fetched from the repository, below, and is not held here.
+set -eu
+AGENT_FLEET_COORDINATOR_URL='${origin}'
+export AGENT_FLEET_COORDINATOR_URL
+curl -fsSL '${target}' | sh
+`,
+        {
+          headers: {
+            'content-type': 'text/x-shellscript; charset=utf-8',
+            // Never cached. A stale installer shim is a box pointed at an
+            // address this fleet has moved off.
+            'cache-control': 'no-store',
+          },
+        },
+      );
     }
 
     // The contract, served by the thing that implements it.

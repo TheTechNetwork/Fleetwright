@@ -59,6 +59,48 @@ Watch the `Worker → deploy` job. Two lines to check:
 - `synced AGENT_FLEET_AUTH_ALLOW`. If it appears under `::warning::Not set as
   repository secrets`, the variable is empty.
 
+## 3b. Bring the two hosts to v3, immediately after the deploy
+
+**There is no ordering that avoids a window, and the app cannot cross it.**
+
+The version is checked **per intent**, on the host (`intents.js`). The
+coordinator never checks it on connect or on health — so a host one version
+behind stays **connected and green** in `fleet_list` and `fleet_health`, and
+every command against it is refused with `unsupported_version`. The fleet looks
+up and nothing works.
+
+`update` is an intent. So the first thing a mismatched fleet loses is its own
+repair path, and the boxes need a shell. That is
+[#323](https://github.com/TheTechNetwork/Fleetwright/issues/323) in its worst
+form and there is no way around it this time.
+
+The advice in `intents.md` — *upgrade hosts before the coordinator* — cannot be
+followed here, because merging to main deploys the Worker automatically. It is
+also symmetric: a v3 host talking to a v2 coordinator refuses too. So the only
+choice is how long the window is.
+
+On each box, back to back, as soon as the deploy finishes:
+
+```sh
+sudo /opt/agent-fleet/install/install.sh --upgrade
+```
+
+**Not a reinstall, and not `uninstall.sh`.** `--upgrade` keeps
+`/etc/agent-fleet-sidecar.env` and the host keypair, so the box comes back as
+the same enrolled host with no new pin. A true uninstall destroys the host
+identity and costs a fresh pin per box for no benefit.
+
+It asks nothing, restarts only the units that exist, and ends by comparing this
+box's protocol to the coordinator's — so a box that is still behind says so
+rather than looking healthy. Expect:
+
+```
+  ok   protocol v3, and the coordinator agrees
+```
+
+Anything else, including `PROTOCOL MISMATCH`, means that box is still refusing
+every command.
+
 ## 4. Verify the deployment is intact
 
 ```sh

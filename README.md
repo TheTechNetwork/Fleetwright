@@ -60,9 +60,20 @@ installer, what it asks, what is deployable today and what is not.
 curl -fsSL https://fleet.thetech.network/install | sudo sh
 ```
 
-It installs what is missing, generates the admin token, asks about Telegram, the
-coordinator, push and the sandbox, enrols the box in its fleet, and starts the
-services. Re-running it is how you upgrade.
+**Curling a coordinator is how you join it.** That URL is a fleet's address, and
+`/install` serves a script that carries it through — so the installer never asks
+which fleet, because you already said. It installs what is missing, asks for the
+six-digit pin you mint in the app, enrols the box and starts the services.
+
+The pin is the only thing it asks for. Nothing else is needed to join a fleet,
+and the questions that were in the way — Telegram, whether to run a coordinator
+here — are for somebody setting one up rather than joining one, so they are
+asked only when there is no fleet in the URL.
+
+Already installed and joined? `install.sh --upgrade` brings a box onto new code
+with no questions at all, restarts the services, and tells you whether its
+protocol still matches the coordinator's — which is the one thing that silently
+takes a fleet down.
 
 The one-liner fetches the repository to `/opt/agent-fleet` and runs the
 installer from there, so the clone is still what ends up on the box and

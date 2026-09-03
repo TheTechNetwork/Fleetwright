@@ -120,4 +120,22 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # GH_REPO, BECAUSE THIS JOB DOES NOT CHECK THE REPOSITORY OUT.
+          #
+          # It has no reason to — it downloads an artifact and uploads it — and
+          # `gh` works out which repository it means from the git remote. With
+          # no checkout there is no remote, so it failed with
+          #
+          #   failed to run git: fatal: not a git repository
+          #
+          # on the v0.2.0 release, which is why no release carries a host
+          # tarball or a manifest, which is why `/update` by manifest has
+          # nothing to point at and the installer cannot fetch a package. One
+          # missing environment variable held up the whole packaging plan, and
+          # the job before it was green.
+          #
+          # This rather than `actions/checkout`: cloning the repository to name
+          # it is a lot of work to avoid one line, and the point of this job is
+          # that it needs nothing from the tree.
+          GH_REPO: ${{ github.repository }}
         run: gh release upload "${{ github.event.release.tag_name }}" dist/*.tar.gz dist/manifest.json --clobber
