@@ -503,9 +503,9 @@ if [ -n "$NODE_BIN" ]; then
   [ "$NODE_MAJOR" -ge "$NODE_FLOOR" ] || die "node $NODE_MAJOR at $NODE_BIN is too old — this needs $NODE_FLOOR or newer (package.json says >=$NODE_FLOOR).
        Nothing has been changed on this box.
 
-       The prerequisite step installs it, and is separate because it adds a
-       third-party apt repository — which is not a thing this installer does to
-       your machine on its own:
+       The prerequisite step installs it into your user's home with nvm, and is
+       separate because changing how this machine gets software is not a thing
+       an installer does on your behalf:
            curl -fsSL ${AGENT_FLEET_COORDINATOR_URL:-https://fleet.thetech.network}/prereq | sudo sh
 
        Or install node any other way — nvm, fnm, a backport — and re-run. If

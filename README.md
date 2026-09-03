@@ -63,11 +63,16 @@ curl -fsSL https://fleet.thetech.network/install | sudo sh
 
 The first line is separate on purpose, and is a no-op if this box already has
 Node 24. It is the one thing the installer will not do on your behalf: closing
-the gap between what Debian ships and what this needs means adding a
-**third-party apt repository and signing key** to your machine, which is a
-different kind of act from installing a package. The installer refuses *before
-it changes anything* and points at it, so a box is never taken apart and then
-turned away.
+the gap between what Debian ships and what this needs means changing how the
+machine gets software, which is a different kind of act from installing a
+package. The installer refuses *before it changes anything* and points at it,
+so a box is never taken apart and then turned away.
+
+It uses **nvm**, into the run user's home — no apt repository, no signing key,
+nothing system-wide, and `rm -rf ~/.nvm` undoes it. The units bake an absolute
+node path, so nothing needs to be on `PATH` and no shell profile is touched.
+The cost is that nothing patches it afterwards: re-run that line to move to a
+newer Node.
 
 **Curling a coordinator is how you join it.** That URL is a fleet's address, and
 `/install` serves a script that carries it through — so the installer never asks
