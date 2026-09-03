@@ -9,6 +9,32 @@ yet designed).
 
 ---
 
+## Beta findings, round one
+
+Two outside testers, told nothing about the design and asked not to be
+reasonable about effort. **[beta-findings.md](docs/beta-findings.md) is the
+list** — 18 items with owners, severity and evidence, plus the order I would
+take them in.
+
+The one sentence to carry:
+
+> "I got my output by ignoring what the screens said and interrogating a
+> verification tool."
+
+Four of them are mine, from this round's own MCP work, and three of those are
+wrong *text* rather than wrong behaviour — which is the kind a test suite does
+not catch. The worst is a **false "NOT LOGGED IN" banner** that tells a
+returning user their one recovery path is closed while the credential is
+perfectly valid.
+
+The theme across the rest: nearly every missing fact **already exists in the
+system** and is absent from the screen where the decision gets made. Session
+dates, who started one, the credential countdown — all present somewhere, none
+of them where somebody is choosing.
+
+Still open: the first-run tester is running, and `DEFAULT_DENY` blocking
+recovery actions (`forget`, `update`) needs a decision rather than a fix.
+
 ## 1. Identity, trust, and accounts
 
 | feature | status | where |
