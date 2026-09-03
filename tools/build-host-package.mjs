@@ -36,6 +36,8 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } fro
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'dist');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -128,7 +130,20 @@ const manifest = {
   // THE FLAG DAY, VISIBLE BEFORE IT HAPPENS. A host refuses an update that
   // would strand it from its coordinator instead of discovering the mismatch
   // afterwards, when it is no longer able to say so.
-  protocol: Number(process.env.RELEASE_PROTOCOL || 2),
+  //
+  // READ FROM THE PROTOCOL, NOT FROM AN ENVIRONMENT VARIABLE. This was
+  // `Number(process.env.RELEASE_PROTOCOL || 2)`, nothing ever set that
+  // variable, and the literal was correct on the day it was written. So the
+  // first manifest this project ever published — v0.2.1, built from code that
+  // speaks v3 — advertised `"protocol": 2`.
+  //
+  // That is the dangerous direction. A v2 host reading it sees its own number,
+  // concludes the release matches, installs v3 code and strands itself from its
+  // coordinator — which is the exact failure this field exists to prevent,
+  // caused by the field. A number written down in a second place is a number
+  // that is wrong one release later, and this one had a default that made
+  // being wrong silent.
+  protocol: PROTOCOL_VERSION,
   // The two artifacts are already coupled — the entrypoint and the credential
   // broker's client live in the image — and until now nothing said so.
   sandboxImage: process.env.RELEASE_SANDBOX_IMAGE || null,

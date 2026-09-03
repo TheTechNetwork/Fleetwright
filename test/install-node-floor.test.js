@@ -132,20 +132,72 @@ test('the prerequisite step installs the floor, and nothing else', () => {
   const wanted = floorOf(JSON.parse(read('package.json')).engines?.node);
 
   assert.match(sh, new RegExp(`^FLOOR=${wanted}$`, 'm'), 'prereq.sh wants a different node than package.json');
-  assert.match(sh, /setup_\$\{FLOOR\}\.x/, 'the repository version is not built from the floor');
+  assert.match(sh, /nvm install \$FLOOR/, 'the installed version is not built from the floor');
+
+  // NVM RATHER THAN NODESOURCE, which is the same argument that made this a
+  // separate command: NodeSource permanently adds a third-party apt repository
+  // and signing key and can replace the distribution's nodejs. nvm is one
+  // directory in one home, removed with `rm -rf`.
+  // The code, not the comment that explains why NodeSource was rejected.
+  assert.equal(/nodesource/i.test(sh.replace(/^\s*#.*$/gm, '')), false,
+    'prereq.sh is back to adding an apt repository');
+  assert.match(sh, /nvm-sh\/nvm\/\$NVM_RELEASE/, 'the nvm version is not pinned');
+  assert.match(sh, /^NVM_RELEASE=v\d+\.\d+\.\d+$/m, 'nvm is fetched from a moving ref');
 
   const body = sh.replace(/^\s*#.*$/gm, '');
   for (const other of ['podman', 'tmux', 'systemctl', 'useradd', '/etc/']) {
     assert.equal(body.includes(other), false, `prereq.sh is doing installer work: ${other}`);
   }
 
+  // AS THE RUN USER, NOT ROOT. nvm is per-user and root's home is 0700, so a
+  // node in /root/.nvm is unreadable by the service, which runs as somebody
+  // else. This is the whole reason the script has to know who that is.
+  assert.match(sh, /RUN_USER="\$\{AGENT_HUB_USER:-\$\{SUDO_USER:-\}\}"/);
+  assert.match(sh, /su - "\$RUN_USER"/);
+  assert.match(sh, /= root \]/, 'installing as root would put node where the service cannot read it');
+
+  // AND IT DOES NOT EDIT ANYBODY'S SHELL. The units use an absolute path, so
+  // shell integration buys nothing, and rewriting a login profile somebody else
+  // uses is a side effect nobody asked for.
+  assert.match(sh, /PROFILE=\/dev\/null/);
+
   // ALREADY FINE IS A NO-OP. A box with node 26 from nvm must not get a system
   // node landing on top of it — this is run by people following instructions
   // who will not check first.
   assert.match(sh, /is already new enough — nothing to do/);
   // And it says what it is about to do to the machine BEFORE doing it, which is
-  // the entire reason the step is separate.
-  assert.match(sh, /adds the NodeSource apt repository and its signing key/);
-  // Refuses on a box it cannot help rather than guessing.
-  assert.match(sh, /does not use apt/);
+  // the entire reason the step is separate — including how to undo it and that
+  // nothing will patch it afterwards.
+  assert.match(sh, /Nothing system-wide changes/);
+  assert.match(sh, /rm -rf/, 'it does not say how to undo itself');
+  assert.match(sh, /Nothing patches it afterwards/, 'the cost of nvm is not stated');
+});
+
+test('Renovate can see the nvm pin, and would see a change to it', async () => {
+  // A version in a shell script is invisible to every manager Renovate has, so
+  // it is annotated in place and matched by a custom manager. The failure mode
+  // is silent in both directions: the regex stops matching and the pin quietly
+  // stops being maintained, or the annotation is edited and nothing says so.
+  //
+  // This matters more than an ordinary pin. prereq.sh runs as root and pipes
+  // nvm's installer into bash — an unpinned ref would be arbitrary code from a
+  // moving target, and a pinned one nobody bumps is a known-old one. Renovate
+  // is what makes "pinned" and "current" the same thing.
+  const config = JSON.parse(read('renovate.json'));
+  const manager = (config.customManagers || []).find((m) =>
+    (m.managerFilePatterns || []).some((f) => f.includes('prereq')),
+  );
+  assert.ok(manager, 'renovate.json has no custom manager for install/prereq.sh');
+
+  const sh = read('install/prereq.sh');
+  const matched = new RegExp(manager.matchStrings[0]).exec(sh);
+  assert.ok(matched, 'the custom manager matches nothing in install/prereq.sh');
+  assert.equal(matched.groups.depName, 'nvm-sh/nvm');
+  assert.equal(matched.groups.datasource, 'github-releases');
+  assert.match(matched.groups.currentValue, /^v\d+\.\d+\.\d+$/, 'the pin is not an exact release');
+
+  // And what it matched is what the script actually uses — an annotation above
+  // a variable nobody reads would be maintained for nothing.
+  assert.match(sh, new RegExp(`NVM_RELEASE=${matched.groups.currentValue}\\b`));
+  assert.match(sh, /nvm-sh\/nvm\/\$NVM_RELEASE\/install\.sh/);
 });

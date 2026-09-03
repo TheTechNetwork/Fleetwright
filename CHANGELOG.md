@@ -11,6 +11,37 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.2.2 — 2026-09-03
+
+**For operators. Nothing changes in the apps.**
+
+v0.2.1 published the first host package this project has ever released — and
+its manifest said `"protocol": 2` for code that speaks v3. The builder read that
+number from an environment variable nothing set, falling back to a literal that
+was correct the day it was written.
+
+That is the dangerous direction: a v2 host reading it sees its own number,
+concludes the release matches, installs v3 code and strands itself from its
+coordinator — the exact failure the field exists to prevent, caused by the
+field. **The number now comes from the protocol itself**, so it cannot drift
+again, and `v0.2.1`'s host package should not be installed.
+
+**Also**
+
+- **`install.sh --upgrade`** brings an already-enrolled box onto new code with
+  no questions, restarts the services, and tells you whether its protocol still
+  matches the coordinator's. An unattended install used to put new code on disk
+  and leave the old code running.
+- **Nothing is destroyed before the install is known to be possible.** A box
+  could be taken apart — services stopped, identity deleted — and then refused
+  at the Node version. It refuses first now.
+- **`curl .../prereq | sudo sh`** installs a new-enough Node with nvm, into the
+  run user's home. Separate on purpose: changing how a machine gets software is
+  not a thing an installer does on your behalf. Nothing system-wide, and
+  `rm -rf ~/.nvm` undoes it.
+- **`curl .../install | sudo sh` carries the fleet's address**, so the installer
+  no longer asks which coordinator to join — you said it by typing the URL.
+
 ## 0.2.1 — 2026-09-02
 
 **Sessions can be given a task.** Starting a session used to open an empty
