@@ -289,7 +289,21 @@ jobs:
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
-        run: brew install xcodegen
+        run: |
+          # UNTAP RATHER THAN SILENCE. GitHub's macOS image ships aws/tap
+          # tapped, Homebrew now requires tap trust, and every brew command
+          # prints a paragraph about it. We use brew for one formula and never
+          # touch aws/tap, so removing it is the honest fix.
+          #
+          # NOT HOMEBREW_NO_REQUIRE_TAP_TRUST=1, which turns off the check for
+          # every tap including ones we do use — and which Homebrew says it
+          # will remove. Silencing a security warning by disabling the security
+          # is the trade this repository keeps declining.
+          #
+          # `|| true` because a future image may not ship it, and a missing tap
+          # must not fail a build.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install xcodegen
 
       # Before init deliberately. Generating a pbxproj is not compilation, so it
       # does not need to be traced, and doing it first keeps the traced section

@@ -91,6 +91,14 @@ jobs:
         run: |
           # tmux is how a session exists at all. The Claude CLI is what runs in
           # it. Neither is preinstalled on a macOS runner.
+          #
+          # UNTAP RATHER THAN SILENCE. The image ships aws/tap tapped, Homebrew
+          # now requires tap trust, and every brew command prints a paragraph
+          # about it. We never touch aws/tap. Not
+          # HOMEBREW_NO_REQUIRE_TAP_TRUST=1, which turns the check off for
+          # every tap including ones we do use, and which Homebrew says it will
+          # remove. `|| true` because a future image may not ship it.
+          brew untap aws/tap >/dev/null 2>&1 || true
           brew install tmux
           npm install -g @anthropic-ai/claude-code
           tmux -V && claude --version
