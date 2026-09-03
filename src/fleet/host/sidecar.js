@@ -806,9 +806,23 @@ export function toCommandLine({ verb, params, actor }) {
       // values it can hold are the two literals below. `title` and `brief` are
       // deliberately NOT here — they are prose, they travel as fields on the
       // request, and commandMeta() below is what picks them up.
-      return ['/new', p.name, p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null]
+      //
+      // `profile` IS here, and the difference is the whole design. It is a
+      // NAME — charset-checked by validateIntent, no whitespace, no quote, no
+      // leading dash — so it is a single token that cannot become a second
+      // flag. The words it selects never travel: agent-hub reads them off a
+      // file on this box. A coordinator that could send the content would be
+      // writing the instructions of an agent with root in a container.
+      return [
+        '/new',
+        p.name,
+        p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null,
+        p.profile ? `--profile=${p.profile}` : null,
+      ]
         .filter(Boolean)
         .join(' ');
+    case 'profiles':
+      return '/profiles';
     // THE WORKSPACE. Quoted with the same care as everything else here: a
     // path is a filename and never a command, so it travels as one argument.
     case 'files':

@@ -54,7 +54,32 @@
 
 import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 
-export const PROTOCOL_VERSION = 2;
+// v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
+//
+// A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
+// free — an old host answers `unknown_verb` and the caller learns something
+// true. Adding a PARAMETER is not: the version handshake has already agreed by
+// the time the params are read, so an old host answers `bad_params` to a
+// request the coordinator had every reason to think it understood. A beta
+// tester met a host two releases behind that refused `fleet_files`, on this
+// fleet, this week; that is what this costs when it goes wrong.
+//
+// So it is spent deliberately, on the highest-ranked finding in both beta
+// reports: a session could not be given anything to do. `brief` was stored and
+// never delivered, so the loop this project's own MCP instructions taught —
+// start, await, read the log — produced an idle REPL, an empty log, and NO
+// ERROR ANYWHERE, which is the worst shape a failure can have.
+//
+// The alternative was a second verb (`launch`) to dodge the number. It was
+// rejected: `start` and `launch` would accumulate separate parameters forever,
+// and the only thing the second one buys is not writing down that the protocol
+// changed.
+//
+// Upgrade order is coordinator-last. A v3 host answers `unsupported_version` to
+// a v2 coordinator and a v2 host answers it to a v3 one, so the fleet is
+// visibly down either way rather than subtly wrong — hosts first, then the
+// coordinator, and the window is loud.
+export const PROTOCOL_VERSION = 3;
 
 /**
  * Session names, matching agent-hub's charset (`src/core/names.js`).
@@ -201,8 +226,32 @@ export const VERBS = Object.freeze({
         max: BRIEF_MAX,
         describe:
           'A note for whoever opens this session later. NOT the task: it is stored, never typed into the ' +
-          'session and never given to the model. The session starts idle and this protocol has no way to ' +
-          'send it a prompt — a person drives it.',
+          'session and never given to the model. To give a session work, name a `profile`.',
+      },
+      // THE TASK, AND IT IS A NAME RATHER THAN THE WORDS.
+      //
+      // docs/wanted.md settled the security half before this was built: the
+      // coordinator may NAME a profile; it may never CARRY one. Injected text
+      // is instructions to an agent with root in a container, so a coordinator
+      // that chose the content would be writing that agent's instructions —
+      // the `reply { text }` argument in different clothes, and a much larger
+      // capability than the rest of this verb set combined.
+      //
+      // `name` and not `enum`, because the values are files on a host and this
+      // table cannot know them. The HOST refuses an unknown one and lists what
+      // it has, which is the same shape the tag refusal already uses well.
+      //
+      // What this does NOT open: there is still no way to send text into a
+      // session, at start or later. The set of things a session can be started
+      // with is exactly the set of files on that box, and adding to it needs a
+      // shell on it.
+      profile: {
+        type: 'name',
+        required: false,
+        describe:
+          'A task profile ON THAT HOST, by name — its content becomes the session\'s first message, so the ' +
+          'session comes up working instead of idle. Ask `profiles` for the list. Without one the session ' +
+          'starts idle and a person has to drive it.',
       },
     },
     mutating: true,
@@ -211,10 +260,24 @@ export const VERBS = Object.freeze({
     // sees this sentence and nothing around it — and "see the note above" is a
     // reference to a comment in a file it will never open.
     summary:
-      'Start a new session. IT COMES UP IDLE — nothing here can hand it work, because no verb sends text ' +
-      'to a session (`answer` picks a numbered option and nothing else). A person drives it from the app ' +
-      'or the pane. There is no path parameter: a session works in a fixed directory, so where it runs is ' +
-      'a property of the host rather than something to ask for.',
+      'Start a new session. NAME A `profile` OR IT COMES UP IDLE: a profile is a file on that host whose ' +
+      'content becomes the session\'s first message, and `profiles` lists what the host has. Without one ' +
+      'the session sits at an empty prompt and a person has to drive it — nothing else here can hand it ' +
+      'work, because no verb sends text to a session (`answer` picks a numbered option and nothing else). ' +
+      'There is no path parameter: a session works in a fixed directory, so where it runs is a property of ' +
+      'the host rather than something to ask for.',
+  },
+  // FREE TO ADD, unlike the parameter above: an old host answers `unknown_verb`
+  // and the caller learns something true. It ships in the same version anyway
+  // because `start { profile }` without a way to ask what the profiles ARE is a
+  // parameter you can only use by guessing.
+  profiles: {
+    params: {},
+    mutating: false,
+    summary:
+      'The task profiles this host has, by name, each with the first line of what it says. Feed one to ' +
+      '`start { profile }`. The CONTENT never crosses this protocol — it is a file on that box, and adding ' +
+      'one needs a shell on it, which is what stops a coordinator from writing a session\'s instructions.',
   },
   resume: {
     params: {

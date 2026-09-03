@@ -23,6 +23,10 @@
  * @property {string} [content]    a file's body, carried as a FIELD for a
  *   stronger version of the same reason: it has newlines and leading whitespace
  *   that matter, and it may be a shell script
+ * @property {string} [profile]    which task profile a new session starts on.
+ *   A NAME, never the words: the content is a file on this box, and a caller
+ *   that could supply it would be writing the instructions of an agent with
+ *   root in a container. See src/core/profiles.js
  */
 
 /**
@@ -62,15 +66,22 @@ import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/fi
  * Flags may appear anywhere, so `/new api --safe` and `/new --safe api` both
  * work — nobody should have to remember an order.
  *
+ * A flag may also carry a VALUE — `--profile=reviewer` — and those land in
+ * `values` rather than in `flags`. Deliberately `=` and not a following word:
+ * `--profile reviewer` would make the value a positional argument, and `/new`
+ * already has two of those, so the parser could not tell a profile from a
+ * session name. One token, no ambiguity, and nothing about the existing flags
+ * changes.
+ *
  * @param {string} line
- * @returns {{ name: string, args: string[], flags: Set<string> }}
+ * @returns {{ name: string, args: string[], flags: Set<string>, values: Map<string, string> }}
  */
 export function parse(line) {
   const parts = String(line || '')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  if (!parts.length) return { name: '', args: [], flags: new Set() };
+  if (!parts.length) return { name: '', args: [], flags: new Set(), values: new Map() };
   // Accept "/start", "start", and Telegram's "/start@mybot" group form.
   const name = parts[0].replace(/^\//, '').split('@')[0].toLowerCase();
 
@@ -78,6 +89,8 @@ export function parse(line) {
   const args = [];
   /** @type {Set<string>} */
   const flags = new Set();
+  /** @type {Map<string, string>} */
+  const values = new Map();
   for (const part of parts.slice(1)) {
     // ONE dash is enough, and so is a dash a phone keyboard has helpfully
     // rewritten. Telegram on iOS turns `--` into an em dash as you type it, so
@@ -87,11 +100,19 @@ export function parse(line) {
     // never typed, so this broke only for people typing the command.
     // A LETTER after the dash, not \w: otherwise `-5` is a flag called "5"
     // rather than a negative number, and `/logs -5` stops meaning anything.
+    // The valued form first: `--profile=reviewer`. Same dash tolerance as
+    // below, because the em-dash rewrite a phone keyboard performs does not
+    // care which form was typed.
+    const valued = /^(?:--|-|—|–)([a-z][\w-]*)=(.+)$/i.exec(part);
+    if (valued) {
+      values.set(valued[1].toLowerCase(), valued[2]);
+      continue;
+    }
     const flag = /^(?:--|-|—|–)([a-z][\w-]*)$/i.exec(part);
     if (flag) flags.add(flag[1].toLowerCase());
     else args.push(part);
   }
-  return { name, args, flags };
+  return { name, args, flags, values };
 }
 
 /**
@@ -456,7 +477,7 @@ function describeAccounts(ctx) {
  * caps it at 256 characters and shows it inline, so keep it to a few words —
  * `help` is the longer text for /help.
  *
- * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, hidden?: boolean, run: (ctx: Ctx, args: string[], flags: Set<string>) => Promise<Reply>|Reply }>}
+ * @type {Record<string, { aliases?: string[], usage: string, help: string, short?: string, hidden?: boolean, run: (ctx: Ctx, args: string[], flags: Set<string>, values: Map<string, string>) => Promise<Reply>|Reply }>}
  */
 export const COMMANDS = {
   help: {
@@ -472,10 +493,13 @@ export const COMMANDS = {
     // Telegram reserves a bare /start as the bot-intro command, so its adapter
     // maps that one case to /help — see adapters/telegram.js.
     aliases: ['start', 'launch', 'run'],
-    usage: '/new [name] [path] [--safe|--dangerous]',
+    usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>]',
     short: 'Start a new Claude session',
-    help: 'Start a new session. --safe keeps permission prompts on for this one session.',
-    run: async (ctx, args, flags) => {
+    help:
+      'Start a new session. --safe keeps permission prompts on for this one session. ' +
+      '--profile=<name> gives it something to do — /profiles lists what this box has. ' +
+      'Without one the session comes up idle, waiting for a person.',
+    run: async (ctx, args, flags, values) => {
       const [name, cwd] = args;
       const skipPermissions = permissionOverride(flags);
       // title and brief arrive as FIELDS on the context, never parsed out of
@@ -489,13 +513,60 @@ export const COMMANDS = {
         skipPermissions,
         title: ctx.title ?? null,
         brief: ctx.brief ?? null,
+        // Typed as `--profile=x`, or supplied as a field by the fleet. The
+        // NAME only: sessions.start reads the content off this box, because a
+        // caller that could supply the words would be writing the instructions
+        // of an agent with root in a container.
+        profile: values?.get('profile') ?? ctx.profile ?? null,
       });
       let text = r.message;
       if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
       if (r.ok && skipPermissions === true && !ctx.cfg.skipPermissions) {
         text += '\nPermission checks are BYPASSED for this session.';
       }
+      // SAID EITHER WAY, because the two outcomes need different sentences and
+      // the silent one is the one that cost two beta reports. A session with a
+      // profile is working; a session without one is waiting, and "waiting"
+      // read as "working" is how somebody comes back in an hour to an empty log.
+      if (r.ok) {
+        const profile = values?.get('profile') ?? ctx.profile ?? null;
+        text += profile
+          ? `\nStarted on the "${profile}" profile — it has its first message already.`
+          : '\nIT STARTED IDLE. Nothing has been asked of it yet: open Remote Control, or start it with ' +
+            '--profile=<name> (see /profiles).';
+      }
       return { ok: r.ok, text, sessions: r.session ? [r.session] : undefined };
+    },
+  },
+
+  profiles: {
+    aliases: ['profile'],
+    usage: '/profiles',
+    short: 'Task profiles this box can start a session on',
+    help:
+      'List the task profiles on this host. Each is a file — start a session on one with ' +
+      '/new --profile=<name>, and the session comes up with that file as its first message ' +
+      'instead of idle. Adding one means putting a file on this box, which needs a shell here.',
+    run: (ctx) => {
+      const have = ctx.sessions.profiles.list();
+      if (!have.length) {
+        return {
+          ok: true,
+          text:
+            'No task profiles on this box, so every session here starts idle.\n' +
+            `Add one as ${ctx.cfg.profileDir}/<name>.md — its content becomes the session's first message.`,
+        };
+      }
+      // The name first and left-aligned: it is the thing that gets typed back.
+      const width = Math.max(...have.map((p) => p.name.length));
+      const lines = have.map((p) => `${p.name.padEnd(width)}  ${p.summary}`);
+      return {
+        ok: true,
+        text: `${have.length} profile${have.length === 1 ? '' : 's'} on this box:\n${lines.join('\n')}`,
+        // Tappable, because the whole point is that choosing one is easier than
+        // typing a task — and a list you have to retype is a list.
+        buttons: have.slice(0, 8).map((p) => ({ label: p.name, command: `/new --profile=${p.name}` })),
+      };
     },
   },
 
@@ -1319,7 +1390,7 @@ export function helpText(ctx) {
  * @returns {Promise<Reply>}
  */
 export async function dispatch(ctx, line) {
-  const { name, args, flags } = parse(line);
+  const { name, args, flags, values } = parse(line);
   if (!name) return { ok: false, text: helpText(ctx) };
 
   const canonical = LOOKUP[name];
@@ -1331,7 +1402,7 @@ export async function dispatch(ctx, line) {
   }
 
   try {
-    return await COMMANDS[canonical].run(ctx, args, flags);
+    return await COMMANDS[canonical].run(ctx, args, flags, values);
   } catch (e) {
     const err = /** @type {Error} */ (e);
     return { ok: false, text: `${canonical} failed: ${err.message}` };

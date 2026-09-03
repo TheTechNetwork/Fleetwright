@@ -914,6 +914,7 @@
                       "list",
                       "logs",
                       "peek",
+                      "profiles",
                       "purge",
                       "readfile",
                       "reboot",

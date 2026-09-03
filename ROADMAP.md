@@ -51,7 +51,10 @@ And the two the first-run tester ranked daily, both arguing "I understand why,
 and I still want it": **task-at-start** (a `brief` that is stored and never
 delivered, so the documented MCP loop ends at an idle REPL) and **a done /
 needs-me / idle state** that does not have to be divined. They found our own
-compromise for the first on our own roadmap — §6's host-side prompt profiles.
+compromise for the first on our own roadmap — §6's host-side prompt profiles —
+and that is what shipped, as **protocol v3**: `start { profile }` names a file
+on the host and its content becomes the session's first message. See
+[`docs/task-at-start.md`](docs/task-at-start.md).
 
 Their disagreement with the order below, kept because it is the sharpest thing
 either report said:
@@ -153,7 +156,7 @@ anything. (`docs/wanted.md` has the full table.)
 | Sandbox: Android Studio + emulator (`/dev/kvm`) | wanted | `docs/wanted.md` |
 | Telnyx module (Inkbox-style) — own repo, published to npm, consumed here | wanted | `docs/wanted.md` |
 | Session config from app/TG | wanted | `docs/wanted.md` |
-| Prompt-efficiency helpers injected at session start / **task at start** | **designed, blocked on one decision** | [`docs/task-at-start.md`](docs/task-at-start.md). The security half is settled — the coordinator NAMES a profile and never carries one. What is open is delivery: `start { profile }` is a new parameter on an existing verb, which this project treats as a flag day, and a beta tester met a host two releases behind this week. Recommendation is v3, carrying whatever else is waiting. Ranked #1 in both beta reports |
+| Prompt-efficiency helpers injected at session start / **task at start** | **done, protocol v3** | [`docs/task-at-start.md`](docs/task-at-start.md). Ranked #1 in both beta reports. `start { profile }` names a file on the host and its content becomes the session's first message; `profiles` lists what a host has. The security half was already settled and is unchanged — the coordinator NAMES a profile and never carries one, so there is still no way to send text into a session. It cost a **flag day**: a parameter on an existing verb means an old host answers `bad_params` after the handshake agreed, so hosts upgrade before the coordinator |
 
 ## 6b. The install should ask nothing
 

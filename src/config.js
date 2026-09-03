@@ -70,6 +70,17 @@ export function loadConfig(env = process.env) {
     // port (hub restarting, port moved). The hub drains it on every reconcile,
     // so a conversation uuid is never lost just because of a timing gap.
     spoolFile: path.join(stateDir, 'uuid-spool.tsv'),
+    // TASK PROFILES: `<name>.md` files, one per profile, and the reason a
+    // session can be started with something to do. See src/core/profiles.js.
+    //
+    // A DIRECTORY ON THE BOX, deliberately. The protocol carries the NAME of a
+    // profile and never its content — a coordinator that could choose the words
+    // would be writing the instructions of an agent with root in a container.
+    // Putting a file here needs a shell here, which is the bound.
+    //
+    // Missing is the normal case and not an error: a host with no profiles
+    // starts idle sessions, which is what every host did before this existed.
+    profileDir: str('AGENT_HUB_PROFILE_DIR', path.join(stateDir, 'profiles')),
 
     // --- how sessions are launched ----------------------------------------
     // Sessions start here. It MUST be a trusted folder in ~/.claude.json or

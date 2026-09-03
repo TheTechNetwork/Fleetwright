@@ -88,7 +88,8 @@ dispatcher, so nothing can work in one surface and be missing from another.
 
 | Command | What it does |
 |---|---|
-| `/new [name] [path] [--safe]` | Start a session. Name optional, path defaults to the workdir. |
+| `/new [name] [path] [--safe] [--profile=<name>]` | Start a session. Name optional, path defaults to the workdir. **Without a profile it comes up idle** — waiting for a person, not working. |
+| `/profiles` | The task profiles on this box. Each is a `<name>.md` file under `AGENT_HUB_PROFILE_DIR`; its content becomes a new session's first message. Adding one needs a shell here, which is what stops a coordinator from writing a session's instructions. |
 | `/resume <name> [summary\|full]` | Bring a stopped session back **with its conversation**. |
 | `/stop <name>` | Stop it. The conversation is kept so `/resume` still works. |
 | `/list` | Everything — running and resumable. |

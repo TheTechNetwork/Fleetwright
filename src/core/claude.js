@@ -28,10 +28,21 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * a DIRECTORY at that path and the session would come up unable to report its
  * conversation uuid — unresumable, silently.
  *
+ * prompt is the CLI's own initial-prompt argument — the session comes up with
+ * that as its first message instead of at an idle REPL. It is the LAST
+ * positional and nothing follows it, which is what stops a profile whose text
+ * happens to begin with a dash from being read as a flag.
+ *
+ * IT IS NEVER TYPED INTO A PANE. `sendKeys` into a live session would race the
+ * TUI's startup and would put the text through tmux's key parsing; passing it
+ * on the command line hands it to claude as one argv entry, before anything is
+ * running to race with. The content comes from a file on this host — see
+ * src/core/profiles.js for why it can never come from the wire.
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null }} opts
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
@@ -40,8 +51,15 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
   if (rc) argv.push('--remote-control', name);
   if (skip) argv.push('--dangerously-skip-permissions');
   if (resumeUuid) argv.push('--resume', resumeUuid);
+  // LAST, and after every flag. A profile is prose: it can start with "-",
+  // contain newlines, and contain quotes. As the final positional it is one
+  // argv entry that nothing after it can reinterpret.
+  if (typeof prompt === 'string' && prompt.trim()) argv.push(prompt);
   // Single-quote each argument: cfg.claudeBin can be an absolute path with
-  // spaces, and resumeUuid/name are already charset-validated upstream.
+  // spaces, and resumeUuid/name are already charset-validated upstream. The
+  // prompt is the one argument here that is NOT charset-validated — it is
+  // deliberately arbitrary text — which is why the quoting is a real escape and
+  // not a formality.
   const quoted = argv.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
   return `IS_SANDBOX=1 exec ${quoted}`;
 }

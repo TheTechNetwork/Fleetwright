@@ -84,24 +84,30 @@ test('required stays required, and enums keep their values', () => {
   }
 });
 
-test('the instructions teach the handoff, not a loop that cannot work', async () => {
+test('the instructions teach the profile, and the handoff when none fits', async () => {
   // The lifecycle they taught was start -> await -> read_log -> stop, which
-  // implies a session produces something. It does not: `brief` is stored and
-  // never delivered, so that loop ends at an idle REPL with an empty log and no
-  // error. Two beta testers lost a session to it.
+  // implies a session produces something. Started with nothing to do it does
+  // not: the loop ends at an idle REPL with an empty log and no error, and two
+  // beta testers lost a session to it.
   //
-  // Until a task can be given at start (#325, a protocol decision), the
-  // instructions have to say what actually happens and what to do instead.
+  // v3 answered the protocol half (#325): `start` takes a `profile`, and the
+  // instructions have to lead with it — an agent that does not know profiles
+  // exist starts idle sessions exactly as before, because the tool call it
+  // makes is the same one.
   const { McpServer } = await import('../src/mcp/server.js');
   const server = new McpServer({ coordinator: 'https://f.example', credential: 'fwk_a', write: () => {}, watchMs: 0 });
   const r = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
   const text = String(r.result.instructions);
 
-  assert.match(text, /COMES UP IDLE, AND YOU CANNOT GIVE IT A TASK/);
-  // The handoff, which is the useful half: the fleet gets them a machine and
-  // the person brings the instructions.
+  assert.match(text, /GIVE A SESSION A PROFILE OR IT COMES UP IDLE/);
+  assert.match(text, /fleet_profiles/, 'a profile you can only name by guessing is not a feature');
+  // The words never travel, and the reason is worth carrying: a caller that
+  // could supply them would be writing the instructions of an agent with root.
+  assert.match(text, /cannot supply the words yourself/);
+  // The handoff survives, because no profile will fit every job. It is the
+  // fallback now rather than the only answer.
   assert.match(text, /Remote Control URL/);
-  assert.match(text, /If nobody is going to drive it, do not start it/);
+  assert.match(text, /do not start it/);
   // And the two things a watcher gets wrong: await cannot see a prompt, and
   // stopping discards the output.
   assert.match(text, /BEFORE stopping it/);

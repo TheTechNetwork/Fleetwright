@@ -57,6 +57,12 @@ test('the verb set is exactly what is documented', () => {
     'list',
     'logs',
     'peek',
+    // v3, and the FREE half of it: an old host answers `unknown_verb`, which
+    // strands nothing. The costly half is `start { profile }` — a parameter on
+    // an existing verb, which is what the version number was actually spent on.
+    // They ship together because a profile you can only name by guessing is not
+    // a feature.
+    'profiles',
     'purge',
     'readfile',
     'reboot',
@@ -131,16 +137,32 @@ test('no verb accepts a path into the HOST', () => {
   // So the rule is narrowed rather than dropped. A path may exist only on the
   // verbs whose whole subject is the workspace, and `start` — the one the
   // original note was about — still takes none.
+  //
+  // MATCHED ON WORDS, NOT SUBSTRINGS, and that is a correction rather than a
+  // relaxation. The old test was `/path|dir|cwd|file/i`, which flags `profile`
+  // — for the "file" inside it, and for nothing else. A substring test that
+  // fires on an unrelated word is a test people learn to argue with, which is
+  // worse than one that is slightly narrower.
+  //
+  // `profile` is allowed on its own merits, and they are not the same merits as
+  // the workspace paths': it never becomes a path the CALLER chose. It is a
+  // bounded name, in one fixed directory on the host, with no dot in its
+  // charset so `..` cannot be spelled — and the words it selects were put there
+  // by somebody with a shell on that box. See src/core/profiles.js.
+  const words = (/** @type {string} */ key) =>
+    key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const PATHY = new Set(['path', 'dir', 'directory', 'cwd', 'file', 'filename', 'folder']);
   const WORKSPACE = new Set(['files', 'readfile', 'writefile', 'copyfile', 'deletefile']);
   for (const [verb, spec] of Object.entries(VERBS)) {
     for (const key of Object.keys(spec.params)) {
       if (WORKSPACE.has(verb) && (key === 'path' || key === 'to')) continue;
-      assert.ok(!/path|dir|cwd|file/i.test(key), `${verb} exposes a path-shaped parameter "${key}"`);
+      assert.ok(!words(key).some((w) => PATHY.has(w)), `${verb} exposes a path-shaped parameter "${key}"`);
     }
   }
   // The original case, named so it cannot come back by accident.
   for (const key of Object.keys(VERBS.start.params)) {
-    assert.ok(!/path|dir|cwd/i.test(key), `start exposes "${key}" — a session's workdir is not the caller's to choose`);
+    assert.ok(!words(key).some((w) => w === 'path' || w === 'dir' || w === 'cwd'),
+      `start exposes "${key}" — a session's workdir is not the caller's to choose`);
   }
   // And a workspace path is never optional about being relative: every one of
   // them is declared `text`, so cleanText bounds it before anything resolves it.

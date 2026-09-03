@@ -684,6 +684,29 @@ STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
 install -d -o "$RUN_USER" -m 0750 "$STATE_DIR"
 ok "$STATE_DIR"
 
+# TASK PROFILES. A session started with no profile comes up idle, waiting for a
+# person; a profile is a file here whose content becomes its first message.
+#
+# THE DIRECTORY IS CREATED EVEN THOUGH IT IS OPTIONAL, and one example is
+# written into it, because a feature nobody can see is a feature nobody uses:
+# `/profiles` on a box with no directory says "add one as …/<name>.md", and a
+# path in an error message is a worse instruction than a file to copy.
+#
+# 0750, and content only ever put here by somebody with a shell on this box.
+# That is the whole security argument for the feature — the coordinator names a
+# profile and can never carry one, so what a session is told to do is chosen
+# here rather than over the wire.
+#
+# NEVER OVERWRITTEN. Re-running the installer is how you upgrade, and clobbering
+# a profile somebody wrote would be an upgrade that changes what their sessions
+# are told to do.
+PROFILE_DIR="${AGENT_HUB_PROFILE_DIR:-$STATE_DIR/profiles}"
+install -d -o "$RUN_USER" -m 0750 "$PROFILE_DIR"
+if [ ! -e "$PROFILE_DIR/orient.md" ]; then
+  install -m 0640 -o "$RUN_USER" "$DIR/install/profiles/orient.md" "$PROFILE_DIR/orient.md"
+fi
+ok "$PROFILE_DIR"
+
 # --- 3. environment file ----------------------------------------------------
 say "Configuration"
 if [ -f "$ENV_FILE" ]; then

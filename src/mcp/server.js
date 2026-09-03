@@ -498,21 +498,23 @@ export class McpServer {
       'reports "done" — a finished session looks exactly like an idle one — so deciding it is over is',
       'your job, not something you will be told.',
       '',
-      'A SESSION YOU START COMES UP IDLE, AND YOU CANNOT GIVE IT A TASK.',
-      'This is the first thing to know, because the obvious reading of fleet_start is wrong and the',
-      'failure is silent. `brief` is a note for whoever opens the session later — it is stored, never',
-      'typed in, never seen by the model in it. No verb sends text to a session. So a session you start',
-      'and then wait on will sit at an empty prompt until it times out, with an empty log and no error',
-      'anywhere. Two testers lost a session to that loop before anybody noticed it could not work.',
+      'GIVE A SESSION A PROFILE OR IT COMES UP IDLE.',
+      'This is the first thing to know, because the failure is silent. `fleet_start` with no `profile`',
+      'opens an empty prompt: the session exists, nothing errored, and nothing was asked of it. Waiting',
+      'on one produces an empty log and no error anywhere. Two testers lost a session to that loop.',
       '',
-      'WHAT TO DO INSTEAD: start it, then hand the Remote Control URL from the reply to the person you',
-      'are working with. They can drive it and you cannot. That is a handoff, not a failure — the fleet',
-      'gets them a machine, and they bring the instructions.',
+      'A PROFILE IS A FILE ON THE HOST, chosen by name. Its content becomes the session\'s first',
+      'message. Call fleet_profiles to see what a host has; you cannot supply the words yourself, and',
+      'that is deliberate rather than missing — a session runs as root in a container, so what it is',
+      'told to do lives on the machine it runs on and gets there by somebody with a shell.',
       '',
-      'If nobody is going to drive it, do not start it.',
+      'IF NO PROFILE FITS, HAND IT OVER RATHER THAN GUESSING. Start it and give the Remote Control URL',
+      'from the reply to the person you are working with: they can drive it and you cannot. That is a',
+      'handoff, not a failure — the fleet gets them a machine, they bring the instructions. If nobody is',
+      'going to drive it and no profile fits, do not start it.',
       '',
-      'When a person IS driving, and you are watching on their behalf:',
-      '  1. fleet_start, naming a host or a tag if you want a particular kind of machine',
+      'Watching one that is actually working:',
+      '  1. fleet_start with a `profile`, naming a host or a tag for a particular kind of machine',
       '  2. fleet_await — returns when the session ends or errors, or the wait runs out. Do not poll.',
       '     It cannot tell you a session is merely waiting at a prompt; fleet_status reports how long',
       '     the pane has been still, which is evidence rather than an answer.',
@@ -789,29 +791,33 @@ export class McpServer {
       if (landed && !String(reply?.text ?? '').includes(landed)) {
         reply = { ...reply, text: `${reply?.text ?? ''}\nOn ${landed}.` };
       }
-      // AND IT SAYS THE SESSION IS IDLE, which is the part nothing said.
+      // AND IT SAYS WHETHER THE SESSION HAS ANYTHING TO DO, which is the part
+      // nothing said.
       //
-      // `brief` is stored and never delivered, so the loop these instructions
-      // teach — start, await, read_log — produces an idle REPL, an empty log
-      // and no error anywhere. A beta tester followed it exactly and lost the
-      // session to it; on a paid runner that loop burns money until the budget
-      // deadline.
+      // Started with no profile, the loop these instructions teach — start,
+      // await, read_log — produces an idle REPL, an empty log and no error
+      // anywhere. A beta tester followed it exactly and lost the session to it;
+      // on a paid runner that loop burns money until the budget deadline.
       //
-      // Delivering a task at start needs a protocol decision that is not made
-      // yet (docs/task-at-start.md, #325). Saying so does not, and silence is
-      // the expensive half: an agent told the session is idle stops waiting
-      // for output that is never coming.
+      // v3 gave `start` a `profile`, so there is now a right answer to point
+      // at rather than only a dead end to name. Both branches are printed,
+      // because "started" reads as "working" either way and only one of them
+      // is: an agent told the session is idle stops waiting for output that is
+      // never coming, and an agent told it is working stops hunting for a
+      // Remote Control URL it does not need.
       if (tool.verb === 'start') {
         reply = {
           ...reply,
-          text:
-            `${reply?.text ?? ''}\n\nIT STARTED IDLE. Nothing here can hand it work — \`brief\` is a note for ` +
-            'people, not a prompt, and no verb sends text to a session. Waiting on it will time out rather ' +
-            'than finish.\n' +
-            (reply?.rcUrl
-              ? `Give this to the person who wants the work done and they can drive it: ${reply.rcUrl}`
-              : 'Whoever wants the work done has to drive it, from the app or the session\'s Remote Control link ' +
-                '— which appears on fleet_status once the session has published one.'),
+          text: params.profile
+            ? `${reply?.text ?? ''}\n\nIt is working on the "${params.profile}" profile — that is its first ` +
+              'message, already delivered. fleet_await, then fleet_read_log BEFORE you stop it.'
+            : `${reply?.text ?? ''}\n\nIT STARTED IDLE — nothing has been asked of it. Waiting on it will ` +
+              'time out rather than finish.\n' +
+              'Either start it with a `profile` (fleet_profiles lists what this host has), or hand it to a ' +
+              'person: ' +
+              (reply?.rcUrl
+                ? reply.rcUrl
+                : 'its Remote Control link appears on fleet_status once the session has published one.'),
         };
       }
     }

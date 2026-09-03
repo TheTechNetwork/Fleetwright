@@ -198,6 +198,23 @@ export class HttpAdapter {
         meta[field] = r.value;
       }
 
+      // WHICH TASK PROFILE, which is a NAME rather than prose and so does not
+      // go through cleanText — that collapses whitespace and strips control
+      // characters, which would silently turn a wrong name into a different
+      // wrong name. A name is exactly right or it is refused.
+      //
+      // It is accepted as a field as well as on the command line so that the
+      // web UI and the fleet do not have to spell it differently. The content
+      // is never accepted here in any form: it is a file on this box, because a
+      // caller that could supply the words would be writing the instructions of
+      // an agent with root in a container.
+      if (body.profile !== undefined && body.profile !== null) {
+        if (typeof body.profile !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(body.profile)) {
+          return json(res, 400, { ok: false, text: 'profile must be a plain name — letters, digits, dash, underscore' });
+        }
+        meta.profile = body.profile;
+      }
+
       // FILE CONTENT, WHICH DOES NOT GO THROUGH cleanText. That collapses runs
       // of whitespace and strips control characters — right for a title and
       // catastrophic for a file, which would come back reindented and with its

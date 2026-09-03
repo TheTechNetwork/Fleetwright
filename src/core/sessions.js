@@ -23,6 +23,7 @@ import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
+import { Profiles } from './profiles.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -47,6 +48,11 @@ export class SessionManager {
     // Optional: an unsandboxed deployment does not need one, and the fleet
     // sidecar can supply its own.
     this.hooks = hooks;
+    // The task profiles this box has. Read from disk on every call rather than
+    // cached: editing a profile should take effect on the next session, not on
+    // the next restart of the hub, and the whole store is a handful of small
+    // files.
+    this.profiles = new Profiles(cfg.profileDir);
     // Names with a start/resume in flight. A start takes up to ~2×rcTimeoutMs
     // while Remote Control is verified, and during that window the session is
     // in tmux but not yet finished. Without this, a second /start with the same
@@ -176,15 +182,18 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null }} opts
    *   skipPermissions overrides AGENT_HUB_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
    *   title is prose a PERSON wrote; supplying it pins the title so nothing
    *   derived later — the transcript hook, the cwd guess — overwrites it.
    *   brief is a sentence of context, kept for the moment of re-entry.
+   *   profile NAMES a file on this host whose content becomes the session's
+   *   first message. The name travels; the words never do. See
+   *   src/core/profiles.js.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -218,6 +227,33 @@ export class SessionManager {
     }
     if (this.inFlight.has(sessionName)) {
       return { ok: false, message: `"${sessionName}" is already starting — give it a moment.` };
+    }
+
+    // THE PROFILE IS RESOLVED BEFORE ANYTHING IS CREATED, and an unknown one
+    // is refused rather than downgraded to an idle session.
+    //
+    // Starting idle when the caller asked for a profile is precisely the shape
+    // that made `brief` the worst-ranked thing in both beta reports: the call
+    // succeeds, a session exists, nothing failed anywhere, and the work was
+    // never handed over. Twice would be a choice.
+    //
+    // The refusal LISTS WHAT THIS HOST HAS, the way the tag refusal does. A
+    // caller that guessed wrong cannot fix a guess it is not shown.
+    /** @type {string|null} */
+    let prompt = null;
+    if (profile) {
+      prompt = this.profiles.get(profile);
+      if (prompt === null) {
+        const have = this.profiles.list().map((p) => p.name);
+        return {
+          ok: false,
+          message: have.length
+            ? `This host has no profile called "${profile}". It has: ${have.join(', ')}.`
+            : `This host has no task profiles at all, so "${profile}" cannot be started. ` +
+              `Profiles are ${this.cfg.profileDir}/<name>.md on this box, and putting one there needs a shell here — ` +
+              'that is deliberate: it is what stops a coordinator from writing a session\'s instructions.',
+        };
+      }
     }
 
     const active = this.running().length;
@@ -257,6 +293,10 @@ export class SessionManager {
       // somebody set deliberately.
       title,
       brief,
+      // Already resolved to content, above. #launch never sees the name — it
+      // could not do anything useful with one, and a second lookup is a second
+      // place for "no such profile" to be handled differently.
+      prompt,
     });
   }
 
@@ -337,10 +377,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -386,6 +426,10 @@ export class SessionManager {
         resumeUuid,
         skipPermissions,
         hookSocket: await this.#ensureHookSocket(name),
+        // Only ever set on a fresh start. A resume that re-sent the profile
+        // would replay the whole task as a new message into a conversation that
+        // has already done it.
+        prompt,
       });
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
