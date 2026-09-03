@@ -118,7 +118,7 @@ jobs:
           # The current release, not the floor. These checks are about this
           # repository rather than about the range it supports, and the floor is
           # exercised by the matrix above.
-          node-version: '26'
+          node-version: '26.8.1'
           cache: npm
       - run: npm install --no-audit --no-fund
       # The Worker's, because verify.sh bundles it and the bundle resolves its
