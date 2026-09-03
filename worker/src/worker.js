@@ -112,7 +112,7 @@ function isObjectReset(e) {
 const handler = {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DOCS_URL?: string, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DOCS_URL?: string, AGENT_FLEET_INSTALL_URL?: string, AGENT_FLEET_PUBLIC_ORIGIN?: string, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -166,11 +166,31 @@ const handler = {
     //
     // Above the token gate on purpose. A box being installed has no credential
     // — acquiring one is what the install is for.
+    // WHOSE INSTALLER, and it is not a constant any more.
+    //
+    // This hardcoded upstream's raw URL, and `bootstrap.sh` then clones the
+    // repository that URL came from. So a fork's own coordinator, on a fork's
+    // own domain, handed a root shell a script that installs SOMEBODY ELSE'S
+    // CODE — silently, and with no way for the person pasting it to notice.
+    // Of everything a fork inherits from this repository's committed config,
+    // that is the one that ends up executing.
+    //
+    // Unset is a refusal that names the variable, the same shape /docs uses.
+    // Redirecting to upstream by default would keep the bug as the default,
+    // and a fork that has not thought about this should get an error rather
+    // than a working command that does the wrong thing.
     if (url.pathname === '/install' || url.pathname === '/install.sh') {
-      return Response.redirect(
-        'https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh',
-        302,
-      );
+      const target = String(env.AGENT_FLEET_INSTALL_URL || '').trim();
+      if (!target) {
+        return new Response(
+          'This coordinator does not publish an installer.\n\n' +
+            'Set AGENT_FLEET_INSTALL_URL in wrangler.toml to the raw URL of YOUR install/bootstrap.sh —\n' +
+            'the script clones the repository it is served from, so pointing it at somebody else\n' +
+            "else's would install their code on your machines.\n",
+          { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
+        );
+      }
+      return Response.redirect(target, 302);
     }
 
     // The contract, served by the thing that implements it.
@@ -180,8 +200,19 @@ const handler = {
     // would need the CSP loosened to run — a real cost, for an API of fifteen
     // routes that most people will read in the repository. Point your own
     // Swagger, Redoc or Bruno at this URL instead.
+    // THE DOCUMENT NAMES WHOEVER IS SERVING IT.
+    //
+    // `servers[0].url` is committed as our hostname, which is right for the
+    // file in the repository and wrong for every deploy of it: a fork's
+    // coordinator handed out a contract advertising OUR origin, so anything
+    // generated from it — a client, a Postman import, an agent reading the
+    // spec — was pointed at somebody else's fleet.
+    //
+    // Substituted rather than parsed and re-serialised: this is a 40 KB
+    // document on a hot path, and the string it replaces is asserted to appear
+    // exactly once by test/openapi.test.js.
     if (url.pathname === '/openapi.json') {
-      return new Response(OPENAPI, {
+      return new Response(OPENAPI.replace(SPEC_ORIGIN, String(env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin)), {
         headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' },
       });
     }
@@ -419,6 +450,13 @@ function json(body, status = 200, extra = {}) {
 // The API contract, inlined at build time so the Worker ships no files.
 // openapi.json in the repository root is the source; test/openapi.test.js
 // executes it against BOTH coordinators, which is the reason it exists.
+/**
+ * The origin the committed document names, and the only thing substituted when
+ * it is served. A constant rather than a literal at the call site so the same
+ * string is used by the test that pins it to exactly one occurrence.
+ */
+export const SPEC_ORIGIN = 'https://fleet.thetech.network';
+
 const OPENAPI = JSON.stringify({
   "openapi": "3.1.0",
   "info": {

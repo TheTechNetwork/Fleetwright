@@ -239,3 +239,22 @@ test('the enums in the document are the enums in the code', async () => {
     if (sessions.includes(`'${s}'`)) assert.ok(status.includes(s), `sessions.js produces '${s}' and the document does not list it`);
   }
 });
+
+test('the document names whoever serves it, not whoever wrote it', async () => {
+  // `servers[0].url` is committed as our hostname — right for the file in this
+  // repository, wrong for every deploy of it. A fork's coordinator handed out a
+  // contract advertising OUR origin, so anything generated from it (a client, a
+  // Postman import, an agent reading the spec) was pointed at somebody else's
+  // fleet.
+  const { SPEC_ORIGIN: fromWorker } = await import('../worker/src/worker.js');
+  const { SPEC_ORIGIN: fromNode } = await import('../src/fleet/coordinator/server.js');
+  assert.equal(fromWorker, fromNode, 'the two coordinators substitute different strings');
+
+  // EXACTLY ONCE in the document, because the substitution is a string replace
+  // rather than a parse — chosen so a 40 KB spec is not re-serialised on a hot
+  // path. A second occurrence would be left behind, pointing at us.
+  const raw = readFileSync(new URL('../openapi.json', import.meta.url), 'utf8');
+  const hits = raw.split(fromWorker).length - 1;
+  assert.equal(hits, 1, `openapi.json mentions ${fromWorker} ${hits} times; the replace only fixes the first`);
+  assert.equal(SPEC.servers[0].url, fromWorker, 'the constant is not what servers[0] actually says');
+});

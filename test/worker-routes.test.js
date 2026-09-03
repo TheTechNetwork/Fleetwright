@@ -44,21 +44,41 @@ test('the privacy policy is public, because App Store Connect requires one', asy
   assert.match(String(res.headers.get('content-type')), /text\/html/);
 });
 
-test('the install one-liner redirects to the script in this repository', async () => {
+test('the install one-liner redirects to whichever repository this deploy names', async () => {
   // A box being installed has no credential — acquiring one is what the install
   // is for — so this has to sit above the token gate.
+  const mine = 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh';
   for (const path of ['/install', '/install.sh']) {
-    const res = await get(path);
+    const res = await get(path, { AGENT_FLEET_INSTALL_URL: mine });
     assert.equal(res.status, 302, path);
-    assert.match(String(res.headers.get('location')), /install\/bootstrap\.sh$/);
+    assert.equal(String(res.headers.get('location')), mine);
   }
+});
+
+test('an unconfigured coordinator publishes no installer at all', async () => {
+  // THE ONE INHERITED CONSTANT THAT ENDS UP EXECUTING. This route hardcoded
+  // upstream's raw URL, and bootstrap.sh clones the repository it came from —
+  // so a fork's own coordinator, on a fork's own domain, handed a root shell a
+  // script that installed SOMEBODY ELSE'S CODE. Silently, with nothing for the
+  // person pasting it to notice.
+  //
+  // Refusing is the only safe default. Redirecting to upstream when unset would
+  // keep the bug as the behaviour, and a working command that does the wrong
+  // thing is worse than an error.
+  const res = await get('/install');
+  assert.equal(res.status, 404);
+  const text = await res.text();
+  // NAMES THE VARIABLE and says why it matters, because the person reading this
+  // is the one who can set it and "not found" sends them nowhere.
+  assert.match(text, /AGENT_FLEET_INSTALL_URL/);
+  assert.match(text, /clones the repository it is served from/);
 });
 
 test('a redirect, not a copy of the script', async () => {
   // The thing people paste into a root shell should be served by the place that
   // has the source. A Worker that returned the script itself could go stale
   // here, and could be edited here.
-  const res = await get('/install');
+  const res = await get('/install', { AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
   assert.equal((await res.text()).includes('#!/bin/sh'), false);
 });
 

@@ -240,6 +240,43 @@ Register your own GitHub App (free) and set `AGENT_FLEET_GITHUB_CLIENT_ID` plus
 the secret. Nothing else depends on it: `connect github` with a pasted token
 and `connect cloudflare` need no callback and work on any coordinator anywhere.
 
+### What a fork must change, and what happens if it does not
+
+`wrangler.toml` in this repository is **our** deployment's config. Deploying it
+unchanged is not neutral — these are the values that do something:
+
+| Setting | Unchanged, a fork gets |
+|---|---|
+| `AGENT_FLEET_AUTH_ALLOW` | **Four of our addresses admitted to their fleet.** `trust.md` has coordinator → host as *trusted absolutely*, so this is the one to change first |
+| `routes` (`custom_domain`) | `wrangler deploy` tries to bind a domain they do not own, and fails |
+| `SENTRY_DSN` | Their errors posted to **our** Sentry project |
+| `AGENT_FLEET_INSTALL_URL` | Their `/install` hands a root shell a script that installs **our** code. Unset is a 404 that says so; this is why it is a variable rather than a constant |
+| `AGENT_FLEET_DOCS_URL` | Their `/docs` redirects to our product page |
+| `AGENT_FLEET_GITHUB_*` | The App flow reaches GitHub and is refused there, because their origin is not on our App's redirect list. Confidently broken, where absent would be honest — register your own App, it is free |
+| `AGENT_FLEET_INVITE_FROM`, `[[send_email]]` | Invitations fail at send time; Cloudflare Email Sending needs a domain they control |
+| `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
+| `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
+
+**This list is the defect, not the documentation of it.** A committed config
+that is one deploy away from admitting strangers to somebody's fleet is the
+wrong default no matter how well it is described, and the fix — a fork-safe
+`wrangler.toml` with our values in a production overlay — is
+[tracked separately](https://github.com/TheTechNetwork/Fleetwright/issues/353)
+because getting the Wrangler environment semantics wrong breaks our own deploy.
+
+Two more, outside `wrangler.toml`:
+
+- **The sandbox image.** `sandbox.yml` publishes to
+  `ghcr.io/<your-org>/fleetwright-session`, and the hub used to pull ours
+  regardless — so a fork's CI built an image nothing consumed while its boxes
+  rebuilt locally every time. Set `AGENT_HUB_SANDBOX_IMAGE_OWNER` to your own
+  org, or `AGENT_HUB_SANDBOX_IMAGE` to a full reference.
+- **The apps.** Both are ours: bundle id, Firebase project, signing certificates
+  and store listings. A fork's users install our builds and type their own
+  coordinator address, which works and is the best fork-parity property here.
+  Rebuilding them is a different exercise — a new bundle id breaks the committed
+  `google-services.json`, and iOS device builds need an Apple team.
+
 **There is no shared coordinator and there is not going to be one.**
 [`trust.md`](./trust.md) has coordinator → host as *trusted absolutely*: a
 coordinator can start a dangerous-mode session on any host in its fleet and

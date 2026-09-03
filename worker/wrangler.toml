@@ -84,6 +84,19 @@ routes = [
 # is set here and in no fork.
 AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
 
+# WHOSE INSTALLER /install HANDS OUT.
+#
+# `install/bootstrap.sh` clones the repository it was served from, so this
+# value decides whose code ends up on the machines somebody installs. It used
+# to be a constant pointing at this repository — which meant a FORK's
+# coordinator, on a fork's own domain, handed a root shell a script that
+# installed our code. Silently, and with nothing for the person pasting it to
+# notice.
+#
+# Unset is a 404 that names this variable. A fork that has not thought about it
+# should get an error rather than a working command that does the wrong thing.
+AGENT_FLEET_INSTALL_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh"
+
 # PUSH, WHICH IS OFF UNLESS THIS SAYS OTHERWISE.
 #
 # It used to turn itself on whenever an APNs key and an FCM service account

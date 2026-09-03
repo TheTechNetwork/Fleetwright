@@ -462,7 +462,11 @@ export class Coordinator {
     // inlined, because this process has a filesystem and the Worker does not.
     if (p === '/openapi.json') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      return res.end(readFileSync(resource('openapi.json'), 'utf8'));
+      // NAMES WHOEVER IS SERVING IT, like the Worker. The committed
+      // `servers[0].url` is our hostname, which is right for the file and wrong
+      // for every deploy of it — a fork handed out a contract pointing at
+      // somebody else's fleet.
+      return res.end(readFileSync(resource('openapi.json'), 'utf8').replace(SPEC_ORIGIN, publicOrigin(req)));
     }
 
     // --- enrolment, before the token gate ------------------------------------
@@ -1189,6 +1193,17 @@ function readMcpBody(req) {
     req.on('error', () => resolve(null));
   });
 }
+
+/**
+ * The origin the committed openapi.json names.
+ *
+ * Declared here rather than imported from worker/src/worker.js, which would
+ * pull the whole Worker bundle into a Node process for one string. Pinned to
+ * the document — and to the Worker's copy — by test/openapi.test.js, because
+ * two constants that must be equal and are not compared is how the substitution
+ * silently stops happening on one of the two coordinators.
+ */
+export const SPEC_ORIGIN = 'https://fleet.thetech.network';
 
 /**
  * The origin a client actually reached us on.

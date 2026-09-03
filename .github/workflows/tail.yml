@@ -46,5 +46,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         # timeout's exit 124 is the SUCCESS case here — the listener ran its
         # full window. Anything else is wrangler failing to attach.
+        #
+        # SKIPPED RATHER THAN FAILED WITHOUT AN ACCOUNT, the way worker.yml,
+        # android.yml and ios.yml all already do it. This was the one workflow
+        # that assumed the token exists — harmless in practice, since it is
+        # workflow_dispatch only and cannot red a fork's main, and still the odd
+        # one out. A fork that runs it should be told what is missing rather
+        # than reading a wrangler authentication error.
         run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set, so there is nothing to tail. See docs/ci.md."
+            exit 0
+          fi
           timeout "${{ inputs.seconds }}" npx wrangler tail --format pretty 2>&1 || [ $? -eq 124 ]
