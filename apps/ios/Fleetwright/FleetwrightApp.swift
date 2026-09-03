@@ -97,10 +97,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     event.request?.url = Self.scrubbed(url)
                 }
                 event.breadcrumbs = event.breadcrumbs?.map { crumb in
+                    // setData(value:key:) rather than assigning through the
+                    // `data` subscript. The SDK deprecated that setter and
+                    // names this as its replacement, and "will become
+                    // read-only in a future release" means the warning is a
+                    // deadline rather than an opinion.
                     if let url = crumb.data?["url"] as? String {
-                        crumb.data?["url"] = Self.scrubbed(url)
+                        crumb.setData(value: Self.scrubbed(url), key: "url")
                     }
-                    crumb.data?.removeValue(forKey: "headers")
+                    // REDACTED RATHER THAN REMOVED. Removal would need a second
+                    // API to guess at, and a header that is visibly withheld is
+                    // better than one that silently was: somebody reading the
+                    // breadcrumb can tell scrubbing happened.
+                    if crumb.data?["headers"] != nil {
+                        crumb.setData(value: "[redacted]", key: "headers")
+                    }
                     return crumb
                 }
                 return event
