@@ -111,6 +111,10 @@ used to check the JSDoc annotations.
 
 ```sh
 npm install
+# The Worker has its own dependencies, and the tests import it — three test
+# files assert the two coordinators agree, so they load worker/src/worker.js.
+# Skipping this gets you three failures that look like a broken clone.
+npm install --prefix worker
 npm test
 npm run typecheck
 

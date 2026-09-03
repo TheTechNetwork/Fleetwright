@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+
+# RUN THIS WITH BASH. `sh install.sh` fails at `set -o pipefail` with "Illegal
+# option -o pipefail" and explains nothing, and people type it — the docs say
+# to execute the file, but a habit is a habit. Two lines here beat the next
+# person losing ten minutes to a shell they did not choose.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "This installer needs bash. Run it as:  sudo bash install/install.sh" >&2
+  exit 2
+fi
+
 # agent-fleet installer — the whole thing, in one script.
 #
 #   curl -fsSL https://fleet.thetech.network/install | sudo sh
