@@ -208,6 +208,30 @@ guarantee nobody needs.
 The rollout comes from a repository variable (`RELEASE_ROLLOUT`), so widening
 one is a setting somebody changes rather than a commit.
 
+### Two addresses, and the channel picks one
+
+| Channel | `AGENT_HUB_RELEASE_MANIFEST` | What it gets |
+|---|---|---|
+| `stable` (default) | `.../releases/latest/download/manifest.json` | Published releases only. GitHub's `latest` pointer skips prereleases, so this address cannot serve a main build even by accident |
+| `prerelease` | `.../releases/download/main/manifest.json` | The newest build of `main`, replaced on every merge |
+
+**The prerelease channel is `main`, not "a release somebody marked".** CI has
+built a host package on every push for weeks and uploaded it as a workflow
+artifact — which expires and has no stable URL, so nothing could poll it. A
+rolling release at a fixed tag gives it a permanent address whose contents are
+replaced on every merge.
+
+**It is still a package, not a pull.** The box fetches a tarball, checks the
+sha256 *before* unpacking, unpacks beside what is running, and moves a symlink.
+Identical mechanism to a published release; only the address differs. The git
+path stays what `docs/packaging.md` has always called it — a fallback, kept
+untouched so it remains one.
+
+**The URL selects and the flag verifies.** A stable host pointed at the main
+manifest by hand is still refused, because the manifest says `prerelease: true`
+and `decideRelease` checks the channel. Two independent mistakes have to line
+up for a stable box to take an unreleased build.
+
 ## What this does not solve
 
 **The sandbox image is a second artifact** and stays one. It is versioned by

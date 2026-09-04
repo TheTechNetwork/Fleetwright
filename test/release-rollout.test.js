@@ -6,6 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { decideRelease, rolloutPosition } from '../src/core/release.js';
 
@@ -126,4 +127,38 @@ test('the position is a spread, and the same everywhere', () => {
     const p = rolloutPosition(key, 'v1');
     assert.ok(p >= 0 && p < 1, `${JSON.stringify(key.slice(0, 12))} gave ${p}`);
   }
+});
+
+test('the prerelease channel is main, and it is published somewhere a host can poll', () => {
+  // CI has built a host package on every push for weeks and uploaded it as a
+  // WORKFLOW ARTIFACT — which expires and has no stable URL, so nothing could
+  // ever poll it. A prerelease host that wants "whatever is on main" had
+  // nowhere to look.
+  const yml = readFileSync(new URL('../.github/workflows/host-release.yml', import.meta.url), 'utf8');
+  const job = yml.slice(yml.indexOf('  main-channel:'), yml.indexOf('  attach:'));
+
+  // A rolling release at a fixed tag: one permanent address, contents replaced.
+  assert.match(job, /gh release create main/);
+  assert.match(job, /--clobber/, 'the assets are not replaced, so the address goes stale');
+  assert.match(job, /gh release edit main --target main/, 'the tag would point at whenever it was created');
+
+  // MARKED PRERELEASE, which is what keeps stable hosts away from it: GitHub's
+  // own `releases/latest` pointer skips prereleases, so a stable box polling
+  // that address cannot see main even by accident.
+  assert.match(job, /--prerelease/);
+
+  // Only on a merge to main, and never on a published release — that is the
+  // attach job's business.
+  assert.match(job, /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+});
+
+test('a stable host pointed at main by hand is still refused', () => {
+  // The URL selects and the flag verifies. Two independent mistakes have to
+  // line up for a stable box to take an unreleased build.
+  const fromMain = { ...BASE, version: 'main-412', prerelease: true };
+  assert.equal(decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, hostKey: 'box' }).reason, 'channel');
+  assert.equal(
+    decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, channel: 'prerelease', hostKey: 'box' }).act,
+    true,
+  );
 });
