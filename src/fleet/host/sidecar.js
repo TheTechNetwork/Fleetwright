@@ -129,7 +129,7 @@ export class Sidecar {
    *   renewIntervalMs?: number,
    *   hubConfig?: any,
    *   watch?: boolean,
-   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null,
+   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null,
    *   version?: (() => { head: string|null, branch: string|null }|null)|null,
    * }} opts
    */
@@ -169,7 +169,7 @@ export class Sidecar {
     this.labels = labels;
     // Injected rather than read here: the sidecar knows about a coordinator
     // and an agent-hub, and nothing about git checkouts or package managers.
-    /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean })|null} */
+    /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null} */
     this.updates = updates;
     this.version = version;
     // Whether a prompt that quotes the session may leave the box.

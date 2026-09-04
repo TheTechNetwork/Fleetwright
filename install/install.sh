@@ -922,6 +922,55 @@ else
   warn "EDIT IT before starting: set AGENT_HUB_TELEGRAM_TOKEN and AGENT_HUB_TELEGRAM_ALLOWED_USERS"
 fi
 
+# WHERE THIS BOX'S RELEASES COME FROM, derived from the repository it was
+# installed out of rather than baked in. A fork's boxes take the fork's
+# releases, and nobody has to be told to set a variable they have never heard
+# of — which is the state every box installed so far is in, and the reason
+# `/update` on a packaged host could only say "set AGENT_HUB_RELEASE_MANIFEST"
+# and stop.
+#
+# The STABLE address. `releases/latest/download` skips prereleases by GitHub's
+# own definition, and a box that wants the rolling build moves itself with
+# `/channel rolling` — src/core/release.js derives the other address from this
+# one, so this is the only URL anybody has to know.
+release_manifest_url() { # release_manifest_url REMOTE
+  # Both forms git writes: https://github.com/owner/repo(.git) and
+  # git@github.com:owner/repo(.git). Anything else — a mirror, a local path, a
+  # GitHub Enterprise host — is deliberately NOT guessed at: inventing a release
+  # path inside somebody else's server produces a 404 on every update check and
+  # blames the update for it.
+  case "$1" in
+    https://github.com/*) slug=${1#https://github.com/} ;;
+    git@github.com:*)     slug=${1#git@github.com:} ;;
+    ssh://git@github.com/*) slug=${1#ssh://git@github.com/} ;;
+    *) return 1 ;;
+  esac
+  slug=${slug%.git}
+  slug=${slug%/}
+  # owner/repo and nothing else. A slug with a third segment is not a
+  # repository, and building a URL from it would be confidently wrong.
+  case "$slug" in
+    */*/*|*/|/*|*" "*|"") return 1 ;;
+    */*) ;;
+    *) return 1 ;;
+  esac
+  printf 'https://github.com/%s/releases/latest/download/manifest.json' "$slug"
+}
+
+if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
+  ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
+  if MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
+    set_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "$MANIFEST_URL"
+    ok "releases come from $MANIFEST_URL"
+  else
+    # Said rather than left silent. A box with no manifest URL is one whose
+    # /update can only report that it cannot update, and finding that out on
+    # the day it matters is the failure this whole line exists to avoid.
+    warn "could not tell which repository this came from, so AGENT_HUB_RELEASE_MANIFEST is unset"
+    warn "  set it in $ENV_FILE to the URL of a release manifest, or this box cannot take updates"
+  fi
+fi
+
 # The installer knows exactly where claude is; the service should not have to
 # work it out again. src/core/which.js searches $HOME/.local/bin and would
 # normally find it — but only for the user it runs as, which is why `doctor`

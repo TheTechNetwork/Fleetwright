@@ -731,12 +731,36 @@ struct Fleet {
             /// looked like it could only report and never act.
             let system: String?
             let rebootRequired: Bool?
+            /// A packaged box's answer to the same question the commit count
+            /// answers for a checkout.
+            ///
+            /// THEY ARE NOT INTERCHANGEABLE and only one is ever set. A release
+            /// has no git history to count, so `appBehind` is nil on those
+            /// boxes — which is CANNOT TELL, and is why a packaged host showed
+            /// nothing here for as long as the packaging existed.
+            let release: Release?
 
             /// Is there anything to apply? Two separate answers, because they
             /// are two different actions on two different things.
-            var appPending: Bool { (appBehind ?? 0) > 0 }
+            var appPending: Bool { (appBehind ?? 0) > 0 || release?.available != nil }
             var systemPending: Bool { !(system ?? "").isEmpty }
         }
+        /// What a release-installed box found waiting for it.
+        struct Release: Codable, Hashable {
+            /// The version waiting, or nil for none. Nil is also what a box
+            /// that could not reach GitHub reports — `message` is the only
+            /// thing that knows the difference, which is why it travels.
+            let available: String?
+            /// Whether this box knows where to look at all. False is the state
+            /// of every box installed before the installer wrote the manifest
+            /// URL, and it is worth showing: it cannot be told apart from
+            /// "checked, nothing waiting" by the version alone.
+            let configured: Bool?
+            /// The host's own sentence. Shown verbatim — it is the only place
+            /// that knows which of the several answers this is.
+            let message: String?
+        }
+
         /// What a session started on this box would actually be given.
         ///
         /// NOT THE SAME QUESTION AS `loggedIn`, which is the distinction that

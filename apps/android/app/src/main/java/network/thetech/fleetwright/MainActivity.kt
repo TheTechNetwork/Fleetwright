@@ -805,6 +805,26 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     host.systemUpdates?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
+                    // A PACKAGED BOX'S ANSWER, and until now the only screen it
+                    // reached was a terminal. The version line counts commits,
+                    // which a release has none of, so a packaged host reported
+                    // null — cannot tell — and this row said nothing about
+                    // updates while the pipeline that built them ran on every
+                    // merge.
+                    //
+                    // The host's own sentence, verbatim: it is the only thing
+                    // that knows which answer this is.
+                    host.release?.message?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (host.release.available != null || !host.release.configured) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
                     if (host.rebootRequired) {
                         Text("reboot required", style = MaterialTheme.typography.bodySmall)
                     }

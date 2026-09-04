@@ -203,6 +203,15 @@ class Fleet(
         val systemUpdates: String?,
         val rebootRequired: Boolean,
         /**
+         * What a release-installed box found waiting for it.
+         *
+         * NOT INTERCHANGEABLE with [behind], and only one is ever set: a
+         * release has no git history to count, so `appBehind` is null on those
+         * boxes — CANNOT TELL — which is why a packaged host showed nothing
+         * here for as long as the packaging existed.
+         */
+        val release: Release? = null,
+        /**
          * Forgotten, still recoverable. Empty on a host that has not been
          * updated — which renders as no section at all, the correct answer for
          * a box where forget still deletes.
@@ -238,9 +247,24 @@ class Fleet(
         val channelPinned: Boolean = false,
     ) {
         /** Two separate answers, because they are two actions on two things. */
-        val appPending: Boolean get() = (behind ?: 0) > 0
+        val appPending: Boolean get() = (behind ?: 0) > 0 || release?.available != null
         val systemPending: Boolean get() = !systemUpdates.isNullOrBlank()
     }
+
+    /**
+     * @property available the version waiting, or null for none — which is also
+     *   what a box that could not reach GitHub reports. [message] is the only
+     *   thing that knows the difference, which is why it travels.
+     * @property configured whether this box knows where to look at all. False
+     *   is the state of every box installed before the installer wrote the
+     *   manifest URL, and cannot be told apart from "nothing waiting" by the
+     *   version alone.
+     */
+    data class Release(
+        val available: String?,
+        val configured: Boolean,
+        val message: String?,
+    )
 
     /**
      * @property summary the host's own sentence, shown verbatim. It is written
@@ -916,6 +940,13 @@ class Fleet(
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
                     systemUpdates = updates?.optString("system")?.takeIf { it.isNotBlank() && it != "null" },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
+                    release = updates?.optJSONObject("release")?.let { r ->
+                        Release(
+                            available = r.optString("available").takeIf { it.isNotBlank() && it != "null" },
+                            configured = r.optBoolean("configured"),
+                            message = r.optString("message").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                     channel = health?.optString("channel")?.takeIf { it.isNotBlank() && it != "null" },
                     channelPinned = health?.optBoolean("channelPinned") == true,
                     bin = health?.optJSONArray("bin")?.let { arr ->

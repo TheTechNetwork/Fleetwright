@@ -646,6 +646,22 @@ private struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(behind > 0 ? .orange : .secondary)
             }
+            // A PACKAGED BOX'S ANSWER TO THE SAME QUESTION, and until now the
+            // only screen it appeared on was a terminal. The line above counts
+            // commits, which a release has none of, so a packaged host reported
+            // nil — cannot tell — and this row said nothing about updates at
+            // all while the pipeline that built them ran on every merge.
+            //
+            // The host's own sentence, verbatim: it is the only thing that
+            // knows which answer this is — one waiting, none waiting, a
+            // protocol mismatch, not yet in the rollout, or a box that does not
+            // know where to look.
+            if let release = host.health?.updates?.release, let message = release.message {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(release.available != nil ? .orange
+                                     : release.configured == false ? .orange : .secondary)
+            }
             // WHAT THE OS HAS WAITING. The host has been sending this since
             // maintenance shipped and nothing displayed it, which is why
             // upgrade looked like a verb that could only report.

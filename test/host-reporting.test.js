@@ -80,12 +80,19 @@ test('health never blocks on git or apt', async () => {
   // The injected function reads a variable. It does not call anything.
   assert.match(bin, /updates: \(\) => lastUpdates,/);
 
-  // And the work happens on a timer instead.
-  assert.match(bin, /setInterval\(refreshUpdates/);
-  assert.match(bin, /setTimeout\(refreshUpdates, 0\)/);
+  // And the work happens on a timer instead. `void refreshUpdates()` rather
+  // than the bare name since the release half is async: the timer must not
+  // await it, and an unhandled rejection is what a bare call would risk.
+  assert.match(bin, /setInterval\(\(\) => void refreshUpdates\(\)/);
+  assert.match(bin, /setTimeout\(\(\) => void refreshUpdates\(\), 0\)/);
+
+  // ONE CHECK IN FLIGHT AT A TIME, which only became possible to get wrong when
+  // the release check added network I/O: two overlapping runs would race and
+  // the slower one would write the older answer over the newer.
+  assert.match(bin, /if \(refreshing\) return;/);
 
   // Both unref'd, or the sidecar is a process that will not exit.
-  const timers = bin.match(/set(Timeout|Interval)\(refreshUpdates[^\n]*/g) || [];
+  const timers = bin.match(/set(Timeout|Interval)\(\(\) => void refreshUpdates[^\n]*/g) || [];
   assert.equal(timers.length, 2);
   for (const t of timers) assert.match(t, /\.unref\?\.\(\)/, `${t} keeps the process alive`);
 });

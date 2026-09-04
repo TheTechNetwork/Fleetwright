@@ -14,6 +14,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
 import { updateAvailable, updateStatus } from '../src/core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
+import { checkRelease } from '../src/core/release-check.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
@@ -129,7 +130,7 @@ async function run() {
   /**
  * What the last update check found. Read by every health frame; written only
  * by the timer below.
- * @type {{ appBehind: number|null, system: any, rebootRequired: boolean }|null}
+ * @type {{ appBehind: number|null, system: any, rebootRequired: boolean, release: import('../src/core/release-check.js').ReleaseCheck|null }|null}
  */
 let lastUpdates = null;
 
@@ -180,7 +181,14 @@ const sidecar = new Sidecar({
   // look broken rather than offline.
   const UPDATE_EVERY_MS = 15 * 60_000;
 
-  function refreshUpdates() {
+  // One at a time. The release half does network I/O, so a slow or hanging
+  // fetch would otherwise have two checks in flight and the later one writing
+  // the older answer.
+  let refreshing = false;
+
+  async function refreshUpdates() {
+    if (refreshing) return;
+    refreshing = true;
     try {
       const hub = loadConfig();
       const app = updateAvailable(hub);
@@ -189,21 +197,34 @@ const sidecar = new Sidecar({
       // reassuring kind of wrong.
       refreshPackageLists(hub);
       const system = systemUpdates();
+      // THE RELEASE, for a packaged box. `updateAvailable` above answers in
+      // commits and needs a git checkout; a released host has none, so it
+      // reported `appBehind: null` — CANNOT TELL — for ever, and both phones
+      // correctly showed nothing. The pipeline was complete and nothing was
+      // looking at it.
+      //
+      // Only for a packaged box: on a checkout the git answer is the real one
+      // and asking GitHub as well would be two answers to one question.
+      const packaged = updateStatus(hub).packaged === true;
+      const release = packaged ? await checkRelease(hub) : null;
       lastUpdates = {
         appBehind: app.ok ? app.behind : null,
         system: describeSystemUpdates(system),
         rebootRequired: system.rebootRequired,
+        release,
       };
     } catch (e) {
       // Left at whatever it was. A failed check is not news — the previous
       // answer is stale rather than wrong, and replacing it with null would
       // report "cannot tell" to a fleet that could tell five minutes ago.
       log.warn(`sidecar: could not refresh the update check: ${e?.message || e}`);
+    } finally {
+      refreshing = false;
     }
   }
 
-  setTimeout(refreshUpdates, 0).unref?.();
-  setInterval(refreshUpdates, UPDATE_EVERY_MS).unref?.();
+  setTimeout(() => void refreshUpdates(), 0).unref?.();
+  setInterval(() => void refreshUpdates(), UPDATE_EVERY_MS).unref?.();
 
   // The per-session hook sockets. The sidecar owns them, so it knows which
   // session a report came from and forwards it to agent-hub's loopback hook
