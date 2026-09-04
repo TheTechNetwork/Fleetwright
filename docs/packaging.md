@@ -164,6 +164,83 @@ value rather than two that have to agree.
 
 Unset on a checkout, which updates by git and always will.
 
+## Channels and staged rollouts
+
+Two fields on the manifest, both defaulting to "everybody", so a release built
+without thinking about either behaves exactly as releases always have.
+
+```json
+{ "prerelease": true, "rollout": 0.25 }
+```
+
+**`prerelease` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=prerelease`
+takes them; the default `stable` skips them. That is the point of marking a
+release: it reaches the machines somebody chose to expose, so a bad build is
+found before the whole fleet takes it. CI sets the field from GitHub's own
+prerelease checkbox — the same box that decides TestFlight-only versus the App
+Store — so the manifest cannot disagree with the release. A build from a push
+to `main` is a prerelease by definition: nobody published it.
+
+**`rollout` is a fraction, and the host decides only where it falls.**
+`rolloutPosition(hostKey, version)` maps a machine into `[0, 1)`, and the host
+takes the release if it lands under the line. No coordinator involvement, no
+list of who has it, nothing to keep in sync — a box can work this out offline.
+
+Three properties it has to have, and each one is a test:
+
+- **Widening only ever adds.** A host that qualified at 25% still qualifies at
+  50%, or raising a rollout would take a release away from machines that had it
+  and the fleet would oscillate.
+- **Each release reshuffles who leads.** The version is in the key, so the same
+  boxes do not take every risk while others never see a release until it is
+  proven. This is why the hash needs a finaliser: without one, `v2.0.0` and
+  `v2.0.1` put 37 of 38 hosts in the same order, because FNV moves a one-bit
+  change into the low bits and the position is the high ones.
+- **A host with no stable name waits for 100%.** Guessing a position would move
+  it between rollouts at random; the fraction only ever rises, so waiting is the
+  answer that cannot be wrong.
+
+FNV-1a with MurmurHash3's `fmix32`, not SHA-256 — nothing here is secret, and
+both a Worker and a Node process must compute it identically without an
+`await`. `crypto.subtle` is async and would make the whole decision async for a
+guarantee nobody needs.
+
+The rollout comes from a repository variable (`RELEASE_ROLLOUT`), so widening
+one is a setting somebody changes rather than a commit.
+
+### Two addresses, and the channel picks one
+
+| Channel | `AGENT_HUB_RELEASE_MANIFEST` | What it gets |
+|---|---|---|
+| `stable` (default) | `.../releases/latest/download/manifest.json` | Published releases only. GitHub's `latest` pointer skips prereleases, so this address cannot serve a main build even by accident |
+| `prerelease` | `.../releases/download/main/manifest.json` | The newest build of `main`, replaced on every merge |
+
+**The prerelease channel is `main`, not "a release somebody marked".** CI has
+built a host package on every push for weeks and uploaded it as a workflow
+artifact — which expires and has no stable URL, so nothing could poll it. A
+rolling release at a fixed tag gives it a permanent address whose contents are
+replaced on every merge.
+
+**It is still a package, not a pull.** The box fetches a tarball, checks the
+sha256 *before* unpacking, unpacks beside what is running, and moves a symlink.
+Identical mechanism to a published release; only the address differs. The git
+path stays what `docs/packaging.md` has always called it — a fallback, kept
+untouched so it remains one.
+
+**The channel MOVES the address; the installer does not have to.** A box is
+installed pointing at the stable manifest, and `manifestUrlFor` derives the
+other address from it by recognising GitHub's two release paths. Filtering the
+manifest without moving the URL would have been the trap: `releases/latest/download`
+skips prereleases by GitHub's own definition, so a box switched to `prerelease`
+would have reported the new channel and gone on taking stable builds forever.
+A URL matching neither shape — a mirror — is left alone, and `/channel` says
+so rather than letting somebody discover it from a box that never updates.
+
+**The URL selects and the flag verifies.** A stable host pointed at the main
+manifest by hand is still refused, because the manifest says `prerelease: true`
+and `decideRelease` checks the channel. Two independent mistakes have to line
+up for a stable box to take an unreleased build.
+
 ## What this does not solve
 
 **The sandbox image is a second artifact** and stays one. It is versioned by

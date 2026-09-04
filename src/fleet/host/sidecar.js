@@ -53,6 +53,7 @@ import { SessionWatcher } from './watcher.js';
 import { promptId, describePrompt } from './prompt.js';
 import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
+import { readChannel, pinnedByEnv } from '../../core/channel.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -448,6 +449,9 @@ export class Sidecar {
         // the rendered text is padded for a terminal, and a picker built by
         // parsing padding is a picker that breaks on a long name.
         ...(Array.isArray(r.profiles) ? { profiles: r.profiles } : {}),
+        // Which releases this box takes, as data — a picker rendered by parsing
+        // the sentence above would break the first time the wording changed.
+        ...(r.channel ? { channel: r.channel, channelPinned: Boolean(r.channelPinned) } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {
@@ -667,6 +671,19 @@ export class Sidecar {
         // for fifteen minutes, and the system one reads what apt already knows
         // rather than refreshing anything.
         updates: this.#updates(),
+        // WHICH RELEASES THIS BOX TAKES, carried with health rather than
+        // fetched per host when a screen opens. The app shows a list of
+        // machines; a picker that had to ask each one separately would be a
+        // round trip per row, and a row that could not draw until it answered.
+        //
+        // Null on a host too old to send it, which is CANNOT TELL and not
+        // "stable" — the distinction the credential field above is written
+        // around, and the one that stops an app confidently mislabelling a box
+        // that is taking prereleases.
+        channel: this.hubConfig ? readChannel(this.hubConfig) : null,
+        // Whether that is forced by the box's environment, so an app disables
+        // the control instead of offering a change that will be refused.
+        channelPinned: this.hubConfig ? pinnedByEnv(this.hubConfig) : null,
       };
     } catch (e) {
       const err = /** @type {Error & {code?: string}} */ (e);
@@ -827,6 +844,9 @@ export function toCommandLine({ verb, params, actor }) {
         .join(' ');
     case 'profiles':
       return '/profiles';
+    // A bounded enum, so it is a single token that cannot become a second flag.
+    case 'channel':
+      return p.to ? `/channel ${p.to}` : '/channel';
     // THE WORKSPACE. Quoted with the same care as everything else here: a
     // path is a filename and never a command, so it travels as one argument.
     case 'files':

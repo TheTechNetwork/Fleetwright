@@ -904,6 +904,7 @@
                     "type": "string",
                     "enum": [
                       "answer",
+                      "channel",
                       "connect",
                       "copyfile",
                       "deletefile",

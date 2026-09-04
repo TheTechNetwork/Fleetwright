@@ -1475,6 +1475,7 @@ const OPENAPI = JSON.stringify({
                     "type": "string",
                     "enum": [
                       "answer",
+                      "channel",
                       "connect",
                       "copyfile",
                       "deletefile",

@@ -121,6 +121,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
+| `channel` | `to?` (`stable`\|`prerelease`) | ✅ | `/channel [stable\|prerelease]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
@@ -210,6 +211,27 @@ hostname is step two. Two round trips, deliberately: a remote reboot should be
 A boolean `confirm: true` would be one tap from a phone in a pocket, and a token
 the coordinator minted would let a compromised coordinator mint its own. The pin
 is issued by the **host**, which is the party that would be rebooted.
+
+**`channel` is what makes `update` mean anything.** It decides which releases a
+box is eligible for: `stable` takes published releases, `prerelease` takes the
+newest build of `main` on every merge. Changing it installs nothing by itself.
+
+It exists because the answer used to live in `/etc/agent-hub.env`, which is
+root-owned and installed `0600` — so changing an update channel meant SSH, on a
+product whose premise is that nothing should. The stored answer is one word in
+the state directory, which the service owns and can write.
+
+**The environment still wins, and setting it refuses rather than being
+overridden.** `AGENT_HUB_RELEASE_CHANNEL` is what configuration management sets,
+and a phone quietly writing a file the next read ignores would be this
+repository's recurring failure exactly: true where it was written, quietly false
+one layer up. The refusal names the file to edit instead, and health carries
+`channelPinned` so an app shows the answer without offering the change.
+
+The channel travels **with health**, not fetched per host when a screen opens —
+a list of machines would otherwise be a round trip per row. `null` there is
+*cannot tell*, meaning a host older than this verb, and must not be rendered as
+`stable`.
 
 `update`, `upgrade` and `reboot` join `logs` in going to one named box, for the
 same two reasons: merging four apt runs into one reply answers nobody, and the

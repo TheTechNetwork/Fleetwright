@@ -70,12 +70,14 @@ export function installedVersion(installDir) {
  * @param {string} opts.installDir
  * @param {string} opts.manifestUrl
  * @param {number} opts.protocol
+ * @param {string} [opts.channel]     'stable' (default) or 'prerelease'
+ * @param {string} [opts.hostKey]     stable per machine, for staged rollouts
  * @param {boolean} [opts.dryRun]     decide and report, download nothing
  * @param {typeof fetch} [opts.fetch]
  * @param {(m: string) => void} [opts.log]
  * @returns {Promise<{ ok: boolean, changed: boolean, version?: string, message: string }>}
  */
-export async function applyRelease({ installDir, manifestUrl, protocol, dryRun = false, fetch: doFetch = fetch, log = () => {} }) {
+export async function applyRelease({ installDir, manifestUrl, protocol, channel = 'stable', hostKey = '', dryRun = false, fetch: doFetch = fetch, log = () => {} }) {
   const layout = releaseLayout(installDir);
   if (!layout.ok) return { ok: false, changed: false, message: layout.message };
 
@@ -89,7 +91,7 @@ export async function applyRelease({ installDir, manifestUrl, protocol, dryRun =
   }
 
   const installed = installedVersion(installDir);
-  const decision = decideRelease({ manifest, installed, protocol });
+  const decision = decideRelease({ manifest, installed, protocol, channel, hostKey });
   if (!decision.act) {
     // `current` is not a failure — a box asking whether it is up to date and
     // being told it is has got the answer it wanted.

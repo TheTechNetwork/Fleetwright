@@ -271,6 +271,32 @@ export const VERBS = Object.freeze({
   // and the caller learns something true. It ships in the same version anyway
   // because `start { profile }` without a way to ask what the profiles ARE is a
   // parameter you can only use by guessing.
+  // WHICH RELEASES THIS BOX TAKES, changed from a phone.
+  //
+  // A NEW VERB, WHICH COSTS NOTHING — an old host answers `unknown_verb` and
+  // the caller learns something true. Adding `channel` to an existing verb
+  // would have been a flag day for a setting.
+  //
+  // A BOUNDED ENUM, NOT A SETTING NAME AND A VALUE. A general "set this
+  // config key" verb would let a coordinator write arbitrary host
+  // configuration, which is the `reply { text }` argument again — the fixed
+  // verb set is only a bound if the verbs are specific. This one can express
+  // exactly two states.
+  //
+  // The value lives in the state directory rather than /etc, because the env
+  // file is root-owned and the service is not root. See src/core/channel.js —
+  // a setting somebody is meant to change from a phone cannot live somewhere
+  // only a shell can reach, which is the whole reason this verb exists.
+  channel: {
+    params: {
+      to: { type: 'enum', required: false, values: ['stable', 'prerelease'] },
+    },
+    mutating: true,
+    summary:
+      'Which releases a host installs. `stable` takes published releases; `prerelease` takes the newest ' +
+      'build of main, on every merge. Ask with no `to` to find out which one a host is on. Changing it ' +
+      'does not update anything by itself — it decides what the next update is allowed to be.',
+  },
   profiles: {
     params: {},
     mutating: false,

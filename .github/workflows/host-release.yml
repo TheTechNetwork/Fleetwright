@@ -53,6 +53,19 @@ jobs:
           # version. Neither is a git sha, because a version somebody has to
           # read aloud on a phone call should be readable.
           RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || format('main-{0}', github.run_number) }}
+          # WHO IT IS FOR. GitHub already knows whether a release was marked as
+          # a prerelease — that is the same box that decides TestFlight-only
+          # versus the App Store — so the manifest says the same thing rather
+          # than being told separately and disagreeing.
+          #
+          # A build from a push to main is a prerelease by definition: nobody
+          # published it, and a host on the stable channel should not take
+          # something that was never released.
+          RELEASE_PRERELEASE: ${{ github.event_name != 'release' || github.event.release.prerelease }}
+          # A repository variable, so widening a rollout is a setting somebody
+          # changes rather than a commit. Unset means everybody, which is how
+          # every release has behaved until now.
+          RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
         run: |
           node tools/build-host-package.mjs | tee build.log
           echo "sha256=$(awk '/^sha256/ {print $2}' build.log)" >> "$GITHUB_OUTPUT"
@@ -63,6 +76,19 @@ jobs:
       - name: Build it again and compare
         env:
           RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || format('main-{0}', github.run_number) }}
+          # WHO IT IS FOR. GitHub already knows whether a release was marked as
+          # a prerelease — that is the same box that decides TestFlight-only
+          # versus the App Store — so the manifest says the same thing rather
+          # than being told separately and disagreeing.
+          #
+          # A build from a push to main is a prerelease by definition: nobody
+          # published it, and a host on the stable channel should not take
+          # something that was never released.
+          RELEASE_PRERELEASE: ${{ github.event_name != 'release' || github.event.release.prerelease }}
+          # A repository variable, so widening a rollout is a setting somebody
+          # changes rather than a commit. Unset means everybody, which is how
+          # every release has behaved until now.
+          RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
         run: |
           first="${{ steps.build.outputs.sha256 }}"
           rm -rf dist
@@ -106,6 +132,62 @@ jobs:
   #
   # So the permission lives where it is used, on a job that only exists when a
   # release is published.
+  # THE PRERELEASE CHANNEL IS MAIN, and this is what makes it reachable.
+  #
+  # The package job has built a host tarball on every push for weeks and
+  # uploaded it as a WORKFLOW ARTIFACT, which expires and has no stable URL — so
+  # nothing could ever poll it. A prerelease host that wants "whatever is on
+  # main" had nowhere to look.
+  #
+  # A ROLLING RELEASE AT A FIXED TAG gives it one. `releases/download/main/...`
+  # is a permanent address whose contents are replaced on every merge, so a box
+  # polls one URL for ever and gets the newest build.
+  #
+  # It is marked prerelease, which does two things: GitHub's own
+  # `releases/latest` pointer SKIPS it — so stable hosts polling that address
+  # keep getting published releases and never see main — and decideRelease
+  # refuses it on a stable host even if somebody points one here by hand. The
+  # URL selects; the flag verifies.
+  #
+  # NOT A GIT PULL. The box still fetches a signed-off tarball, checks the
+  # sha256 before unpacking, unpacks beside what is running and moves a symlink.
+  # Same mechanism as a release, different address.
+  main-channel:
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: fleetwright-host
+          path: dist
+      - name: Publish as the rolling main build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Same reason as the attach job below: this does not check the
+          # repository out, and `gh` learns which repository it means from the
+          # git remote.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Created once, replaced for ever after. `gh release create` fails
+          # when the tag exists, and that failure is the ordinary case here, so
+          # it is tried and tolerated rather than branched on — a `view` first
+          # would be two API calls to learn what the create tells us anyway.
+          gh release create main \
+            --prerelease \
+            --title "Rolling build from main" \
+            --notes "The newest build of main. Hosts on AGENT_HUB_RELEASE_CHANNEL=prerelease poll this; it is replaced on every merge and is not a published release." \
+            --target main 2>/dev/null || true
+
+          # --clobber, because the point is that these files are replaced.
+          gh release upload main dist/*.tar.gz dist/manifest.json --clobber
+
+          # The tag has to follow main, or the release page shows a commit from
+          # whenever it was first created while serving today's artifacts.
+          gh release edit main --target main >/dev/null
+
   attach:
     needs: package
     if: github.event_name == 'release'

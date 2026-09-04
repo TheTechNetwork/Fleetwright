@@ -189,8 +189,9 @@ it is very easy to re-enter one merge at a time.
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
 | **readmit a revoked host / replace a host's key** | swipe the host row | button on the host row | curl |
+| **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
 
-**A gap this table caught, in the round that added the row above.** Android's
+**A gap this table caught, in the round that added the profile row.** Android's
 `SessionKind` had no `host` field at all, while iOS has had one since placement
 shipped — so a kind naming a box did nothing on Android, silently. A setting
 that works on one phone and not the other is worse than one that works on

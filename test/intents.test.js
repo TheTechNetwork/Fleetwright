@@ -41,6 +41,10 @@ test('the verb set is exactly what is documented', () => {
   // not.
   assert.deepEqual(Object.keys(VERBS).sort(), [
     'answer',
+    // Which releases this box installs, asked and set from the app — the point
+    // being that changing an update channel was the last thing that still
+    // needed somebody to SSH in and edit a file.
+    'channel',
     'connect',
     // The workspace, five verbs, added together and named here on purpose:
     // this is the visible edit the comment above asks for. Adding them cost no
@@ -194,8 +198,12 @@ test('only state-changing verbs are marked mutating', () => {
     // which is state by any reading — and being mutating is what gets their
     // idempotency key honoured, so a retried write cannot half-apply and a
     // retried delete does not report "no such file" for what it just removed.
+    // channel writes a file in the state directory that decides what the next
+    // update is allowed to be. Asking with no `to` reads — but a verb is
+    // mutating or it is not, and the idempotency key is what stops a retried
+    // change being applied twice against a box that has moved on since.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);
