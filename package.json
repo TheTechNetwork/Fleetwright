@@ -30,7 +30,7 @@
     "@types/node": "26.4.1",
     "esbuild": "0.28.2",
     "js-yaml": "5.4.1",
-    "playwright": "1.62.1",
+    "playwright": "1.63.0",
     "preact": "10.29.8",
     "preact-render-to-string": "6.7.0",
     "typescript": "7.0.2"
