@@ -36,7 +36,7 @@
   "src/core/trust.js": 46,
   "src/core/update.js": 80,
   "src/core/upgrades.js": 71,
-  "src/core/which.js": 95,
+  "src/core/which.js": 84,
   "src/fleet/apns-node.js": 47,
   "src/fleet/coordinator/clients.js": 100,
   "src/fleet/coordinator/core.js": 92,
