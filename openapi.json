@@ -927,6 +927,7 @@
                       "stop",
                       "unlink",
                       "update",
+                      "updates",
                       "upgrade",
                       "verify",
                       "writefile"

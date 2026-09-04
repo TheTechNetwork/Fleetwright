@@ -41,6 +41,8 @@
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, as data rather than as rendered text
+ * @property {{ app: any, system: any }} [waiting] what is waiting for this box,
+ *   as data: the app half and the OS half, each naming its own subject
  * @property {string} [channel]   which releases this box installs
  * @property {boolean} [channelPinned] the environment is forcing it, so the app
  *   must not offer to change it
@@ -63,7 +65,7 @@ import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
-import { migrationReply } from '../core/migrate.js';
+import { migrationReply, migrationState } from '../core/migrate.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -1350,6 +1352,85 @@ export const COMMANDS = {
     },
   },
 
+  updates: {
+    usage: '/updates',
+    short: 'What is waiting for this box',
+    help:
+      'Both kinds at once: this software, and the operating system. They are ' +
+      'different questions with different answers, and a screen that shows one ' +
+      'of them next to the other without saying which is which contradicts itself.',
+    run: async (ctx) => {
+      const status = updateStatus(ctx.cfg);
+
+      // THE APP HALF, and which question it is depends on how this box was
+      // installed. A release compares versions against a manifest; a checkout
+      // counts commits. Neither answer is available on the other kind of box,
+      // which is why `appBehind` has been null on every packaged host since
+      // packaging existed.
+      let app;
+      if (status.packaged) {
+        const r = await checkRelease(ctx.cfg);
+        app = {
+          kind: 'release',
+          pending: Boolean(r.available),
+          available: r.available,
+          text: r.message,
+        };
+      } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {
+        // A CHECKOUT THAT COULD STOP BEING ONE. Counting commits here while
+        // /update offers to move the box onto packaged releases would be two
+        // answers about the same question disagreeing — which is the exact
+        // defect this verb was written to remove, reintroduced one screen over.
+        const m = migrationState(ctx.cfg, status, await checkRelease(ctx.cfg));
+        app = { kind: 'migratable', pending: true, text: m.message };
+      } else if (status.ok) {
+        // FORCED. The health frame reports from a cache refreshed every fifteen
+        // minutes, which is right for a frame sent every fifteen seconds and
+        // wrong for somebody pressing a button labelled Check. They are asking
+        // now.
+        const avail = updateAvailable(ctx.cfg, { force: true });
+        app = {
+          kind: 'checkout',
+          pending: Boolean(avail.ok && avail.behind),
+          behind: avail.ok ? avail.behind : null,
+          text: !avail.ok
+            ? avail.message
+            : avail.behind
+              ? `${avail.behind} commit${avail.behind === 1 ? '' : 's'} behind ${avail.upstream}.`
+              : 'Fleetwright is up to date.',
+        };
+      } else {
+        app = { kind: 'unknown', pending: false, text: status.message ?? 'Could not read the install.' };
+      }
+
+      // THE OS HALF. Refreshed first, rate-limited inside, and a no-op when the
+      // box has not been given permission — in which case the count below is
+      // measured against whatever the lists last said, and describeSystemUpdates
+      // says so rather than reporting a reassuring zero.
+      refreshPackageLists(ctx.cfg);
+      const s = systemUpdates();
+      const summary = describeSystemUpdates(s);
+      const system = {
+        supported: s.supported,
+        pending: Boolean(summary),
+        count: s.count,
+        text: !s.supported
+          ? `No package information here (${s.reason ?? 'unsupported'}).`
+          : (summary ?? 'No system packages are waiting.'),
+      };
+
+      return {
+        ok: true,
+        // EACH LINE NAMES ITS SUBJECT. The bug this verb exists for was two
+        // true sentences with no subjects, rendered next to each other.
+        text: `Fleetwright: ${app.text}\nOperating system: ${system.text}`,
+        // And as DATA, so a row can render a state rather than parse a
+        // sentence — the same rule as `profiles`, `entries` and `channel`.
+        waiting: { app, system },
+      };
+    },
+  },
+
   upgrade: {
     aliases: ['sysupdate'],
     usage: '/upgrade [--apply]',
@@ -1368,7 +1449,15 @@ export const COMMANDS = {
       const s = systemUpdates();
       if (!s.supported) return { ok: true, text: `No package information here (${s.reason ?? 'unsupported'}).` };
       const summary = describeSystemUpdates(s);
-      if (!summary) return { ok: true, text: 'The box is up to date.' };
+      // NAMES ITS SUBJECT. This said "The box is up to date." — a sentence
+      // about apt, with no subject, rendered by the app directly above a line
+      // reading "1 commit behind". Both were true and the screen contradicted
+      // itself, which is worse than either being wrong: whichever one somebody
+      // believes, the other taught them not to trust the screen.
+      //
+      // /upgrade is the operating system. /update is this software. The reply
+      // has to say which one it just looked at.
+      if (!summary) return { ok: true, text: 'No system packages are waiting. (This is the OS, not Fleetwright — /update checks that.)' };
 
       const shown = s.packages.slice(0, 12).join(', ');
       return {

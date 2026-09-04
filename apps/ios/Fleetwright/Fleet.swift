@@ -383,6 +383,22 @@ struct Fleet {
         try await intent("update", params: restart ? ["restart": "yes"] : [:], host: host)
     }
 
+    /// What is waiting for a box — both this software and the operating system.
+    ///
+    /// ONE ROUND TRIP AND ONE ANSWER, which is the point. Asking `update` and
+    /// `upgrade` separately is what produced a screen saying "The box is up to
+    /// date." directly above "1 commit behind": two true sentences about
+    /// different subjects, rendered next to each other with nothing saying
+    /// which was which.
+    ///
+    /// It also FORCES the app-side check. The commit count in a health frame
+    /// comes from a cache refreshed every fifteen minutes, which is right for a
+    /// frame sent every fifteen seconds and wrong for somebody who just pressed
+    /// a button labelled Check.
+    func updates(host: String) async throws -> Reply {
+        try await intent("updates", params: [:], host: host)
+    }
+
     /// Which releases a box installs — and, with `to`, change it.
     ///
     /// Bare is a question. This is the whole point of the verb: an update
@@ -828,6 +844,10 @@ struct Fleet {
         let reason: String?
         let health: HostHealth?
         var id: String { hostId }
+
+        /// Is there anything of ours to apply? Asked once, so the version line
+        /// and the buttons cannot disagree about whether this box is current.
+        var updatePending: Bool { health?.updates?.appPending == true }
     }
 
     struct Host: Codable, Identifiable, Hashable {
