@@ -164,13 +164,21 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
+#   AGENT_FLEET_API_TOKEN             break-glass admin, and OPTIONAL. Phones do
+#                                     not use it, hosts do not use it, and a
+#                                     coordinator with sign-in configured and no
+#                                     admin token is not open — it simply has no
+#                                     way back in when sign-in itself is broken.
+#                                     Set it or do not; what the coordinator
+#                                     refuses to run without is ANY way in at
+#                                     all, which means this or the AUTH_ pair
 #   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
 #
 # Those two are also declared in .dev.vars.example, which is what makes the
-# Deploy to Cloudflare dialog ask for them at deploy time — a button deploy
-# never runs without them. The push secrets below stay out of it: optional.
+# Deploy to Cloudflare dialog ask for them at deploy time — so a button deploy
+# starts life with a way in, before its owner has touched [vars]. The push
+# secrets below stay out of it: optional.
 #
 # AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
 # identifiers and belong in [vars] above, where changing who a coordinator will
@@ -198,7 +206,8 @@ enabled = true
 # AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
 # it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
-# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
-# running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
-# says so, which leaves the admin token as the only way in. Without the FCM
+# With NEITHER the admin token NOR the AUTH_ pair, the Worker refuses every
+# request rather than running open — there is no way for anybody to
+# authenticate, and it says so (worker.js). Without just the AUTH_ pair,
+# sign-in answers 503 and the admin token is the only way in. Without the FCM
 # service account, push is logged instead of sent, and says so.

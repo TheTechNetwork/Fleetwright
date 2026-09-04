@@ -169,11 +169,10 @@ it when you merge ours in and push, and the
 <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">deploy page</a>
 says how. Prefer a terminal? The same page is five commands from clone to a
 coordinator answering on a URL, with no copy to maintain.</p>
-<p>The dialog asks up front for the two values every coordinator needs — an
-admin token, and who may sign in. Without the first it comes up refusing every
-request, which is deliberate: a coordinator with no credential is remote
-control of every machine in the fleet for whoever finds the URL. The Worker
-says so, and names the command. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
+<p>The dialog asks up front for two values — a break-glass admin token, and
+who may sign in. A coordinator that comes up with no way for anybody to
+authenticate refuses every request and says so, naming both remedies; the
+dialog's questions are how a button deploy starts life past that state. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
 is DNS and four secrets.</p>
 <p><strong>Sign-in still works with the apps from the stores</strong> — you need no
 Apple or Google setup of your own for it. What you cannot self-host is

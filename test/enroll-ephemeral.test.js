@@ -32,8 +32,10 @@ test('the contract says the field exists', () => {
 test('both apps can ask for one', () => {
   // A capability only reachable by curl is a capability the product does not
   // have — which is precisely what this was for as long as it existed.
-  assert.match(IOS, /mintHostPin\(ephemeral: Bool = false\)/);
+  // The signature grew a bound-pin form; ephemeral is still its first
+  // parameter and still defaulted, so existing callers are unchanged.
+  assert.match(IOS, /mintHostPin\(ephemeral: Bool = false/);
   assert.match(IOS, /"ephemeral": ephemeral/);
-  assert.match(ANDROID, /mintHostPin\(ephemeral: Boolean = false\)/);
+  assert.match(ANDROID, /mintHostPin\(\s*ephemeral: Boolean = false/);
   assert.match(ANDROID, /put\("ephemeral", ephemeral\)/);
 });

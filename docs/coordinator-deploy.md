@@ -37,14 +37,19 @@ an empty `[vars]`, so it admits nobody and reaches nothing of ours. What each
 absence means, and what to set, is a comment in that file — the rest of this
 page walks the ones that matter.
 
-The Worker **refuses every request** until that secret is set, and the refusal
-names the command. A coordinator with no credential is remote control of every
-box in the fleet for anyone who finds the URL, and a Worker URL is not a
-secret.
+**What the Worker refuses to run without is any way in at all.** Until either
+the admin token or the sign-in pair below is set, it answers 503 to
+everything and the refusal names both remedies — a coordinator nobody can
+authenticate to is not open, it is unusable, and it should say so at boot
+rather than one 401 at a time. On a fresh deploy of the fork-safe config,
+`[vars]` is empty, so the admin token *is* the first way in — which is why it
+is the second command rather than a footnote.
 
-That token is **break-glass, not the everyday credential**. It can stop every
-session and revoke every host. Phones sign in and are issued their own; hosts
-never have it at all.
+The token itself is **break-glass and optional, not the everyday credential**.
+It can stop every session and revoke every host; phones sign in and are
+issued their own, and hosts never have it at all. Once sign-in is configured
+you may run without it — the trade is having no way back when sign-in itself
+is what broke.
 
 ### The Deploy to Cloudflare button
 
@@ -352,6 +357,12 @@ something:
 | `AGENT_FLEET_INVITE_FROM`, `[[send_email]]` | Invitations fail at send time; Cloudflare Email Sending needs a domain they control |
 | `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
 | `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
+
+**`AGENT_FLEET_API_TOKEN` is optional**, for a fork like for us — the Deploy
+section above has the rule: what a coordinator refuses to run without is any
+way in at all, an admin token or an issuer-and-audience pair. It used to
+refuse without the token specifically, which was right when the token was the
+only credential and stopped being right when sign-in shipped.
 
 **That list WAS the defect, and it is fixed rather than documented.** A
 committed config one deploy away from admitting strangers to somebody's fleet is

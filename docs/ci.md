@@ -104,9 +104,9 @@ revocable on its own.
 ### The Worker's runtime secrets are a different thing
 
 These live in Cloudflare, not GitHub, and `wrangler deploy` does not touch them.
-**A Worker deployed without them answers 503 to everything** — deliberately, since
-a coordinator with no credentials is remote control of every box in the fleet for
-whoever finds the URL.
+**A Worker with no way for anybody to authenticate — no admin token and no
+sign-in pair — answers 503 to everything**, deliberately, and the refusal
+names both remedies.
 
 Two ways to set them, and you only need one.
 
