@@ -216,9 +216,35 @@ jobs:
             esac
           done
 
-          # The tag has to follow main, or the release page shows a commit from
-          # whenever it was first created while serving today's artifacts.
-          gh release edit rolling --target main >/dev/null
+          # THE TAG HAS TO FOLLOW MAIN, AND `--target` DOES NOT MOVE IT.
+          #
+          # `target_commitish` is only honoured when GitHub has to CREATE the
+          # tag. On one that already exists it is accepted, reported as success
+          # and ignored — so this line, which has been here since the rolling
+          # build shipped, pinned the tag at whatever commit the FIRST run cut
+          # it from and left it there for ever while --clobber kept the
+          # artifacts current.
+          #
+          # That is the worst available combination: a release page dated weeks
+          # ago, serving today's tarball, with nothing red and a comment above
+          # it claiming otherwise. Moving the git ref is what actually moves a
+          # tag, and `force` is required because this is not a fast-forward.
+          if ! gh api -X PATCH "repos/$GH_REPO/git/refs/tags/rolling" \
+                 -f sha="$GITHUB_SHA" -F force=true >/dev/null; then
+            echo "::error::could not move the rolling tag to $GITHUB_SHA"
+            exit 1
+          fi
+
+          # AND PROVED, because the failure this replaces was an API call that
+          # reported success and changed nothing. Asserting the thing rather
+          # than the call is the only version of this check worth having.
+          at=$(gh api "repos/$GH_REPO/git/refs/tags/rolling" --jq '.object.sha')
+          if [ "$at" != "$GITHUB_SHA" ]; then
+            echo "::error::the rolling tag is at $at, not $GITHUB_SHA"
+            exit 1
+          fi
+          echo "rolling is at $at"
+
 
   attach:
     needs: package
