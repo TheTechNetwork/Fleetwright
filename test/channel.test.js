@@ -185,6 +185,17 @@ test('/channel tells a pinned box it cannot be changed from here', async () => {
   }
 });
 
+test('nothing still tells somebody to set the name that was renamed', () => {
+  // The rename's loose end, and the kind that survives a green suite: a
+  // REFUSAL message naming the old value. It is read at exactly the moment
+  // somebody is trying to do the thing, and following it would leave them
+  // setting a value that is only understood by a compatibility shim.
+  for (const f of ['../src/core/release.js', '../src/core/channel.js', '../src/adapters/commands.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /AGENT_HUB_RELEASE_CHANNEL=prerelease/, `${f} still tells somebody to set the old value`);
+  }
+});
+
 test('the channel verb and the command cannot drift apart', () => {
   // The verb's enum and the module's list are the same two words, so adding a
   // third channel in one place fails here rather than at a phone.
