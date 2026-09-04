@@ -119,7 +119,11 @@ test('a box on the old sudoers rule still upgrades', () => {
   assert.match(src, /APT_PLAIN/);
   assert.match(src, /APT_SAFE/);
   assert.match(src, /not allowed to execute\|sorry, user/);
-  assert.match(src, /re-run the installer to update it/, 'the fallback is silent about how to stop needing it');
+  // NAMES --repair RATHER THAN A REINSTALL. The only remedy used to be running
+  // the whole installer on a machine whose only fault was being older than a
+  // commit — and on a box mid-flag-day, a full reinstall is the thing that
+  // needs a bound pin afterwards.
+  assert.match(src, /install\.sh --repair/, 'the fallback is silent about how to stop needing it');
 });
 
 test('the rule printed by hand is the rule the installer writes', () => {

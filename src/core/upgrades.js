@@ -291,7 +291,10 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   // installer is what moves a box onto the new rule.
   let r = run(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
   if (r.status !== 0 && /not allowed to execute|sorry, user/i.test(`${r.stderr}${r.stdout}`)) {
-    log.warn('upgrade: this box\'s sudoers rule predates the noninteractive flags — re-run the installer to update it');
+    log.warn(
+      "upgrade: this box's sudoers rule predates the noninteractive flags. " +
+        'Fix it without a full reinstall: sudo /opt/agent-fleet/install/install.sh --repair',
+    );
     r = run(['sudo', '-n', ...APT_PLAIN], 15 * 60_000);
   }
   if (r.status !== 0) {

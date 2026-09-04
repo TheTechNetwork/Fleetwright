@@ -89,6 +89,13 @@ with no questions at all, restarts the services, and tells you whether its
 protocol still matches the coordinator's — which is the one thing that silently
 takes a fleet down.
 
+`install.sh --repair` does that and also puts back everything the installer
+generates: the service units, the Claude hook, and the sudoers rules this box
+has already agreed to. It reads those answers out of the env file and never
+writes one, so a box that said no to system upgrades keeps its no. It is for a
+machine whose configuration has drifted, or whose rules were written before a
+change — where the only remedy used to be a full reinstall.
+
 The one-liner fetches the repository to `/opt/agent-fleet` and runs the
 installer from there, so the clone is still what ends up on the box and
 `git -C /opt/agent-fleet log` still answers "what is this running". To do those
