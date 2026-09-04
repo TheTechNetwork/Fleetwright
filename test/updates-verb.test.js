@@ -115,3 +115,36 @@ test('the OS half never claims the box is up to date', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a checkout that could be migrated says that, not a commit count', async () => {
+  // THE DEFECT THIS VERB EXISTS TO REMOVE, ONE SCREEN OVER. /update on such a
+  // box offers to move it onto packaged releases; /updates counting commits at
+  // the same time would be two answers to the same question disagreeing —
+  // which is what "The box is up to date." above "1 commit behind" was.
+  //
+  // The helper is not installed on a machine running the suite, so the state
+  // here is `no_helper` and the count is the honest answer. What is asserted is
+  // that the two agree: whatever /updates says about a checkout, /update's
+  // migration answer does not contradict it.
+  const dir = mkdtempSync(path.join(tmpdir(), 'updates-checkout-'));
+  mkdirSync(path.join(dir, '.git'));
+  try {
+    const cfg = /** @type {any} */ ({
+      installDir: dir,
+      stateDir: dir,
+      hostname: 'h',
+      releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json',
+    });
+    const updates = await dispatch(/** @type {any} */ ({ cfg }), '/updates');
+    const update = await dispatch(/** @type {any} */ ({ cfg }), '/update --check');
+
+    // Neither claims this box is current while the other offers it something.
+    const bothSayWaiting = /waiting|behind|move/i.test(updates.text) === /waiting|behind|move/i.test(update.text);
+    assert.ok(
+      bothSayWaiting || !updates.waiting.app.pending,
+      `/updates and /update --check disagree:\n${updates.text}\n---\n${update.text}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

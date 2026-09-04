@@ -65,7 +65,7 @@ import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
-import { migrationReply } from '../core/migrate.js';
+import { migrationReply, migrationState } from '../core/migrate.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -1376,6 +1376,13 @@ export const COMMANDS = {
           available: r.available,
           text: r.message,
         };
+      } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {
+        // A CHECKOUT THAT COULD STOP BEING ONE. Counting commits here while
+        // /update offers to move the box onto packaged releases would be two
+        // answers about the same question disagreeing — which is the exact
+        // defect this verb was written to remove, reintroduced one screen over.
+        const m = migrationState(ctx.cfg, status, await checkRelease(ctx.cfg));
+        app = { kind: 'migratable', pending: true, text: m.message };
       } else if (status.ok) {
         // FORCED. The health frame reports from a cache refreshed every fifteen
         // minutes, which is right for a frame sent every fifteen seconds and
