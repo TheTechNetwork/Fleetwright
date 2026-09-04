@@ -9,11 +9,29 @@ on:
     # testers a byte-identical app.
     paths:
       - 'apps/android/**'
+      # THE SHARED PARITY TABLE, which lives outside apps/ on purpose — it is
+      # one file read by both phones and by the Node suite, and putting it under
+      # either app would make it look like that app's.
+      #
+      # It has to be named here or this workflow does not run for the one change
+      # the table exists to police. That is the identical failure #367 took out
+      # of ci.yml: a filter skipping the tests that guard the files it skips for.
+      # test/parity-fixtures.test.js fails if this line goes away.
+      - 'test/fixtures/parity/**'
       - '.github/workflows/android.yml'
       - '!apps/android/**/*.md'
   pull_request:
     paths:
       - 'apps/android/**'
+      # THE SHARED PARITY TABLE, which lives outside apps/ on purpose — it is
+      # one file read by both phones and by the Node suite, and putting it under
+      # either app would make it look like that app's.
+      #
+      # It has to be named here or this workflow does not run for the one change
+      # the table exists to police. That is the identical failure #367 took out
+      # of ci.yml: a filter skipping the tests that guard the files it skips for.
+      # test/parity-fixtures.test.js fails if this line goes away.
+      - 'test/fixtures/parity/**'
       - '.github/workflows/android.yml'
       - '!apps/android/**/*.md'
   workflow_dispatch:
@@ -67,6 +85,21 @@ jobs:
           # halfway through a Gradle task.
           packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
       - uses: gradle/actions/setup-gradle@v6.3.0
+
+      # THE UNIT TESTS, BEFORE THE BUILD, because a compile failure in a test
+      # is cheaper to read on its own than buried after an APK.
+      #
+      # Plain JVM — no emulator, no device. Everything asserted here is a pure
+      # function, so this costs seconds on the runner already set up above.
+      #
+      # It is not a no-op gate added in advance of tests existing: it runs
+      # ReassuranceParityTest, which drives this app's reassurance rule against
+      # the same table apps/ios runs its Swift against. Before this, the only
+      # thing asserting the two phones agreed was a Node test grepping both
+      # sources for a word — which passes whether they agree or not.
+      - name: Unit tests
+        working-directory: apps/android
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Build the debug APK
         working-directory: apps/android

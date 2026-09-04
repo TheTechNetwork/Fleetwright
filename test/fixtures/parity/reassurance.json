@@ -1,0 +1,102 @@
+{
+  "$comment": [
+    "The reassurance line, as a table of inputs and the two strings both phones must produce.",
+    "",
+    "ONE FILE, THREE READERS: test/reassurance.test.js checks it is exhaustive,",
+    "ReassuranceParityTest.kt runs the Kotlin against it, and ReassuranceParityTests.swift",
+    "runs the Swift. Change the rule and this file has to change, which fails both apps",
+    "until both are updated — which is the whole point, because the rule is written twice.",
+    "",
+    "WHY A FIXTURE AND NOT A GREP. test/reassurance.test.js asserted parity by matching",
+    "the word `quietFor` in both sources. That passes whether Kotlin's floor is 90 seconds",
+    "and Swift's is 120: both files contain the word, the phones disagree, nothing is red.",
+    "A table of inputs and expected outputs is the only kind of parity a text search",
+    "cannot fake."
+  ],
+  "cases": [
+    {
+      "why": "the most urgent clause wins, and one waiting session is the most urgent thing there is",
+      "in": { "waiting": 1, "running": 3, "quiet": 1, "unwell": ["deb13"], "blind": false, "healthy": 2 },
+      "headline": "One session is waiting for you",
+      "basis": "3 sessions running · 1 of them quiet a while · deb13"
+    },
+    {
+      "why": "plural waiting",
+      "in": { "waiting": 2, "running": 2, "quiet": 0, "unwell": [], "blind": false, "healthy": 1 },
+      "headline": "2 sessions are waiting for you",
+      "basis": "2 sessions running · 1 machine healthy"
+    },
+    {
+      "why": "one unwell machine, nothing waiting",
+      "in": { "waiting": 0, "running": 1, "quiet": 0, "unwell": ["pi4"], "blind": false, "healthy": 1 },
+      "headline": "One machine needs a look",
+      "basis": "1 session running · pi4"
+    },
+    {
+      "why": "several unwell machines, and the basis names every one of them",
+      "in": { "waiting": 0, "running": 0, "quiet": 0, "unwell": ["pi4", "deb13", "mac-mini"], "blind": false, "healthy": 0 },
+      "headline": "3 machines need a look",
+      "basis": "pi4, deb13, mac-mini"
+    },
+    {
+      "why": "blind is not the same fact as healthy-and-idle, and the basis says so instead of reassuring",
+      "in": { "waiting": 0, "running": 0, "quiet": 0, "unwell": [], "blind": true, "healthy": 0 },
+      "headline": "No machines are reporting",
+      "basis": "The coordinator has no health from any machine, so this cannot say whether anything is running."
+    },
+    {
+      "why": "blind wins the basis outright, and outranks running==0 in the headline too — a fleet we cannot see is not a fleet we know is idle",
+      "in": { "waiting": 0, "running": 4, "quiet": 2, "unwell": [], "blind": true, "healthy": 0 },
+      "headline": "No machines are reporting",
+      "basis": "The coordinator has no health from any machine, so this cannot say whether anything is running."
+    },
+    {
+      "why": "healthy fleet, nothing running — a different sentence from blind, deliberately",
+      "in": { "waiting": 0, "running": 0, "quiet": 0, "unwell": [], "blind": false, "healthy": 2 },
+      "headline": "Nothing is running",
+      "basis": "2 machines healthy"
+    },
+    {
+      "why": "the state the product exists to produce",
+      "in": { "waiting": 0, "running": 2, "quiet": 0, "unwell": [], "blind": false, "healthy": 3 },
+      "headline": "Nothing needs you",
+      "basis": "2 sessions running · 3 machines healthy"
+    },
+    {
+      "why": "singular everywhere at once — the branch a plural-only test never reaches",
+      "in": { "waiting": 0, "running": 1, "quiet": 1, "unwell": [], "blind": false, "healthy": 1 },
+      "headline": "Nothing needs you",
+      "basis": "1 session running · 1 of them quiet a while · 1 machine healthy"
+    },
+    {
+      "why": "quiet sessions are counted but do not change the headline — they are not a request",
+      "in": { "waiting": 0, "running": 5, "quiet": 3, "unwell": [], "blind": false, "healthy": 1 },
+      "headline": "Nothing needs you",
+      "basis": "5 sessions running · 3 of them quiet a while · 1 machine healthy"
+    },
+    {
+      "why": "waiting outranks unwell, which outranks blind — the order IS the design",
+      "in": { "waiting": 1, "running": 0, "quiet": 0, "unwell": ["pi4"], "blind": true, "healthy": 0 },
+      "headline": "One session is waiting for you",
+      "basis": "The coordinator has no health from any machine, so this cannot say whether anything is running."
+    },
+    {
+      "why": "unwell outranks blind in the headline",
+      "in": { "waiting": 0, "running": 0, "quiet": 0, "unwell": ["pi4"], "blind": true, "healthy": 0 },
+      "headline": "One machine needs a look",
+      "basis": "The coordinator has no health from any machine, so this cannot say whether anything is running."
+    },
+    {
+      "why": "zero healthy machines and none unwell is a real state — the fleet is empty of work, not of machines",
+      "in": { "waiting": 0, "running": 0, "quiet": 0, "unwell": [], "blind": false, "healthy": 0 },
+      "headline": "Nothing is running",
+      "basis": "0 machines healthy"
+    },
+    {
+      "why": "unwell replaces the healthy phrase rather than joining it — one clause about machines, not two",
+      "in": { "waiting": 0, "running": 1, "quiet": 0, "unwell": ["pi4"], "blind": false, "healthy": 4 },
+      "headline": "One machine needs a look",
+      "basis": "1 session running · pi4"
+    }
+  ]
+}

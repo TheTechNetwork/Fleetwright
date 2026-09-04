@@ -12,6 +12,13 @@ where every capability is a command someone types, because that is what the
 thing being copied looked like. The right question is what each surface is
 *good* at, and then whether the protocol underneath can serve all of them.
 
+> **Executable parity, since #374.** The scoreboard below was kept honest by
+> tests that read the Swift and the Kotlin as *text* — which can prove a rule is
+> mentioned in both places and cannot prove the two agree. The rules that are
+> written twice now have a shared table of inputs and expected outputs in
+> `test/fixtures/parity/`, run by a Kotlin unit test and a Swift one. See
+> "Testing the apps" in [`ci.md`](./ci.md).
+
 ## What the gap actually is
 
 The chat surface exposes **16 commands**:

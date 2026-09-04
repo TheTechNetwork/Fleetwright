@@ -97,6 +97,60 @@ It exists because the hand-maintained version was wrong twice, and the second
 time cost a deploy — see `docs/ci-scope.md`. When it fails it prints the
 uncovered files and the exact `- 'dir/**'` lines to add.
 
+## Testing the apps
+
+The apps' own workflows used to **compile** them and stop. What asserted their
+behaviour was 22 files in `test/` reading the Swift and the Kotlin as text:
+
+```js
+assert.match(model, /quietFor/, `${name} does not compute it`);
+```
+
+That passes whether Kotlin's stall floor is 90 seconds and Swift's is 120. Both
+sources contain the word, the phones disagree, and nothing is red. A search can
+prove a rule is *mentioned* in two places; only running both against the same
+inputs proves they agree.
+
+### A shared table, three readers
+
+`test/fixtures/parity/*.json` holds inputs and expected outputs for the rules
+that are written twice. Three things read it:
+
+| reader | what it asserts |
+|---|---|
+| `test/parity-fixtures.test.js` | the table is complete, exhaustive over the rule's branches, and that both app workflows trigger on it |
+| `apps/android/.../ReassuranceParityTest.kt` | the Kotlin produces those answers — plain JVM, `./gradlew testDebugUnitTest`, no emulator |
+| `apps/ios/FleetwrightTests/ReassuranceParityTests.swift` | the Swift produces them — `xcodebuild test` on a simulator |
+
+There is deliberately **no JavaScript copy of the rule**. A third implementation
+would be a third thing to drift; the table is the specification, and Node's job
+is to keep it honest rather than to answer it.
+
+### Three traps, all of them silent
+
+- **The fixture lives outside `apps/`**, so a change to the table would not have
+  triggered either app workflow — the exact filter bug #367 removed from
+  `ci.yml`. Both now name `test/fixtures/parity/**`, and
+  `parity-fixtures.test.js` fails if either line goes away.
+- **`org.json` is a stub on Android's unit-test classpath.** Every method throws
+  "not mocked", and `returnDefaultValues` makes them return null instead —
+  either way a test parsing the table reads an empty document and passes. A real
+  `org.json` on the *test* classpath shadows the stub.
+- **`xcodebuild test` cannot use a generic destination.** The build step uses
+  `generic/platform=iOS Simulator`, which needs no simulator to exist; tests
+  have to boot one. The device is chosen at run time from what the runner
+  actually has, because a hardcoded `name=iPhone 17` breaks on a runner image
+  bump and looks like a code failure.
+
+### What is not covered
+
+The apps' UI. Compose UI tests need an emulator and XCUITest needs a booted
+simulator; both are slow and the flake costs more trust than the coverage buys.
+The dark-mode, Dynamic Type and VoiceOver checks stay a human checklist in
+[`app-testing.md`](./app-testing.md). An emulator **launch** smoke test — does
+the app come up and render the empty state — is the next thing worth adding, and
+is the one that would catch an R8 failure.
+
 ## Coverage
 
 `scripts/check-coverage.mjs`, inside `verify.sh`, so it is the same check
@@ -149,6 +203,13 @@ Three things it deliberately does not do:
 - **It does not judge a failing suite.** A run that stopped early covered
   whatever it reached, and ratcheting against that would record a floor from a
   broken run.
+- **It does not judge a PARTIAL suite either.** `test/files-container.test.js`
+  skips itself where there is no container engine, and `src/core/files.js` then
+  measures 48% against a floor of 96% recorded by CI — 189 lines of regression
+  that did not happen. A skip means the numbers are not comparable, so the run
+  says `not judged — 1 test skipped` and passes. CI skips nothing, so the
+  ratchet is enforced where it decides whether something merges. `--update`
+  *refuses* on a partial run rather than writing the depressed numbers in.
 
 The slack is **two lines per file**, converted to a percentage from that file's
 own length rather than being a flat percentage — two lines out of a hundred is

@@ -38,6 +38,22 @@ struct Reassurance {
     /// Machines reporting normally.
     let healthy: Int
 
+    /// The six fields directly, which is what the shared parity table supplies.
+    ///
+    /// SWIFT SUPPRESSES THE MEMBERWISE INIT the moment a struct declares one of
+    /// its own, so this has to be written out. It is not a testing back door:
+    /// `headline` and `basis` are functions of these six numbers and nothing
+    /// else, and being able to say so in a constructor is the same claim the
+    /// Kotlin data class makes for free.
+    init(waiting: Int, running: Int, quiet: Int, unwell: [String], blind: Bool, healthy: Int) {
+        self.waiting = waiting
+        self.running = running
+        self.quiet = quiet
+        self.unwell = unwell
+        self.blind = blind
+        self.healthy = healthy
+    }
+
     init(sessions: [Fleet.Session], hosts: [Fleet.FleetHost]) {
         waiting = sessions.filter { $0.prompt != nil }.count
         running = sessions.filter { $0.isRunning }.count

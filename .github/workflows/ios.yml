@@ -13,11 +13,29 @@ on:
     # testers a byte-identical app.
     paths:
       - 'apps/ios/**'
+      # THE SHARED PARITY TABLE, which lives outside apps/ on purpose — it is
+      # one file read by both phones and by the Node suite, and putting it under
+      # either app would make it look like that app's.
+      #
+      # It has to be named here or this workflow does not run for the one change
+      # the table exists to police. That is the identical failure #367 took out
+      # of ci.yml: a filter skipping the tests that guard the files it skips for.
+      # test/parity-fixtures.test.js fails if this line goes away.
+      - 'test/fixtures/parity/**'
       - '.github/workflows/ios.yml'
       - '!apps/ios/**/*.md'
   pull_request:
     paths:
       - 'apps/ios/**'
+      # THE SHARED PARITY TABLE, which lives outside apps/ on purpose — it is
+      # one file read by both phones and by the Node suite, and putting it under
+      # either app would make it look like that app's.
+      #
+      # It has to be named here or this workflow does not run for the one change
+      # the table exists to police. That is the identical failure #367 took out
+      # of ci.yml: a filter skipping the tests that guard the files it skips for.
+      # test/parity-fixtures.test.js fails if this line goes away.
+      - 'test/fixtures/parity/**'
       - '.github/workflows/ios.yml'
       - '!apps/ios/**/*.md'
   workflow_dispatch:
@@ -105,6 +123,45 @@ jobs:
               -destination 'generic/platform=iOS Simulator' \
               -configuration Debug \
               CODE_SIGNING_ALLOWED=NO
+
+      # THE UNIT TESTS, on a real simulator.
+      #
+      # Separate from the build above, and the destination is why: `xcodebuild
+      # build` uses `generic/platform=iOS Simulator`, which compiles for any
+      # simulator and needs none to exist. `xcodebuild test` CANNOT use a
+      # generic destination — it has to boot something — so this is a different
+      # invocation rather than a flag on the same one.
+      #
+      # THE DEVICE IS CHOSEN AT RUN TIME. A hardcoded `name=iPhone 17` is a job
+      # that breaks when the runner image changes its device set, which happens
+      # without warning and looks like a code failure. This asks the runner what
+      # it has and fails loudly if the answer is nothing.
+      - name: Unit tests
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          device=$(xcrun simctl list devices available --json | jq -r '
+            [ .devices
+              | to_entries[]
+              | select(.key | test("iOS"))
+              | .value[]
+              | select(.name | startswith("iPhone"))
+              | .udid
+            ] | first // empty')
+          if [ -z "$device" ]; then
+            echo "::error::no iOS iPhone simulator is available on this runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "testing on simulator $device"
+          xcodebuild test \
+            -project Fleetwright.xcodeproj \
+            -scheme Fleetwright \
+            -sdk iphonesimulator \
+            -destination "id=$device" \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify
 
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.
