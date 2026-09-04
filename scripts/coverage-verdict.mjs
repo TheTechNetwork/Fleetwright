@@ -98,3 +98,18 @@ export function normalise(p) {
   const rel = path.isAbsolute(p) ? path.relative(process.cwd(), p) : p;
   return rel.split(path.sep).join('/');
 }
+
+/**
+ * How many tests the run skipped, out of node's spec-reporter summary.
+ *
+ * A skip means the coverage numbers are not comparable with floors recorded
+ * from a full run — see the long note in check-coverage.mjs for the case that
+ * found this. Parsed rather than inferred: node prints one summary line, and
+ * anything else here would be guessing.
+ *
+ * @param {string} stdout
+ */
+export function skippedCount(stdout) {
+  const m = /^\u2139 skipped (\d+)$/m.exec(stdout || '');
+  return m ? Number(m[1]) : 0;
+}

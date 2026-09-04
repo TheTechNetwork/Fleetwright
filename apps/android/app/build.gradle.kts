@@ -188,6 +188,26 @@ android {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
   }
+  // THE SHARED PARITY TABLE, on the unit-test classpath.
+  //
+  // It lives at the repository root in test/fixtures/, not under apps/, because
+  // it is one file read by both phones and by the Node suite — putting it under
+  // either app would make it look like that app's.
+  //
+  // Pointed at directly rather than copied into build/. A Copy task would need
+  // its output wired into whichever `process*UnitTestJavaRes` task is current,
+  // and a wiring that silently stops running leaves the tests reading nothing
+  // and passing. A source directory cannot fail that way.
+  //
+  // srcDir is `test/fixtures` and not `test/fixtures/parity`, so the resource
+  // is named `parity/reassurance.json` — the prefix says where it came from,
+  // and a second table lands beside it rather than at the classpath root.
+  sourceSets {
+    getByName("test") {
+      resources.srcDir(rootProject.file("../../test/fixtures"))
+    }
+  }
+
   buildFeatures {
     compose = true
     // For GOOGLE_WEB_CLIENT_ID above. Off by default since AGP 8.
@@ -207,6 +227,20 @@ kotlin {
 }
 
 dependencies {
+  // THE UNIT TESTS. Plain JVM, no emulator: `./gradlew testDebugUnitTest`.
+  testImplementation("junit:junit:4.13.2")
+
+  // THE REAL org.json, AND THIS LINE IS LOAD-BEARING.
+  //
+  // android.jar on the unit-test classpath is a STUB: every method throws "not
+  // mocked", and the usual cure — testOptions.unitTests.isReturnDefaultValues —
+  // makes them return null and 0 instead. Either way a test parsing the shared
+  // parity table would be reading an empty document and passing on it, which is
+  // worse than not having the test at all.
+  //
+  // A real implementation on the TEST classpath shadows the stub, so the table
+  // is actually parsed. The app itself keeps using the platform's.
+  testImplementation("org.json:json:20240303")
   implementation("androidx.core:core-ktx:1.19.0")
   implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
   implementation("androidx.activity:activity-compose:1.13.0")

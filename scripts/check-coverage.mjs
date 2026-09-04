@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { globSync } from 'node:fs';
 
-import { parseLcov, judge } from './coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount } from './coverage-verdict.mjs';
 
 const FLOORS = 'test/coverage-floor.json';
 const update = process.argv.includes('--update');
@@ -124,6 +124,32 @@ if (run.status !== 0) {
   process.exit(1);
 }
 
+// A SUITE THAT DID NOT ALL RUN IS NOT A COVERAGE ANSWER EITHER, and this is
+// the sibling of the check above rather than a new idea.
+//
+// THE BUG THIS FIXES, found by using it. test/files-container.test.js runs the
+// workspace browser inside a real container and SKIPS ITSELF when there is no
+// container engine. CI has Docker, so it runs there and src/core/files.js
+// measures 96%; a laptop without Docker measures 48% for the same unchanged
+// code. The floor recorded from CI then failed every local run with
+//
+//     src/core/files.js
+//       covered 48.62%, floor is 96% — about 189 lines that used to run no
+//       longer do
+//
+// naming a regression that did not happen. That is red-locally-green-on-CI,
+// which is worse than the other way round: the gate is wrong in the direction
+// that teaches people to stop reading it.
+//
+// So a skip means the numbers are not comparable, and the honest answer is to
+// say so rather than to judge. CI skips nothing, so the ratchet is fully
+// enforced exactly where it decides whether something merges.
+//
+// ANNOUNCED, NEVER SILENT — the same rule verify.sh's header states about
+// VERIFY_SKIP_TESTS. A check that can quietly do less than it says is the
+// failure this whole file is about.
+const skipped = skippedCount(run.stdout || '');
+
 if (!existsSync(lcovPath)) {
   console.error('no coverage was written — node produced no lcov report');
   rmSync(work, { recursive: true, force: true });
@@ -136,12 +162,39 @@ rmSync(work, { recursive: true, force: true });
 /** @type {Record<string, number>} */
 const floors = existsSync(FLOORS) ? JSON.parse(readFileSync(FLOORS, 'utf8')) : {};
 
+if (update && skipped > 0) {
+  // MORE URGENT THAN THE READ PATH. Judging against a partial run is a wrong
+  // answer; RECORDING one writes it into the floors file, where it silently
+  // lowers the bar for everybody afterwards — the ratchet slipping, by the one
+  // command that is supposed to move it deliberately.
+  console.error(
+    `refusing to re-baseline from a run with ${skipped} skipped test${skipped === 1 ? '' : 's'}.\n` +
+      'Those files would be recorded at whatever this environment happened to reach,\n' +
+      'which is lower than CI reaches and would lower the floor for everybody.\n' +
+      'Run it where nothing skips — a container engine is usually what is missing.',
+  );
+  process.exit(1);
+}
+
 if (update) {
   /** @type {Record<string, number>} */
   const next = {};
   for (const file of [...actual.keys()].sort()) next[file] = Math.floor(actual.get(file)?.pct ?? 0);
   writeFileSync(FLOORS, `${JSON.stringify(next, null, 2)}\n`);
   console.log(`wrote ${FLOORS} — ${Object.keys(next).length} files`);
+  process.exit(0);
+}
+
+if (skipped > 0) {
+  // The one-line summary LAST, because verify.sh shows the final line and a
+  // trailing sentence of explanation would read as the whole answer.
+  console.log(
+    'The numbers are not comparable with floors recorded from a full run. The usual\n' +
+      '  cause is no container engine, which makes test/files-container.test.js skip and\n' +
+      '  src/core/files.js read about half what CI measures. CI runs everything, so the\n' +
+      '  ratchet is enforced where it decides whether something merges.\n' +
+      `not judged — ${skipped} test${skipped === 1 ? '' : 's'} skipped`,
+  );
   process.exit(0);
 }
 

@@ -48,6 +48,13 @@ targets:
       - path: Fleetwright
     dependencies:
       - package: Sentry
+    # THE TEST TARGET JOINS THIS TARGET'S SCHEME, rather than being declared in
+    # a `schemes:` block of its own. CI runs `xcodebuild -scheme Fleetwright`,
+    # and a test target that exists but is in no scheme's test action is a
+    # target xcodebuild will happily not run — green, and having tested nothing.
+    scheme:
+      testTargets:
+        - FleetwrightTests
     info:
       # WRITTEN, not read. XcodeGen creates this plist on every generation, so
       # the file on disk is output — it is gitignored, and editing it there is
@@ -226,3 +233,33 @@ targets:
         # certificate problem and is not one.
         com.apple.developer.applesignin:
           - Default
+
+
+  # UNIT TESTS, plain XCTest — no simulator UI, no XCUITest.
+  #
+  # What they are for is stated in ReassuranceParityTests.swift: the rule that
+  # produces the reassurance line is written twice, once here and once in
+  # Kotlin, and until now the only thing asserting the two agreed was a Node
+  # test grepping both sources for a word. This runs them.
+  FleetwrightTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FleetwrightTests
+      # THE SHARED TABLE, as a folder reference out of the repository root.
+      #
+      # `type: folder` copies the directory whole, so the bundle carries
+      # `parity/reassurance.json` and a second table needs no change here. A
+      # list of individual files would need editing every time one is added,
+      # and the failure of forgetting is a test that reads nothing and passes.
+      - path: ../../test/fixtures/parity
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: Fleetwright
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: network.thetech.fleetwright.tests
+        SWIFT_VERSION: "5.9"
+        # @testable import needs it, and Debug is what `xcodebuild test` builds.
+        ENABLE_TESTABILITY: YES
