@@ -459,6 +459,34 @@ write_upgrade_sudoers() {
   return 1
 }
 
+# BECOMING A PACKAGED BOX, which is the one update step that needs root.
+#
+# Everything else about an update is unprivileged and stays that way: fetch,
+# verify a sha256, unpack beside what is running, move a symlink. Switching
+# LAYOUTS is different — it rewrites systemd units and reloads the daemon.
+#
+# THE HELPER IS NOT IN THE INSTALL TREE, and that is the whole security
+# argument. The service user can write the install tree — it has to, because
+# applyRelease unpacks releases and swaps `current` as that user — so a sudoers
+# rule naming a script in there would let the service rewrite the thing it is
+# allowed to run as root. It is installed here, root-owned, outside anything the
+# service can touch, and the rule names this path exactly.
+#
+# No arguments, for the reason the apt rule spells its whole command line out:
+# sudoers matches argv, and every argument somebody could pass is a widening.
+write_migrate_sudoers() {
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-migrate\n' "$RUN_USER" > "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then
+    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-migrate
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 write_reboot_sudoers() {
   local tmp
   tmp="$(mktemp)"
@@ -968,6 +996,23 @@ if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
     # the day it matters is the failure this whole line exists to avoid.
     warn "could not tell which repository this came from, so AGENT_HUB_RELEASE_MANIFEST is unset"
     warn "  set it in $ENV_FILE to the URL of a release manifest, or this box cannot take updates"
+  fi
+fi
+
+# THE MIGRATION HELPER, and the grant that lets the app use it.
+#
+# Only on a checkout: a box that is already packaged has nothing to migrate to,
+# and a rule nobody needs is a rule nobody reviews. `install -o root -g root`
+# rather than a copy, because the mode and the owner are the security property
+# — see write_migrate_sudoers.
+if [ "$PACKAGED" = 0 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
+  install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
+  ok "installed /usr/local/sbin/fleetwright-migrate"
+  if write_migrate_sudoers; then
+    ok "the app can move this box onto packaged releases without a shell"
+  else
+    warn "could not write /etc/sudoers.d/agent-hub-migrate — moving this box onto"
+    warn "  packaged releases will need: sudo /usr/local/sbin/fleetwright-migrate"
   fi
 fi
 

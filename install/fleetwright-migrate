@@ -1,0 +1,124 @@
+#!/bin/sh
+# Move a git-checkout install onto the packaged layout. Root, no arguments.
+#
+#   sudo -n /usr/local/sbin/fleetwright-migrate
+#
+# WHY THIS FILE EXISTS AT ALL, rather than the work happening in agent-hub.
+# Switching layouts means rewriting systemd units and reloading the daemon, and
+# the service is unprivileged on purpose. Everything else about updating is
+# already unprivileged — fetch, verify, unpack, swap a symlink — and stays that
+# way; this is the one step that is not.
+#
+# WHY IT LIVES IN /usr/local/sbin AND NOT IN THE INSTALL TREE. install.sh does
+# `chown -R "$RUN_USER" "$DIR"` so that /update can pull, which means the
+# service user can WRITE every file in the checkout. A sudoers rule naming a
+# script the service user can rewrite is not a narrow grant — it is root, with
+# extra steps. So this is installed by root, outside anything the service can
+# touch, and the sudoers rule names this path exactly.
+#
+# NO ARGUMENTS, for the same reason the apt rule spells out its whole command
+# line: sudoers matches argv, and every argument is a widening. Everything this
+# needs it reads from /etc/agent-hub.env, which is root-owned and 0600.
+#
+# WHAT THE SERVICE USER CAN INFLUENCE, stated plainly because a grant nobody
+# has bounded is a grant nobody can review:
+#
+#   WHEN this runs — that is the whole feature.
+#   WHICH CHANNEL, via <stateDir>/release-channel, which it owns. That chooses
+#     between two paths under the operator's own manifest URL and nothing else.
+#
+#   NOT the URL, which comes from the root-owned env file.
+#   NOT the payload, which is checked against the sha256 in that manifest.
+#   NOT what runs as root afterwards: the units it writes run AS THE SERVICE
+#     USER, exactly as they did before. Nothing here gives away a shell.
+set -eu
+
+ENV_FILE=/etc/agent-hub.env
+say()  { printf '%s\n' "$*"; }
+die()  { printf 'FAIL %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "this has to run as root — it writes systemd units"
+
+# Read the env file the way systemd does, and take only what is needed. Sourcing
+# it would execute whatever is in there, in a root shell.
+env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/'; }
+
+MANIFEST_URL="$(env_get AGENT_HUB_RELEASE_MANIFEST)"
+[ -n "$MANIFEST_URL" ] || die "AGENT_HUB_RELEASE_MANIFEST is not set in $ENV_FILE, so there is nothing to migrate to."
+
+INSTALL_DIR="$(env_get AGENT_HUB_INSTALL_DIR)"
+[ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/agent-fleet
+STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
+[ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/agent-hub
+BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+
+# ALREADY DONE IS NOT A FAILURE. A retried migration must not take a working
+# packaged box apart to rebuild it.
+if [ -f "$INSTALL_DIR/lib/agent-hub.mjs" ] || [ -L "$BASE/current" ]; then
+  say "already on the packaged layout — nothing to do"
+  exit 0
+fi
+[ -d "$INSTALL_DIR/.git" ] || die "$INSTALL_DIR is neither a checkout nor a release; this does not know what it is looking at."
+
+# The channel picks the address, exactly as src/core/release.js does it. Two
+# paths under the operator's own URL — this cannot be pointed somewhere else.
+CHANNEL="$(env_get AGENT_HUB_RELEASE_CHANNEL)"
+[ -n "$CHANNEL" ] || CHANNEL="$(cat "$STATE_DIR/release-channel" 2>/dev/null || echo stable)"
+case "$CHANNEL" in
+  rolling|prerelease)
+    MANIFEST_URL="$(printf '%s' "$MANIFEST_URL" | sed 's|/releases/latest/download/|/releases/download/rolling/|')" ;;
+  *) ;;
+esac
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+say "fetching $MANIFEST_URL"
+curl -fsSL "$MANIFEST_URL" -o "$WORK/manifest.json" || die "could not fetch the release manifest"
+
+json() { sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORK/manifest.json" | head -1; }
+VERSION="$(json version)"
+FILE="$(json file)"
+SHA="$(json sha256)"
+[ -n "$VERSION" ] && [ -n "$FILE" ] && [ -n "$SHA" ] || die "the manifest is missing version, file or sha256"
+
+# A NAME, NEVER A PATH. Both of these become directory and file names below, and
+# src/core/release.js refuses the same two shapes for the same reason: a version
+# of ../../etc normalises straight out of where it is supposed to land.
+for v in "$VERSION" "$FILE"; do
+  case "$v" in
+    */*|..*|.*|"") die "the manifest's version or filename is not a plain name: $v" ;;
+  esac
+done
+
+TARBALL_URL="$(printf '%s' "$MANIFEST_URL" | sed 's|/[^/]*$||')/$FILE"
+say "fetching $TARBALL_URL"
+curl -fsSL "$TARBALL_URL" -o "$WORK/$FILE" || die "could not download the release"
+
+# VERIFIED BEFORE IT IS UNPACKED, not after. A tarball that is unpacked and then
+# checked has already written whatever it contained.
+GOT="$(sha256sum "$WORK/$FILE" | cut -d' ' -f1)"
+[ "$GOT" = "$SHA" ] || die "the release does not match its manifest: expected $SHA, got $GOT"
+say "sha256 ok"
+
+mkdir -p "$BASE/releases"
+rm -rf "$BASE/releases/.incoming-$VERSION"
+mkdir -p "$BASE/releases/.incoming-$VERSION"
+tar -xzf "$WORK/$FILE" -C "$BASE/releases/.incoming-$VERSION" --strip-components=1
+rm -rf "$BASE/releases/$VERSION"
+mv "$BASE/releases/.incoming-$VERSION" "$BASE/releases/$VERSION"
+
+# Replaced atomically, for the reason install.sh gives: a symlink that briefly
+# does not exist is a service that briefly cannot start.
+ln -sfn "$BASE/releases/$VERSION" "$BASE/.current.new"
+mv -Tf "$BASE/.current.new" "$BASE/current"
+say "laid out $BASE/releases/$VERSION"
+
+# AND THE INSTALLER DOES THE REST. It already knows how to template units for a
+# packaged layout, keep the env files it finds, and restart what it started —
+# --upgrade is exactly "an already-configured box, brought onto new code, with
+# no questions". Reimplementing any of that here would be a second installer
+# that is subtly different on the day it matters.
+[ -x "$BASE/current/install/install.sh" ] || die "the release has no install/install.sh in it"
+say "running the installer from the release"
+exec bash "$BASE/current/install/install.sh" --upgrade

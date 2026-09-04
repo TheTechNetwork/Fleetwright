@@ -62,6 +62,8 @@ import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { manifestUrlFor } from '../core/release.js';
+import { checkRelease } from '../core/release-check.js';
+import { migrationReply } from '../core/migrate.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -1298,6 +1300,21 @@ export const COMMANDS = {
           text: r.message,
           buttons: r.ok && r.changed && canSelfRestart() ? [{ label: 'Restart to apply', command: '/update --restart' }] : undefined,
         };
+      }
+
+      // A CHECKOUT THAT COULD STOP BEING ONE. Before anything git happens: if
+      // this box can be moved onto packaged releases, that IS the update, and
+      // pulling would be a step in the direction we are leaving.
+      //
+      // The decision is migrationReply's, not this file's — it was four returns
+      // deep here and unreachable by any test, which the coverage gate said out
+      // loud the first run after it landed.
+      if (!status.packaged && ctx.cfg.releaseManifest) {
+        const reply = migrationReply(ctx.cfg, status, await checkRelease(ctx.cfg), {
+          apply: flags.has('restart') || flags.has('apply'),
+          check: flags.has('check'),
+        });
+        if (reply) return reply;
       }
 
       if (!status.ok) return { ok: false, text: status.message ?? 'Could not read the checkout.' };
