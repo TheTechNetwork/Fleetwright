@@ -18,6 +18,7 @@
     "sidecar": "node bin/agent-fleet-sidecar",
     "test": "node --test test/*.test.js build/*.test.js",
     "typecheck": "tsc -p tsconfig.json",
+    "deploy": "npm --prefix worker install && npm --prefix worker run deploy",
     "build:web": "node scripts/build-web.mjs",
     "pretest": "node scripts/build-web.mjs",
     "browse": "node scripts/browse.mjs",

@@ -54,7 +54,10 @@ the sidecar that speaks to a coordinator, the intent protocol between them, and
 the per-session sandbox plumbing.
 
 **Setting up a box:** [`docs/deployment.md`](./docs/deployment.md) — one
-installer, what it asks, what is deployable today and what is not.
+installer, what it asks, what is deployable today and what is not. The URL in
+these two lines is the address of the fleet the box will join — this one is
+**ours**, so it is the line to copy only if you were invited here; joining
+your own fleet means your own coordinator's URL in its place:
 
 ```sh
 curl -fsSL https://fleet.thetech.network/prereq  | sudo sh   # once, if node is old
@@ -83,6 +86,16 @@ The pin is the only thing it asks for. Nothing else is needed to join a fleet,
 and the questions that were in the way — Telegram, whether to run a coordinator
 here — are for somebody setting one up rather than joining one, so they are
 asked only when there is no fleet in the URL.
+
+**No fleet to join yet?** Then there is no URL to curl, and the clone path
+below is yours: [`docs/first-session.md`](./docs/first-session.md) runs it
+end to end. Answer `Y` when the installer offers to run the coordinator on the
+box, or — for a coordinator a phone on mobile data can reach — deploy it to
+your own Cloudflare account first:
+[`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md). (A fresh
+coordinator's own `/install` answers 404 until you point
+`AGENT_FLEET_INSTALL_URL` at your copy of the repository, which is deliberate:
+a coordinator never hands root a script its operator did not name.)
 
 Already installed and joined? `install.sh --upgrade` brings a box onto new code
 with no questions at all, restarts the services, and tells you whether its

@@ -165,12 +165,15 @@ enabled = true
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
 #   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
-#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
-#                                     https://appleid.apple.com https://accounts.google.com
-#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
-#                                     iOS bundle id, the Android web client id
 #   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
+#
+# AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
+# identifiers and belong in [vars] above, where changing who a coordinator will
+# accept is a reviewable diff. This block briefly listed them as secrets, and
+# because Cloudflare keeps vars and secrets in one namespace, following both
+# halves of this file at once would have had a deploy clobber the secret — one
+# place per name, and for these the [vars] table is the place.
 #
 # THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
 # they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN

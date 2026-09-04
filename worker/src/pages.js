@@ -159,6 +159,14 @@ your own hardware, and you deploy it to your own account — there is no tenancy
 of ours to be in.</p>
 <p><a href="https://deploy.workers.cloudflare.com/?url=https://github.com/TheTechNetwork/Fleetwright">
 <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare Workers" height="32"></a></p>
+<p>One thing to check in the dialog that opens: the deploy command should be
+<code>npm run deploy</code>. The Worker lives in <code>worker/</code> of a
+repository that also holds everything that runs on your machines, so an offer
+to configure the project automatically has looked at the wrong directory and
+will configure the wrong thing — that command is the repository saying which
+thing is the Worker. Prefer a terminal? The
+<a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">deploy page</a>
+is five commands from clone to a coordinator answering on a URL.</p>
 <p>It comes up refusing every request until you set an admin token, which is
 deliberate: a coordinator with no credential is remote control of every machine
 in the fleet for whoever finds the URL. The Worker says so, and names the

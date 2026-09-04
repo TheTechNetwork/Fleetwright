@@ -12,15 +12,25 @@ If a step here stops being true, this page is the bug.
 ```sh
 git clone https://github.com/TheTechNetwork/Fleetwright && cd Fleetwright
 sudo bash install/install.sh --check     # changes nothing; prints what it would do
-sudo bash install/install.sh             # installs node, tmux, podman, the CLI, the services
+sudo sh install/prereq.sh                # only if --check said node is too old
+sudo bash install/install.sh             # installs tmux, podman, the CLI, the services
 ```
 
-**Use `bash`, not `sh`.** The installer says so if you get it wrong.
+**Use `bash`, not `sh`, for the installer.** It says so if you get it wrong.
+The prerequisite line is separate on purpose — node is the one thing the
+installer refuses to install for you, and it refuses *before* changing
+anything, naming this command.
 
 ## Join it to a coordinator
 
-Skip if this box *is* the coordinator — the installer sets that up and prints
-where it listens.
+Skip if this box *is* the coordinator — the installer asks whether to run one
+here, sets it up on a `Y`, and prints where it listens. That is the whole
+single-box setup.
+
+No coordinator anywhere yet, and you want one a phone on mobile data can
+reach? Deploy it to your own Cloudflare account first —
+[coordinator-deploy.md](./coordinator-deploy.md) is five commands — and give
+the installer that URL when it asks.
 
 ```sh
 # On the coordinator, with the admin token:
