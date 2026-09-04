@@ -14,7 +14,7 @@ Used for verifying OIDC ID tokens at sign-in.
 
 | | |
 |---|---|
-| version | `6.2.9`, exact — see below |
+| version | `6.2.10`, exact — see below (Renovate moves it; `package.json` is the number to believe) |
 | dependencies | **none** — nothing transitive to audit |
 | licence | MIT |
 | adoption | ~100M downloads a week |
@@ -142,8 +142,10 @@ apply, and a library would be carried for two function calls.
 question, plus an availability dependency on every session start.
 
 **A sign-in SDK on iOS.** `AuthenticationServices` is in the operating system;
-Sign in with Apple is `SignInWithAppleButton` and one delegate callback. The iOS
-app still has zero packages.
+Sign in with Apple is `SignInWithAppleButton` and one delegate callback. The
+iOS app's only package is Sentry (`sentry-cocoa`, pinned exact in
+`project.yml`), taken for the same reasons as the Worker's —
+[`error-reporting.md`](./error-reporting.md).
 
 **A Google sign-in SDK beyond the three above.** Firebase Auth would have done
 it too, and would have brought an account system, a user database and a second

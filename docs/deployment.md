@@ -12,9 +12,9 @@ standable-up yet.
 | **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ as a Node process **or** a Cloudflare Worker |
 | **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
 | **Cloudflare deployment** (Worker + Durable Objects) | ✅ deployed by CI to `fleet.thetech.network` |
-| **Push notifications** | ⚠️ server side done; needs a Firebase project, and untested against real FCM |
-| **Android app** | ⚠️ builds, signs, installs; push wired to FCM, untested against a real device |
-| **iOS app** | ⚠️ compiles in CI on macOS; never run on a device |
+| **Push notifications** | ✅ built end to end; delivery confirmed on both platforms, 3 Sep 2026 |
+| **Android app** | ⚠️ in open testing on Play — what is proven is [`app-parity.md`'s table](./app-parity.md#what-is-actually-proven-about-the-apps), which this row defers to |
+| **iOS app** | ⚠️ in beta on TestFlight — same table, same deferral |
 
 A box you set up today runs the whole loop: a coordinator, this box as a fleet
 host, and sandboxed sessions with real root inside a container whose filesystem
@@ -35,11 +35,24 @@ the thing it had been waiting on since the sender was written.
 `design.md` explains why validating any of the sandbox work on macOS proves less
 than it looks like it does.
 
-The installer installs what is missing — node (>= 24, which `package.json`
-requires), tmux, podman, git, curl — from the distribution's own repositories.
-It does not pipe a remote script into a shell. `AGENT_HUB_NO_INSTALL_DEPS=1`
-turns that off for a box where package management is somebody else's job, and
-then it tells you what to install instead.
+The installer installs what is missing — tmux, podman, git, curl — from the
+distribution's own repositories. It does not pipe a remote script into a shell.
+`AGENT_HUB_NO_INSTALL_DEPS=1` turns that off for a box where package management
+is somebody else's job, and then it tells you what to install instead.
+
+**Node (>= 24, which `package.json` requires) is the one thing it refuses to
+install**, before changing anything else, because Debian ships an older one and
+closing that gap means changing how the machine gets software. The refusal
+prints the command; it is a no-op on a box that already has Node 24:
+
+```sh
+curl -fsSL https://fleet.thetech.network/prereq | sudo sh
+# or, from a clone: sudo sh install/prereq.sh
+```
+
+It uses nvm, into the run user's home — nothing system-wide, `rm -rf ~/.nvm`
+undoes it, and re-running it is how a box moves to a newer Node. The header of
+[`install/prereq.sh`](../install/prereq.sh) is the full argument.
 
 **claude** — the Claude Code CLI — is the one thing it will not install for you.
 Log in during the install, or later from chat with `/login`.
@@ -387,7 +400,7 @@ curl -s -X POST localhost:8791/api/intent \
 for driving one sidecar by hand with no coordinator:
 
 ```sh
-echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
+echo '{"v":3,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
   | agent-fleet-sidecar
 ```
 
@@ -478,10 +491,13 @@ Resource limits are podman flags — `AGENT_HUB_SANDBOX_MEMORY` (8g),
 
 ### Still to do here
 
-Everything above ran as **root**, so podman's container-root → unprivileged-host-user
-mapping is unproven and is the correct deployment posture. Until it is done, an
-escape lands as root on the host rather than as a nobody user. Run rootless
-before trusting this with anything you care about.
+The services run as an unprivileged user and podman runs rootless — what is
+**unverified** is the property that arrangement exists for: that uid 0 inside
+a container maps to the unprivileged service user on the host, so an escape
+lands as nobody. The original hardware validation all ran as root, and nothing
+yet asserts the mapping — `security.md` SEC-SESSION-5 is the honest statement.
+Treat an escape as landing with the service user's authority at best, root at
+worst, until somebody proves which.
 
 ## 4. The phone
 
@@ -615,13 +631,17 @@ one.
 
 Not "undocumented" — not built, or built and never proven:
 
-- **Rootless podman.** The sandbox has only ever run as root. That is the wrong
-  posture and it is stated again under §3 above, because it is the one item here
-  with a security consequence rather than a convenience one.
-- **Push against real FCM.** The sender, the encoding and the installer step are
-  all built and tested; no notification has ever been delivered to a phone.
-- **The apps on a device.** Android builds and installs, iOS compiles in CI.
-  Neither has been driven by a person.
+- **Verifying the rootless mapping.** The fleet deploys rootless; that an
+  escape lands as an unprivileged user is asserted, not tested. Stated again
+  under §3 above, because it is the one item here with a security consequence
+  rather than a convenience one — `security.md` SEC-SESSION-5.
+- **The apps at every stage.** Push delivery is confirmed and both beta tracks
+  are live — this list said otherwise for a while after both stopped being
+  true, which is exactly the four-documents failure
+  [`app-parity.md`](./app-parity.md#what-is-actually-proven-about-the-apps)
+  exists to end, so its table is now the only place those claims live. What
+  genuinely has no row there yet: a cold-start wake, a locked screen, a
+  notification acted on minutes late, and Android's Doze.
 - **Wake-on-LAN.** §3's second meaning of "wake". A sleeping box cannot be a
   host, and nothing sends the packet.
 - **Telegram on the Worker.** Telegram works against a box today; the webhook

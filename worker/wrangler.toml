@@ -6,6 +6,18 @@
 # daemon. Hosts open an outbound WebSocket and a Durable Object pins it; the
 # phone speaks HTTPS to the same origin. This is not a tunnel — nothing is
 # aimed at your boxes, they are ordinary clients.
+#
+# DEPLOYING THIS FILE REPLACES THE WORKER NAMED BELOW on whatever account
+# wrangler is logged into. The name deliberately matches
+# wrangler.production.toml — same script, so `wrangler secret put` reaches one
+# place and a deploy from either file replaces the same Worker — which cuts
+# the other way too: on OUR account, a bare `wrangler deploy` here, or the
+# root `npm run deploy`, overwrites the production coordinator with this
+# empty [vars]. Nothing goes red; sign-in answers 503 for every phone, push
+# switches off, and the GitHub App flow breaks, all silently. Ours deploys
+# through CI with `--config wrangler.production.toml`; deploying ours by hand
+# needs that same flag, and the root deploy script prints which config it is
+# about to send for exactly this reason.
 
 name = "agent-fleet-coordinator"
 main = "src/worker.js"
@@ -172,12 +184,20 @@ enabled = true
 #                                     Set it or do not; what the coordinator
 #                                     refuses to run without is ANY way in at
 #                                     all, which means this or the AUTH_ pair
-#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
-#                                     https://appleid.apple.com https://accounts.google.com
-#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
-#                                     iOS bundle id, the Android web client id
 #   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
+#
+# Those two are also declared in .dev.vars.example, which is what makes the
+# Deploy to Cloudflare dialog ask for them at deploy time — so a button deploy
+# starts life with a way in, before its owner has touched [vars]. The push
+# secrets below stay out of it: optional.
+#
+# AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
+# identifiers and belong in [vars] above, where changing who a coordinator will
+# accept is a reviewable diff. This block briefly listed them as secrets, and
+# because Cloudflare keeps vars and secrets in one namespace, following both
+# halves of this file at once would have had a deploy clobber the secret — one
+# place per name, and for these the [vars] table is the place.
 #
 # THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
 # they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
@@ -198,7 +218,8 @@ enabled = true
 # AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
 # it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
-# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
-# running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
-# says so, which leaves the admin token as the only way in. Without the FCM
+# With NEITHER the admin token NOR the AUTH_ pair, the Worker refuses every
+# request rather than running open — there is no way for anybody to
+# authenticate, and it says so (worker.js). Without just the AUTH_ pair,
+# sign-in answers 503 and the admin token is the only way in. Without the FCM
 # service account, push is logged instead of sent, and says so.

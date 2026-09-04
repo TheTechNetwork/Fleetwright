@@ -9,7 +9,14 @@ That is a simplification, and it is also the fix for a whole family of bug this
 project kept producing. Writing down what it costs before it is built, because
 three surfaces depend on the thing being removed.
 
-## What exists today
+> **Built.** `pickCredentialSource` has no fallback any more — a session whose
+> actor has no linked account is refused, and says so — `operatorAccount()`
+> answers for Telegram, the CLI and the web UI, and `adoptBoxAccount()` is the
+> one-time migration that hands the box's old login to the person it belonged
+> to. The sections below are left in their original tense because the cost
+> accounting is why it was safe to do.
+
+## What existed before this
 
 Two kinds of Claude credential on a host:
 

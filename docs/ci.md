@@ -1,9 +1,9 @@
 # CI, and the secrets it needs
 
-Five workflows. **Everything that runs on a pull request needs no secrets at
-all** — the secret-dependent jobs skip themselves with a notice rather than
-failing, so a fork or a fresh clone never shows a red main for something it was
-never given.
+The workflows in `.github/workflows/` — the directory is the authority on how
+many. **Everything that runs on a pull request needs no secrets at all** — the
+secret-dependent jobs skip themselves with a notice rather than failing, so a
+fork or a fresh clone never shows a red main for something it was never given.
 
 | workflow | on | secrets |
 |---|---|---|
@@ -17,6 +17,11 @@ never given.
 | `ios.yml` — `release-app-store` | **full** release (not a prerelease) | App Store Connect |
 | `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
+| `sandbox.yml` | pushes touching `sandbox/` | none — `GITHUB_TOKEN` with `packages: write`, publishing the session image to GHCR |
+| `host-release.yml` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
+| `tail.yml` | manual | Cloudflare |
+| `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
+| `renovate-config.yml` | PRs touching `renovate.json` | none |
 
 ## Cutting a release
 
@@ -99,9 +104,9 @@ revocable on its own.
 ### The Worker's runtime secrets are a different thing
 
 These live in Cloudflare, not GitHub, and `wrangler deploy` does not touch them.
-**A Worker deployed without them answers 503 to everything** — deliberately, since
-a coordinator with no credentials is remote control of every box in the fleet for
-whoever finds the URL.
+**A Worker with no way for anybody to authenticate — no admin token and no
+sign-in pair — answers 503 to everything**, deliberately, and the refusal
+names both remedies.
 
 Two ways to set them, and you only need one.
 
@@ -113,26 +118,28 @@ unset:
 |---|---|
 | `AGENT_FLEET_API_TOKEN` | break-glass admin. `openssl rand -hex 24`. Not what phones use |
 | `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
+| `AGENT_FLEET_APNS_KEY` / `_KEY_ID` / `_TEAM_ID` | the `.p8` and its identifiers, for push to iOS. Optional, same fallback |
 
-And three repository **variables**, which configure sign-in. Not secrets — an
-issuer list, an audience list and a list of allowed addresses — but the deploy
-job syncs them the same way, because they are the difference between "nobody
-can sign in" and "anybody with a Google account can":
+And two repository **variables**:
 
 | variable | |
 |---|---|
-| `AGENT_FLEET_AUTH_ISSUERS` | `https://appleid.apple.com https://accounts.google.com` |
-| `AGENT_FLEET_AUTH_AUDIENCES` | the iOS bundle id and the Android **web** OAuth client id |
-| `AGENT_FLEET_AUTH_ALLOW` | `@yourdomain.com`, or whole addresses. **Empty allows nobody** |
+| `WRANGLER_CONFIG` | which config the deploy uses. Ours sets `wrangler.production.toml`; unset falls back to the fork-safe `wrangler.toml` — no routes, empty `[vars]` — so a fork running this workflow can never deploy our config by accident |
+| `AGENT_FLEET_AUTH_ALLOW` | who may sign in: `@yourdomain.com`, or whole addresses. **Empty allows nobody.** A repository variable here, synced to the Worker **as a secret** — it decides who can reach a fleet and must not be a committed var, because Cloudflare keeps vars and secrets in one namespace and a committed var clobbers the synced secret on every deploy |
 
-**Or directly**, which keeps them out of GitHub entirely:
+The other two sign-in settings — `AGENT_FLEET_AUTH_ISSUERS` and
+`AGENT_FLEET_AUTH_AUDIENCES` — are **not** synced from GitHub: they are public
+identifiers and live as `[vars]` in the wrangler config itself (ours in
+`wrangler.production.toml`), so changing who a coordinator will accept is a
+reviewable diff. One home per name; see
+[`coordinator-deploy.md`](./coordinator-deploy.md).
+
+**Or directly**, which keeps the secrets out of GitHub entirely:
 
 ```sh
 cd worker
-# The three AGENT_FLEET_AUTH_* settings are NOT secrets and are NOT set here.
-# They are [vars] in worker/wrangler.toml and deploy with the code, so that
-# changing who can reach the fleet is a reviewable diff. See coordinator-deploy.md.
 npx wrangler secret put AGENT_FLEET_API_TOKEN
+npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
 npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
 ```
 
@@ -156,11 +163,13 @@ Making one, if there is not already a keystore:
 
 ```sh
 mise install                                  # keytool comes with the JDK
-KEYSTORE_PASSWORD='…' mise run keystore       # writes ./release.jks
+KEYSTORE_PASSWORD='…' mise run keystore       # writes ~/fleetwright-release.jks
 ```
 
-That prints the base64 and the exact four secrets to paste. It refuses to
-overwrite an existing `release.jks`, because that mistake cannot be undone.
+That prints the base64 and the exact four secrets to paste. It writes to
+`$HOME` rather than the checkout (`KEYSTORE_OUT` overrides) — a signing key
+does not belong in a git tree — and refuses to overwrite an existing keystore,
+because that mistake cannot be undone.
 
 `keytool: command not found` means there is no JDK on your PATH — which is what
 `mise install` fixes, since `mise.toml` already pins temurin-25 for the Android
@@ -230,13 +239,13 @@ testing, where people install from a link and never see a store page. Plus the
 |---|---|
 | Privacy policy | `https://fleet.thetech.network/privacy` |
 | Ads | none |
-| Data safety | **no data collected.** The token and the commands go to a coordinator the user runs; nothing reaches us. This changes the day Firebase is wired for push, because the FCM SDK collects a device identifier |
+| Data safety | changed when sign-in and push landed — the email address is collected and linked to the user, for app functionality. [`store-listing.md`](../apps/android/store/store-listing.md)'s "Data safety" section is the one source for these answers; do not fill the form from here |
 | Content rating | utility, no user-generated content, no communication → Everyone |
 | Target audience | **18+**, which keeps the Families policy and its extra review out of it |
 
 `apps/android/store/` has the icon and the feature graphic, both generated by
-`tools/make-app-icon.py`. Screenshots are not there and cannot be: they have to
-come from a running app.
+`tools/make-app-icon.py`, and the phone screenshots, which came from a running
+app because inventing them would be inventing the product.
 
 ### When Play says the caller has no permission
 
@@ -489,7 +498,7 @@ the version page:
 | Description, promotional text, keywords, support URL | written for the store page |
 | Screenshots | 6.9" and 6.5" iPhone at minimum; from a running app, like the Play ones |
 | Privacy policy URL | `https://fleet.thetech.network/privacy`, same as Play |
-| App Privacy | **no data collected** — same answer and same caveat as Play's data safety form: it changes the day the FCM SDK ships a device identifier |
+| App Privacy | same answers as Play's data safety form, and from the same single source: [`store-listing.md`](../apps/android/store/store-listing.md)'s "Data safety" section (email address collected, linked, app functionality) |
 | Age rating | the questionnaire; utility, no user-generated content → 4+ |
 | Category | Developer Tools |
 | Pricing and availability | free, all territories — set once, outlives versions |
@@ -561,9 +570,11 @@ Firebase console → Project settings → Service accounts → Generate new priv
 key. See [`push.md`](./push.md) — including the newline mangling that catches
 everyone.
 
-`google-services.json` goes in `apps/android/app/` and is gitignored. It is not
-a secret (it ships inside every APK), but it is account-specific, so CI builds
-without it until the app actually uses FCM.
+`google-services.json` lives in `apps/android/app/` and is **committed,
+deliberately** — it is not a secret (it ships inside every APK) and treating it
+as one would mean a repository nobody else can build; `apps/android/README.md`
+carries the argument, including why gitignoring it would have been a silent
+push failure.
 
 ## Code scanning — one setting, and it is not a secret
 
@@ -616,12 +627,14 @@ build if one does not. Without a block a workflow inherits the repository-wide
 default — a setting in the web UI, invisible in the diff — so the token a step
 receives is decided somewhere nobody reviewing that step will look.
 
-The floor is `contents: read`. Two jobs raise their own:
+The floor is `contents: read`. The jobs that raise their own:
 
 | job | | why |
 |---|---|---|
 | `android.yml` — `release` | `contents: write` | `gh release upload` attaches the APK to the release |
 | `codeql.yml` — all three | `security-events: write` | uploading results is the point of the workflow |
+| `host-release.yml` — attach | `contents: write` | uploads the host tarball and manifest to the release |
+| `sandbox.yml` | `packages: write` | pushes the session image to GHCR |
 
 ## What to set up first
 

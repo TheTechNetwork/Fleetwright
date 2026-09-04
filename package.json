@@ -18,6 +18,7 @@
     "sidecar": "node bin/agent-fleet-sidecar",
     "test": "node --test test/*.test.js build/*.test.js",
     "typecheck": "tsc -p tsconfig.json",
+    "deploy": "echo '>>> config: worker/wrangler.toml, the fork-safe default. This replaces the Worker named agent-fleet-coordinator on whatever account wrangler is logged into - on the upstream repo that is the production coordinator, which deploys via CI with wrangler.production.toml instead.' && npm --prefix worker install && npm --prefix worker run deploy",
     "build:web": "node scripts/build-web.mjs",
     "pretest": "node scripts/build-web.mjs",
     "browse": "node scripts/browse.mjs",
@@ -36,5 +37,15 @@
   },
   "dependencies": {
     "jose": "6.2.10"
+  },
+  "cloudflare": {
+    "bindings": {
+      "AGENT_FLEET_API_TOKEN": {
+        "description": "Break-glass admin credential, and a fresh deploy's first way in — until sign-in is configured, a coordinator without it refuses every request. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
+      },
+      "AGENT_FLEET_AUTH_ALLOW": {
+        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately — leave this empty and no phone can sign in until you set it later with `wrangler secret put`. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml — see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
+      }
+    }
   }
 }

@@ -23,9 +23,11 @@ builds it on a macOS runner on every PR** (`.github/workflows/ios.yml`), so it
 is no longer unverified code: it compiles, and the first compile duly turned up
 a `Section` initialiser that does not exist.
 
-What CI does *not* do is run it. Nothing here has been driven by a person on a
-device — no Siri phrase spoken, no push delivered, no session resumed from a
-lock screen. Compiling is a much weaker claim than working.
+What CI does *not* do is run it. Compiling is a much weaker claim than working
+— and what is actually proven on a device (push delivery is, since 3 Sep 2026;
+a spoken Siri phrase and a lock-screen resume are not) lives in
+[`docs/app-parity.md`](../../docs/app-parity.md#what-is-actually-proven-about-the-apps)'s
+table, which this page defers to rather than restates.
 
 ## Build
 
@@ -98,14 +100,12 @@ APNs, and posts the device token to `POST /api/devices`. The token is sent as
 **hex** — sending `Data`'s description instead is the classic mistake, and
 produces a registration that silently never delivers.
 
-Two routes to actually delivering:
-
-- **Through FCM** (recommended, and what Android already uses): add the iOS app
-  to the same Firebase project and upload an APNs auth key. One integration,
-  both platforms, and `docs/push.md` needs no changes.
-- **Direct APNs**: a second sender alongside `fcmPusher` in
-  `src/fleet/push.js`, signing ES256 with a `.p8` key. The interface is one
-  `send` method; see `docs/push.md`.
+Delivery goes over **direct APNs**, and that choice is settled: `apnsPusher`
+in `src/fleet/push.js` signs ES256 with a `.p8` key, and the coordinator
+routes iOS registrations there and everything else to FCM. The secrets are
+`AGENT_FLEET_APNS_KEY`, `AGENT_FLEET_APNS_KEY_ID` and
+`AGENT_FLEET_APNS_TEAM_ID` — `docs/push.md` has the whole path, including why
+the FCM bridge (one integration for both platforms) was the road not taken.
 
 `aps-environment` is `development` in the entitlements. Getting this wrong is
 the classic "notifications work in Xcode and not in TestFlight".

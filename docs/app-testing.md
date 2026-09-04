@@ -56,12 +56,13 @@ on the allowlist. See [`identity.md`](./identity.md).
 
 Two shortcuts while testing:
 
-- The collapsed **"use a credential instead"** field takes the public demo
-  credential (two invented hosts and three invented sessions, for App Review)
-  or the admin token from
-  `AGENT_FLEET_API_TOKEN`. That is the way to test everything downstream of
-  sign-in without sign-in working yet.
-- `sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env` on a box;
+- The **"Look around the demo fleet"** button points the app at the demo
+  Worker (`fleetdemo.thetech.network` — two invented hosts and three invented
+  sessions, built for App Review). One tap, nothing to type, and it exercises
+  everything downstream of sign-in without sign-in working yet. The old
+  collapsed "use a credential instead" field is gone from both apps.
+- The admin token still works over curl for whatever the demo cannot show:
+  `sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env` on a box;
   for the Worker it is the `AGENT_FLEET_API_TOKEN` GitHub Actions secret.
 
 Two things that will stop a real sign-in, both worth checking before debugging
@@ -91,7 +92,7 @@ Both coordinators answer `/api/hosts` in the **same shape** — `{ok, ...snapsho
 on the Node side too now, deliberately kept in step with the Worker:
 
 ```jsonc
-{"ok":true,"protocol":1,"hosts":[],"devices":0,"events":[]}
+{"ok":true,"protocol":3,"hosts":[],"devices":0,"events":[]}
 ```
 
 Neither app reads this endpoint today — they only POST `/api/intent` — but
@@ -99,7 +100,7 @@ that is no longer a reason to assume either shape if one starts.
 
 ## Emulator specifics that will cost you an hour each
 
-**The Android AVD must be API 36 or newer.** `minSdk = 36`, so the app will not
+**The Android AVD must be API 30 or newer.** `minSdk = 30`, so the app will not
 install on anything older and the failure is a terse `INSTALL_FAILED_OLDER_SDK`.
 `compileSdk`/`targetSdk` are 37.
 
@@ -169,8 +170,9 @@ and confirm what actually went out rather than what `defaults read` reports.
 **The iOS deployment target is 26.0.** Older simulators will not appear, and
 that is the point rather than an inconvenience: the app uses Liquid Glass — the
 tab bar that minimises on scroll, the glass materials, the button styles — and
-those are 26-only. One version back, deliberately, which is the same posture as
-`minSdk = 36` on Android and stays true when 27 ships.
+those are 26-only. One version back, deliberately — a posture Android does not
+share: its floor dropped to `minSdk = 30`, held safe by `NewApi` as a lint
+error — and it stays true when 27 ships.
 
 ## What to actually test
 
@@ -255,12 +257,6 @@ Test the transport before the integration:
   identity.
 - **The Android emulator can** receive real FCM — but only an image **with Google
   Play services**. A plain AOSP image silently never receives anything.
-
-Android push is not wired at all yet. Doing it is four steps, all in
-[`../apps/android/README.md`](../apps/android/README.md), and the reason it was
-left out is that the Google Services Gradle plugin *fails the build* when
-`google-services.json` is absent — so wiring it before a Firebase project exists
-would have meant nobody could build the app.
 
 Once a device is registered, make the coordinator send one:
 

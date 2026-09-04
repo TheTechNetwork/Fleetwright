@@ -16,13 +16,16 @@ set -a; . /etc/agent-fleet-coordinator.env; set +a
 agent-fleet-coordinator
 ```
 
-## It runs as a plain Node process, for now
+## There are two of it, and they are one design
 
 §4 chose Cloudflare Workers + Durable Objects for the phone leg, and that is
-still the plan. This is the same design running somewhere you can put a
-breakpoint in: `registry.js`, `scheduler.js` and the intent plumbing carry all
-the decisions and touch nothing runtime-specific, so the Worker version is a
-transport swap rather than a rewrite.
+what production runs (`worker/`, see
+[`coordinator-deploy.md`](./coordinator-deploy.md)). This is the same design
+running somewhere you can put a breakpoint in: `registry.js`, `scheduler.js`
+and the intent plumbing carry all the decisions and touch nothing
+runtime-specific, so the two are a transport swap rather than two
+implementations — held to one contract by `openapi.json` and
+`test/openapi.test.js`.
 
 The WebSocket is hand-rolled (`src/fleet/ws.js`) because this project has zero
 runtime dependencies, and a dependency on the one code path every host holds
@@ -72,7 +75,7 @@ than acted on. Knowing where a session *was* is not knowing where it *is*.
 | `POST /api/intent` | `{verb, params, actor?, id?}` — the full surface |
 | `GET /api/<verb>/<name>` | Shortcut-friendly shorthand, one round trip |
 | `GET /api/hosts` | the fleet, with state and reason per host |
-| `GET /healthz` | liveness only — the one deliberately unauthenticated surface |
+| `GET /healthz` | liveness only — the one unauthenticated surface on the *intent* path. The Worker also serves `/docs`, `/install`, `/prereq`, sign-in and the OAuth callback without a fleet credential, each 404 or 503 until its variable is set — see [`coordinator-deploy.md`](./coordinator-deploy.md) and `openapi.json` for the full surface |
 
 An `id` you supply is honoured as an idempotency key, so a phone that retries a
 `start` gets the original outcome rather than a second session. One the
@@ -89,8 +92,13 @@ here understated it; see [security.md](./security.md) §4.1. It still cannot run
 anything. That is the whole point of §5, and it is why the verb set is small and
 boring.
 
-## Not done yet
+## Both halves this section used to wait on are done
 
-Deploying to Cloudflare; host → coordinator **events**, so a session that hits a prompt or finishes can
-push rather than be polled — §3's third meaning of "wake", and the one that
-makes the phone app worth having.
+Cloudflare deployment is production ([`coordinator-deploy.md`](./coordinator-deploy.md)),
+and host → coordinator **events** shipped: the watcher raises
+`session.awaiting-input` / `session.ended` / `session.error`, the sidecar sends
+them over the socket it already holds, and the coordinator pushes the
+`NOTIFIABLE` ones to registered devices — §3's third meaning of "wake". What
+that has been *proven* to do on a phone is
+[`app-parity.md`](./app-parity.md#what-is-actually-proven-about-the-apps)'s
+table to say, not this page's.

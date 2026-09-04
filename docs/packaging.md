@@ -37,9 +37,14 @@ merge, with a manifest:
   "url": "https://.../fleetwright-host-2026.08.29-1.tar.gz",
   "sha256": "…",
   "minSandboxImage": "sha256:…",
-  "protocol": 2
+  "protocol": 3
 }
 ```
+
+(`protocol` is read from `PROTOCOL_VERSION` by the builder, never written as a
+literal — v0.2.1 shipped with a literal `2` against v3 code, which is the exact
+stranding this field exists to prevent, caused by the field. `CHANGELOG.md`
+0.2.2 is the incident report.)
 
 - **`HOST_PATHS` is already the manifest.** It lives in `src/core/update.js`
   today because that is where it could act; the package is built from the same
@@ -68,10 +73,12 @@ once `npm ci` was involved.
 1. **Path-scoped "behind"** — shipped. Hosts stop reporting updates that are
    not theirs, and stop restarting for them.
 2. **Publish the tarball and manifest in CI**, alongside the current git flow.
-   Nothing consumes them yet; they can be wrong without hurting anybody.
-   **Built** — `tools/build-host-package.mjs`. Two builds of one commit are
+   **Done** — `tools/build-host-package.mjs` builds it and
+   `.github/workflows/host-release.yml` attaches both to every release, after
+   re-building and comparing digests. Two builds of one commit are
    byte-identical (`--sort=name`, fixed mtime, no owner), which is what makes
-   the digest a statement about the code rather than about a build machine.
+   the digest a statement about the code rather than about a build machine —
+   and step 3 consumes them now, so they can no longer be wrong quietly.
 3. **Teach `/update` the manifest**, preferring it and falling back to git. One
    box at a time, and the fallback is the thing that makes that safe.
    **Done** — `release.js` decides, `release-apply.js` fetches and swaps, and

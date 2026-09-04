@@ -11,8 +11,12 @@ default config should produce a coordinator that admits nobody, rather than one
 that admits whoever happened to be committed. What follows is how to be
 prepared.
 
-Do these **in order**, before merging
-[#349](https://github.com/TheTechNetwork/Fleetwright/pull/349).
+> **Done — the split is on `main`** and the account was prepared. Kept as the
+> runbook: for re-verifying a deploy, and because a fork making the same move
+> does these same steps against its own account.
+
+Do these **in order**, before merging a change like
+[#345](https://github.com/TheTechNetwork/Fleetwright/pull/345)'s split.
 
 ---
 

@@ -160,7 +160,7 @@ working directory, and whichever environment a session is allowed to see.
 
 Two things to get right rather than fast:
 
-- **The intent protocol has eight fixed verbs on purpose** (`docs/intents.md`),
+- **The intent protocol has a fixed verb set on purpose** (`docs/intents.md`),
   and the whole security argument is that a compromised coordinator cannot
   express a command. Configuration must arrive as named, validated fields — not
   as anything that gets interpolated into a command line.
@@ -214,10 +214,12 @@ not know, and the shape of the answer probably differs by kind:
   `docs/plan.md` is what makes the second one countable for the first time —
   every `session.awaiting-input` is now a structured record of an interruption.
 
-Which suggests the order: **ship a profile mechanism that is host-side and named,
-then measure interruptions per session with and without a profile, and let that
-decide what goes in one.** The argument about which rules help is not settled by
-argument.
+Which suggested the order, and the first half shipped: **v3's
+`start { profile }` and `profiles` are exactly the host-side, named mechanism**
+— see [`task-at-start.md`](./task-at-start.md). What remains wanted here is the
+second half: measure interruptions per session with and without a profile, and
+let that decide what goes in one. The argument about which rules help is not
+settled by argument.
 
 ### Serving secrets into a session without the session holding them
 
@@ -277,24 +279,10 @@ framing is the part worth carrying: **the app, Siri, Google Assistant and the
 CLI are what most people use. Telegram stays as an option and stops setting the
 ceiling.**
 
-Measured rather than guessed. Chat exposes 16 commands; both apps already carry
-clients for most of them. The gap is three different problems:
-
-- **built, not on screen** — `forget` exists in `Fleet.swift` and `Fleet.kt` and
-  appears nowhere in either UI. A button.
-- **needs a new verb** — `logs`, `update`, `upgrade`, `reboot`, `login`/`code`.
-  Telegram reaches these by talking to `agent-hub` on that box; an app talking
-  to a coordinator has no such path. `PROTOCOL_VERSION` is exact-match, so this
-  is one coordinated v2 designed together, not five verbs added one at a time.
-- **needs data nobody collects** — workspace path, context-window usage, plan
-  limits, host version and whether it is behind.
-
-Build order: no-protocol-change work first (forget, host picker, workspace path,
-Telegram setup from the app), then additive reporting on existing verbs, then
-protocol v2 once — with `answer` in the same bump — then the filesystem last,
-because an authenticated app that can read and write arbitrary paths on every
-host is the largest new attack surface in the product and wants its own design
-pass.
+The gap analysis and the build order lived here once; they ran their course —
+v2 shipped the verbs, v3 shipped profiles, and the filesystem closed last as
+planned. [`app-parity.md`](./app-parity.md) is the current state and this file
+does not restate its table.
 
 Voice gets a vote on the protocol: parameters have to be nameable out loud, and
 replies need a short speakable sentence the host writes. Notably `answer` taking

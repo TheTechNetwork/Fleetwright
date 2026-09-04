@@ -5,51 +5,150 @@ tunnel daemon. Hosts open an outbound WebSocket, a Durable Object pins it, and
 the phone speaks HTTPS to the same origin. This is **not a tunnel** — nothing is
 aimed at your boxes; they are ordinary clients.
 
-It answers on **https://fleet.thetech.network**, configured as a custom domain
-in `wrangler.toml`, so Cloudflare creates and manages the DNS record and the
-certificate. There is nothing to point anywhere by hand.
+Ours answers on **https://fleet.thetech.network**, configured as a custom
+domain in `wrangler.production.toml` — the file that is ours and says so.
+Yours answers on the **workers.dev** URL the deploy prints, until you add a
+domain of your own to `worker/wrangler.toml` (a commented example is in the
+file; `custom_domain = true` makes Cloudflare create and manage the DNS record
+and the certificate, so there is nothing to point anywhere by hand).
 
-That hostname is load-bearing in one specific way: §5 has each host PIN the
-coordinator origin it will talk to, so changing it means editing every host's
-`/etc/agent-fleet-sidecar.env`. It is not a value to churn.
+Whichever hostname you end up on is load-bearing in one specific way: §5 has
+each host PIN the coordinator origin it will talk to, so changing it means
+editing every host's `/etc/agent-fleet-sidecar.env`. Pick one you intend to
+keep — which is the argument for putting a domain on it before enrolling a
+fleet, not after.
 
 ## Deploy
 
+From nothing, with a free Cloudflare account and Node on any machine — this
+does not have to be, and usually is not, a fleet box:
+
 ```sh
-cd worker
+git clone https://github.com/TheTechNetwork/Fleetwright
+cd Fleetwright/worker
+npm install
+npx wrangler deploy                                # opens a browser login the first time
 npx wrangler secret put AGENT_FLEET_API_TOKEN      # openssl rand -hex 24
-npx wrangler deploy
 ```
 
-The Worker **refuses every request** until that is set. A coordinator with no
-credential is remote control of every box in the fleet for anyone who finds the
-URL, and a Worker URL is not a secret.
+That deploys `worker/wrangler.toml`, which is **the fork-safe default on
+purpose**: no routes, so it answers on the workers.dev URL the deploy prints;
+an empty `[vars]`, so it admits nobody and reaches nothing of ours. What each
+absence means, and what to set, is a comment in that file — the rest of this
+page walks the ones that matter.
 
-That token is **break-glass, not the everyday credential**. It can stop every
-session and revoke every host. Phones sign in and are issued their own; hosts
-never have it at all.
+**What the Worker refuses to run without is any way in at all.** Until either
+the admin token or the sign-in pair below is set, it answers 503 to
+everything and the refusal names both remedies — a coordinator nobody can
+authenticate to is not open, it is unusable, and it should say so at boot
+rather than one 401 at a time. On a fresh deploy of the fork-safe config,
+`[vars]` is empty, so the admin token *is* the first way in — which is why it
+is the second command rather than a footnote.
+
+The token itself is **break-glass and optional, not the everyday credential**.
+It can stop every session and revoke every host; phones sign in and are
+issued their own, and hosts never have it at all. Once sign-in is configured
+you may run without it — the trade is having no way back when sign-in itself
+is what broke.
+
+### The Deploy to Cloudflare button
+
+The product page carries one. It clones this repository into your own GitHub
+account and wires the copy to Workers Builds, so pushes to your copy deploy
+your coordinator — which is a fine arrangement if you want one.
+
+**Check the deploy command in the dialog: it must be `npm run deploy`.** The
+Worker lives in `worker/` of a repository that also holds the host software,
+and it imports fleet code from outside that directory — so Cloudflare's
+automatic project configuration, which looks at the repository root, finds no
+Wrangler config and would configure the wrong thing, and pointing the button
+at the subdirectory would break the imports. The root `package.json`'s
+`deploy` script exists precisely so the dialog has a correct command to
+pre-fill: it installs the Worker's dependencies and deploys from `worker/`,
+with the whole repository present.
+
+**The dialog asks for the two required secrets up front** —
+`AGENT_FLEET_API_TOKEN` and `AGENT_FLEET_AUTH_ALLOW` — because
+`.dev.vars.example` declares them and `package.json`'s `cloudflare` field
+describes them, which is the mechanism Cloudflare's deploy flow reads. So a
+button deploy comes up already holding its admin token rather than refusing
+every request, and already knowing who may sign in.
+
+Deliberately not asked for: the two sign-in identifiers. They are `[vars]`,
+copied into your `worker/wrangler.toml` as below — public values whose changes
+should be a reviewable diff, and collecting them as dialog secrets would set
+up exactly the vars-versus-secrets namespace collision that file warns about.
+So after the button, what remains is those two lines and a host pointed at
+the URL.
+
+#### How updates reach a button deployment — they do not, until you merge
+
+The repository the button made is a **copy, not a fork**: GitHub offers no
+sync button on it, and nothing of ours can push to it. What Workers Builds
+watches is *your* copy — every push to its production branch redeploys your
+coordinator — so an update is a merge you run:
+
+```sh
+git clone https://github.com/<you>/<your-copy> && cd <your-copy>
+git remote add upstream https://github.com/TheTechNetwork/Fleetwright
+git fetch upstream && git merge upstream/main && git push
+```
+
+The push is the deploy. Your own changes — the sign-in `[vars]`, a route —
+ride through the merge; a conflict means you and upstream edited the same
+lines of the same file, which for `wrangler.toml` is a diff worth actually
+reading rather than resolving on autopilot.
+
+**Update the hosts in the same act, and hosts first.** The protocol version
+is exact-match, and the two halves of your fleet track different remotes: a
+box updates from wherever it was installed from — its clone's origin, or
+`AGENT_HUB_RELEASE_MANIFEST` for a packaged host, ours unless you changed
+them — while your coordinator updates only when you merge and push your copy. On a protocol bump that means hosts can move and leave
+your coordinator behind, or the reverse; the window is loudly broken rather
+than subtly wrong (`unsupported_version`, both directions), and
+`install.sh --upgrade` tells you whether a box's protocol still matches its
+coordinator, which is the check to believe. Run the hosts' update, then push
+the merge.
+
+If owning a copy is more maintenance than you wanted, the terminal path above
+has none: it deploys from this repository directly, and an update is
+`git pull` and the same `npx wrangler deploy`. The button's trade is
+auto-deploy-on-push in exchange for being the one who pushes.
 
 ### Sign-in
 
-Three more — and unlike the token above, **none of them is a secret and none of
-them is `secret put`**. They live in `[vars]` in `worker/wrangler.toml` and
-deploy with the code. This page used to say `secret put` for all three, which
-was wrong twice over: it hides who can reach the fleet in a place nobody
-reviews, and setting a secret whose name is already a `[vars]` key collides at
-deploy time.
+Three more values. Until they are set, sign-in answers 503 and says so, which
+leaves the admin token as the only way in.
 
-They are already filled in there. Changing them means editing that file and
-running `npx wrangler deploy`:
+**Two are `[vars]`, not secrets.** `AGENT_FLEET_AUTH_ISSUERS` and
+`AGENT_FLEET_AUTH_AUDIENCES` are public identifiers — who may vouch for a
+person, and which app the ID token must be for. Copy these two lines into
+`[vars]` in `worker/wrangler.toml` **verbatim** and run `npx wrangler deploy`;
+they are ours, and using them is what lets people sign in to *your* coordinator
+with the App Store and Play builds, with no Apple or Google setup of your own
+(the fork section below explains why that works):
 
 ```toml
 AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
 AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
-AGENT_FLEET_AUTH_ALLOW = "@thetech.network,elibrody2@gmail.com"
 ```
 
-Which is the point of keeping them there: **who can reach a fleet is a
-reviewable diff**, not a value somebody typed into a prompt at midnight and
-cannot later account for.
+Vars rather than secrets, deliberately: they deploy with the code, so what a
+coordinator will accept is **a reviewable diff**, not a value somebody typed
+into a prompt at midnight and cannot later account for. This page used to say
+`secret put` for all three, which was wrong twice over — it hid the values in
+a place nobody reviews, and Cloudflare keeps vars and secrets in one
+namespace, so a secret whose name is already a `[vars]` key collides at deploy
+time.
+
+**The third is a secret.** `AGENT_FLEET_AUTH_ALLOW` decides who is allowed in,
+and a list of the addresses that can reach your fleet does not belong in a
+repository — the fork-safe section below records how it briefly was one, and
+what that cost:
+
+```sh
+npx wrangler secret put AGENT_FLEET_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
+```
 
 **The audience is two values, and they are not symmetrical.** Apple issues its
 ID tokens for the **iOS bundle id**. Google issues them for the OAuth **web**
@@ -79,7 +178,7 @@ half once with a six-digit pin, and signs a fresh nonce on every connection —
 see [`trust.md`](./trust.md). Mint the first pin with the admin token:
 
 ```sh
-curl -sX POST https://fleet.thetech.network/api/enroll \
+curl -sX POST https://your-coordinator/api/enroll \
      -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
      -H 'content-type: application/json' -d '{"kind":"host"}'
 ```
@@ -143,8 +242,8 @@ Two smaller things fell out of it:
 
 ### `/docs` on the coordinator is a redirect
 
-`AGENT_FLEET_DOCS_URL` in `wrangler.toml` points `/docs` at the demo Worker
-with a 302. **Unset means 404**, which is the right answer for a self-hosted
+`AGENT_FLEET_DOCS_URL` in `wrangler.production.toml` points `/docs` at the
+demo Worker with a 302. **Unset means 404**, which is the right answer for a self-hosted
 fleet: somebody else's private coordinator on their own domain has no product
 page to point at. Ours is set; every fork gets nothing.
 
@@ -204,8 +303,9 @@ people assume.
 
 **Sign-in needs nothing of yours.** The apps mint ID tokens against our Google
 and Apple client IDs; a coordinator only verifies the signature against the
-provider's public keys and then checks issuer, audience and allowlist. All
-three are public identifiers, already committed in `wrangler.toml`. Copy
+provider's public keys and then checks issuer, audience and allowlist. The
+identifiers are public — the sign-in section above has them, and they are
+committed in `wrangler.production.toml`. Copy
 `AGENT_FLEET_AUTH_ISSUERS` and `AGENT_FLEET_AUTH_AUDIENCES`, set your own
 `AGENT_FLEET_AUTH_ALLOW`, and people sign in to your fleet with the App Store
 and Play builds. **No Firebase project. No Apple Developer account.**
@@ -242,8 +342,9 @@ and `connect cloudflare` need no callback and work on any coordinator anywhere.
 
 ### What a fork must change, and what happens if it does not
 
-`wrangler.toml` in this repository is **our** deployment's config. Deploying it
-unchanged is not neutral — these are the values that do something:
+`wrangler.toml` in this repository used to be **our** deployment's config.
+Deploying it unchanged was not neutral — these are the values that did
+something:
 
 | Setting | Unchanged, a fork gets |
 |---|---|
@@ -257,18 +358,11 @@ unchanged is not neutral — these are the values that do something:
 | `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
 | `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
 
-**`AGENT_FLEET_API_TOKEN` is optional.** The coordinator used to refuse to run
-without it, on the reasoning that a coordinator with no credentials is remote
-control of every box for whoever finds the URL. That was true when the admin
-token was the only credential, and stopped being true when sign-in shipped:
-phones hold per-device credentials from a verified identity, hosts authenticate
-by signature against a per-host keypair, and runners present a token GitHub
-minted for one job.
-
-What it refuses to run without now is **any way in at all** — an admin token,
-or an issuer and an audience to verify a sign-in against. Set both if you want
-a way back when sign-in itself is broken; set neither and it says so at boot
-rather than one 401 at a time.
+**`AGENT_FLEET_API_TOKEN` is optional**, for a fork like for us — the Deploy
+section above has the rule: what a coordinator refuses to run without is any
+way in at all, an admin token or an issuer-and-audience pair. It used to
+refuse without the token specifically, which was right when the token was the
+only credential and stopped being right when sign-in shipped.
 
 **That list WAS the defect, and it is fixed rather than documented.** A
 committed config one deploy away from admitting strangers to somebody's fleet is
@@ -322,7 +416,7 @@ machines and not something to hold over a stranger's.
 In `/etc/agent-fleet-sidecar.env` on each box:
 
 ```
-AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network
+AGENT_FLEET_COORDINATOR_URL=https://your-coordinator    # the workers.dev URL, or your domain
 AGENT_FLEET_TRANSPORT=websocket
 AGENT_FLEET_HOST_KEY=/var/lib/agent-fleet/host-key.json
 ```

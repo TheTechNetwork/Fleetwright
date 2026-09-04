@@ -159,10 +159,20 @@ your own hardware, and you deploy it to your own account — there is no tenancy
 of ours to be in.</p>
 <p><a href="https://deploy.workers.cloudflare.com/?url=https://github.com/TheTechNetwork/Fleetwright">
 <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare Workers" height="32"></a></p>
-<p>It comes up refusing every request until you set an admin token, which is
-deliberate: a coordinator with no credential is remote control of every machine
-in the fleet for whoever finds the URL. The Worker says so, and names the
-command. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
+<p>One thing to check in the dialog that opens: the deploy command should be
+<code>npm run deploy</code>. The Worker lives in <code>worker/</code> of a
+repository that also holds everything that runs on your machines, so an offer
+to configure the project automatically has looked at the wrong directory and
+will configure the wrong thing — that command is the repository saying which
+thing is the Worker. The repository the button makes is yours — updates reach
+it when you merge ours in and push, and the
+<a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">deploy page</a>
+says how. Prefer a terminal? The same page is five commands from clone to a
+coordinator answering on a URL, with no copy to maintain.</p>
+<p>The dialog asks up front for two values — a break-glass admin token, and
+who may sign in. A coordinator that comes up with no way for anybody to
+authenticate refuses every request and says so, naming both remedies; the
+dialog's questions are how a button deploy starts life past that state. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
 is DNS and four secrets.</p>
 <p><strong>Sign-in still works with the apps from the stores</strong> — you need no
 Apple or Google setup of your own for it. What you cannot self-host is

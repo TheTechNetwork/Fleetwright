@@ -47,8 +47,9 @@ report.
 ## A DSN is not a secret
 
 It identifies a project and grants only the ability to send it events, which is
-why it lives in `wrangler.toml`, the Android manifest and `project.yml` rather
-than in a secret store. **Unset means no reporting at all** — a fresh clone, a
+why it lives in `wrangler.production.toml` (ours; the fork-safe `wrangler.toml`
+leaves it unset), the Android manifest and `project.yml` rather than in a
+secret store. **Unset means no reporting at all** — a fresh clone, a
 contributor's `wrangler dev` and a self-hosted fleet post nowhere, and turning
 it off during an incident is a variable change rather than a code deploy.
 

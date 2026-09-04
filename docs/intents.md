@@ -17,7 +17,7 @@ One module, `src/fleet/protocol/intents.js`, imported by both ends:
 **The coordinator sends intents, never commands.** Down the socket goes
 
 ```json
-{"v":1,"kind":"intent","id":"01J8…","verb":"resume","params":{"name":"bigjob","choice":"summary"}}
+{"v":3,"kind":"intent","id":"01J8…","verb":"resume","params":{"name":"bigjob","choice":"summary"}}
 ```
 
 and never a shell string, never a command line, never a path.
@@ -72,7 +72,7 @@ Coordinator → host:
 
 ```json
 {
-  "v": 2,
+  "v": 3,
   "kind": "intent",
   "id": "01J8ZK3QH4",
   "verb": "resume",
@@ -84,10 +84,10 @@ Coordinator → host:
 
 | Field | Rule |
 |---|---|
-| `v` | must equal `2`. A mismatch is refused, never guessed at. |
+| `v` | must equal `3` (`PROTOCOL_VERSION` in `intents.js`). A mismatch is refused, never guessed at. |
 | `kind` | `"intent"`. |
 | `id` | **idempotency key**, `[A-Za-z0-9._:-]{8,128}`. Required on every intent. |
-| `verb` | one of the eighteen below. Checked with `hasOwnProperty`, so `toString` is not a verb. |
+| `verb` | one of the twenty-six below (`VERBS` in `intents.js` is the authority). Checked with `hasOwnProperty`, so `toString` is not a verb. |
 | `params` | object. **Unknown keys are refused, not ignored** — see below. |
 | `issuedAt` | epoch ms. Bounds replay when the host passes `maxSkewMs`. |
 | `actor` | optional, `[A-Za-z0-9._:@+-]{1,128}`. Becomes `fleet:<actor>` in `createdBy`. |
@@ -95,7 +95,7 @@ Coordinator → host:
 Host → coordinator:
 
 ```json
-{ "v": 2, "kind": "reply", "id": "01J8ZK3QH4", "ok": true, "text": "…", "sessions": [] }
+{ "v": 3, "kind": "reply", "id": "01J8ZK3QH4", "ok": true, "text": "…", "sessions": [] }
 ```
 
 `replayed: true` marks a reply served from the idempotency cache. A refused
@@ -112,10 +112,13 @@ and "dead host" is the one it retries.
 | `status` | `name?` | | `/status [name]` |
 | `peek` | `name`, `lines?` (1–500) | | sidecar-local — `GET /api/peek` |
 | `health` | — | | sidecar-local — `GET /api/state` + `os` |
-| `start` | `name?`, `mode?` (`safe`\|`dangerous`) | ✅ | `/new [name] [--safe\|--dangerous]` |
+| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?` | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>]` |
+| `profiles` | — | | `/profiles` |
 | `resume` | `name`, `choice?` (`summary`\|`full`) | ✅ | `/resume <name> [summary\|full]` |
 | `stop` | `name` | ✅ | `/stop <name>` |
-| `forget` | `name` | ✅ | `/forget <name>` |
+| `forget` | `name` | ✅ | `/forget <name>` — bins for seven days |
+| `restore` | `name` | ✅ | `/restore <name>` |
+| `purge` | `name` | ✅ | `/purge <name>` — the irreversible one |
 | `answer` | `name`, `option` (1–9), `promptId?` | ✅ | `/answer <name> <1-9> [promptId]` |
 | `logs` | `name?`, `service?` (`hub`\|`coordinator`\|`sidecar`), `lines?` (1–200) | | `/logs [name\|service] [lines]` |
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
@@ -124,6 +127,7 @@ and "dead host" is the one it retries.
 | `channel` | `to?` (`stable`\|`prerelease`) | ✅ | `/channel [stable\|prerelease]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
+| `verify` | `provider`, `scope?` | | `/verify <provider>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
 
@@ -140,8 +144,6 @@ ever given: an access token in a container expires in eight hours, and the
 thing that replaces it must not travel with it. See
 [accounts.md](./accounts.md) for the custody argument and `trust.md` for the
 rule it follows.
-| `restore` | `name` | ✅ | `/restore <name>` |
-| `purge` | `name` | ✅ | `/purge <name>` |
 
 ## The workspace
 
@@ -250,10 +252,12 @@ registry Telegram, the web UI and agent-hub's own CLI use, so a fleet command
 cannot work differently from the same command typed into chat — or exist when
 that one does not.
 
-Two limits the host imposes on this table, both covered in
+One limit the host imposes on this table, covered in
 [`sidecar.md`](./sidecar.md): `lines` can only ever narrow a peek (agent-hub
-serves a fixed 60), and `actor` cannot reach agent-hub's `createdBy` at all
-(it hardcodes `web` for every HTTP caller).
+serves a fixed 60). The `actor`, once verified, does travel: the sidecar posts
+`fleet:<email>` and agent-hub records it as `createdBy` — an attribution as
+trustworthy as the hub token that carried it, which is to say a label for
+honest surfaces, not an audit trail.
 
 ### v3, and what a version bump costs
 
@@ -414,11 +418,13 @@ list is worse than a re-read.
   coordinator origin"). The adapter refuses to start without one, but does not
   itself verify it — that belongs where TLS and the credential live.
 - **Authorization.** Authenticating the actor does not answer *which sessions
-  this actor may touch*. The `actor` field carries an id the sidecar logs and
-  echoes, but agent-hub records every HTTP caller as `web`, so it cannot
-  reach `createdBy` today. The policy belongs in the coordinator regardless —
+  this actor may touch*. The `actor` field reaches `createdBy` now, but that is
+  attribution, not policy. The policy belongs in the coordinator regardless —
   one chokepoint instead of N hosts — and that is where §5 argues per-session
   ownership should live.
-- **Host → coordinator events** (a session hit a prompt, finished, errored —
-  §3's third meaning of "wake"). `kind` is reserved for it; nothing implements
-  it yet.
+
+Host → coordinator **events** are no longer in this list: the watcher raises
+`session.awaiting-input`, `session.ended` and `session.error`, the sidecar
+sends them as `kind: "event"` over the socket it already holds, and the
+coordinator pushes the ones in `NOTIFIABLE` to registered devices
+(`src/fleet/host/watcher.js`, `src/fleet/coordinator/core.js`).

@@ -197,6 +197,38 @@ test('the structural half is identical in both, key by key', () => {
   }
 });
 
+test('the deploy button asks for the two required secrets, and every copy agrees', () => {
+  // The Deploy to Cloudflare dialog prompts for the secrets declared in
+  // .dev.vars.example, with the descriptions from package.json's "cloudflare"
+  // field — that is what makes a button deploy come up holding its admin token
+  // instead of refusing every request. There are two copies of the dotenv file
+  // because two readers look in two places: wrangler's tooling beside the
+  // config, the button's dialog at the root of the repository it was handed.
+  // Two copies that must agree and are never compared is how one silently
+  // stops matching, which is this file's founding complaint.
+  const root = read('.dev.vars.example');
+  const worker = read('worker/.dev.vars.example');
+  assert.equal(root, worker, 'the two .dev.vars.example copies have drifted');
+
+  const declared = [...root.matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(declared, ['AGENT_FLEET_API_TOKEN', 'AGENT_FLEET_AUTH_ALLOW'],
+    'the dialog would ask for a different set of secrets than the two every coordinator needs');
+
+  // Every prompted secret carries a description, and no description names a
+  // secret that is not prompted — a described-but-undeclared binding is a
+  // dialog field that never appears, silently.
+  const pkg = JSON.parse(read('package.json'));
+  const described = Object.keys(pkg.cloudflare?.bindings ?? {}).sort();
+  assert.deepEqual(described, declared,
+    'package.json "cloudflare" descriptions and .dev.vars.example disagree about the secrets');
+
+  // And both names are ones the config actually documents as secrets, so the
+  // dialog cannot end up collecting a value nothing reads.
+  for (const name of declared) {
+    assert.ok(DEFAULT.includes(name), `wrangler.toml never mentions ${name}`);
+  }
+});
+
 test('CI deploys the production config, and it is a variable rather than a constant', () => {
   // A fork running this workflow must not deploy OUR config. The path comes
   // from a repository variable that our repository sets and a fork does not, so
