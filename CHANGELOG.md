@@ -60,6 +60,12 @@ again, and `v0.2.1`'s host package should not be installed.
 
 **Also**
 
+- **A packaged box can finally see its own updates.** It reported "cannot tell"
+  for as long as the packaging existed: the check counted git commits, and a
+  release has none. Both phones now show what a box found waiting, and the
+  installer records where its releases come from — derived from the repository
+  it was installed out of, so a fork's boxes take the fork's. Existing boxes
+  pick this up on `install.sh --upgrade`.
 - **An upgrade that fails now says which package broke.** It reported whatever
   came last, which was usually debconf recovering — the tidying after the
   error, quoted as the error. `install.sh --repair` re-runs the parts of an
