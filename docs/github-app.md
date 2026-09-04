@@ -84,7 +84,7 @@ Create the App at **Settings → Developer settings → GitHub Apps → New**.
 | Pull requests | Read & write | `repo` |
 | Issues | Read & write | `repo` |
 | Workflows | Read & write | `workflow` |
-| Actions | Read | reading run logs, which this project does constantly |
+| Actions | Read & write | reading run logs, which this project does constantly — and **write**, which is what lets somebody's own token dispatch a runner workflow for them. See [runner-central.md](./runner-central.md): the alternative was a credential the coordinator holds, which is the thing this whole document exists to refuse |
 | Metadata | Read | mandatory |
 
 **Account permissions:** none needed yet. `read:org` was doing work `gh` can

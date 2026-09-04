@@ -23,6 +23,7 @@ import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oaut
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
+import { RunnerTickets } from './runner-tickets.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -51,6 +52,7 @@ export class CoordinatorCore {
    *   push?: import('../push.js').Pusher|null,
  *   mailer?: { send: ((m: { to: string, subject: string, text: string }) => Promise<void>)|null, from: string|null }|null,
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
+   *   runnerRepo?: string|null,
    * }} [opts]
    */
   constructor({
@@ -69,6 +71,12 @@ export class CoordinatorCore {
     // normal case for a fresh clone and is not an error: the paste route is
     // first-class, not a fallback. See docs/github-app.md.
     githubApp = null,
+    // Where `provision` dispatches runner workflows, as `owner/repo`. Absent
+    // is the normal case and is not an error — a fleet with no runner
+    // repository refuses `provision` with the one line an operator needs,
+    // rather than pretending it can start machines it has nowhere to start.
+    // See docs/runner-central.md.
+    runnerRepo = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -78,6 +86,14 @@ export class CoordinatorCore {
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
     this.githubApp = githubApp;
+    this.runnerRepo = runnerRepo;
+    // Single-use, minutes-long, and minted only when this coordinator itself
+    // dispatches a run — so a runner's owner is decided before the job exists
+    // rather than by a reusable secret sitting in a repository. Separate store
+    // and separate prefix from `runnerTokens` above, for the same reason that
+    // one is separate from `clients`: a credential that cannot be confused for
+    // another cannot be accepted in its place by a check somebody forgot.
+    this.runnerTickets = new RunnerTickets({ now });
     /**
      * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
      * back. In memory rather than in storage on purpose: it lives ten minutes,
@@ -132,6 +148,15 @@ export class CoordinatorCore {
      * @type {(() => void)|null}
      */
     this.onEvents = null;
+    /**
+     * Called when something the coordinator must not forget has changed —
+     * today only a minted runner ticket, which is spent by a job that starts
+     * minutes later and may cross a restart or a Durable Object eviction on
+     * the way. Same shape and the same reason as `onEvents`: the core does not
+     * know whether storage is a file or a Durable Object, and must not.
+     * @type {(() => void)|null}
+     */
+    this.onStateChanged = null;
   }
 
   // --- hosts ---------------------------------------------------------------
@@ -162,7 +187,10 @@ export class CoordinatorCore {
     // cannot renew a GitHub token and can do everything else, and refusing the
     // socket over it would turn a degraded capability into an offline box.
     try {
-      const frame = buildConfigFrame({ githubClientSecret: this.githubApp?.clientSecret });
+      const frame = buildConfigFrame({
+        githubClientSecret: this.githubApp?.clientSecret,
+        runnerRepo: this.runnerRepo,
+      });
       if (frame) send(frame);
     } catch (e) {
       this.log.warn(`coordinator: could not send config to ${hostId}: ${/** @type {Error} */ (e).message}`);
@@ -823,6 +851,64 @@ export class CoordinatorCore {
           'Only this fleet\u2019s admin can change the account a box itself runs on. ' +
           'Connecting your OWN credential needs no permission \u2014 leave the scope off.',
       };
+    }
+
+    // ASKING FOR A MACHINE THAT DOES NOT EXIST YET.
+    //
+    // Two things have to be true before this can be placed, and neither is a
+    // property of any host, so both are settled here rather than by a refusal
+    // travelling back from a box that could not have known.
+    //
+    // WHOSE RUNNER IT IS, decided from the VERIFIED caller and never from a
+    // parameter. A runner exists because one person asked for it, costs them
+    // money while it lives, and is placed only for them — so an unattributed
+    // caller has not named anybody, and picking somebody would be attributing a
+    // machine to a person who did not ask for it. The break-glass token arrives
+    // with no requester at all, deliberately: it is what you hold when identity
+    // is broken, and identity is exactly what this verb needs.
+    //
+    // The ticket is minted HERE, overwriting anything the caller sent. That is
+    // the whole of the ownership design: the fleet dispatches the run, so it
+    // knows who asked before the job exists, and the job proves which dispatch
+    // it is by presenting a single-use value it could not have invented. See
+    // src/fleet/coordinator/runner-tickets.js.
+    if (spec.verb === 'provision') {
+      const owner = String(spec.requester?.email || '').toLowerCase();
+      if (!owner) {
+        return {
+          ok: false,
+          error: { code: 'not_signed_in' },
+          text:
+            'A runner belongs to the person who asked for it, so this needs a signed-in identity. ' +
+            'Sign in on a device and use its credential rather than the fleet-wide admin token.',
+        };
+      }
+      if (!this.runnerRepo) {
+        return {
+          ok: false,
+          error: { code: 'not_configured' },
+          text:
+            'This fleet has no runner repository, so there is nowhere to start a machine. ' +
+            'An operator sets AGENT_FLEET_RUNNER_REPO to the owner/repo holding the runner workflows — ' +
+            'see docs/runner-central.md.',
+        };
+      }
+      const ticket = await this.runnerTickets.mint({ owner, platform: String(shaped.params.platform || '') });
+      spec = { ...spec, params: { ...shaped.params, ticket: ticket.token } };
+      // Persisted before the dispatch leaves, not after it succeeds: a ticket
+      // that is spent by a job but was never written down is an unattributed
+      // host, and the window between minting and enrolment is minutes long —
+      // long enough to contain a restart, which is precisely the case this
+      // exists for.
+      this.onStateChanged?.();
+      this.record({
+        event: 'runner.requested',
+        actor: spec.actor ?? null,
+        // Never the ticket. It is single-use and short-lived and it is still a
+        // value that attributes a machine to a person, and the event ring is
+        // read by every device this fleet has issued a credential to.
+        text: `${owner} asked for a ${shaped.params.platform} runner from ${this.runnerRepo}`,
+      });
     }
 
     const placement = place(this.registry, spec, {

@@ -42,6 +42,11 @@ export async function startStubHub({
   let claudeAccounts = 1;
   /** @type {string[]} */
   const commands = [];
+  /** Whole request bodies, so a test can assert what travels BESIDE a command —
+   * a title, a file's content, a dispatch ticket. The line alone cannot show
+   * that, and "it is not on the command line" is exactly what some of those
+   * fields exist to be. @type {any[]} */
+  const bodies = [];
   /** @type {Array<{name: string, cwd: string|null, uuid: string}>} */
   const hookReports = [];
 
@@ -90,6 +95,7 @@ export async function startStubHub({
     if (p === '/api/command' && req.method === 'POST') {
       const line = String(body.command || '');
       commands.push(line);
+      bodies.push(body);
       // agent-hub answers 200 even for a failed command; ok lives in the body.
       return json(200, onCommand ? onCommand(line) : { ok: true, text: `ran ${line}` });
     }
@@ -120,6 +126,7 @@ export async function startStubHub({
       claudeAccounts = n;
     },
     commands,
+    bodies,
     hookReports,
     sessions,
     panes,

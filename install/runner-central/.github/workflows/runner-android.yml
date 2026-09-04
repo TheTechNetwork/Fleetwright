@@ -1,0 +1,132 @@
+name: Android emulator runner
+
+# A Linux machine with the Android SDK and a machine that can actually RUN an
+# app, in somebody's fleet, for the length of one job.
+#
+# WHY THIS IS NOT JUST THE LINUX RUNNER WITH A LABEL. Building an APK needs the
+# SDK, which the Ubuntu image already has. Looking at one needs an emulator, and
+# an emulator without KVM is software-rendered ARM translation — slow enough
+# that a session times out waiting for a boot rather than failing. The two
+# steps below are what make the difference: the udev rule that lets an ordinary
+# user open /dev/kvm, and the packages for a system image.
+#
+# NO EMULATOR IS STARTED HERE, deliberately. Which API level, which device
+# profile and which app is the session's business, and a workflow that booted
+# one would be choosing for it — and paying for the boot on every runner that
+# turned out to want a different one. `avdmanager` and `emulator` are on PATH;
+# starting one is a line the agent runs.
+#
+# Dispatched by the fleet itself when a session asks for one — `fleet_provision`
+# over MCP, or the app — and startable by hand from the Actions tab when you
+# would rather do that. The two paths differ in one value: the fleet sends a
+# single-use `ticket` naming who asked, and a run started by hand falls back to
+# the FLEETWRIGHT_RUNNER_TOKEN secret. Neither of them admits the machine.
+#
+# WHAT ADMITS IT is `permissions: id-token: write` below. GitHub mints a
+# short-lived token for this job naming the repository, the workflow file and
+# the run; the coordinator verifies it against an allowlist of repositories the
+# way it verifies a sign-in. There is deliberately no credential in this
+# repository that can put a machine in a fleet.
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'Minted by the coordinator. Leave empty when starting this by hand.'
+        required: false
+        default: ''
+        type: string
+      minutes:
+        description: 'How long to stay in the fleet. GitHub kills the job at 360.'
+        required: false
+        default: '60'
+        type: string
+      coordinator:
+        description: 'Which fleet to join.'
+        required: false
+        default: 'https://fleet.thetech.network'
+        type: string
+      source:
+        description: 'The Fleetwright repository whose code this host runs.'
+        required: false
+        default: 'TheTechNetwork/Fleetwright'
+        type: string
+      ref:
+        description: 'Which ref of it.'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  # THE WHOLE POINT — see the header. A stored secret that can enrol a host is
+  # readable by every workflow in the repository, survives the job, and cannot
+  # say which job used it. This cannot be exported from the job that asked for
+  # it.
+  id-token: write
+
+concurrency:
+  # One per run, and never cancelled by a newer one: this job IS the host, and
+  # cancelling it takes somebody's session away mid-sentence.
+  group: runner-android-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
+    # actually ends the job, so this is the value that applies when something
+    # has hung rather than the one that governs a normal run.
+    #
+    # Deliberately not computed from the input. Expressions are allowed here,
+    # and a workflow that computes its own timeout fails at dispatch with no
+    # line number when the expression is wrong.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: tmux
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tmux
+
+      - name: Hardware acceleration
+        # THE ONE LINE THAT DECIDES WHETHER AN EMULATOR IS USABLE. The runner
+        # supports nested virtualisation and /dev/kvm exists; what is missing is
+        # permission for the unprivileged user the job runs as. Without it the
+        # emulator falls back to software rendering and takes minutes to boot a
+        # device somebody is paying for by the minute.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -w /dev/kvm && echo "::notice::/dev/kvm is writable — emulators here are hardware accelerated." \
+            || echo "::warning::/dev/kvm is not writable. An emulator will still start and will be slow."
+
+      - name: A system image to boot
+        # Accepting licences non-interactively is the step everybody misses, and
+        # its failure arrives much later as sdkmanager refusing to install
+        # anything. `emulator` and the platform tools are what a session needs on
+        # PATH; the system image is the thing that takes a minute to fetch, so it
+        # is fetched here rather than inside somebody's session.
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install 'platform-tools' 'emulator' \
+            'system-images;android-35;google_apis;x86_64' >/dev/null
+          echo "$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - uses: ./.github/actions/fleet-host
+        with:
+          ticket: ${{ inputs.ticket }}
+          claim: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
+          minutes: ${{ inputs.minutes }}
+          coordinator: ${{ inputs.coordinator }}
+          source: ${{ inputs.source }}
+          ref: ${{ inputs.ref }}
+          # `android` and `emulator` are separate labels on purpose: an APK
+          # build wants the first and a session that has to LOOK at the app
+          # wants the second, and they are not the same request.
+          labels: linux,android,emulator,ephemeral
+          host-prefix: gha-android
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}

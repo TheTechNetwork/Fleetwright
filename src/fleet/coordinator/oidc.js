@@ -87,7 +87,7 @@ function keysFor(issuer) {
  * the file that is supposed to do this can.
  *
  * @param {string} token
- * @param {{ audiences: string[], repositories: string[], workflowRef?: string|null }} opts
+ * @param {{ audiences: string[], repositories: string[], workflowRef?: string|string[]|null }} opts
  * @returns {Promise<{ repository: string, runId: string, runAttempt: string, workflowRef: string, ref: string, actor: string }>}
  */
 export async function verifyActionsToken(token, { audiences, repositories, workflowRef = null }) {
@@ -118,8 +118,19 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
     throw new Error(`${repository || 'that repository'} is not allowed to enrol runners here`);
   }
   const jobWorkflowRef = String(payload.job_workflow_ref || '');
-  if (workflowRef && !jobWorkflowRef.startsWith(workflowRef)) {
-    throw new Error(`that job runs ${jobWorkflowRef || 'an unknown workflow'}, not ${workflowRef}`);
+  // A LIST, because a runner repository has one workflow per operating system.
+  //
+  // It was a single prefix, which was right when the only runner was a Mac and
+  // wrong the moment there were four files: pinning one of them means the other
+  // three cannot admit a host, and pinning none means ANY workflow in the
+  // repository can — including one a pull request adds, which is the whole
+  // reason this claim is checked at all.
+  //
+  // A string still works and means a list of one, so no deployment's
+  // configuration changes underneath it.
+  const allowedRefs = (Array.isArray(workflowRef) ? workflowRef : [workflowRef]).filter(Boolean);
+  if (allowedRefs.length && !allowedRefs.some((prefix) => jobWorkflowRef.startsWith(String(prefix)))) {
+    throw new Error(`that job runs ${jobWorkflowRef || 'an unknown workflow'}, not ${allowedRefs.join(' or ')}`);
   }
 
   return {

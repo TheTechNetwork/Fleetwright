@@ -138,6 +138,27 @@ compatibility_flags = ["nodejs_als"]
 # it as a secret all along. The `[vars]` entry was the bug.
 [vars]
 
+# RUNNERS, which a fleet has none of until these are set. All three are public
+# operator decisions rather than secrets, so they belong here — see
+# docs/runner-central.md and install/runner-central/README.md.
+#
+#   AGENT_FLEET_RUNNER_REPO       where `provision` dispatches, as owner/repo.
+#                                 Hosts learn it on the config frame, so no box
+#                                 is configured with it.
+#   AGENT_FLEET_ACTIONS_REPOS     which repositories may enrol a host at all.
+#                                 EMPTY MEANS NOBODY, deliberately: a deployment
+#                                 that has not said has not opted in.
+#   AGENT_FLEET_ACTIONS_WORKFLOW  which FILES in them may. Without it any
+#                                 workflow there can admit a machine, including
+#                                 one a pull request adds. A comma-separated
+#                                 list, one entry per operating system, each
+#                                 ending at the `@` so it pins the file and
+#                                 allows any ref.
+#
+# AGENT_FLEET_RUNNER_REPO = "you/your-runners"
+# AGENT_FLEET_ACTIONS_REPOS = "you/your-runners"
+# AGENT_FLEET_ACTIONS_WORKFLOW = "you/your-runners/.github/workflows/runner-macos.yml@,you/your-runners/.github/workflows/runner-linux.yml@,you/your-runners/.github/workflows/runner-windows.yml@,you/your-runners/.github/workflows/runner-android.yml@"
+
 [[send_email]]
 name = "EMAIL"
 # `remote = true` so a local `wrangler dev` sends through the real service

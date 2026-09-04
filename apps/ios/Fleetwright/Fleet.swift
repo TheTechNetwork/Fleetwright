@@ -333,6 +333,23 @@ struct Fleet {
     }
     func stop(_ name: String) async throws -> Reply { try await intent("stop", params: ["name": name]) }
 
+    /// Ask for a temporary machine — macOS, Windows, Linux or an Android emulator.
+    ///
+    /// It does NOT return a host. GitHub has to find hardware, boot it and
+    /// install what a session needs, so the runner appears in the fleet minutes
+    /// later as a temporary host owned by whoever asked. Anything it runs is
+    /// lost when it goes.
+    ///
+    /// `host` is which permanent box dispatches it, and matters only in a fleet
+    /// with several: the dispatch is made with that person's GitHub connection
+    /// on that machine, so the coordinator refuses rather than guessing when
+    /// more than one could. See docs/runner-central.md.
+    func provision(platform: String, minutes: Int? = nil, host: String? = nil) async throws -> Reply {
+        var params: [String: String] = ["platform": platform]
+        if let minutes { params["minutes"] = String(minutes) }
+        return try await intent("provision", params: params, host: host, numeric: ["minutes"])
+    }
+
     /// What every host in the fleet can start a session on.
     ///
     /// Fans out, because a profile is a file on one box: asking a single
@@ -893,6 +910,7 @@ struct Fleet {
         case "restore": return "Restoring \(name)"
         case "purge": return "Purging \(name)"
         case "answer": return "Answering \(name)"
+        case "provision": return "Asking for a \(params["platform"] ?? "temporary") machine"
         case "writefile": return "Writing \(params["path"] ?? "a file") in \(name)"
         case "copyfile": return "Copying \(params["path"] ?? "a file") in \(name)"
         case "deletefile": return "Deleting \(params["path"] ?? "a file") in \(name)"

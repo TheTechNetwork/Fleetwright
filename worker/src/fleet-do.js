@@ -23,6 +23,7 @@ import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/github-oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
@@ -81,7 +82,24 @@ export class Fleet {
         clientSecret: env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
         slug: env.AGENT_FLEET_GITHUB_APP_SLUG,
       },
+      // Where `provision` dispatches runner workflows, as owner/repo. Absent
+      // means this fleet cannot start machines and says so — see
+      // docs/runner-central.md.
+      runnerRepo: env.AGENT_FLEET_RUNNER_REPO || null,
     });
+    // A runner ticket is minted at dispatch and spent by a job that starts
+    // minutes later — a gap this object is evicted across as a matter of
+    // course, so it goes to storage the moment it is minted.
+    this.core.onStateChanged = () => {
+      const write = this.state.storage
+        .put('runnerTickets', this.core.runnerTickets.serialise())
+        // Caught for the same reason the event ring's write is: an unhandled
+        // rejection on a floating promise aborts the whole Durable Object, and
+        // losing one ticket write costs an unattributed runner rather than
+        // every socket in the fleet.
+        .catch((e) => console.warn(`fleet: could not persist runner tickets: ${e?.message || e}`));
+      this.state.waitUntil?.(write);
+    };
 
     // Coalesced per invocation: several events can be recorded while handling
     // one message, and a DO storage write per line would be wasteful.
@@ -115,6 +133,8 @@ export class Fleet {
       // Separate store, separate key. A runner token that did not survive a
       // deploy would break every repository holding one, silently.
       this.core.runnerTokens.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTokens')) || []));
+      // Minted at dispatch, spent by a job minutes later, across an eviction.
+      this.core.runnerTickets.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTickets')) || []));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       // MCP clients that registered themselves. A Durable Object is evicted
@@ -352,24 +372,41 @@ export class Fleet {
             ? splitList(this.env.AGENT_FLEET_ACTIONS_AUDIENCE)
             : [DEFAULT_ACTIONS_AUDIENCE],
           repositories,
-          workflowRef: this.env.AGENT_FLEET_ACTIONS_WORKFLOW || null,
+          // A LIST: one workflow file per operating system in the runner
+          // repository, and a single value still works as a list of one.
+          workflowRef: splitList(this.env.AGENT_FLEET_ACTIONS_WORKFLOW),
         });
       } catch (e) {
         return json({ ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message }, 403);
       }
 
-      // Reusable, revocable, and powerless on its own: the machine was admitted
-      // by GitHub's token above. This only answers whose runner it is.
-      const claim = await this.core.runnerTokens.verify(String(body?.claim || ''));
-      if (!claim || !claim.email) {
+      // TWO CREDENTIALS ANSWER THE SAME QUESTION, and which one arrived says
+      // how the run was started. A TICKET means this fleet dispatched it, for
+      // one verified person, single-use and minutes old. A RUNNER TOKEN means
+      // somebody pressed Run workflow with the reusable secret the repository
+      // holds. Both are powerless on their own — the machine was admitted by
+      // GitHub's token above — and the prefix decides which store is asked, so
+      // neither can be accepted in place of the other.
+      const presented = String(body?.claim || '');
+      const ticket = RunnerTickets.looksLikeTicket(presented)
+        ? await this.core.runnerTickets.redeem(presented)
+        : null;
+      const claim = ticket ? null : await this.core.runnerTokens.verify(presented);
+      const claimedOwner = ticket ? ticket.owner : claim?.email ? claim.email.toLowerCase() : null;
+      if (!claimedOwner) {
+        // Persisted even on the refusal: a ticket that was spent here is gone
+        // from the store, and the safe failure is "ask for another runner"
+        // rather than "try that value again".
+        await this.#saveClients();
         return json(
           {
             ok: false,
             error: { code: 'unclaimed' },
             text:
-              'That runner token is not one this fleet issued, or it has been revoked. ' +
-              'Mint one in the app under Hosts → Runner tokens and put it in the repository ' +
-              'or organisation secret the workflow reads.',
+              'That claim is not one this fleet issued, has been revoked, or — for a dispatch ticket — ' +
+              'has already been spent or expired. Ask for the runner again, or mint a runner token in the ' +
+              'app under Hosts → Runner tokens and put it in the repository or organisation secret the ' +
+              'workflow reads.',
           },
           403,
         );
@@ -382,10 +419,14 @@ export class Fleet {
         hostId,
         publicJwk: body?.publicJwk,
         enrolledBy: `actions:${job.repository}`,
-        owner: claim.email.toLowerCase(),
+        owner: claimedOwner,
         ephemeral: true,
       });
       await this.#saveEnrollment();
+      // The spent ticket, written down as well as the new host. Both halves or
+      // neither: a host recorded without its ticket being consumed leaves a
+      // value that could attribute a second machine.
+      if (ticket) await this.#saveClients();
       if (!result.ok || !result.host) {
         return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
       }
@@ -393,7 +434,9 @@ export class Fleet {
         event: 'host.enrolled',
         hostId: result.host.hostId,
         fingerprint: result.host.fingerprint,
-        text: `a runner from ${job.repository} enrolled itself for ${claim.email}`,
+        text:
+          `a runner from ${job.repository} enrolled itself for ${claimedOwner}` +
+          `${ticket ? ' (dispatched by this fleet)' : ''}`,
       });
       return json({ ok: true, hostId, fingerprint: result.host.fingerprint, ephemeral: true }, 200);
     }
@@ -997,6 +1040,10 @@ export class Fleet {
   async #saveClients() {
     await this.state.storage.put('clients', this.core.clients.serialise());
     await this.state.storage.put('runnerTokens', this.core.runnerTokens.serialise());
+    // SPENT ONES MUST NOT COME BACK. serialise() drops what has been redeemed
+    // or expired, so writing it here is what makes a single-use ticket single
+    // use across an eviction as well as within one.
+    await this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise());
     await this.state.storage.put('mcpClients', this.core.mcpAuthorizations.serialise());
   }
 

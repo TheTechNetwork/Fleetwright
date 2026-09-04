@@ -27,6 +27,15 @@
  *   A NAME, never the words: the content is a file on this box, and a caller
  *   that could supply it would be writing the instructions of an agent with
  *   root in a container. See src/core/profiles.js
+ * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
+ *   `/provision`. A credential, so it travels as a field rather than on the
+ *   command line — see src/core/redact.js for why that distinction exists
+ * @property {string} [runnerRepo] the fleet's runner repository, as owner/repo.
+ *   Delivered to this host on the coordinator's config frame, so no box is
+ *   configured with it — see src/fleet/protocol/config-frame.js
+ * @property {string} [coordinator] the origin this box is pinned to, which is
+ *   what a runner is told to join. From this host's own configuration, never
+ *   from anything the coordinator said about itself
  */
 
 /**
@@ -72,6 +81,7 @@ import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
+import { dispatchRunner, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -1185,6 +1195,112 @@ export const COMMANDS = {
       if (row === null) return { ok: false, text: 'Could not tell whose credential this is, so nothing was removed.' };
       const r = new Connections(ctx.cfg.stateDir).remove(row, provider);
       return { ok: r.ok, text: r.message, connections: connectionsPayload(ctx, {}, { host: boxRow }) };
+    },
+  },
+
+  provision: {
+    usage: '/provision <macos|windows|linux|android> [minutes]',
+    short: 'Ask for a temporary machine that joins the fleet',
+    help:
+      'Dispatches a workflow in the fleet\u2019s runner repository, which brings up a GitHub Actions runner that '
+      + 'enrols itself as an ephemeral host for the minutes you name and is destroyed when the job ends. It is '
+      + 'dispatched with YOUR GitHub connection on this box \u2014 so it can only start a workflow you could have '
+      + 'started yourself, and the runner belongs to you. See docs/runner-central.md.',
+    run: async (ctx, args) => {
+      const platform = (args[0] || '').toLowerCase();
+      if (!Object.hasOwn(RUNNER_WORKFLOWS, platform)) {
+        return {
+          ok: false,
+          text: `Usage: /provision <${Object.keys(RUNNER_WORKFLOWS).join('|')}> [minutes]`,
+        };
+      }
+      const minutes = args[1] === undefined ? DEFAULT_MINUTES : Number(args[1]);
+      if (!Number.isFinite(minutes) || minutes < 5 || minutes > MAX_MINUTES) {
+        return { ok: false, text: `Minutes must be a number between 5 and ${MAX_MINUTES}.` };
+      }
+
+      // THE THREE THINGS THAT DO NOT COME FROM THE COMMAND LINE, and each is
+      // refused separately because they send somebody to three different
+      // places.
+      //
+      // The REPOSITORY is the fleet's, delivered on the coordinator's config
+      // frame — an operator sets it once and no box is configured.
+      if (!ctx.runnerRepo) {
+        return {
+          ok: false,
+          text:
+            'This fleet has no runner repository, so there is nowhere to start a machine. An operator sets '
+            + 'AGENT_FLEET_RUNNER_REPO on the coordinator and every host learns it on the next connect.',
+        };
+      }
+      // The TICKET is minted by the coordinator at the moment somebody asks,
+      // and is what tells the fleet whose runner this will be. A command typed
+      // on this box has none, and that is not a gap to paper over: the whole
+      // ownership design is that the fleet knows who asked BEFORE the job
+      // exists, and nothing typed here can establish that.
+      if (!ctx.ticket) {
+        return {
+          ok: false,
+          text:
+            'A runner is attributed to the person who asked for it, and the ticket that does that is minted by '
+            + 'the coordinator. Ask through the app or the MCP server (`fleet_provision`) rather than on the box \u2014 '
+            + 'or press Run workflow in the runner repository yourself, which uses the runner token instead.',
+        };
+      }
+      // And WHICH FLEET the runner should join, which this box knows about
+      // itself and the coordinator is not asked for.
+      if (!ctx.coordinator) {
+        return { ok: false, text: 'This box does not know its own coordinator URL, so it cannot tell a runner where to join.' };
+      }
+
+      // WHOSE GITHUB. `rowForActor` and never a parameter, exactly as
+      // `connect me` resolves: the moment a caller can name the row, "start me
+      // a runner" becomes "spend somebody else's GitHub connection".
+      //
+      // The box's own row is refused rather than used as a fallback. A runner
+      // belongs to a person, the shared row belongs to the machine, and
+      // falling back would attribute a machine to whoever happens to have
+      // connected GitHub for the box.
+      const row = rowForActor(ctx.actor);
+      if (row === null || row === HOST_ROW) {
+        return {
+          ok: false,
+          text: 'Could not tell whose GitHub connection to dispatch with, so nothing was started.',
+        };
+      }
+      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      if (!token) {
+        return {
+          ok: false,
+          text:
+            'GitHub is not connected for you on this box, and a runner is dispatched with your own connection. '
+            + 'Connect it in the app and ask again \u2014 nothing needs restarting.',
+        };
+      }
+
+      const r = await dispatchRunner({
+        repo: ctx.runnerRepo,
+        platform,
+        minutes,
+        ticket: ctx.ticket,
+        coordinator: ctx.coordinator,
+        token,
+      });
+      if (!r.ok) return { ok: false, text: r.message };
+      return {
+        ok: true,
+        // SAYS WHAT WILL HAPPEN NEXT, because nothing else will. The dispatch
+        // returns long before the machine exists — GitHub has to find hardware,
+        // boot it, install tmux and the CLI, and only then does the host appear
+        // — so a reply that said "started" would be read as "ready" by the
+        // agent that asked, which would then look for a host that is still
+        // being built.
+        text:
+          `Asked GitHub to start a ${platform} runner from ${ctx.runnerRepo} (${r.workflow} on ${r.ref}) for `
+          + `${r.minutes} minutes. It is not here yet: runners take a few minutes to boot, and it will appear in `
+          + '`status` as a temporary host owned by you. Anything it runs is lost when it goes, so collect what you '
+          + 'need before then.',
+      };
     },
   },
 

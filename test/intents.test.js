@@ -67,6 +67,11 @@ test('the verb set is exactly what is documented', () => {
     // They ship together because a profile you can only name by guessing is not
     // a feature.
     'profiles',
+    // ASKS FOR A MACHINE THAT DOES NOT EXIST YET, which nothing else here
+    // does. Named in this list rather than arriving with the feature, and it
+    // cost no version bump for the reason above: an older host answers
+    // `unknown_verb`, and its parameters are new on a NEW verb.
+    'provision',
     'purge',
     'readfile',
     'reboot',
@@ -207,8 +212,12 @@ test('only state-changing verbs are marked mutating', () => {
     // update is allowed to be. Asking with no `to` reads — but a verb is
     // mutating or it is not, and the idempotency key is what stops a retried
     // change being applied twice against a box that has moved on since.
+    // provision starts a machine and spends somebody's Actions minutes, and
+    // the idempotency key is what stops a retried request paying for a second
+    // one — the reply comes back long before the runner does, so a caller that
+    // retries on a slow answer is exactly the case.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

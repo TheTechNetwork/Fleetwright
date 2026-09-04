@@ -36,6 +36,7 @@ import { SPEC_ORIGIN } from './spec.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
+import { RunnerTickets } from './runner-tickets.js';
 import { callbackPage } from './github-oauth.js';
 import { resource } from '../../core/resources.js';
 import { identify } from './identity.js';
@@ -89,7 +90,14 @@ export class Coordinator {
       push: pusherFromEnv(process.env, this.log, {
         apnsDeliver: http2Deliver(process.env.AGENT_FLEET_APNS_SANDBOX === '1' ? 'api.sandbox.push.apple.com' : undefined),
       }),
+      // Where `provision` dispatches runner workflows. An operator decision,
+      // sent to every host on the config frame rather than placed on each of
+      // them — see docs/runner-central.md.
+      runnerRepo: process.env.AGENT_FLEET_RUNNER_REPO || null,
     });
+    // A minted runner ticket is spent by a job that starts minutes later, so it
+    // has to survive a restart in between.
+    this.core.onStateChanged = () => this.saveState();
     /** @type {import('node:http').Server|null} */
     this.server = null;
     /** @type {NodeJS.Timeout|null} */
@@ -157,6 +165,7 @@ export class Coordinator {
     // Separate store, separate slot. A runner token that did not survive a
     // restart would break every repository holding one, silently, on a deploy.
     this.core.runnerTokens.restore(state.runnerTokens || []);
+    this.core.runnerTickets.restore(state.runnerTickets || []);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // MCP clients that registered themselves. Codes are not persisted and
@@ -247,6 +256,9 @@ export class Coordinator {
         hosts: this.core.hostIds.serialise(),
         clients: this.core.clients.serialise(),
         runnerTokens: this.core.runnerTokens.serialise(),
+        // Minted at dispatch and spent by a job minutes later, which is long
+        // enough to contain a restart. See runner-tickets.js.
+        runnerTickets: this.core.runnerTickets.serialise(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         mcpClients: this.core.mcpAuthorizations.serialise(),
@@ -514,7 +526,10 @@ export class Coordinator {
           // repository is even looked at.
           audiences: audiences.length ? audiences : [DEFAULT_ACTIONS_AUDIENCE],
           repositories,
-          workflowRef: process.env.AGENT_FLEET_ACTIONS_WORKFLOW || null,
+          // A LIST now: a runner repository has one workflow per operating
+          // system, and pinning one of them would stop the other three admitting
+          // a host. A single value still works and means a list of one.
+          workflowRef: splitList(process.env.AGENT_FLEET_ACTIONS_WORKFLOW),
         });
       } catch (e) {
         return json(res, 403, { ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message });
@@ -549,18 +564,44 @@ export class Coordinator {
       // leaked one lets somebody attribute a runner to a fleet member — from a
       // repository they must already be able to run workflows in — rather than
       // put a machine in the fleet or call the API as anybody.
-      const claim = await this.core.runnerTokens.verify(String(body?.claim || ''));
-      if (!claim || !claim.email) {
+      // TWO CREDENTIALS ANSWER THE SAME QUESTION, and which one arrived says
+      // how the run was started.
+      //
+      // A TICKET means this fleet dispatched the run: it was minted for one
+      // verified person at that moment, it is single-use, and it expires in
+      // minutes. That is the self-service path — nothing is stored in the
+      // repository at all, and the owner was known before the job existed.
+      //
+      // A RUNNER TOKEN means somebody ran the workflow themselves, with the
+      // reusable secret the repository holds. Kept, and first-class: dispatching
+      // needs a permanent host with GitHub connected, and pressing Run workflow
+      // needs neither.
+      //
+      // The prefix decides which store is asked, so one can never be accepted
+      // in place of the other by a check somebody forgot — and the refusal
+      // below is one sentence covering both, because a job cannot act on the
+      // difference and whoever is guessing should not be told which it was.
+      const presented = String(body?.claim || '');
+      const ticket = RunnerTickets.looksLikeTicket(presented)
+        ? await this.core.runnerTickets.redeem(presented)
+        : null;
+      const claim = ticket ? null : await this.core.runnerTokens.verify(presented);
+      const owner = ticket ? ticket.owner : claim?.email ? claim.email.toLowerCase() : null;
+      if (!owner) {
+        // Spent tickets are gone from the store, so this ALSO persists the
+        // redemption of one that failed downstream — the safe failure is "ask
+        // for another runner", never "try that value again".
+        this.saveState();
         return json(res, 403, {
           ok: false,
           error: { code: 'unclaimed' },
           text:
-            'That runner token is not one this fleet issued, or it has been revoked. ' +
-            'Mint one in the app under Hosts → Runner tokens and put it in the repository ' +
-            'or organisation secret the workflow reads.',
+            'That claim is not one this fleet issued, has been revoked, or — for a dispatch ticket — ' +
+            'has already been spent or expired. Ask for the runner again, or mint a runner token in the ' +
+            'app under Hosts → Runner tokens and put it in the repository or organisation secret the ' +
+            'workflow reads.',
         });
       }
-      const owner = claim.email.toLowerCase();
 
       const result = await this.core.hostIds.enrol({
         hostId,

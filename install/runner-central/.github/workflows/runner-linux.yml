@@ -1,0 +1,97 @@
+name: Linux runner
+
+# A Linux machine, in somebody's fleet, for the length of one job.
+#
+# The cheapest of the four and the one to reach for by default: Actions minutes
+# on a standard Ubuntu runner are free on a public repository and the least
+# expensive anywhere else, and most of what a session is asked to do — build it,
+# test it, run the linter, check it still compiles — does not care which
+# operating system it happens on. Ask for a Mac when you need a Mac.
+#
+# Dispatched by the fleet itself when a session asks for one — `fleet_provision`
+# over MCP, or the app — and startable by hand from the Actions tab when you
+# would rather do that. The two paths differ in one value: the fleet sends a
+# single-use `ticket` naming who asked, and a run started by hand falls back to
+# the FLEETWRIGHT_RUNNER_TOKEN secret. Neither of them admits the machine.
+#
+# WHAT ADMITS IT is `permissions: id-token: write` below. GitHub mints a
+# short-lived token for this job naming the repository, the workflow file and
+# the run; the coordinator verifies it against an allowlist of repositories the
+# way it verifies a sign-in. There is deliberately no credential in this
+# repository that can put a machine in a fleet.
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'Minted by the coordinator. Leave empty when starting this by hand.'
+        required: false
+        default: ''
+        type: string
+      minutes:
+        description: 'How long to stay in the fleet. GitHub kills the job at 360.'
+        required: false
+        default: '60'
+        type: string
+      coordinator:
+        description: 'Which fleet to join.'
+        required: false
+        default: 'https://fleet.thetech.network'
+        type: string
+      source:
+        description: 'The Fleetwright repository whose code this host runs.'
+        required: false
+        default: 'TheTechNetwork/Fleetwright'
+        type: string
+      ref:
+        description: 'Which ref of it.'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  # THE WHOLE POINT — see the header. A stored secret that can enrol a host is
+  # readable by every workflow in the repository, survives the job, and cannot
+  # say which job used it. This cannot be exported from the job that asked for
+  # it.
+  id-token: write
+
+concurrency:
+  # One per run, and never cancelled by a newer one: this job IS the host, and
+  # cancelling it takes somebody's session away mid-sentence.
+  group: runner-linux-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
+    # actually ends the job, so this is the value that applies when something
+    # has hung rather than the one that governs a normal run.
+    #
+    # Deliberately not computed from the input. Expressions are allowed here,
+    # and a workflow that computes its own timeout fails at dispatch with no
+    # line number when the expression is wrong.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: tmux
+        # `-qq` and no recommends: this is the whole of what the runner image is
+        # missing, and apt's output is otherwise a screen of noise in front of
+        # the only line here that can fail.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tmux
+
+      - uses: ./.github/actions/fleet-host
+        with:
+          ticket: ${{ inputs.ticket }}
+          claim: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
+          minutes: ${{ inputs.minutes }}
+          coordinator: ${{ inputs.coordinator }}
+          source: ${{ inputs.source }}
+          ref: ${{ inputs.ref }}
+          labels: linux,ephemeral
+          host-prefix: gha-linux
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}

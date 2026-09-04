@@ -187,6 +187,56 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     // of yet is a different problem from an ambiguous one.
   }
 
+  // ASKING FOR A RUNNER GOES TO A BOX THAT CAN ASK FOR ONE.
+  //
+  // `provision` does not run work — it spends the ASKING PERSON'S GitHub token
+  // to dispatch a workflow, and that token lives on a host they have connected
+  // GitHub on. So this is a one-box question like `logs` or `update`, with two
+  // differences that both come from what the box is being asked to do.
+  //
+  // NEVER A RUNNER. A temporary host has no connections, no renewal timer and
+  // minutes to live; asking one to start another is a machine paid for by the
+  // minute doing paperwork, and it fails with a message about GitHub not being
+  // connected that would send somebody looking in the wrong place. Filtered out
+  // rather than refused, because from here a runner is simply not one of the
+  // boxes that can answer this.
+  //
+  // AND IT REFUSES RATHER THAN GUESSES when several could. Picking one would
+  // pick whichever host the iterator reached first, and the answer to "why did
+  // that say GitHub is not connected" would be "because it asked a different
+  // machine from the one you connected it on" — which nobody can see from the
+  // refusal. Naming them is what makes the second attempt work.
+  if (verb === 'provision') {
+    const durable = registry.reachable().filter((h) => !h.ephemeral);
+    if (!durable.length) {
+      return {
+        kind: 'refused',
+        code: 'no_hosts',
+        reason:
+          `${describeWhyNoHosts(registry)} A runner is dispatched BY a permanent host, using the GitHub ` +
+          'connection stored there — so a fleet with no permanent host has nothing to ask.',
+      };
+    }
+    if (preferHost) {
+      const chosen = durable.find((h) => h.hostId === preferHost);
+      return chosen
+        ? { kind: 'host', host: chosen }
+        : {
+            kind: 'refused',
+            code: 'host_unavailable',
+            reason: `${preferHost} is not a connected permanent host. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+          };
+    }
+    if (durable.length === 1) return { kind: 'host', host: durable[0] };
+    return {
+      kind: 'refused',
+      code: 'ambiguous_host',
+      reason:
+        `Which box should ask for it? ${durable.map((h) => h.hostId).join(', ')}. ` +
+        'It is dispatched with your GitHub connection, so name the host you connected GitHub on.',
+    };
+  }
+
   if (
     verb === 'logs' ||
     verb === 'update' ||

@@ -1,0 +1,187 @@
+name: Become a fleet host
+description: >
+  Enrol this job into a Fleetwright fleet as an ephemeral host, stay in it for
+  the minutes asked for, and leave cleanly. Everything a runner does that is the
+  same on every operating system lives here.
+
+# WHY A COMPOSITE ACTION AND NOT FOUR COPIES OF THE SCRIPT.
+#
+# The interesting part of a runner workflow is about two dozen lines — install
+# tmux the way this OS installs things, pick a runner label — and the part that
+# actually joins the fleet is the same everywhere. Copied into four files, that
+# shared part is four things to fix when one of them is wrong, and the way that
+# goes wrong is silent: three workflows get the fix and the fourth keeps working
+# well enough to look fine until somebody uses it.
+#
+# Windows does NOT use this, and the reason is mechanical rather than a
+# judgement: every step below runs in bash, a composite action cannot choose its
+# shell from an input, and the Windows runner's shell is MSYS2. See
+# runner-windows.yml, which carries its own copy on purpose and says so.
+
+inputs:
+  ticket:
+    description: 'Single-use dispatch ticket, minted by the coordinator. Empty for a run started by hand.'
+    required: false
+    default: ''
+  claim:
+    description: 'The reusable runner token, for a run started by hand. Ignored when a ticket is given.'
+    required: false
+    default: ''
+  minutes:
+    required: true
+  coordinator:
+    required: true
+  source:
+    description: 'The Fleetwright repository to run, as owner/repo.'
+    required: true
+  ref:
+    required: true
+  labels:
+    description: 'Placement labels, comma separated.'
+    required: true
+  host-prefix:
+    description: 'What this kind of runner is called, e.g. gha-mac.'
+    required: true
+  api-key:
+    description: 'ANTHROPIC_API_KEY. The credential sessions on this runner authenticate with.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Mask the ticket
+      shell: bash
+      # workflow_dispatch inputs are NOT masked, and this one attributes a
+      # machine to a person. It is single-use and minutes old, so the exposure
+      # is small — and small is not none, and the run log of a public repository
+      # is readable by everybody.
+      run: |
+        [ -n "${{ inputs.ticket }}" ] && echo "::add-mask::${{ inputs.ticket }}"
+        [ -n "${{ inputs.claim }}" ] && echo "::add-mask::${{ inputs.claim }}"
+        exit 0
+
+    - name: Get the fleet
+      uses: actions/checkout@v7.0.1
+      with:
+        # NOT THIS REPOSITORY. A runner repository holds workflows and nothing
+        # else — the code a host runs lives in Fleetwright, which is public, so
+        # this needs no credential. Both values are inputs so a fork runs its
+        # own fleet's code without editing four files.
+        repository: ${{ inputs.source }}
+        ref: ${{ inputs.ref }}
+        path: fleet
+
+    - uses: actions/setup-node@v7.0.0
+      with:
+        node-version: '24.20.0'
+
+    - name: Install what a session needs
+      shell: bash
+      working-directory: fleet
+      run: |
+        set -euo pipefail
+        # --omit=dev: a host needs `jose` and nothing else. The dev
+        # dependencies are a typescript compiler and a browser.
+        npm ci --omit=dev --no-audit --no-fund
+        npm install -g @anthropic-ai/claude-code
+        # tmux is installed by the workflow, because that is the part that
+        # differs. If it is not here the job has already gone wrong and this is
+        # where it should say so — before a machine is enrolled into somebody's
+        # fleet and starts failing every session it is given.
+        command -v tmux >/dev/null || {
+          echo "::error::tmux is not installed. A session IS a tmux pane, so this runner cannot host one."
+          exit 1
+        }
+        tmux -V && claude --version
+
+    - name: Be a host until the clock runs out
+      shell: bash
+      working-directory: fleet
+      env:
+        # UNIQUE PER RUN, AND run_attempt IS NOT OPTIONAL. A re-run reuses
+        # run_id, and two hosts sharing one identity is the clone bug in a new
+        # costume — this project has paid for that lesson once already.
+        #
+        # The coordinator DERIVES the id it actually uses from the OIDC token
+        # rather than believing this, which is the property that stops a job
+        # naming itself after a permanent host. This value is what the sidecar
+        # calls itself before it is told otherwise.
+        AGENT_FLEET_HOST_ID: ${{ inputs.host-prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+        AGENT_FLEET_COORDINATOR_URL: ${{ inputs.coordinator }}
+        AGENT_FLEET_LABELS: ${{ inputs.labels }}
+        # NO SANDBOX. The sandbox exists to protect a machine that persists.
+        # This one is destroyed within the hour by something more thorough than
+        # a container boundary, and rootless podman on a hosted runner is a
+        # Linux VM inside a VM where it works at all.
+        AGENT_HUB_SANDBOX: '0'
+        AGENT_HUB_WORKDIR: ${{ runner.temp }}/work
+        AGENT_HUB_STATE_DIR: ${{ runner.temp }}/state
+        # EVERY ABSOLUTE DEFAULT HAS TO MOVE, not just the obvious one. These
+        # default to /var/lib and /run, which on a hosted runner are either
+        # unwritable without sudo or simply absent — and the failure is `enrol`
+        # dying on EACCES before the host ever appears in the fleet.
+        AGENT_FLEET_HOST_KEY: ${{ runner.temp }}/state/host-key.json
+        AGENT_FLEET_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
+        MINUTES: ${{ inputs.minutes }}
+        TICKET: ${{ inputs.ticket }}
+        CLAIM: ${{ inputs.claim }}
+        # THE CREDENTIAL A RUNNER CAN ACTUALLY USE. There is nobody at the other
+        # end of a runner to open a login page and paste a code back, so a host
+        # that needs a human to become useful is not a runner. An API key needs
+        # no browser, is revocable on its own, and bills separately.
+        #
+        # Unsandboxed sessions inherit this process's environment, so putting it
+        # here is what puts it in front of the CLI.
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+        chmod 700 "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+
+        # The session manager first: the sidecar talks to it on loopback and is
+        # useless without it.
+        node bin/agent-hub serve &
+        HUB=$!
+        for _ in $(seq 1 30); do
+          curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
+        done
+
+        # WHAT ADMITS THIS MACHINE IS NOT IN THIS REPOSITORY. GitHub mints a
+        # short-lived token for this job naming the repository, the workflow file
+        # and the run, and `enrol-actions` presents that. The value below only
+        # says WHOSE runner this is — a ticket when the fleet dispatched the run,
+        # the reusable runner token when a person pressed Run workflow.
+        WHOSE="${TICKET:-$CLAIM}"
+        if [ -z "$WHOSE" ]; then
+          echo "::error::No ticket and no FLEETWRIGHT_RUNNER_TOKEN secret, so the fleet cannot tell whose runner this is. Ask through the app or MCP, or set the secret to run it by hand."
+          exit 1
+        fi
+        node bin/agent-fleet-sidecar enrol-actions "$WHOSE"
+
+        # THE JOB ENDING IS THE DISCONNECT, and the disconnect is what retires
+        # this host and revokes its key. So the sidecar runs for exactly as long
+        # as we mean to be a host, and exiting normally IS the cleanup — there
+        # is no step to remember.
+        set +e
+        node bin/agent-fleet-sidecar &
+        SIDECAR=$!
+        echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
+        # SAID EITHER WAY, and said differently. A runner with no key is not
+        # broken, it is unusable — and those need different sentences, because
+        # only one of them names something somebody can go and fix.
+        if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+          echo "::notice::Sessions here authenticate with ANTHROPIC_API_KEY. Usage bills to that API account, not to a subscription."
+        else
+          echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start. Add one in Settings → Secrets → Actions."
+        fi
+        sleep "$(( MINUTES * 60 ))"
+
+        # Politely, then not. A sidecar given the chance to close its socket
+        # tells the coordinator it is going; one that is killed leaves the
+        # coordinator waiting for a heartbeat from a machine that no longer
+        # exists.
+        kill -TERM "$SIDECAR" 2>/dev/null || true
+        for _ in $(seq 1 10); do kill -0 "$SIDECAR" 2>/dev/null || break; sleep 1; done
+        kill -KILL "$SIDECAR" 2>/dev/null || true
+        kill -TERM "$HUB" 2>/dev/null || true

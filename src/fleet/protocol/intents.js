@@ -646,6 +646,90 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Give a host what it needs to renew a connection without being asked again.',
   },
+
+  // A MACHINE THAT DOES NOT EXIST YET.
+  //
+  // Every other verb in this table acts on a host that has already enrolled.
+  // This one asks for one to be created: a GitHub Actions job, on hardware
+  // nobody here owns, that joins the fleet for as long as it was asked for and
+  // is destroyed with the job. See docs/runner-central.md.
+  //
+  // WHY IT IS A VERB AND NOT A BUTTON IN AN APP. The case it exists for is an
+  // agent mid-session that needs an operating system this fleet does not have —
+  // "does this build on Windows", "does the UI look right on a Mac". A person
+  // opening github.com to click Run workflow is not that, and it is the step
+  // that made runners a thing somebody set up rather than a thing a session
+  // could reach for. The app gets it too, by the same route as everything else.
+  //
+  // WHAT IT CANNOT EXPRESS, which is the whole safety argument. There is no
+  // repository parameter, no workflow parameter, no ref and no inputs — a
+  // platform from a fixed list and a number of minutes. The repository is named
+  // by the operator on the config frame and the workflow file is derived from
+  // the platform, so a compromised coordinator can ask for a Mac and cannot ask
+  // a person's GitHub token to run something of its choosing somewhere of its
+  // choosing. That is the same rule `start` follows when it names a profile
+  // rather than carrying one.
+  //
+  // AND IT SPENDS SOMEBODY'S MONEY, which is worth saying in the summary
+  // because the agent reading it is the one deciding. Actions minutes on a
+  // private repository are metered, and a session on the runner bills to the
+  // API key that repository holds.
+  provision: {
+    params: {
+      // A FIXED LIST, and the reason is `logs.service` and `connect.provider`
+      // over again: the value selects a workflow FILE in the runner repository,
+      // so an open string would be a caller choosing what runs. Four values,
+      // one file each, and a repository that does not have one answers with a
+      // refusal naming what it does have.
+      platform: {
+        type: 'enum',
+        required: true,
+        values: ['macos', 'windows', 'linux', 'android'],
+        describe:
+          'Which operating system to bring up. `android` is a Linux runner with the SDK and a hardware-accelerated ' +
+          'emulator, for driving an app rather than only building one.',
+      },
+      // HOW LONG TO PAY FOR. The job ends itself after this and the disconnect
+      // retires the host — there is no cleanup step to forget. GitHub kills a
+      // job at 360 minutes regardless, so the ceiling here is below that rather
+      // than at it: a runner that is killed mid-sentence leaves the coordinator
+      // waiting for a heartbeat from a machine that has already gone.
+      minutes: {
+        type: 'int',
+        required: false,
+        min: 5,
+        max: 350,
+        describe: 'How long the runner stays in the fleet before ending itself. Default 60, and GitHub kills any job at 360.',
+      },
+      // MINTED BY THE COORDINATOR, NEVER BY THE CALLER — and declared here
+      // anyway, because the host validates every field of what arrives and a
+      // parameter the protocol does not name is refused.
+      //
+      // It is what answers "whose runner is this" without a reusable secret
+      // sitting in a repository: single-use, minutes long, and bound to the
+      // verified person who asked. The coordinator overwrites whatever arrives
+      // in it, so a caller supplying one buys nothing.
+      //
+      // Optional rather than required for one reason: this verb is the only
+      // place in the protocol where the coordinator ADDS a parameter, and a
+      // required one would make `checkParams` refuse an ordinary caller's
+      // request before the coordinator ever got to mint it. The host requires
+      // it in practice and says so.
+      ticket: {
+        type: 'secret',
+        required: false,
+        max: 128,
+        describe: 'Minted by the coordinator. Anything sent here is discarded and replaced.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Ask for a temporary machine — macOS, Windows, Linux or an Android emulator — that joins the fleet as an ' +
+      'ephemeral host for the minutes you name and is destroyed when the job ends. It does NOT return a host: the ' +
+      'runner takes a few minutes to boot and appears in `status` as a host owned by you. Sessions started there ' +
+      'are lost when it goes, so collect what you need before then. It spends GitHub Actions minutes and bills any ' +
+      'session it runs to the runner repository’s API key.',
+  },
 });
 
 /** @param {string} verb */
