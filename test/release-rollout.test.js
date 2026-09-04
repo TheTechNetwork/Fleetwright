@@ -143,7 +143,19 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   // A rolling release at a fixed tag: one permanent address, contents replaced.
   assert.match(job, /gh release create rolling/);
   assert.match(job, /--clobber/, 'the assets are not replaced, so the address goes stale');
-  assert.match(job, /gh release edit rolling --target main/, 'the tag would point at whenever it was created');
+  // THE TAG IS MOVED BY MOVING THE REF, not by `gh release edit --target`.
+  // target_commitish is only honoured when GitHub has to CREATE the tag; on one
+  // that exists it is accepted, reported as success and ignored — which pinned
+  // the tag at the first run's commit for ever while --clobber kept the
+  // artifacts current. A release page dated weeks ago serving today's tarball,
+  // with nothing red.
+  assert.match(job, /gh api -X PATCH "repos\/\$GH_REPO\/git\/refs\/tags\/rolling"/);
+  assert.match(job, /-F force=true/, 'moving a tag backwards or sideways is not a fast-forward');
+  assert.doesNotMatch(job, /gh release edit rolling --target/, 'the line that did nothing is back');
+
+  // And the move is PROVED rather than assumed, because what it replaces was an
+  // API call that reported success and changed nothing.
+  assert.match(job, /\$\{?at\}? != "\$GITHUB_SHA"|"\$at" != "\$GITHUB_SHA"/);
 
   // AND THE PREVIOUS TARBALL IS REMOVED. The name carries the build number, so
   // --clobber cannot reach it: every merge uploaded a new name beside the last
