@@ -13,8 +13,25 @@ reaches TestFlight, Play and the GitHub release.
 
 ## 0.2.2 — 2026-09-04
 
-**Mostly for operators, and two things you can now do from a phone that
-previously needed a terminal on the box.**
+**Two things you can now do from your phone that used to need a terminal on the
+machine, and a fix every operator should read.**
+
+**In the apps**
+
+- **Choose which releases a machine installs.** A picker on the host row:
+  `stable` takes published releases, `rolling` takes the newest build as it is
+  merged. It installs nothing by itself — it decides what the next update is
+  allowed to be. A machine whose channel is set in its own configuration shows
+  the answer and says it cannot be changed from here.
+- **Readmit a revoked host, or replace a host's key, from the host row** —
+  swipe on iOS, a button on Android. Both were deliberately refused for an
+  unbound pin, and both refusals named a remedy that until now only a shell
+  could apply.
+- **A packaged machine can see its own updates.** It reported "cannot tell" for
+  as long as the packaging existed, because the check counted git commits and a
+  release has none. Both apps now show what a machine found waiting for it.
+
+**For operators**
 
 v0.2.1 published the first host package this project has ever released — and
 its manifest said `"protocol": 2` for code that speaks v3. The builder read that
@@ -26,6 +43,11 @@ concludes the release matches, installs v3 code and strands itself from its
 coordinator — the exact failure the field exists to prevent, caused by the
 field. **The number now comes from the protocol itself**, so it cannot drift
 again, and `v0.2.1`'s host package should not be installed.
+
+The installer now records where a machine's releases come from, derived from
+the repository it was installed out of — so a fork's boxes take the fork's.
+Existing boxes pick this up on `install.sh --upgrade`, without which they keep
+reporting that they do not know where to look.
 
 **Also**
 
@@ -46,26 +68,6 @@ again, and `v0.2.1`'s host package should not be installed.
   took the first `node` on `PATH`, which on Debian is the distribution's 20, and
   never looked at the newer one nvm had put in the run user's home. Clean hosts
   worked; the boxes most likely to be upgraded did not.
-
-**In the apps**
-
-- **Readmit a revoked host, or replace a host's key, from the host row** — swipe
-  on iOS, a button on Android. Both were deliberately refused for an unbound
-  pin, and both refusals named a remedy that only a shell could apply.
-- **Choose which releases a box installs.** A segmented picker on iOS, chips on
-  Android: `stable` takes published releases, `rolling` takes the newest build
-  of main on every merge. It installs nothing by itself — it decides what
-  the next update is allowed to be. Boxes whose channel is set in their own
-  environment show the answer and say it cannot be changed from here.
-
-**Also**
-
-- **A packaged box can finally see its own updates.** It reported "cannot tell"
-  for as long as the packaging existed: the check counted git commits, and a
-  release has none. Both phones now show what a box found waiting, and the
-  installer records where its releases come from — derived from the repository
-  it was installed out of, so a fork's boxes take the fork's. Existing boxes
-  pick this up on `install.sh --upgrade`.
 - **An upgrade that fails now says which package broke.** It reported whatever
   came last, which was usually debconf recovering — the tidying after the
   error, quoted as the error. `install.sh --repair` re-runs the parts of an
