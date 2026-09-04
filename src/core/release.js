@@ -109,7 +109,7 @@ export function rolloutPosition(hostKey, version) {
  * @param {unknown} q.manifest        whatever the URL returned
  * @param {string} q.installed        the version running now
  * @param {number} q.protocol         the protocol THIS build speaks
- * @param {string} [q.channel]        'stable' (default) or 'prerelease'
+ * @param {string} [q.channel]        'stable' (default) or 'rolling'
  * @param {string} [q.hostKey]        stable per machine, for staged rollouts
  * @returns {{ act: false, reason: string, message: string } | { act: true, manifest: Manifest, message: string }}
  */
@@ -174,7 +174,10 @@ export function decideRelease({ manifest, installed, protocol, channel = 'stable
   // A PRERELEASE IS OPT-IN, PER HOST. The point of marking one is that it goes
   // to the boxes somebody chose to expose, so a bad build is found before every
   // machine takes it.
-  if (m.prerelease === true && channel !== 'prerelease') {
+  // `m.prerelease` is GITHUB'S flag — the checkbox on the release — and the
+  // channel is which address this box polls. Two different questions, which is
+  // why the channel is no longer called by the same word.
+  if (m.prerelease === true && channel !== 'rolling') {
     return {
       act: false,
       reason: 'channel',
@@ -253,9 +256,19 @@ export function fileUrl(manifestUrl, file) {
   return new URL(file, manifestUrl).toString();
 }
 
-/** The two GitHub release addresses, and how to get from one to the other. */
+/**
+ * The two GitHub release addresses, and how to get from one to the other.
+ *
+ * THE ROLLING TAG IS `rolling`, NOT `main`, and that is a bug fix rather than a
+ * preference. A tag named `main` alongside a branch named `main` makes every
+ * bare `main` in git ambiguous — and git resolves `refs/tags/` FIRST, so
+ * `git checkout main`, `git diff main` and `git log main..` silently used the
+ * commit the last rolling build was cut from, drifting further behind the
+ * branch on every merge. It warns, and a warning in a script nobody reads is
+ * not a defence.
+ */
 const STABLE_PATH = '/releases/latest/download/';
-const PRERELEASE_PATH = '/releases/download/main/';
+const ROLLING_PATH = '/releases/download/rolling/';
 
 /**
  * Which manifest a box on this channel should fetch.
@@ -279,8 +292,8 @@ const PRERELEASE_PATH = '/releases/download/main/';
  */
 export function manifestUrlFor(manifestUrl, channel) {
   const url = String(manifestUrl || '');
-  const want = channel === 'prerelease' ? PRERELEASE_PATH : STABLE_PATH;
-  const other = channel === 'prerelease' ? STABLE_PATH : PRERELEASE_PATH;
+  const want = channel === 'rolling' ? ROLLING_PATH : STABLE_PATH;
+  const other = channel === 'rolling' ? STABLE_PATH : ROLLING_PATH;
   if (url.includes(want)) return { url, derived: true };
   if (url.includes(other)) return { url: url.replace(other, want), derived: true };
   return { url, derived: false };

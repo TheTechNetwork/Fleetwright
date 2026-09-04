@@ -180,7 +180,7 @@ without thinking about either behaves exactly as releases always have.
 { "prerelease": true, "rollout": 0.25 }
 ```
 
-**`prerelease` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=prerelease`
+**`rolling` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=rolling`
 takes them; the default `stable` skips them. That is the point of marking a
 release: it reaches the machines somebody chose to expose, so a bad build is
 found before the whole fleet takes it. CI sets the field from GitHub's own
@@ -217,12 +217,27 @@ one is a setting somebody changes rather than a commit.
 
 ### Two addresses, and the channel picks one
 
+**The channel is `rolling`, and the tag is `rolling`, and neither is `main`.**
+Both were, for one afternoon. A tag named `main` beside a branch named `main`
+makes every bare `main` in git ambiguous — and git resolves `refs/tags/` first,
+so `git checkout main`, `git diff main` and `git log main..` silently used the
+commit the last rolling build was cut from, one merge further behind on every
+run. It warns and then does the wrong thing anyway.
+
+The channel was renamed with it, for a different reason: GitHub already has a
+field called `prerelease` — the checkbox on a release, which the manifest
+carries — so a channel of the same name meant one word for two questions,
+*which address does this box poll* and *was this release marked as not final*.
+`AGENT_HUB_RELEASE_CHANNEL=prerelease` is still **read** as `rolling`, because
+it was documented briefly and falling back to `stable` would be the silent wrong
+answer. Nothing writes it.
+
 | Channel | `AGENT_HUB_RELEASE_MANIFEST` | What it gets |
 |---|---|---|
 | `stable` (default) | `.../releases/latest/download/manifest.json` | Published releases only. GitHub's `latest` pointer skips prereleases, so this address cannot serve a main build even by accident |
-| `prerelease` | `.../releases/download/main/manifest.json` | The newest build of `main`, replaced on every merge |
+| `rolling` | `.../releases/download/rolling/manifest.json` | The newest build of `main`, replaced on every merge |
 
-**The prerelease channel is `main`, not "a release somebody marked".** CI has
+**The rolling channel is `main`, not "a release somebody marked".** CI has
 built a host package on every push for weeks and uploaded it as a workflow
 artifact — which expires and has no stable URL, so nothing could poll it. A
 rolling release at a fixed tag gives it a permanent address whose contents are
@@ -238,7 +253,7 @@ untouched so it remains one.
 installed pointing at the stable manifest, and `manifestUrlFor` derives the
 other address from it by recognising GitHub's two release paths. Filtering the
 manifest without moving the URL would have been the trap: `releases/latest/download`
-skips prereleases by GitHub's own definition, so a box switched to `prerelease`
+skips prereleases by GitHub's own definition, so a box switched to `rolling`
 would have reported the new channel and gone on taking stable builds forever.
 A URL matching neither shape — a mirror — is left alone, and `/channel` says
 so rather than letting somebody discover it from a box that never updates.

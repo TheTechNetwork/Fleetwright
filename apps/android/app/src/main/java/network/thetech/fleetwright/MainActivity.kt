@@ -891,7 +891,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             )
                         } else {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("stable", "prerelease").forEach { option ->
+                                listOf("stable", "rolling").forEach { option ->
                                     FilterChip(
                                         selected = current == option,
                                         enabled = busyHost == null && current != option,

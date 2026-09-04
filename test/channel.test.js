@@ -37,11 +37,11 @@ test('a box nobody has asked is on stable', () => {
 test('what was set is what the next read gets', () => {
   const { cfg, stateDir } = fixture();
   try {
-    const r = writeChannel(cfg, 'prerelease');
+    const r = writeChannel(cfg, 'rolling');
     assert.equal(r.ok, true);
-    assert.equal(r.channel, 'prerelease');
+    assert.equal(r.channel, 'rolling');
     // The point of the whole feature: a second process, reading fresh, agrees.
-    assert.equal(readChannel(cfg), 'prerelease');
+    assert.equal(readChannel(cfg), 'rolling');
     // And back again, because a switch that only goes one way is a trap.
     assert.equal(writeChannel(cfg, 'stable').ok, true);
     assert.equal(readChannel(cfg), 'stable');
@@ -53,23 +53,23 @@ test('what was set is what the next read gets', () => {
 test('a channel nobody has heard of is refused, and the file is untouched', () => {
   const { cfg, stateDir } = fixture();
   try {
-    writeChannel(cfg, 'prerelease');
+    writeChannel(cfg, 'rolling');
     const r = writeChannel(cfg, 'nightly');
     assert.equal(r.ok, false);
     assert.match(r.message, /not a channel/);
     // Refused means refused: the box did not quietly move, and did not quietly
     // fall back to stable either.
-    assert.equal(readChannel(cfg), 'prerelease');
+    assert.equal(readChannel(cfg), 'rolling');
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
 
 test('the environment wins, and setting the channel says so rather than lying', () => {
-  const { cfg, stateDir } = fixture({ releaseChannel: 'prerelease' });
+  const { cfg, stateDir } = fixture({ releaseChannel: 'rolling' });
   try {
     assert.equal(pinnedByEnv(cfg), true);
-    assert.equal(readChannel(cfg), 'prerelease');
+    assert.equal(readChannel(cfg), 'rolling');
 
     const r = writeChannel(cfg, 'stable');
     // THE ASSERTION THIS FILE EXISTS FOR. Writing a file that the next read
@@ -78,7 +78,45 @@ test('the environment wins, and setting the channel says so rather than lying', 
     assert.equal(r.ok, false);
     assert.match(r.message, /AGENT_HUB_RELEASE_CHANNEL/);
     assert.match(r.message, /agent-hub\.env/);
-    assert.equal(readChannel(cfg), 'prerelease');
+    assert.equal(readChannel(cfg), 'rolling');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('the name this channel had for one afternoon still reads', () => {
+  // #366 shipped `prerelease` as the value and the docs said so for a few
+  // hours. Anybody who copied it into their environment or their state file
+  // should get the channel they asked for — falling back to stable would be
+  // the silent wrong answer this whole module is written against, and it would
+  // be silent in the direction that matters: a box quietly not taking the
+  // builds somebody deliberately opted it into.
+  const { cfg, stateDir } = fixture();
+  try {
+    writeFileSync(path.join(stateDir, 'release-channel'), 'prerelease\n');
+    assert.equal(readChannel(cfg), 'rolling');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+
+  const pinned = fixture({ releaseChannel: 'prerelease' });
+  try {
+    assert.equal(readChannel(pinned.cfg), 'rolling');
+    assert.equal(pinnedByEnv(pinned.cfg), true);
+  } finally {
+    rmSync(pinned.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('the old name is readable and NOT settable', () => {
+  // Read-only on purpose: accepting it as a written answer would keep a name
+  // that existed for an afternoon alive for ever, in files written years later
+  // by people who never saw the docs that used it.
+  const { cfg, stateDir } = fixture();
+  try {
+    const r = writeChannel(cfg, 'prerelease');
+    assert.equal(r.ok, false);
+    assert.match(r.message, /stable, rolling/);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -91,7 +129,7 @@ test('a corrupt or half-written file reads as stable rather than throwing', () =
     assert.equal(readChannel(cfg), 'stable');
     // Whitespace and case are how a person edits a one-word file by hand.
     writeFileSync(path.join(stateDir, 'release-channel'), '  PreRelease \n');
-    assert.equal(readChannel(cfg), 'prerelease');
+    assert.equal(readChannel(cfg), 'rolling');
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -101,10 +139,10 @@ test('an unwritable state directory is reported, not swallowed', () => {
   const { cfg, stateDir } = fixture();
   try {
     chmodSync(stateDir, 0o500);
-    const r = writeChannel(cfg, 'prerelease');
+    const r = writeChannel(cfg, 'rolling');
     // Running the suite as root defeats a mode bit, so this asserts the pair
     // that must hold either way: the answer and the box agree.
-    assert.equal(readChannel(cfg), r.ok ? 'prerelease' : 'stable');
+    assert.equal(readChannel(cfg), r.ok ? 'rolling' : 'stable');
     if (!r.ok) assert.match(r.message, /could not write/);
   } finally {
     chmodSync(stateDir, 0o700);
@@ -122,19 +160,19 @@ test('/channel answers with data, not only a sentence', async () => {
     assert.equal(asked.channel, 'stable');
     assert.equal(asked.channelPinned, false);
 
-    const set = await dispatch(ctx, '/channel prerelease');
+    const set = await dispatch(ctx, '/channel rolling');
     assert.equal(set.ok, true);
-    assert.equal(set.channel, 'prerelease');
+    assert.equal(set.channel, 'rolling');
     // A picker rendered by parsing the sentence would break the first time the
     // wording changed, which is why the field is asserted and not the prose.
-    assert.equal((await dispatch(ctx, '/channel')).channel, 'prerelease');
+    assert.equal((await dispatch(ctx, '/channel')).channel, 'rolling');
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
 
 test('/channel tells a pinned box it cannot be changed from here', async () => {
-  const { cfg, stateDir } = fixture({ releaseChannel: 'prerelease' });
+  const { cfg, stateDir } = fixture({ releaseChannel: 'rolling' });
   try {
     const asked = await dispatch(/** @type {any} */ ({ cfg }), '/channel');
     // Said in the answer rather than discovered by trying, and carried as a
@@ -152,7 +190,7 @@ test('the channel verb and the command cannot drift apart', () => {
   // third channel in one place fails here rather than at a phone.
   assert.deepEqual(VERBS.channel.params.to.values, [...CHANNELS]);
   assert.equal(toCommandLine({ verb: 'channel', params: {}, actor: '' }), '/channel');
-  assert.equal(toCommandLine({ verb: 'channel', params: { to: 'prerelease' }, actor: '' }), '/channel prerelease');
+  assert.equal(toCommandLine({ verb: 'channel', params: { to: 'rolling' }, actor: '' }), '/channel rolling');
 });
 
 test('/update takes the stored channel, and the channel moves the address', () => {
@@ -174,25 +212,25 @@ test('/update takes the stored channel, and the channel moves the address', () =
 
 test('the two channels are two addresses, and a mirror is left alone', () => {
   const stable = 'https://github.com/o/r/releases/latest/download/manifest.json';
-  const main = 'https://github.com/o/r/releases/download/main/manifest.json';
+  const rolling = 'https://github.com/o/r/releases/download/rolling/manifest.json';
 
-  assert.deepEqual(manifestUrlFor(stable, 'prerelease'), { url: main, derived: true });
-  assert.deepEqual(manifestUrlFor(main, 'stable'), { url: stable, derived: true });
+  assert.deepEqual(manifestUrlFor(stable, 'rolling'), { url: rolling, derived: true });
+  assert.deepEqual(manifestUrlFor(rolling, 'stable'), { url: stable, derived: true });
   // Already right stays put rather than being rewritten twice.
   assert.deepEqual(manifestUrlFor(stable, 'stable'), { url: stable, derived: true });
-  assert.deepEqual(manifestUrlFor(main, 'prerelease'), { url: main, derived: true });
+  assert.deepEqual(manifestUrlFor(rolling, 'rolling'), { url: rolling, derived: true });
 
   // A mirror matches neither shape. Returned UNCHANGED and flagged, because
   // inventing a path inside somebody else's release host would produce a 404
   // on every update and blame the channel for it.
   const mirror = 'https://releases.example.com/agent-hub/manifest.json';
-  assert.deepEqual(manifestUrlFor(mirror, 'prerelease'), { url: mirror, derived: false });
+  assert.deepEqual(manifestUrlFor(mirror, 'rolling'), { url: mirror, derived: false });
 });
 
 test('a box on a mirror is told the switch does not move its address', async () => {
   const { cfg, stateDir } = fixture({ releaseManifest: 'https://releases.example.com/m.json' });
   try {
-    const r = await dispatch(/** @type {any} */ ({ cfg }), '/channel prerelease');
+    const r = await dispatch(/** @type {any} */ ({ cfg }), '/channel rolling');
     assert.equal(r.ok, true);
     // Said rather than left to be discovered by a box that never updates.
     assert.match(r.text, /same manifest on either channel/);
@@ -206,8 +244,8 @@ test('a box on GitHub is told where its updates will come from', async () => {
     releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json',
   });
   try {
-    const r = await dispatch(/** @type {any} */ ({ cfg }), '/channel prerelease');
-    assert.match(r.text, /releases\/download\/main\/manifest\.json/);
+    const r = await dispatch(/** @type {any} */ ({ cfg }), '/channel rolling');
+    assert.match(r.text, /releases\/download\/rolling\/manifest\.json/);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

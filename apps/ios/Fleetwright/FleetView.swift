@@ -705,7 +705,7 @@ private struct SettingsView: View {
             } else {
                 Picker("Channel", selection: channelBinding(host.hostId, current: channel)) {
                     Text("Stable").tag("stable")
-                    Text("Prerelease").tag("prerelease")
+                    Text("Rolling").tag("rolling")
                 }
                 .pickerStyle(.segmented)
                 .font(.caption)
