@@ -597,6 +597,133 @@ private struct SettingsView: View {
         await loadHosts()
     }
 
+    /// What this box says about itself, as lines.
+    ///
+    /// EXTRACTED FOR THE TYPE CHECKER, not for tidiness, and the failure is
+    /// worth naming because it does not point at itself: this row's body grew
+    /// past what Swift will spend solving one expression, and the compiler
+    /// blamed a nested ternary that had not been touched in months — "unable to
+    /// type-check this expression in reasonable time", on somebody else's line.
+    /// It only happens on CI, because only CI builds for a device.
+    ///
+    /// A method rather than a separate View: these read `busyHost` and call
+    /// `maintain`, and threading that through a struct's initialiser would be
+    /// paying in bindings for something the type checker wanted in expressions.
+    @ViewBuilder
+    private func healthLines(for host: Fleet.FleetHost) -> some View {
+            // WHO CAN START A SESSION HERE. This used to read "NOT signed in
+            // — sessions will not start", off the box's own Claude login, and it
+            // survived the model that made it true: a machine has no account
+            // now, so that line appeared in red on every host — including ones
+            // reporting healthy, which is a screen contradicting itself.
+            //
+            // Zero is the real fault and is the only one worth colouring.
+            // Absent means an older host and says nothing at all.
+            if let accounts = host.health?.claudeAccounts {
+                Text(describeAccounts(accounts))
+                    .font(.caption2)
+                    .foregroundStyle(accounts == 0 ? .red : .secondary)
+            }
+            // THE SECOND WAY TO BE SIGNED OUT, and the one that was invisible.
+            // The line above reports on the box's own home directory; this
+            // reports on the credential file a session is handed a copy of.
+            // They came apart in production — a box saying "signed in" while
+            // every session started on it came up logged out — and the only
+            // visible symptom was that a brand new session worked and a resumed
+            // one did not.
+            //
+            // Shown only when it is DEAD. An expired token that can renew
+            // itself is the ordinary state of a box nobody has touched for an
+            // hour, and a warning that fires on the ordinary case is one people
+            // stop reading.
+            if let credential = host.health?.credential, credential.isDead {
+                Text(credential.summary ?? "Sessions started here will come up signed out.")
+                    .font(.caption2).foregroundStyle(.red)
+            }
+            if let version = host.health?.version?.head {
+                let behind = host.health?.updates?.appBehind ?? 0
+                Text(describeVersion(version, behind: behind))
+                    .font(.caption2)
+                    .foregroundStyle(behind > 0 ? .orange : .secondary)
+            }
+            // WHAT THE OS HAS WAITING. The host has been sending this since
+            // maintenance shipped and nothing displayed it, which is why
+            // upgrade looked like a verb that could only report.
+            if let system = host.health?.updates?.system, !system.isEmpty {
+                Text(system).font(.caption2).foregroundStyle(.orange)
+            }
+            if host.health?.updates?.rebootRequired == true {
+                Text("reboot required").font(.caption2).foregroundStyle(.orange)
+            }
+    }
+
+    /// Check, apply, reboot — and the channel that decides what "apply" means.
+    @ViewBuilder
+    private func maintenanceRow(for host: Fleet.FleetHost) -> some View {
+            // MAINTENANCE, which used to need SSH. Update is safe and
+            // idempotent so it is one tap; reboot is two steps and asks for the
+            // hostname, exactly as it does in chat — a remote reboot should be
+            // harder than a local one, not easier.
+            //
+            // Check always; apply only when there is something to apply. A
+            // button that is always offered teaches people to press it without
+            // reading, which is the opposite of what a maintenance screen is
+            // for.
+            HStack(spacing: 12) {
+                Button("Check") { Task { await maintain(host.hostId, .check) } }
+                if host.health?.updates?.appPending == true {
+                    Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
+                }
+                if host.health?.updates?.systemPending == true {
+                    Button("Apply upgrade") { Task { await maintain(host.hostId, .applyUpgrade) } }
+                }
+                Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
+            .disabled(busyHost != nil)
+    }
+
+    /// Which releases this box takes, as a control or as a fact.
+    ///
+    /// Absent on a host that predates the verb — nil, which is CANNOT TELL and
+    /// not `stable`. An app that guessed would label a box confidently and
+    /// wrongly, which is the rule `credential` and `updates` are written around
+    /// a few lines above.
+    @ViewBuilder
+    private func channelControl(for host: Fleet.FleetHost) -> some View {
+        if let channel = host.health?.channel {
+            if host.health?.channelPinned == true {
+                // Pinned in the box's environment. Shown as a fact, not as a
+                // control that refuses: an operator setting this from
+                // configuration management has said something deliberate, and a
+                // picker that silently failed would read as a bug in the app
+                // rather than a decision on the box.
+                Text("Channel: \(channel) — set on the box")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("Channel", selection: channelBinding(host.hostId, current: channel)) {
+                    Text("Stable").tag("stable")
+                    Text("Prerelease").tag("prerelease")
+                }
+                .pickerStyle(.segmented)
+                .font(.caption)
+                .disabled(busyHost != nil)
+            }
+        }
+    }
+
+    /// The picker's binding, named rather than inline for the same reason
+    /// `channelControl` exists: a `Binding(get:set:)` holding a `Task` is a
+    /// closure the type checker has to work out in the middle of a view body.
+    private func channelBinding(_ hostId: String, current: String) -> Binding<String> {
+        Binding(
+            get: { current },
+            set: { wanted in Task { await maintain(hostId, .channel(wanted)) } }
+        )
+    }
+
     /// Restore or purge, in one place so the busy flag and the result text
     /// cannot drift apart — the same reason `maintain` exists.
     @MainActor
@@ -999,114 +1126,17 @@ private struct SettingsView: View {
                                 Text(describeAccount(account))
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
-                            // WHO CAN START A SESSION HERE. This used to read
-                            // "NOT signed in — sessions will not start", off
-                            // the box's own Claude login, and it survived the
-                            // model that made it true: a machine has no account
-                            // now, so that line appeared in red on every host —
-                            // including ones reporting healthy, which is a
-                            // screen contradicting itself.
-                            //
-                            // Zero is the real fault and is the only one worth
-                            // colouring. Absent means an older host and says
-                            // nothing at all.
-                            if let accounts = host.health?.claudeAccounts {
-                                Text(accounts == 0
-                                     ? "Nobody has connected a Claude account here — sessions will not start"
-                                     : accounts == 1 ? "1 person can start sessions here"
-                                     : "\(accounts) people can start sessions here")
-                                    .font(.caption2)
-                                    .foregroundStyle(accounts == 0 ? .red : .secondary)
-                            }
-                            // THE SECOND WAY TO BE SIGNED OUT, and the one
-                            // that was invisible. The line above reports on
-                            // the box's own home directory; this reports on
-                            // the credential file a session is handed a copy
-                            // of. They came apart in production — a box saying
-                            // "signed in" while every session started on it
-                            // came up logged out — and the only visible
-                            // symptom was that a brand new session worked and
-                            // a resumed one did not.
-                            //
-                            // Shown only when it is DEAD. An expired token
-                            // that can renew itself is the ordinary state of a
-                            // box nobody has touched for an hour, and a
-                            // warning that fires on the ordinary case is one
-                            // people stop reading.
-                            if let credential = host.health?.credential, credential.isDead {
-                                Text(credential.summary ?? "Sessions started here will come up signed out.")
-                                    .font(.caption2).foregroundStyle(.red)
-                            }
-                            if let version = host.health?.version?.head {
-                                let behind = host.health?.updates?.appBehind ?? 0
-                                Text(describeVersion(version, behind: behind))
-                                    .font(.caption2)
-                                    .foregroundStyle(behind > 0 ? .orange : .secondary)
-                            }
-                            // WHAT THE OS HAS WAITING. The host has been
-                            // sending this since maintenance shipped and
-                            // nothing displayed it, which is why upgrade
-                            // looked like a verb that could only report.
-                            if let system = host.health?.updates?.system, !system.isEmpty {
-                                Text(system).font(.caption2).foregroundStyle(.orange)
-                            }
-                            if host.health?.updates?.rebootRequired == true {
-                                Text("reboot required").font(.caption2).foregroundStyle(.orange)
-                            }
-                            // MAINTENANCE, which used to need SSH. Update is
-                            // safe and idempotent so it is one tap; reboot is
-                            // two steps and asks for the hostname, exactly as
-                            // it does in chat — a remote reboot should be
-                            // harder than a local one, not easier.
-                            // Check always; apply only when there is something
-                            // to apply. A button that is always offered teaches
-                            // people to press it without reading, which is the
-                            // opposite of what a maintenance screen is for.
-                            HStack(spacing: 12) {
-                                Button("Check") { Task { await maintain(host.hostId, .check) } }
-                                if host.health?.updates?.appPending == true {
-                                    Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
-                                }
-                                if host.health?.updates?.systemPending == true {
-                                    Button("Apply upgrade") { Task { await maintain(host.hostId, .applyUpgrade) } }
-                                }
-                                Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
-                            }
-                            .font(.caption)
-                            .buttonStyle(.borderless)
-                            .disabled(busyHost != nil)
-                            // THE UPDATE CHANNEL, and the reason it is here
-                            // rather than on a settings screen of its own: it
-                            // decides what "Apply update" two lines above will
-                            // install, so it belongs beside it.
-                            //
-                            // Absent on a host that predates the verb, which
-                            // is nil and not "stable" — an app that guessed
-                            // would label a box confidently and wrongly.
-                            if let channel = host.health?.channel {
-                                if host.health?.channelPinned == true {
-                                    // Pinned in the box's environment. Shown as
-                                    // a fact, not as a control that refuses:
-                                    // an operator setting this from
-                                    // configuration management has said
-                                    // something deliberate, and a picker that
-                                    // silently failed would look like a bug in
-                                    // the app rather than a decision on the box.
-                                    Text("Channel: \(channel) — set on the box")
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                } else {
-                                    Picker("Channel", selection: Binding(
-                                        get: { channel },
-                                        set: { Task { await maintain(host.hostId, .channel($0)) } }
-                                    )) {
-                                        Text("Stable").tag("stable")
-                                        Text("Prerelease").tag("prerelease")
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .font(.caption)
-                                    .disabled(busyHost != nil)
-                                }
-                            }
+                            // THREE CALLS RATHER THAN THREE BLOCKS, and it is
+                            // the Swift type checker asking, not a style rule.
+                            // This row's body grew past what the compiler will
+                            // spend on one expression and it failed on CI —
+                            // blaming a nested ternary nobody had touched,
+                            // because that was the sub-expression it happened
+                            // to run out of time on. The line an error like
+                            // that names is not the line that caused it.
+                            healthLines(for: host)
+                            maintenanceRow(for: host)
+                            channelControl(for: host)
                             // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
                             // this row is where it belongs: it is a login the
                             // BOX performs in a pane, not a token that travels.
@@ -1418,6 +1448,19 @@ private func describeBinned(_ item: Fleet.Binned) -> String {
     if item.title != nil { parts.append(item.name) }
     if let remaining = item.remaining { parts.append(remaining) }
     return parts.joined(separator: " · ")
+}
+
+/// "Nobody has connected a Claude account here", or how many people have.
+///
+/// A function rather than a nested ternary inside the view, and NOT a style
+/// preference: the host row's body grew past what the Swift type checker will
+/// spend on one expression, and it failed here — on code that had not changed
+/// — because this was the expression it happened to run out of time on. The
+/// error names a line nobody edited, which is the whole difficulty with it.
+private func describeAccounts(_ accounts: Int) -> String {
+    if accounts == 0 { return "Nobody has connected a Claude account here — sessions will not start" }
+    if accounts == 1 { return "1 person can start sessions here" }
+    return "\(accounts) people can start sessions here"
 }
 
 /// "running abc1234 · 3 commits behind", or "· up to date".
