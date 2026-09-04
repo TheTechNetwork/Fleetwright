@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseLcov, judge, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
 
 /** One lcov record. Only SF/LF/LH are read, so only those are written. */
 const record = (file, found, hit) => `TN:\nSF:${file}\nLF:${found}\nLH:${hit}\nend_of_record\n`;
@@ -113,4 +113,24 @@ test('holding exactly at the floor passes', () => {
   // pull request that changed nothing about coverage.
   const cov = parseLcov(record('src/a.js', 100, 90));
   assert.equal(judge(cov, { 'src/a.js': 90 }).regressions.length, 0);
+});
+
+test('a skipped test is counted, because a partial run is not a coverage answer', () => {
+  // THE BUG THIS CAME FROM. test/files-container.test.js skips itself when
+  // there is no container engine, and src/core/files.js then measures 48%
+  // instead of the 96% CI sees. Judging that against a floor recorded from CI
+  // reports 189 lines of regression that did not happen — red locally, green on
+  // CI, which is the direction that teaches people the gate is noise.
+  assert.equal(skippedCount('\u2139 pass 1257\n\u2139 fail 0\n\u2139 skipped 1\n'), 1);
+  assert.equal(skippedCount('\u2139 pass 1257\n\u2139 fail 0\n\u2139 skipped 12\n'), 12);
+});
+
+test('a full run counts zero, so the ratchet still runs where nothing skips', () => {
+  // The half that matters for CI: if this over-reported, the gate would quietly
+  // stop judging anything anywhere.
+  assert.equal(skippedCount('\u2139 pass 1257\n\u2139 fail 0\n\u2139 skipped 0\n'), 0);
+  assert.equal(skippedCount(''), 0);
+  // Not fooled by the word appearing in a test NAME, which is the obvious way
+  // for a line-matching parser to be wrong.
+  assert.equal(skippedCount('\u2714 a test about skipped 3 things (1ms)\n\u2139 skipped 0\n'), 0);
 });
