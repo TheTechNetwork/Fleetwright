@@ -167,10 +167,11 @@ will configure the wrong thing — that command is the repository saying which
 thing is the Worker. Prefer a terminal? The
 <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">deploy page</a>
 is five commands from clone to a coordinator answering on a URL.</p>
-<p>It comes up refusing every request until you set an admin token, which is
-deliberate: a coordinator with no credential is remote control of every machine
-in the fleet for whoever finds the URL. The Worker says so, and names the
-command. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
+<p>The dialog asks up front for the two values every coordinator needs — an
+admin token, and who may sign in. Without the first it comes up refusing every
+request, which is deliberate: a coordinator with no credential is remote
+control of every machine in the fleet for whoever finds the URL. The Worker
+says so, and names the command. <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">The rest of the deploy</a>
 is DNS and four secrets.</p>
 <p><strong>Sign-in still works with the apps from the stores</strong> — you need no
 Apple or Google setup of your own for it. What you cannot self-host is

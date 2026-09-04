@@ -37,5 +37,15 @@
   },
   "dependencies": {
     "jose": "6.2.10"
+  },
+  "cloudflare": {
+    "bindings": {
+      "AGENT_FLEET_API_TOKEN": {
+        "description": "Break-glass admin credential — the coordinator refuses every request until it is set. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
+      },
+      "AGENT_FLEET_AUTH_ALLOW": {
+        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml — see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
+      }
+    }
   }
 }

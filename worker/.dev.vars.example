@@ -1,0 +1,19 @@
+# The secrets a coordinator cannot run without, in the dotenv format the
+# Deploy to Cloudflare dialog reads: declaring them here is what makes the
+# dialog ask for each value at deploy time and store it as a Worker secret,
+# with the descriptions kept in the root package.json's "cloudflare" field.
+#
+# Locally, `cp .dev.vars.example .dev.vars` beside worker/wrangler.toml gives
+# `wrangler dev` the same pair. The real file is gitignored; this one ships.
+#
+# This is deliberately NOT every setting. The sign-in identifiers are [vars]
+# in worker/wrangler.toml — public values whose changes should be a reviewable
+# diff — and the push secrets are optional and documented in that file's
+# secret block. Only what every coordinator needs is asked for up front.
+#
+# TWO COPIES OF THIS FILE, pinned identical by test/fork-safe-config.test.js:
+# this one sits beside the wrangler config, where wrangler's tooling looks,
+# and the repository root holds the other, where the deploy button's dialog
+# looks — the button hands Cloudflare the whole repository.
+AGENT_FLEET_API_TOKEN=""
+AGENT_FLEET_AUTH_ALLOW=""

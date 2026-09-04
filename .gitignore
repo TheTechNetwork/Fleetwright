@@ -58,3 +58,9 @@ apps/android/sentry.properties
 apps/ios/.sentryclirc
 .sentryclirc
 sentry.properties
+
+# Real secrets for `wrangler dev` and the deploy-button flow. The example file
+# is the one that ships — it declares which secrets the Deploy to Cloudflare
+# dialog asks for. This pair of patterns is wrangler's own convention.
+.dev.vars*
+!.dev.vars.example

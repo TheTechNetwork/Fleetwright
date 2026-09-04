@@ -62,8 +62,19 @@ at the subdirectory would break the imports. The root `package.json`'s
 pre-fill: it installs the Worker's dependencies and deploys from `worker/`,
 with the whole repository present.
 
-Everything after the button is the same as the terminal path: the secret, the
-sign-in values, and a host pointed at the URL.
+**The dialog asks for the two required secrets up front** —
+`AGENT_FLEET_API_TOKEN` and `AGENT_FLEET_AUTH_ALLOW` — because
+`.dev.vars.example` declares them and `package.json`'s `cloudflare` field
+describes them, which is the mechanism Cloudflare's deploy flow reads. So a
+button deploy comes up already holding its admin token rather than refusing
+every request, and already knowing who may sign in.
+
+Deliberately not asked for: the two sign-in identifiers. They are `[vars]`,
+copied into your `worker/wrangler.toml` as below — public values whose changes
+should be a reviewable diff, and collecting them as dialog secrets would set
+up exactly the vars-versus-secrets namespace collision that file warns about.
+So after the button, what remains is those two lines and a host pointed at
+the URL.
 
 ### Sign-in
 

@@ -168,6 +168,10 @@ enabled = true
 #   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
 #
+# Those two are also declared in .dev.vars.example, which is what makes the
+# Deploy to Cloudflare dialog ask for them at deploy time — a button deploy
+# never runs without them. The push secrets below stay out of it: optional.
+#
 # AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
 # identifiers and belong in [vars] above, where changing who a coordinator will
 # accept is a reviewable diff. This block briefly listed them as secrets, and
