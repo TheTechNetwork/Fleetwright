@@ -7,10 +7,13 @@ fork or a fresh clone never shows a red main for something it was never given.
 
 | workflow | on | secrets |
 |---|---|---|
-| `ci.yml` | every push and PR | none |
+| `ci.yml` | every push and PR — **no paths filter**, see `ci-scope.md` | none |
+| `ci.yml` — `gate` (`CI passed`) | every push, PR and merge-queue run | none |
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
-| `worker.yml` — `check` | PRs touching `worker/` or `src/fleet/` | none |
+| `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |
+| `worker.yml` — `gate` (`Worker passed`) | every push, PR and merge-queue run | none |
+| `sandbox.yml` — `smoke` | PRs touching `sandbox/` | none |
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
 | `ios.yml` — `testflight` | published release | App Store Connect |
@@ -22,6 +25,143 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
 | `renovate-config.yml` | PRs touching `renovate.json` | none |
+
+## The merge gate
+
+Two named checks, and they are the only two worth requiring:
+
+| check | what it means |
+|---|---|
+| **`CI passed`** | `ci.yml`'s `test` matrix and `checks` job both passed, or were legitimately skipped |
+| **`Worker passed`** | `worker.yml`'s `check` job passed, or the change was not in the Worker's bundle |
+
+**They exist so that a required check can have a stable name.** Requiring
+`test (node 24)` directly works right up until the matrix moves — it has
+already been 18 and 20 — and on the day it becomes `26`, every protection rule
+naming the old leg waits forever for a check that will never report again. It
+does not fail; it hangs, and it looks like slow CI rather than a broken gate.
+These two names do not move.
+
+Both are `if: always()` over their dependencies, and **skipped counts as
+passed**. That is the half that makes a filtered job safe to require: a change
+outside the Worker's bundle skips `check` and the gate still answers. A failed
+or **cancelled** job does not pass — `success()` alone gets the cancellation
+case wrong, and a cancelled run is not a run that said yes.
+
+### Turning it on
+
+The workflows are ready either way; these are repository settings, and nothing
+in the repository can set them.
+
+**Settings → Rules → Rulesets**, on `main`:
+
+- *Require status checks to pass* → add **`CI passed`** and **`Worker passed`**.
+- *Require branches to be up to date before merging* — or, better, the merge
+  queue below, which does the same thing without a push-and-wait loop.
+- *Require a pull request before merging.*
+
+**Settings → General → Pull Requests → Allow merge queue**, then in the same
+ruleset *Require merge queue*. `ci.yml` and `worker.yml` already listen for
+`merge_group`; a queue run builds main *plus everything ahead of this pull
+request* and tests that, which is the only thing that answers "does merging
+this break main" rather than "did this break the main it branched from".
+
+**That distinction is not theoretical here.** `CONTRIBUTING.md` describes
+stacked rounds merged bottom-up: `#N+1` is based on `#N`, so the moment `#N`
+merges, `#N+1`'s green tick describes a base that no longer exists. That is the
+exact shape a merge queue is for.
+
+**Do not require the app builds.** `ios.yml` filters at the trigger, so on a
+change outside `apps/ios` it reports *nothing* rather than *skipped* — a
+required check would wait on it forever. Making them requireable means the same
+`changes`-job treatment `worker.yml` got; until then they report on the pull
+request and a human reads them.
+
+## The Worker's deploy filter
+
+`worker.yml` only deploys when something in the Worker's bundle changed, and
+that bundle is wider than `worker/`: it pulls `CoordinatorCore`, the push
+senders and the OIDC verifier out of `src/fleet`, `text.js` and `names.js` out
+of `src/core`, and six files out of `src/mcp`.
+
+The list is checked rather than remembered. `scripts/check-worker-filter.mjs`
+(inside `verify.sh`, the `deploy` line) bundles the Worker with esbuild's
+`--metafile` and fails when `on.push.paths` does not name a file that is
+actually in it:
+
+```
+deploy     ... 30 bundled files, all named
+```
+
+It exists because the hand-maintained version was wrong twice, and the second
+time cost a deploy — see `docs/ci-scope.md`. When it fails it prints the
+uncovered files and the exact `- 'dir/**'` lines to add.
+
+## Coverage
+
+`scripts/check-coverage.mjs`, inside `verify.sh`, so it is the same check
+locally and in CI.
+
+It records per-file **line** coverage in `test/coverage-floor.json` and fails a
+change that executes *less* of a file than the last one did. It is a ratchet,
+not a target: there is no "80% or fail" line to argue about, and no way for the
+untested surface to quietly grow.
+
+```sh
+node scripts/check-coverage.mjs            # the gate
+node scripts/check-coverage.mjs --update   # re-baseline after coverage RISES
+VERIFY_SKIP_COVERAGE=1 ./scripts/verify.sh # skip it, announced
+```
+
+`--update` is the only way a floor moves, and it lands as a reviewable diff in
+the pull request that earned it. A run that rises prints the files and the
+command; a run that drops prints how many **lines** stopped executing, because
+that is the number somebody can act on.
+
+**The suite runs three times per pull request.** Twice in the matrix, and once
+more inside `check-coverage.mjs` — `VERIFY_SKIP_TESTS` skips the `tests` *line*,
+not the run underneath the coverage one, because coverage has to execute the
+suite to measure it. Three runs of 21 seconds, in parallel with a docker build.
+Recorded here so "coverage runs once, here" is not read as "once in total".
+
+Two failures, and they say different things:
+
+| | what it means | what to do |
+|---|---|---|
+| **dropped below its floor** | a test was removed, or code was added that nothing runs | add the test |
+| **no floor recorded** | new source, or newly reached by a test | `--update`, and read the number before committing it |
+
+The second one fails rather than merely printing, because a module added at 0%
+is the untested surface growing — the thing the ratchet exists to stop. There is
+no prior number to judge it against, so the gate insists the number be
+*recorded* rather than judging its value.
+
+Three things it deliberately does not do:
+
+- **Branches and functions are not ratcheted.** They move on their own — the
+  same file measured twice reports 89.83% and 90.60% of branches with nothing
+  changed — and a gate that fails on an unchanged tree is a gate people learn
+  to re-run and then to ignore.
+- **It never fails on a low number.** `src/core/trust.js` sits at 46%. That is
+  a fact to fix with a test, not a reason to block an unrelated change — and it
+  is why an unrecorded file fails on being *unrecorded* rather than on being
+  low.
+- **It does not judge a failing suite.** A run that stopped early covered
+  whatever it reached, and ratcheting against that would record a floor from a
+  broken run.
+
+The slack is **two lines per file**, converted to a percentage from that file's
+own length rather than being a flat percentage — two lines out of a hundred is
+two points, two lines out of a thousand is 0.2, and a flat tolerance would have
+let twenty lines go dark on the big file without a word.
+
+Writing that rule found a real gap, which is the argument for the whole
+mechanism: `scheduler.js` was flapping between 100% and 98.06% on an unchanged
+tree because its `ambiguous_session` refusal — *"a stop that lands on the wrong
+box is not recoverable by trying again"* — **had no test**, and was being
+covered by accident from a fixture elsewhere in the suite.
+`test/ambiguous-session.test.js` asserts it now.
+
 
 ## Cutting a release
 

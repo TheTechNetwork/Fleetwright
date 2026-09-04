@@ -12,6 +12,35 @@
 set -uo pipefail
 fail=0
 
+# THE NODE FLOOR, FIRST, because everything below assumes it.
+#
+# This script grew a dependency on a runtime feature and said nothing about it:
+# check-coverage.mjs imports globSync from node:fs, which does not exist before
+# Node 22, so on an older one the coverage line printed a bare
+#
+#   SyntaxError: The requested module 'node:fs' does not provide an export
+#   named 'globSync'
+#
+# and this script then reported "SOMETHING FAILED — do not commit" for a tree
+# that was completely fine. The message named neither the floor nor the file,
+# which makes it a bug hunt rather than a sentence.
+#
+# THE NUMBER COMES FROM package.json, not from a literal here. That is the whole
+# point of install-node-floor.test.js, which exists because this floor was
+# written down in four places and three of them drifted. A fifth copy in the
+# script that checks everything else would be the same joke told again.
+node_floor=$(node -p "require('./package.json').engines.node.match(/\d+/)[0]" 2>/dev/null || echo '')
+node_major=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo '')
+if [ -n "$node_floor" ] && [ -n "$node_major" ] && [ "$node_major" -lt "$node_floor" ]; then
+  printf 'node       ... FAILED\n'
+  printf '  This is Node %s. package.json says >=%s, and the checks below need it —\n' "$node_major" "$node_floor"
+  printf '  scripts/check-coverage.mjs imports globSync from node:fs, which is 22+.\n'
+  printf '  Nothing was run: a green tick from an unsupported runtime is worth less\n'
+  printf '  than no tick at all.\n'
+  printf '\nSOMETHING FAILED — do not commit\n'
+  exit 1
+fi
+
 # VERIFY_SKIP_TESTS=1 runs everything EXCEPT the suite.
 #
 # For CI, and it is the reason CI can run this file rather than a copy of it.
@@ -26,9 +55,41 @@ printf 'tests      ... '
 if [ -n "${VERIFY_SKIP_TESTS:-}" ]; then
   printf 'skipped (VERIFY_SKIP_TESTS)\n'
 elif out=$(npm test --silent 2>&1); then
-  printf '%s\n' "$(printf '%s' "$out" | grep -E '^# (pass|fail)' | tr '\n' ' ')"
+  # BOTH REPORTER FORMATS, and the second one is why this line was blank.
+  #
+  # `# pass 1182` is TAP; `ℹ pass 1182` is the spec reporter, which is what
+  # node emits now. The grep named only TAP, so it matched nothing and this
+  # printed an empty summary after a suite of 1183 tests — the exit code was
+  # still right, so nothing was WRONG, and that is the point: a line that
+  # reports nothing looks exactly like a line reporting good news.
+  printf '%s\n' "$(printf '%s' "$out" | grep -E '^(#|ℹ) (pass|fail)' | tr '\n' ' ')"
 else
-  printf 'FAILED\n%s\n' "$(printf '%s' "$out" | grep -E '^not ok' | head -10)"; fail=1
+  # And the same on the failing side, where it matters more: with the spec
+  # reporter there is no `not ok`, so a failed suite printed "FAILED" and then
+  # nothing at all — no test name, no assertion, nothing to act on.
+  printf 'FAILED\n%s\n' "$(printf '%s' "$out" | grep -E '^(not ok|✖)' | head -10)"; fail=1
+fi
+
+# COVERAGE, and it runs even when VERIFY_SKIP_TESTS does not.
+#
+# Its own flag on purpose. VERIFY_SKIP_TESTS exists because the suite's answer
+# depends on which Node is running it and therefore belongs in CI's version
+# matrix; coverage's answer does not — it is a property of the code — so it runs
+# once, here, in the `checks` job that skips the suite. One place, one
+# implementation, and CI keeps running this file rather than a copy of it.
+#
+# It runs the suite itself, so this is the second execution locally. Twenty-one
+# seconds, against the class of bug that is the whole reason the comments in
+# this file exist: code that shipped because nothing ever executed it.
+#
+# It fails on a DROP, never on a low number. See scripts/check-coverage.mjs.
+printf 'coverage   ... '
+if [ -n "${VERIFY_SKIP_COVERAGE:-}" ]; then
+  printf 'skipped (VERIFY_SKIP_COVERAGE)\n'
+elif out=$(node scripts/check-coverage.mjs 2>&1); then
+  printf '%s\n' "$(printf '%s' "$out" | tail -1)"
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
 printf 'typecheck  ... '
@@ -73,6 +134,24 @@ else
   printf 'FAILED
 %s
 ' "$out"; fail=1
+fi
+
+# THE DEPLOY FILTER, against the bundle it claims to describe.
+#
+# worker.yml names the directories whose changes redeploy the Worker, and that
+# list has been wrong twice — src/core when the protocol module started
+# importing it, and src/mcp, which was never named at all and cost a deploy:
+# 0d3f8af changed src/mcp/authorize-page.js and otherwise only docs/ and test/,
+# so the workflow never ran and production kept the old code.
+#
+# A missed deploy is the quietest failure here. Nothing is red, no job is
+# visibly skipped, and the coordinator serves last week's code while main says
+# otherwise. esbuild already knows the graph; this asks it.
+printf 'deploy     ... '
+if out=$(node scripts/check-worker-filter.mjs 2>&1); then
+  printf '%s\n' "$out"
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
 # THE CHECKS THAT WOULD HAVE CAUGHT WHAT SHIPPED BROKEN.

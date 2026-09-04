@@ -69,3 +69,121 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # THE IMAGE, RUNNING. Everything above this line proves the Containerfile
+  # builds; nothing proved the thing it built works, and the difference is not
+  # academic — this image shipped for weeks with a PATH SHIM FOR `gh` AND NO
+  # `gh` BEHIND IT. It built perfectly. A beta tester found it the only way
+  # anybody could: `gh: command not found`, in a live session, with a working
+  # credential broker sitting behind it.
+  #
+  # A build is a syntax check for a container. These are the assertions a
+  # session makes on its first second, made here instead of on somebody's box.
+  #
+  # amd64 only and `load: true` rather than push: the arm64 leg is emulated
+  # under QEMU and takes minutes to produce an answer that cannot differ for any
+  # of this — every check below is about whether a file is present and runs, not
+  # about machine code. cache-from is the same GHA cache the job above filled,
+  # so this rebuilds nothing.
+  smoke:
+    name: the image actually runs
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.3.0
+
+      - uses: docker/build-push-action@v7.3.0
+        with:
+          context: sandbox
+          file: sandbox/Containerfile
+          platforms: linux/amd64
+          load: true
+          tags: agent-session:smoke
+          cache-from: type=gha
+
+      # --entrypoint is overridden deliberately: tini + entrypoint.sh ends by
+      # exec'ing claude, which would sit waiting for a terminal nobody is
+      # attached to. The entrypoint itself is run separately below.
+      - name: Everything a session expects to find on PATH
+        run: |
+          set -eu
+          docker run --rm --entrypoint sh agent-session:smoke -euc '
+            for tool in node npm git rg gh claude fleet-cred git-credential-fleet agent-session-hook; do
+              command -v "$tool" >/dev/null || { echo "MISSING: $tool"; exit 1; }
+            done
+            node --version
+            claude --version
+            echo "--- PATH is complete ---"
+          '
+
+      # THE BUG THIS WHOLE JOB EXISTS FOR, and the shim is what makes it
+      # testable without a credential. `gh` on PATH is /usr/local/bin/gh, the
+      # shim; it resolves "the first gh on PATH that is not me" and execs it,
+      # and when there is no such thing it exits 127 saying so. So:
+      #
+      #   gh --version        must succeed — the image installs a real gh
+      #   wrangler --version  must exit 127 — the image deliberately does not,
+      #                       and the shim has to REFUSE rather than hang
+      #
+      # Both halves matter. The first is the regression that reached a tester
+      # (`gh: command not found`, with a working broker behind it). The second
+      # is the failure the shim's own comments call the worst way for this to
+      # break: a shim that finds itself, execs itself and spins forever. A hang
+      # has no error message and no exit code, and a job asserting only the
+      # happy path would sit there for six hours before anybody knew.
+      #
+      # Neither needs a broker: the shim treats a missing credential as
+      # something for the real tool to complain about, not a reason to refuse.
+      - name: The credential shims resolve a real tool, and refuse when there is none
+        timeout-minutes: 2
+        run: |
+          set -eu
+          docker run --rm --entrypoint sh agent-session:smoke -euc '
+            gh --version
+            set +e
+            out=$(wrangler --version 2>&1); rc=$?
+            set -e
+            test "$rc" = 127 || { echo "wrangler shim exited $rc, expected 127: $out"; exit 1; }
+            case "$out" in
+              *"not installed in this session"*) ;;
+              *) echo "wrangler shim said something else: $out"; exit 1 ;;
+            esac
+            echo "--- one shim resolved, one refused, neither looped ---"
+          '
+
+      # The two dialogs that hung a session on hardware. Both are answered in
+      # the image, and both answers are a JSON file that a later edit to the
+      # Containerfile can silently stop writing.
+      - name: The dialogs nobody is there to answer are pre-answered
+        run: |
+          set -eu
+          docker run --rm --entrypoint node agent-session:smoke -e '
+            const state = require("/root/.claude.json");
+            const work = state.projects?.["/work"] ?? {};
+            if (!work.hasTrustDialogAccepted) throw new Error("folder trust is not pre-accepted for /work");
+            if (!state.hasCompletedOnboarding) throw new Error("onboarding is not pre-completed");
+            const settings = require("/etc/agent-session/settings.json");
+            if (!settings.skipDangerousModePermissionPrompt) throw new Error("the dangerous-mode prompt is not skipped");
+            console.log("--- both dialogs answered ---");
+          '
+
+      # The entrypoint, run for real against an EMPTY /root/.claude — which is
+      # the state a first session is in, and the reason the copy exists at all:
+      # the volume mount shadows whatever the image put at that path. `true` as
+      # the command replaces the claude it would otherwise exec.
+      - name: The entrypoint seeds a first session
+        run: |
+          set -eu
+          docker run --rm --tmpfs /root/.claude:rw agent-session:smoke true
+          docker run --rm --tmpfs /root/.claude:rw --entrypoint sh agent-session:smoke -euc '
+            /usr/local/bin/entrypoint true
+            test -f /root/.claude/settings.json || { echo "the entrypoint did not seed settings.json"; exit 1; }
+            grep -q skipDangerousModePermissionPrompt /root/.claude/settings.json
+            # SCOPED to github.com, not a bare credential.helper — a global one is
+            # consulted for every host a session ever clones from, and the
+            # entrypoint deliberately does not set one. Asserting the bare key
+            # would fail on correct config.
+            test "$(git config --global --get credential.https://github.com.helper)" = fleet
+            echo "--- a first session comes up seeded ---"
+          '
