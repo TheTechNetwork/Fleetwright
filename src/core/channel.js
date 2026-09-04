@@ -20,8 +20,28 @@
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
-/** The only two answers. `stable` is what a box gets by saying nothing. */
-export const CHANNELS = Object.freeze(['stable', 'prerelease']);
+/**
+ * The only two answers. `stable` is what a box gets by saying nothing.
+ *
+ * ROLLING, NOT `prerelease`, and the name matters more than it looks. GitHub
+ * already has a field called prerelease — it is the checkbox on a release, and
+ * the manifest carries it — so a CHANNEL of the same name meant one word for
+ * two things: "which address this box polls" and "was this release marked as
+ * not-final". They are not the same question, and every sentence explaining the
+ * pair had to say which one it meant.
+ */
+export const CHANNELS = Object.freeze(['stable', 'rolling']);
+
+/**
+ * What the channel was called for one afternoon.
+ *
+ * Read-only, and deliberately not settable. #366 shipped `prerelease` as the
+ * value and the docs said so for a few hours; anybody who copied it into
+ * AGENT_HUB_RELEASE_CHANNEL should get the channel they asked for rather than
+ * falling back to stable, which is the silent-wrong-answer this file is written
+ * against. Nothing writes this value any more.
+ */
+const ALIASES = Object.freeze({ prerelease: 'rolling' });
 
 /** @param {import('../config.js').Config} cfg */
 function channelFile(cfg) {
@@ -36,14 +56,14 @@ function channelFile(cfg) {
  * small file read, on a path taken once per update check.
  *
  * @param {import('../config.js').Config} cfg
- * @returns {'stable'|'prerelease'}
+ * @returns {'stable'|'rolling'}
  */
 export function readChannel(cfg) {
-  const fromEnv = String(cfg.releaseChannel || '').trim().toLowerCase();
-  if (CHANNELS.includes(fromEnv)) return /** @type {any} */ (fromEnv);
+  const fromEnv = canonical(cfg.releaseChannel);
+  if (fromEnv) return fromEnv;
   try {
-    const stored = readFileSync(channelFile(cfg), 'utf8').trim().toLowerCase();
-    if (CHANNELS.includes(stored)) return /** @type {any} */ (stored);
+    const stored = canonical(readFileSync(channelFile(cfg), 'utf8'));
+    if (stored) return stored;
   } catch {
     // No file is the ordinary case and means stable, which is what a box that
     // has never been asked should be on.
@@ -52,12 +72,24 @@ export function readChannel(cfg) {
 }
 
 /**
+ * One written-down answer, or null if it is not one.
+ *
+ * @param {string|undefined|null} value
+ * @returns {'stable'|'rolling'|null}
+ */
+function canonical(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (CHANNELS.includes(v)) return /** @type {any} */ (v);
+  return /** @type {any} */ (ALIASES[/** @type {keyof typeof ALIASES} */ (v)] ?? null);
+}
+
+/**
  * Whether the environment is forcing a channel, and so overriding the file.
  *
  * @param {import('../config.js').Config} cfg
  */
 export function pinnedByEnv(cfg) {
-  return CHANNELS.includes(String(cfg.releaseChannel || '').trim().toLowerCase());
+  return canonical(cfg.releaseChannel) !== null;
 }
 
 /**
@@ -100,8 +132,8 @@ export function writeChannel(cfg, value) {
     ok: true,
     channel: wanted,
     message:
-      wanted === 'prerelease'
-        ? 'This box now takes prereleases — the newest build of main, on every merge.'
+      wanted === 'rolling'
+        ? 'This box now takes rolling builds — the newest build of main, on every merge.'
         : 'This box now takes published releases only.',
   };
 }

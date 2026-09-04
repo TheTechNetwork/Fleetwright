@@ -139,7 +139,7 @@ jobs:
   # nothing could ever poll it. A prerelease host that wants "whatever is on
   # main" had nowhere to look.
   #
-  # A ROLLING RELEASE AT A FIXED TAG gives it one. `releases/download/main/...`
+  # A ROLLING RELEASE AT A FIXED TAG gives it one. `releases/download/rolling/...`
   # is a permanent address whose contents are replaced on every merge, so a box
   # polls one URL for ever and gets the newest build.
   #
@@ -152,7 +152,7 @@ jobs:
   # NOT A GIT PULL. The box still fetches a signed-off tarball, checks the
   # sha256 before unpacking, unpacks beside what is running and moves a symlink.
   # Same mechanism as a release, different address.
-  main-channel:
+  rolling-channel:
     needs: package
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -163,7 +163,19 @@ jobs:
         with:
           name: fleetwright-host
           path: dist
-      - name: Publish as the rolling main build
+      # THE TAG IS `rolling`, AND IT WAS `main` FOR ONE AFTERNOON.
+      #
+      # A tag named `main` beside a branch named `main` makes every bare `main`
+      # in git ambiguous, and git resolves refs/tags/ FIRST — so `git checkout
+      # main`, `git diff main` and `git log main..` all silently used the commit
+      # the last rolling build was cut from, drifting one merge further behind
+      # the branch every time this job ran. Git says "warning: refname 'main' is
+      # ambiguous" and then does the wrong thing anyway, which is the worst of
+      # both: a message nobody reads in a script, and a stale answer.
+      #
+      # `rolling` is also the name of the channel now, so the address and the
+      # setting say the same word.
+      - name: Publish as the rolling build
         env:
           GH_TOKEN: ${{ github.token }}
           # Same reason as the attach job below: this does not check the
@@ -175,18 +187,38 @@ jobs:
           # when the tag exists, and that failure is the ordinary case here, so
           # it is tried and tolerated rather than branched on — a `view` first
           # would be two API calls to learn what the create tells us anyway.
-          gh release create main \
+          gh release create rolling \
             --prerelease \
             --title "Rolling build from main" \
-            --notes "The newest build of main. Hosts on AGENT_HUB_RELEASE_CHANNEL=prerelease poll this; it is replaced on every merge and is not a published release." \
+            --notes "The newest build of main. Hosts on AGENT_HUB_RELEASE_CHANNEL=rolling poll this; it is replaced on every merge and is not a published release." \
             --target main 2>/dev/null || true
 
           # --clobber, because the point is that these files are replaced.
-          gh release upload main dist/*.tar.gz dist/manifest.json --clobber
+          gh release upload rolling dist/*.tar.gz dist/manifest.json --clobber
+
+          # AND THE OLD TARBALL GOES, because --clobber cannot reach it. The
+          # tarball's name carries the build number (fleetwright-host-main-29),
+          # so every merge uploads a NEW name beside the last one rather than
+          # replacing it — the release accumulated one tarball per merge, for
+          # ever, on an address whose whole promise is that its contents are
+          # replaced. Nothing broke; manifest.json names the file it means. It
+          # is a leak, and one that would have been discovered as a quota.
+          #
+          # Everything that is not what we just uploaded goes. Derived from the
+          # files on disk rather than from a pattern, so a rename of the
+          # artifact cannot leave this deleting the wrong thing.
+          keep="manifest.json $(cd dist && ls -1 *.tar.gz | tr '\n' ' ')"
+          echo "keeping: $keep"
+          gh release view rolling --json assets --jq '.assets[].name' | while read -r asset; do
+            case " $keep " in
+              *" $asset "*) ;;
+              *) echo "removing stale asset $asset"; gh release delete-asset rolling "$asset" --yes ;;
+            esac
+          done
 
           # The tag has to follow main, or the release page shows a commit from
           # whenever it was first created while serving today's artifacts.
-          gh release edit main --target main >/dev/null
+          gh release edit rolling --target main >/dev/null
 
   attach:
     needs: package

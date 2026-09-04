@@ -20,14 +20,17 @@ test('a prerelease reaches only the hosts that asked for it', () => {
   const stable = ask({ manifest: { prerelease: true }, hostKey: 'box' });
   assert.equal(stable.act, false);
   assert.equal(stable.reason, 'channel');
-  // Names the variable, because the person reading this is the one who can set
-  // it and "not for this channel" sends them to a document.
-  assert.match(stable.message, /AGENT_HUB_RELEASE_CHANNEL=prerelease/);
+  // Names BOTH remedies, because the person reading this is the one who can
+  // apply either and "not for this channel" sends them to a document. The app
+  // one comes first: it is the one that does not need a shell on the box, which
+  // is the whole reason the verb exists.
+  assert.match(stable.message, /\/channel rolling/);
+  assert.match(stable.message, /AGENT_HUB_RELEASE_CHANNEL=rolling/);
 
-  assert.equal(ask({ manifest: { prerelease: true }, channel: 'prerelease', hostKey: 'box' }).act, true);
+  assert.equal(ask({ manifest: { prerelease: true }, channel: 'rolling', hostKey: 'box' }).act, true);
   // And an ordinary release still reaches a host that opted in — the channel
   // widens what it takes rather than replacing it.
-  assert.equal(ask({ channel: 'prerelease', hostKey: 'box' }).act, true);
+  assert.equal(ask({ channel: 'rolling', hostKey: 'box' }).act, true);
 });
 
 test('a rollout admits a stable fraction, and widening only ever adds', () => {
@@ -129,18 +132,31 @@ test('the position is a spread, and the same everywhere', () => {
   }
 });
 
-test('the prerelease channel is main, and it is published somewhere a host can poll', () => {
+test('the rolling channel is main, and it is published somewhere a host can poll', () => {
   // CI has built a host package on every push for weeks and uploaded it as a
   // WORKFLOW ARTIFACT — which expires and has no stable URL, so nothing could
-  // ever poll it. A prerelease host that wants "whatever is on main" had
-  // nowhere to look.
+  // ever poll it. A rolling host that wants "whatever is on main" had nowhere
+  // to look.
   const yml = readFileSync(new URL('../.github/workflows/host-release.yml', import.meta.url), 'utf8');
-  const job = yml.slice(yml.indexOf('  main-channel:'), yml.indexOf('  attach:'));
+  const job = yml.slice(yml.indexOf('  rolling-channel:'), yml.indexOf('  attach:'));
 
   // A rolling release at a fixed tag: one permanent address, contents replaced.
-  assert.match(job, /gh release create main/);
+  assert.match(job, /gh release create rolling/);
   assert.match(job, /--clobber/, 'the assets are not replaced, so the address goes stale');
-  assert.match(job, /gh release edit main --target main/, 'the tag would point at whenever it was created');
+  assert.match(job, /gh release edit rolling --target main/, 'the tag would point at whenever it was created');
+
+  // AND THE PREVIOUS TARBALL IS REMOVED. The name carries the build number, so
+  // --clobber cannot reach it: every merge uploaded a new name beside the last
+  // one and the release grew a tarball per merge, on an address whose whole
+  // promise is that its contents are replaced.
+  assert.match(job, /gh release delete-asset rolling/);
+
+  // NOT A TAG CALLED `main`, which is what this shipped as for one afternoon.
+  // A tag and a branch of the same name make every bare `main` ambiguous, and
+  // git resolves refs/tags/ first — so `git checkout main` silently used the
+  // commit the last rolling build was cut from. It warns and then does the
+  // wrong thing, which is worse than either alone.
+  assert.doesNotMatch(job, /gh release (create|upload|edit) main\b/);
 
   // MARKED PRERELEASE, which is what keeps stable hosts away from it: GitHub's
   // own `releases/latest` pointer skips prereleases, so a stable box polling
@@ -158,7 +174,7 @@ test('a stable host pointed at main by hand is still refused', () => {
   const fromMain = { ...BASE, version: 'main-412', prerelease: true };
   assert.equal(decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, hostKey: 'box' }).reason, 'channel');
   assert.equal(
-    decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, channel: 'prerelease', hostKey: 'box' }).act,
+    decideRelease({ manifest: fromMain, installed: 'v1', protocol: 3, channel: 'rolling', hostKey: 'box' }).act,
     true,
   );
 });

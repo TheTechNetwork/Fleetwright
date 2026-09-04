@@ -11,9 +11,10 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
-## 0.2.2 — 2026-09-03
+## 0.2.2 — 2026-09-04
 
-**For operators. Nothing changes in the apps.**
+**Mostly for operators, and two things you can now do from a phone that
+previously needed a terminal on the box.**
 
 v0.2.1 published the first host package this project has ever released — and
 its manifest said `"protocol": 2` for code that speaks v3. The builder read that
@@ -41,6 +42,39 @@ again, and `v0.2.1`'s host package should not be installed.
   `rm -rf ~/.nvm` undoes it.
 - **`curl .../install | sudo sh` carries the fleet's address**, so the installer
   no longer asks which coordinator to join — you said it by typing the URL.
+- **The installer no longer refuses a box that already had the right Node.** It
+  took the first `node` on `PATH`, which on Debian is the distribution's 20, and
+  never looked at the newer one nvm had put in the run user's home. Clean hosts
+  worked; the boxes most likely to be upgraded did not.
+
+**In the apps**
+
+- **Readmit a revoked host, or replace a host's key, from the host row** — swipe
+  on iOS, a button on Android. Both were deliberately refused for an unbound
+  pin, and both refusals named a remedy that only a shell could apply.
+- **Choose which releases a box installs.** A segmented picker on iOS, chips on
+  Android: `stable` takes published releases, `rolling` takes the newest build
+  of main on every merge. It installs nothing by itself — it decides what
+  the next update is allowed to be. Boxes whose channel is set in their own
+  environment show the answer and say it cannot be changed from here.
+
+**Also**
+
+- **An upgrade that fails now says which package broke.** It reported whatever
+  came last, which was usually debconf recovering — the tidying after the
+  error, quoted as the error. `install.sh --repair` re-runs the parts of an
+  install that are safe to repeat, for a box left half-configured.
+- **The admin token is optional.** A coordinator with sign-in configured and no
+  `AGENT_FLEET_API_TOKEN` is not an open one; what it still refuses to run
+  without is *any* way in at all. Most forks need never set one.
+- **A release can go out to a fraction of the fleet.** `RELEASE_ROLLOUT` is a
+  repository variable, so widening one is a setting rather than a commit, and
+  each host's position is stable across versions in a way that does not put the
+  same boxes first every time.
+- **The docs were swept against the code**, end to end: what shipped now says
+  so, and what did not still says that. Start at `docs/coordinator-deploy.md`
+  if you are standing up a coordinator of your own — there is a Deploy to
+  Cloudflare button now, and it asks for what it needs up front.
 
 ## 0.2.1 — 2026-09-02
 

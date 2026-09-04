@@ -289,7 +289,7 @@ export const VERBS = Object.freeze({
   // only a shell can reach, which is the whole reason this verb exists.
   channel: {
     params: {
-      to: { type: 'enum', required: false, values: ['stable', 'prerelease'] },
+      to: { type: 'enum', required: false, values: ['stable', 'rolling'] },
     },
     mutating: true,
     summary:

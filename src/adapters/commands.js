@@ -610,11 +610,11 @@ export const COMMANDS = {
   },
 
   channel: {
-    usage: '/channel [stable|prerelease]',
+    usage: '/channel [stable|rolling]',
     short: 'Which releases this box installs',
     help:
       'Ask with no argument to see which channel this box is on. `stable` takes published releases; ' +
-      '`prerelease` takes the newest build of main, on every merge. Changing it updates nothing by ' +
+      '`rolling` takes the newest build of main, on every merge. Changing it updates nothing by ' +
       'itself — it decides what the next update is allowed to be.',
     run: (ctx, args) => {
       const [wanted] = args;
@@ -625,7 +625,7 @@ export const COMMANDS = {
           ok: true,
           text:
             `This box is on the ${current} channel.\n` +
-            (current === 'prerelease'
+            (current === 'rolling'
               ? 'It takes the newest build of main, on every merge.'
               : 'It takes published releases only.') +
             // SAID WHEN IT CANNOT BE CHANGED, rather than letting somebody

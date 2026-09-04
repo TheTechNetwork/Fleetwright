@@ -124,7 +124,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
-| `channel` | `to?` (`stable`\|`prerelease`) | ✅ | `/channel [stable\|prerelease]` |
+| `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
@@ -215,7 +215,7 @@ the coordinator minted would let a compromised coordinator mint its own. The pin
 is issued by the **host**, which is the party that would be rebooted.
 
 **`channel` is what makes `update` mean anything.** It decides which releases a
-box is eligible for: `stable` takes published releases, `prerelease` takes the
+box is eligible for: `stable` takes published releases, `rolling` takes the
 newest build of `main` on every merge. Changing it installs nothing by itself.
 
 It exists because the answer used to live in `/etc/agent-hub.env`, which is

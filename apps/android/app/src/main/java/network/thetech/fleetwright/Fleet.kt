@@ -222,7 +222,7 @@ class Fleet(
          */
         val credential: Credential? = null,
         /**
-         * Which releases this box installs — "stable" or "prerelease".
+         * Which releases this box installs — "stable" or "rolling".
          *
          * NULL IS CANNOT TELL, not "stable". A host older than the channel verb
          * sends nothing, and labelling it stable would be the app asserting

@@ -70,7 +70,7 @@ export function installedVersion(installDir) {
  * @param {string} opts.installDir
  * @param {string} opts.manifestUrl
  * @param {number} opts.protocol
- * @param {string} [opts.channel]     'stable' (default) or 'prerelease'
+ * @param {string} [opts.channel]     'stable' (default) or 'rolling'
  * @param {string} [opts.hostKey]     stable per machine, for staged rollouts
  * @param {boolean} [opts.dryRun]     decide and report, download nothing
  * @param {typeof fetch} [opts.fetch]

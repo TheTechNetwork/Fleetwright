@@ -155,7 +155,7 @@ struct Fleet {
         var profiles: [Profile]?
         /// Which releases this box installs. A field rather than a sentence for
         /// the same reason as everything above it: a picker that had to find
-        /// the word "prerelease" in the prose would break on a rewording.
+        /// the word "rolling" in the prose would break on a rewording.
         var channel: String?
         /// The box's environment is forcing the channel, so the control is
         /// shown as an answer and not as a choice. Said up front rather than
@@ -782,7 +782,7 @@ struct Fleet {
         /// updated, which decodes as nil and renders as no section at all —
         /// the correct answer for a box where forget still deletes.
         let bin: [Binned]?
-        /// Which releases this box installs — "stable" or "prerelease".
+        /// Which releases this box installs — "stable" or "rolling".
         ///
         /// NIL IS CANNOT TELL, not "stable". A host older than the channel
         /// verb sends nothing, and labelling it as stable would be the app
