@@ -571,8 +571,22 @@ async function actionsIssuer() {
   // ONLY THE JWKS. Everything else goes to the real fetch, because the
   // enrolment test below calls a coordinator over HTTP in this same process —
   // a blanket stub would answer that call with a key set.
+  //
+  // THE HOST, PARSED, NOT A SUBSTRING OF THE URL. `includes()` was the first
+  // spelling and CodeQL was right to refuse it: the issuer's name can appear
+  // anywhere in a URL — a path, a query parameter, a subdomain of somebody
+  // else's — so the check would answer a key set to a request that was never
+  // going to GitHub. It is a test stub, and the habit is the point: the same
+  // line in src/ would be the whole of an SSRF.
+  const isIssuer = (/** @type {unknown} */ url) => {
+    try {
+      return new URL(String(url)).hostname === 'token.actions.githubusercontent.com';
+    } catch {
+      return false;
+    }
+  };
   globalThis.fetch = /** @type {any} */ (async (url, init) =>
-    String(url).includes('token.actions.githubusercontent.com')
+    isIssuer(url)
       ? new Response(JSON.stringify({ keys }), { status: 200, headers: { 'content-type': 'application/json' } })
       : real(url, init));
 
