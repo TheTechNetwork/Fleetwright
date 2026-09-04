@@ -188,6 +188,7 @@ it is very easy to re-enter one merge at a time.
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
+| **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
 
 **A gap this table caught, in the round that added the row above.** Android's
 `SessionKind` had no `host` field at all, while iOS has had one since placement

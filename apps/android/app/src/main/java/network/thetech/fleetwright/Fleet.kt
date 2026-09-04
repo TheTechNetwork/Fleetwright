@@ -221,6 +221,21 @@ class Fleet(
          * not sandbox. Never rendered as a fault.
          */
         val credential: Credential? = null,
+        /**
+         * Which releases this box installs — "stable" or "prerelease".
+         *
+         * NULL IS CANNOT TELL, not "stable". A host older than the channel verb
+         * sends nothing, and labelling it stable would be the app asserting
+         * something it was never told — the same rule [credential] is written
+         * around.
+         */
+        val channel: String? = null,
+        /**
+         * The box's environment is forcing the channel, so the control is shown
+         * as an answer rather than as a choice. Said before somebody taps,
+         * rather than discovered by a refusal afterwards.
+         */
+        val channelPinned: Boolean = false,
     ) {
         /** Two separate answers, because they are two actions on two things. */
         val appPending: Boolean get() = (behind ?: 0) > 0
@@ -502,6 +517,16 @@ class Fleet(
     /** Pull code on one box. Restarting is opt-in. */
     suspend fun update(host: String, restart: Boolean = false): Reply =
         intent("update", if (restart) mapOf("restart" to "yes") else emptyMap(), host = host)
+
+    /**
+     * Which releases a box installs — and, with [to], change it.
+     *
+     * Bare is a question. The verb exists because the channel used to be a line
+     * in `/etc/agent-hub.env`, which meant a shell on the box — the one thing
+     * somebody holding only a phone does not have.
+     */
+    suspend fun channel(host: String, to: String? = null): Reply =
+        intent("channel", buildMap { if (!to.isNullOrBlank()) put("to", to) }, host = host)
 
     /** What the OS has waiting, and optionally install it. */
     suspend fun upgrade(host: String, apply: Boolean = false): Reply =
@@ -876,6 +901,8 @@ class Fleet(
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
                     systemUpdates = updates?.optString("system")?.takeIf { it.isNotBlank() && it != "null" },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
+                    channel = health?.optString("channel")?.takeIf { it.isNotBlank() && it != "null" },
+                    channelPinned = health?.optBoolean("channelPinned") == true,
                     bin = health?.optJSONArray("bin")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i ->
                             arr.optJSONObject(i)?.let { b ->

@@ -554,7 +554,7 @@ private struct SettingsView: View {
     // what the verbs always supported. The app had it backwards in two
     // different directions: Update always restarted (apply with no check) and
     // Upgrade never applied (check with no apply).
-    private enum Maintenance { case check, applyUpdate, applyUpgrade, rebootAsk, rebootDo }
+    private enum Maintenance { case check, applyUpdate, applyUpgrade, rebootAsk, rebootDo, channel(String) }
 
     /// One place for all four, so the busy flag and the result text cannot
     /// drift apart between them.
@@ -573,6 +573,12 @@ private struct SettingsView: View {
             case .applyUpdate: reply = try await fleet.update(host: host, restart: true)
             case .applyUpgrade: reply = try await fleet.upgrade(host: host, apply: true)
             case .rebootAsk: reply = try await fleet.reboot(host: host)
+            // WHICH RELEASES THIS BOX TAKES. It used to be a line in
+            // /etc/agent-hub.env, which meant SSH — the one thing somebody
+            // holding only a phone does not have. loadHosts() below refreshes
+            // the row, so what the screen shows afterwards is what the box
+            // reported and not what this tap hoped for.
+            case .channel(let to): reply = try await fleet.channel(host: host, to: to)
             case .rebootDo:
                 reply = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm)
                 rebootTarget = nil
@@ -1014,6 +1020,38 @@ private struct SettingsView: View {
                             .font(.caption)
                             .buttonStyle(.borderless)
                             .disabled(busyHost != nil)
+                            // THE UPDATE CHANNEL, and the reason it is here
+                            // rather than on a settings screen of its own: it
+                            // decides what "Apply update" two lines above will
+                            // install, so it belongs beside it.
+                            //
+                            // Absent on a host that predates the verb, which
+                            // is nil and not "stable" — an app that guessed
+                            // would label a box confidently and wrongly.
+                            if let channel = host.health?.channel {
+                                if host.health?.channelPinned == true {
+                                    // Pinned in the box's environment. Shown as
+                                    // a fact, not as a control that refuses:
+                                    // an operator setting this from
+                                    // configuration management has said
+                                    // something deliberate, and a picker that
+                                    // silently failed would look like a bug in
+                                    // the app rather than a decision on the box.
+                                    Text("Channel: \(channel) — set on the box")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                } else {
+                                    Picker("Channel", selection: Binding(
+                                        get: { channel },
+                                        set: { Task { await maintain(host.hostId, .channel($0)) } }
+                                    )) {
+                                        Text("Stable").tag("stable")
+                                        Text("Prerelease").tag("prerelease")
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .font(.caption)
+                                    .disabled(busyHost != nil)
+                                }
+                            }
                             // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
                             // this row is where it belongs: it is a login the
                             // BOX performs in a pane, not a token that travels.

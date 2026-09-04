@@ -41,6 +41,9 @@
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, as data rather than as rendered text
+ * @property {string} [channel]   which releases this box installs
+ * @property {boolean} [channelPinned] the environment is forcing it, so the app
+ *   must not offer to change it
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
  *   the task profiles on this box, as data. A picker rendered from the rendered
  *   text would be a picker built by parsing column padding
@@ -57,6 +60,8 @@ import { pickCredentialSource } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
 import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
+import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
+import { manifestUrlFor } from '../core/release.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -475,6 +480,30 @@ function describeAccounts(ctx) {
 }
 
 /**
+ * The one case where switching the channel changes nothing, said out loud.
+ *
+ * `manifestUrlFor` derives the other channel's address from the configured one
+ * by recognising GitHub's two release paths. A box pointed at a MIRROR matches
+ * neither, so the address does not move and the switch is decided entirely by
+ * whatever `prerelease` flag that mirror's manifest happens to carry. That is a
+ * real difference in behaviour, and a person who is not told about it would
+ * reasonably believe their box had changed channel.
+ *
+ * @param {any} cfg
+ * @param {string} channel
+ */
+function addressNote(cfg, channel) {
+  if (!cfg.releaseManifest) return '';
+  const target = manifestUrlFor(cfg.releaseManifest, channel);
+  if (target.derived) return `\n\nUpdates come from ${target.url}`;
+  return (
+    `\n\nAGENT_HUB_RELEASE_MANIFEST is ${cfg.releaseManifest}, which is not one of GitHub's ` +
+    'two release addresses, so this box fetches the same manifest on either channel. ' +
+    "What it installs then depends on that manifest's own prerelease flag."
+  );
+}
+
+/**
  * `short` is the one-line description registered with Telegram's setMyCommands,
  * which is what makes the client autocomplete these as you type "/". Telegram
  * caps it at 256 characters and shows it inline, so keep it to a few words —
@@ -576,6 +605,43 @@ export const COMMANDS = {
         // Tappable, because the whole point is that choosing one is easier than
         // typing a task — and a list you have to retype is a list.
         buttons: have.slice(0, 8).map((p) => ({ label: p.name, command: `/new --profile=${p.name}` })),
+      };
+    },
+  },
+
+  channel: {
+    usage: '/channel [stable|prerelease]',
+    short: 'Which releases this box installs',
+    help:
+      'Ask with no argument to see which channel this box is on. `stable` takes published releases; ' +
+      '`prerelease` takes the newest build of main, on every merge. Changing it updates nothing by ' +
+      'itself — it decides what the next update is allowed to be.',
+    run: (ctx, args) => {
+      const [wanted] = args;
+      const current = readChannel(ctx.cfg);
+      if (!wanted) {
+        const pinned = pinnedByEnv(ctx.cfg);
+        return {
+          ok: true,
+          text:
+            `This box is on the ${current} channel.\n` +
+            (current === 'prerelease'
+              ? 'It takes the newest build of main, on every merge.'
+              : 'It takes published releases only.') +
+            // SAID WHEN IT CANNOT BE CHANGED, rather than letting somebody
+            // discover it by trying. An operator setting this in the
+            // environment has said something deliberate; the app should not
+            // look like it disagrees.
+            (pinned ? '\n\nSet in this box\'s environment, so it cannot be changed from here.' : ''),
+          channel: current,
+          channelPinned: pinned,
+        };
+      }
+      const r = writeChannel(ctx.cfg, wanted);
+      return {
+        ok: r.ok,
+        text: r.ok ? `${r.message}${addressNote(ctx.cfg, wanted)}` : r.message,
+        ...(r.ok ? { channel: r.channel, channelPinned: false } : { channel: current, channelPinned: pinnedByEnv(ctx.cfg) }),
       };
     },
   },
@@ -1199,11 +1265,19 @@ export const COMMANDS = {
               'Set AGENT_HUB_RELEASE_MANIFEST to the URL of a release manifest and /update will fetch from it.',
           };
         }
+        // READ NOW, not at startup: the point of the channel verb is that it
+        // changes without restarting the service.
+        const channel = readChannel(ctx.cfg);
+        // AND THE CHANNEL MOVES THE ADDRESS. The two channels are two URLs —
+        // `releases/latest/download` skips prereleases by GitHub's definition —
+        // so filtering the manifest without moving the address would leave a
+        // box that had switched taking stable builds and reporting otherwise.
+        const target = manifestUrlFor(ctx.cfg.releaseManifest, channel);
         const r = await applyRelease({
           installDir: ctx.cfg.installDir,
-          manifestUrl: ctx.cfg.releaseManifest,
+          manifestUrl: target.url,
           protocol: PROTOCOL_VERSION,
-          channel: ctx.cfg.releaseChannel,
+          channel,
           // THE HOSTNAME, because agent-hub does not read the sidecar's env and
           // so does not know AGENT_FLEET_HOST_ID. It is the same value in the
           // ordinary case — that variable defaults to os.hostname() — and what

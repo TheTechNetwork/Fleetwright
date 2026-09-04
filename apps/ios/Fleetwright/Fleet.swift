@@ -153,6 +153,14 @@ struct Fleet {
         /// one lives on. Same reasoning as `entries`: a picker built by parsing
         /// the rendered text would be a picker built from column padding.
         var profiles: [Profile]?
+        /// Which releases this box installs. A field rather than a sentence for
+        /// the same reason as everything above it: a picker that had to find
+        /// the word "prerelease" in the prose would break on a rewording.
+        var channel: String?
+        /// The box's environment is forcing the channel, so the control is
+        /// shown as an answer and not as a choice. Said up front rather than
+        /// discovered by a refusal.
+        var channelPinned: Bool?
     }
 
     /// A task profile: a file on ONE host whose content becomes a new session's
@@ -373,6 +381,18 @@ struct Fleet {
     /// restart leaves the box on old code and says so.
     func update(host: String, restart: Bool = false) async throws -> Reply {
         try await intent("update", params: restart ? ["restart": "yes"] : [:], host: host)
+    }
+
+    /// Which releases a box installs — and, with `to`, change it.
+    ///
+    /// Bare is a question. This is the whole point of the verb: an update
+    /// channel used to be a line in `/etc/agent-hub.env`, which meant a shell
+    /// on the box, which is the one thing somebody with only a phone does not
+    /// have.
+    func channel(host: String, to: String? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let to, !to.isEmpty { params["to"] = to }
+        return try await intent("channel", params: params, host: host)
     }
 
     /// What the operating system has waiting, and optionally install it.
@@ -746,6 +766,18 @@ struct Fleet {
         /// updated, which decodes as nil and renders as no section at all —
         /// the correct answer for a box where forget still deletes.
         let bin: [Binned]?
+        /// Which releases this box installs — "stable" or "prerelease".
+        ///
+        /// NIL IS CANNOT TELL, not "stable". A host older than the channel
+        /// verb sends nothing, and labelling it as stable would be the app
+        /// asserting something it was never told; the row simply shows no
+        /// channel, which is the honest answer and matches how `credential`
+        /// and `updates` treat an older box.
+        let channel: String?
+        /// The box's environment is forcing it, so the picker is shown as an
+        /// answer rather than as a choice. Said before somebody taps, rather
+        /// than discovered by a refusal afterwards.
+        let channelPinned: Bool?
     }
 
     /// A host as the fleet snapshot describes it — state, reason, and whatever

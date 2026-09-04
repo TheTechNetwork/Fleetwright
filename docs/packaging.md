@@ -227,6 +227,15 @@ Identical mechanism to a published release; only the address differs. The git
 path stays what `docs/packaging.md` has always called it — a fallback, kept
 untouched so it remains one.
 
+**The channel MOVES the address; the installer does not have to.** A box is
+installed pointing at the stable manifest, and `manifestUrlFor` derives the
+other address from it by recognising GitHub's two release paths. Filtering the
+manifest without moving the URL would have been the trap: `releases/latest/download`
+skips prereleases by GitHub's own definition, so a box switched to `prerelease`
+would have reported the new channel and gone on taking stable builds forever.
+A URL matching neither shape — a mirror — is left alone, and `/channel` says
+so rather than letting somebody discover it from a box that never updates.
+
 **The URL selects and the flag verifies.** A stable host pointed at the main
 manifest by hand is still refused, because the manifest says `prerelease: true`
 and `decideRelease` checks the channel. Two independent mistakes have to line

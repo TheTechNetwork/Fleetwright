@@ -862,6 +862,52 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         ) { Text("Reboot") }
                         TextButton(onClick = { credentialsFor = host.hostId }) { Text("Credentials") }
                     }
+                    // THE UPDATE CHANNEL, beside the button it decides the
+                    // meaning of: "Apply update" installs whatever this says is
+                    // eligible. It used to be a line in /etc/agent-hub.env,
+                    // which meant SSH — the one thing somebody holding only a
+                    // phone does not have.
+                    //
+                    // Absent on a host that predates the verb, which is null
+                    // and NOT "stable": an app that guessed would label a box
+                    // confidently and wrongly.
+                    host.channel?.let { current ->
+                        if (host.channelPinned) {
+                            // Pinned in the box's environment. Shown as a fact
+                            // rather than as a control that refuses — an
+                            // operator setting this from configuration
+                            // management has said something deliberate, and a
+                            // picker that silently failed would read as a bug
+                            // in the app rather than a decision on the box.
+                            Text(
+                                "Channel: $current — set on the box",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("stable", "prerelease").forEach { option ->
+                                    FilterChip(
+                                        selected = current == option,
+                                        enabled = busyHost == null && current != option,
+                                        onClick = {
+                                            scope.launch {
+                                                busyHost = host.hostId
+                                                hostActionResult =
+                                                    Fleet(settings).channel(host.hostId, to = option).text
+                                                busyHost = null
+                                                // Re-read rather than assume:
+                                                // what the row shows afterwards
+                                                // is what the box reported, not
+                                                // what this tap hoped for.
+                                                fleetHosts = Fleet(settings).fleetHosts()
+                                            }
+                                        },
+                                        label = { Text(option) },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // TWO STEPS, and the second one asks for the hostname typed out.

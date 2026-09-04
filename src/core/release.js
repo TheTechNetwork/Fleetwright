@@ -253,6 +253,39 @@ export function fileUrl(manifestUrl, file) {
   return new URL(file, manifestUrl).toString();
 }
 
+/** The two GitHub release addresses, and how to get from one to the other. */
+const STABLE_PATH = '/releases/latest/download/';
+const PRERELEASE_PATH = '/releases/download/main/';
+
+/**
+ * Which manifest a box on this channel should fetch.
+ *
+ * THE CHANNEL HAS TO MOVE THE ADDRESS, not only filter what arrives. The two
+ * channels are two different URLs — `releases/latest/download` skips
+ * prereleases by GitHub's own definition, so a box left pointed there would
+ * switch to `prerelease`, report that it had, and keep taking stable builds
+ * forever. That is this repository's recurring failure exactly: true where it
+ * was written, quietly false one layer up.
+ *
+ * Derived from the configured URL rather than configured twice, because two
+ * settings that must agree are a setting that will not. A URL matching neither
+ * shape — a mirror, a file:// path in a test — is returned unchanged and
+ * `derived` is false, so a caller can SAY that rather than silently rewriting
+ * somebody's address into one that does not exist.
+ *
+ * @param {string} manifestUrl the configured address
+ * @param {string} channel
+ * @returns {{ url: string, derived: boolean }}
+ */
+export function manifestUrlFor(manifestUrl, channel) {
+  const url = String(manifestUrl || '');
+  const want = channel === 'prerelease' ? PRERELEASE_PATH : STABLE_PATH;
+  const other = channel === 'prerelease' ? STABLE_PATH : PRERELEASE_PATH;
+  if (url.includes(want)) return { url, derived: true };
+  if (url.includes(other)) return { url: url.replace(other, want), derived: true };
+  return { url, derived: false };
+}
+
 /**
  * Where a release lives once it is installed.
  *
