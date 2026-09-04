@@ -193,3 +193,45 @@ test('an existing install is offered a clean, even from the one-liner', () => {
   // And genuinely nobody still means update, never destroy.
   assert.match(SH, /Nobody to ask — updating/);
 });
+
+test('--repair puts back what the installer generates, and nothing it was told', () => {
+  // The sections that write units, the hook and the directories already rewrite
+  // what they own on every run, so an unattended run repairs most of a drifted
+  // box. The two sudoers rules are the exception: they live behind questions in
+  // the wizard, and the wizard does not run when nobody is there to answer.
+  assert.match(SH, /^\s*--repair\)/m, 'there is no --repair flag');
+  assert.match(SH, /REPAIR=1; UPGRADE=1; WIZARD=no/, 'repair should imply upgrade and ask nothing');
+  assert.match(SH, /AGENT_HUB_REPAIR/, 'no environment form for configuration management');
+  assert.match(SH, /--repair      --upgrade, and put back/, '--help does not mention it');
+});
+
+test('a repair reads the recorded answers and never writes one', () => {
+  // A box that said no to system upgrades keeps its no. Re-applying a rule the
+  // box already agreed to is acting on somebody's decision; turning one on
+  // because a repair happened to run would be making it for them.
+  const section = SH.slice(SH.indexOf('# --- 8b.'), SH.indexOf('# --- 9.'));
+
+  assert.match(section, /get_env "\$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE\)" = 1/);
+  assert.match(section, /get_env "\$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT\)" = 1/);
+  assert.equal(/set_env/.test(section), false, 'the repair writes a setting — it must only read them');
+
+  // And says so when it leaves one alone, or a repair that silently did less
+  // than expected looks like one that did nothing.
+  assert.match(section, /leaving that alone/);
+});
+
+test('the sudoers rules have one implementation, called twice', () => {
+  // The wizard writes them when somebody says yes; --repair writes them when
+  // the env file says they already did. Two copies of a rule that must match is
+  // how a box ends up permitted to run a command the code no longer issues —
+  // which is the drift --repair exists to undo.
+  assert.match(SH, /^write_upgrade_sudoers\(\) \{/m);
+  assert.match(SH, /^write_reboot_sudoers\(\) \{/m);
+  assert.equal((SH.match(/if write_upgrade_sudoers; then/g) || []).length, 2, 'not called from both places');
+  assert.equal((SH.match(/if write_reboot_sudoers; then/g) || []).length, 2, 'not called from both places');
+
+  // Both validate before installing. A malformed file in /etc/sudoers.d does
+  // not break one rule, it breaks sudo.
+  const writers = SH.slice(SH.indexOf('write_upgrade_sudoers() {'), SH.indexOf('# --- 1. prerequisites'));
+  assert.equal((writers.match(/visudo -cf/g) || []).length, 2, 'a rule is installed without being validated');
+});

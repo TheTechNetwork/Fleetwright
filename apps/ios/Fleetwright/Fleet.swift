@@ -625,8 +625,24 @@ struct Fleet {
     ///   runner. Decided here, when the pin is minted, rather than claimed by
     ///   the host: a machine that could declare itself temporary is a machine
     ///   that could decline to be cleaned up. See docs/ephemeral-hosts.md.
-    func mintHostPin(ephemeral: Bool = false) async throws -> String {
-        let data = try await post("/api/enroll", body: ["kind": "host", "ephemeral": ephemeral])
+    /// - Parameter hostId: BINDS the pin to one machine's name, which is what
+    ///   readmitting or re-keying an existing host requires. An unbound pin is
+    ///   handed out to ADD a box and must not be spendable on taking over one
+    ///   that already exists — so the coordinator refuses both cases unless the
+    ///   pin names the host.
+    /// - Parameter readmit: additionally permits bringing back a host that was
+    ///   revoked, so that undoing a removal is a decision somebody makes rather
+    ///   than a side effect of holding a pin.
+    func mintHostPin(ephemeral: Bool = false, hostId: String? = nil, readmit: Bool = false) async throws -> String {
+        /// A dictionary rather than a struct because the two optional keys are
+        /// omitted entirely when absent — sending `hostId: null` would bind the
+        /// pin to nothing and read, on the wire, as somebody having meant to.
+        var body: [String: Any] = ["kind": "host", "ephemeral": ephemeral]
+        if let hostId, !hostId.isEmpty {
+            body["hostId"] = hostId
+            body["readmit"] = readmit
+        }
+        let data = try await post("/api/enroll", body: body)
         struct Reply: Codable { let ok: Bool?; let code: String?; let text: String? }
         let reply = try JSONDecoder().decode(Reply.self, from: data)
         guard let code = reply.code else { throw FleetError.message(reply.text ?? "Could not mint a pin.") }

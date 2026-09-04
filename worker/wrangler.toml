@@ -164,7 +164,14 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
+#   AGENT_FLEET_API_TOKEN             break-glass admin, and OPTIONAL. Phones do
+#                                     not use it, hosts do not use it, and a
+#                                     coordinator with sign-in configured and no
+#                                     admin token is not open — it simply has no
+#                                     way back in when sign-in itself is broken.
+#                                     Set it or do not; what the coordinator
+#                                     refuses to run without is ANY way in at
+#                                     all, which means this or the AUTH_ pair
 #   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
 #                                     https://appleid.apple.com https://accounts.google.com
 #   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the

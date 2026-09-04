@@ -627,6 +627,12 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var signInResult by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var pin by rememberSaveable { mutableStateOf("") }
+    // WHICH HOST THE PIN IN HAND IS FOR, or empty for an unbound one. A bound
+    // pin only works on the machine it names, and the refusal for using it
+    // elsewhere arrives on the box rather than here — so a screen showing six
+    // digits without saying whose they are is one somebody types the wrong pin
+    // from.
+    var pinBoundTo by rememberSaveable { mutableStateOf("") }
     var ephemeralPin by rememberSaveable { mutableStateOf(false) }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
     var confirming by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1146,6 +1152,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                 onClick = {
                     scope.launch {
                         busy = true
+                        pinBoundTo = ""
                         pin = runCatching { Fleet(settings).mintHostPin(ephemeralPin) }
                             .getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
                         busy = false
@@ -1160,6 +1167,13 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     style = MaterialTheme.typography.headlineMedium,
                     fontFamily = FontFamily.Monospace,
                 )
+                if (pinBoundTo.isNotBlank()) {
+                    Text(
+                        "for $pinBoundTo only",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 Text(
                     "On that box:  agent-fleet-sidecar enrol $pin\nGood for ten minutes, once.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1186,6 +1200,33 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                     onClick = { confirming = host.hostId },
                                 ) { Text("Revoke") }
                             }
+                            // THE TWO CASES AN UNBOUND PIN IS REFUSED FOR, and
+                            // until now the only way through either was a curl
+                            // carrying the break-glass admin token — the
+                            // credential this whole design exists to stop
+                            // needing. Both refusals name the remedy, and
+                            // neither was reachable from here.
+                            //
+                            // /api/enroll takes any signed-in credential, so
+                            // this is a screen that was missing rather than a
+                            // permission that was.
+                            TextButton(
+                                enabled = !busy,
+                                onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        pinBoundTo = ""
+                                        pin = runCatching {
+                                            Fleet(settings).mintHostPin(hostId = host.hostId, readmit = host.revoked)
+                                        }.getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
+                                        // Set only on success, so a failed mint
+                                        // cannot leave the previous pin on
+                                        // screen wearing a new host's name.
+                                        if (pin.isNotBlank()) pinBoundTo = host.hostId
+                                        busy = false
+                                    }
+                                },
+                            ) { Text(if (host.revoked) "Readmit" else "Replace key") }
                         }
                         // The fingerprint is here so it can be compared with
                         // what the box itself prints. Two machines claiming one

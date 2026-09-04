@@ -79,6 +79,14 @@ for candidate in "$(command -v node 2>/dev/null || true)" \
 done
 if [ -n "$existing" ]; then
   ok "node $("$existing" -v) at $existing is already new enough — nothing to do"
+  # SAID WHEN THEY DIFFER, because `node -v` in a shell can print something
+  # older and that reads as this script having lied. The installer uses an
+  # absolute path and does not care what is on PATH; a person comparing the two
+  # very much does.
+  onpath="$(command -v node 2>/dev/null || true)"
+  if [ -n "$onpath" ] && [ "$onpath" != "$existing" ]; then
+    warn "your shell's \`node\` is still $onpath ($("$onpath" -v 2>/dev/null || echo unknown)) — that is expected, and the services use the one above"
+  fi
   printf '\n  Next:\n      curl -fsSL https://fleet.thetech.network/install | sudo sh\n\n'
   exit 0
 fi

@@ -347,16 +347,40 @@ curl -fsSL '${target}' | sh
     // Only the admin token is required now. Hosts carry their own keys, and
     // people sign in — so the thing that must exist at boot is the credential
     // that can mint the first enrolment code, and nothing else.
-    if (!env.AGENT_FLEET_API_TOKEN) {
+    // THE QUESTION IS "IS THERE ANY WAY IN", NOT "IS THERE AN ADMIN TOKEN".
+    //
+    // This refused to run without AGENT_FLEET_API_TOKEN, on the reasoning that
+    // a coordinator with no credentials is remote control of every box for
+    // whoever finds the URL. That was true when the admin token was the only
+    // credential. It stopped being true when sign-in shipped: phones hold
+    // per-device credentials from a verified identity, hosts authenticate by
+    // signature against a per-host keypair, and runners present a token GitHub
+    // minted for one job. The admin token is break-glass, and most fleets will
+    // never need one.
+    //
+    // So a coordinator with sign-in configured and no admin token is not open —
+    // it simply has no break-glass — and refusing to boot it was refusing a
+    // correct configuration.
+    //
+    // WHAT STILL FAILS CLOSED is a coordinator with NO authentication at all.
+    // That is the case the old guard was really about, and it is checked here
+    // instead: an admin token, or an issuer and an audience to verify a sign-in
+    // against. Neither means nobody can ever get in, which is worth saying at
+    // boot rather than discovering per request.
+    const hasSignIn = Boolean(String(env.AGENT_FLEET_AUTH_ISSUERS || '').trim())
+      && Boolean(String(env.AGENT_FLEET_AUTH_AUDIENCES || '').trim());
+    if (!env.AGENT_FLEET_API_TOKEN && !hasSignIn) {
       return json(
         {
           ok: false,
           error: { code: 'not_configured' },
           text:
-            'This coordinator has no admin token set. Run:\n' +
+            'This coordinator has no way for anybody to authenticate.\n\n' +
+            'Either configure sign-in, which is what phones use:\n' +
+            '  AGENT_FLEET_AUTH_ISSUERS, AGENT_FLEET_AUTH_AUDIENCES and AGENT_FLEET_AUTH_ALLOW\n\n' +
+            'or set a break-glass admin token:\n' +
             '  wrangler secret put AGENT_FLEET_API_TOKEN\n\n' +
-            'Hosts and phones do not use it — they enrol and sign in. It exists to ' +
-            'mint the first enrolment code and to get back in when nothing else works.',
+            'Both is usual. Hosts need neither — they enrol with a pin and authenticate by signature.',
         },
         503,
       );
@@ -412,7 +436,21 @@ curl -fsSL '${target}' | sh
     // the file — which was everything, until test/worker-routes.test.js.
     const expected = env.AGENT_FLEET_API_TOKEN || '';
 
-    if (!timingSafeEqual(presented, expected)) {
+    // NEITHER MAY BE EMPTY, and this is now load-bearing rather than belt.
+    //
+    // timingSafeEqual('', '') is TRUE — it compares two zero-length strings and
+    // finds no difference, which is correct for what it does and catastrophic
+    // here. While the guard above refused to boot without an admin token the
+    // pair could never both be empty; now that a coordinator may deliberately
+    // have no admin token, a request arriving with no Authorization header
+    // would have compared '' against '' and been admitted AS ADMIN.
+    //
+    // So the emptiness check is what keeps the token optional. It is written
+    // out here rather than folded into timingSafeEqual, because that function
+    // is a string comparison and this is a statement about credentials.
+    const isAdmin = Boolean(expected) && Boolean(presented) && timingSafeEqual(presented, expected);
+
+    if (!isAdmin) {
       // Checked HERE, before the request reaches the Durable Object, so an
       // unauthenticated peer never gets as far as something holding state.
       // Not the shared token — but it may be a credential issued to a device.

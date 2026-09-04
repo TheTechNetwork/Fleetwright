@@ -536,6 +536,11 @@ private struct SettingsView: View {
     @State private var signInResult = ""
     @State private var signingIn = false
     @State private var pin = ""
+    /// WHICH HOST THE PIN IN HAND IS FOR, or nil for an unbound one. A bound
+    /// pin only works on the machine it names, so a screen showing six digits
+    /// and not saying which box they belong to is a screen somebody types the
+    /// wrong pin from.
+    @State private var pinBoundTo: String?
     @State private var ephemeralPin = false
     @State private var hosts: [Fleet.Host] = []
     @State private var fleetHosts: [Fleet.FleetHost] = []
@@ -619,6 +624,28 @@ private struct SettingsView: View {
     }
 
     /// 123 456 — read down a phone, typed into a terminal.
+    /// A pin that only works on one machine.
+    ///
+    /// Readmitting a revoked host and re-keying an existing one are the two
+    /// things an unbound pin is deliberately refused for — a pin handed out to
+    /// ADD a box must not be spendable on taking over one that is already
+    /// there, and undoing a revocation should be a decision rather than a side
+    /// effect. Both refusals name that remedy; neither could be acted on from
+    /// this app until now.
+    @MainActor
+    private func mintBoundPin(for hostId: String, readmit: Bool) async {
+        pin = ""
+        pinBoundTo = nil
+        do {
+            pin = try await Fleet(settings: settings).mintHostPin(hostId: hostId, readmit: readmit)
+            // Set only on success, so a failed mint cannot leave the previous
+            // pin on screen wearing a new host's name.
+            pinBoundTo = hostId
+        } catch {
+            signInResult = error.localizedDescription
+        }
+    }
+
     private var formattedPin: String {
         pin.count == 6 ? "\(pin.prefix(3)) \(pin.suffix(3))" : pin
     }
@@ -785,6 +812,7 @@ private struct SettingsView: View {
                         Button("Mint a pin for a new host") {
                             Task {
                                 pin = ""
+                                pinBoundTo = nil
                                 do {
                                     pin = try await Fleet(settings: settings).mintHostPin(ephemeral: ephemeralPin)
                                 } catch {
@@ -796,6 +824,14 @@ private struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(formattedPin).font(.system(.title, design: .monospaced))
                                     .textSelection(.enabled)
+                                if let bound = pinBoundTo {
+                                    // NAMED, because a bound pin is refused
+                                    // anywhere else and the refusal arrives on
+                                    // the box rather than here.
+                                    Text("for \(bound) only")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
                                 Text("On that box:  agent-fleet-sidecar enrol \(pin)")
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundStyle(.secondary)
@@ -827,6 +863,25 @@ private struct SettingsView: View {
                                     // app exists to avoid.
                                     Button("Revoke", role: .destructive) { confirmingRevoke = host.hostId }
                                 }
+                                // THE TWO CASES THE COORDINATOR REFUSES AN
+                                // UNBOUND PIN FOR, and until now the only way
+                                // through either was a curl with the
+                                // break-glass admin token — the credential this
+                                // whole design exists to stop needing.
+                                //
+                                // Both refusals name the remedy and neither was
+                                // reachable from here, which is the same shape
+                                // as a drifted host that can only be fixed with
+                                // a shell.
+                                //
+                                // No admin check: /api/enroll accepts any
+                                // signed-in credential, so this is a screen
+                                // that was missing rather than a permission
+                                // that was.
+                                Button(host.isRevoked ? "Readmit" : "Replace key") {
+                                    Task { await mintBoundPin(for: host.hostId, readmit: host.isRevoked) }
+                                }
+                                .tint(.blue)
                             }
                         }
                     } header: {
