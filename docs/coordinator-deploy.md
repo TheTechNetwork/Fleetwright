@@ -257,6 +257,19 @@ unchanged is not neutral — these are the values that do something:
 | `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
 | `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
 
+**`AGENT_FLEET_API_TOKEN` is optional.** The coordinator used to refuse to run
+without it, on the reasoning that a coordinator with no credentials is remote
+control of every box for whoever finds the URL. That was true when the admin
+token was the only credential, and stopped being true when sign-in shipped:
+phones hold per-device credentials from a verified identity, hosts authenticate
+by signature against a per-host keypair, and runners present a token GitHub
+minted for one job.
+
+What it refuses to run without now is **any way in at all** — an admin token,
+or an issuer and an audience to verify a sign-in against. Set both if you want
+a way back when sign-in itself is broken; set neither and it says so at boot
+rather than one 401 at a time.
+
 **That list WAS the defect, and it is fixed rather than documented.** A
 committed config one deploy away from admitting strangers to somebody's fleet is
 the wrong default no matter how well it is described.
