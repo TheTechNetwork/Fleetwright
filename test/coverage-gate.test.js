@@ -92,10 +92,16 @@ test('a rise is reported and never fails — the floors move by hand, in a diff'
   );
 });
 
-test('a file with no floor is reported, not failed — new source is not a regression', () => {
+test('a file with no floor is its OWN bucket, not a regression', () => {
+  // The distinction is the point. There is no prior number for a new file, so
+  // calling it a regression would be a lie about what was measured — but the
+  // command-line gate still refuses it, because a file that has never been
+  // measured is exactly the "untested surface quietly growing" the ratchet
+  // claims to prevent. Reported as new, failed as unrecorded, fixed by
+  // `--update` writing the number down as a reviewable diff.
   const cov = parseLcov(record('src/new.js', 100, 10));
   const { untracked, regressions } = judge(cov, {});
-  assert.equal(regressions.length, 0);
+  assert.equal(regressions.length, 0, 'it is not a drop — there was nothing to drop from');
   assert.deepEqual(
     untracked.map(([f]) => f),
     ['src/new.js'],

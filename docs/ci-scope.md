@@ -157,8 +157,16 @@ that is where the bugs in this repository's history actually lived.
 `scripts/check-coverage.mjs` records per-file line coverage in
 `test/coverage-floor.json` and fails a change that executes **less** of a file
 than the last one did. A ratchet rather than a target: it never argues about
-whether 80% is enough, and it never lets the untested surface quietly grow. It
-runs inside `verify.sh`, so it is the same check locally and in CI.
+whether 80% is enough. It runs inside `verify.sh`, so it is the same check
+locally and in CI.
+
+Two failures, and they are different sentences. A file that **drops** below its
+floor is a regression — a test was removed, or code was added that nothing runs.
+A file with **no floor at all** is new, or newly reached, and there is no prior
+number to judge it against; the gate refuses it anyway, because a module added
+at 0% is precisely the untested surface growing. Both are answered by the same
+act: `node scripts/check-coverage.mjs --update`, whose diff is reviewed with the
+change that earned it.
 
 ## Changing any of this
 

@@ -160,12 +160,22 @@ if (risen.length) {
   for (const [file, floor, now] of risen) console.log(`  ${pct(floor)} → ${pct(now)}  ${file}`);
 }
 
-if (untracked.length) {
-  console.log('not in the floors file yet (new source, or newly reached):');
-  for (const [file, now] of untracked) console.log(`  ${pct(now)}  ${file}`);
-}
+// A NEW FILE FAILS, and this used to only print. The docs claimed the untested
+// surface "never quietly grows", and for a file that had never been measured it
+// could: it appeared under a heading, nothing failed, and a module added at 0%
+// passed the gate that exists to stop exactly that.
+//
+// There is no prior number to ratchet against, so the gate cannot judge the
+// VALUE — but it can insist the value be recorded, which is the same act that
+// records every other floor and lands as the same reviewable diff. One command,
+// once per new file.
+//
+// It costs nothing in flakiness that was not already there: a file that drops
+// out of the report while still on disk already fails as `vanished`, so a file
+// that flaps in and out was always going to fail in one direction. This makes
+// it symmetric rather than adding a new way to be red.
 
-if (!regressions.length && !vanished.length) {
+if (!regressions.length && !vanished.length && !untracked.length) {
   const covered = [...actual.values()].map((v) => v.pct);
   const mean = covered.reduce((a, b) => a + b, 0) / (covered.length || 1);
   console.log(`coverage held on ${actual.size} files (mean ${mean.toFixed(1)}% of lines)`);
@@ -180,9 +190,26 @@ for (const [file, floor, now, lines] of regressions) {
 for (const file of vanished) {
   console.error(`  ${file}\n    still on disk but no longer reached by any test — it had a floor of ${floors[file]}%`);
 }
-console.error(
-  `\n${regressions.length + vanished.length} file${regressions.length + vanished.length === 1 ? '' : 's'} lost coverage.\n` +
-    'Either the change removed the test that covered it, or it added code nothing runs.\n' +
-    'Add the test. `--update` is for a floor that went UP.',
-);
+for (const [file, now] of untracked) {
+  console.error(
+    `  ${file}\n    covered ${now.toFixed(2)}% and has no floor recorded — new source, or newly reached by a test`,
+  );
+}
+const lost = regressions.length + vanished.length;
+if (lost) {
+  console.error(
+    `\n${lost} file${lost === 1 ? '' : 's'} lost coverage.\n` +
+      'Either the change removed the test that covered it, or it added code nothing runs.\n' +
+      'Add the test, then re-run. `--update` is for a floor that went UP.',
+  );
+}
+if (untracked.length) {
+  console.error(
+    `\n${untracked.length} file${untracked.length === 1 ? ' has' : 's have'} no floor recorded.\n` +
+      'This is the one case `--update` is for on a first run:\n' +
+      '  node scripts/check-coverage.mjs --update\n' +
+      'It writes what the suite reaches today, and that number is then held. If it\n' +
+      'reads lower than you expected, the fix is a test rather than the command.',
+  );
+}
 process.exit(1);

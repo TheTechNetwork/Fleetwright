@@ -118,6 +118,24 @@ the pull request that earned it. A run that rises prints the files and the
 command; a run that drops prints how many **lines** stopped executing, because
 that is the number somebody can act on.
 
+**The suite runs three times per pull request.** Twice in the matrix, and once
+more inside `check-coverage.mjs` — `VERIFY_SKIP_TESTS` skips the `tests` *line*,
+not the run underneath the coverage one, because coverage has to execute the
+suite to measure it. Three runs of 21 seconds, in parallel with a docker build.
+Recorded here so "coverage runs once, here" is not read as "once in total".
+
+Two failures, and they say different things:
+
+| | what it means | what to do |
+|---|---|---|
+| **dropped below its floor** | a test was removed, or code was added that nothing runs | add the test |
+| **no floor recorded** | new source, or newly reached by a test | `--update`, and read the number before committing it |
+
+The second one fails rather than merely printing, because a module added at 0%
+is the untested surface growing — the thing the ratchet exists to stop. There is
+no prior number to judge it against, so the gate insists the number be
+*recorded* rather than judging its value.
+
 Three things it deliberately does not do:
 
 - **Branches and functions are not ratcheted.** They move on their own — the
@@ -125,7 +143,9 @@ Three things it deliberately does not do:
   changed — and a gate that fails on an unchanged tree is a gate people learn
   to re-run and then to ignore.
 - **It never fails on a low number.** `src/core/trust.js` sits at 46%. That is
-  a fact to fix with a test, not a reason to block an unrelated change.
+  a fact to fix with a test, not a reason to block an unrelated change — and it
+  is why an unrecorded file fails on being *unrecorded* rather than on being
+  low.
 - **It does not judge a failing suite.** A run that stopped early covered
   whatever it reached, and ratcheting against that would record a floor from a
   broken run.

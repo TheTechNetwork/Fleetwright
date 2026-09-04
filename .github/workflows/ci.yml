@@ -171,6 +171,17 @@ jobs:
       # flag (VERIFY_SKIP_COVERAGE) rather than riding on VERIFY_SKIP_TESTS.
       # Coverage is a property of the code, not of the runtime: two matrix legs
       # would produce the same number and pay for a second suite run to do it.
+      #
+      # SO THE SUITE RUNS THREE TIMES PER PULL REQUEST, and that is worth saying
+      # out loud rather than leaving somebody to find it. Twice in the matrix
+      # above, and a third time inside check-coverage.mjs here — VERIFY_SKIP_TESTS
+      # skips the `tests` LINE, not the run underneath the coverage one, because
+      # coverage has to execute the suite to measure it.
+      #
+      # Three runs of 21 seconds, in parallel with a docker build. It is a real
+      # cost and a small one; the alternative is threading a coverage-enabled
+      # run out of one matrix leg, which couples the two jobs to save nothing
+      # anybody can feel.
       - name: Everything verify.sh checks, except the suite
         env:
           VERIFY_SKIP_TESTS: '1'

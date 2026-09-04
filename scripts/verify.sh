@@ -12,6 +12,35 @@
 set -uo pipefail
 fail=0
 
+# THE NODE FLOOR, FIRST, because everything below assumes it.
+#
+# This script grew a dependency on a runtime feature and said nothing about it:
+# check-coverage.mjs imports globSync from node:fs, which does not exist before
+# Node 22, so on an older one the coverage line printed a bare
+#
+#   SyntaxError: The requested module 'node:fs' does not provide an export
+#   named 'globSync'
+#
+# and this script then reported "SOMETHING FAILED — do not commit" for a tree
+# that was completely fine. The message named neither the floor nor the file,
+# which makes it a bug hunt rather than a sentence.
+#
+# THE NUMBER COMES FROM package.json, not from a literal here. That is the whole
+# point of install-node-floor.test.js, which exists because this floor was
+# written down in four places and three of them drifted. A fifth copy in the
+# script that checks everything else would be the same joke told again.
+node_floor=$(node -p "require('./package.json').engines.node.match(/\d+/)[0]" 2>/dev/null || echo '')
+node_major=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo '')
+if [ -n "$node_floor" ] && [ -n "$node_major" ] && [ "$node_major" -lt "$node_floor" ]; then
+  printf 'node       ... FAILED\n'
+  printf '  This is Node %s. package.json says >=%s, and the checks below need it —\n' "$node_major" "$node_floor"
+  printf '  scripts/check-coverage.mjs imports globSync from node:fs, which is 22+.\n'
+  printf '  Nothing was run: a green tick from an unsupported runtime is worth less\n'
+  printf '  than no tick at all.\n'
+  printf '\nSOMETHING FAILED — do not commit\n'
+  exit 1
+fi
+
 # VERIFY_SKIP_TESTS=1 runs everything EXCEPT the suite.
 #
 # For CI, and it is the reason CI can run this file rather than a copy of it.
