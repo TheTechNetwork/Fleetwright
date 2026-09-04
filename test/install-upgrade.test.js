@@ -230,8 +230,59 @@ test('the sudoers rules have one implementation, called twice', () => {
   assert.equal((SH.match(/if write_upgrade_sudoers; then/g) || []).length, 2, 'not called from both places');
   assert.equal((SH.match(/if write_reboot_sudoers; then/g) || []).length, 2, 'not called from both places');
 
-  // Both validate before installing. A malformed file in /etc/sudoers.d does
-  // not break one rule, it breaks sudo.
+  // Every one of them validates before installing. A malformed file in
+  // /etc/sudoers.d does not break one rule, it breaks sudo.
   const writers = SH.slice(SH.indexOf('write_upgrade_sudoers() {'), SH.indexOf('# --- 1. prerequisites'));
-  assert.equal((writers.match(/visudo -cf/g) || []).length, 2, 'a rule is installed without being validated');
+  assert.equal((writers.match(/visudo -cf/g) || []).length, 3, 'a rule is installed without being validated');
+});
+
+test('the migration rule names a path the service user cannot write', () => {
+  // THE WHOLE SECURITY ARGUMENT FOR THE MIGRATION GRANT, as an assertion.
+  //
+  // install.sh does `chown -R "$RUN_USER" "$DIR"` — the service user can write
+  // every file in the install tree, and must be able to, because applyRelease
+  // unpacks releases and swaps `current` as that user. So a sudoers rule naming
+  // anything under $DIR would let the service rewrite the script it is allowed
+  // to run as root. That is not a narrow grant; it is root with extra steps.
+  assert.match(SH, /^write_migrate_sudoers\(\) \{/m);
+  assert.match(SH, /NOPASSWD: \/usr\/local\/sbin\/fleetwright-migrate/);
+  assert.doesNotMatch(SH, /NOPASSWD:[^\n]*\$DIR/, 'a sudoers rule names a path in the install tree');
+
+  // Installed as root, by root. The mode and the owner ARE the property — a
+  // copy that inherited the checkout's ownership would defeat the paragraph
+  // above while looking identical.
+  assert.match(SH, /install -m 0755 -o root -g root "\$DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
+
+  // NO ARGUMENTS. sudoers matches argv, so every argument somebody could pass
+  // is a widening of the grant — the same reason the apt rule spells its whole
+  // command line out rather than permitting `apt-get`.
+  const rule = SH.slice(SH.indexOf('write_migrate_sudoers() {'), SH.indexOf('write_reboot_sudoers() {'));
+  assert.doesNotMatch(rule, /fleetwright-migrate [^\\n]/, 'the rule permits arguments');
+
+  // And only on a checkout: a packaged box has nothing to migrate to, and a
+  // rule nobody needs is a rule nobody reviews.
+  assert.match(SH, /if \[ "\$PACKAGED" = 0 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/);
+});
+
+test('the migration helper verifies before it unpacks, and refuses a path', () => {
+  const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
+
+  // The sha256 is checked BEFORE the tar runs. A tarball unpacked and then
+  // checked has already written whatever it contained.
+  const verify = mig.indexOf('sha256sum');
+  const unpack = mig.indexOf('tar -xzf');
+  assert.ok(verify > 0 && unpack > verify, 'the release is unpacked before its digest is checked');
+
+  // version and file both become paths. src/core/release.js refuses the same
+  // two shapes for the same reason.
+  assert.match(mig, /\*\/\*\|\.\.\*\|\.\*\|""\)/, 'the manifest fields are not checked for being plain names');
+
+  // The env file is READ, never sourced — sourcing it executes whatever is in
+  // it, in a root shell.
+  assert.doesNotMatch(mig, /^\s*\.\s+"?\$ENV_FILE/m);
+  assert.doesNotMatch(mig, /source .*ENV_FILE/);
+
+  // Already-packaged is not a failure: a retried migration must not take a
+  // working box apart to rebuild it.
+  assert.match(mig, /already on the packaged layout/);
 });
