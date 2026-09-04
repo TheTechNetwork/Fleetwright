@@ -53,6 +53,19 @@ jobs:
           # version. Neither is a git sha, because a version somebody has to
           # read aloud on a phone call should be readable.
           RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || format('main-{0}', github.run_number) }}
+          # WHO IT IS FOR. GitHub already knows whether a release was marked as
+          # a prerelease — that is the same box that decides TestFlight-only
+          # versus the App Store — so the manifest says the same thing rather
+          # than being told separately and disagreeing.
+          #
+          # A build from a push to main is a prerelease by definition: nobody
+          # published it, and a host on the stable channel should not take
+          # something that was never released.
+          RELEASE_PRERELEASE: ${{ github.event_name != 'release' || github.event.release.prerelease }}
+          # A repository variable, so widening a rollout is a setting somebody
+          # changes rather than a commit. Unset means everybody, which is how
+          # every release has behaved until now.
+          RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
         run: |
           node tools/build-host-package.mjs | tee build.log
           echo "sha256=$(awk '/^sha256/ {print $2}' build.log)" >> "$GITHUB_OUTPUT"
@@ -63,6 +76,19 @@ jobs:
       - name: Build it again and compare
         env:
           RELEASE_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || format('main-{0}', github.run_number) }}
+          # WHO IT IS FOR. GitHub already knows whether a release was marked as
+          # a prerelease — that is the same box that decides TestFlight-only
+          # versus the App Store — so the manifest says the same thing rather
+          # than being told separately and disagreeing.
+          #
+          # A build from a push to main is a prerelease by definition: nobody
+          # published it, and a host on the stable channel should not take
+          # something that was never released.
+          RELEASE_PRERELEASE: ${{ github.event_name != 'release' || github.event.release.prerelease }}
+          # A repository variable, so widening a rollout is a setting somebody
+          # changes rather than a commit. Unset means everybody, which is how
+          # every release has behaved until now.
+          RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
         run: |
           first="${{ steps.build.outputs.sha256 }}"
           rm -rf dist

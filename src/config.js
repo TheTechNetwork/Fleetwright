@@ -184,6 +184,11 @@ export function loadConfig(env = process.env) {
     // checkout, which updates by git and always will — see docs/packaging.md,
     // where the fallback is what makes moving one box at a time safe.
     releaseManifest: str('AGENT_HUB_RELEASE_MANIFEST'),
+    // WHICH RELEASES THIS BOX TAKES. `stable` skips anything marked as a
+    // prerelease; `prerelease` takes both. Per host on purpose — the point of
+    // marking a release is that it goes to the machines somebody chose to
+    // expose, so a bad build is found before the whole fleet takes it.
+    releaseChannel: str('AGENT_HUB_RELEASE_CHANNEL', 'stable'),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),

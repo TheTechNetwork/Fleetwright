@@ -164,6 +164,50 @@ value rather than two that have to agree.
 
 Unset on a checkout, which updates by git and always will.
 
+## Channels and staged rollouts
+
+Two fields on the manifest, both defaulting to "everybody", so a release built
+without thinking about either behaves exactly as releases always have.
+
+```json
+{ "prerelease": true, "rollout": 0.25 }
+```
+
+**`prerelease` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=prerelease`
+takes them; the default `stable` skips them. That is the point of marking a
+release: it reaches the machines somebody chose to expose, so a bad build is
+found before the whole fleet takes it. CI sets the field from GitHub's own
+prerelease checkbox — the same box that decides TestFlight-only versus the App
+Store — so the manifest cannot disagree with the release. A build from a push
+to `main` is a prerelease by definition: nobody published it.
+
+**`rollout` is a fraction, and the host decides only where it falls.**
+`rolloutPosition(hostKey, version)` maps a machine into `[0, 1)`, and the host
+takes the release if it lands under the line. No coordinator involvement, no
+list of who has it, nothing to keep in sync — a box can work this out offline.
+
+Three properties it has to have, and each one is a test:
+
+- **Widening only ever adds.** A host that qualified at 25% still qualifies at
+  50%, or raising a rollout would take a release away from machines that had it
+  and the fleet would oscillate.
+- **Each release reshuffles who leads.** The version is in the key, so the same
+  boxes do not take every risk while others never see a release until it is
+  proven. This is why the hash needs a finaliser: without one, `v2.0.0` and
+  `v2.0.1` put 37 of 38 hosts in the same order, because FNV moves a one-bit
+  change into the low bits and the position is the high ones.
+- **A host with no stable name waits for 100%.** Guessing a position would move
+  it between rollouts at random; the fraction only ever rises, so waiting is the
+  answer that cannot be wrong.
+
+FNV-1a with MurmurHash3's `fmix32`, not SHA-256 — nothing here is secret, and
+both a Worker and a Node process must compute it identically without an
+`await`. `crypto.subtle` is async and would make the whole decision async for a
+guarantee nobody needs.
+
+The rollout comes from a repository variable (`RELEASE_ROLLOUT`), so widening
+one is a setting somebody changes rather than a commit.
+
 ## What this does not solve
 
 **The sandbox image is a second artifact** and stays one. It is versioned by

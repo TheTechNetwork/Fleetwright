@@ -47,7 +47,56 @@ export const CURRENT_LINK = 'current';
  * @property {number} [bytes]
  * @property {number} [protocol]
  * @property {string|null} [sandboxImage]
+ * @property {boolean} [prerelease]  only for hosts that asked for prereleases
+ * @property {number} [rollout]      0–1; the fraction of hosts this is for yet
  */
+
+/**
+ * Where one host falls in a staged rollout, as a number in [0, 1).
+ *
+ * FNV-1a, NOT SHA-256, and the difference is worth stating because a hash in a
+ * release path invites the assumption that it is a security boundary. It is
+ * not: nothing here is a secret, a host that lied about its own name would only
+ * change when it updates, and the property actually needed is an even spread
+ * that both a Worker and a Node process compute identically without an await.
+ * `crypto.subtle` is async and would make this whole decision async, for a
+ * guarantee nobody needs.
+ *
+ * THE VERSION IS IN THE KEY. Hashing the host alone would put the same
+ * machines at the front of every rollout for ever — one box would take every
+ * risk and another would never see a release until it was already proven.
+ * Mixing the version in reshuffles the order per release while staying
+ * deterministic WITHIN one: raising a rollout from 0.1 to 0.5 only ever adds
+ * hosts, and never takes the release away from a box that already qualified.
+ *
+ * @param {string} hostKey  stable per machine — the host id, or its hostname
+ * @param {string} version
+ */
+export function rolloutPosition(hostKey, version) {
+  const key = `${hostKey}:${version}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    // Math.imul, because `hash * 16777619` overflows a double past 32 bits and
+    // stops being the same function on different inputs.
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  // A FINALISER, and it is not optional — this was written without one and the
+  // rollout barely reshuffled between v2.0.0 and v2.0.1: 37 of 38 hosts led
+  // both. FNV-1a moves a one-bit input change into the LOW bits of the hash,
+  // and the position is the high bits (it divides by 2^32), so two versions
+  // differing in their last character produced almost the same ordering — the
+  // property this function exists to avoid.
+  //
+  // MurmurHash3's fmix32, which is exactly the "spread low bits upward" step
+  // FNV lacks. Tested by comparing who leads two adjacent versions.
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x85ebca6b) >>> 0;
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35) >>> 0;
+  hash ^= hash >>> 16;
+  return (hash >>> 0) / 0x100000000;
+}
 
 /**
  * Is this manifest usable, and is it worth acting on?
@@ -60,9 +109,11 @@ export const CURRENT_LINK = 'current';
  * @param {unknown} q.manifest        whatever the URL returned
  * @param {string} q.installed        the version running now
  * @param {number} q.protocol         the protocol THIS build speaks
+ * @param {string} [q.channel]        'stable' (default) or 'prerelease'
+ * @param {string} [q.hostKey]        stable per machine, for staged rollouts
  * @returns {{ act: false, reason: string, message: string } | { act: true, manifest: Manifest, message: string }}
  */
-export function decideRelease({ manifest, installed, protocol }) {
+export function decideRelease({ manifest, installed, protocol, channel = 'stable', hostKey = '' }) {
   const m = /** @type {any} */ (manifest);
   if (!m || typeof m !== 'object') {
     return { act: false, reason: 'unreadable', message: 'the release manifest was not an object' };
@@ -112,8 +163,47 @@ export function decideRelease({ manifest, installed, protocol }) {
     };
   }
 
+  // BEFORE the channel and rollout rules. A host that already has the release
+  // is done, whatever channel it is on and wherever it falls in a rollout —
+  // telling it "not for you yet" about something it is running would be a
+  // sentence nobody can act on.
   if (m.version === installed) {
     return { act: false, reason: 'current', message: `already on ${installed}` };
+  }
+
+  // A PRERELEASE IS OPT-IN, PER HOST. The point of marking one is that it goes
+  // to the boxes somebody chose to expose, so a bad build is found before every
+  // machine takes it.
+  if (m.prerelease === true && channel !== 'prerelease') {
+    return {
+      act: false,
+      reason: 'channel',
+      message:
+        `${m.version} is a prerelease and this host is on the stable channel.\n` +
+        'Set AGENT_HUB_RELEASE_CHANNEL=prerelease to take these.',
+    };
+  }
+
+  // STAGED, and the fraction is the release's to decide rather than the host's.
+  // A host computes only WHERE IT FALLS, which it can do offline and identically
+  // everywhere. Absent, or 1 or more, means everybody — a rollout nobody
+  // configured must not hold a fleet back.
+  const rollout = typeof m.rollout === 'number' ? m.rollout : 1;
+  if (rollout < 1) {
+    // No key means no stable position, and guessing one would move a host
+    // between rollouts at random. Waiting is the safe answer: the fraction only
+    // ever rises, so a host that cannot place itself gets the release when it
+    // reaches everybody.
+    const position = hostKey ? rolloutPosition(hostKey, m.version) : 1;
+    if (position >= rollout) {
+      return {
+        act: false,
+        reason: 'rollout',
+        message:
+          `${m.version} is rolling out to ${Math.round(rollout * 100)}% of hosts and this one is not in that group yet.\n` +
+          (hostKey ? 'It will update when the rollout widens.' : 'This host has no stable name to place itself with, so it waits for 100%.'),
+      };
+    }
   }
 
   return { act: true, manifest: m, message: `${installed} → ${m.version}` };

@@ -147,6 +147,18 @@ const manifest = {
   // The two artifacts are already coupled — the entrypoint and the credential
   // broker's client live in the image — and until now nothing said so.
   sandboxImage: process.env.RELEASE_SANDBOX_IMAGE || null,
+  // WHO THIS RELEASE IS FOR, and both default to "everybody" so that a release
+  // built without thinking about either behaves as releases always have.
+  //
+  // Unlike `protocol` above, these two CANNOT be read out of the code: they are
+  // facts about how a particular release is being shipped, not about what it
+  // is. So they are environment variables — the thing `protocol` should never
+  // have been.
+  prerelease: process.env.RELEASE_PRERELEASE === 'true',
+  // 0–1. A host derives its own position from its name and this version, so
+  // widening a rollout only ever adds machines. Written as a number so a
+  // manifest is readable: 0.25 is a quarter, not a string somebody parses.
+  rollout: Math.min(1, Math.max(0, Number(process.env.RELEASE_ROLLOUT ?? 1) || 0)),
 };
 writeFileSync(path.join(OUT, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 

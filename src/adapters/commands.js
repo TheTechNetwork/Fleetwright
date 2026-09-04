@@ -1203,6 +1203,12 @@ export const COMMANDS = {
           installDir: ctx.cfg.installDir,
           manifestUrl: ctx.cfg.releaseManifest,
           protocol: PROTOCOL_VERSION,
+          channel: ctx.cfg.releaseChannel,
+          // THE HOSTNAME, because agent-hub does not read the sidecar's env and
+          // so does not know AGENT_FLEET_HOST_ID. It is the same value in the
+          // ordinary case — that variable defaults to os.hostname() — and what
+          // a rollout needs is only that it is stable per machine.
+          hostKey: ctx.cfg.hostname,
           dryRun: flags.has('check'),
         });
         // The same two-step as the git path: the code lands, then somebody
