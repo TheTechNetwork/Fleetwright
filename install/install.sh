@@ -158,7 +158,24 @@ while [ $# -gt 0 ]; do
       printf '  --no-wizard   never ask; write templates and print the next steps\n'
       printf '  --upgrade     an already-enrolled box onto new code: no questions,\n'
       printf '                restarts the services, and checks the protocol matches\n'
+      printf '  --repair      --upgrade, and put back everything this installer\n'
+      printf '                generates: units, the hook, and the sudoers rules this\n'
+      printf '                box has already agreed to. Never changes an answer\n'
       exit 0 ;;
+    --repair)
+      # EVERYTHING THIS INSTALLER GENERATES, PUT BACK, and nothing it was told.
+      #
+      # Sections 2, 4 and 5 already rewrite what they own on every run — the
+      # units, the hook, the directories — so a plain unattended run repairs
+      # most of a drifted box already. What it does NOT put back is the pair of
+      # sudoers rules, because those live behind questions in the wizard, and
+      # the wizard does not run when nobody is there to answer.
+      #
+      # The answers are already recorded in the env file. A repair re-applies
+      # the rules that the box has already said yes to, which is how a machine
+      # whose rule predates a change gets the current one without being asked
+      # again about a decision it already made.
+      REPAIR=1; UPGRADE=1; WIZARD=no ;;
     --upgrade)
       # AN ALREADY-CONFIGURED BOX, BROUGHT ONTO NEW CODE, WITH NO QUESTIONS.
       #
@@ -195,6 +212,8 @@ if [ -t 0 ]; then ASK_IN=/dev/stdin
 elif [ -r /dev/tty ]; then ASK_IN=/dev/tty
 else ASK_IN=""; fi
 
+REPAIR="${REPAIR:-0}"
+[ "${AGENT_HUB_REPAIR:-0}" = "1" ] && { REPAIR=1; UPGRADE=1; WIZARD=no; }
 UPGRADE="${UPGRADE:-0}"
 [ "${AGENT_HUB_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
 [ "${AGENT_HUB_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
@@ -409,6 +428,49 @@ if [ -f /var/lib/agent-fleet/host-key.json ] && [ -f /var/lib/agent-fleet/machin
     [ "$CLEAN" = ask ] && CLEAN=yes
   fi
 fi
+
+# --- writing the sudoers rules ----------------------------------------------
+#
+# ONE IMPLEMENTATION, called by the wizard when somebody says yes and by
+# --repair when the env file says they already did. Two copies of a rule that
+# must match is how a box ends up permitted to run a command the code no longer
+# issues — which is exactly the drift --repair exists to undo.
+#
+# Both validate with visudo BEFORE installing. A malformed file in
+# /etc/sudoers.d does not break one rule, it breaks sudo.
+
+# `:` and `=` are sudoers metacharacters — they separate the host, runas and
+# command sections — so Dpkg::Options::= must be escaped or visudo rejects the
+# whole file. Found by running visudo on it rather than by reading the grammar.
+write_upgrade_sudoers() {
+  local tmp
+  tmp="$(mktemp)"
+  {
+    printf 'Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"\n'
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, ' "$RUN_USER"
+    printf '/usr/bin/apt-get -y -o Dpkg\\:\\:Options\\:\\:\\=--force-confold -o Dpkg\\:\\:Options\\:\\:\\=--force-confdef upgrade\n'
+  } > "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then
+    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-upgrade
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+write_reboot_sudoers() {
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl reboot\n' "$RUN_USER" > "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then
+    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-reboot
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
 
 # --- 1. prerequisites -------------------------------------------------------
 say "Checking prerequisites"
@@ -1609,17 +1671,18 @@ if [ "$WIZARD" = yes ]; then
     printf '  own, so without it "no updates" would mean "nobody has looked since\n'
     printf '  install day".\n'
     if confirm "Allow system updates from chat?" Y; then
-      SUDO_TMP="$(mktemp)"
-      printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade\n' "$RUN_USER" > "$SUDO_TMP"
-      if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
-        install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-upgrade
+      # TWO FORMS, AND THE OLD ONE STAYS. sudo matches the whole command line,
+      # so an option this rule does not name is a refusal — which is why an
+      # unattended upgrade could not pass the flags that make it unattended.
+      # The plain form is kept so a box whose rule predates this keeps working:
+      # upgrades.js tries the option form and falls back on a refusal.
+      if write_upgrade_sudoers; then
         set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
         ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may run apt-get update and apt-get -y upgrade"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
-      rm -f "$SUDO_TMP"
     else
       set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 0
       ok "skipping — /upgrade will report what is waiting but not apply it"
@@ -1638,16 +1701,13 @@ if [ "$WIZARD" = yes ]; then
     printf '  the command, a one-time token, and the hostname typed out.\n'
     printf '  EVERY RUNNING SESSION DIES — a reboot takes the tmux server with it.\n'
     if confirm "Allow reboot from chat?" N; then
-      SUDO_TMP="$(mktemp)"
-      printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl reboot\n' "$RUN_USER" > "$SUDO_TMP"
-      if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
-        install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-reboot
+      if write_reboot_sudoers; then
         set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 1
+        set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
         ok "/etc/sudoers.d/agent-hub-reboot — $RUN_USER may run systemctl reboot"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
-      rm -f "$SUDO_TMP"
     else
       set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 0
       ok "skipping — /reboot will explain how to turn it on if anybody asks"
@@ -1924,6 +1984,49 @@ fi
 # Everything that was skipped, together, at the end. One warning in the middle
 # of two hundred lines is a warning nobody read — and on a platform this only
 # partly supports, the list IS the useful output.
+# --- 8b. --repair: the rules this box already agreed to -----------------------
+#
+# The sections above rewrite everything they own on every run — units, the hook,
+# the directories — so an unattended run already repairs most of a drifted box.
+# The two sudoers rules are the exception, because they live behind questions in
+# the wizard and the wizard does not run when nobody is there to answer.
+#
+# THE ANSWERS ARE ALREADY IN THE ENV FILE. A box that said yes to system
+# upgrades has AGENT_HUB_SYSTEM_UPGRADE=1 recorded, so re-applying the rule is
+# acting on a decision somebody already made rather than making one for them.
+# A box that said no keeps its no: this reads the setting, it never writes one.
+#
+# The case this exists for is a rule that has CHANGED shape. The upgrade rule
+# grew two permitted command forms so an unattended apt can answer conffile
+# prompts, and every box installed before that carries the old one — where the
+# only remedy was a full reinstall on a machine whose only fault was being
+# older than a commit.
+if [ "$REPAIR" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
+  say "Repairing what this box has already agreed to"
+  if command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
+    if [ "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" = 1 ]; then
+      if write_upgrade_sudoers; then
+        ok "/etc/sudoers.d/agent-hub-upgrade rewritten"
+      else
+        warn "the upgrade sudoers rule did not validate, so it was left as it was"
+      fi
+    else
+      ok "system upgrades are off here — leaving that alone"
+    fi
+    if [ "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT)" = 1 ]; then
+      if write_reboot_sudoers; then
+        ok "/etc/sudoers.d/agent-hub-reboot rewritten"
+      else
+        warn "the reboot sudoers rule did not validate, so it was left as it was"
+      fi
+    else
+      ok "reboot from chat is off here — leaving that alone"
+    fi
+  else
+    warn "no visudo on this box, so the sudoers rules were not touched"
+  fi
+fi
+
 # --- 9. --upgrade: apply the code, and say whether it can talk ---------------
 #
 # The wizard block above is where services get restarted, and it only runs with
