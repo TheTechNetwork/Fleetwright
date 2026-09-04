@@ -142,6 +142,12 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   assert.match(job, /--clobber/, 'the assets are not replaced, so the address goes stale');
   assert.match(job, /gh release edit rolling --target main/, 'the tag would point at whenever it was created');
 
+  // AND THE PREVIOUS TARBALL IS REMOVED. The name carries the build number, so
+  // --clobber cannot reach it: every merge uploaded a new name beside the last
+  // one and the release grew a tarball per merge, on an address whose whole
+  // promise is that its contents are replaced.
+  assert.match(job, /gh release delete-asset rolling/);
+
   // NOT A TAG CALLED `main`, which is what this shipped as for one afternoon.
   // A tag and a branch of the same name make every bare `main` ambiguous, and
   // git resolves refs/tags/ first — so `git checkout main` silently used the

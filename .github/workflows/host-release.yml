@@ -196,6 +196,26 @@ jobs:
           # --clobber, because the point is that these files are replaced.
           gh release upload rolling dist/*.tar.gz dist/manifest.json --clobber
 
+          # AND THE OLD TARBALL GOES, because --clobber cannot reach it. The
+          # tarball's name carries the build number (fleetwright-host-main-29),
+          # so every merge uploads a NEW name beside the last one rather than
+          # replacing it — the release accumulated one tarball per merge, for
+          # ever, on an address whose whole promise is that its contents are
+          # replaced. Nothing broke; manifest.json names the file it means. It
+          # is a leak, and one that would have been discovered as a quota.
+          #
+          # Everything that is not what we just uploaded goes. Derived from the
+          # files on disk rather than from a pattern, so a rename of the
+          # artifact cannot leave this deleting the wrong thing.
+          keep="manifest.json $(cd dist && ls -1 *.tar.gz | tr '\n' ' ')"
+          echo "keeping: $keep"
+          gh release view rolling --json assets --jq '.assets[].name' | while read -r asset; do
+            case " $keep " in
+              *" $asset "*) ;;
+              *) echo "removing stale asset $asset"; gh release delete-asset rolling "$asset" --yes ;;
+            esac
+          done
+
           # The tag has to follow main, or the release page shows a commit from
           # whenever it was first created while serving today's artifacts.
           gh release edit rolling --target main >/dev/null
