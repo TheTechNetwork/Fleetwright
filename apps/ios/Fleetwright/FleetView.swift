@@ -546,6 +546,13 @@ private struct SettingsView: View {
     @State private var fleetHosts: [Fleet.FleetHost] = []
     @State private var confirmingRevoke: String?
     @State private var hostActionResult = ""
+    /// WHICH host that answer is about.
+    ///
+    /// It used to be one string rendered in the enrolment section — above the
+    /// "Fleet" header, detached from every row — so an answer about one machine
+    /// appeared above a list of four. A reply has to be shown where the thing
+    /// it is replying about is.
+    @State private var resultHost: String?
     @State private var busyHost: String?
     @State private var rebootTarget: String?
     /// Deleting for good is the one action here with no undo left, so it asks
@@ -566,31 +573,44 @@ private struct SettingsView: View {
     @MainActor
     private func maintain(_ host: String, _ what: Maintenance) async {
         busyHost = host
+        resultHost = host
         defer { busyHost = nil }
         do {
             let fleet = Fleet(settings: settings)
-            let reply: Fleet.Reply
+            // A STRING RATHER THAN A REPLY, because one case asks two verbs and
+            // there is no honest single Reply to hand back for that pair.
+            let answer: String?
             switch what {
-            // The check is `upgrade` with apply off — the verb's own reporting
-            // mode. It refreshes what the OS knows; the git side is already in
-            // health, recomputed when the host next reports.
-            case .check: reply = try await fleet.upgrade(host: host)
-            case .applyUpdate: reply = try await fleet.update(host: host, restart: true)
-            case .applyUpgrade: reply = try await fleet.upgrade(host: host, apply: true)
-            case .rebootAsk: reply = try await fleet.reboot(host: host)
+            // ONE VERB, BOTH SUBJECTS. This was `upgrade` alone — the
+            // operating system — while the button sat between two things that
+            // can be out of date, and it produced a screen contradicting
+            // itself: "The box is up to date." printed directly above "running
+            // 0223f94 · 1 commit behind". Both sentences were true, about
+            // different things, and whichever one somebody believed the other
+            // taught them the screen was unreliable.
+            //
+            // Two verbs would have been two round trips and two chances to
+            // render them apart. One answer cannot disagree with itself.
+            case .check: answer = try await fleet.updates(host: host).text
+            case .applyUpdate: answer = try await fleet.update(host: host, restart: true).text
+            case .applyUpgrade: answer = try await fleet.upgrade(host: host, apply: true).text
+            case .rebootAsk: answer = try await fleet.reboot(host: host).text
             // WHICH RELEASES THIS BOX TAKES. It used to be a line in
             // /etc/agent-hub.env, which meant SSH — the one thing somebody
             // holding only a phone does not have. loadHosts() below refreshes
             // the row, so what the screen shows afterwards is what the box
             // reported and not what this tap hoped for.
-            case .channel(let to): reply = try await fleet.channel(host: host, to: to)
+            case .channel(let to): answer = try await fleet.channel(host: host, to: to).text
             case .rebootDo:
-                reply = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm)
+                answer = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm).text
                 rebootTarget = nil
                 rebootPin = ""
                 rebootConfirm = ""
             }
-            hostActionResult = reply.text ?? ""
+            // NAMED, because this one string is shown in a single field above
+            // a list of machines. An answer with no host on it is an answer
+            // about whichever box somebody last tapped, which is a guess.
+            hostActionResult = answer ?? ""
         } catch {
             hostActionResult = error.localizedDescription
         }
@@ -611,26 +631,26 @@ private struct SettingsView: View {
     /// paying in bindings for something the type checker wanted in expressions.
     @ViewBuilder
     private func healthLines(for host: Fleet.FleetHost) -> some View {
-            // WHO CAN START A SESSION HERE. This used to read "NOT signed in
-            // — sessions will not start", off the box's own Claude login, and it
-            // survived the model that made it true: a machine has no account
-            // now, so that line appeared in red on every host — including ones
-            // reporting healthy, which is a screen contradicting itself.
+            // WHO CAN START A SESSION HERE, and as whom. These were two lines
+            // saying overlapping things — "signed in as eli@x.com · max ·
+            // eli@x.com's Organization" above "2 people can start sessions
+            // here" — where the org half repeated the address and the count
+            // repeated the point. One line, and the org is dropped when it is
+            // just the address again wearing a suffix.
             //
-            // Zero is the real fault and is the only one worth colouring.
-            // Absent means an older host and says nothing at all.
+            // Zero is the real fault and the only thing worth colouring: a
+            // machine has no Claude account of its own, so nil means an older
+            // host and says nothing at all.
             if let accounts = host.health?.claudeAccounts {
-                Text(describeAccounts(accounts))
+                Text(describeWhoCanStart(accounts, account: host.health?.account))
                     .font(.caption2)
                     .foregroundStyle(accounts == 0 ? .red : .secondary)
             }
             // THE SECOND WAY TO BE SIGNED OUT, and the one that was invisible.
-            // The line above reports on the box's own home directory; this
-            // reports on the credential file a session is handed a copy of.
-            // They came apart in production — a box saying "signed in" while
-            // every session started on it came up logged out — and the only
-            // visible symptom was that a brand new session worked and a resumed
-            // one did not.
+            // The line above reports on who has linked an account; this reports
+            // on the credential file a session is actually handed. They came
+            // apart in production — a box saying "signed in" while every
+            // session started on it came up logged out.
             //
             // Shown only when it is DEAD. An expired token that can renew
             // itself is the ordinary state of a box nobody has touched for an
@@ -640,33 +660,19 @@ private struct SettingsView: View {
                 Text(credential.summary ?? "Sessions started here will come up signed out.")
                     .font(.caption2).foregroundStyle(.red)
             }
-            if let version = host.health?.version?.head {
-                let behind = host.health?.updates?.appBehind ?? 0
-                Text(describeVersion(version, behind: behind))
-                    .font(.caption2)
-                    .foregroundStyle(behind > 0 ? .orange : .secondary)
-            }
-            // A PACKAGED BOX'S ANSWER TO THE SAME QUESTION, and until now the
-            // only screen it appeared on was a terminal. The line above counts
-            // commits, which a release has none of, so a packaged host reported
-            // nil — cannot tell — and this row said nothing about updates at
-            // all while the pipeline that built them ran on every merge.
-            //
-            // The host's own sentence, verbatim: it is the only thing that
-            // knows which answer this is — one waiting, none waiting, a
-            // protocol mismatch, not yet in the rollout, or a box that does not
-            // know where to look.
-            if let release = host.health?.updates?.release, let message = release.message {
-                Text(message)
-                    .font(.caption2)
-                    .foregroundStyle(release.available != nil ? .orange
-                                     : release.configured == false ? .orange : .secondary)
-            }
-            // WHAT THE OS HAS WAITING. The host has been sending this since
-            // maintenance shipped and nothing displayed it, which is why
-            // upgrade looked like a verb that could only report.
+            // WHAT IT IS RUNNING, AND WHAT IS WAITING, on one line — including
+            // the channel, which had a line of its own on every row saying the
+            // same eleven words. Version, then what it is behind, then which
+            // releases it takes: one sentence, read left to right, in the order
+            // somebody asks the questions.
+            Text(describeRunning(host))
+                .font(.caption2)
+                .foregroundStyle(host.updatePending ? .orange : .secondary)
+            // WHAT THE OS HAS WAITING, kept separate because it is a different
+            // subject with a different button — the whole reason `updates`
+            // exists as a verb is that these two were being read as one.
             if let system = host.health?.updates?.system, !system.isEmpty {
-                Text(system).font(.caption2).foregroundStyle(.orange)
+                Text("OS: \(system)").font(.caption2).foregroundStyle(.orange)
             }
             if host.health?.updates?.rebootRequired == true {
                 Text("reboot required").font(.caption2).foregroundStyle(.orange)
@@ -708,25 +714,19 @@ private struct SettingsView: View {
     /// a few lines above.
     @ViewBuilder
     private func channelControl(for host: Fleet.FleetHost) -> some View {
-        if let channel = host.health?.channel {
-            if host.health?.channelPinned == true {
-                // Pinned in the box's environment. Shown as a fact, not as a
-                // control that refuses: an operator setting this from
-                // configuration management has said something deliberate, and a
-                // picker that silently failed would read as a bug in the app
-                // rather than a decision on the box.
-                Text("Channel: \(channel) — set on the box")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("Channel", selection: channelBinding(host.hostId, current: channel)) {
-                    Text("Stable").tag("stable")
-                    Text("Rolling").tag("rolling")
-                }
-                .pickerStyle(.segmented)
-                .font(.caption)
-                .disabled(busyHost != nil)
+        // ONLY WHEN IT IS A CHOICE. A pinned box used to render "Channel:
+        // stable — set on the box" as a line of its own, on every row, saying
+        // the same eleven words about every machine. The fact still travels —
+        // describeRunning puts it at the end of the version line, where it is
+        // three words and in context.
+        if let channel = host.health?.channel, host.health?.channelPinned != true {
+            Picker("Channel", selection: channelBinding(host.hostId, current: channel)) {
+                Text("Stable").tag("stable")
+                Text("Rolling").tag("rolling")
             }
+            .pickerStyle(.segmented)
+            .font(.caption)
+            .disabled(busyHost != nil)
         }
     }
 
@@ -1066,19 +1066,6 @@ private struct SettingsView: View {
                         }
                         .padding(.vertical, 4)
                     }
-                    if !hostActionResult.isEmpty {
-                    // MONOSPACED, SELECTABLE, AND ALLOWED TO BE TALL. This is a
-                    // host's own output — several lines of it, with paths and
-                    // commit ids in — and it was being rendered as a squeezed
-                    // grey caption that ran together into one paragraph.
-                    ScrollView {
-                        Text(hostActionResult)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxHeight: 220)
-                }
                 Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
                     }
@@ -1152,7 +1139,23 @@ private struct SettingsView: View {
                             // that names is not the line that caused it.
                             healthLines(for: host)
                             maintenanceRow(for: host)
-                            channelControl(for: host)
+                            // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used
+                            // to be a single string rendered in the enrolment
+                            // section above the "Fleet" header — so "The box is
+                            // up to date." appeared above a list of four
+                            // machines, belonging to none of them and sitting
+                            // directly over a row that said "1 commit behind".
+                            if resultHost == host.hostId, !hostActionResult.isEmpty {
+                                ScrollView {
+                                    Text(hostActionResult)
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxHeight: 160)
+                                .padding(8)
+                                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                            }
                             // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
                             // this row is where it belongs: it is a login the
                             // BOX performs in a pane, not a token that travels.
@@ -1464,6 +1467,55 @@ private func describeBinned(_ item: Fleet.Binned) -> String {
     if item.title != nil { parts.append(item.name) }
     if let remaining = item.remaining { parts.append(remaining) }
     return parts.joined(separator: " · ")
+}
+
+/// "2 people · eli@example.com · max", or the fault when it is one.
+///
+/// ONE LINE OUT OF TWO THAT OVERLAPPED. The row used to print "signed in as
+/// eli@example.com · max · eli@example.com's Organization" and, below it, "2
+/// people can start sessions here" — the org repeating the address with a
+/// suffix, and the count repeating the point in a full sentence.
+///
+/// The org is dropped when it is only the address again. Google and Anthropic
+/// both name a personal organisation that way, so on a single-person account it
+/// is guaranteed noise.
+private func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) -> String {
+    // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
+    // "Nobody" alone says what is wrong without saying what to do about it —
+    // naming the Claude account is what makes it actionable. The other cases
+    // are not faults and do not need a sentence.
+    if accounts == 0 { return "Nobody has connected a Claude account here — sessions will not start" }
+    var parts: [String] = ["\(accounts) \(accounts == 1 ? "person" : "people")"]
+    if let email = account?.email, !email.isEmpty { parts.append(email) }
+    if let plan = account?.plan, !plan.isEmpty { parts.append(plan) }
+    if let org = account?.org, !org.isEmpty, !org.hasPrefix(account?.email ?? "\u{0}") {
+        parts.append(org)
+    }
+    return parts.joined(separator: " · ")
+}
+
+/// "0223f94 · 1 commit behind · rolling", or as much of it as is known.
+///
+/// THREE LINES COLLAPSED INTO ONE, in the order somebody asks the questions:
+/// what is it running, is that current, and what will it take next. The channel
+/// had a line of its own on every row — eleven words repeated per machine,
+/// saying the same thing on all of them.
+private func describeRunning(_ host: Fleet.FleetHost) -> String {
+    var parts: [String] = []
+    if let head = host.health?.version?.head, !head.isEmpty { parts.append(head) }
+    let behind = host.health?.updates?.appBehind ?? 0
+    if behind > 0 {
+        parts.append("\(behind) commit\(behind == 1 ? "" : "s") behind")
+    } else if let waiting = host.health?.updates?.release?.available {
+        parts.append("\(waiting) waiting")
+    } else if host.health?.version?.head != nil {
+        parts.append("up to date")
+    }
+    if let channel = host.health?.channel, !channel.isEmpty {
+        // Pinned is worth a word, because it is why the picker is missing.
+        parts.append(host.health?.channelPinned == true ? "\(channel), set on the box" : channel)
+    }
+    return parts.isEmpty ? "version not reported" : parts.joined(separator: " · ")
 }
 
 /// "Nobody has connected a Claude account here", or how many people have.

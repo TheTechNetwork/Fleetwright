@@ -124,6 +124,7 @@ and "dead host" is the one it retries.
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
+| `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
@@ -213,6 +214,25 @@ hostname is step two. Two round trips, deliberately: a remote reboot should be
 A boolean `confirm: true` would be one tap from a phone in a pocket, and a token
 the coordinator minted would let a compromised coordinator mint its own. The pin
 is issued by the **host**, which is the party that would be rebooted.
+
+**`updates` answers both questions at once, and that is the whole point of it.**
+`update` is this software; `upgrade` is the operating system. They are different
+subjects with different answers, and the app's Check button asked only the
+second — so a real fleet showed *"The box is up to date."* printed directly
+above *"running 0223f94 · 1 commit behind"*, with an Apply update button beside
+it. Both sentences were true. Neither said what it was about.
+
+Two verbs would have been two round trips and two chances to render them apart.
+One answer cannot disagree with itself, and every line in it names its subject.
+
+It is a **new verb rather than a `check` parameter on `update`**, which is the
+rule at the top of this page paying for itself: adding a verb is free, because
+an older host answers `unknown_verb`. Adding a parameter is a flag day — v3
+hosts were in the field the morning this was written.
+
+It also **forces** the app-side check. The commit count in a health frame comes
+from a cache refreshed every fifteen minutes, which is right for a frame sent
+every fifteen seconds and wrong for somebody who just pressed a button.
 
 **`channel` is what makes `update` mean anything.** It decides which releases a
 box is eligible for: `stable` takes published releases, `rolling` takes the

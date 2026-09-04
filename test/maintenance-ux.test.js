@@ -27,13 +27,30 @@ const APPS = [
   ],
 ];
 
-test('both apps offer a check that applies nothing', () => {
+test('both apps offer a check that applies nothing, and asks about both subjects', () => {
   for (const [name, view] of APPS) {
     const src = read(view);
     assert.match(src, /"Check"/, `${name} has no check`);
-    // The check is `upgrade` in its reporting mode — apply off, which is the
-    // verb's own default and the thing it was designed to do.
-    assert.match(src, /upgrade\((host: )?host(\.hostId)?\)/, `${name}'s check does not use upgrade's reporting mode`);
+
+    // THE `updates` VERB, NOT `upgrade`. This test used to assert `upgrade`,
+    // which is the operating system alone — and that is exactly what shipped:
+    // a screenshot of a real fleet showed "The box is up to date." printed
+    // directly above "running 0223f94 · 1 commit behind", with an Apply update
+    // button beside it. Both sentences were true, about different things, and
+    // neither said which. The test was pinning the bug.
+    //
+    // One verb answers both halves, so the two cannot be rendered apart and
+    // cannot arrive from two round trips in either order.
+    assert.match(src, /updates\((host: )?host(\.hostId)?\)/, `${name}'s check does not ask about both kinds of update`);
+
+    // And the check must not be the thing that APPLIES. `updates` is a read;
+    // `upgrade(apply:)` and `update(restart:)` are the two that act, and they
+    // are behind their own buttons.
+    assert.doesNotMatch(
+      src,
+      /case \.check[^\n]*upgrade\(host: host, apply: true\)/,
+      `${name}'s check applies something`,
+    );
   }
 });
 

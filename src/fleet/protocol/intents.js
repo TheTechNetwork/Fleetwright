@@ -318,6 +318,30 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Stop a running session, keeping its conversation resumable.',
   },
+  // WHAT IS WAITING FOR THIS BOX — both kinds, in one answer.
+  //
+  // A NEW VERB RATHER THAN A `check` PARAM ON `update`, and the reason is the
+  // rule this file states about itself: adding a verb is free, because an older
+  // host answers `unknown_verb` and strands nothing. Adding a PARAM is a flag
+  // day — `bad_params` arrives AFTER the version check has agreed, so the
+  // handshake says "we understand each other" and then the work fails. v3 hosts
+  // shipped this morning; a bump would strand every one of them to add a read.
+  //
+  // AND IT ANSWERS BOTH SUBJECTS, which is the actual bug it exists for. The
+  // app's Check button called `upgrade` — the operating system — and printed
+  // "The box is up to date." directly above "running 0223f94 · 1 commit
+  // behind". Both sentences were true, about different things, and the screen
+  // contradicted itself. Two verbs would have been two round trips and two
+  // chances to render them apart; one verb cannot disagree with itself.
+  updates: {
+    params: {},
+    // A READ, and pinned to one box like `logs` and `update`: what is waiting
+    // is a property of a machine, and merging four answers into one reply
+    // answers nobody.
+    mutating: false,
+    summary: 'what is waiting for this box, both this software and the OS',
+  },
+
   logs: {
     params: {
       // A SESSION's logs, which are a different question from a service's.

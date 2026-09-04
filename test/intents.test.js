@@ -78,6 +78,11 @@ test('the verb set is exactly what is documented', () => {
     'stop',
     'unlink',
     'update',
+    // A READ, and a new VERB rather than a `check` param on `update` — which
+    // would have been a flag day for every v3 host to add a question. It
+    // answers both subjects at once, because the bug it exists for was two true
+    // sentences about different things rendered next to each other.
+    'updates',
     'upgrade',
     'verify',
     'writefile',

@@ -543,6 +543,17 @@ class Fleet(
         intent("update", if (restart) mapOf("restart" to "yes") else emptyMap(), host = host)
 
     /**
+     * What is waiting for a box — both this software and the operating system.
+     *
+     * ONE ROUND TRIP AND ONE ANSWER. Asking `update` and `upgrade` separately
+     * is what produced a screen saying "The box is up to date." directly above
+     * "1 commit behind": two true sentences about different subjects with
+     * nothing saying which was which. It also forces the app-side check, which
+     * otherwise reports from a cache refreshed every fifteen minutes.
+     */
+    suspend fun updates(host: String): Reply = intent("updates", emptyMap(), host = host)
+
+    /**
      * Which releases a box installs — and, with [to], change it.
      *
      * Bare is a question. The verb exists because the channel used to be a line

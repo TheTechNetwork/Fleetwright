@@ -1498,6 +1498,7 @@ const OPENAPI = JSON.stringify({
                       "stop",
                       "unlink",
                       "update",
+                      "updates",
                       "upgrade",
                       "verify",
                       "writefile"

@@ -716,6 +716,9 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         var fleetHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
         var busyHost by remember { mutableStateOf<String?>(null) }
         var hostActionResult by remember { mutableStateOf("") }
+        // WHICH host that answer is about. It was one string at the bottom of
+        // the list, so an answer about one machine was rendered below four.
+        var resultHost by remember { mutableStateOf<String?>(null) }
         var rebootTarget by remember { mutableStateOf<String?>(null) }
         // Deleting for good is the one action here with no undo left, so it
         // asks once. `forget` deliberately does not ask, because it is now
@@ -749,36 +752,34 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     // unrepresentable as a benign value; rendering its
                     // sentence verbatim is what makes that visible.
                     host.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    if (host.accountEmail != null) {
-                        val bits = listOfNotNull("signed in as ${host.accountEmail}", host.accountPlan, host.accountOrg)
-                        Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                    }
-                    // WHO CAN START A SESSION HERE. This used to read "NOT
-                    // signed in — sessions will not start", off the box's own
-                    // Claude login, and it survived the model that made it
-                    // true: a machine has no account now, so that line appeared
-                    // in red on every host — including ones reporting healthy,
-                    // which is a screen contradicting itself.
+                    // WHO CAN START A SESSION HERE, AND AS WHOM — one line out
+                    // of two that overlapped. The row printed "signed in as
+                    // eli@x.com · max · eli@x.com's Organization" above "2
+                    // people can start sessions here": the org repeating the
+                    // address with a suffix, and the count repeating the point
+                    // in a full sentence.
                     //
-                    // Zero is the real fault and the only one worth colouring.
-                    // Null means an older host and says nothing at all.
+                    // Zero is the real fault and the only thing worth
+                    // colouring. Null means an older host and says nothing.
                     host.claudeAccounts?.let { accounts ->
                         Text(
-                            when (accounts) {
-                                0 -> "Nobody has connected a Claude account here — sessions will not start"
-                                1 -> "1 person can start sessions here"
-                                else -> "$accounts people can start sessions here"
-                            },
+                            describeWhoCanStart(accounts, host),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (accounts == 0) MaterialTheme.colorScheme.error
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    host.version?.let { head ->
-                        val behind = host.behind ?: 0
-                        val text = if (behind > 0) "running $head · $behind behind" else "running $head · up to date"
-                        Text(text, style = MaterialTheme.typography.bodySmall)
-                    }
+                    // WHAT IT IS RUNNING, WHAT IS WAITING, AND WHICH RELEASES
+                    // IT TAKES — one line, read left to right in the order
+                    // somebody asks the questions. The channel had a line of
+                    // its own on every row, eleven words saying the same thing
+                    // about every machine.
+                    Text(
+                        describeRunning(host),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (host.appPending) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     // THE SECOND WAY TO BE SIGNED OUT, and the one that was
                     // invisible. `loggedIn` above reports on the box's own home
                     // directory; this reports on the credential file a session
@@ -848,9 +849,18 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             onClick = {
                                 scope.launch {
                                     busyHost = host.hostId
-                                    // The check is `upgrade` with apply off —
-                                    // the verb's own reporting mode.
-                                    hostActionResult = Fleet(settings).upgrade(host.hostId).text
+                                    // ONE VERB, BOTH SUBJECTS. This was
+                                    // `upgrade` alone — the operating system —
+                                    // while the button sits between two things
+                                    // that can be out of date, and it produced
+                                    // a screen contradicting itself: "The box
+                                    // is up to date." directly above "1 commit
+                                    // behind". Two verbs would be two round
+                                    // trips and two chances to render them
+                                    // apart; one answer cannot disagree with
+                                    // itself.
+                                    resultHost = host.hostId
+                                    hostActionResult = Fleet(settings).updates(host.hostId).text
                                     busyHost = null
                                     fleetHosts = Fleet(settings).fleetHosts()
                                 }
@@ -862,7 +872,8 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                 onClick = {
                                     scope.launch {
                                         busyHost = host.hostId
-                                        hostActionResult = Fleet(settings).update(host.hostId, restart = true).text
+                                        resultHost = host.hostId
+                                    hostActionResult = Fleet(settings).update(host.hostId, restart = true).text
                                         busyHost = null
                                         fleetHosts = Fleet(settings).fleetHosts()
                                     }
@@ -875,7 +886,8 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                 onClick = {
                                     scope.launch {
                                         busyHost = host.hostId
-                                        hostActionResult = Fleet(settings).upgrade(host.hostId, apply = true).text
+                                        resultHost = host.hostId
+                                    hostActionResult = Fleet(settings).upgrade(host.hostId, apply = true).text
                                         busyHost = null
                                         fleetHosts = Fleet(settings).fleetHosts()
                                     }
@@ -898,17 +910,33 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     // and NOT "stable": an app that guessed would label a box
                     // confidently and wrongly.
                     host.channel?.let { current ->
-                        if (host.channelPinned) {
-                            // Pinned in the box's environment. Shown as a fact
-                            // rather than as a control that refuses — an
-                            // operator setting this from configuration
-                            // management has said something deliberate, and a
-                            // picker that silently failed would read as a bug
-                            // in the app rather than a decision on the box.
+                    // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used to be one
+                    // string at the bottom of the whole screen, below every
+                    // machine, belonging to none of them — and directly under a
+                    // row that could be saying the opposite.
+                    if (resultHost == host.hostId && hostActionResult.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.small,
+                        ) {
                             Text(
-                                "Channel: $current — set on the box",
-                                style = MaterialTheme.typography.bodySmall,
+                                hostActionResult,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .heightIn(max = 180.dp)
+                                    .verticalScroll(rememberScrollState()),
                             )
+                        }
+                    }
+                        // ONLY WHEN IT IS A CHOICE. A pinned box used to render
+                        // "Channel: stable — set on the box" as a line of its
+                        // own, on every row, saying the same eleven words about
+                        // every machine. The fact still travels —
+                        // describeRunning puts it at the end of the version
+                        // line, where it is three words and in context.
+                        if (host.channelPinned) {
+                            // Nothing: said above, in context.
                         } else {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 listOf("stable", "rolling").forEach { option ->
@@ -918,6 +946,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                         onClick = {
                                             scope.launch {
                                                 busyHost = host.hostId
+                                                resultHost = host.hostId
                                                 hostActionResult =
                                                     Fleet(settings).channel(host.hostId, to = option).text
                                                 busyHost = null
@@ -1312,4 +1341,45 @@ private fun statusColour(status: String): Color = when (status) {
     "awaiting-input" -> MaterialTheme.colorScheme.error
     "stopped" -> MaterialTheme.colorScheme.onSurfaceVariant
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * "2 people · eli@example.com · max", or the fault when it is nobody.
+ *
+ * ONE LINE OUT OF TWO THAT OVERLAPPED. The org is dropped when it is only the
+ * address again — Google and Anthropic both name a personal organisation that
+ * way, so on a single-person account it is guaranteed noise.
+ */
+private fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
+    // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
+    // "Nobody" alone says what is wrong without saying what to do about it —
+    // naming the Claude account is what makes it actionable.
+    if (accounts == 0) return "Nobody has connected a Claude account here — sessions will not start"
+    val parts = mutableListOf("$accounts ${if (accounts == 1) "person" else "people"}")
+    host.accountEmail?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+    host.accountPlan?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+    host.accountOrg?.takeIf { it.isNotBlank() && !it.startsWith(host.accountEmail ?: "\u0000") }?.let { parts.add(it) }
+    return parts.joinToString(" · ")
+}
+
+/**
+ * "0223f94 · 1 commit behind · rolling", or as much of it as is known.
+ *
+ * Three lines collapsed into one, in the order somebody asks the questions:
+ * what is it running, is that current, and what will it take next.
+ */
+private fun describeRunning(host: Fleet.FleetHost): String {
+    val parts = mutableListOf<String>()
+    host.version?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+    val behind = host.behind ?: 0
+    when {
+        behind > 0 -> parts.add("$behind commit${if (behind == 1) "" else "s"} behind")
+        host.release?.available != null -> parts.add("${host.release.available} waiting")
+        host.version != null -> parts.add("up to date")
+    }
+    host.channel?.takeIf { it.isNotBlank() }?.let {
+        // Pinned is worth a word, because it is why the picker is missing.
+        parts.add(if (host.channelPinned) "$it, set on the box" else it)
+    }
+    return if (parts.isEmpty()) "version not reported" else parts.joinToString(" · ")
 }

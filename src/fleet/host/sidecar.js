@@ -845,6 +845,8 @@ export function toCommandLine({ verb, params, actor }) {
     case 'profiles':
       return '/profiles';
     // A bounded enum, so it is a single token that cannot become a second flag.
+    case 'updates':
+      return '/updates';
     case 'channel':
       return p.to ? `/channel ${p.to}` : '/channel';
     // THE WORKSPACE. Quoted with the same care as everything else here: a
