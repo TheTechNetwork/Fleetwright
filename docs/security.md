@@ -27,9 +27,9 @@ normative.
 | **Host** | Debian box: agent-hub + sidecar + rootless podman | Be the sole authority on its own tmux, hold its own P-256 key, hold at rest the credentials of members who linked on it. | Speak for any host but itself; hold a fleet-wide admin credential. |
 | **Session** | A Claude Code agent in a container, root inside, reading untrusted input, holding live credentials | Do the work it was asked to. Nothing else. It is the **least trusted component in the system**. | Be believed about who it is (it reports over a bind-mounted socket it cannot forge); hold anything whose leak must outlive it. |
 | **Phone app** | iOS/Android, App Store / Play, holds one per-device credential | Act as the member it was issued to, until revoked. | Contain any baked-in fleet secret (an IPA/APK is public). |
-| **Member** | A verified email on the allowlist | Drive their own sessions, see their own sessions, mint enrolment pins. | See or act on another member's sessions; change what account a box runs on. |
+| **Member** | A verified email on the allowlist | Drive their own sessions, see their own sessions, mint enrolment pins. | See or act on another member's sessions; link a Claude account for anyone but themselves. |
 | **Guest** | A member who brings their own Claude/GitHub/Cloudflare and has no shell on any box | Same as a member. Never inherits shared GitHub/Cloudflare credentials. | Inherit anyone's provider tokens; get OS-level isolation from other members on the same host. |
-| **Admin** | First verified member on a fresh fleet; the `admin` bit | Remove hosts and other people's devices; change the box's own account; see every session. | — (admin is the ceiling; there is no super-admin) |
+| **Admin** | First verified member on a fresh fleet; the `admin` bit | Remove hosts and other people's devices; see every session. | — (admin is the ceiling; there is no super-admin) |
 | **Platform parties** | Cloudflare, Apple, Google, GitHub, Anthropic | Nobody chose them; everybody depends on them. Compromise or coercion of any is out of scope (§10). | — |
 
 **SEC-ACTOR-1** — Every component MUST be designed so that its own compromise
@@ -60,8 +60,10 @@ interesting failures live.
    the system and the one the docs describe wrongly — see §5 and §9.
 3. **host → session.** One-directional seeding (credentials in) plus a
    per-session unforgeable socket (uuid out). The session cannot cross back.
-4. **anything-on-host-loopback → agent-hub.** Unauthenticated by default (§6.4).
-   The trust boundary is "any local process," which is stronger than it sounds.
+4. **anything-on-host-loopback → agent-hub.** Token-gated (§6.4, §9-G6): a
+   token is generated into `${stateDir}/api-token` when none is configured, and
+   the check fails closed. The boundary is "any local process that can read
+   that file," which in practice means the service user.
 5. **coordinator → issuer.** The one place identity is actually established, and
    the coordinator does it correctly (§5.1).
 
@@ -76,12 +78,12 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 |---|---|---|---|---|---|
 | **Device token** (`fwk_…`) | phone Keychain/Keystore; **hash only** in the DO | the phone; nobody via the DO | re-issue | `revoke(id)`, per-device | `lastSeenAt`, client list |
 | **Break-glass admin token** (`AGENT_FLEET_API_TOKEN`) | Cloudflare secret | the Worker; whoever holds the Worker's secrets | `wrangler secret put` + redeploy | none — it is the floor | none; it is unattributed by design |
-| **GitHub App client secret** | Cloudflare secret **and** every `<row>.renewal.json` on every host (§9-G2) | the Worker; **root and the service user on every host that has a linked member** | change in Cloudflare — **does not reach the on-disk copies** (§9-G2) | none scoped | none |
+| **GitHub App client secret** | Cloudflare secret; on hosts, sidecar **memory only** — delivered on the config frame, never written (§9-G2, fixed) | the Worker; each connected sidecar in memory (and root on that box, via process memory) | change in Cloudflare + redeploy; hosts pick it up on reconnect | none scoped | none |
 | **Host private key** (P-256) | `/var/lib/agent-fleet/host-key.json`, `0600` in `0700`, mode re-checked every load | that host's service user only | re-enrol the host | `revoke` at coordinator, per-host | mode check refuses to start if loosened |
 | **Host public key** | coordinator DO | anyone who reads the DO (public half; harmless) | with re-enrol | with revoke | host list |
-| **Box shared Claude credential** | host home + copied into each session volume | host service user; every session (a copy) | `claude` renewal / re-login | re-login | `credentialSummary` in `/api/state` |
+| **Box Claude credential** | **gone as a standing store** — adopted once into `${stateDir}/accounts/<email>.json` and handed to the member it belonged to; a session with no linked account is refused, not given a shared one (`one-account-per-person.md`) | — | — | — | — |
 | **Member linked Claude credential** | `${stateDir}/accounts/<email>.json` on hosts where linked | host service user; that member's sessions (a copy) | keepalive / re-link | `/accounts remove`, `unlink` | `/api/state` per-account |
-| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host | host service user; **every session on that host** (sourced from `.secrets.env`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local); provider revoke (real) | `verify` verb |
+| **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local); provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry | `outstanding()` (masked) |
 | **Telegram bot token** | host env (`AGENT_HUB_TELEGRAM_TOKEN`) | host service user | manual | manual | — |
@@ -99,13 +101,14 @@ nothing else secret.
 **SEC-CRED-2** — A refresh token MUST NOT travel to any session. It lives in
 `<row>.renewal.json`, mounted into no container.
 *Falsify:* assert `renewalPathFor` output is never in `sandboxArgv` mounts and
-never written to `<row>.env`. A test should source a container's `.secrets.env`
-and assert no `refresh` field.
+never written to `<row>.env`, and that the broker's answer to a session never
+carries a `refresh` field (`credential-broker.js`).
 
 **SEC-CRED-3** — Any file holding a live credential MUST be `0600` in a `0700`
 directory, and permissions SHOULD be re-checked on load, not only set on write.
-*Falsify:* `host/identity.js` re-checks and refuses (good, keep). `connectors.js`
-writes `0600` but does **not** re-check on read — see §9-G5.
+*Falsify:* `host/identity.js` re-checks and refuses, and so does the credential
+store now — `Connections` re-checks mode on every read, tightens, and warns
+(§9-G5, fixed; `test/connectors.test.js`).
 
 ---
 
@@ -158,11 +161,12 @@ there is none (`sidecar.js` validates shape, not authorship).
 
 ### 4.2 Compromised host (root on the box)
 
-**Bound:** total for that host and everyone who linked on it. Root reads the box
-Claude credential, every member's `<row>.env`, and — because the refresh token
-**and** the fleet client secret are on disk (§9-G2) — can mint fresh GitHub
-tokens for those members **for as long as the refresh chain lives**, re-minting
-after each provider revocation. It cannot reach other hosts (it holds only its
+**Bound:** total for that host and everyone who linked on it. Root reads every
+member's linked credentials and `<row>.env`, and — because the refresh token is
+on disk and the client secret sits in the sidecar's memory, which root can read
+(§9-G2 moved it off disk, not off the box) — can mint fresh GitHub tokens for
+those members **for as long as the refresh chain lives**, re-minting after each
+provider revocation. It cannot reach other hosts (it holds only its
 own P-256 key) and cannot forge the coordinator.
 *This is the intended bound* — `trust.md`'s "spread minting keys across hosts so
 a host compromise costs that host's access." SEC-HOST-1 makes it a rule.
@@ -174,28 +178,26 @@ code reads `AGENT_FLEET_API_TOKEN` or another host's key.
 
 ### 4.3 Local process on a host reaching loopback (NEW — see §6.4)
 
-**Bound:** full agent-hub authority, including the credential verbs, for **any
-local process that can reach `127.0.0.1:8790`** when no `AGENT_HUB_TOKEN` is set
-(the default). agent-hub's justification — "reaching it means shell, which is
-game over" (`http.js`) — was true when the API only managed sessions. It is no
-longer true: a non-root local user who is *not* the service owner can now inject
-(`link`), remove (`unlink`), read panes (`peek`) and reboot, without ever
-holding root or the service user's files.
+**Bound:** full agent-hub authority, including the credential verbs, for any
+local process that can present the token — which since §9-G6 means any process
+that can **read `${stateDir}/api-token`**, not any process that can reach
+`127.0.0.1:8790`. A token is generated whenever none is configured and the
+check fails closed, so a non-service local uid is refused rather than served.
+The old justification — "reaching it means shell, which is game over" — no
+longer has to carry the credential verbs on its own.
 
-**SEC-HOST-2** — On any host that is not single-tenant and single-user, the
-loopback API MUST be token-gated (`AGENT_HUB_TOKEN`). The default (untokened,
-loopback-only) is safe **only** under the assumption that every local process is
-already fully trusted. That assumption MUST be stated to an operator, not left
-implicit.
-*Falsify:* there is no test that a second local uid is refused; there cannot be
-while the default is untokened. A doc line in install output would discharge the
-`SHOULD`.
+**SEC-HOST-2** — The loopback API MUST be token-gated, with the token generated
+when none is configured and the check failing closed — never open because
+configuration was skipped.
+*Falsify:* `test/api-token.test.js` asserts a caller without the token is
+refused, including when token generation itself failed.
 
 ### 4.4 Malicious or hijacked session
 
-**Bound:** whatever the credentials it was seeded with can do, for as long as
-they live (GitHub access token: 8h; box Claude credential: its remaining life),
-plus anything reachable over **open egress** (§8). Escape from the container
+**Bound:** whatever the credentials it holds can do, for as long as they live
+(GitHub access token: 8h, fetched per request over the broker socket; the
+member's Claude credential: its remaining life), plus anything reachable over
+**open egress** (§8). Escape from the container
 lands as the host's unprivileged user **if podman is rootless** — which is the
 correct posture and **UNVERIFIED**: `design.md:§10` records that all hardware
 tests ran as root, so container-root → host-root is the state actually proven.
@@ -215,10 +217,12 @@ revoked token 401s and a sibling still verifies.
 ### 4.6 Stolen host disk / backup
 
 **Bound:** the host private key (`0600` — but a backup copies bytes, not modes),
-every `<row>.env`, every `<row>.renewal.json` (refresh tokens **and** the client
-secret), and the box Claude credential. This is the exposure `github-app.md`
-claims does not exist ("nothing to steal at rest") — see §9-G2. TPM sealing
-(`trust.md`) is the intended mitigation and is **ASPIRATIONAL**.
+every `<row>.env`, every `<row>.renewal.json` (refresh tokens — the client
+secret is no longer on disk, §9-G2), and every linked Claude credential under
+`accounts/`. A refresh token without the client secret cannot be exchanged,
+which is what the G2 fix bought: the stolen-disk case is now the inert one
+`github-app.md` always described. TPM sealing (`trust.md`) is the intended
+mitigation for the rest and is **ASPIRATIONAL**.
 
 ### 4.7 Malicious guest
 
@@ -370,18 +374,17 @@ anchoring; the `secret` type's charset. Point (4) is checkable only by a reviewe
 holding this list — that is what §11 is for.
 
 **SEC-PROTO-4** — `answer` MUST remain an ordinal into a host-published option
-list, and its `promptId` guard MUST be understood for what it is: it detects that
-the dialog *shape* changed, not that the *question* changed. Two distinct prompts
-of the same kind and option labels collide (§9-G3). Until fixed, `answer` MUST
-NOT be relied on to prevent answering the wrong same-shaped question.
-*Falsify:* `prompt.js:promptId` hashes `name+kind+labels`, excluding command
-text; construct two permission prompts with identical labels and assert equal ids.
+list, and its `promptId` guard MUST keep folding in a digest of the dialog body
+for the kinds that recur (§9-G3, fixed): a late tap against a same-shaped but
+different question is refused, not typed into whatever is on screen.
+*Falsify:* construct two permission prompts with identical labels and different
+bodies and assert their ids differ (`test/prompt.test.js`).
 
 ### 6.4 The host's local API
 
-**SEC-PROTO-5** — agent-hub's loopback API is unauthenticated by default and
-gains the credential verbs in v2. See SEC-HOST-2: it MUST be token-gated on any
-multi-user host. The `/internal/session-start` hook endpoint is deliberately
+**SEC-PROTO-5** — agent-hub's loopback API is token-gated: a token is generated
+into `${stateDir}/api-token` whenever none is configured and the check fails
+closed (§9-G6). The `/internal/session-start` hook endpoint is deliberately
 untokened and MUST stay loopback/socket-only; its authentication is the
 bind-mount, not a token (SEC-SESSION-1).
 
@@ -393,7 +396,7 @@ Nobody had written this down. A session is the product working as intended: an
 agent that **reads untrusted content** (repository files, issue and PR text, web
 pages, tool output, dependency READMEs) while holding a **live GitHub token**, a
 **root shell inside its container**, **open egress**, and — by default —
-`--dangerously-skip-permissions` (`config.js:88`, `AGENT_HUB_SKIP_PERMISSIONS`
+`--dangerously-skip-permissions` (`src/config.js`, `AGENT_HUB_SKIP_PERMISSIONS`
 defaults **true**).
 
 **What this means concretely.** Injected text in any content the agent reads can
@@ -546,7 +549,7 @@ this at real machines. G5–G7 are real and smaller.
 | **G1** | **corrected.** Every site now states the real bound: `intents.js`, `intents.md`, `connectors.md`, `design.md`, `coordinator.md`, `trust.md` ×2. The two `trust.md` conclusions that leaned on the understated baseline were re-derived and **both survive** — the vault refusal and the minting-key placement rest on the *delta*, which correcting the baseline widens rather than narrows. |
 | **G2** | **fixed.** The config frame `github-app.md` describes is built (`src/fleet/protocol/config-frame.js`), sent on every host connect, and held in the sidecar's memory. `saveRenewal` no longer stores `client`; `renew` accepts it and discards it so an older coordinator is not refused. The renewal timer moved from agent-hub to the sidecar, because the exchange needs the secret and the sidecar is the process that has it. `test/config-frame.test.js`, `test/github-renewal.test.js`. |
 | **G3** | **fixed.** `promptId` folds in a bounded, non-travelling digest of the dialog body, for the kinds that recur (`permission`, `trust`) and not for the one that does not (`resume`, whose body carries a live counter). `test/prompt.test.js`. |
-| **G4** | **fixed, and it found two more bugs.** Captured from tmux against CLI 2.1.234. The premise was false — the mode line is drawn while working too, so in `bypass permissions` a session mid-tool-call matched "at rest": never restarted, and shown as "ready · idle" while working. The trust dialog had also stopped being recognised entirely, making it invisible AND a restart candidate. `test/real-panes.test.js`. |
+| **G4** | **still open.** SEC-SESSION-5 holds: the fleet deploys rootless, and nothing yet asserts that uid 0 in a container maps to the unprivileged service uid on the host. (This row briefly claimed "fixed" on the strength of the pane-detection work in `test/real-panes.test.js`, which belongs to a different finding entirely — recorded rather than erased, because a security row marked fixed by an unrelated bug fix is exactly the failure this register exists to catch.) |
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |

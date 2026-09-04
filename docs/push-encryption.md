@@ -119,8 +119,8 @@ time, and WebCrypto catches it on import.
 
 ## Push is off unless switched on
 
-`AGENT_FLEET_PUSH` in `wrangler.toml`, or the environment for a Node
-coordinator. **Unset is off, and it says so in the log** rather than being
+`AGENT_FLEET_PUSH` in your `wrangler.toml`'s `[vars]` (ours is set in
+`wrangler.production.toml`), or the environment for a Node coordinator. **Unset is off, and it says so in the log** rather than being
 silent — silence is how a fleet discovers on the day it matters that push was
 never wired up.
 

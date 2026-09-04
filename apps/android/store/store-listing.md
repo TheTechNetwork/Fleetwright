@@ -83,24 +83,23 @@ functionality is restricted*), otherwise expect a rejection for
 Fleetwright is a client for a self-hosted agent fleet coordinator. It has no
 built-in backend and no sign-up of its own: it signs you in with Google, and
 your coordinator decides which addresses it allows. A reviewer's address will
-not be on anybody's list, so use the demo credential instead.
+not be on anybody's list, so use the demo fleet instead.
 
-  1. Open Settings.
-  2. Coordinator URL: https://fleet.thetech.network
-  3. Tap "Use a credential instead" and paste:
-       demo-3a2ec7773eabcd4e38a9a880296a4e4b
-  4. Tap "Use it".
+  1. Open the app.
+  2. Tap "Look around the demo fleet" — one tap, nothing to type.
 
-The demo coordinator returns a small set of sample sessions and accepts
-start / stop / resume / peek. It reaches no real machine — there are no hosts
-behind it — and it will remain available for the duration of the review.
+The demo fleet (fleetdemo.thetech.network) returns a small set of sample
+sessions and accepts start / stop / resume / peek. It reaches no real
+machine — there are no hosts behind it — and it will remain available for the
+duration of the review.
 ```
 
-The demo credential is deliberately public and rate limited; it is a `[vars]`
-entry in `worker/wrangler.toml` rather than a secret. See
-`docs/coordinator-deploy.md` for why that is safe: the requests it authorises
-are answered from constants, and the Durable Object holding the real fleet is
-never reached.
+The demo runs on its own Worker with no fleet behind it, and its token is
+committed and rate limited *because it authorises nothing* — it is a `[vars]`
+entry in `worker/wrangler.demo.toml`, pinned to both apps by
+`test/demo-button.test.js`. See `docs/coordinator-deploy.md`: the requests it
+answers come from constants, and the Durable Object holding the real fleet is
+on a different Worker entirely.
 
 ---
 

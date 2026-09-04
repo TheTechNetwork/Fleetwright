@@ -20,9 +20,8 @@
 
 # The operator console — design
 
-**Status:** design, not built. The prototype at `src/web/console.html` is a
-static rendering of everything below with fake data; wiring it to the live API
-is a separate job.
+**Status:** the specification. What is implemented, and where, is the banner
+above; the old static prototype it mentions is gone.
 
 **Scope:** Phase 5's console (`plan.md` §3). Not the phone. Not
 `src/web/index.html`, which stays exactly as it is and keeps doing the one job

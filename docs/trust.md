@@ -718,8 +718,9 @@ later has none.
 descending order of how much they matter:
 
 **1. It makes the coordinator hold credentials.** Everything above is built on
-the coordinator being treated as compromised: the fixed verb set exists so that
-a compromised Worker can do no more than start and stop some sessions. A vault
+the coordinator being treated as compromised: the fixed verb set bounds a
+compromised Worker to lifecycle plus writing a credential into a row on a box
+it is driving (`security.md` §4.1 states the bound honestly). A vault
 the coordinator can read turns it into the single highest-value target in the
 system — one breach yielding every member's GitHub and Cloudflare tokens rather
 than a bounded amount of session mischief. That is not a small trade for a
@@ -767,7 +768,9 @@ A host that joins tomorrow cannot be handed an envelope sealed today by a
 device that has since forgotten the secret. Either something central holds
 plaintext, or somebody re-links.
 
-Until the broker exists, re-linking is one tap, and it is one tap per new
+The broker exists now ([`credential-broker.md`](./credential-broker.md)), and
+this is the gap it does not close: a host that joins after a credential was
+linked still has no copy. Re-linking is one tap, and it is one tap per new
 machine rather than one per machine per credential.
 
 ## Minting instead of storing, and OAuth instead of a PAT

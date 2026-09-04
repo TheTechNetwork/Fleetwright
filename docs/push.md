@@ -20,8 +20,10 @@ session hits a prompt
    └─ FCM → the phone                                            src/fleet/push.js
 ```
 
-Every step is built and tested. What is not wired is the **app end of FCM**,
-which needs a Firebase project — see `apps/android/README.md`.
+Every step is built and tested, and the app end is wired on both platforms —
+what is *proven* about delivery lives in
+[`app-parity.md`'s table](./app-parity.md#what-is-actually-proven-about-the-apps)
+and nowhere else, including here.
 
 ## What gets a notification, and what does not
 
@@ -159,9 +161,13 @@ registration is gone for good, and it is pruned.
 
 ## Configuring the sender
 
-One environment variable, holding the Firebase service-account JSON — as JSON,
-or base64-encoded. Both are accepted; which one you want depends on where it is
-going.
+Two things, not one. **`AGENT_FLEET_PUSH` is the switch** — until it is set to
+`1`/`true`/`yes`/`on`, nothing is sent at all and the coordinator logs that it
+is disabled, whatever credentials exist (see
+[`push-encryption.md`](./push-encryption.md) for why the switch is separate).
+Then the credential: an environment variable holding the Firebase
+service-account JSON — as JSON, or base64-encoded. Both are accepted; which one
+you want depends on where it is going.
 
 The installer asks for this and does the encoding — `install.sh` takes the
 *path* to the JSON and base64s it into the coordinator's env file, which is the
@@ -213,18 +219,20 @@ often arrive as literal `\n`, which makes the key import fail with a message
 that explains nothing. `pemToBytes` accepts both forms, and there is a test for
 exactly that.
 
-## iOS
+## iOS: the route that was chosen
 
-Two routes, and the first is much less work:
-
-- **Through FCM.** Add the iOS app to the same Firebase project and upload an
-  APNs auth key. One integration for both platforms, and nothing here changes.
-- **Direct APNs.** A second sender beside `fcmPusher`, signing ES256 with a
-  `.p8` key. The `Pusher` interface is a single `send(devices, message)` that
-  returns `{sent, dead}` — `logPusher` is nine lines and shows the shape.
+There were two routes, and the one that shipped is **direct APNs**:
+`apnsPusher` signs ES256 with a `.p8` key, and `routingPusher` sends iOS
+registrations there and everything else to FCM — `pusherFromEnv` logs "APNs
+for iOS, FCM for everything else" when both are configured. The rejected
+route, FCM's APNs bridge, would have meant adding the Firebase SDK to the iOS
+app, which the section above declines for its own reasons. The `Pusher`
+interface is a single `send(devices, message)` returning `{sent, dead}` —
+`logPusher` shows the shape in eight lines.
 
 ## Why FCM was implemented first
 
-It covers Android directly and iOS through the APNs bridge, so it is one
-integration for both platforms — and crucially it needs **no Apple signing key**,
-which means Android push can be tested before an iOS build exists at all.
+It covered Android directly and, until the direct sender existed, iOS through
+the APNs bridge — one integration for both platforms, and crucially it needed
+**no Apple signing key**, which meant Android push could be tested before an
+iOS build existed at all.

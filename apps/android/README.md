@@ -10,11 +10,12 @@ Latest of everything, and every one of them was built before it was written
 down: JDK 25, Gradle 9.7, AGP 9.3.1, Kotlin 2.2, compileSdk and targetSdk 37,
 compose-bom 2026.08.
 
-**`minSdk` is 36 — one version back, and that is a real decision.** It excludes
-most phones in the field today. It is the right trade here because there is no
-installed base to keep working and every level supported below it is a
-compatibility path somebody reasons about forever, but it is not a default to
-inherit without thinking.
+**`minSdk` is 30 — Android 11 — and the floor is held by lint, not by hope.**
+It started at 36, which excluded most phones in the field for what turned out
+to be conservatism rather than a requirement (a beta tester's own phone was
+among the excluded). What makes 30 safe is `error += "NewApi"` in the lint
+block: an API newer than the floor fails the build instead of crashing on the
+oldest phone that installs it.
 
 Two notes on the toolchain, both of which cost a build to discover:
 

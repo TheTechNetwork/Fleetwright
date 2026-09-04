@@ -40,20 +40,19 @@ that would still be accepted if the private half ever leaked out of a build log.
 
 ## Running one: `.github/workflows/ephemeral-mac.yml`
 
-`workflow_dispatch`, with the pin as an input. Mint one in the app
-(Fleet → Add a host, marked ephemeral), dispatch the workflow, and a macOS
-runner joins the fleet for as long as you asked for.
+`workflow_dispatch`. Set the `FLEETWRIGHT_RUNNER_TOKEN` repository (or
+organisation) secret once, dispatch the workflow, and a macOS runner joins the
+fleet for as long as you asked for — `enrol-actions` presents GitHub's own
+OIDC token to prove which repository the run belongs to, and the stored token
+only *names the owner*; it cannot admit a machine on its own.
 
-**The pin is typed, not stored.** There is deliberately no credential in this
-repository that can admit a machine. A pin lasts ten minutes, is single-use, and
-is minted by a person looking at what they are doing. Storing a long-lived
-credential to make the run automatic would trade that for the ability to admit a
-host from any workflow edit — and admitting a host is not something a pull
-request should be able to do.
-
-It is masked on the first line of the job anyway: `workflow_dispatch` inputs are
-not masked by default, and ten minutes of exposure in a public log is small
-rather than none.
+**A pin is the fallback, not the path.** The optional pin input exists for a
+coordinator with no Actions repositories configured (`AGENT_FLEET_ACTIONS_REPOS`
+unset): mint one in the app (Fleet → Add a host, marked ephemeral) and type it
+into the dispatch. It lasts ten minutes, is single-use, and is minted by a
+person looking at what they are doing. There is still no credential in this
+repository that can admit a machine — that property moved from "the pin is
+typed" to "the OIDC token does the admitting", and held.
 
 ### The credential, and why it is an API key
 
@@ -162,12 +161,13 @@ longer an admission credential at all. It is a name tag.
 nobody is responsible for, and "I cannot tell whose this is" is not the same fact
 as "it belongs to nobody".
 
-**The claim is the last thing anybody types**, and the reason it is still typed
-is that nothing dispatches the workflow on the person's behalf yet. The
-coordinator holds a GitHub App installation; when it dispatches the run itself,
-it knows who asked before the job exists and the claim can travel as an input
-nobody sees. That is the next step, and it is what makes this genuinely
-self-service rather than one-field-shorter.
+**The claim is a stored secret now, `FLEETWRIGHT_RUNNER_TOKEN`** — safe to
+store precisely because it names an owner rather than admitting a machine;
+GitHub's OIDC token is what does the admitting. What nothing does yet is
+dispatch the workflow on the person's behalf: the coordinator holds a GitHub
+App installation, and when it dispatches the run itself it will know who asked
+before the job exists. That is the step that makes this genuinely self-service
+rather than one-field-shorter.
 
 Placement then skips other people's runners entirely, and a fleet whose only
 match is one of them refuses with that reason — not `at_capacity`, which is what
@@ -185,11 +185,12 @@ person owning it would mean nobody else could work.
   in a new costume, and we have paid for that lesson once already. `run_id` and
   `run_attempt` are both needed — a re-run reuses the id. **Done:**
   `AGENT_FLEET_HOST_ID: gha-mac-<run_id>-<run_attempt>`.
-- **A pin minted per job.** The question was which credential CI holds to mint
-  one, because it is a credential that can admit a machine. **Answered by not
-  holding one:** the pin is a dispatch input, typed by a person. Automating it
-  later means deciding that question properly, and until then nothing in this
-  repository can admit a host.
+- **A credential that admits, or one that only names.** The question was which
+  credential CI holds, because admitting a machine is not something a workflow
+  edit should be able to do. **Answered by OIDC:** GitHub's own job token
+  proves which repository the run belongs to, and the stored
+  `FLEETWRIGHT_RUNNER_TOKEN` only claims an owner. Nothing in this repository
+  can admit a host; the fallback pin, when used, is still typed by a person.
 - **The session cannot outlive the host.** `resume` is pinned to the box holding
   the volume, so when a runner goes, its sessions are gone. That is correct and
   needs saying out loud rather than being discovered.
@@ -218,8 +219,10 @@ exactly like one sitting idle, which is the same ambiguity the watcher already
 cannot resolve on a permanent host — and on a runner it matters more, because
 the machine is being paid for by the minute.
 
-**MCP is where this lands.** The intent protocol is already the right shape for
-it (fixed verbs, typed parameters, structured replies), and an MCP server is a
-thin adapter over `/api/intent` rather than new architecture. `start` on a named
-ephemeral host, `peek` for output, and a completion signal that does not exist
-yet are the three pieces.
+**MCP is where this landed** — see [`mcp.md`](./mcp.md). The intent protocol
+was already the right shape for it (fixed verbs, typed parameters, structured
+replies), and the MCP server is a thin adapter over `/api/intent` rather than
+new architecture. `fleet_start` on a named ephemeral host exists, and
+`fleet_await`/`fleet_read_log` cover watching and collecting; the completion
+signal is the piece that still does not — a finished session still looks like
+an idle one.

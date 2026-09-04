@@ -129,12 +129,23 @@ caller chooses is a label, not an attribution.
 Both coordinators — the Worker and the Node one — implement these identically,
 because an app must not be able to tell which one it is talking to.
 
-Configure with three settings; the sample is commented in `worker/wrangler.toml`:
+Configure with three settings, and they do not all live in the same place.
+The two identifiers are `[vars]` — ours are in `worker/wrangler.production.toml`,
+and the fork-safe `worker/wrangler.toml` documents what happens while each is
+unset (sign-in answers 503 and says so):
 
 ```
 AGENT_FLEET_AUTH_ISSUERS    https://appleid.apple.com https://accounts.google.com
 AGENT_FLEET_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com
-AGENT_FLEET_AUTH_ALLOW      @thetech.network
+```
+
+The allowlist is a **secret**, never a var — it decides who can reach a fleet
+and does not belong in a repository, and because Cloudflare keeps vars and
+secrets in one namespace, a `[vars]` entry of the same name would clobber it on
+every deploy:
+
+```sh
+npx wrangler secret put AGENT_FLEET_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
 ```
 
 ## In the apps
@@ -183,10 +194,13 @@ If the app is ever distributed through Play, the fingerprint that matters is the
 **app signing certificate** from the Play Console rather than the upload key —
 Play re-signs, so the key that built the artefact is not the key that ships.
 
-Both apps also have a collapsed **"use a credential instead"** field. It exists
-for two things sign-in cannot cover: App Review, whose reviewers are on nobody's
-allowlist and use the public demo credential, and getting back in when sign-in
-itself is what is broken.
+The collapsed **"use a credential instead"** field both apps used to carry is
+gone, and its two jobs went to better homes. App Review, whose reviewers are on
+nobody's allowlist, gets a one-tap **"Look around the demo fleet"** button
+pointing at the demo Worker — whose token authorises nothing, because that
+Worker holds no fleet to protect. Getting back in when sign-in itself is broken
+is curl with `AGENT_FLEET_API_TOKEN`, not a paste field on every user's
+settings screen. See [`coordinator-deploy.md`](./coordinator-deploy.md).
 
 ## The hardening this stops short of
 

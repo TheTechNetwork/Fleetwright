@@ -39,11 +39,17 @@ Revoking that credential in the app stops the MCP server, the same as any phone.
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```
-reboot, upgrade, update   restart a machine somebody else is working on
-purge, forget, restore    destroy a conversation that cannot be recovered
-connect, link, unlink     move somebody's credentials around
-answer                    ← the interesting one
+reboot, upgrade, restore          restart or unbin what somebody else is using
+purge                             destroy a conversation with no recovery
+writefile, copyfile, deletefile   the workspace's destructive half
+connect, link, unlink, renew      move somebody's credentials around
+answer                            ← the interesting one
 ```
+
+(`update` and `forget` were deliberately taken **off** this list: `update`
+because `KillMode=process` means it ends nobody's work, and `forget` because
+the seven-day bin made it the recoverable one — `DEFAULT_DENY` in
+`src/mcp/tools.js` carries the argument for each.)
 
 **Not a security boundary.** Whoever runs this holds a credential and can call
 `/api/intent` directly with `curl`. This is about what an agent *reaches for
@@ -270,12 +276,19 @@ Sessions are expected to finish within about 15 minutes. Nothing in the fleet
 reports "done" — a finished session looks exactly like an idle one — so deciding
 it is over is your job, not something you will be told.
 
-  1. fleet_start, naming a host if you want a particular machine
-  2. fleet_peek to read what it is doing, as often as you need
-  3. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed
+GIVE A SESSION A PROFILE OR IT COMES UP IDLE. …
 
-TEMPORARY HOSTS COST MONEY WHILE THEY LIVE. …
+  1. fleet_start with a `profile`, naming a host or a tag …
+  2. fleet_await — returns when the session ends or errors … Do not poll.
+  3. fleet_read_log to collect what it produced — BEFORE stopping it …
+  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR …
 ```
+
+(Quoted from `McpServer#instructions()` in `src/mcp/server.js`, abridged — that
+function is the source; a profile is a file on the host, listed by
+`fleet_profiles`, whose content becomes the session's first message. Starting
+without one produces an idle REPL and an empty log, which is the silent failure
+v3 was spent removing.)
 
 `AGENT_FLEET_MCP_BUDGET_MINUTES` sets the number, and it is **stated rather than
 enforced**. A timer the agent cannot see produces a session that dies mid-answer

@@ -132,13 +132,13 @@ either. That is a portability fix in the CLI calls, not a change of engine.
 
 ## Status
 
-**Done** on coordinator, Worker, host, MCP, iOS and Android.
+Shipped everywhere in one round; what is proven per surface is
+[`app-parity.md`](./app-parity.md)'s to say, not this page's.
 
 The apps show a **Files** button on every session, running or stopped — the
 workspace volume survives a stop, which is what makes a session resumable, so
-"collect what it produced" is mostly a thing you do after the work has finished.
-Browse, read, **edit, create, copy and delete** — all five verbs have a screen
-on both phones.
+"collect what it produced" is mostly a thing you do after the work has
+finished.
 
 Two choices worth knowing. **Save is offered only when the text differs from
 what was read**, so a file opened and closed is never rewritten: that would move

@@ -58,22 +58,20 @@ concatenated into it.
 Each shows up as a deliberate compromise, and each is worth knowing before
 reading the code.
 
-### 1. `createdBy` cannot reflect who asked — and this is a real regression
+### 1. `createdBy` used to be unattributable — fixed, and worth keeping the shape of
 
-agent-hub hardcodes `actor: 'web'` for every HTTP caller (`http.js:142`). Every
-token holder is anonymous and indistinguishable to it, so a session the fleet
-starts is recorded as started by "web", not by `telegram:12345`.
+agent-hub used to hardcode `actor: 'web'` for every HTTP caller, so a session
+the fleet started was recorded as started by "web", not by the person who
+asked. It accepts a claimed actor now — charset-validated, falling back to
+`web` only when none is claimed (`src/adapters/http.js`) — and the sidecar
+posts the verified `fleet:<email>`, which lands in `createdBy`
+(`src/core/sessions.js`).
 
-The sidecar knows the real actor and puts it in its own logs and replies. It
-**cannot** make agent-hub record it. This is exactly the flat-allowlist gap
-`design.md` §1 lists, and it is not fixable from out here — only upstream, or in
-the coordinator, which is where §5 argues per-session ownership belongs anyway
-(one chokepoint instead of N hosts).
-
-An in-process adapter would not have this problem. It is the price of keeping
-`src/core/` and `src/adapters/` contributable, stated plainly rather than
-discovered later. Now that it is all one project this IS fixable here — it is
-just a change that has to stand on its own merits upstream, not a quiet edit.
+The honest caveat travels with it: the attribution is exactly as trustworthy
+as the hub token that carried it — anything holding that token can claim any
+actor — so it is a label for honest surfaces, not an audit trail.
+Authorization still belongs in the coordinator, which is where §5 argues
+per-session ownership lives (one chokepoint instead of N hosts).
 
 ### 2. `/api/peek` is fixed at 60 lines
 
@@ -264,7 +262,7 @@ connection open, so nothing listens on the host and there is no port to open.
 the whole path drivable by hand with no coordinator at all:
 
 ```sh
-echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
+echo '{"v":3,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
   | node bin/agent-fleet-sidecar
 ```
 
@@ -316,7 +314,10 @@ revocable one at a time.
 
 ## Still to build
 
-- **Rootless podman.** The sandbox has only ever run as root, which is the wrong
-  posture: an escape currently lands as root on the host.
+- **Verifying the rootless mapping.** The fleet deploys rootless podman
+  ([`hardening.md`](./hardening.md)); what is unverified is the property it is
+  deployed for — that uid 0 in a container maps to the unprivileged service
+  user on the host, so an escape lands as nobody. `security.md` SEC-SESSION-5
+  is the honest statement, and nothing yet asserts it.
 - **Wake-on-LAN.** §3's second meaning of "wake" — a box that is asleep cannot
   be a host, and nothing sends the magic packet yet.

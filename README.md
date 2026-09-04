@@ -143,8 +143,9 @@ never be built.
 | `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
 | `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [naming](./docs/naming.md), [upstream lineage](./docs/upstream-agent-hub.md) |
 
-Still to come: rootless podman (the sandbox has only run as root), Wake-on-LAN,
-and Telegram on the Worker.
+Still to come: verifying the rootless mapping (the fleet runs rootless podman;
+that an escape lands unprivileged is asserted, not yet tested — `security.md`
+SEC-SESSION-5), Wake-on-LAN, and Telegram on the Worker.
 The apps and the Cloudflare deployment exist — see
 [`docs/deployment.md`](./docs/deployment.md) for what is proven and what is
 merely built.

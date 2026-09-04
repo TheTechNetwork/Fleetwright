@@ -229,8 +229,8 @@ progress and quietly widens what a single compromised host can reach.
 
 | | value | where it lives |
 |---|---|---|
-| App ID | `4758006` | `[vars]` — an identifier |
-| Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` — appears in every authorize URL |
+| App ID | `4758006` | `[vars]` in `wrangler.production.toml` — ours; a fork registers its own App |
+| Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` in `wrangler.production.toml` — appears in every authorize URL |
 | Client secret | *(to generate)* | `wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET` |
 | Private key | *(not yet needed)* | nowhere, until the broker exists |
 
@@ -429,6 +429,12 @@ somebody has to remember is the failure mode this whole document is arguing
 against.
 
 ## Build order
+
+**Steps 1–4 have shipped** — the callback is served by both coordinators, the
+apps use system browsers with no paste field, and storage lives host-side (see
+[`connectors.md`](./connectors.md) and [`accounts.md`](./accounts.md)). Step 5
+still waits on the broker's minting half. The reasoning is kept because the
+order was the point:
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
    `code` and `state`, exchanges it for an access + refresh token, and relays

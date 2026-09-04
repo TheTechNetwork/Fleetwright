@@ -8,7 +8,15 @@ effort. The returning-user run is complete (`RETURNING-USER-REPORT.md` on
 `claude/fleetwright-returning-user-3z0b2m`); the first-run tester is still going.
 
 This file exists so none of it is lost. Every row has an owner, a severity and
-enough detail to act on cold. **Nothing here is fixed unless it says so.**
+enough detail to act on cold.
+
+> **Status, 4 Sep 2026: most rows below were fixed** in the rounds that
+> followed (#343/#345 and after — the installer's `return 0`, the v3 profile
+> work, the login banner, the four-documents cleanup among them). The row text
+> is left exactly as filed; the linked issue is the current state of each.
+> Notably H2 resolved the *other* way than item 8 below feared: push was
+> proven on both platforms on 3 Sep 2026, so the listing sells it because it
+> is true — `app-parity.md` is the record.
 
 The verdict worth keeping at the top:
 
@@ -227,7 +235,8 @@ anything above.
 6. **A1, I1-I4, B2, B3, B5** - the MCP ergonomics pass.
 7. **D1-D3** - a decision about what an operator may lift.
 8. **H1, H2** - make the four documents agree, and either prove push on one
-   real phone or stop selling it.
+   real phone or stop selling it. *(Both happened: proven 3 Sep 2026, and
+   `app-parity.md`'s table is now the one source the others defer to.)*
 9. **B1** - no fix without a reproduction against the deployed Worker.
 
 The tester's disagreement with `ROADMAP.md`, worth keeping: *"All defensible,

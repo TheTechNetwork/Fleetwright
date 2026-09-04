@@ -1,8 +1,8 @@
 # Example profiles
 
-The installer copies `orient.md` into `AGENT_HUB_PROFILE_DIR` (by default
-`/var/lib/agent-hub/profiles`) on a fresh box, and never overwrites one that is
-already there.
+The installer copies every `.md` in this directory except this README into
+`AGENT_HUB_PROFILE_DIR` (by default `/var/lib/agent-hub/profiles`) on a fresh
+box, and never overwrites one that is already there.
 
 **A profile file IS the prompt.** Its entire content becomes the first message
 of a session started with `--profile=<name>`, so there is nowhere in it to put

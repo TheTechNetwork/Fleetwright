@@ -6,14 +6,15 @@ costs more, and says nothing while doing it — which is how the Android publish
 job sat skipped and green for weeks.
 
 So this is the table, kept where it can be checked rather than inferred from
-five workflow files.
+the workflow files.
 
 | event | runs |
 |---|---|
 | **pull request** | tests, typecheck, CodeQL, worker `check`, iOS and Android builds if that app changed. Nothing publishes, ever. |
-| **push to main** | the above, plus: Worker deploy (if the Worker or `src/fleet` changed), TestFlight **internal** and Play **closed testing** (each if that app changed) |
-| **release published** | TestFlight **external** and Play **open testing**, both after review — plus the signed APK attached to the GitHub release |
-| **workflow_dispatch** | build, sign, and publish to the **closed** track — dispatching by hand is a test of the pipeline, and a pipeline test should not land in front of everybody with the link |
+| **push to main** | the above, plus: Worker deploy (if the Worker or `src/fleet` changed), TestFlight **internal** and Play's commit track — `PLAY_COMMIT_TRACK`, default `beta`, which is **open testing** (each if that app changed) |
+| **prerelease published** | TestFlight **external** and the same Play commit track — a rehearsal of the release path in front of testers, not everybody |
+| **release published** | Play **production** and the App Store, after review — plus the signed APK and the host package attached to the GitHub release |
+| **workflow_dispatch** | build, sign, and publish to the commit track — dispatching by hand is a test of the pipeline, on the track a merge would have used |
 | **schedule** | CodeQL, weekly |
 
 ## The rules underneath it

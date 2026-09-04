@@ -1,7 +1,9 @@
 # Connecting credentials: Claude, GitHub, Cloudflare
 
 What a session needs to do its work, connected from a phone, by the person who
-owns it. Three verbs — `connect`, `link`, `unlink` — and a table of providers.
+owns it. Four verbs — `connect`, `link`, `verify`, `unlink` — and a table of
+providers. (`renew` is this family's fifth member, coordinator-to-host only —
+[`intents.md`](./intents.md) has it.)
 
 Written when the last verb landed. It is also the thing guest onboarding was
 blocked on, and the reason is worth stating first because it drove every choice
@@ -54,6 +56,7 @@ outside a comment.
 |---|---|
 | `connect` | bare: what could be connected and what is. With a provider: begin, and return a URL |
 | `link` | finish, with the token or the authorization code |
+| `verify` | check a stored credential with its provider, and report what it can actually do |
 | `unlink` | forget it here. **Does not revoke it at the provider** |
 
 Each maps onto a chat command that already existed, so a fleet command still
@@ -65,6 +68,7 @@ connect claude scope=host  → /login force
 connect github             → /connect github
 link claude <code>         → /code <code>
 link github <token>        → /link github <token>
+verify github              → /verify github
 unlink claude scope=me     → /accounts remove <email>
 unlink claude scope=host   → /login logout
 ```

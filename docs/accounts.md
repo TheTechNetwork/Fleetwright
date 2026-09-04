@@ -106,9 +106,8 @@ credential that is itself expired is not copied over the session's, which might
 still hold a refresh token that works.
 
 The provider tokens — GitHub, Cloudflare — ride along on a **separate key**,
-because "whose Claude account" does not answer "whose GitHub token": a person
-with no linked Claude account runs on the shared one and still gets their own
-repositories. That key is the actor who *started* the session, off the record,
+because "whose Claude account" does not answer "whose GitHub token": the two
+are linked separately, and either can exist without the other. That key is the actor who *started* the session, off the record,
 never the actor pressing resume — otherwise a colleague resuming somebody's
 work quietly lends it their credentials.
 
@@ -187,7 +186,7 @@ access token and already runs that person's sessions.
 
 | file | who reads it |
 |---|---|
-| `<row>.env` | what a **session** gets — sourced into every container |
+| `<row>.env` | what a **session** may ask for — read host-side, per request, by the broker ([`credential-broker.md`](./credential-broker.md)); nothing is sourced into the container any more |
 | `<row>.connections.json` | what a **phone** may see — no secret in it at all |
 | `<row>.renewal.json` | what only the **host** may use — mounted nowhere |
 

@@ -400,7 +400,7 @@ curl -s -X POST localhost:8791/api/intent \
 for driving one sidecar by hand with no coordinator:
 
 ```sh
-echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
+echo '{"v":3,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
   | agent-fleet-sidecar
 ```
 
@@ -491,10 +491,13 @@ Resource limits are podman flags — `AGENT_HUB_SANDBOX_MEMORY` (8g),
 
 ### Still to do here
 
-Everything above ran as **root**, so podman's container-root → unprivileged-host-user
-mapping is unproven and is the correct deployment posture. Until it is done, an
-escape lands as root on the host rather than as a nobody user. Run rootless
-before trusting this with anything you care about.
+The services run as an unprivileged user and podman runs rootless — what is
+**unverified** is the property that arrangement exists for: that uid 0 inside
+a container maps to the unprivileged service user on the host, so an escape
+lands as nobody. The original hardware validation all ran as root, and nothing
+yet asserts the mapping — `security.md` SEC-SESSION-5 is the honest statement.
+Treat an escape as landing with the service user's authority at best, root at
+worst, until somebody proves which.
 
 ## 4. The phone
 
@@ -628,9 +631,10 @@ one.
 
 Not "undocumented" — not built, or built and never proven:
 
-- **Rootless podman.** The sandbox has only ever run as root. That is the wrong
-  posture and it is stated again under §3 above, because it is the one item here
-  with a security consequence rather than a convenience one.
+- **Verifying the rootless mapping.** The fleet deploys rootless; that an
+  escape lands as an unprivileged user is asserted, not tested. Stated again
+  under §3 above, because it is the one item here with a security consequence
+  rather than a convenience one — `security.md` SEC-SESSION-5.
 - **The apps at every stage.** Push delivery is confirmed and both beta tracks
   are live — this list said otherwise for a while after both stopped being
   true, which is exactly the four-documents failure

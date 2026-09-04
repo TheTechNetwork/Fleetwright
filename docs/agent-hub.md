@@ -35,8 +35,11 @@ machine never needs a terminal.
 **Dependencies: `node` (>= 24 — see below), `tmux`, `claude`.**
 
 > **Upstream said 18+.** `package.json` in this repository requires `>= 24` and
-> that is the number to believe; the installer installs it. A beta tester found
-> three different answers across three files and could not tell which was real.
+> that is the number to believe. Node is the one thing the installer refuses to
+> install for you — `curl -fsSL <coordinator>/prereq | sudo sh` (or
+> `install/prereq.sh`) puts it in the run user's home with nvm; the installer
+> itself installs tmux, podman, git and curl. A beta tester found three
+> different answers across three files and could not tell which was real.
  No database, no build step, no
 npm install, no cloud account. Clone it and run it.
 
@@ -94,13 +97,22 @@ dispatcher, so nothing can work in one surface and be missing from another.
 | `/stop <name>` | Stop it. The conversation is kept so `/resume` still works. |
 | `/list` | Everything — running and resumable. |
 | `/status [name]` | Hub health, or one session's detail. |
-| `/forget <name>` | Stop it *and* erase the record. No longer resumable. |
+| `/forget <name>` | Stop it and put it in the bin. Recoverable with `/restore` for seven days. |
+| `/restore <name>` | Put a binned session's record back, on volumes that never went. |
+| `/purge <name>` | What `/forget` used to be: destroy it, volumes and all, with no recovery. |
+| `/bin` | What is in the bin, and each entry's deadline. |
 | `/update [--restart]` | Pull the latest code onto this box. `--restart` applies it; sessions keep running. |
 | `/login` | Log this box into a Claude account. `/login console`, `/login status`, `/login logout`, `/login cancel`. |
 | `/code <value>` | Send back the authorization code from the login page. |
 | `/whoami` | The id this hub sees you as — what goes in the allowlist. |
 
 From the shell: `agent-hub list`, `agent-hub new mysession`, and so on.
+
+This table is the session-manager core, not the whole registry — the fleet and
+credential commands (`/answer`, `/logs`, `/upgrade`, `/reboot`, `/enroll`,
+`/connect`, `/link`, `/verify`, `/unlink`, `/accounts`, the `/files` family)
+live in `src/adapters/commands.js` and are listed by `/help`; their contracts
+are [`intents.md`](./intents.md)'s tables.
 
 **In Telegram you rarely type any of this.** The bot registers its command list
 with Telegram at startup, so typing `/` autocompletes every command with a

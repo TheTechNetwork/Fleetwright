@@ -22,7 +22,9 @@ AGENT_HUB_SANDBOX_IMAGE=localhost/agent-session:latest sudo -E install/install.s
 ```
 
 `ensureSandboxImage` builds anything tagged `localhost/` and pulls anything
-else, so switching between the two is one environment variable.
+else, so switching between the two is one environment variable. A fork that
+publishes the same image under its own org sets just
+`AGENT_HUB_SANDBOX_IMAGE_OWNER` — the short way to say "the same image, mine".
 
 Every push also publishes a `sha-<commit>` tag, which is what makes "which
 image is that box running" answerable after the fact.
