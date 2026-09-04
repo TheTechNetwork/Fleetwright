@@ -24,9 +24,44 @@ const CHECK_TIMEOUT_MS = 20_000;
 
 /** @param {string[]} argv */
 function run(argv, timeout = CHECK_TIMEOUT_MS) {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout });
+  // DEBIAN_FRONTEND for debconf, which reads it from the environment and has no
+  // other way to be told. sudo's env_reset would drop it, so the sudoers rule
+  // carries `Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"` — scoped
+  // to that one command, because what happens when a PERSON runs apt on this
+  // box is their machine's business and not ours to change.
+  //
+  // Harmless on every other command run here: apt-get and dpkg-query read it,
+  // nothing else looks.
+  const r = spawnSync(argv[0], argv.slice(1), {
+    encoding: 'utf8',
+    timeout,
+    env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' },
+  });
   return { status: r.status ?? 1, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
 }
+
+/**
+ * The two forms of the upgrade command, and why there are two.
+ *
+ * `APT_SAFE` is what should run: noninteractive, and answering conffile prompts
+ * conservatively so a package that ships a changed config cannot stall an
+ * upgrade nobody is watching. `APT_PLAIN` is what a box installed before that
+ * rule is permitted to run — sudo matches the whole command line, so the extra
+ * options are a refusal on an old rule rather than an unknown flag.
+ *
+ * Kept beside each other because the fallback only makes sense as a pair: the
+ * day nothing is left on the old rule, both go.
+ */
+const APT_PLAIN = Object.freeze(['/usr/bin/apt-get', '-y', 'upgrade']);
+const APT_SAFE = Object.freeze([
+  '/usr/bin/apt-get',
+  '-y',
+  '-o',
+  'Dpkg::Options::=--force-confold',
+  '-o',
+  'Dpkg::Options::=--force-confdef',
+  'upgrade',
+]);
 
 /**
  * The part of a failed apt run that says WHY.
@@ -208,11 +243,22 @@ export function runUpgrade(cfg, { actor = null } = {}) {
         'System upgrades are off.\n\n' +
         'This service runs unprivileged on purpose, so applying packages needs a rule that says ' +
         'so out loud. On the box:\n\n' +
-        `  echo '${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade' \\\n` +
-        '    | sudo tee /etc/sudoers.d/agent-hub-upgrade\n' +
+        // THE SAME RULE THE INSTALLER WRITES, and it has to be — somebody who
+        // pastes this and somebody who re-runs the installer must end up with
+        // the same permissions, or one of them gets an upgrade that stalls on
+        // a conffile prompt and the other does not.
+        //
+        // The backslashes are not decoration: `:` and `=` are sudoers
+        // metacharacters, separating the host, runas and command sections, and
+        // visudo rejects the line without them.
+        '  sudo tee /etc/sudoers.d/agent-hub-upgrade >/dev/null <<\'EOF\'\n' +
+        '  Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"\n' +
+        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, ` +
+        '/usr/bin/apt-get -y -o Dpkg\\:\\:Options\\:\\:\\=--force-confold -o Dpkg\\:\\:Options\\:\\:\\=--force-confdef upgrade\n' +
+        '  EOF\n' +
         '  sudo chmod 0440 /etc/sudoers.d/agent-hub-upgrade\n\n' +
         'then set AGENT_HUB_SYSTEM_UPGRADE=1 in /etc/agent-hub.env and restart.\n' +
-        'Scoped to those two commands: it cannot install, remove or run anything else.',
+        'Scoped to those three commands: it cannot install, remove or run anything else.',
     };
   }
 
@@ -225,7 +271,29 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   // -n: never prompt for a password. If the sudoers rule is missing this fails
   // in a second with a clear message rather than hanging on a prompt nobody can
   // answer.
-  const r = run(['sudo', '-n', '/usr/bin/apt-get', '-y', 'upgrade'], 15 * 60_000);
+  //
+  // NONINTERACTIVE, AND CONFFILE PROMPTS ANSWERED. Without these a package that
+  // ships a changed config file stops to ask which version to keep, on a box
+  // with no terminal — debconf falls back to Noninteractive, dpkg gets no
+  // answer, and the upgrade fails. That is what the debconf lines in a failure
+  // report are really telling you.
+  //
+  //   --force-confold  keep the config already on the box
+  //   --force-confdef  take the maintainer's answer where there is no local change
+  //
+  // Both are the conservative choice: an upgrade run by a machine must not
+  // replace a file somebody edited.
+  //
+  // TRIED, THEN FALLEN BACK, because sudo matches the WHOLE command line. A box
+  // whose /etc/sudoers.d/agent-hub-upgrade predates this rule permits only the
+  // bare form, so the safe one is refused — and refusing to upgrade at all
+  // would be worse than upgrading the way it always has. Re-running the
+  // installer is what moves a box onto the new rule.
+  let r = run(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
+  if (r.status !== 0 && /not allowed to execute|sorry, user/i.test(`${r.stderr}${r.stdout}`)) {
+    log.warn('upgrade: this box\'s sudoers rule predates the noninteractive flags — re-run the installer to update it');
+    r = run(['sudo', '-n', ...APT_PLAIN], 15 * 60_000);
+  }
   if (r.status !== 0) {
     const detail = upgradeFailureDetail(r);
     return {

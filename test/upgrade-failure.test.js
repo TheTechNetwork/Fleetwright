@@ -93,3 +93,55 @@ test('the advice names a command instead of naming the box', () => {
   // The code, not the comment recording what it used to say.
   assert.equal(/Run it on the box to see the whole output/.test(src.replace(/^\s*\*.*$/gm, '')), false);
 });
+
+// --- and the reason those debconf lines were there at all --------------------
+
+test('the upgrade runs noninteractively, with conffile prompts answered', async () => {
+  // The debconf complaint was a real signal, not just noise: without a frontend
+  // and without conffile options, a package that ships a changed config file
+  // stops to ask which version to keep — on a box with no terminal. debconf
+  // falls back to Noninteractive, dpkg gets no answer, and the upgrade fails.
+  //
+  // Both flags are the CONSERVATIVE choice. An upgrade run by a machine must
+  // not replace a file somebody edited.
+  const src = readFileSync(new URL('../src/core/upgrades.js', import.meta.url), 'utf8');
+  assert.match(src, /--force-confold/);
+  assert.match(src, /--force-confdef/);
+  assert.match(src, /DEBIAN_FRONTEND: 'noninteractive'/);
+});
+
+test('a box on the old sudoers rule still upgrades', () => {
+  // sudo matches the WHOLE command line, so the extra options are a refusal on
+  // a rule that predates them — not an unknown flag. Refusing to upgrade at all
+  // would be worse than upgrading the way it always has, so it falls back and
+  // says which one it took.
+  const src = readFileSync(new URL('../src/core/upgrades.js', import.meta.url), 'utf8');
+  assert.match(src, /APT_PLAIN/);
+  assert.match(src, /APT_SAFE/);
+  assert.match(src, /not allowed to execute\|sorry, user/);
+  assert.match(src, /re-run the installer to update it/, 'the fallback is silent about how to stop needing it');
+});
+
+test('the rule printed by hand is the rule the installer writes', () => {
+  // Somebody who pastes the message and somebody who re-runs the installer must
+  // end up with the same permissions, or one gets an upgrade that stalls on a
+  // conffile prompt and the other does not.
+  const src = readFileSync(new URL('../src/core/upgrades.js', import.meta.url), 'utf8');
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  for (const piece of ['env_keep += "DEBIAN_FRONTEND"', 'force-confold', 'force-confdef']) {
+    assert.ok(src.includes(piece), `the printed rule is missing ${piece}`);
+    assert.ok(sh.includes(piece), `the installer's rule is missing ${piece}`);
+  }
+
+  // ESCAPED IN BOTH. `:` and `=` are sudoers metacharacters — they separate the
+  // host, runas and command sections — and visudo rejects the line without the
+  // backslashes. Found by running visudo on it rather than by reading the
+  // grammar, and the installer validates with visudo before installing.
+  // Both files carry `Dpkg\\:\\:Options` as source text — a shell printf and a
+  // JS string literal each needing one level of escaping to emit one backslash.
+  for (const [name, text] of [['upgrades.js', src], ['install.sh', sh]]) {
+    assert.ok(text.includes('Dpkg\\\\:\\\\:Options'), `${name} does not escape the sudoers metacharacters`);
+  }
+  assert.match(sh, /visudo -cf/);
+});

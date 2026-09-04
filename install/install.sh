@@ -1577,7 +1577,34 @@ if [ "$WIZARD" = yes ]; then
     printf '  install day".\n'
     if confirm "Allow system updates from chat?" Y; then
       SUDO_TMP="$(mktemp)"
-      printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade\n' "$RUN_USER" > "$SUDO_TMP"
+      # TWO FORMS, AND THE OLD ONE STAYS. sudo matches the whole command line,
+      # so an option this rule does not name is a refusal — which is why an
+      # unattended upgrade could not pass the flags that make it unattended.
+      #
+      # The second form is what agent-hub prefers: --force-confold keeps the
+      # config already on the box when a package ships a new default, and
+      # --force-confdef takes the maintainer's answer where there is no local
+      # change. Without them a package with a modified conffile stops to ask a
+      # question nobody can answer, and dpkg fails.
+      #
+      # DEBIAN_FRONTEND is passed through rather than baked in, because setting
+      # debconf's frontend in its own database would change what happens when a
+      # PERSON runs apt on this box — that is their machine's behaviour, not
+      # ours to decide. env_keep is scoped to this one command for the same
+      # reason.
+      #
+      # The plain form is kept so a box whose rule predates this keeps working:
+      # upgrades.js tries the option form and falls back on a refusal, and
+      # re-running the installer is what moves a box forward.
+      {
+        printf 'Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"\n'
+        printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, ' "$RUN_USER"
+        # ESCAPED, because `:` and `=` are sudoers metacharacters — they
+        # separate the host, runas and command sections — and visudo rejects
+        # the line outright without the backslashes. Found by running visudo on
+        # it rather than by reading the grammar.
+        printf '/usr/bin/apt-get -y -o Dpkg\\:\\:Options\\:\\:\\=--force-confold -o Dpkg\\:\\:Options\\:\\:\\=--force-confdef upgrade\n'
+      } > "$SUDO_TMP"
       if visudo -cf "$SUDO_TMP" >/dev/null 2>&1; then
         install -m 0440 "$SUDO_TMP" /etc/sudoers.d/agent-hub-upgrade
         set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
