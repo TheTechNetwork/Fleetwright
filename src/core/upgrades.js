@@ -29,6 +29,48 @@ function run(argv, timeout = CHECK_TIMEOUT_MS) {
 }
 
 /**
+ * The part of a failed apt run that says WHY.
+ *
+ * This was `(r.stderr || r.stdout).split('\n').slice(-4)`, and both halves of
+ * that were wrong in the same direction — they discarded the answer.
+ *
+ * STDERR OR STDOUT, NOT EITHER. apt writes its progress and dpkg's own error
+ * detail to stdout and debconf's complaints to stderr. Choosing stderr when it
+ * is non-empty means the stream carrying the cause is never read, and debconf
+ * makes stderr non-empty on virtually every unattended run:
+ *
+ *   debconf: unable to initialize frontend: Teletype
+ *   debconf: (This frontend requires a controlling tty.)
+ *   debconf: falling back to frontend: Noninteractive
+ *   E: Sub-process /usr/bin/dpkg returned an error code (1)
+ *
+ * That is what reached somebody's phone. Every line of it is noise except the
+ * last, which says only that dpkg failed — and the four-line window was
+ * entirely filled by the noise, so the package that actually broke was never
+ * shown. "Run it on the box to see the whole output" then sends them to a shell
+ * for something the coordinator already had.
+ *
+ * THE DEBCONF LINES ARE DROPPED, not because warnings should be hidden, but
+ * because these three are not about this run: debconf says it cannot use a
+ * teletype, and then says it fell back successfully. Keeping them costs the
+ * space the real error needs.
+ *
+ * @param {{ stdout: string, stderr: string }} r
+ */
+export function upgradeFailureDetail(r) {
+  const noise = /^debconf: (unable to initialize frontend|\(This frontend requires|falling back to frontend)/;
+  const lines = `${r.stdout}\n${r.stderr}`
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l && !noise.test(l));
+  // Twelve rather than four. dpkg names the package on one line and explains on
+  // the next few, and apt appends its own summary after that — a four-line tail
+  // reliably catches the summary and misses the cause.
+  const tail = lines.slice(-12);
+  return tail.length ? tail.join('\n') : 'apt said nothing about why.';
+}
+
+/**
  * Packages this box could upgrade, and whether it is waiting for a reboot.
  *
  * apt only. A box running something else gets `supported: false` rather than a
@@ -185,14 +227,17 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   // answer.
   const r = run(['sudo', '-n', '/usr/bin/apt-get', '-y', 'upgrade'], 15 * 60_000);
   if (r.status !== 0) {
-    const detail = (r.stderr || r.stdout).split('\n').slice(-4).join('\n');
+    const detail = upgradeFailureDetail(r);
     return {
       ok: false,
       text:
         `apt-get upgrade failed:\n${detail}\n\n` +
         (/password is required|not allowed/i.test(detail)
           ? 'That is the sudoers rule missing — see /upgrade with AGENT_HUB_SYSTEM_UPGRADE unset for the exact line.'
-          : 'Run it on the box to see the whole output.'),
+          // NAMES THE COMMAND, rather than sending somebody to "the box" to
+          // work out what to type. The detail above is the whole of what apt
+          // said that matters; this is for the case where it is not enough.
+          : `On the box: sudo apt-get -y upgrade\nA package whose service failed to start usually explains itself in: systemctl status <name>`),
     };
   }
 
