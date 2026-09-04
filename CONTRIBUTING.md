@@ -41,6 +41,14 @@ round, because `PROTOCOL_VERSION` is exact-match and the flag day is paid once
 
 - `./scripts/verify.sh` green before every commit — it is the gate that can
   actually fail, and "SOMETHING FAILED — do not commit" means exactly that.
+  CI runs this same file rather than a copy of it.
+- **Coverage does not go backwards.** `verify.sh` runs
+  `scripts/check-coverage.mjs`, which fails a change that executes less of a
+  file than the last one did. It never fails on a low number and never argues
+  about a target — only about code that used to run and stopped. When coverage
+  RISES, `node scripts/check-coverage.mjs --update` re-baselines
+  `test/coverage-floor.json`, and that diff belongs in the pull request that
+  earned it. See `docs/ci.md`.
 - The Worker's behaviour is proven in workerd (`worker/test/live.test.js`),
   not inferred from Node. The outage lived entirely in the gap between the
   two runtimes.

@@ -34,21 +34,19 @@ on:
       - 'package-lock.json'
       - '.github/workflows/worker.yml'
       - '!**/*.md'
-  # Pull requests filter on the same inputs as the push. The old reasoning —
-  # "check is a required status and a skipped check reports nothing" — was
-  # written as though branch protection existed; it does not (confirmed
-  # 2026-08-28), and meanwhile every docs-only pull request was paying for a
-  # workerd boot. If protection is ever enabled, this moves to an if-gated
-  # `changes` job like codeql.yml's.
+  # PULL REQUESTS NO LONGER FILTER AT THE TRIGGER. The old note here said the
+  # filter was safe because branch protection did not exist; `Worker passed`
+  # below is meant to be a required check, so it is not safe any more — a
+  # filtered trigger reports NOTHING, and a required check waits for nothing
+  # forever. The identical filter now lives in the `changes` job, where not
+  # running is a visible "skipped". A docs-only pull request still does not pay
+  # for a workerd boot.
   pull_request:
-    paths:
-      - 'worker/**'
-      - 'src/fleet/**'
-      - 'src/core/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/worker.yml'
-      - '!**/*.md'
+  # The merge queue, so the Worker is bundled and BOOTED against main plus
+  # everything ahead of it in the queue rather than against the main it branched
+  # from. This repository merges stacked pull requests bottom-up, which is
+  # exactly the case where those two are different.
+  merge_group:
   workflow_dispatch:
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
@@ -74,11 +72,60 @@ permissions:
   contents: read
 
 jobs:
-  # Runs on every PR and needs no secrets. --dry-run does the whole bundle and
-  # the Durable Object migration check without touching the account, which is
-  # what catches the mistake that actually happens: something under src/fleet/
-  # quietly starting to import from `node:` and no longer being portable.
+  # WHETHER THIS CHANGE IS IN THE BUNDLE. The list is the push filter above,
+  # word for word, and it has to stay that way: the two answer the same question
+  # and the day they disagree is the day a pull request skips the check for a
+  # change that then deploys.
+  #
+  # Wider than `worker/**` on purpose — worker/src/fleet-do.js imports
+  # CoordinatorCore, the push senders and the OIDC verifier out of src/fleet,
+  # and the protocol module imports text.js and names.js out of src/core. A
+  # filter naming only the directory would quietly stop checking the half of the
+  # Worker that lives somewhere else.
+  #
+  # Anything that is not a pull request — a push to main, a merge_group run —
+  # gets true, because those are the events where a partial view is the thing
+  # that ships.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      bundle: ${{ steps.filter.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -eu
+          if [ "$EVENT" != pull_request ]; then
+            echo "not a pull request — checking the Worker"
+            echo "bundle=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch -q --no-tags origin "$BASE"
+          files=$(git diff --name-only "$(git merge-base "origin/$BASE" HEAD)" HEAD)
+          echo "$files" | sed 's/^/  /'
+          bundle=false
+          for f in $files; do
+            case "$f" in
+              *.md) ;;
+              worker/*|src/fleet/*|src/core/*|package.json|package-lock.json|.github/workflows/worker.yml)
+                bundle=true; break ;;
+            esac
+          done
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+  # Runs on every PR that touches the bundle and needs no secrets. --dry-run
+  # does the whole bundle and the Durable Object migration check without
+  # touching the account, which is what catches the mistake that actually
+  # happens: something under src/fleet/ quietly starting to import from `node:`
+  # and no longer being portable.
   check:
+    needs: changes
+    if: needs.changes.outputs.bundle == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -144,6 +191,11 @@ jobs:
 
   deploy:
     needs: check
+    # `github.ref` on a merge_group run is the queue's own
+    # `refs/heads/gh-readonly-queue/...` branch, so this condition already
+    # excludes it — a queue run bundles and boots the Worker and deploys
+    # nothing. Said here because "it happens to be excluded" is how a queue run
+    # eventually ships something nobody merged.
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production
@@ -276,3 +328,27 @@ jobs:
       - name: Where it landed
         if: steps.creds.outputs.have == 'true'
         run: echo "::notice::Deployed. Point a host at it with AGENT_FLEET_COORDINATOR_URL — see docs/coordinator-deploy.md."
+
+  # The one required check for this workflow, for the same reason ci.yml has
+  # one: `check` is skipped on a change that is not in the bundle, and a
+  # required check has to report something on every pull request. Skipped is a
+  # pass here; failed and cancelled are not.
+  gate:
+    name: Worker passed
+    needs: [changes, check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job above either passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -eu
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a job this gate depends on reported '$r'"; exit 1 ;;
+            esac
+          done
+          echo "Worker passed"

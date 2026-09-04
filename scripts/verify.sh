@@ -26,9 +26,41 @@ printf 'tests      ... '
 if [ -n "${VERIFY_SKIP_TESTS:-}" ]; then
   printf 'skipped (VERIFY_SKIP_TESTS)\n'
 elif out=$(npm test --silent 2>&1); then
-  printf '%s\n' "$(printf '%s' "$out" | grep -E '^# (pass|fail)' | tr '\n' ' ')"
+  # BOTH REPORTER FORMATS, and the second one is why this line was blank.
+  #
+  # `# pass 1182` is TAP; `ℹ pass 1182` is the spec reporter, which is what
+  # node emits now. The grep named only TAP, so it matched nothing and this
+  # printed an empty summary after a suite of 1183 tests — the exit code was
+  # still right, so nothing was WRONG, and that is the point: a line that
+  # reports nothing looks exactly like a line reporting good news.
+  printf '%s\n' "$(printf '%s' "$out" | grep -E '^(#|ℹ) (pass|fail)' | tr '\n' ' ')"
 else
-  printf 'FAILED\n%s\n' "$(printf '%s' "$out" | grep -E '^not ok' | head -10)"; fail=1
+  # And the same on the failing side, where it matters more: with the spec
+  # reporter there is no `not ok`, so a failed suite printed "FAILED" and then
+  # nothing at all — no test name, no assertion, nothing to act on.
+  printf 'FAILED\n%s\n' "$(printf '%s' "$out" | grep -E '^(not ok|✖)' | head -10)"; fail=1
+fi
+
+# COVERAGE, and it runs even when VERIFY_SKIP_TESTS does not.
+#
+# Its own flag on purpose. VERIFY_SKIP_TESTS exists because the suite's answer
+# depends on which Node is running it and therefore belongs in CI's version
+# matrix; coverage's answer does not — it is a property of the code — so it runs
+# once, here, in the `checks` job that skips the suite. One place, one
+# implementation, and CI keeps running this file rather than a copy of it.
+#
+# It runs the suite itself, so this is the second execution locally. Twenty-one
+# seconds, against the class of bug that is the whole reason the comments in
+# this file exist: code that shipped because nothing ever executed it.
+#
+# It fails on a DROP, never on a low number. See scripts/check-coverage.mjs.
+printf 'coverage   ... '
+if [ -n "${VERIFY_SKIP_COVERAGE:-}" ]; then
+  printf 'skipped (VERIFY_SKIP_COVERAGE)\n'
+elif out=$(node scripts/check-coverage.mjs 2>&1); then
+  printf '%s\n' "$(printf '%s' "$out" | tail -1)"
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
 printf 'typecheck  ... '

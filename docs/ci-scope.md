@@ -10,12 +10,13 @@ the workflow files.
 
 | event | runs |
 |---|---|
-| **pull request** | tests, typecheck, CodeQL, worker `check`, iOS and Android builds if that app changed. Nothing publishes, ever. |
+| **pull request** | tests, coverage, typecheck, CodeQL, worker `check`, iOS and Android builds if that app changed. Nothing publishes, ever. |
 | **push to main** | the above, plus: Worker deploy (if the Worker or `src/fleet` changed), TestFlight **internal** and Play's commit track — `PLAY_COMMIT_TRACK`, default `beta`, which is **open testing** (each if that app changed) |
 | **prerelease published** | TestFlight **external** and the same Play commit track — a rehearsal of the release path in front of testers, not everybody |
 | **release published** | Play **production** and the App Store, after review — plus the signed APK and the host package attached to the GitHub release |
 | **workflow_dispatch** | build, sign, and publish to the commit track — dispatching by hand is a test of the pipeline, on the track a merge would have used |
 | **schedule** | CodeQL, weekly |
+| **merge queue** | the whole of `ci.yml` and `worker.yml`, against main plus everything ahead of the pull request in the queue — see "Two questions a pull request cannot answer" below |
 
 ## The rules underneath it
 
@@ -33,21 +34,38 @@ that changing `src/fleet` changes the Worker, so the filter has to say so. A
 filter naming only `worker/**` would quietly stop deploying the half of the
 Worker that lives somewhere else — much worse than deploying too often.
 
-**Everything is scoped, because nothing is required.** This repository has no
-branch protection and no required status checks (confirmed 2026-08-28), so
-trigger-level paths filters are safe everywhere: `ci.yml` ignores prose, apps
-and the sandbox; `worker.yml` runs only when something in its bundle changed —
-which includes `src/core/**`, because the protocol module imports from it;
-and CodeQL gates **every** language per pull request through its `changes`
-job — the compiled two by their app trees, `actions` by workflow changes, and
-`javascript-typescript` by "anything that is not purely prose".
+**The root suite is not scoped at all any more, and that is a correction.**
+`ci.yml` used to carry
+`paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']`, on
+the grounds that a filtered trigger was safe while nothing was a required
+status. That was the wrong risk to be measuring. The filter did not only skip a
+check nobody required — **it skipped the tests that guard the files it was
+skipping for:**
 
-**The standing rule if protection is ever enabled:** a filtered trigger reports
-*no status*, which blocks a required check forever. The moment any of these
-becomes required, its filter moves from the trigger to an if-gated `changes`
-job (codeql.yml is the template), so a skip is a visible "skipping" instead of
-a missing answer. Main pushes and the weekly schedule always run CodeQL in
-full, so the alert baseline is never built from a partial view.
+| skipped | what did not run |
+|---|---|
+| `apps/**` | **twenty-two** test files in `test/` read the Swift and the Kotlin. They are the parity suite: both phones say the same five things in the same order (`reassurance.test.js`), both carry the same verbs, both compute `quietFor` and both show it. The app workflows *compile* the app; nothing else asserts any of that. So the one change those tests exist for — an edit to an app — was the one change that did not run them. |
+| `docs/**` | `install-node-floor.test.js` reads `docs/deployment.md` and asserts the Node floor it states matches `package.json`. Editing that document alone skipped the test whose entire subject is that document. |
+| `sandbox/**` | `verify.sh` parses `entrypoint.sh` and `tool-shim.sh`; `sandbox.yml` only ever built the image. A sandbox-only change reached main with its shell read by nothing. |
+
+That is one failure in three places, and it is not fixable by writing a
+cleverer filter — a filter has to know which tests read which files, and it
+learns that a year late, from a bug. The root suite is 21 seconds. It runs.
+
+**The expensive filters stay exactly where they are.** A macOS runner, a build
+number and a Cloudflare deploy are the cases where the answer to "if this does
+not run, does anybody find out?" is *yes* — the app workflows report on the
+pull request themselves — and where running twice costs something real.
+`worker.yml`'s filter also moved off the trigger into an if-gated `changes`
+job, so a skip is a visible "skipped" rather than a missing answer; its list is
+the same one the deploy uses, word for word, because the two answer the same
+question.
+
+CodeQL gates **every** language per pull request through its own `changes` job
+— the compiled two by their app trees, `actions` by workflow changes, and
+`javascript-typescript` by "anything that is not purely prose". Main pushes and
+the weekly schedule always run it in full, so the alert baseline is never built
+from a partial view.
 
 **Two events, two audiences, on both platforms.**
 
@@ -95,6 +113,32 @@ pipeline reporting success is worse than no staging at all.
 **Main runs are never cancelled.** `cancel-in-progress` is on for pull requests
 only. A cancelled PR run is waste; a cancelled main run is something that did
 not ship while reporting nothing wrong.
+
+## Two questions a pull request cannot answer
+
+Both are about the gap between "green" and "safe to merge", and both are now
+closed by something other than a test.
+
+**Does it still pass against the main it will land on?** A pull request is
+built against the base it branched from. Two of them, each green, can be red
+together — and this repository merges **stacked** pull requests bottom-up
+(`CONTRIBUTING.md`), which is that situation deliberately: `#N+1` is based on
+`#N`, and the moment `#N` merges, `#N+1`'s green tick describes a main that no
+longer exists.
+
+`ci.yml` and `worker.yml` both listen for `merge_group` now, so a merge queue
+runs them against main *plus everything ahead of this pull request in the
+queue*, immediately before it lands. Enabling the queue is a repository
+setting; the workflows are ready for it either way.
+
+**Is there anything the tests never looked at?** A green suite proves the tests
+that exist still pass. It says nothing about the lines no test reaches, and
+that is where the bugs in this repository's history actually lived.
+`scripts/check-coverage.mjs` records per-file line coverage in
+`test/coverage-floor.json` and fails a change that executes **less** of a file
+than the last one did. A ratchet rather than a target: it never argues about
+whether 80% is enough, and it never lets the untested surface quietly grow. It
+runs inside `verify.sh`, so it is the same check locally and in CI.
 
 ## Changing any of this
 

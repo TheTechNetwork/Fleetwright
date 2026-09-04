@@ -1,21 +1,55 @@
 name: CI
 
 on:
-  # paths-ignore, not paths: everything runs unless the change provably cannot
-  # reach the root tests. The apps have their own workflows and their own
-  # compilers; prose has neither. worker/** stays IN — the root suite executes
-  # worker code directly (the openapi contract runs against both coordinators,
-  # and protocol-reported greps the worker source).
+  # NO PATHS FILTER AT ALL, and that is the change. It used to be
+  # `paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']`,
+  # with a note saying that was safe because nothing here is a required status.
   #
-  # Safe to filter at the trigger because this repository has no required
-  # status checks (confirmed 2026-08-28). If protection is ever enabled, these
-  # must move to an if-gated `changes` job like codeql.yml's, so a skip is a
-  # visible "skipping" rather than a missing status that blocks the merge.
+  # It was not safe, and the note was measuring the wrong risk. The filter did
+  # not just skip a check nobody required — IT SKIPPED THE TESTS THAT GUARD THE
+  # FILES IT WAS SKIPPING FOR:
+  #
+  #   apps/**   TWENTY-TWO tests in test/ read the Swift and the Kotlin. They
+  #             are the parity suite — both phones say the same five things in
+  #             the same order (reassurance.test.js), both carry the same verbs,
+  #             both compute quietFor and show it. The app workflows compile the
+  #             app; NOTHING ELSE ASSERTS ANY OF THAT. So the one change those
+  #             tests exist for — an edit to an app — was the one change that
+  #             did not run them.
+  #
+  #   docs/**   install-node-floor.test.js reads docs/deployment.md and asserts
+  #             the Node floor it states matches package.json. Editing that
+  #             document alone skipped the test whose whole subject is that
+  #             document.
+  #
+  #   sandbox/**  verify.sh parses entrypoint.sh and tool-shim.sh, and
+  #             sandbox.yml only ever built the image. A sandbox-only change
+  #             reached main having had its shell read by nothing.
+  #
+  # That is the same failure in three places, and it is not fixable by writing
+  # a cleverer filter: a filter has to know which tests read which files, and it
+  # learns that a year late, from a bug. So it is gone.
+  #
+  # THE PRICE IS A FEW MINUTES OF UBUNTU ON A DOCS PULL REQUEST, and
+  # docs/ci-scope.md's own rule already priced it: "if this job does not run,
+  # does anybody find out?" — nothing else reports the root suite, so no — and
+  # "if it runs twice, what does it cost?" — for a test, a minute. The suite is
+  # 21 seconds. The expensive filters, the ones guarding a macOS runner, a build
+  # number and a deploy, are untouched and stay where they are.
   push:
     branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']
   pull_request:
-    paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']
+  # THE MERGE QUEUE, which is the only thing here that can answer "does this
+  # break main" rather than "did this break the main it branched from". A pull
+  # request is tested against its own base; two of them, each green, can be red
+  # together — and this repository merges STACKED pull requests bottom-up
+  # (CONTRIBUTING.md), which is that situation on purpose. `merge_group` runs
+  # everything against main plus whatever is ahead of it in the queue,
+  # immediately before it lands.
+  #
+  # Harmless until a queue is enabled; enabling one without this would hang
+  # every merge, because the queue waits for checks that never start.
+  merge_group:
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
 # branch pushed three times in a minute kept three builds alive and the answer
@@ -30,6 +64,9 @@ concurrency:
   # says, so two quick merges would leave a commit on main with no test result
   # at all.
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  # Never on a merge_group run either: `github.ref` there is the queue's own
+  # temporary branch, so it does not collide with anything — and a cancelled
+  # queue run drops the merge, which is the same failure as a cancelled push.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only, and nothing here has ever needed more. Spelled out rather than
@@ -126,9 +163,14 @@ jobs:
       - run: npm install --no-audit --no-fund
         working-directory: worker
 
-      # Typecheck, both Worker bundles, the openapi contract, the workflow
-      # sweep, the name check, and both shell parses — the same eight lines
+      # Typecheck, coverage, both Worker bundles, the openapi contract, the
+      # workflow sweep, the name check, and both shell parses — the same lines
       # anybody sees locally, with the same names.
+      #
+      # COVERAGE RUNS HERE AND NOT IN THE MATRIX, which is why it has its own
+      # flag (VERIFY_SKIP_COVERAGE) rather than riding on VERIFY_SKIP_TESTS.
+      # Coverage is a property of the code, not of the runtime: two matrix legs
+      # would produce the same number and pay for a second suite run to do it.
       - name: Everything verify.sh checks, except the suite
         env:
           VERIFY_SKIP_TESTS: '1'
@@ -228,8 +270,41 @@ jobs:
       # do less than the checked-in script does. Two implementations of one
       # check is how the weaker one becomes the one that passes.
 
-  # Its own job, on its own Node. Renovate declares engines ^24.11.0, and on 26
-  # npm warns EBADENGINE and the native re2 module does not load — at which
-  # point the validator says out loud that "regex validation may be inaccurate".
-  # A checker running outside its supported runtime is a checker whose answer
-  # you cannot lean on.
+  # (The Renovate config validator has its own workflow, renovate-config.yml —
+  # it runs on its own Node because Renovate declares engines ^24.11.0 and its
+  # native re2 module does not load on 26.)
+
+  # THE ONE CHECK TO MAKE REQUIRED, and the reason it exists rather than
+  # requiring `test (node 24)` and `checks` directly.
+  #
+  # A required check is named, and a name is a thing that changes: the matrix
+  # legs above have already been 18 and 20, and the day `24` becomes `26` every
+  # branch protection rule naming the old leg is waiting for a check that will
+  # never report again — silently, and looking like a slow CI rather than a
+  # broken gate. This name does not move.
+  #
+  # `if: always()` so it reports whatever happened above rather than inheriting
+  # a skip. Nothing here is gated today, but a future job that is must not be
+  # able to turn this gate green by not running — so a skipped dependency passes
+  # and a failed or CANCELLED one does not. `success()` alone gets the
+  # cancellation case wrong, which is the one that matters: a cancelled run is
+  # not a run that said yes.
+  gate:
+    name: CI passed
+    needs: [test, checks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job above either passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -eu
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a job this gate depends on reported '$r'"; exit 1 ;;
+            esac
+          done
+          echo "CI passed"
