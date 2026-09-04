@@ -154,6 +154,9 @@ jobs:
             exit 1
           fi
           echo "testing on simulator $device"
+          # `tee` the RAW xcodebuild output before the formatter, because the
+          # count is checked below and xcbeautify's wording is a formatter's
+          # choice while xcodebuild's "Executed N tests" is not.
           xcodebuild test \
             -project Fleetwright.xcodeproj \
             -scheme Fleetwright \
@@ -161,7 +164,19 @@ jobs:
             -destination "id=$device" \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
+            | tee /tmp/xcodebuild-test.log \
             | xcbeautify
+
+          # AND SOMETHING RAN. `xcodebuild test` exits 0 on a bundle containing
+          # no tests, so a test target that stopped being in the scheme's test
+          # action — or a source file that stopped being compiled into it —
+          # would report a green tick having asserted nothing.
+          if ! grep -qE 'Executed [1-9][0-9]* test' /tmp/xcodebuild-test.log; then
+            echo "::error::xcodebuild test reported no tests executed"
+            grep -E 'Executed .* test|Test Suite' /tmp/xcodebuild-test.log | tail -20 || true
+            exit 1
+          fi
+          grep -E 'Executed [0-9]+ test' /tmp/xcodebuild-test.log | tail -3
 
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.

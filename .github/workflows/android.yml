@@ -99,7 +99,28 @@ jobs:
       # sources for a word — which passes whether they agree or not.
       - name: Unit tests
         working-directory: apps/android
-        run: ./gradlew --no-daemon testDebugUnitTest
+        # AND THE COUNT IS CHECKED, because `testDebugUnitTest` passes when it
+        # runs NOTHING. If the test source set is ever not picked up — a moved
+        # directory, a renamed variant, a Gradle change — the task succeeds
+        # having discovered no classes, and the job goes green having asserted
+        # nothing at all. That is the exact shape of green this whole change
+        # exists to remove, and it would be invisible in the log: Gradle's test
+        # task is silent on success.
+        #
+        # Read out of the JUnit XML rather than Gradle's own output, because the
+        # XML is a contract and console formatting is not.
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon testDebugUnitTest
+          results=app/build/test-results/testDebugUnitTest
+          total=$(grep -ho 'tests="[0-9]*"' "$results"/*.xml 2>/dev/null \
+            | tr -dc '0-9\n' | awk '{s+=$1} END {print s+0}')
+          echo "JUnit XML reports $total test(s)"
+          if [ "$total" -lt 1 ]; then
+            echo "::error::testDebugUnitTest passed having run no tests — the test source set was not picked up"
+            ls -R "$results" 2>&1 || true
+            exit 1
+          fi
 
       - name: Build the debug APK
         working-directory: apps/android
