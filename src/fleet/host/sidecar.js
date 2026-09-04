@@ -420,6 +420,28 @@ export class Sidecar {
       // Deliberately not `actor` (which is 'fleet' when there is none): an
       // intent with no actor must still record NO actor, exactly as before.
       const meta = commandMeta(intent.verb, intent.params, intent.actor ? `fleet:${intent.actor}` : '');
+      // WHERE RUNNERS COME FROM AND WHICH FLEET THEY JOIN, added here because
+      // neither is in the intent and they come from two different places.
+      //
+      // The repository is the coordinator's, off the config frame — one
+      // operator decision for the whole fleet rather than a file on every box.
+      // The coordinator ORIGIN is this host's own, from its transport: it is
+      // what this box pinned at enrolment, so a runner is told to join the
+      // fleet this machine is actually in rather than one the coordinator
+      // names for itself.
+      if (intent.verb === 'provision') {
+        const repo = this.config.get('runnerRepo');
+        if (repo) meta.runnerRepo = repo;
+        // Normalised to a bare origin. `AGENT_FLEET_COORDINATOR_URL` is
+        // whatever an operator typed — a trailing slash is ordinary — and this
+        // becomes a workflow input that a runner puts in its own environment,
+        // where `https://fleet.example/` and `https://fleet.example` are two
+        // different strings to anything doing a comparison.
+        try {
+          const origin = this.transport?.origin ? new URL(this.transport.origin).origin : '';
+          if (origin) meta.coordinator = origin;
+        } catch { /* not a URL: the host refuses the dispatch and says so */ }
+      }
       this.log.info(`sidecar: ${actor} → ${redactCommandLine(line)}`);
       const r = await this.hub.command(line, meta);
 
@@ -963,6 +985,14 @@ export function toCommandLine({ verb, params, actor }) {
         return `/accounts remove ${mine}`;
       }
       return `/unlink ${p.provider}${p.scope === 'host' ? ' --host' : ''}`;
+    case 'provision':
+      // A word from a four-value enum and a bounded integer, so both are single
+      // tokens that cannot become flags. The TICKET is deliberately not here —
+      // it is a credential and travels beside the command, where no log site
+      // between here and the pane has to remember to mask it. Nor is the
+      // repository: the coordinator named it on the config frame, and a value
+      // this process holds is not a value a caller typed.
+      return ['/provision', p.platform, p.minutes].filter((x) => x !== undefined && x !== null).join(' ');
     case 'renew':
       // Both are protocol-constrained the same way `link.secret` is — printable
       // ASCII, no whitespace, no quote, no dash to start — so they are two
@@ -1006,5 +1036,15 @@ export function commandMeta(verb, params = {}, actor = '') {
     // File content, for the same reason and by the same route: prose and
     // payloads travel beside a command rather than inside it.
     ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),
+    // THE DISPATCH TICKET, for the same reason and by the same route: it is a
+    // credential, and a credential on a command line is a credential in the
+    // journal of every surface that logs one.
+    //
+    // The repository and the coordinator origin are NOT here, because they are
+    // not part of the intent at all — one comes off the config frame and one
+    // out of this host's own configuration, so they are added where the request
+    // is assembled rather than where an intent is translated. This function
+    // takes an intent and nothing else, which is what keeps it testable.
+    ...(verb === 'provision' && typeof params?.ticket === 'string' ? { ticket: params.ticket } : {}),
   };
 }

@@ -1,0 +1,164 @@
+name: Windows runner
+
+# A Windows machine, in somebody's fleet, for the length of one job.
+#
+# THIS ONE IS NOT PROVEN, and saying so is the point of this paragraph rather
+# than a hedge. macOS and Linux runners are the same host software on the same
+# shape of machine; Windows is not, and the reason is specific: a session IS a
+# tmux pane, tmux is a POSIX program, and Windows has no tmux. So this workflow
+# runs the host under MSYS2 — which the runner image ships, and which has a tmux
+# package — and hands the Windows `node` MSYS2's paths converted with `cygpath`.
+# Every one of those joins is somewhere the two worlds can disagree.
+#
+# It is therefore written to FAIL LOUDLY AND EARLY rather than to look like it
+# worked. The preflight below refuses before a machine enrols into a fleet,
+# because a runner that joins and then cannot start a session is worse than one
+# that never joined: it is placed on, it accepts work, and it fails it.
+#
+# What to do when it breaks: build on Linux and ask a person with Windows to
+# look, or read docs/runner-central.md, which says what was tried and what the
+# alternatives were.
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'Minted by the coordinator. Leave empty when starting this by hand.'
+        required: false
+        default: ''
+        type: string
+      minutes:
+        description: 'How long to stay in the fleet. GitHub kills the job at 360.'
+        required: false
+        default: '60'
+        type: string
+      coordinator:
+        description: 'Which fleet to join.'
+        required: false
+        default: 'https://fleet.thetech.network'
+        type: string
+      source:
+        description: 'The Fleetwright repository whose code this host runs.'
+        required: false
+        default: 'TheTechNetwork/Fleetwright'
+        type: string
+      ref:
+        description: 'Which ref of it.'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  # GitHub's own job token is what admits this machine — see runner-macos.yml.
+  id-token: write
+
+concurrency:
+  group: runner-windows-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    # NOT THE COMPOSITE ACTION the other three share, and the reason is
+    # mechanical rather than a preference: every step in it runs in bash, and a
+    # composite action cannot pick its shell from an input. This file carries
+    # its own copy of the same script under the MSYS2 shell. When one of them
+    # changes, both have to — which is the cost of the only arrangement that
+    # works, written down so it is a known cost rather than a surprise.
+    defaults:
+      run:
+        shell: C:\msys64\usr\bin\bash.exe -eo pipefail {0}
+    steps:
+      - name: Preflight — is this machine what we think it is?
+        # BEFORE ANYTHING IS INSTALLED AND LONG BEFORE ANYTHING ENROLS. Each of
+        # these is an assumption about a runner image that GitHub changes
+        # without telling anybody, and each has a different fix.
+        run: |
+          [ -x /usr/bin/pacman ] || { echo "::error::No MSYS2 pacman on this image. The Windows runner image has changed shape; this workflow needs rewriting."; exit 1; }
+          pacman -S --noconfirm --needed tmux >/dev/null 2>&1 || { echo "::error::MSYS2 has no tmux package here."; exit 1; }
+          command -v tmux >/dev/null || { echo "::error::tmux installed and is not on PATH."; exit 1; }
+          tmux -V
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ inputs.source }}
+          ref: ${{ inputs.ref }}
+          path: fleet
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.20.0'
+
+      - name: Install what a session needs
+        working-directory: fleet
+        run: |
+          # THE WINDOWS node, from MSYS2's bash. setup-node puts it on the
+          # Windows PATH, which this shell inherits — so if it is not here, the
+          # two worlds have already failed to meet and everything after this
+          # would fail more confusingly.
+          command -v node >/dev/null || { echo "::error::setup-node's node is not visible from the MSYS2 shell."; exit 1; }
+          node --version
+          npm ci --omit=dev --no-audit --no-fund
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Be a host until the clock runs out
+        working-directory: fleet
+        env:
+          AGENT_FLEET_HOST_ID: gha-win-${{ github.run_id }}-${{ github.run_attempt }}
+          AGENT_FLEET_COORDINATOR_URL: ${{ inputs.coordinator }}
+          AGENT_FLEET_LABELS: windows,ephemeral
+          AGENT_HUB_SANDBOX: '0'
+          MINUTES: ${{ inputs.minutes }}
+          TICKET: ${{ inputs.ticket }}
+          CLAIM: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          [ -n "${TICKET:-}" ] && echo "::add-mask::$TICKET"
+          [ -n "${CLAIM:-}" ] && echo "::add-mask::$CLAIM"
+
+          # PATHS ARE THE WHOLE DIFFICULTY. bash here thinks in /c/…; the node
+          # that reads these variables is a Windows program and thinks in C:\….
+          # So the directories are made with MSYS2 paths and EXPORTED as Windows
+          # ones, converted by cygpath — which is the single join this workflow
+          # exists to test.
+          base="$(pwd)/../runtime"
+          mkdir -p "$base/work" "$base/state" "$base/sockets"
+          export AGENT_HUB_WORKDIR="$(cygpath -w "$base/work")"
+          export AGENT_HUB_STATE_DIR="$(cygpath -w "$base/state")"
+          export AGENT_FLEET_HOST_KEY="$(cygpath -w "$base/state/host-key.json")"
+          export AGENT_FLEET_HOOK_SOCKET_DIR="$(cygpath -w "$base/sockets")"
+
+          node bin/agent-hub serve &
+          HUB=$!
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
+          done
+          curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" || {
+            echo "::error::agent-hub did not come up on this machine. Nothing has enrolled, which is the intended failure."
+            exit 1
+          }
+
+          # GitHub's job token admits the machine; this only says whose it is.
+          WHOSE="${TICKET:-$CLAIM}"
+          if [ -z "$WHOSE" ]; then
+            echo "::error::No ticket and no FLEETWRIGHT_RUNNER_TOKEN secret, so the fleet cannot tell whose runner this is."
+            exit 1
+          fi
+          node bin/agent-fleet-sidecar enrol-actions "$WHOSE"
+
+          set +e
+          node bin/agent-fleet-sidecar &
+          SIDECAR=$!
+          echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start."
+          fi
+          sleep "$(( MINUTES * 60 ))"
+
+          # The job ending IS the disconnect, and the disconnect is what retires
+          # this host and revokes its key.
+          kill -TERM "$SIDECAR" 2>/dev/null || true
+          for _ in $(seq 1 10); do kill -0 "$SIDECAR" 2>/dev/null || break; sleep 1; done
+          kill -KILL "$SIDECAR" 2>/dev/null || true
+          kill -TERM "$HUB" 2>/dev/null || true

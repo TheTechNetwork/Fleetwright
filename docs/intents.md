@@ -130,6 +130,19 @@ and "dead host" is the one it retries.
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
+| `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket` | ✅ | `/provision <platform> [minutes]` |
+
+`provision` is the other odd one, and in the opposite direction: every verb
+above acts on a host that has already enrolled, and this one asks for a host to
+come into existence. What makes it safe is what it cannot say — no repository,
+no workflow file, no ref, no inputs, only a platform from a fixed list and a
+number of minutes. The repository is named by the operator on the config frame
+and the workflow file is derived from the platform, so a compromised coordinator
+can ask for a Mac and cannot ask somebody's GitHub token to run something of its
+choosing somewhere of its choosing. `ticket` is the exception to "the caller
+supplies the params": the coordinator mints it, overwrites whatever arrived, and
+it is what tells the fleet whose runner this will be. See
+[runner-central.md](./runner-central.md).
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a

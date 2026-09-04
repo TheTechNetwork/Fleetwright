@@ -1,0 +1,95 @@
+name: macOS runner
+
+# A macOS machine, in somebody's fleet, for the length of one job.
+#
+# Dispatched by the fleet itself when a session asks for one — `fleet_provision`
+# over MCP, or the app — and startable by hand from the Actions tab when you
+# would rather do that. The two paths differ in one value: the fleet sends a
+# single-use `ticket` naming who asked, and a run started by hand falls back to
+# the FLEETWRIGHT_RUNNER_TOKEN secret. Neither of them admits the machine.
+#
+# WHAT ADMITS IT is `permissions: id-token: write` below. GitHub mints a
+# short-lived token for this job naming the repository, the workflow file and
+# the run; the coordinator verifies it against an allowlist of repositories the
+# way it verifies a sign-in. There is deliberately no credential in this
+# repository that can put a machine in a fleet.
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'Minted by the coordinator. Leave empty when starting this by hand.'
+        required: false
+        default: ''
+        type: string
+      minutes:
+        description: 'How long to stay in the fleet. GitHub kills the job at 360.'
+        required: false
+        default: '60'
+        type: string
+      coordinator:
+        description: 'Which fleet to join.'
+        required: false
+        default: 'https://fleet.thetech.network'
+        type: string
+      source:
+        description: 'The Fleetwright repository whose code this host runs.'
+        required: false
+        default: 'TheTechNetwork/Fleetwright'
+        type: string
+      ref:
+        description: 'Which ref of it.'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  # THE WHOLE POINT — see the header. A stored secret that can enrol a host is
+  # readable by every workflow in the repository, survives the job, and cannot
+  # say which job used it. This cannot be exported from the job that asked for
+  # it.
+  id-token: write
+
+concurrency:
+  # One per run, and never cancelled by a newer one: this job IS the host, and
+  # cancelling it takes somebody's session away mid-sentence.
+  group: runner-macos-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  host:
+    runs-on: macos-26
+    # GitHub's own ceiling, as a BACKSTOP only. The `minutes` input is what
+    # actually ends the job, so this is the value that applies when something
+    # has hung rather than the one that governs a normal run.
+    #
+    # Deliberately not computed from the input. Expressions are allowed here,
+    # and a workflow that computes its own timeout fails at dispatch with no
+    # line number when the expression is wrong.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: tmux
+        # UNTAP RATHER THAN SILENCE. The image ships aws/tap tapped, Homebrew
+        # now requires tap trust, and every brew command prints a paragraph
+        # about it. Not HOMEBREW_NO_REQUIRE_TAP_TRUST=1, which turns the check
+        # off for every tap including ones we do use. `|| true` because a
+        # future image may not ship it.
+        run: |
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install tmux
+
+      - uses: ./.github/actions/fleet-host
+        with:
+          ticket: ${{ inputs.ticket }}
+          claim: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
+          minutes: ${{ inputs.minutes }}
+          coordinator: ${{ inputs.coordinator }}
+          source: ${{ inputs.source }}
+          ref: ${{ inputs.ref }}
+          # `xcode` is the label that makes this machine findable for the thing
+          # it is uniquely for: an iOS or macOS build nobody has hardware for.
+          labels: macos,xcode,ephemeral
+          host-prefix: gha-mac
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}

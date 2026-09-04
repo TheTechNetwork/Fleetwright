@@ -1487,6 +1487,7 @@ const OPENAPI = JSON.stringify({
                       "logs",
                       "peek",
                       "profiles",
+                      "provision",
                       "purge",
                       "readfile",
                       "reboot",

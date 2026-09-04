@@ -46,6 +46,16 @@ connect, link, unlink, renew      move somebody's credentials around
 answer                            ← the interesting one
 ```
 
+`fleet_provision` is **not** withheld, and it is the one on this list that costs
+money — it starts a machine on GitHub's hardware and any session it runs bills
+to the runner repository's API key. It is exposed for the same reason `stop`
+was: this server exists so a session can hand work to a machine, watch it and
+collect the output, and a fleet that cannot be asked for the machine leaves that
+loop needing a browser tab. The verb refuses an unattributed caller, the runner
+belongs to whoever asked, and it ends itself — so what an agent can do unasked
+is bounded by a clock rather than by a policy. The tool's own description says
+what it spends. See [runner-central.md](./runner-central.md).
+
 (`update` and `forget` were deliberately taken **off** this list: `update`
 because `KillMode=process` means it ends nobody's work, and `forget` because
 the seven-day bin made it the recoverable one — `DEFAULT_DENY` in

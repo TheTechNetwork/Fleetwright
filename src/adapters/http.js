@@ -233,6 +233,39 @@ export class HttpAdapter {
         meta.content = body.content;
       }
 
+      // WHAT A DISPATCH NEEDS AND THE COMMAND LINE MUST NOT CARRY.
+      //
+      // Three values, and each is here rather than in `line` for its own
+      // reason. The TICKET is a credential: on the command line it would be in
+      // the journal of every surface that logs one, which is the whole argument
+      // src/core/redact.js is built around, and beside the command it is in
+      // none of them. The REPOSITORY and the COORDINATOR are not secrets and
+      // are still not arguments — they are context this box was given (one on
+      // the coordinator's config frame, one from its own configuration), not
+      // something the caller typed, and mixing the two on one line is how a
+      // caller ends up able to supply either.
+      //
+      // Each is charset-checked here rather than trusted from the sidecar.
+      // This endpoint is reachable by anything holding the hub token, so a
+      // value that is only validated by its usual caller is validated only
+      // until there are two.
+      for (const [field, re] of /** @type {Array<[string, RegExp]>} */ ([
+        // `fwt_<id>_<secret>`, and bounded well above it.
+        ['ticket', /^[A-Za-z0-9_-]{1,128}$/],
+        ['runnerRepo', /^[A-Za-z0-9._-]{1,80}\/[A-Za-z0-9._-]{1,80}$/],
+        // An origin, not a URL with a path: this becomes a workflow input that
+        // tells a machine which fleet to join.
+        ['coordinator', /^https?:\/\/[A-Za-z0-9._-]{1,253}(:\d{1,5})?$/],
+      ])) {
+        if (body[field] === undefined || body[field] === null) continue;
+        if (typeof body[field] !== 'string' || !re.test(body[field])) {
+          // The value is not quoted back — one of these is a credential, and a
+          // refusal travels to a log like every other one.
+          return json(res, 400, { ok: false, text: `${field} is not in the form this accepts` });
+        }
+        meta[field] = body[field];
+      }
+
       // WHO ASKED, when the caller can say.
       //
       // This used to be the literal 'web' for every HTTP caller, so every

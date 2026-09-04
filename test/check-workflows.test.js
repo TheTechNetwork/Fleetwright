@@ -151,3 +151,65 @@ jobs:
 `);
   assert.equal(r.ok, true, r.output);
 });
+
+test('a composite action is checked, not counted', () => {
+  // THE FAILURE THIS FILE EXISTS TO STOP, committed by this file. The checker
+  // walked `jobs` only, so an action.yml — which holds `runs.steps` — was read,
+  // parsed, counted in "checked N workflows" and looked at not at all. A
+  // checker that quietly passes a broken file manufactures confidence, which is
+  // worse than having no checker.
+  const r = check(`
+name: Become a host
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        if [ -n "x" ]; then
+          echo hi
+`);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /unexpected end of file|syntax error/);
+});
+
+test('a shell named by its path is still a shell', () => {
+  // GitHub lets a job name the executable and its arguments, and that is the
+  // ONLY way to run bash on a Windows runner:
+  //
+  //     shell: C:\msys64\usr\bin\bash.exe -eo pipefail {0}
+  //
+  // Matching the bare words `bash` and `sh` skipped every step in the workflow
+  // least likely to be right, silently.
+  const r = check(`
+name: X
+on: workflow_dispatch
+jobs:
+  host:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: C:\\msys64\\usr\\bin\\bash.exe -eo pipefail {0}
+    steps:
+      - run: |
+          fi"
+`);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /unexpected EOF|syntax error/);
+});
+
+test('a shell bash cannot judge is still skipped', () => {
+  // The false-failure half of the same mistake. `pwsh` is not bash, and
+  // syntax-checking it with bash would fail correct workflows.
+  const r = check(`
+name: X
+on: workflow_dispatch
+jobs:
+  host:
+    runs-on: windows-2025
+    steps:
+      - shell: pwsh
+        run: |
+          if ($true) { Write-Host "fine" }
+`);
+  assert.equal(r.ok, true);
+});

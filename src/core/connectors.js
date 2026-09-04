@@ -656,6 +656,35 @@ export class Connections {
   }
 
   /**
+   * The stored token for one provider, or null.
+   *
+   * PUBLIC BECAUSE SOMETHING OTHER THAN A SESSION NEEDS ONE NOW. Until
+   * `provision`, every token this file holds was read either to be verified or
+   * to be handed to a session through the broker — so `#secrets` stayed private
+   * and the two callers inside this class were the whole story.
+   *
+   * Dispatching a runner is the first time the HOST ITSELF calls a provider's
+   * API as a person: it asks GitHub to start a workflow with that person's
+   * token, and the token never leaves this process. Adding a reader is
+   * therefore the honest change, rather than the alternatives — exporting
+   * `#secrets`, which hands out every provider at once, or routing the call
+   * through `check()`, which is a verifier and would have to grow a second job.
+   *
+   * Read at the moment of use, never cached: keepalive replaces a GitHub token
+   * every few hours, and a copy taken at start-up is the exact bug the
+   * credential broker exists to have removed.
+   *
+   * @param {string|symbol|null} row @param {string} provider
+   * @returns {string|null}
+   */
+  tokenFor(row, provider) {
+    const p = PROVIDERS[provider];
+    if (!p) return null;
+    const secret = this.#secrets(row)[p.env[0]];
+    return typeof secret === 'string' && secret ? secret : null;
+  }
+
+  /**
    * Check a STORED credential against its provider, and report what it can do.
    *
    * Different from verifying at link time, which checks a value somebody just

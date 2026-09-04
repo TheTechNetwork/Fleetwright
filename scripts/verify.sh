@@ -165,8 +165,16 @@ fi
 #
 # None of them needed cleverness to catch. They needed something to look.
 printf 'workflows  ... '
-if out=$(node scripts/check-workflows.mjs 2>&1); then
-  printf '%s\n' "${out##*$'\n'}"
+# THREE DIRECTORIES, NOT ONE. The runner repository's workflows live in
+# install/runner-central/ because they are copied into a DIFFERENT repository —
+# and a file this repository ships and never checks is the same unchecked shell
+# as before, with an extra step between writing it and finding out. They are
+# also the workflows whose failures are most expensive: one of them enrols a
+# paid-for machine into somebody's fleet before it reaches the line that breaks.
+if out=$( { node scripts/check-workflows.mjs \
+    && node scripts/check-workflows.mjs install/runner-central/.github/workflows \
+    && node scripts/check-workflows.mjs install/runner-central/.github/actions/fleet-host; } 2>&1); then
+  printf '%s\n' "$(printf '%s' "$out" | tr '\n' ' ')"
 else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi

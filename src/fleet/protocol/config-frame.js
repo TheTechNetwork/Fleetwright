@@ -34,13 +34,39 @@ import { PROTOCOL_VERSION } from './intents.js';
  * fails is dropped with a warning rather than stored, because a malformed
  * secret stored is a renewal that fails hours later somewhere else.
  *
- * @type {Readonly<Record<string, { max: number, secret: boolean, what: string }>>}
+ * @type {Readonly<Record<string, { max: number, secret: boolean, what: string, shape?: RegExp }>>}
  */
 export const CONFIG_KEYS = Object.freeze({
   githubClientSecret: {
     max: 4096,
     secret: true,
     what: "the GitHub App's client secret, for exchanging refresh tokens",
+  },
+  // WHERE RUNNERS COME FROM, and the second entry this list has ever had.
+  //
+  // `owner/repo` — the repository whose workflows a `provision` dispatches
+  // into. It belongs here rather than in an environment file on every box for
+  // the reason the client secret does: it is one operator decision for the
+  // whole fleet, and a value copied onto each machine is a value that is stale
+  // on the one somebody forgot.
+  //
+  // IT IS NOT A SECRET AND IT IS STILL A CAPABILITY, which is the part to be
+  // honest about. The host dispatches with the ASKING PERSON'S GitHub token, so
+  // a coordinator that named a repository of its own choosing could make that
+  // token start a workflow somewhere the person did not intend. Two things
+  // bound it and neither is this frame: GitHub refuses a dispatch into anything
+  // that person cannot already run workflows in, and the token never leaves the
+  // host — it is spent against api.github.com, not handed to the repository.
+  // So the reach is "a workflow they could have run themselves", which is a
+  // real capability and a small one beside `link`, which writes a credential.
+  //
+  // Shaped like a repository, not merely bounded: the value goes into a URL
+  // path, and `owner/repo` is the only thing that can be true of it.
+  runnerRepo: {
+    max: 140,
+    secret: false,
+    what: 'the GitHub repository whose workflows `provision` dispatches, as owner/repo',
+    shape: /^[A-Za-z0-9._-]{1,80}\/[A-Za-z0-9._-]{1,80}$/,
   },
 });
 
@@ -97,6 +123,11 @@ export function readConfigFrame(msg) {
       || value.length > spec.max
       || !VALUE_RE.test(value)
       || FORBIDDEN_RE.test(value)
+      // AND ITS OWN SHAPE, where the value has one. The charset above is what
+      // every entry must survive; `runnerRepo` has to be a repository as well,
+      // because it is interpolated into an API path and "printable ASCII" is
+      // not a thing that is true only of `owner/repo`.
+      || (spec.shape && !spec.shape.test(value))
     ) {
       // The value is NOT quoted back. These are credentials, and a refusal
       // travels to a log the way every other refusal does.

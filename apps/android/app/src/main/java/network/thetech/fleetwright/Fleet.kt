@@ -492,6 +492,26 @@ class Fleet(
     suspend fun stop(name: String): Reply = intent("stop", mapOf("name" to name))
 
     /**
+     * Ask for a temporary machine — macOS, Windows, Linux or an Android emulator.
+     *
+     * It does NOT return a host. GitHub has to find hardware, boot it and
+     * install what a session needs, so the runner appears in the fleet minutes
+     * later as a temporary host owned by whoever asked. Anything it runs is
+     * lost when it goes.
+     *
+     * `host` is which permanent box dispatches it, and matters only in a fleet
+     * with several: the dispatch is made with that person's GitHub connection
+     * on that machine, so the coordinator refuses rather than guessing when
+     * more than one could. See docs/runner-central.md.
+     */
+    suspend fun provision(platform: String, minutes: Int? = null, host: String? = null): Reply = intent(
+        "provision",
+        mapOf("platform" to platform),
+        host,
+        numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
+    )
+
+    /**
      * What every host in the fleet can start a session on.
      *
      * Fans out, because a profile is a file on one box: asking a single machine

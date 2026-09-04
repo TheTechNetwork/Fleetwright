@@ -94,7 +94,14 @@ function checkNoExpressions(node, file, at = '') {
 function checkShell(doc, file) {
   const work = mkdtempSync(path.join(tmpdir(), 'wf-'));
   try {
-    for (const [jobName, job] of Object.entries(doc?.jobs || {})) {
+    // A COMPOSITE ACTION IS A JOB HERE TOO, and it was not, which made this
+    // file do the thing its own header is about: it printed "checked 1
+    // workflows" for an action.yml and looked at none of it. Composite actions
+    // hold `runs.steps` rather than `jobs.<name>.steps`, so the walk below saw
+    // an empty list and passed — a checker that quietly passes a broken file is
+    // worse than no checker, because it manufactures confidence.
+    const units = { ...(doc?.jobs || {}), ...(doc?.runs?.steps ? { runs: doc.runs } : {}) };
+    for (const [jobName, job] of Object.entries(units)) {
       const steps = /** @type {any} */ (job)?.steps;
       if (!Array.isArray(steps)) continue;
       for (const [i, step] of steps.entries()) {
@@ -104,12 +111,24 @@ function checkShell(doc, file) {
         // the false-failure half of the same mistake.
         const shell =
           step.shell || /** @type {any} */ (job)?.defaults?.run?.shell || doc?.defaults?.run?.shell || 'bash';
-        if (!/^(bash|sh)$/.test(String(shell))) continue;
+        // A CUSTOM SHELL STRING IS STILL A SHELL. GitHub lets a workflow name
+        // the executable and its arguments — `C:\msys64\usr\bin\bash.exe -eo
+        // pipefail {0}` is how a Windows job runs bash at all — and matching
+        // only the bare words `bash` and `sh` skipped every step in the one
+        // workflow least likely to be right. The executable's name is what
+        // decides, not how it was spelled.
+        const exe = String(shell).trim().split(/\s+/)[0].replace(/\\/g, '/').split('/').pop() || '';
+        const language = exe.replace(/\.exe$/i, '');
+        // `pwsh` is not something bash can judge, and pretending otherwise
+        // would be the false-failure half of the same mistake.
+        if (!/^(bash|sh)$/.test(language)) continue;
         const script = step.run.replace(/\$\{\{[^}]*\}\}/g, 'EXPR');
         const scriptFile = path.join(work, 'step.sh');
         writeFileSync(scriptFile, script);
         try {
-          execFileSync(String(shell), ['-n', scriptFile], { stdio: 'pipe' });
+          // The LOCAL bash, never the path the workflow named: that one is on a
+          // GitHub runner, and this check runs here.
+          execFileSync(language, ['-n', scriptFile], { stdio: 'pipe' });
         } catch (e) {
           const why = String(/** @type {any} */ (e).stderr || /** @type {any} */ (e).message)
             .replace(new RegExp(scriptFile, 'g'), 'step')

@@ -40,6 +40,12 @@ that would still be accepted if the private half ever leaked out of a build log.
 
 ## Running one: `.github/workflows/ephemeral-mac.yml`
 
+> **Superseded, not removed.** This file still works and is the macOS runner
+> this repository can start for itself. The four-platform version a fleet
+> dispatches lives in [`install/runner-central/`](../install/runner-central/)
+> and is copied into a repository of its own — see
+> [runner-central.md](./runner-central.md).
+
 `workflow_dispatch`. Set the `FLEETWRIGHT_RUNNER_TOKEN` repository (or
 organisation) secret once, dispatch the workflow, and a macOS runner joins the
 fleet for as long as you asked for — `enrol-actions` presents GitHub's own
@@ -126,8 +132,16 @@ could choose a permanent host's, and re-enrolment replaces a key.
 
 ```
 AGENT_FLEET_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
-AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/ephemeral-mac.yml@
+AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/runner-macos.yml@,
+                              owner/repo/.github/workflows/runner-linux.yml@
+AGENT_FLEET_RUNNER_REPO       owner/repo               where `provision` dispatches
 ```
+
+**The workflow pin is a LIST**, and became one when a runner repository grew
+one file per operating system: pinning one of four means the other three cannot
+admit a host, and pinning none means any workflow there can. A single value
+still works and means a list of one, so no deployment's configuration changed
+underneath it.
 
 Both are **operator** decisions — which repositories may admit machines at all —
 and change about as often as the fleet gains a repository. There is deliberately
@@ -163,11 +177,17 @@ as "it belongs to nobody".
 
 **The claim is a stored secret now, `FLEETWRIGHT_RUNNER_TOKEN`** — safe to
 store precisely because it names an owner rather than admitting a machine;
-GitHub's OIDC token is what does the admitting. What nothing does yet is
-dispatch the workflow on the person's behalf: the coordinator holds a GitHub
-App installation, and when it dispatches the run itself it will know who asked
-before the job exists. That is the step that makes this genuinely self-service
-rather than one-field-shorter.
+GitHub's OIDC token is what does the admitting.
+
+**And the fleet dispatches the run itself now**, which is the step this
+paragraph used to end by wanting — see [runner-central.md](./runner-central.md).
+It does not do it with an installation token, which would need the private key
+this project has nowhere to put: it does it with **the asking person's own
+GitHub App token**, already stored on a host and already renewed there. That
+answers the ownership question before the job exists, so the claim a dispatched
+run carries is a **single-use ticket** minted at that moment rather than a
+reusable secret. The stored token stays for runs somebody starts by hand, and
+both are first-class.
 
 Placement then skips other people's runners entirely, and a fleet whose only
 match is one of them refuses with that reason — not `at_capacity`, which is what
@@ -222,7 +242,9 @@ the machine is being paid for by the minute.
 **MCP is where this landed** — see [`mcp.md`](./mcp.md). The intent protocol
 was already the right shape for it (fixed verbs, typed parameters, structured
 replies), and the MCP server is a thin adapter over `/api/intent` rather than
-new architecture. `fleet_start` on a named ephemeral host exists, and
-`fleet_await`/`fleet_read_log` cover watching and collecting; the completion
-signal is the piece that still does not — a finished session still looks like
-an idle one.
+new architecture. `fleet_start` on a named ephemeral host exists,
+`fleet_await`/`fleet_read_log` cover watching and collecting, and
+`fleet_provision` now asks for the machine as well — so the whole loop is verbs
+a session can reach rather than a browser tab somebody has to open. The
+completion signal is the piece that still does not: a finished session still
+looks like an idle one.
