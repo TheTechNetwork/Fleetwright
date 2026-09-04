@@ -34,6 +34,26 @@ that changing `src/fleet` changes the Worker, so the filter has to say so. A
 filter naming only `worker/**` would quietly stop deploying the half of the
 Worker that lives somewhere else — much worse than deploying too often.
 
+**And that filter is no longer maintained by hand, because it was wrong twice.**
+It is a list of directories that has to stay in step with an import graph, and
+an import graph moves when somebody adds a line at the top of a file — which is
+not a moment anybody thinks about a workflow.
+
+| | what happened |
+|---|---|
+| `src/core` | the protocol module started importing `text.js` and `names.js`. Caught by somebody noticing. |
+| `src/mcp` | `worker.js` mounts the remote MCP server's routes, so six files under `src/mcp` are compiled into the deployed Worker. The filter never named them, and **it cost a deploy**: `0d3f8af` (*"Say which origin, because Google will not"*, #291) changed `src/mcp/authorize-page.js` and otherwise only `docs/` and `test/`, so `worker.yml` never ran and production kept the old code until an unrelated commit happened to redeploy it. |
+
+A missed deploy is the quietest failure in this repository. Nothing is red, no
+job is visibly skipped, and the coordinator serves last week's code while main
+says otherwise.
+
+`scripts/check-worker-filter.mjs`, in `verify.sh`, asks **esbuild** which files
+are in the bundle — `--metafile` on the same invocation the `worker` line
+bundles with — and fails when `on.push.paths` does not name one of them. It also
+checks that the `changes` job's shell gates on every directory the trigger
+names, since those two lists are written twice and answer the same question.
+
 **The root suite is not scoped at all any more, and that is a correction.**
 `ci.yml` used to carry
 `paths-ignore: ['**/*.md', 'docs/**', 'apps/**', 'sandbox/**', 'LICENSE']`, on

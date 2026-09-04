@@ -107,6 +107,24 @@ else
 ' "$out"; fail=1
 fi
 
+# THE DEPLOY FILTER, against the bundle it claims to describe.
+#
+# worker.yml names the directories whose changes redeploy the Worker, and that
+# list has been wrong twice — src/core when the protocol module started
+# importing it, and src/mcp, which was never named at all and cost a deploy:
+# 0d3f8af changed src/mcp/authorize-page.js and otherwise only docs/ and test/,
+# so the workflow never ran and production kept the old code.
+#
+# A missed deploy is the quietest failure here. Nothing is red, no job is
+# visibly skipped, and the coordinator serves last week's code while main says
+# otherwise. esbuild already knows the graph; this asks it.
+printf 'deploy     ... '
+if out=$(node scripts/check-worker-filter.mjs 2>&1); then
+  printf '%s\n' "$out"
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
 # THE CHECKS THAT WOULD HAVE CAUGHT WHAT SHIPPED BROKEN.
 #
 # Three bugs reached main and every one was invisible to everything that ran:

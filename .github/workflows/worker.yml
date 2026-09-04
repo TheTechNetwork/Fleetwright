@@ -30,6 +30,21 @@ on:
       # rules moved to src/core — a deploy filter has to name what the bundle
       # holds, not what the directory layout implies.
       - 'src/core/**'
+      # AND src/mcp, WHICH IS THE SAME BUG A SECOND TIME. The comment above is
+      # about src/core joining the bundle and the filter not noticing; six
+      # files under src/mcp are in it too — worker.js mounts the remote MCP
+      # server's routes — and this list did not name them.
+      #
+      # It cost a deploy. 0d3f8af ("Say which origin, because Google will not",
+      # #291) changed src/mcp/authorize-page.js and otherwise only docs/ and
+      # test/, so this workflow never ran and the Worker was never redeployed.
+      # The fix reached production days later, carried by an unrelated commit.
+      #
+      # scripts/check-worker-filter.mjs now derives the answer from esbuild's
+      # metafile and fails when this list does not cover what the bundle
+      # actually holds, because this is the third time a human has been asked
+      # to keep a list in step with an import graph.
+      - 'src/mcp/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/worker.yml'
@@ -75,7 +90,8 @@ jobs:
   # WHETHER THIS CHANGE IS IN THE BUNDLE. The list is the push filter above,
   # word for word, and it has to stay that way: the two answer the same question
   # and the day they disagree is the day a pull request skips the check for a
-  # change that then deploys.
+  # change that then deploys. scripts/check-worker-filter.mjs asserts they
+  # agree, and asserts both against the bundle esbuild actually produces.
   #
   # Wider than `worker/**` on purpose — worker/src/fleet-do.js imports
   # CoordinatorCore, the push senders and the OIDC verifier out of src/fleet,
@@ -112,7 +128,7 @@ jobs:
           for f in $files; do
             case "$f" in
               *.md) ;;
-              worker/*|src/fleet/*|src/core/*|package.json|package-lock.json|.github/workflows/worker.yml)
+              worker/*|src/fleet/*|src/core/*|src/mcp/*|package.json|package-lock.json|.github/workflows/worker.yml)
                 bundle=true; break ;;
             esac
           done

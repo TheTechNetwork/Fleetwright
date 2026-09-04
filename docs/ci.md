@@ -77,6 +77,26 @@ required check would wait on it forever. Making them requireable means the same
 `changes`-job treatment `worker.yml` got; until then they report on the pull
 request and a human reads them.
 
+## The Worker's deploy filter
+
+`worker.yml` only deploys when something in the Worker's bundle changed, and
+that bundle is wider than `worker/`: it pulls `CoordinatorCore`, the push
+senders and the OIDC verifier out of `src/fleet`, `text.js` and `names.js` out
+of `src/core`, and six files out of `src/mcp`.
+
+The list is checked rather than remembered. `scripts/check-worker-filter.mjs`
+(inside `verify.sh`, the `deploy` line) bundles the Worker with esbuild's
+`--metafile` and fails when `on.push.paths` does not name a file that is
+actually in it:
+
+```
+deploy     ... 30 bundled files, all named
+```
+
+It exists because the hand-maintained version was wrong twice, and the second
+time cost a deploy — see `docs/ci-scope.md`. When it fails it prints the
+uncovered files and the exact `- 'dir/**'` lines to add.
+
 ## Coverage
 
 `scripts/check-coverage.mjs`, inside `verify.sh`, so it is the same check
