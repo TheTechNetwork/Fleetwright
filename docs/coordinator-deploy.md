@@ -76,6 +76,40 @@ up exactly the vars-versus-secrets namespace collision that file warns about.
 So after the button, what remains is those two lines and a host pointed at
 the URL.
 
+#### How updates reach a button deployment — they do not, until you merge
+
+The repository the button made is a **copy, not a fork**: GitHub offers no
+sync button on it, and nothing of ours can push to it. What Workers Builds
+watches is *your* copy — every push to its production branch redeploys your
+coordinator — so an update is a merge you run:
+
+```sh
+git clone https://github.com/<you>/<your-copy> && cd <your-copy>
+git remote add upstream https://github.com/TheTechNetwork/Fleetwright
+git fetch upstream && git merge upstream/main && git push
+```
+
+The push is the deploy. Your own changes — the sign-in `[vars]`, a route —
+ride through the merge; a conflict means you and upstream edited the same
+lines of the same file, which for `wrangler.toml` is a diff worth actually
+reading rather than resolving on autopilot.
+
+**Update the hosts in the same act, and hosts first.** The protocol version
+is exact-match, and the two halves of your fleet track different remotes: a
+box updates from wherever it was installed from — its clone's origin, or
+`AGENT_HUB_RELEASE_MANIFEST` for a packaged host, ours unless you changed
+them — while your coordinator updates only when you merge and push your copy. On a protocol bump that means hosts can move and leave
+your coordinator behind, or the reverse; the window is loudly broken rather
+than subtly wrong (`unsupported_version`, both directions), and
+`install.sh --upgrade` tells you whether a box's protocol still matches its
+coordinator, which is the check to believe. Run the hosts' update, then push
+the merge.
+
+If owning a copy is more maintenance than you wanted, the terminal path above
+has none: it deploys from this repository directly, and an update is
+`git pull` and the same `npx wrangler deploy`. The button's trade is
+auto-deploy-on-push in exchange for being the one who pushes.
+
 ### Sign-in
 
 Three more values. Until they are set, sign-in answers 503 and says so, which

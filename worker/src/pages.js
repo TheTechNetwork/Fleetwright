@@ -164,9 +164,11 @@ of ours to be in.</p>
 repository that also holds everything that runs on your machines, so an offer
 to configure the project automatically has looked at the wrong directory and
 will configure the wrong thing — that command is the repository saying which
-thing is the Worker. Prefer a terminal? The
+thing is the Worker. The repository the button makes is yours — updates reach
+it when you merge ours in and push, and the
 <a href="https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md">deploy page</a>
-is five commands from clone to a coordinator answering on a URL.</p>
+says how. Prefer a terminal? The same page is five commands from clone to a
+coordinator answering on a URL, with no copy to maintain.</p>
 <p>The dialog asks up front for the two values every coordinator needs — an
 admin token, and who may sign in. Without the first it comes up refusing every
 request, which is deliberate: a coordinator with no credential is remote
