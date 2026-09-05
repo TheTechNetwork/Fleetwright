@@ -24,6 +24,30 @@ function fixture(extra = {}) {
   return { cfg: /** @type {any} */ ({ stateDir, releaseChannel: '', ...extra }), stateDir };
 }
 
+test('an ordinary box is NOT pinned, so the picker appears', async () => {
+  // THE BUG EVERY BOX IN THE FLEET HAD, and the fixtures in this file are why
+  // it survived: they construct `{ releaseChannel: '' }` by hand, which is what
+  // an unset environment OUGHT to produce — and config.js was defaulting it to
+  // 'stable'. Every test here passed against a value production never had.
+  //
+  // The consequence on a phone: `pinnedByEnv` decides whether the environment
+  // is FORCING a channel by asking whether the value is a known channel, so a
+  // default of 'stable' pinned every box on earth. The picker never rendered,
+  // /channel refused every change, and both apps said "set on the box" about a
+  // setting nobody had set.
+  //
+  // So this test goes through loadConfig rather than around it.
+  const { loadConfig } = await import('../src/config.js');
+  const clean = loadConfig({});
+  assert.equal(pinnedByEnv(clean), false, 'an unset environment still pins the channel');
+  assert.equal(readChannel(clean), 'stable', 'unset should still MEAN stable');
+
+  // And a box whose operator did set it is still pinned, which is the whole
+  // point of the field.
+  assert.equal(pinnedByEnv(loadConfig({ AGENT_HUB_RELEASE_CHANNEL: 'rolling' })), true);
+  assert.equal(readChannel(loadConfig({ AGENT_HUB_RELEASE_CHANNEL: 'rolling' })), 'rolling');
+});
+
 test('a box nobody has asked is on stable', () => {
   const { cfg, stateDir } = fixture();
   try {

@@ -188,7 +188,20 @@ export function loadConfig(env = process.env) {
     // prerelease; `prerelease` takes both. Per host on purpose — the point of
     // marking a release is that it goes to the machines somebody chose to
     // expose, so a bad build is found before the whole fleet takes it.
-    releaseChannel: str('AGENT_HUB_RELEASE_CHANNEL', 'stable'),
+    // EMPTY, AND THAT IS LOAD-BEARING. It looks like a missing default and it
+    // is the opposite: src/core/channel.js reads this to answer "is the
+    // environment FORCING a channel", and it decides that by asking whether the
+    // value is one of the known channels.
+    //
+    // With `'stable'` here — which is what shipped — every box on earth was
+    // pinned. The picker never rendered on any host row, `/channel` refused
+    // every change, and both apps correctly showed "set on the box" about a
+    // setting nobody had set. The logic in channel.js was right; this line made
+    // it answer the wrong question.
+    //
+    // Unset means unset. channel.js owns what that falls back to, in one place,
+    // and it falls back to stable.
+    releaseChannel: str('AGENT_HUB_RELEASE_CHANNEL', ''),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
