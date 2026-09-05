@@ -5,7 +5,7 @@
   install/agent-fleet-coordinator.service — kept beside it deliberately, so a
   change to one is an obvious prompt to look at the other.
 
-  __USER__ / __DIR__ / __NODE__ are substituted by install.sh, exactly as in
+  __USER__ / __DIR__ / __NODE__ / __ENTRY__ are substituted by install.sh, as in
   the systemd unit.
 
   THE DIFFERENCE THAT MATTERS: launchd has no EnvironmentFile. systemd reads
@@ -27,7 +27,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__NODE__</string>
-    <string>__DIR__/bin/agent-fleet-coordinator</string>
+    <string>__ENTRY__</string>
   </array>
 
   <key>UserName</key>

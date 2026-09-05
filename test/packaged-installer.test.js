@@ -337,8 +337,11 @@ test('the entry points a unit names run under node, not just as scripts', async 
   const rel = unpackedRelease();
   if (!rel) return t.skip('the release could not be built here');
   try {
+    // The unit names __ENTRY__ now, which install.sh resolves to lib/<name>.mjs
+    // on a release and bin/<name> on a checkout — see the entry tests below.
+    // What matters here is unchanged: whatever it resolves to has to start.
     const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
-    assert.match(unit, /ExecStart=__NODE__ __DIR__\/bin\/agent-hub/, 'the unit no longer names bin/');
+    assert.match(unit, /ExecStart=__NODE__ __ENTRY__ serve/, 'the unit names no entry point');
 
     // The coordinator is deliberately NOT here: it moved to a Cloudflare
     // Worker, so a release ships none — and the installer must not write a unit
@@ -383,4 +386,57 @@ test('no unit is written for an entry point the payload does not have', () => {
   // And a checkout still gets one, because a box running its own coordinator is
   // a thing --from-source keeps possible on purpose.
   assert.equal(existsSync(new URL('../bin/agent-fleet-coordinator', import.meta.url).pathname), true);
+});
+
+test('a unit names the module, so a bad shim in a release cannot stop it', () => {
+  // THE SECOND HALF OF THE OUTAGE, and the half a new release could not fix.
+  //
+  // The shim is part of the PAYLOAD. v0.2.3 shipped a `#!/bin/sh` shim, the
+  // unit said `node __DIR__/bin/agent-hub`, and every packaged service died at
+  // startup. Correcting the shim on main does nothing for a release already on
+  // a box — it can only be superseded, which is the trap AGENT_FLEET_PAYLOAD
+  // was added to escape for the installer.
+  //
+  // Naming the module takes the shim out of systemd's path entirely, and the
+  // installer is the thing that writes units — so re-running the one-liner
+  // fixes a release ALREADY ON DISK.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.match(sh, /unit_entry\(\) \{/);
+  assert.match(sh, /if \[ -f "\$DIR\/lib\/\$1\.mjs" \]/, 'the entry is not derived from what the payload has');
+  assert.match(sh, /-e "s\|__ENTRY__\|\$\(unit_entry "\$1"\)\|g"/);
+
+  // No unit hardcodes bin/ any more — that is the substitution that could not
+  // tell a checkout from a release.
+  for (const f of ['agent-hub.service', 'agent-fleet-sidecar.service', 'agent-fleet-coordinator.service',
+                   'agent-hub.plist', 'agent-fleet-sidecar.plist', 'agent-fleet-coordinator.plist']) {
+    const unit = readFileSync(new URL(`../install/${f}`, import.meta.url), 'utf8');
+    const body = unit.replace(/^#.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '');
+    assert.doesNotMatch(body, /__DIR__\/bin\//, `${f} still names a bin/ path`);
+    assert.match(body, /__ENTRY__/, `${f} names no entry at all`);
+  }
+});
+
+test('the entry resolves to something node can run, in both shapes', () => {
+  // The rule as arithmetic, against both layouts. A checkout has bin/<name> and
+  // no lib/<name>.mjs; a release has both.
+  const work = mkdtempSync(path.join(tmpdir(), 'entry-'));
+  try {
+    const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+    const fn = sh.slice(sh.indexOf('unit_entry() {'), sh.indexOf('\n}\n', sh.indexOf('unit_entry() {')) + 3);
+
+    const ask = (/** @type {string} */ dir) =>
+      spawnSync('bash', ['-c', `DIR=${dir}\n${fn}\nunit_entry agent-hub`], { encoding: 'utf8' }).stdout.trim();
+
+    // A release: lib/ wins, which is what keeps a broken shim out of the way.
+    spawnSync('mkdir', ['-p', path.join(work, 'release', 'lib'), path.join(work, 'release', 'bin')]);
+    spawnSync('bash', ['-c', `touch ${work}/release/lib/agent-hub.mjs ${work}/release/bin/agent-hub`]);
+    assert.equal(ask(path.join(work, 'release')), path.join(work, 'release', 'lib', 'agent-hub.mjs'));
+
+    // A checkout: bin/, which is JavaScript there and always has been.
+    spawnSync('mkdir', ['-p', path.join(work, 'checkout', 'bin')]);
+    spawnSync('bash', ['-c', `touch ${work}/checkout/bin/agent-hub`]);
+    assert.equal(ask(path.join(work, 'checkout')), path.join(work, 'checkout', 'bin', 'agent-hub'));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 });
