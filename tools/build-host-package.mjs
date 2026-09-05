@@ -102,7 +102,28 @@ writeFileSync(
 // exists and nobody's muscle memory changes.
 for (const [entry, out] of ENTRIES) {
   const name = path.basename(entry);
-  const shim = `#!/bin/sh\n# Shipped by ${stageName}.\nexec node "$(dirname "$(readlink -f "$0")")/../${out}" "$@"\n`;
+  // JAVASCRIPT, NOT SH, AND THIS TOOK A HOST DOWN. This was `#!/bin/sh` with an
+  // `exec node …` inside, which works when something RUNS the file — and the
+  // systemd unit does not run it:
+  //
+  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //
+  // node strips the `#!` line, meets the `#` on line 2, and every packaged
+  // service died at startup with `SyntaxError: Invalid or unexpected token`, in
+  // a restart loop, on the first host ever converted.
+  //
+  // A checkout's bin/agent-hub is JS with a node shebang, so `node bin/x` and
+  // `./bin/x` both work there. The packaged shim was the only artifact where
+  // those two differed, and it is the one systemd invokes.
+  const shim =
+    `#!/usr/bin/env node\n` +
+    `// Shipped by ${stageName}.\n` +
+    `//\n` +
+    `// JS rather than sh because the systemd unit runs \`node <this file>\`, and\n` +
+    `// a shell script handed to node is a syntax error.\n` +
+    `import { fileURLToPath } from 'node:url';\n` +
+    `import path from 'node:path';\n` +
+    `await import(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '${out}'));\n`;
   const file = path.join(stage, 'bin', name);
   writeFileSync(file, shim);
   chmodSync(file, 0o755);

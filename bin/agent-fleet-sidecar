@@ -15,6 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { updateAvailable, updateStatus } from '../src/core/update.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
 import { checkRelease } from '../src/core/release-check.js';
+import { installedVersion } from '../src/core/release-apply.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
@@ -168,8 +169,22 @@ const sidecar = new Sidecar({
     // code without anything rebuilding, and what a person reading the app
     // wants is what is running, not what was compiled.
     version: () => {
-      const st = updateStatus(loadConfig());
-      return st.ok ? { head: st.head ?? null, branch: st.branch ?? null } : null;
+      const hub = loadConfig();
+      const st = updateStatus(hub);
+      if (st.ok) return { head: st.head ?? null, branch: st.branch ?? null };
+      // A PACKAGED BOX HAS A VERSION TOO, and it reported none. updateStatus
+      // answers `ok: false` for a release — correctly, there is no checkout to
+      // read — and this returned null, which the apps render as "version not
+      // reported" on a machine that knows exactly what it is running.
+      //
+      // The release version is the honest answer to the same question. `branch`
+      // stays null: a release is not on one, and inventing "release" there
+      // would be a word the app might one day try to use.
+      if (st.packaged) {
+        const v = installedVersion(hub.installDir);
+        return v === 'unknown' ? null : { head: v, branch: null };
+      }
+      return null;
     },
   });
 

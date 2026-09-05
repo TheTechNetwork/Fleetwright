@@ -103,12 +103,41 @@ jobs:
       # Unpacked and run, from a directory with no node_modules and no source
       # tree. This is the failure the resources.js change exists to prevent, and
       # asserting it here means it cannot come back quietly.
-      - name: Run the packaged bundle
+      # RUN THE WAY SYSTEMD RUNS IT, which is not how this used to check.
+      #
+      # It ran `node "$root/lib/agent-hub.mjs"` — the library, directly — and so
+      # never executed bin/agent-hub, which is the ONLY file the unit names:
+      #
+      #     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+      #
+      # The shim was `#!/bin/sh` with an `exec node …` inside. Fine when
+      # something runs the file; a syntax error when node is handed it. Every
+      # packaged service died in a restart loop on the first host ever
+      # converted, and this step was green for every release before it.
+      #
+      # Both forms, because they are two different questions: `node <shim>` is
+      # what systemd does, `./shim` is what a person does, and the shim only
+      # earned its name when it answered both.
+      - name: Run the packaged bundle the way the unit does
         run: |
           mkdir -p /tmp/verify && tar -xzf dist/*.tar.gz -C /tmp/verify
           root="$(find /tmp/verify -maxdepth 1 -mindepth 1 -type d)"
           test ! -d "$root/node_modules"
-          (cd / && node "$root/lib/agent-hub.mjs" --help | head -1)
+          # THAT IT STARTS, not that it succeeds. Exit codes belong to each
+          # tool — agent-fleet-mcp refuses without a coordinator URL and is
+          # right to. A shim node cannot parse dies before any of that.
+          for entry in agent-hub agent-fleet-sidecar agent-fleet-mcp; do
+            [ -f "$root/bin/$entry" ] || { echo "::error::no bin/$entry in the release"; exit 1; }
+            for how in "node $root/bin/$entry" "$root/bin/$entry"; do
+              out="$(cd / && $how --help 2>&1 || true)"
+              case "$out" in
+                *SyntaxError*|*"Invalid or unexpected token"*|*"Cannot find module"*)
+                  echo "::error::$how did not start:"; printf '%s\n' "$out" | head -5; exit 1 ;;
+              esac
+              [ -n "$out" ] || { echo "::error::$how produced nothing"; exit 1; }
+            done
+          done
+          echo "--- every entry point runs, both ways ---"
 
       - uses: actions/upload-artifact@v7.0.1
         with:

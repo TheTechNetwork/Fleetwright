@@ -1139,6 +1139,17 @@ private struct SettingsView: View {
                             // that names is not the line that caused it.
                             healthLines(for: host)
                             maintenanceRow(for: host)
+                            // AND THE CHANNEL PICKER, which this row lost when
+                            // the result box took its place. It was still
+                            // DEFINED — channelControl(for:) sat there,
+                            // correct and unreachable — so nothing failed to
+                            // compile and no test noticed: the parity suite
+                            // reads the file for the function and the strings,
+                            // and both were present.
+                            //
+                            // A view that is written and never called renders
+                            // exactly like one that was never written.
+                            channelControl(for: host)
                             // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used
                             // to be a single string rendered in the enrolment
                             // section above the "Fleet" header — so "The box is

@@ -318,3 +318,69 @@ test('a fallback to the release installer says which of three reasons it was', (
   assert.match(mig, /is not executable, so it cannot be used/);
   assert.match(mig, /predates the payload option — re-run the one-liner to update it/);
 });
+
+test('the entry points a unit names run under node, not just as scripts', async (t) => {
+  // THIS TOOK A HOST DOWN. The shims were `#!/bin/sh` with `exec node …`
+  // inside, which works when something RUNS the file — and the systemd unit
+  // does not run it:
+  //
+  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //
+  // node strips the `#!` line, meets the `#` on line 2, and every packaged
+  // service died at startup in a restart loop:
+  //
+  //     SyntaxError: Invalid or unexpected token
+  //
+  // A checkout's bin/agent-hub is JavaScript with a node shebang, so both forms
+  // work there. The packaged shim was the only artifact where they differed,
+  // and it is the one systemd invokes.
+  const rel = unpackedRelease();
+  if (!rel) return t.skip('the release could not be built here');
+  try {
+    const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
+    assert.match(unit, /ExecStart=__NODE__ __DIR__\/bin\/agent-hub/, 'the unit no longer names bin/');
+
+    // The coordinator is deliberately NOT here: it moved to a Cloudflare
+    // Worker, so a release ships none — and the installer must not write a unit
+    // for it either, which the next test asserts.
+    for (const entry of ['agent-hub', 'agent-fleet-sidecar', 'agent-fleet-mcp']) {
+      const file = path.join(rel.root, 'bin', entry);
+      assert.equal(existsSync(file), true, `no bin/${entry} in the release`);
+
+      // WHAT IS ASSERTED IS THAT IT STARTS, not that it succeeds. Exit codes
+      // belong to each tool: agent-fleet-mcp refuses without a coordinator URL
+      // and a credential, and is right to. A shim that node cannot parse dies
+      // before any of that, which is the failure this test is for.
+      for (const [how, r] of [
+        // The way systemd does it. This is the assertion that was missing.
+        ['node', spawnSync(process.execPath, [file, '--help'], { encoding: 'utf8' })],
+        // And the way a person does it, because the shim exists for that too.
+        ['direct', spawnSync(file, ['--help'], { encoding: 'utf8' })],
+      ]) {
+        const out = `${r.stdout}${r.stderr}`;
+        assert.doesNotMatch(out, /SyntaxError|Invalid or unexpected token/, `${how} bin/${entry}: ${out.slice(0, 200)}`);
+        assert.doesNotMatch(out, /Cannot find module|ERR_MODULE_NOT_FOUND/, `${how} bin/${entry}: ${out.slice(0, 200)}`);
+        assert.ok(out.trim().length > 0, `${how} bin/${entry} produced nothing at all`);
+      }
+    }
+  } finally {
+    rmSync(rel.dir, { recursive: true, force: true });
+  }
+});
+
+
+test('no unit is written for an entry point the payload does not have', () => {
+  // The coordinator moved to a Cloudflare Worker, so a release ships no
+  // bin/agent-fleet-coordinator — deliberately. install.sh wrote the unit
+  // anyway, so converting a box that ran its own coordinator produced a service
+  // pointing at a file that was never in the tarball. It fails at every start,
+  // and reads as a broken box rather than as a component that is not supposed
+  // to be there.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.match(sh, /if \[ -f "\$DIR\/bin\/agent-fleet-coordinator" \]; then\n\s+install_unit agent-fleet-coordinator/);
+  assert.match(sh, /it runs as a Worker, so no unit is written/);
+
+  // And a checkout still gets one, because a box running its own coordinator is
+  // a thing --from-source keeps possible on purpose.
+  assert.equal(existsSync(new URL('../bin/agent-fleet-coordinator', import.meta.url).pathname), true);
+});
