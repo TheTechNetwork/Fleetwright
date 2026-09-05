@@ -29,7 +29,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
-import { decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
+import { RELEASES_DIR, decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
 
 /**
  * Is this install laid out so a release can be swapped in?
@@ -42,7 +42,44 @@ import { decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload }
  * @returns {{ ok: true, base: string } | { ok: false, message: string }}
  */
 export function releaseLayout(installDir) {
-  if (path.basename(installDir) !== 'current') {
+  // TWO NAMES FOR THE SAME DIRECTORY, and only one of them was accepted.
+  //
+  // This required basename === 'current', which a RUNNING box can never
+  // satisfy. INSTALL_ROOT is derived from import.meta.url, and node resolves
+  // symlinks — so a service started as `<base>/current/lib/agent-hub.mjs`
+  // reports its root as `<base>/releases/<version>`. The check was written
+  // about the path the units name; the code reads the path node resolved.
+  //
+  // The first host ever to run a release asked /update and was told
+  //
+  //     /opt/fleetwright/releases/main-55 is not a release layout
+  //
+  // about a box laid out exactly as intended. Which means updating by manifest
+  // — the entire point of packaging — could never have worked on any box.
+  //
+  // Both shapes are the same layout seen from two places, so both are read:
+  //
+  //     <base>/current              the symlink, what the units name
+  //     <base>/releases/<version>   where it resolves to
+  const base = path.basename(installDir) === 'current'
+    ? path.dirname(installDir)
+    : path.basename(path.dirname(installDir)) === RELEASES_DIR
+      ? path.dirname(path.dirname(installDir))
+      : null;
+
+  // AND THE ROOT IS NOT A BASE. `/current` and `/releases/v1` satisfy the shapes
+  // above and give a base of `/`, which would unpack the next release into the
+  // filesystem root. No box is laid out there, so the only way to arrive at it
+  // is a mistake — and this function's answer decides where files get written.
+  // Same reasoning as decideRelease refusing a version that is a path.
+  if (base === '/' || base === '' || base === '.') {
+    return {
+      ok: false,
+      message: `${installDir} would put releases at the filesystem root, which is not a layout.`,
+    };
+  }
+
+  if (base === null) {
     return {
       ok: false,
       message:
@@ -50,7 +87,7 @@ export function releaseLayout(installDir) {
         'Re-run install.sh from a release and it will lay this box out as <base>/current -> releases/<version>.',
     };
   }
-  return { ok: true, base: path.dirname(installDir) };
+  return { ok: true, base };
 }
 
 /**

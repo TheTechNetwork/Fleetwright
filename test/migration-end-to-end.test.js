@@ -241,3 +241,32 @@ test('a half-finished migration resumes instead of reporting success', (t) => {
     rmSync(f.work, { recursive: true, force: true });
   }
 });
+
+
+test('a converted box can take the NEXT update, which is the point of converting', (t) => {
+  // The first host to run a release asked for an update and was told its own
+  // layout was not one. Converting a box buys nothing if the box cannot then
+  // update — so this asserts the thing conversion is FOR, from the path a
+  // running service actually reports.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    assert.equal(migrate(f).status, 0);
+
+    // What a running process sees: node resolves the symlink, so this is the
+    // release directory and not `current`.
+    const resolved = path.join(f.base, 'releases', 'v9.9.9');
+    assert.equal(existsSync(resolved), true);
+
+    // The update path has to accept it and agree on where the next release goes.
+    return import('../src/core/release-apply.js').then(({ releaseLayout }) => {
+      const viaReal = releaseLayout(resolved);
+      const viaLink = releaseLayout(path.join(f.base, 'current'));
+      assert.equal(viaReal.ok, true, viaReal.ok ? '' : viaReal.message);
+      assert.deepEqual(viaReal.base, viaLink.base);
+      assert.equal(viaReal.base, f.base);
+    });
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
