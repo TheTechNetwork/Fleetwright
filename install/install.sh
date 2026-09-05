@@ -2155,6 +2155,18 @@ if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     ok "no earlier install to clean up"
   elif [ ! -d "$OLD_DIR" ]; then
     ok "the earlier install at $OLD_DIR is already gone"
+  elif [ "$UPGRADE" = 1 ] && [ -d "$OLD_DIR/.git" ]; then
+    # A MIGRATION KEEPS THE CHECKOUT, DELIBERATELY, and this used to be
+    # reported as a failure: SERVICES_STARTED is only set inside the wizard's
+    # start block, which --upgrade skips — so this warned that "the new services
+    # did not start" immediately before the upgrade section restarted them and
+    # said so. Two true-looking lines contradicting each other, in the log
+    # somebody reads to find out whether a conversion worked.
+    #
+    # And keeping it is right on its own terms. That tree holds the installer a
+    # future migration runs (AGENT_FLEET_PAYLOAD), and it is the way back: one
+    # `ln -sfn` re-points `current` at it if a release turns out not to start.
+    ok "$OLD_DIR kept — it is the installer future updates use, and the way back"
   elif [ "$SERVICES_STARTED" != 1 ]; then
     # THE ORDER IS THE SAFETY. Removing the old tree before the new one has
     # been seen to start would leave a box with neither.
@@ -2289,7 +2301,13 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   # An upgrade is exactly when that gap opens, so this is where it gets said.
   say "Checking the protocol"
   UPGRADE_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
+  # BOTH SHAPES. A checkout has src/; a RELEASE has only bundled lib/, so this
+  # read nothing on a packaged box and skipped the one check that catches the
+  # failure described above — silently, on exactly the boxes an upgrade puts
+  # most at risk. The release states the protocol it speaks in its package.json,
+  # which is the same number the manifest carries.
   UPGRADE_MINE="$("$NODE_BIN" -e "import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))" 2>/dev/null || true)"
+  [ -n "$UPGRADE_MINE" ] || UPGRADE_MINE="$(sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$DIR/package.json" 2>/dev/null | head -1)"
   if [ -z "$UPGRADE_MINE" ]; then
     warn "could not read this box's protocol version from $DIR — skipping the check"
   elif [ -z "$UPGRADE_URL" ]; then

@@ -41,7 +41,11 @@ test('it refuses a box that is not already in a fleet, and names what is missing
   // refuses rather than half-installing. That refusal is the boundary between
   // "unattended upgrade", which is this, and "unattended first enrolment",
   // which is a credential design decision and is not built.
-  const block = /if \[ "\$UPGRADE" = 1 \][\s\S]*?\n  fi\n/.exec(SH);
+  // ANCHORED TO A LINE START, because `elif [ "$UPGRADE" = 1 ]` contains
+  // `if [ "$UPGRADE" = 1 ]` — and section 8 grew one of those, earlier in the
+  // file, so an unanchored match found a block with none of this in it and the
+  // failure read as "the upgrade section is gone".
+  const block = /^if \[ "\$UPGRADE" = 1 \][\s\S]*?\n  fi\n/m.exec(SH);
   assert.ok(block, 'the upgrade section is gone');
   assert.match(block[0], /host-key\.json/, 'it does not check that the box is enrolled');
   assert.match(block[0], /\$SIDECAR_ENV/);

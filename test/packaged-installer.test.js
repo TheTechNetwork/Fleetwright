@@ -21,7 +21,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -39,18 +39,22 @@ function unpackedRelease() {
   const built = spawnSync(process.execPath, ['tools/build-host-package.mjs'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, RELEASE_VERSION: 'v-test' },
+    // Its own output directory — see the note in migration-end-to-end.test.js.
+    env: { ...process.env, RELEASE_VERSION: 'v-test', RELEASE_OUT_DIR: path.join(work, 'dist') },
   });
   if (built.status !== 0) {
     rmSync(work, { recursive: true, force: true });
     return null;
   }
-  const dist = path.join(ROOT, 'dist');
+  // Built into this test's own directory, so two test files building at once
+  // cannot overwrite each other's tarball mid-read.
+  const dist = path.join(work, 'dist');
   const tarball = readdirSync(dist).find((f) => f.endsWith('.tar.gz'));
-  spawnSync('tar', ['-xzf', path.join(dist, tarball ?? ''), '-C', work], { encoding: 'utf8' });
-  rmSync(dist, { recursive: true, force: true });
-  const [name] = readdirSync(work);
-  return { dir: work, root: path.join(work, name) };
+  const out = path.join(work, 'unpacked');
+  mkdirSync(out, { recursive: true });
+  spawnSync('tar', ['-xzf', path.join(dist, tarball ?? ''), '-C', out], { encoding: 'utf8' });
+  const [name] = readdirSync(out);
+  return { dir: work, root: path.join(out, name) };
 }
 
 test('the installer in a release starts at all', (t) => {
@@ -439,4 +443,62 @@ test('the entry resolves to something node can run, in both shapes', () => {
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
+});
+
+test('a release states the protocol it speaks, so the upgrade check is not skipped', async (t) => {
+  // FROM A REAL MIGRATION, at the very end:
+  //
+  //   Checking the protocol
+  //   warn could not read this box's protocol version from /opt/fleetwright/current
+  //        — skipping the check
+  //
+  // install.sh reads PROTOCOL_VERSION out of src/fleet/protocol/intents.js. A
+  // release has no src/ — only bundled lib/ — so the check skipped silently on
+  // every packaged box.
+  //
+  // That check is not decoration. The coordinator matches versions EXACTLY and
+  // does not check on connect or on health, so a host one version behind stays
+  // connected and green while every command against it fails. An upgrade is
+  // when that gap opens, and this skipped precisely there.
+  const rel = unpackedRelease();
+  if (!rel) return t.skip('the release could not be built here');
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(rel.root, 'package.json'), 'utf8'));
+    assert.equal(typeof pkg.protocol, 'number', 'a release does not say which protocol it speaks');
+
+    // The same number the manifest carries, from the same source — two readers,
+    // one fact, and no way for them to disagree.
+    const { PROTOCOL_VERSION } = await import('../src/fleet/protocol/intents.js');
+    assert.equal(pkg.protocol, PROTOCOL_VERSION);
+
+    // And the installer's fallback is the one that reads it.
+    const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+    assert.match(sh, /\[ -n "\$UPGRADE_MINE" \] \|\| UPGRADE_MINE=/, 'the protocol read has no fallback');
+    assert.match(sh, /"\$DIR\/package\.json"/);
+  } finally {
+    rmSync(rel.dir, { recursive: true, force: true });
+  }
+});
+
+test('a migration keeps the checkout, and does not call that a failure', () => {
+  // The same log said, in order:
+  //
+  //   warn the new services did not start, so /opt/agent-fleet was left alone.
+  //   ok   agent-hub restarted, on the new code
+  //
+  // SERVICES_STARTED is only set inside the wizard's start block, which
+  // --upgrade skips — so this warned that the services had failed immediately
+  // before the upgrade section started them successfully. Two true-looking
+  // lines contradicting each other, in the log somebody reads to find out
+  // whether a conversion worked.
+  //
+  // Keeping the checkout is also right on its own terms: it holds the installer
+  // a future migration runs, and it is the way back.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.match(sh, /elif \[ "\$UPGRADE" = 1 \] && \[ -d "\$OLD_DIR\/\.git" \]; then/);
+  assert.match(sh, /it is the installer future updates use, and the way back/);
+
+  // The old warning still exists for the case it was written for: a fresh
+  // install whose services genuinely did not come up.
+  assert.match(sh, /the new services did not start/);
 });

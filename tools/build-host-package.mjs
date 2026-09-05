@@ -40,7 +40,12 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { rolloutFraction } from './rollout.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'dist');
+// WHERE THE ARTIFACTS LAND. `dist/` unless told otherwise, and the override is
+// not a convenience: two tests that both build a release write the same two
+// filenames, and node's test runner runs files in PARALLEL. They passed
+// separately and failed together, which is the least useful way for a test to
+// be wrong.
+const OUT = process.env.RELEASE_OUT_DIR || path.join(ROOT, 'dist');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 /** Passed in by CI, so a release is named after the run that produced it. */
@@ -95,7 +100,12 @@ for (const rel of VERBATIM) {
 // is a load-bearing statement, and it is also how resources.js finds the root.
 writeFileSync(
   path.join(stage, 'package.json'),
-  `${JSON.stringify({ name: pkg.name, version, type: 'module', bin: pkg.bin, private: true }, null, 2)}\n`,
+  // `protocol` is here as well as in the manifest, and for a different reader:
+  // install.sh checks whether a box still speaks the coordinator's version
+  // during an upgrade, and it read that out of src/fleet/protocol/intents.js —
+  // which a release does not contain. So the check skipped silently on exactly
+  // the boxes an upgrade puts most at risk.
+  `${JSON.stringify({ name: pkg.name, version, protocol: PROTOCOL_VERSION, type: 'module', bin: pkg.bin, private: true }, null, 2)}\n`,
 );
 
 // Thin shims, so `/usr/local/bin/agent-hub` keeps pointing at a path that
