@@ -49,6 +49,29 @@ these files.
 Neither of them admits a machine to a fleet. That is GitHub's own job token,
 which cannot be stored and cannot leave the job that asked for it.
 
+## What a runner can reach, which is less than you expect
+
+**Public code, and nothing else.** A runner's credential store is a fresh empty
+directory — connections are per person and live on the box they were made on —
+so a machine ninety seconds old has none. It gets `ANTHROPIC_API_KEY` and that
+is the list. The job's own `GITHUB_TOKEN` is scoped to *this* repository and
+read-only, which is right for checking out four workflow files and useless for
+anything else.
+
+So a session here can clone a public repository and cannot clone yours if yours
+is private. Worth knowing before you dispatch a Mac to build something it cannot
+check out.
+
+The proper fix is git auth scoped to the repository a session asked for, lasting
+about an hour, and it is not built —
+[`docs/runner-central.md`](../../docs/runner-central.md#what-this-does-not-solve)
+has the shape and what is missing. What you can do meanwhile, if you accept that
+it is bounded by you rather than by the request: add a fine-grained PAT here with
+read (or write) on the repositories you are willing to have built on a runner,
+and have the workflow export it. Every runner then gets the same reach, chosen
+once, whoever asked — which is the honest description of that trade rather than
+a reason not to make it.
+
 ## 3. Three settings on the coordinator
 
 ```
