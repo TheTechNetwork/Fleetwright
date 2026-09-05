@@ -55,25 +55,17 @@ if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
 # running in place, because a checkout is a thing somebody edits and moving it
 # under them would be its own kind of rude.
 FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
-if [ "$PACKAGED" = 1 ]; then
-  RELEASE_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/package.json" | head -1)"
-  [ -n "$RELEASE_VERSION" ] || RELEASE_VERSION="unversioned"
-  RELEASE_DIR="$FLEET_BASE/releases/$RELEASE_VERSION"
-  if [ "$DIR" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
-    mkdir -p "$FLEET_BASE/releases"
-    rm -rf "$RELEASE_DIR"
-    cp -a "$DIR/." "$RELEASE_DIR"
-    # Replaced atomically. `ln -sfn` on an existing symlink is not atomic on
-    # every filesystem, and a symlink that briefly does not exist is a service
-    # that briefly cannot start.
-    ln -sfn "$RELEASE_DIR" "$FLEET_BASE/.current.new"
-    mv -Tf "$FLEET_BASE/.current.new" "$FLEET_BASE/current"
-  fi
-  # Everything below templates units and runs binaries from here, so it is the
-  # symlink and not the versioned directory: that is what makes the next
-  # release a symlink swap instead of an installer run.
-  [ -L "$FLEET_BASE/current" ] && DIR="$FLEET_BASE/current"
-fi
+# THE LAY-OUT ITSELF HAPPENS AFTER THE ARGUMENTS ARE READ, further down. It
+# used to be right here, and this file has learned that lesson once already:
+# "Ordering is the entire fix. Anything that can refuse this install has to
+# refuse it before anything is destroyed."
+#
+# Two things were wrong with it here. It read $CHECK_ONLY twenty lines before
+# anything set it, which under `set -u` is a FATAL ERROR — and only ever
+# evaluated on a packaged box, so it could not fire until the first machine
+# converted itself. It fired on the first one. And even with the variable
+# defaulted, `--check` would have copied a release into place before reaching
+# the argument that promises to change nothing.
 
 # Set only when the new agent-hub has been SEEN to start. Section 8 will not
 # remove the install it replaced without it.
@@ -241,6 +233,26 @@ if [ "$WIZARD" = auto ]; then
   if [ -n "$ASK_IN" ] && [ -t 1 ]; then WIZARD=yes; else WIZARD=no; fi
 fi
 [ "$CHECK_ONLY" = 1 ] && WIZARD=no
+
+if [ "$PACKAGED" = 1 ]; then
+  RELEASE_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/package.json" | head -1)"
+  [ -n "$RELEASE_VERSION" ] || RELEASE_VERSION="unversioned"
+  RELEASE_DIR="$FLEET_BASE/releases/$RELEASE_VERSION"
+  if [ "$DIR" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
+    mkdir -p "$FLEET_BASE/releases"
+    rm -rf "$RELEASE_DIR"
+    cp -a "$DIR/." "$RELEASE_DIR"
+    # Replaced atomically. `ln -sfn` on an existing symlink is not atomic on
+    # every filesystem, and a symlink that briefly does not exist is a service
+    # that briefly cannot start.
+    ln -sfn "$RELEASE_DIR" "$FLEET_BASE/.current.new"
+    mv -Tf "$FLEET_BASE/.current.new" "$FLEET_BASE/current"
+  fi
+  # Everything below templates units and runs binaries from here, so it is the
+  # symlink and not the versioned directory: that is what makes the next
+  # release a symlink swap instead of an installer run.
+  [ -L "$FLEET_BASE/current" ] && DIR="$FLEET_BASE/current"
+fi
 
 # Installing missing OS packages rather than printing a command for someone to
 # copy is the difference between "one installer" and "an installer plus a
