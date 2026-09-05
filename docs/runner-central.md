@@ -176,6 +176,42 @@ is not a fleet host at all.
 
 ## What this does not solve
 
+**A runner has no git credential, so it can only reach public code.** This is
+the largest of these and it was missing from this document, which is worse than
+the gap itself: everything above describes getting a machine and nothing said
+what that machine can actually check out.
+
+A runner's `AGENT_HUB_STATE_DIR` is a fresh directory under `runner.temp`, so
+its credential store is empty — connections are per person and live on the box
+they were made on, and a machine that has existed for ninety seconds has none.
+It gets `ANTHROPIC_API_KEY` and that is the whole list. The job's own
+`GITHUB_TOKEN` is scoped to the runner repository and read-only, which is right
+for checking out four workflow files and useless for anything else.
+
+So "test a macOS app build" works if the app is public and does not if it is
+private, which is the wrong way round for most of the reason somebody wants a
+Mac. Saying it here rather than letting it be discovered on a machine being paid
+for by the minute.
+
+**The fix is not a bigger credential, it is a narrower one.** The obvious
+answers are all worse than the problem:
+
+| | why not |
+|---|---|
+| push the person's user token to the runner with `link` | it is their whole installation for eight hours, on a machine they do not own, inside a job in a public repository. That is somebody's account travelling to a machine, which is the line [ephemeral-hosts.md](./ephemeral-hosts.md) is careful to say the API key does *not* cross |
+| a fine-grained PAT in the runner repository's secrets | bounded by an operator rather than by a request: every runner gets the same reach, chosen once, whoever asked. Honest and available today, and not what a session needs |
+| the fleet's own Actions token | answers who dispatches. It cannot clone anything |
+
+What a session needs is git auth **scoped to the repository that session asked
+for**, lasting about an hour. GitHub has exactly that primitive — an
+installation token minted with `repositories` and a `permissions` subset — and
+the delivery half is already built: [`credential-broker.js`](../src/core/credential-broker.js)
+is one socket per session, and *which socket a request arrives on is what
+identifies the session*. What is missing is the minter, which is the private
+key's custody question in [github-app.md](./github-app.md), and one seam: that
+socket is served only for sandboxed sessions (`cfg.sandbox && cfg.sandboxHookSocket`),
+and a runner deliberately runs unsandboxed.
+
 **Nothing reports completion.** A runner session that has finished looks exactly
 like an idle one — the ambiguity the watcher already cannot resolve on a
 permanent host, and it matters more here because the machine is being paid for
