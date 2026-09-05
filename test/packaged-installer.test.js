@@ -21,7 +21,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -103,4 +103,45 @@ test('--check from a release changes nothing, including the release layout', (t)
   } finally {
     rmSync(rel.dir, { recursive: true, force: true });
   }
+});
+
+// --- the migration helper's idea of "already done" ---------------------------
+
+test('a half-finished migration is resumed, not declared complete', () => {
+  // REPORTED FROM A BOX, on the second attempt after the first one crashed:
+  //
+  //   This box is already running. Convert it now? [y/N] [no]: y
+  //   already on the packaged layout — nothing to do
+  //
+  // It was not on the packaged layout. The first attempt had laid the release
+  // out and then died, so `$BASE/current` existed while the systemd units still
+  // pointed at the checkout — and the guard tested for the symlink.
+  //
+  // Answering "nothing to do" to somebody who just said yes is the worst
+  // available reply: it is indistinguishable from success and leaves the box
+  // exactly as it was.
+  const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
+
+  // THE UNIT IS THE ANSWER. What a box runs is what systemd starts.
+  assert.match(mig, /UNIT=\/etc\/systemd\/system\/agent-hub\.service/);
+  assert.match(mig, /grep -q "\$BASE\/current" "\$UNIT"/);
+
+  // And neither of the two wrong questions decides it any more. The symlink is
+  // now a reason to CONTINUE; the env-file install dir is gone from the test
+  // entirely, because nothing ever writes AGENT_HUB_INSTALL_DIR.
+  const guard = mig.slice(mig.indexOf('ALREADY DONE IS NOT A FAILURE'), mig.indexOf('CHANNEL='));
+  assert.doesNotMatch(guard, /\|\| \[ -L "\$BASE\/current" \]/, 'a leftover symlink still means "done"');
+  assert.match(guard, /continuing from there/);
+});
+
+test('nothing writes the variable the helper used to trust', () => {
+  // The quieter half of the same bug, and the reason the symlink was reached
+  // for at all: `env_get AGENT_HUB_INSTALL_DIR` always returns empty, so the
+  // check it fed was a hardcoded path wearing a variable's clothes — false even
+  // after a migration that worked.
+  //
+  // If somebody teaches the installer to record it, this test fails and the
+  // guard above can be reconsidered on purpose rather than by accident.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.doesNotMatch(sh, /set_env[^\n]*AGENT_HUB_INSTALL_DIR/);
 });
