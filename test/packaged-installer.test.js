@@ -287,3 +287,34 @@ test('a release whose own installer is broken can still be migrated to', () => {
     rmSync(rel.dir, { recursive: true, force: true });
   }
 });
+
+test('the installer runs the helper from its own tree, not the installed copy', () => {
+  // A STALENESS CLASS, and it cost a real migration. /usr/local/sbin/fleetwright-migrate
+  // is a snapshot taken by whichever install ran last. install.sh runs as root
+  // out of a checkout it has just updated — so running the snapshot means a fix
+  // to the helper takes effect on the run AFTER the one that installed it.
+  //
+  // That is exactly what happened: a box re-ran the one-liner with the fix in
+  // its tree and migrated using the previous helper, printing the fallback
+  // message the fix exists to avoid.
+  //
+  // /usr/local/sbin remains the APP's path, where there is no checkout and the
+  // narrow sudoers rule is the whole point.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const block = sh.slice(sh.indexOf('# --- 9. and then it stops being a checkout'));
+  assert.match(block, /HELPER="\$DIR\/install\/fleetwright-migrate"/, 'the installer still runs the installed snapshot');
+  assert.match(block, /\[ -x "\$DIR\/install\/fleetwright-migrate" \]/);
+  // The snapshot stays as the fallback, for a tree that somehow has no helper.
+  assert.match(block, /HELPER=\/usr\/local\/sbin\/fleetwright-migrate/);
+});
+
+test('a fallback to the release installer says which of three reasons it was', () => {
+  // Falling back silently is how somebody reads "running the installer from the
+  // release", knows a fix landed that should have prevented it, and cannot tell
+  // which of three things went wrong. Each has a different answer and only one
+  // of them is "wait for a release".
+  const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
+  assert.match(mig, /this box has no checkout to use/);
+  assert.match(mig, /is not executable, so it cannot be used/);
+  assert.match(mig, /predates the payload option — re-run the one-liner to update it/);
+});
