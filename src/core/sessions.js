@@ -24,6 +24,7 @@ import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { Profiles } from './profiles.js';
+import { readSessionLogs } from './logs.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -33,6 +34,10 @@ import { log } from '../log.js';
  * @property {boolean} ok
  * @property {string} message
  * @property {import('./registry.js').SessionRecord} [session]
+ * @property {Array<{ label: string, command: string }>} [buttons] what to offer
+ *   next, when the answer alone is not one somebody can act on. The command
+ *   layer already carries these to both phones and to Telegram; a message that
+ *   names a remedy the reader cannot reach is the failure this field removes.
  */
 
 export class SessionManager {
@@ -508,6 +513,19 @@ export class SessionManager {
       if (rc.killed) {
         return { ok: false, message: `Started "${name}" but ${rc.detail}. Killed it — try again.` };
       }
+      // WHAT IT PRINTED, not where to go and read it.
+      //
+      // This ended with "Reach it on the box with: tmux attach -t <name>" — a
+      // remedy only a shell can apply, on a product whose premise is that a
+      // machine can be run without one. It is the same shape as an update that
+      // says "set this variable" and a channel that lives in a root-owned file:
+      // the answer is named and the reader cannot reach it.
+      //
+      // The output is the thing somebody actually wants, and the host is
+      // holding it — `session exited during startup` is a symptom, and the
+      // container printed the cause on its way out. So it is quoted here,
+      // short, and the FULL answer is a button rather than a command to copy.
+      const tail = this.#startupOutput(name);
       return {
         ok: true,
         message:
@@ -518,11 +536,44 @@ export class SessionManager {
           // reason is the only thing distinguishing "this session" from
           // "every session".
           (rc.detail ? `\n${rc.detail}` : '') +
-          `\nReach it on the box with: tmux attach -t ${name}`,
+          (tail ? `\n\n${tail}` : ''),
+        // A BUTTON RATHER THAN A COMMAND TO COPY. Every other dead end in this
+        // codebase that names a remedy names one the reader can act on from
+        // where they are standing; this one printed a tmux invocation at
+        // somebody holding a phone.
+        buttons: [
+          { label: 'Show its output', command: `/logs ${name}` },
+          { label: 'Look at the pane', command: `/peek ${name}` },
+        ],
         session: this.registry.get(name) ?? rec,
       };
     } finally {
       this.inFlight.delete(name);
+    }
+  }
+
+  /**
+   * The last few lines a session printed, for a start that did not come up.
+   *
+   * SHORT ON PURPOSE — six lines, not sixty. This goes into a message somebody
+   * reads on a phone, beside two buttons that fetch the rest; quoting a whole
+   * container log there would bury the sentence above it.
+   *
+   * Never throws and never blocks the reply. A start that half-worked is
+   * already bad news, and failing to decorate it would turn that into no answer
+   * at all.
+   *
+   * @param {string} name
+   * @returns {string}
+   */
+  #startupOutput(name) {
+    try {
+      const r = readSessionLogs(this.cfg, name, 6);
+      if (!r.ok) return '';
+      const text = r.text.split('\n').slice(-6).join('\n').trim();
+      return text ? `Last output:\n${text}` : '';
+    } catch {
+      return '';
     }
   }
 
