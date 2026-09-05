@@ -270,6 +270,22 @@ digest, refreshed by `/update` and by a session start, and `minSandboxImage`
 is how a host release says which one it needs. Merging them would mean
 shipping a container layer to update a JavaScript file.
 
+**A release does not have to carry a working installer.** It did, and that was
+the worst property this pipeline had: a migration ran the installer *inside* the
+release, so a broken one could not be migrated to and could only be
+**superseded**. One afternoon produced three releases that way, each fixing a
+bug the previous one had hidden, in code that had never executed.
+
+`AGENT_FLEET_PAYLOAD` breaks it. `fleetwright-migrate` runs the installer **the
+box already has** — refreshed by `curl … | sudo sh`, which costs nothing and
+needs no release — and points it at the release as payload. An installer fix
+now reaches a machine as soon as somebody re-runs the one-liner, and a release
+only has to be a correct *payload*.
+
+The release still ships `install/`, and that is still what somebody unpacking a
+tarball by hand runs. It is also the fallback for a box whose own installer
+predates the option. What changed is which installer a **migration** uses.
+
 **An install ends up packaged now, and that was the missing half.** `bootstrap.sh`
 clones the repository — it has to, because `install.sh` lives in it — so the
 installer always ran from a checkout, `PACKAGED` was always 0, and *every*

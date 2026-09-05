@@ -28,7 +28,26 @@ fi
 # tokens and allowlist survive every upgrade.
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# WHERE THE PAYLOAD IS — beside this script, unless told otherwise.
+#
+# AGENT_FLEET_PAYLOAD EXISTS TO BREAK ONE DEPENDENCY, and it is the reason this
+# project stopped needing a release to fix its own installer.
+#
+# A migration lays a release out and then has to re-point the systemd units at
+# it. It did that by running the installer INSIDE the release — so a release
+# carrying a broken installer could not be migrated to, and the only way to fix
+# an installer bug was to supersede it. Three releases in one day went that way,
+# each fixing a bug the previous one revealed, on code that had never run.
+#
+# With this, the migration runs the installer THE BOX ALREADY HAS — updated by
+# `curl … | sudo sh`, which is free — and points it at the release as payload.
+# An installer fix now reaches a machine the moment somebody re-runs the
+# one-liner, and a release only has to be a correct PAYLOAD rather than a
+# correct installer.
+#
+# The release still carries install/ and it is still what a person unpacking a
+# tarball by hand runs. This changes which one a MIGRATION uses.
+DIR="${AGENT_FLEET_PAYLOAD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # A RELEASE, OR A CHECKOUT. The two differ in exactly one way that matters here:
 # a release carries its dependencies already bundled into lib/, so there is no

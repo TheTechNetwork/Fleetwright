@@ -168,6 +168,26 @@ say "laid out $BASE/releases/$VERSION"
 # --upgrade is exactly "an already-configured box, brought onto new code, with
 # no questions". Reimplementing any of that here would be a second installer
 # that is subtly different on the day it matters.
+# THE INSTALLER THIS BOX ALREADY HAS, pointed at the release as payload.
+#
+# This used to run the installer out of the release, and that made a release's
+# installer load-bearing for its own adoption: a broken one could not be
+# migrated to, and could only be superseded by another release. That is how one
+# afternoon produced three of them, each fixing a bug the last had hidden.
+#
+# The box's own installer is updated by `curl … | sudo sh`, which costs nothing
+# and needs no release. So an installer fix now reaches a machine as soon as
+# somebody re-runs the one-liner, and a release only has to be a correct
+# PAYLOAD rather than a correct installer.
+LOCAL_INSTALLER="$INSTALL_DIR/install/install.sh"
+if [ -x "$LOCAL_INSTALLER" ] && grep -q 'AGENT_FLEET_PAYLOAD' "$LOCAL_INSTALLER"; then
+  say "running this box's installer against the release"
+  AGENT_FLEET_PAYLOAD="$BASE/current" exec bash "$LOCAL_INSTALLER" --upgrade
+fi
+
+# FALLBACK, for a box whose own installer predates the payload option — or that
+# has none, because it was installed from a tarball by hand. The smoke check
+# above has already established that this one at least starts.
 [ -x "$BASE/current/install/install.sh" ] || die "the release has no install/install.sh in it"
 say "running the installer from the release"
 exec bash "$BASE/current/install/install.sh" --upgrade

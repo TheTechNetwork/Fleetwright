@@ -222,3 +222,68 @@ test('a release installing itself does not delete itself', () => {
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+test('a migration uses the installer the box already has', () => {
+  // WHY THIS MATTERS MORE THAN THE BUGS IT PREVENTS. The migration used to run
+  // the installer INSIDE the release, which made a release's installer
+  // load-bearing for its own adoption: a broken one could not be migrated to
+  // and could only be SUPERSEDED. One afternoon produced three releases that
+  // way, each fixing a bug the previous had hidden, on code that had never run.
+  //
+  // The box's own installer is updated by `curl … | sudo sh`, which costs
+  // nothing and needs no release. So an installer fix reaches a machine as soon
+  // as somebody re-runs the one-liner, and a release only has to be a correct
+  // PAYLOAD rather than a correct installer.
+  const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  assert.match(sh, /DIR="\$\{AGENT_FLEET_PAYLOAD:-/, 'install.sh cannot be pointed at a payload');
+  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" exec bash "\$LOCAL_INSTALLER"/);
+
+  // THE LOCAL ONE IS TRIED FIRST. A fallback that runs first is not a fallback.
+  const local = mig.indexOf('LOCAL_INSTALLER="$INSTALL_DIR/install/install.sh"');
+  const fallback = mig.indexOf('running the installer from the release');
+  assert.ok(local > 0 && local < fallback, 'the release installer is still preferred');
+
+  // And it is only used when it UNDERSTANDS the payload option — an older
+  // box's installer would ignore it and cheerfully reinstall the checkout,
+  // which is the one outcome worse than using the release's.
+  assert.match(mig, /grep -q 'AGENT_FLEET_PAYLOAD' "\$LOCAL_INSTALLER"/);
+
+  // The fallback stays, because a box installed from a tarball by hand has no
+  // local installer at all.
+  assert.match(mig, /the release has no install\/install\.sh in it/);
+});
+
+test('a release whose own installer is broken can still be migrated to', () => {
+  // THE PROPERTY, END TO END. Built, laid out the way the migration does it,
+  // with the release's installer replaced by one that exits 3 — and the box's
+  // installer takes it from there.
+  //
+  // This is the assertion that would have saved three releases.
+  const rel = unpackedRelease();
+  if (!rel) return;
+  const base = path.join(rel.dir, 'base');
+  try {
+    spawnSync('mkdir', ['-p', path.join(base, 'releases')]);
+    spawnSync('mv', [rel.root, path.join(base, 'releases', 'v9.9.9')]);
+    spawnSync('ln', ['-sfn', path.join(base, 'releases', 'v9.9.9'), path.join(base, 'current')]);
+    spawnSync('bash', ['-c',
+      `printf '#!/bin/bash\\nexit 3\\n' > ${path.join(base, 'releases', 'v9.9.9', 'install', 'install.sh')}`]);
+
+    const r = spawnSync('bash', [path.join(ROOT, 'install', 'install.sh'), '--check'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AGENT_FLEET_PAYLOAD: path.join(base, 'current'),
+        AGENT_FLEET_BASE: base,
+      },
+    });
+    const out = `${r.stdout}${r.stderr}`;
+    // It read the payload, not its own tree.
+    assert.match(out, new RegExp(`source\\s*:\\s*${base}/current`), out.slice(0, 300));
+    assert.doesNotMatch(out, /unbound variable|cannot stat/);
+  } finally {
+    rmSync(rel.dir, { recursive: true, force: true });
+  }
+});
