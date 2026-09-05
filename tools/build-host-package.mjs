@@ -95,7 +95,12 @@ for (const rel of VERBATIM) {
 // is a load-bearing statement, and it is also how resources.js finds the root.
 writeFileSync(
   path.join(stage, 'package.json'),
-  `${JSON.stringify({ name: pkg.name, version, type: 'module', bin: pkg.bin, private: true }, null, 2)}\n`,
+  // `protocol` is here as well as in the manifest, and for a different reader:
+  // install.sh checks whether a box still speaks the coordinator's version
+  // during an upgrade, and it read that out of src/fleet/protocol/intents.js —
+  // which a release does not contain. So the check skipped silently on exactly
+  // the boxes an upgrade puts most at risk.
+  `${JSON.stringify({ name: pkg.name, version, protocol: PROTOCOL_VERSION, type: 'module', bin: pkg.bin, private: true }, null, 2)}\n`,
 );
 
 // Thin shims, so `/usr/local/bin/agent-hub` keeps pointing at a path that
