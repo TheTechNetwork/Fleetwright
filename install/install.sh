@@ -238,7 +238,28 @@ if [ "$PACKAGED" = 1 ]; then
   RELEASE_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/package.json" | head -1)"
   [ -n "$RELEASE_VERSION" ] || RELEASE_VERSION="unversioned"
   RELEASE_DIR="$FLEET_BASE/releases/$RELEASE_VERSION"
-  if [ "$DIR" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
+
+  # RESOLVED, BECAUSE $DIR CAN BE THE SYMLINK POINTING AT $RELEASE_DIR, and
+  # comparing those two as strings said "different" about one directory.
+  #
+  # This is what a migration does: fleetwright-migrate lays the release out,
+  # points `current` at it, and runs the installer from `$FLEET_BASE/current`.
+  # So $DIR is /opt/fleetwright/current and $RELEASE_DIR is
+  # /opt/fleetwright/releases/v0.2.3 — the same directory by two names. The
+  # block then ran, and its FIRST ACT was `rm -rf "$RELEASE_DIR"`: it deleted
+  # the directory it was running out of, leaving `current` dangling, and the
+  # copy that came next failed with
+  #
+  #     cp: cannot stat '/opt/fleetwright/current/.': No such file or directory
+  #
+  # on a real box, on the first migration that got this far. The block was
+  # written for a release unpacked SOMEWHERE ELSE — a tarball in /tmp — and
+  # nothing had ever run it from `current` until the migration existed.
+  #
+  # `pwd -P` is the whole fix: it resolves symlinks, so a release installing
+  # itself recognises itself and skips straight to the symlink it already is.
+  DIR_REAL="$(cd "$DIR" 2>/dev/null && pwd -P)" || DIR_REAL="$DIR"
+  if [ "$DIR_REAL" != "$RELEASE_DIR" ] && [ "$CHECK_ONLY" != 1 ]; then
     mkdir -p "$FLEET_BASE/releases"
     rm -rf "$RELEASE_DIR"
     cp -a "$DIR/." "$RELEASE_DIR"

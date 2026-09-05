@@ -37,6 +37,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { rolloutFraction } from './rollout.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'dist');
@@ -158,7 +159,11 @@ const manifest = {
   // 0–1. A host derives its own position from its name and this version, so
   // widening a rollout only ever adds machines. Written as a number so a
   // manifest is readable: 0.25 is a quarter, not a string somebody parses.
-  rollout: Math.min(1, Math.max(0, Number(process.env.RELEASE_ROLLOUT ?? 1) || 0)),
+  //
+  // Absent, empty and unparseable all mean everybody. That is one line of
+  // arithmetic with a long story behind it, and the story lives with the
+  // function in tools/rollout.mjs rather than being repeated here.
+  rollout: rolloutFraction(process.env.RELEASE_ROLLOUT),
 };
 writeFileSync(path.join(OUT, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
