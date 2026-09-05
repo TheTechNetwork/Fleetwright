@@ -6,11 +6,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# __USER__ / __DIR__ / __NODE__ are substituted by install.sh.
+# __USER__ / __DIR__ / __NODE__ / __ENTRY__ are substituted by install.sh.
+#
+# __ENTRY__ IS WHAT NODE RUNS, and it is computed rather than written here
+# because the answer differs between the two shapes an install can take. A
+# checkout's bin/<name> is JavaScript; a release ships lib/<name>.mjs plus a
+# thin bin/ shim. This used to say __DIR__/bin/<name> for both, so on a release
+# systemd ran `node <shim>` — and when that shim was a shell script, every
+# service died at startup with a syntax error. Naming the module removes the
+# shim from the path systemd takes at all.
 User=__USER__
 WorkingDirectory=__DIR__
 EnvironmentFile=/etc/agent-hub.env
-ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+ExecStart=__NODE__ __ENTRY__ serve
 
 Restart=always
 RestartSec=3

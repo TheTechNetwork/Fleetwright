@@ -1224,6 +1224,22 @@ say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo 
 # differ. Kept as one function so a service can never be installed on one
 # platform and forgotten on the other — which is exactly the bug described
 # above, in a different coat.
+# WHAT NODE SHOULD RUN FOR A UNIT, which is not the same file in both shapes.
+#
+# A checkout's bin/<name> is JavaScript with a node shebang, so `node bin/<name>`
+# works. A RELEASE ships lib/<name>.mjs plus a thin bin/ shim — and when that
+# shim was a shell script, `node <shim>` was a syntax error and every packaged
+# service died in a restart loop.
+#
+# Naming the module takes the shim out of systemd's path entirely. That also
+# fixes releases ALREADY ON DISK: the installer is updated by re-running the
+# one-liner, which costs nothing, while a payload can only be superseded. The
+# same reasoning as AGENT_FLEET_PAYLOAD, applied to the other half.
+unit_entry() { # unit_entry NAME
+  if [ -f "$DIR/lib/$1.mjs" ]; then printf '%s/lib/%s.mjs' "$DIR" "$1"
+  else printf '%s/bin/%s' "$DIR" "$1"; fi
+}
+
 install_unit() { # install_unit NAME
   local src dest
   if [ "$PLATFORM" = macos ]; then
@@ -1234,6 +1250,7 @@ install_unit() { # install_unit NAME
     dest="/etc/systemd/system/$1.service"
   fi
   sed -e "s|__USER__|$RUN_USER|g" \
+      -e "s|__ENTRY__|$(unit_entry "$1")|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
       "$src" > "$dest"
