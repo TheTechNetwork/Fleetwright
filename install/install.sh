@@ -1261,7 +1261,19 @@ done
 
 install_unit agent-hub
 install_unit agent-fleet-sidecar
-install_unit agent-fleet-coordinator
+# ONLY IF THE PAYLOAD HAS ONE. A release deliberately ships no coordinator —
+# that moved to a Cloudflare Worker — so writing this unit on a packaged box
+# produces a service pointing at a file that was never in the tarball, which
+# fails at every start and is reported as a broken box rather than as a
+# component that is not supposed to be here.
+#
+# A checkout still has it, so a box running its own coordinator keeps working
+# and `--from-source` keeps that possible on purpose.
+if [ -f "$DIR/bin/agent-fleet-coordinator" ]; then
+  install_unit agent-fleet-coordinator
+else
+  ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
+fi
 
 # Reading the service journal needs group membership: systemd-journald shows a
 # plain user only their own logs. Without this /logs returns "no entries" for a
