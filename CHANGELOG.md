@@ -11,6 +11,44 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.2.3 — 2026-09-05
+
+**For operators, and it matters if you have a box on v0.2.2.**
+
+v0.2.2's installer could not run from inside a release. The lay-out block read
+`$CHECK_ONLY` before the argument loop assigned it, which is fatal under
+`set -u` — and it only ever evaluated on a packaged box, so no install from a
+checkout could reach it. The first machine to convert itself found it in four
+seconds:
+
+    running the installer from the release
+    install.sh: line 62: CHECK_ONLY: unbound variable
+
+Nothing was damaged by it: the release is laid out beside what is running and
+the units are only re-pointed at the very end, so a box that hit this stayed on
+the code it was already running. **Converting a box needs this release** — the
+installer that runs during a migration is the one inside the release, so the fix
+had to ship in one.
+
+**Also**
+
+- **Moving a box onto packaged releases is offered by the installer**, rather
+  than being a capability nothing called. Re-run the one-liner and it asks — yes
+  by default on a fresh box, **no** on one that is already running, because it
+  restarts the services. `--from-source` keeps the checkout for a machine you
+  edit.
+- **A half-finished migration resumes.** It used to see the release directory a
+  failed attempt left behind and answer "already on the packaged layout —
+  nothing to do", which is indistinguishable from success and left the box
+  exactly as it was.
+- **A release is checked before it is switched to.** Its installer has to start,
+  or the migration refuses and says so without moving anything — the sha256
+  proves the tarball is the right one, not that what is in it runs.
+- **A session that fails to start says what it printed.** It used to end with
+  `tmux attach -t <name>`, which is a remedy only a shell can apply. The last
+  lines of the session's own output are in the message now, with buttons for the
+  rest.
+
 ## 0.2.2 — 2026-09-04
 
 **Two things you can now do from your phone that used to need a terminal on the

@@ -145,3 +145,28 @@ test('nothing writes the variable the helper used to trust', () => {
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
   assert.doesNotMatch(sh, /set_env[^\n]*AGENT_HUB_INSTALL_DIR/);
 });
+
+test('a release that cannot install itself is refused before current moves', () => {
+  // TWO REAL ATTEMPTS ON ONE MACHINE got as far as moving the `current` symlink
+  // and then died running the installer out of the release. The sha256 above
+  // proves the tarball is the one the manifest names; it says nothing about
+  // whether what is inside it RUNS — and the migration's last act is to run the
+  // installer out of it.
+  //
+  // A release carrying a broken installer therefore strands the box, and cannot
+  // be fixed by fixing main: the installer that runs is the one in the release.
+  // v0.2.2 was exactly that.
+  const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
+
+  const smoke = mig.indexOf('install.sh" --help');
+  const move = mig.indexOf('mv "$BASE/releases/.incoming-$VERSION"');
+  const link = mig.indexOf('ln -sfn');
+  assert.ok(smoke > 0, 'the release installer is never tried before being adopted');
+  assert.ok(smoke < move && smoke < link, 'the release is adopted before anything checks that it runs');
+
+  // And a refusal leaves NOTHING behind: no half-adopted version directory, and
+  // above all no moved symlink.
+  const block = mig.slice(smoke - 400, move);
+  assert.match(block, /rm -rf "\$BASE\/releases\/\.incoming-\$VERSION"/);
+  assert.match(block, /Nothing was changed/);
+});

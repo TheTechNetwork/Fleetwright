@@ -129,6 +129,31 @@ mkdir -p "$BASE/releases"
 rm -rf "$BASE/releases/.incoming-$VERSION"
 mkdir -p "$BASE/releases/.incoming-$VERSION"
 tar -xzf "$WORK/$FILE" -C "$BASE/releases/.incoming-$VERSION" --strip-components=1
+# DOES THE THING WE ARE ABOUT TO SWITCH TO ACTUALLY START?
+#
+# The sha256 above proves the tarball is the one the manifest names. It says
+# nothing about whether what is inside it runs, and this migration's last act is
+# to run the installer OUT OF the release — so a release carrying a broken
+# installer strands the box, and cannot be fixed by fixing main. That is not
+# hypothetical: v0.2.2 shipped an install.sh that died on `CHECK_ONLY: unbound
+# variable`, and two attempts on a real machine got as far as moving `current`
+# before finding out.
+#
+# `--help` is the cheap whole-file answer: it needs no node, no tmux and no
+# root, and it is parsed inside the argument loop — so anything that runs before
+# that loop and dies takes it with it. Printing usage proves the script starts.
+#
+# BEFORE `current` MOVES, which is the entire point of putting it here. A
+# release that cannot start is one this box never points at, and the failure is
+# a sentence instead of a half-converted machine.
+if ! bash "$BASE/releases/.incoming-$VERSION/install/install.sh" --help >/dev/null 2>"$WORK/smoke.err"; then
+  say "the installer inside $VERSION does not run:"
+  sed 's/^/    /' "$WORK/smoke.err" >&2
+  rm -rf "$BASE/releases/.incoming-$VERSION"
+  die "refusing to switch to a release that cannot install itself. Nothing was changed.
+       A newer release will carry the fix; until then this box is fine as it is."
+fi
+
 rm -rf "$BASE/releases/$VERSION"
 mv "$BASE/releases/.incoming-$VERSION" "$BASE/releases/$VERSION"
 

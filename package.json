@@ -1,6 +1,6 @@
 {
   "name": "agent-fleet",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it \u2014 sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
@@ -41,10 +41,10 @@
   "cloudflare": {
     "bindings": {
       "AGENT_FLEET_API_TOKEN": {
-        "description": "Break-glass admin credential, and a fresh deploy's first way in — until sign-in is configured, a coordinator without it refuses every request. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
+        "description": "Break-glass admin credential, and a fresh deploy's first way in \u2014 until sign-in is configured, a coordinator without it refuses every request. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
       },
       "AGENT_FLEET_AUTH_ALLOW": {
-        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately — leave this empty and no phone can sign in until you set it later with `wrangler secret put`. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml — see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
+        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately \u2014 leave this empty and no phone can sign in until you set it later with `wrangler secret put`. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml \u2014 see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
       }
     }
   }
