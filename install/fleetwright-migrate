@@ -52,11 +52,35 @@ STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 [ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/agent-hub
 BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 
-# ALREADY DONE IS NOT A FAILURE. A retried migration must not take a working
-# packaged box apart to rebuild it.
-if [ -f "$INSTALL_DIR/lib/agent-hub.mjs" ] || [ -L "$BASE/current" ]; then
+# ALREADY DONE IS NOT A FAILURE, BUT A LEFTOVER IS NOT DONE.
+#
+# This asked two questions and both were the wrong one.
+#
+#   [ -L "$BASE/current" ]  says a previous run laid a release out. It says
+#     NOTHING about what this box runs. The first real migration failed after
+#     that step, so the second one found the symlink, announced "already on the
+#     packaged layout — nothing to do", changed nothing, and left a box that had
+#     been told it converted and had not.
+#
+#   [ -f "$INSTALL_DIR/lib/..." ]  reads AGENT_HUB_INSTALL_DIR out of the env
+#     file, and NOTHING EVER WRITES IT — src/config.js has a default and the
+#     installer never records one. So this is really a hardcoded /opt/agent-fleet
+#     wearing a variable's clothes, and it stays false even after a successful
+#     migration.
+#
+# THE UNIT IS THE ANSWER. What a box runs is what systemd starts, and that is
+# one grep away. A unit already pointing into the release tree is a converted
+# box; anything else is not, whatever directories happen to exist.
+UNIT=/etc/systemd/system/agent-hub.service
+if [ -f "$UNIT" ] && grep -q "$BASE/current" "$UNIT"; then
   say "already on the packaged layout — nothing to do"
   exit 0
+fi
+if [ -L "$BASE/current" ]; then
+  # A HALF-FINISHED MIGRATION IS A REASON TO CONTINUE, not to stop. Everything
+  # below is idempotent: the version directory is removed and re-extracted, the
+  # symlink is replaced atomically, and the installer is re-run.
+  say "a previous attempt laid a release out and did not finish — continuing from there"
 fi
 [ -d "$INSTALL_DIR/.git" ] || die "$INSTALL_DIR is neither a checkout nor a release; this does not know what it is looking at."
 
