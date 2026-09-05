@@ -33,11 +33,25 @@
 #     USER, exactly as they did before. Nothing here gives away a shell.
 set -eu
 
-ENV_FILE=/etc/agent-hub.env
+# The box's configuration, and the only place this reads anything from. The
+# override exists so the whole migration can be driven end to end by a test
+# against temporary directories — the path this file takes on a real box is the
+# one nothing ever ran until a machine ran it, five times, badly.
+ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/agent-hub.env}"
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 
-[ "$(id -u)" = 0 ] || die "this has to run as root — it writes systemd units"
+# BEING ROOT IS NOT THE REQUIREMENT; BEING ABLE TO WRITE IS — the same rule
+# bootstrap.sh states, and for the same reason. This said "run as root" and
+# meant "I am going to write /opt and /etc", which is true on a box and false
+# when every path it touches has been pointed somewhere else.
+#
+# install.sh does its own check for the units, which is where root is genuinely
+# needed. Refusing here on a privilege rather than on an ability made the whole
+# path untestable, and untestable is how it got to a fifth attempt.
+BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+mkdir -p "$BASE" 2>/dev/null || true
+[ -w "$BASE" ] || die "cannot write $BASE — this needs to be run as root, or with AGENT_FLEET_BASE somewhere you own"
 
 # Read the env file the way systemd does, and take only what is needed. Sourcing
 # it would execute whatever is in there, in a root shell.
@@ -50,7 +64,6 @@ INSTALL_DIR="$(env_get AGENT_HUB_INSTALL_DIR)"
 [ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/agent-fleet
 STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 [ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/agent-hub
-BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 
 # ALREADY DONE IS NOT A FAILURE, BUT A LEFTOVER IS NOT DONE.
 #
