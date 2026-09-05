@@ -161,6 +161,8 @@ while [ $# -gt 0 ]; do
       printf '  --repair      --upgrade, and put back everything this installer\n'
       printf '                generates: units, the hook, and the sudoers rules this\n'
       printf '                box has already agreed to. Never changes an answer\n'
+      printf '  --from-source stay a git checkout. For a box somebody EDITS; every\n'
+      printf '                other install ends up on packaged releases\n'
       exit 0 ;;
     --repair)
       # EVERYTHING THIS INSTALLER GENERATES, PUT BACK, and nothing it was told.
@@ -176,6 +178,14 @@ while [ $# -gt 0 ]; do
       # whose rule predates a change gets the current one without being asked
       # again about a decision it already made.
       REPAIR=1; UPGRADE=1; WIZARD=no ;;
+    --from-source)
+      # THE ESCAPE HATCH docs/packaging.md has named since packaging shipped and
+      # nothing implemented. A development box wants the checkout: it is a thing
+      # somebody edits, and `/update` pulling into it is the point.
+      #
+      # Everything else should end up packaged, which is what the block at the
+      # end of this script now makes happen.
+      FROM_SOURCE=1 ;;
     --upgrade)
       # AN ALREADY-CONFIGURED BOX, BROUGHT ONTO NEW CODE, WITH NO QUESTIONS.
       #
@@ -214,6 +224,8 @@ else ASK_IN=""; fi
 
 REPAIR="${REPAIR:-0}"
 [ "${AGENT_HUB_REPAIR:-0}" = "1" ] && { REPAIR=1; UPGRADE=1; WIZARD=no; }
+FROM_SOURCE="${FROM_SOURCE:-0}"
+[ "${AGENT_HUB_FROM_SOURCE:-0}" = "1" ] && FROM_SOURCE=1
 UPGRADE="${UPGRADE:-0}"
 [ "${AGENT_HUB_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
 [ "${AGENT_HUB_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
@@ -808,6 +820,12 @@ fi
 # Ordering is the entire fix. Anything that can refuse this install has to
 # refuse it before anything is destroyed.
 previous_install
+# Remembered for section 9: converting a box that is ALREADY RUNNING is a
+# different question from setting up a fresh one, and gets a different
+# default. Recorded here because the block below runs after section 8 has
+# tidied FOUND away.
+HAD_PREVIOUS=0
+[ ${#FOUND[@]} -gt 0 ] && HAD_PREVIOUS=1
 if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
   say "A previous install is already here"
   for f in "${FOUND[@]}"; do printf '  %s\n' "$f"; done
@@ -2352,4 +2370,85 @@ Next:
   generates the admin token, enrols this box and starts the services for you.
 
 EOF
+fi
+
+# --- 9. and then it stops being a checkout ----------------------------------
+#
+# THE THING THAT WAS MISSING, and it is why a box re-run through the one-liner
+# stayed commit-based no matter which menu option somebody chose.
+#
+# bootstrap.sh clones the repository — it has to, because install.sh lives in
+# it — so this script always runs from a checkout, PACKAGED is always 0, and
+# every install the documented way produced a git working tree. "Clean" wiped
+# the box and rebuilt exactly the same shape. #376 installed the migration
+# helper and nothing ever called it, so the capability existed and no path
+# reached it: true where it was written, quietly false one layer up.
+#
+# A CHECKOUT IS THE WRONG DEFAULT NOW. It needs the tree writable by the service
+# user so `/update` can pull, it drifts (which is how a real box met
+# `git checkout` refusing to overwrite sixty-eight files), and a pull is not
+# verified against anything. A release is a tarball with a sha256 checked before
+# it is unpacked, installed beside what is running, activated by a symlink.
+#
+# So: offer it, default yes, once the box is otherwise finished. Not earlier —
+# the migration re-runs this script from the release to re-template the units,
+# and running it against a half-configured box would be two installers
+# interleaving.
+if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] \
+   && [ -z "${FLEETWRIGHT_MIGRATING:-}" ] && [ -x /usr/local/sbin/fleetwright-migrate ] \
+   && [ -n "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
+  say "Packaged releases"
+  printf '  This box is a git checkout. On packaged releases an update is a\n'
+  printf '  download with a checksum instead of a pull, installed beside what is\n'
+  printf '  running and activated by a symlink — and the tree stops being\n'
+  printf '  something that can drift.\n'
+  printf '\n  What it does, so that it is not a surprise:\n'
+  printf '    - installs the current release under %s\n' "${AGENT_FLEET_BASE:-/opt/fleetwright}"
+  printf '    - re-points the systemd units at it and RESTARTS the services\n'
+  printf '    - leaves %s where it is, and leaves running sessions alone\n' "$DIR"
+  printf '  Reversible: re-run this installer with --from-source.\n'
+
+  # THE DEFAULT DEPENDS ON WHETHER THIS BOX WAS ALREADY DOING SOMETHING, and
+  # that distinction is the whole answer to "are you sure?".
+  #
+  # A FRESH box has nothing to disturb — no sessions, no services anybody is
+  # relying on — and packaged is the shape every install should end up in. Yes.
+  #
+  # A box that was ALREADY RUNNING is a different question. Moving where its
+  # code lives and restarting its services is not a thing to discover having
+  # happened because somebody leaned on the return key. That is the rule this
+  # script already follows for the identity prompt, and the one the app follows
+  # by refusing to migrate without an explicit apply. So: no, and it says how
+  # to ask for it.
+  if [ "$HAD_PREVIOUS" = 1 ]; then MIGRATE_DEFAULT=no; else MIGRATE_DEFAULT=yes; fi
+
+  MIGRATE="$MIGRATE_DEFAULT"
+  # NOBODY THERE MEANS NO, whichever kind of box this is. An unattended run must
+  # not change the shape of a box nobody was asked about.
+  if [ -z "$ASK_IN" ]; then
+    MIGRATE=no
+    printf '\n  Nobody to ask — leaving this box as a checkout.\n'
+    printf '  Move it later from the app, or: sudo /usr/local/sbin/fleetwright-migrate\n'
+  elif [ "$MIGRATE_DEFAULT" = no ]; then
+    ask MIGRATE "This box is already running. Convert it now? [y/N]" no
+  else
+    ask MIGRATE "Set this box up on packaged releases? [Y/n]" yes
+  fi
+
+  # `""` is NOT in the yes list. `ask` already substitutes the default for an
+  # empty answer, so accepting it here as well would make return mean yes on the
+  # box where the default is deliberately no — which is precisely the keystroke
+  # this is written to not act on.
+  case "$MIGRATE" in
+    y|Y|yes|YES)
+      # Called directly rather than through sudo: this script is already root.
+      # FLEETWRIGHT_MIGRATING stops the install.sh the helper execs from
+      # arriving back here — it will be running from the release, where
+      # PACKAGED is 1 and this block is skipped anyway, and belt and braces on
+      # a loop that would be a fork bomb rather than a bug.
+      FLEETWRIGHT_MIGRATING=1 /usr/local/sbin/fleetwright-migrate \
+        || warn "the migration did not finish — this box is still the checkout it was, and still works"
+      ;;
+    *) ok "staying a checkout" ;;
+  esac
 fi

@@ -286,3 +286,65 @@ test('the migration helper verifies before it unpacks, and refuses a path', () =
   // working box apart to rebuild it.
   assert.match(mig, /already on the packaged layout/);
 });
+
+test('an install ends up packaged unless somebody asks for a checkout', () => {
+  // THE GAP A REAL BOX FOUND. bootstrap.sh clones the repository — it has to,
+  // because install.sh lives in it — so this script always runs from a
+  // checkout, PACKAGED is always 0, and every install the documented way
+  // produced a git working tree. Re-running the one-liner and choosing either
+  // menu option rebuilt exactly the same shape.
+  //
+  // #376 installed the migration helper and nothing ever called it: the
+  // capability existed and no path reached it.
+  assert.match(SH, /--from-source\)/, 'the flag docs/packaging.md promises still does not exist');
+  assert.match(SH, /\[ "\$PACKAGED" = 0 \] && \[ "\$FROM_SOURCE" = 0 \]/, 'the installer never offers to stop being a checkout');
+  assert.match(SH, /\/usr\/local\/sbin\/fleetwright-migrate/);
+
+  // NOBODY THERE MEANS NO. Changing the shape of a box nobody was asked about
+  // is recoverable only by somebody with a shell — the same rule the identity
+  // prompt follows, for the same reason.
+  const block = SH.slice(SH.indexOf('# --- 9. and then it stops being a checkout'));
+  assert.match(block, /if \[ -z "\$ASK_IN" \]; then\n\s+MIGRATE=no/, 'an unattended run would migrate silently');
+
+  // AND A BOX THAT IS ALREADY RUNNING DEFAULTS TO NO. A fresh box has nothing
+  // to disturb and should end up packaged; converting a working one moves
+  // where its code lives and restarts its services, which is not a thing to
+  // discover having happened because somebody leaned on the return key.
+  assert.match(block, /if \[ "\$HAD_PREVIOUS" = 1 \]; then MIGRATE_DEFAULT=no; else MIGRATE_DEFAULT=yes; fi/);
+  assert.match(block, /Convert it now\? \[y\/N\]/);
+  assert.match(block, /\[Y\/n\]/, 'a fresh install does not default to packaged');
+
+  // The empty answer must NOT be in the yes list: `ask` already substitutes the
+  // default, so accepting "" here as well would make return mean yes on the
+  // box where the default is deliberately no.
+  assert.doesNotMatch(block, /y\|Y\|yes\|YES\|""/, 'return means yes even where the default is no');
+
+  // And it says what it will do before it asks — where the code goes, that the
+  // services restart, and that the checkout is left alone.
+  assert.match(block, /RESTARTS the services/);
+  assert.match(block, /--from-source/);
+  // And it names the command, because "leaving this box as a checkout" without
+  // one is a state with no way out of it.
+  assert.match(block, /sudo \/usr\/local\/sbin\/fleetwright-migrate/);
+
+  // A LOOP HERE WOULD BE A FORK BOMB, not a bug: the helper execs this script
+  // from the release, and this script would call the helper again.
+  assert.match(block, /FLEETWRIGHT_MIGRATING/);
+  assert.match(SH, /\[ -z "\$\{FLEETWRIGHT_MIGRATING:-\}" \]/);
+
+  // A failed migration must leave the box working. It has just finished a
+  // complete checkout install; the release lay-out happens beside it and the
+  // units are only re-templated at the very end.
+  assert.match(block, /still the checkout it was, and still works/);
+});
+
+test('the release carries what it needs to reinstall itself', () => {
+  // The helper's last act is `install.sh --upgrade` FROM THE RELEASE, which is
+  // what re-templates the units at the new path. A tarball without install/ in
+  // it would lay out perfectly and then fail on its last line, having already
+  // moved the `current` symlink.
+  const build = readFileSync(new URL('../tools/build-host-package.mjs', import.meta.url), 'utf8');
+  const verbatim = /const VERBATIM = \[([^\]]*)\]/.exec(build);
+  assert.ok(verbatim, 'the package builder no longer has a VERBATIM list');
+  assert.match(verbatim[1], /'install'/, 'a release cannot reinstall itself');
+});
