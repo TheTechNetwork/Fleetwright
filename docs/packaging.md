@@ -86,7 +86,7 @@ once `npm ci` was involved.
    untouched, which is what makes it a fallback rather than a second
    implementation.
 4. **Switch the installer** to fetch a release rather than clone, keeping
-   `--from-source` for development boxes. **Half done** — `install.sh` detects
+   `--from-source` for development boxes. **Done** — `install.sh` detects
    which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
    skips npm entirely when packaged, and removes the install it replaced. What
    is not done is the FIRST install: a box still gets its first release
@@ -269,6 +269,19 @@ up for a stable box to take an unreleased build.
 digest, refreshed by `/update` and by a session start, and `minSandboxImage`
 is how a host release says which one it needs. Merging them would mean
 shipping a container layer to update a JavaScript file.
+
+**An install ends up packaged now, and that was the missing half.** `bootstrap.sh`
+clones the repository — it has to, because `install.sh` lives in it — so the
+installer always ran from a checkout, `PACKAGED` was always 0, and *every*
+install by the documented one-liner produced a git working tree. Re-running it
+and choosing either menu option rebuilt the same shape. The migration helper
+shipped and nothing called it.
+
+The last section of `install.sh` now offers the conversion, and the default
+depends on what it found: a **fresh** box has nothing to disturb and defaults to
+yes; a box that was **already running** defaults to no, because moving where its
+code lives and restarting its services is not something to discover having
+happened. With no terminal it never converts and names the command.
 
 **Development boxes still want the checkout.** `--from-source` keeps that, and
 the fallback in step 3 means the two can coexist indefinitely rather than
