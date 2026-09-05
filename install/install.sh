@@ -2391,6 +2391,29 @@ if [ "$WIZARD" = yes ]; then
           $COORD_ENV
 
 EOF
+elif [ "$UPGRADE" = 1 ] || [ "$HAD_PREVIOUS" = 1 ]; then
+  # A BOX THAT WAS ALREADY SET UP GETS TOLD WHAT CHANGED, not what to set up.
+  #
+  # This branch is `WIZARD = no`, which is true of an unattended fresh install
+  # AND of every --upgrade — and --upgrade is how a migration finishes. So a
+  # machine that had been enrolled and running for weeks ended a successful
+  # conversion by being told to create a Telegram bot, start the session
+  # manager, and put an admin token in a file that already had one.
+  #
+  # Everything in that list was already done. Printing it reads like the
+  # install wiped the configuration, which is the one thing somebody watching a
+  # migration is afraid of.
+  printf '\n  Nothing above was reconfigured — the answers already in the /etc files\n'
+  printf '  were kept, and the services were restarted on the code below.\n\n'
+  printf '  Running from : %s\n' "$DIR"
+  if [ -L "$FLEET_BASE/current" ] && [ "$DIR" = "$FLEET_BASE/current" ]; then
+    printf '  Release      : %s\n' "$(readlink "$FLEET_BASE/current")"
+    printf '\n  This box now takes packaged releases. Updates are a download with a\n'
+    printf '  checksum from here on, and `/update` from the app applies them.\n'
+  fi
+  printf '\n  Check it:\n'
+  printf '      systemctl status agent-hub agent-fleet-sidecar\n'
+  printf '      agent-hub doctor\n\n'
 else
   cat <<EOF
 

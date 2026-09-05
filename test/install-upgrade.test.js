@@ -348,3 +348,41 @@ test('the release carries what it needs to reinstall itself', () => {
   assert.ok(verbatim, 'the package builder no longer has a VERBATIM list');
   assert.match(verbatim[1], /'install'/, 'a release cannot reinstall itself');
 });
+
+test('an upgraded box is told what changed, not how to set itself up', () => {
+  // FROM A REAL MIGRATION THAT SUCCEEDED. It ended with:
+  //
+  //   Next:
+  //     1. Create a Telegram bot — message @BotFather ...
+  //     2. Start the session manager: systemctl enable --now agent-hub
+  //     ... put an AGENT_FLEET_API_TOKEN in /etc/agent-fleet-coordinator.env
+  //
+  // on a machine that had been enrolled and running for weeks, with all of it
+  // already done. The closing block branches on `WIZARD = yes`, and --upgrade
+  // sets WIZARD=no — so an unattended FRESH install and an upgrade of a
+  // configured box took the same path.
+  //
+  // Everything in that list was already true. Printing it reads like the
+  // install wiped the configuration, which is the one thing somebody watching
+  // a migration is afraid of.
+  const upgraded = SH.slice(
+    SH.indexOf('elif [ "$UPGRADE" = 1 ] || [ "$HAD_PREVIOUS" = 1 ]; then'),
+    SH.indexOf('\nelse\n  cat <<EOF\n\nNext:'),
+  );
+  assert.ok(upgraded.length > 0, 'an upgrade still falls through to the fresh-box instructions');
+
+  // It says the thing somebody is actually anxious about.
+  assert.match(upgraded, /Nothing above was reconfigured/);
+  assert.match(upgraded, /Running from/);
+
+  // And none of the fresh-box setup appears in it.
+  for (const wrong of [/BotFather/, /Create a Telegram bot/, /enable --now agent-hub/, /AGENT_FLEET_API_TOKEN in/]) {
+    assert.doesNotMatch(upgraded, wrong, 'an upgraded box is still told to set itself up');
+  }
+
+  // A migration says what it converted TO, because "it worked" and "it worked
+  // and here is the release you are on" are different amounts of help when the
+  // next thing you do is check whether it worked.
+  assert.match(upgraded, /This box now takes packaged releases/);
+  assert.match(upgraded, /readlink "\$FLEET_BASE\/current"/);
+});
