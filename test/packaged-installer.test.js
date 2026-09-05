@@ -170,3 +170,55 @@ test('a release that cannot install itself is refused before current moves', () 
   assert.match(block, /rm -rf "\$BASE\/releases\/\.incoming-\$VERSION"/);
   assert.match(block, /Nothing was changed/);
 });
+
+test('a release installing itself does not delete itself', () => {
+  // FROM A REAL BOX, on the first migration that got this far:
+  //
+  //   running the installer from the release
+  //   cp: cannot stat '/opt/fleetwright/current/.': No such file or directory
+  //
+  // fleetwright-migrate lays the release out, points `current` at it, and runs
+  // the installer from $FLEET_BASE/current. So $DIR is the SYMLINK and
+  // $RELEASE_DIR is what it points at — the same directory by two names — and
+  // the block compared them as strings, decided they differed, and began with
+  // `rm -rf "$RELEASE_DIR"`. It deleted the directory it was running out of.
+  //
+  // The block was written for a release unpacked somewhere else, a tarball in
+  // /tmp. Nothing ran it from `current` until the migration existed.
+  //
+  // RUN IN ISOLATION, not by running the installer: a real run writes
+  // /etc/systemd units and a state directory, which is not a thing a test may
+  // do to the machine it is running on. The block is lifted out and given a
+  // fixture, the same way scripts/coverage-verdict.mjs is tested apart from the
+  // suite it judges.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const start = sh.indexOf('if [ "$PACKAGED" = 1 ]; then');
+  const block = sh.slice(start, sh.indexOf('\nfi\n', start) + 4);
+  assert.match(block, /pwd -P/, 'the block no longer resolves $DIR');
+
+  const work = mkdtempSync(path.join(tmpdir(), 'selfinstall-'));
+  try {
+    const release = path.join(work, 'releases', 'v9.9.9');
+    spawnSync('mkdir', ['-p', release]);
+    spawnSync('bash', ['-c', `printf '{"version":"v9.9.9"}' > ${release}/package.json`]);
+    spawnSync('bash', ['-c', `printf 'canary' > ${release}/marker`]);
+    spawnSync('ln', ['-sfn', release, path.join(work, 'current')]);
+
+    const r = spawnSync('bash', ['-euo', 'pipefail', '-c',
+      `PACKAGED=1 CHECK_ONLY=0 FLEET_BASE=${work} DIR=${work}/current\n${block}\necho "DIR=$DIR"`,
+    ], { encoding: 'utf8' });
+
+    const out = `${r.stdout}${r.stderr}`;
+    assert.doesNotMatch(out, /cannot stat/, out.slice(0, 300));
+
+    // THE THREE THINGS THAT MUST SURVIVE. The release, its contents, and the
+    // symlink — because what broke was all three at once.
+    assert.equal(existsSync(path.join(release, 'marker')), true, 'the release deleted itself');
+    assert.equal(existsSync(path.join(work, 'current', 'marker')), true, 'current dangles');
+    // And DIR ends up as the symlink, which is what makes the next release a
+    // symlink swap rather than an installer run.
+    assert.match(out, new RegExp(`DIR=${work}/current`));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
