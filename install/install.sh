@@ -2498,7 +2498,21 @@ if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] \
       # arriving back here — it will be running from the release, where
       # PACKAGED is 1 and this block is skipped anyway, and belt and braces on
       # a loop that would be a fork bomb rather than a bug.
-      FLEETWRIGHT_MIGRATING=1 /usr/local/sbin/fleetwright-migrate \
+      # THE ONE IN THE TREE, NOT THE COPY IN /usr/local/sbin.
+      #
+      # That copy is a snapshot taken by whichever install ran last, and this
+      # script is running as root out of a checkout that was updated seconds
+      # ago. Running the snapshot means a fix to the helper does not take
+      # effect until the run AFTER the one that installed it — which is exactly
+      # what happened: a box re-ran the one-liner with the fix present in its
+      # tree, and migrated with the previous helper.
+      #
+      # /usr/local/sbin is for the APP's path, where there is no checkout and a
+      # narrow sudoers rule is the point. Here there is a tree, it is newer, and
+      # nothing needs sudo because this is already root.
+      HELPER=/usr/local/sbin/fleetwright-migrate
+      [ -x "$DIR/install/fleetwright-migrate" ] && HELPER="$DIR/install/fleetwright-migrate"
+      FLEETWRIGHT_MIGRATING=1 "$HELPER" \
         || warn "the migration did not finish — this box is still the checkout it was, and still works"
       ;;
     *) ok "staying a checkout" ;;

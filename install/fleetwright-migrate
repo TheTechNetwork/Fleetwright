@@ -185,6 +185,18 @@ if [ -x "$LOCAL_INSTALLER" ] && grep -q 'AGENT_FLEET_PAYLOAD' "$LOCAL_INSTALLER"
   AGENT_FLEET_PAYLOAD="$BASE/current" exec bash "$LOCAL_INSTALLER" --upgrade
 fi
 
+# WHY IT DID NOT, when it did not. Falling back silently is how somebody reads
+# "running the installer from the release", knows a fix landed that should have
+# prevented that, and cannot tell which of three things went wrong. Each of
+# these has a different answer and only one of them is "wait for a release".
+if [ ! -e "$LOCAL_INSTALLER" ]; then
+  say "no installer at $LOCAL_INSTALLER — this box has no checkout to use"
+elif [ ! -x "$LOCAL_INSTALLER" ]; then
+  say "$LOCAL_INSTALLER is not executable, so it cannot be used"
+else
+  say "$LOCAL_INSTALLER predates the payload option — re-run the one-liner to update it"
+fi
+
 # FALLBACK, for a box whose own installer predates the payload option — or that
 # has none, because it was installed from a tarball by hand. The smoke check
 # above has already established that this one at least starts.
