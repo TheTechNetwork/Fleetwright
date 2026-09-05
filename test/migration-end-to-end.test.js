@@ -43,20 +43,17 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
   const built = spawnSync(process.execPath, ['tools/build-host-package.mjs'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, RELEASE_VERSION: 'v9.9.9' },
+    // Its own output directory: node runs test FILES in parallel, and two
+    // builds sharing dist/ overwrite each other's tarball mid-read.
+    env: { ...process.env, RELEASE_VERSION: 'v9.9.9', RELEASE_OUT_DIR: dist },
   });
   if (built.status !== 0) {
     rmSync(work, { recursive: true, force: true });
     return null;
   }
-  mkdirSync(dist, { recursive: true });
-  // Files only: dist/ also holds the staging directory the tarball was made
-  // from, and a release host serves the two artifacts and nothing else.
-  for (const f of readdirSync(path.join(ROOT, 'dist'))) {
-    if (!f.endsWith('.tar.gz') && f !== 'manifest.json') continue;
-    writeFileSync(path.join(dist, f), readFileSync(path.join(ROOT, 'dist', f)));
-  }
-  rmSync(path.join(ROOT, 'dist'), { recursive: true, force: true });
+  // The build wrote straight into `dist` — RELEASE_OUT_DIR above — so there is
+  // nothing to copy and, more importantly, nothing shared with another test
+  // file running at the same time.
 
   // A RELEASE WHOSE OWN INSTALLER IS BROKEN, when asked for. The smoke check
   // exists for exactly this, and a test that only ever sees good releases is

@@ -40,7 +40,12 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { rolloutFraction } from './rollout.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'dist');
+// WHERE THE ARTIFACTS LAND. `dist/` unless told otherwise, and the override is
+// not a convenience: two tests that both build a release write the same two
+// filenames, and node's test runner runs files in PARALLEL. They passed
+// separately and failed together, which is the least useful way for a test to
+// be wrong.
+const OUT = process.env.RELEASE_OUT_DIR || path.join(ROOT, 'dist');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 /** Passed in by CI, so a release is named after the run that produced it. */

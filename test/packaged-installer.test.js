@@ -21,7 +21,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -39,18 +39,22 @@ function unpackedRelease() {
   const built = spawnSync(process.execPath, ['tools/build-host-package.mjs'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, RELEASE_VERSION: 'v-test' },
+    // Its own output directory — see the note in migration-end-to-end.test.js.
+    env: { ...process.env, RELEASE_VERSION: 'v-test', RELEASE_OUT_DIR: path.join(work, 'dist') },
   });
   if (built.status !== 0) {
     rmSync(work, { recursive: true, force: true });
     return null;
   }
-  const dist = path.join(ROOT, 'dist');
+  // Built into this test's own directory, so two test files building at once
+  // cannot overwrite each other's tarball mid-read.
+  const dist = path.join(work, 'dist');
   const tarball = readdirSync(dist).find((f) => f.endsWith('.tar.gz'));
-  spawnSync('tar', ['-xzf', path.join(dist, tarball ?? ''), '-C', work], { encoding: 'utf8' });
-  rmSync(dist, { recursive: true, force: true });
-  const [name] = readdirSync(work);
-  return { dir: work, root: path.join(work, name) };
+  const out = path.join(work, 'unpacked');
+  mkdirSync(out, { recursive: true });
+  spawnSync('tar', ['-xzf', path.join(dist, tarball ?? ''), '-C', out], { encoding: 'utf8' });
+  const [name] = readdirSync(out);
+  return { dir: work, root: path.join(out, name) };
 }
 
 test('the installer in a release starts at all', (t) => {
