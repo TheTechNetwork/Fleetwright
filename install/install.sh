@@ -1290,6 +1290,19 @@ install_unit() { # install_unit NAME
   # about the file it means.
   chown root:wheel "$dest" 2>/dev/null || true
   chmod 0644 "$dest"
+
+  # WHAT THIS UNIT NAMES HAS TO EXIST, and nothing checked. A unit is written
+  # from a template and looks perfectly correct while pointing at a file that is
+  # not there — which is precisely how a fleet spent an afternoon in restart
+  # loops, with an installer reporting `ok` on every line.
+  #
+  # systemd will not tell you either: it reports "Failed with result exit-code"
+  # and the reason is in the journal, on a box somebody has to log in to.
+  UNIT_TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' "$dest" | head -1)"
+  if [ -n "$UNIT_TARGET" ] && [ ! -f "$UNIT_TARGET" ]; then
+    warn "$dest names $UNIT_TARGET, which does not exist — this service cannot start"
+    warn "  the install continued; fix the payload and re-run, or use --from-source"
+  fi
   ok "$dest"
 }
 

@@ -112,6 +112,49 @@ convert() {
     sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1
 }
 
+# --- 0. can the box get the new code at all? --------------------------------
+#
+# THE SCENARIO THAT WAS MISSING, and the one that cost a host an afternoon.
+# Everything below tests what happens once a box HAS the current installer. A
+# box that cannot update its checkout never reaches any of it, and every "re-run
+# and it will be fixed" is wrong for a reason no migration test can see.
+
+step "0. an outdated checkout — can bootstrap bring it forward?"
+ORIGIN="$WORK/origin"; SEED="$WORK/seed"
+git init -q --bare "$ORIGIN"
+git init -q "$SEED"
+git -C "$SEED" config user.email drill@local; git -C "$SEED" config user.name drill
+echo one > "$SEED/f"; git -C "$SEED" add -A; git -C "$SEED" commit -qm one
+git -C "$SEED" branch -M main; git -C "$SEED" push -q "$ORIGIN" main
+OLD_SHA="$(git -C "$SEED" rev-parse HEAD)"
+echo two > "$SEED/f"; git -C "$SEED" commit -qam two; git -C "$SEED" push -q "$ORIGIN" main
+NEW_SHA="$(git -C "$SEED" rev-parse HEAD)"
+
+BOX="$WORK/outdated"
+git clone -q "$ORIGIN" "$BOX"
+git -C "$BOX" reset -q --hard "$OLD_SHA"
+# The states a real box has been in: behind, with a stale tag shadowing the
+# branch, and with local edits.
+git -C "$BOX" tag -f main "$OLD_SHA" >/dev/null 2>&1
+echo "local edit" >> "$BOX/f"
+
+FLEETWRIGHT_REPO="$ORIGIN" FLEETWRIGHT_DIR="$BOX" FLEETWRIGHT_REF=main \
+  sh -c 'set -eu
+    DIR="$FLEETWRIGHT_DIR"; REF="$FLEETWRIGHT_REF"; REPO="$FLEETWRIGHT_REPO"
+    git -C "$DIR" remote set-url origin "$REPO"
+    if git -C "$DIR" rev-parse -q --verify "refs/tags/$REF" >/dev/null 2>&1; then
+      git -C "$DIR" tag -d "$REF" >/dev/null 2>&1 || true
+    fi
+    git -C "$DIR" fetch --quiet --prune --prune-tags --force       origin "refs/heads/$REF:refs/remotes/origin/$REF" 2>/dev/null       || git -C "$DIR" fetch --quiet --force origin "refs/heads/$REF:refs/remotes/origin/$REF"
+    git -C "$DIR" checkout --quiet -B "$REF" "origin/$REF" 2>/dev/null       || { git -C "$DIR" reset --quiet --hard "origin/$REF"; git -C "$DIR" checkout --quiet -B "$REF" "origin/$REF"; }
+  ' >/dev/null 2>&1
+if [ "$(git -C "$BOX" rev-parse HEAD)" = "$NEW_SHA" ]; then
+  ok "an outdated checkout with a stale tag and local edits came forward"
+else
+  bad "the checkout did not update: $(git -C "$BOX" rev-parse --short HEAD), wanted ${NEW_SHA:0:7}"
+fi
+git -C "$BOX" rev-parse refs/tags/main >/dev/null 2>&1 && bad "the stale tag survived" || ok "the stale tag was pruned"
+
 # --- 1. a fresh box ---------------------------------------------------------
 
 step "1. fresh box — nothing installed"
