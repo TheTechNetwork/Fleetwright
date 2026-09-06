@@ -1293,13 +1293,26 @@ for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   fi
 done
 
+# RE-TEMPLATED FOR THE RELEASE, NOT SKIPPED — and the difference took a host
+# down. The first version of this guard left the units alone entirely, on the
+# reasoning that rewriting them to point at this checkout is a revert. True, and
+# it threw away the other half: a unit is GENERATED, and an old one is exactly
+# what needs replacing.
+#
+# deb13-staging was already converted, with a unit written before units named
+# the module — `node .../current/bin/agent-hub`, against a release whose bin/ is
+# a shell shim. It had been in a restart loop for thirty-odd attempts. The
+# re-run that could have fixed it politely left it broken.
+#
+# So the units are written, pointed at the release this box actually runs.
+# --from-source is how somebody asks for the checkout instead.
 if [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; then
-  # LEFT ALONE, DELIBERATELY. This box runs packaged releases; rewriting its
-  # units to point at this checkout is exactly the revert described above.
-  # --from-source is how somebody asks for that on purpose.
-  ok "this box runs packaged releases — its units are left pointing there"
+  ok "this box runs packaged releases — pointing its units at $FLEET_BASE/current"
   ok "  (--from-source moves it back to this checkout)"
-else
+  UNIT_DIR_SAVED="$DIR"
+  DIR="$FLEET_BASE/current"
+fi
+
 install_unit agent-hub
 install_unit agent-fleet-sidecar
 # ONLY IF THE PAYLOAD HAS ONE. A release deliberately ships no coordinator —
@@ -1315,7 +1328,8 @@ if [ -f "$DIR/bin/agent-fleet-coordinator" ]; then
 else
   ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
 fi
-fi
+
+if [ -n "${UNIT_DIR_SAVED:-}" ]; then DIR="$UNIT_DIR_SAVED"; unset UNIT_DIR_SAVED; fi
 
 # Reading the service journal needs group membership: systemd-journald shows a
 # plain user only their own logs. Without this /logs returns "no entries" for a
@@ -1590,13 +1604,13 @@ if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER
 fi
 
 # --- 6. CLIs on PATH --------------------------------------------------------
+# Same reasoning as the units: pointed at the release, not skipped and not
+# dragged back to the checkout. A command line on one tree and services on
+# another is the confusing half of a revert.
 if [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; then
-  # Same reason as the units: /usr/local/bin/agent-hub pointing into this
-  # checkout on a box that runs releases is half a revert, and the confusing
-  # half — the services would be on one tree and the command line on another.
-  say "Linking the CLIs"
-  ok "left pointing at the release this box runs"
-else
+  LINK_DIR_SAVED="$DIR"
+  DIR="$FLEET_BASE/current"
+fi
 say "Linking the CLIs"
 
 # /usr/local/bin is NOT guaranteed to exist. On Apple Silicon it usually does
@@ -1625,7 +1639,7 @@ for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
     warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
   ok "$BIN_DIR/$cli -> $DIR/bin/$cli"
 done
-fi
+if [ -n "${LINK_DIR_SAVED:-}" ]; then DIR="$LINK_DIR_SAVED"; unset LINK_DIR_SAVED; fi
 
 # --- 7. the wizard ----------------------------------------------------------
 # Everything above wrote files. This turns the checklist that used to be printed
