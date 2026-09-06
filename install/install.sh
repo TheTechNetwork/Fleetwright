@@ -47,7 +47,19 @@ set -euo pipefail
 #
 # The release still carries install/ and it is still what a person unpacking a
 # tarball by hand runs. This changes which one a MIGRATION uses.
-DIR="${AGENT_FLEET_PAYLOAD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# WHERE THIS SCRIPT ITSELF LIVES, which is not always where the payload is.
+#
+# THE TEMPLATES COME FROM HERE, AND THAT IS THE WHOLE POINT. install_unit read
+# `$DIR/install/<name>.service`, and $DIR is the PAYLOAD — so a box pointing its
+# units at a release read that RELEASE's unit template. v0.2.3's predates
+# __ENTRY__ and hardcodes `__DIR__/bin/agent-hub`, so the substitution found
+# nothing to replace and every repair wrote the same broken unit, on a box whose
+# installer had been correct for hours.
+#
+# The installer that is running is the newest thing on the box — it is what
+# `curl … | sudo sh` just updated. Its templates are the ones to use.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIR="${AGENT_FLEET_PAYLOAD:-$SELF_DIR}"
 
 # A RELEASE, OR A CHECKOUT. The two differ in exactly one way that matters here:
 # a release carries its dependencies already bundled into lib/, so there is no
@@ -1293,11 +1305,17 @@ unit_entry() { # unit_entry NAME
 
 install_unit() { # install_unit NAME
   local src dest
+  # THE TEMPLATE FROM THIS INSTALLER, the entry path from the payload. Reading
+  # the template from $DIR meant a release's own template decided the shape of
+  # the unit, and an old release cannot know about a placeholder added after it
+  # was built. SELF_DIR is what the one-liner just updated.
+  local from="$SELF_DIR"
+  [ -f "$from/install/$1.service" ] || [ -f "$from/install/$1.plist" ] || from="$DIR"
   if [ "$PLATFORM" = macos ]; then
-    src="$DIR/install/$1.plist"
+    src="$from/install/$1.plist"
     dest="/Library/LaunchDaemons/network.thetech.$1.plist"
   else
-    src="$DIR/install/$1.service"
+    src="$from/install/$1.service"
     dest="/etc/systemd/system/$1.service"
   fi
   sed -e "s|__USER__|$RUN_USER|g" \
