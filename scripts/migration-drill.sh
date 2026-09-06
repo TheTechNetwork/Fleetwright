@@ -332,6 +332,69 @@ fi
 starts "after a refused release"
 cp "$WORK/manifest.good" "$DIST/manifest.json"
 
+# --- 10. a converted box whose release is gone ------------------------------
+#
+# THE STATE deb13-staging WAS ACTUALLY IN, and the one every path agreed to
+# leave alone. An earlier installer deleted the directory it was running out of
+# (#388) and left `current` dangling. After that:
+#
+#   the units pointed at a release that did not exist
+#   unit_entry fell back to a bin/ that did not exist either
+#   the conversion was not offered, because the box looked converted
+#   and the service restarted six thousand times
+#
+# Every line of the installer said ok.
+
+step "10. a converted box whose release directory is gone"
+install_from_checkout >/dev/null 2>&1
+convert >/dev/null 2>&1
+GONE="$(readlink -f "$BASE/current")"
+rm -rf "$GONE"
+[ -e "$BASE/current" ] && bad "the fixture did not break the symlink" || ok "reproduced: current dangles, nothing behind it"
+
+install_from_checkout
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+[ -f "$TARGET" ] && ok "the unit names something that exists: $(basename "$TARGET")" \
+  || bad "the unit still names a missing file: $TARGET"
+starts "after healing a missing release"
+
+# --- 11. a box systemd has given up on ---------------------------------------
+#
+# THE REASON A REPAIRED BOX STAYED BROKEN. Once StartLimitBurst is hit systemd
+# answers "Start request repeated too quickly" and refuses to start the unit at
+# all — so a box that has been crash-looping cannot be healed by ANY installer,
+# however correct the unit it writes. deb13-staging reached restart counter
+# 6423, and every re-run reported `ok agent-hub running`.
+
+step "11. rate-limited — systemd has stopped trying"
+install_from_checkout >/dev/null 2>&1
+# Break it the way a bad release does, then let systemd give up.
+BROKEN="$WORK/broken-entry.mjs"
+printf '#!/bin/sh\n# not javascript\n' > "$BROKEN"
+sed -i "s|^ExecStart=.*|ExecStart=$(command -v node) $BROKEN serve|" /etc/systemd/system/agent-hub.service
+systemctl daemon-reload
+systemctl restart agent-hub >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8; do systemctl start agent-hub >/dev/null 2>&1; done
+sleep 1
+if systemctl status agent-hub 2>&1 | grep -q "repeated too quickly" \
+   || [ "$(systemctl show -p NRestarts --value agent-hub 2>/dev/null || echo 0)" -gt 0 ]; then
+  ok "reproduced: systemd is refusing to start it"
+else
+  ok "systemd did not rate-limit here; the repair below is still the assertion"
+fi
+
+# THE INSTALLER MUST CLEAR THE FAILURE AND BRING IT BACK — on its own. The
+# assertion deliberately does not restart anything itself, because that would
+# be the drill doing the healing it is supposed to be testing.
+install_from_checkout --upgrade
+sleep 1
+if [ "$(systemctl is-active agent-hub)" = active ]; then
+  ok "the installer cleared the failure and started it"
+else
+  bad "the installer left it dead"
+  journalctl -u agent-hub -n 4 --no-pager 2>/dev/null | sed 's/^/       /'
+fi
+
 step "Result"
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ] || exit 1
