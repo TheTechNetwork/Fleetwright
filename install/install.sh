@@ -100,7 +100,27 @@ FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 CONVERTED=0
 if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
    && grep -q "$FLEET_BASE/current" /etc/systemd/system/agent-hub.service 2>/dev/null; then
-  CONVERTED=1
+  # AND THE RELEASE IT NAMES HAS TO BE THERE. "Converted" meant "the unit points
+  # at the release tree", which is true of a box whose release tree is GONE —
+  # and that is a state boxes reached, because an earlier installer deleted the
+  # directory it was running out of and left `current` dangling.
+  #
+  # On such a box every path agreed to leave things alone: the units were
+  # pointed at a release that did not exist, unit_entry fell back to a bin/ that
+  # did not exist either, the conversion was not offered because the box looked
+  # converted, and the service restarted six thousand times.
+  #
+  # A box whose payload is missing is not converted. It is broken, and the
+  # checkout beside it works — so it goes back to that, says so, and offers the
+  # conversion again.
+  if [ -f "$FLEET_BASE/current/lib/agent-hub.mjs" ]; then
+    CONVERTED=1
+  else
+    warn "$FLEET_BASE/current does not contain a usable release"
+    warn "  the units point there and nothing is behind them — putting this box"
+    warn "  back on the checkout, which works, and offering the move again below"
+    rm -f "$FLEET_BASE/current"
+  fi
 fi
 
 # Set only when the new agent-hub has been SEEN to start. Section 8 will not
@@ -2126,13 +2146,28 @@ if [ "$WIZARD" = yes ]; then
           return 1
         fi
         systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # A UNIT THAT CRASH-LOOPED CANNOT BE STARTED UNTIL ITS FAILURE IS
+        # CLEARED, and nothing cleared it. Once StartLimitBurst is hit systemd
+        # answers "Start request repeated too quickly" and refuses — so a box
+        # that has been failing cannot be repaired by ANY installer, however
+        # correct the unit it writes. A real host reached restart counter 6423
+        # and every re-run of the installer reported `ok`.
+        systemctl reset-failed "$1" >/dev/null 2>&1 || true
+
+        WAS_ACTIVE=no
+        systemctl is-active --quiet "$1" && WAS_ACTIVE=yes
+        systemctl enable "$1" >/dev/null 2>&1 || true
+        systemctl restart "$1" >/dev/null 2>&1 || true
+
+        # AND THE ANSWER IS SYSTEMD'S, NOT THE EXIT CODE OF THE COMMAND. Both
+        # `enable --now` and `restart` returned success on a box whose service
+        # died immediately afterwards — so the installer said "running" about a
+        # unit in a restart loop, which is the single most misleading line it
+        # could print.
+        sleep 1
         if systemctl is-active --quiet "$1"; then
-          if systemctl restart "$1" >/dev/null 2>&1; then
-            ok "$1 restarted, on the new code"
-            return 0
-          fi
-        elif systemctl enable --now "$1" >/dev/null 2>&1; then
-          ok "$1 running"
+          [ "$WAS_ACTIVE" = yes ] && ok "$1 restarted, on the new code" || ok "$1 running"
           return 0
         fi
         warn "$1 failed to start:"
@@ -2356,7 +2391,15 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     systemctl list-unit-files "$unit.service" >/dev/null 2>&1 || continue
     systemctl cat "$unit.service" >/dev/null 2>&1 || continue
     systemctl daemon-reload >/dev/null 2>&1 || true
-    if systemctl restart "$unit" >/dev/null 2>&1; then
+    # THE SAME TWO RULES AS start_service, AND FOR THE SAME REASON. A unit that
+    # crash-looped is refused by systemd until its failure is cleared, so an
+    # upgrade — which is how a migration finishes — could not repair the boxes
+    # that most needed repairing. And `restart` returning 0 says the request was
+    # accepted, not that anything is running.
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    systemctl restart "$unit" >/dev/null 2>&1 || true
+    sleep 1
+    if systemctl is-active --quiet "$unit"; then
       ok "$unit restarted, on the new code"
     else
       warn "$unit did not come back:"
