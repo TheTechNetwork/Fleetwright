@@ -128,7 +128,12 @@ test('a half-finished migration is resumed, not declared complete', () => {
 
   // THE UNIT IS THE ANSWER. What a box runs is what systemd starts.
   assert.match(mig, /UNIT=\/etc\/systemd\/system\/agent-hub\.service/);
-  assert.match(mig, /grep -q "\$BASE\/current" "\$UNIT"/);
+  // EXECSTART, NOT THE WHOLE FILE. A unit names the tree in WorkingDirectory
+  // and EnvironmentFile too, so grepping the file asks "does this mention the
+  // release" when the question is "does it RUN from it" — and a box whose
+  // ExecStart had been pointed back at a checkout was told it was already
+  // converted. The drill caught that.
+  assert.match(mig, /grep '\^ExecStart=' "\$UNIT" \| grep -q "\$BASE\/current"/);
 
   // And neither of the two wrong questions decides it any more. The symlink is
   // now a reason to CONTINUE; the env-file install dir is gone from the test
@@ -473,8 +478,14 @@ test('a release states the protocol it speaks, so the upgrade check is not skipp
 
     // And the installer's fallback is the one that reads it.
     const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-    assert.match(sh, /\[ -n "\$UPGRADE_MINE" \] \|\| UPGRADE_MINE=/, 'the protocol read has no fallback');
+    // GUARDED, NOT CHAINED. As `[ -n "$X" ] || VAR=$(sed … | head -1)` the
+    // fallback could END THE INSTALLER: sed exits non-zero on a file it cannot
+    // read, pipefail promotes it, and an assignment on the right of `||` makes
+    // that the status of the whole compound. It fired right after the services
+    // restarted, so a migration that had worked reported failure.
+    assert.match(sh, /if \[ -z "\$UPGRADE_MINE" \] && \[ -f "\$DIR\/package\.json" \]; then/);
     assert.match(sh, /"\$DIR\/package\.json"/);
+    assert.doesNotMatch(sh, /\[ -n "\$UPGRADE_MINE" \] \|\| UPGRADE_MINE=/, 'the fallback can end the script again');
   } finally {
     rmSync(rel.dir, { recursive: true, force: true });
   }
@@ -554,4 +565,27 @@ test('a converted box gets its units REWRITTEN for the release, not skipped', ()
 
   // The offer still does not reappear — that part of the guard was right.
   assert.match(sh, /\[ "\$CHECK_ONLY" != 1 \] && \[ "\$CONVERTED" = 0 \]/);
+});
+
+test('the reporting sections cannot end the installer', () => {
+  // THREE STATEMENTS IN ONE BLOCK COULD, and all three fired after the services
+  // had been restarted — so a migration that had completely succeeded exited
+  // non-zero and printed "Checking the protocol" as its last line.
+  //
+  // Under `set -euo pipefail` a command substitution that fails takes the script
+  // with it. `sed` exits 2 on a file it cannot read; `curl` exits 3 on a URL it
+  // cannot parse and 7 on one it cannot reach. None of that is a reason to stop
+  // an install — being unable to compare two version numbers is a warning.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  // The reader: a missing file is "unset", not a fatal error.
+  assert.match(sh, /get_env\(\) \{ # get_env FILE KEY\n\s+\[ -f "\$1" \] \|\| return 0/);
+
+  // The health probe: guarded by `if`, so a failure is an empty answer.
+  assert.match(sh, /if UPGRADE_HEALTH="\$\(curl -fsS --max-time 10/);
+  assert.doesNotMatch(
+    sh,
+    /UPGRADE_THEIRS="\$\(curl -fsS/,
+    'the health probe can end the installer again',
+  );
 });

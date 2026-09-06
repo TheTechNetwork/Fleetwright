@@ -84,8 +84,16 @@ STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 # THE UNIT IS THE ANSWER. What a box runs is what systemd starts, and that is
 # one grep away. A unit already pointing into the release tree is a converted
 # box; anything else is not, whatever directories happen to exist.
+# EXECSTART, NOT THE WHOLE FILE. A unit mentions the tree in more than one
+# place — WorkingDirectory, EnvironmentFile — so grepping the file asked "does
+# this unit mention the release directory" when the question is "does it RUN
+# from it". A box whose ExecStart had been pointed back at a checkout, with a
+# WorkingDirectory still naming the release, was told it was already converted
+# and left exactly as it was.
+#
+# What a box runs is one line, and that is the line to read.
 UNIT=/etc/systemd/system/agent-hub.service
-if [ -f "$UNIT" ] && grep -q "$BASE/current" "$UNIT"; then
+if [ -f "$UNIT" ] && grep '^ExecStart=' "$UNIT" | grep -q "$BASE/current"; then
   say "already on the packaged layout — nothing to do"
   exit 0
 fi

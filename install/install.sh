@@ -380,8 +380,22 @@ set_env() { # set_env FILE KEY VALUE
 }
 
 # Read a value back out of an env file.
+#
+# CANNOT FAIL, AND THAT IS THE POINT. This is a reader whose contract is "empty
+# means unset" — and under `set -euo pipefail` it killed the entire installer
+# when the file did not exist. `sed` exits 2 on a file it cannot read, pipefail
+# promotes that through the pipeline, and set -e ends the script.
+#
+# It did so SILENTLY, and in the worst place: the protocol check, which runs
+# after the services have been restarted. A migration that had completely
+# succeeded printed "Checking the protocol" and stopped, exited non-zero, and
+# was reported to whoever ran it as "the migration did not finish".
+#
+# Found by scripts/migration-drill.sh on the first scenario it ran, which is
+# the argument for the drill.
 get_env() { # get_env FILE KEY
-  sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1 || true
 }
 
 # Run something as the target user. `sudo` is not guaranteed to exist — a
@@ -2354,7 +2368,21 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   # most at risk. The release states the protocol it speaks in its package.json,
   # which is the same number the manifest carries.
   UPGRADE_MINE="$("$NODE_BIN" -e "import('$DIR/src/fleet/protocol/intents.js').then(m => console.log(m.PROTOCOL_VERSION))" 2>/dev/null || true)"
-  [ -n "$UPGRADE_MINE" ] || UPGRADE_MINE="$(sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$DIR/package.json" 2>/dev/null | head -1)"
+  # GUARDED, BECAUSE A FALLBACK MUST NOT BE ABLE TO END THE SCRIPT. As
+  # `[ -n "$X" ] || VAR=$(sed ... | head -1)` this was a landmine: sed exits 2
+  # on a file it cannot read, pipefail promotes that through the pipeline, and
+  # the assignment being the right-hand side of `||` makes its failure the
+  # status of the whole compound — so `set -e` ended the installer.
+  #
+  # It ended it in the worst possible place: immediately after the services were
+  # restarted, printing "Checking the protocol" and nothing else. A migration
+  # that had completely succeeded exited non-zero and was reported as a failure.
+  #
+  # This line was added today to make the check work on packaged boxes, and it
+  # took out the thing it was fixing. scripts/migration-drill.sh caught it.
+  if [ -z "$UPGRADE_MINE" ] && [ -f "$DIR/package.json" ]; then
+    UPGRADE_MINE="$(sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$DIR/package.json" | head -1 || true)"
+  fi
   if [ -z "$UPGRADE_MINE" ]; then
     warn "could not read this box's protocol version from $DIR — skipping the check"
   elif [ -z "$UPGRADE_URL" ]; then
@@ -2363,7 +2391,21 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     # /healthz needs no credential and answers {ok, protocol}. Deliberately not
     # an authenticated route: the point is to be readable from a box that is
     # being repaired.
-    UPGRADE_THEIRS="$(curl -fsS --max-time 10 "${UPGRADE_URL%/}/healthz" 2>/dev/null       | sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    # A REPORTING SECTION MUST NOT BE ABLE TO END THE SCRIPT, and this is the
+    # third statement in this block that could. `curl` exits 3 on a URL it
+    # cannot parse and 7 on one it cannot reach; pipefail promotes that through
+    # the pipeline, the assignment fails, and `set -e` ends the installer —
+    # AFTER the services have already been restarted.
+    #
+    # So any box whose coordinator is unreachable, or which has never had one,
+    # reported a completely successful migration as a failure and stopped with
+    # "Checking the protocol" as its last line. Being unable to compare two
+    # version numbers is a warning; it is not a reason to stop.
+    UPGRADE_THEIRS=""
+    if UPGRADE_HEALTH="$(curl -fsS --max-time 10 "${UPGRADE_URL%/}/healthz" 2>/dev/null)"; then
+      UPGRADE_THEIRS="$(printf '%s' "$UPGRADE_HEALTH" \
+        | sed -n 's/.*"protocol"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    fi
     if [ -z "$UPGRADE_THEIRS" ]; then
       warn "could not reach $UPGRADE_URL to compare protocol versions — this box speaks v$UPGRADE_MINE"
     elif [ "$UPGRADE_THEIRS" = "$UPGRADE_MINE" ]; then
