@@ -419,9 +419,22 @@ test('a unit names the module, so a bad shim in a release cannot stop it', () =>
   for (const f of ['agent-hub.service', 'agent-fleet-sidecar.service', 'agent-fleet-coordinator.service',
                    'agent-hub.plist', 'agent-fleet-sidecar.plist', 'agent-fleet-coordinator.plist']) {
     const unit = readFileSync(new URL(`../install/${f}`, import.meta.url), 'utf8');
-    const body = unit.replace(/^#.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '');
-    assert.doesNotMatch(body, /__DIR__\/bin\//, `${f} still names a bin/ path`);
-    assert.match(body, /__ENTRY__/, `${f} names no entry at all`);
+
+    // THE LINES THAT SAY WHAT RUNS, rather than the file with its comments
+    // stripped. Stripping was both imprecise and wrong-shaped: one pass over
+    // `<!--[\s\S]*?-->` can leave a `<!--` behind on nested input, which CodeQL
+    // flagged (js/incomplete-multi-character-sanitization). It is a test rather
+    // than a sanitizer, so nothing was exploitable — but the fix for "I removed
+    // the parts I did not want to read" is to read the parts I do.
+    //
+    // A systemd unit says it in ExecStart=; a launchd plist says it in the
+    // <string> entries of ProgramArguments. Comments in either form are neither.
+    const execLines = unit.split('\n').filter((l) => /^ExecStart=|<string>/.test(l.trim()));
+    assert.ok(execLines.length > 0, `${f} has no line saying what it runs`);
+    for (const line of execLines) {
+      assert.doesNotMatch(line, /__DIR__\/bin\//, `${f} still names a bin/ path: ${line.trim()}`);
+    }
+    assert.ok(execLines.some((l) => l.includes('__ENTRY__')), `${f} names no entry at all`);
   }
 });
 
