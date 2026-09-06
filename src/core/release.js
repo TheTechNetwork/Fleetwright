@@ -326,6 +326,17 @@ export function releasePaths(base, version) {
 }
 
 /**
+ * How many releases a box keeps.
+ *
+ * It was two — live and previous — and that was written when a release meant a
+ * published version every few weeks. The rolling channel takes a build on every
+ * merge, so "the one before" can be an hour old and a bad build noticed the
+ * next morning has nothing to go back to. About a megabyte each, against a
+ * rollback that actually reaches.
+ */
+export const RELEASES_KEPT = 14;
+
+/**
  * Releases that can be removed.
  *
  * Keeps the live one and the one before it, because "the one before" is what a
@@ -335,12 +346,39 @@ export function releasePaths(base, version) {
  * @param {string[]} present   directory names under releases/
  * @param {string} live        the version `current` points at
  * @param {string|null} previous
+ * @param {{ keep?: number, newestFirst?: string[]|null }} [opts] `newestFirst`
+ *   is the caller's ordering, by when each was installed — version names do not
+ *   sort against each other once two channels exist.
  * @returns {string[]}
  */
-export function releasesToPrune(present, live, previous = null) {
-  const keep = new Set([live, previous].filter(Boolean));
+export function releasesToPrune(present, live, previous = null, { keep = RELEASES_KEPT, newestFirst = null } = {}) {
   // Anything half-unpacked is not a release and is always removable — it is
   // the debris of an interrupted update, and keeping it would make the next
-  // one refuse a directory that already exists.
-  return present.filter((v) => v.startsWith('.incoming-') || !keep.has(v));
+  // one refuse a directory that already exists. It is never counted against
+  // the retention limit either: it is not a version anybody could go back to.
+  const incoming = present.filter((v) => v.startsWith('.incoming-'));
+  const releases = present.filter((v) => !v.startsWith('.incoming-'));
+
+  // LIVE AND PREVIOUS ARE KEPT WHATEVER HAPPENS. They are not "the two newest"
+  // — `previous` is what a rollback returns to, and it stays kept even if
+  // fourteen newer ones arrive while somebody is deciding.
+  const kept = new Set([live, previous].filter(Boolean));
+
+  // THEN THE MOST RECENT, UP TO THE LIMIT. Two was the whole policy, and it was
+  // written when a release meant a published version every few weeks. The
+  // rolling channel takes a build on every merge — `main-55` — so "the one
+  // before" can be an hour old, and a bad build noticed on Monday had nothing
+  // to go back to.
+  //
+  // ORDER COMES FROM THE CALLER, because it is a filesystem fact: version names
+  // are not comparable across channels (`v0.2.3` and `main-55` do not sort
+  // against each other), and the only honest ordering is when each was
+  // installed. Absent an order this keeps the ones it was given, which is what
+  // a caller with no filesystem to ask should get.
+  for (const v of newestFirst ?? releases) {
+    if (kept.size >= keep) break;
+    if (releases.includes(v)) kept.add(v);
+  }
+
+  return [...incoming, ...releases.filter((v) => !kept.has(v))];
 }

@@ -119,8 +119,15 @@ test('a protocol mismatch never downloads anything', async () => {
   rmSync(box.base, { recursive: true, force: true });
 });
 
-test('the release before last is kept, and older ones are not', async () => {
-  // A rollback target that was tidied away is not a rollback target.
+test('the release before last is kept, and so are the ones before that', async () => {
+  // A rollback target that was tidied away is not a rollback target — the
+  // original point of this test, and still true.
+  //
+  // What changed is how many. It was live-and-previous, written when a release
+  // meant a published version every few weeks. The rolling channel takes a
+  // build on every merge, so "the one before" can be an hour old and a bad
+  // build noticed the next morning had nothing to go back to. Fourteen now —
+  // about a megabyte each, against a rollback that actually reaches.
   const box = makeBox('v1');
   mkdirSync(path.join(box.base, 'releases', 'v0'), { recursive: true });
   const rel = makeRelease('v2');
@@ -131,7 +138,26 @@ test('the release before last is kept, and older ones are not', async () => {
     fetch: serve(rel, { version: 'v2', file: 'r.tar.gz', sha256: rel.sha256, protocol: 2 }),
   });
   const left = readdirSync(path.join(box.base, 'releases')).sort();
-  assert.deepEqual(left, ['v1', 'v2']);
+  assert.deepEqual(left, ['v0', 'v1', 'v2'], 'a box under the limit lost a release');
+  rmSync(box.base, { recursive: true, force: true });
+});
+
+test('past the limit, the oldest go and the running one never does', async () => {
+  const box = makeBox('v1');
+  // Fifteen older releases, so applying one more crosses the line.
+  for (let i = 0; i < 15; i++) mkdirSync(path.join(box.base, 'releases', `old-${i}`), { recursive: true });
+  const rel = makeRelease('v2');
+  await applyRelease({
+    installDir: box.current,
+    manifestUrl: URL_,
+    protocol: 2,
+    fetch: serve(rel, { version: 'v2', file: 'r.tar.gz', sha256: rel.sha256, protocol: 2 }),
+  });
+  const left = readdirSync(path.join(box.base, 'releases'));
+  assert.equal(left.length, 14, `kept ${left.length}: ${left.sort().join(' ')}`);
+  // The two that are not negotiable: what it runs, and what it would go back to.
+  assert.ok(left.includes('v2'), 'the new release was pruned');
+  assert.ok(left.includes('v1'), 'the rollback target was pruned');
   rmSync(box.base, { recursive: true, force: true });
 });
 

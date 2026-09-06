@@ -86,6 +86,23 @@ FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 # defaulted, `--check` would have copied a release into place before reaching
 # the argument that promises to change nothing.
 
+# IS THIS BOX ALREADY ON PACKAGED RELEASES, even though this script is running
+# out of a checkout?
+#
+# THE ONE-LINER RE-RAN AND QUIETLY UN-MIGRATED A CONVERTED BOX. bootstrap.sh
+# updates /opt/agent-fleet and runs the install.sh inside it, so PACKAGED is 0 —
+# and everything below then re-pointed the units and the CLI links back at the
+# checkout, undoing a conversion nobody asked to undo, before offering to
+# convert again. The repeated offer was the visible half of a revert.
+#
+# What a box RUNS is what systemd starts, which is the same question
+# fleetwright-migrate asks and the same way it asks it.
+CONVERTED=0
+if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
+   && grep -q "$FLEET_BASE/current" /etc/systemd/system/agent-hub.service 2>/dev/null; then
+  CONVERTED=1
+fi
+
 # Set only when the new agent-hub has been SEEN to start. Section 8 will not
 # remove the install it replaced without it.
 SERVICES_STARTED=0
@@ -1276,6 +1293,13 @@ for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   fi
 done
 
+if [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; then
+  # LEFT ALONE, DELIBERATELY. This box runs packaged releases; rewriting its
+  # units to point at this checkout is exactly the revert described above.
+  # --from-source is how somebody asks for that on purpose.
+  ok "this box runs packaged releases — its units are left pointing there"
+  ok "  (--from-source moves it back to this checkout)"
+else
 install_unit agent-hub
 install_unit agent-fleet-sidecar
 # ONLY IF THE PAYLOAD HAS ONE. A release deliberately ships no coordinator —
@@ -1290,6 +1314,7 @@ if [ -f "$DIR/bin/agent-fleet-coordinator" ]; then
   install_unit agent-fleet-coordinator
 else
   ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
+fi
 fi
 
 # Reading the service journal needs group membership: systemd-journald shows a
@@ -1565,6 +1590,13 @@ if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER
 fi
 
 # --- 6. CLIs on PATH --------------------------------------------------------
+if [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; then
+  # Same reason as the units: /usr/local/bin/agent-hub pointing into this
+  # checkout on a box that runs releases is half a revert, and the confusing
+  # half — the services would be on one tree and the command line on another.
+  say "Linking the CLIs"
+  ok "left pointing at the release this box runs"
+else
 say "Linking the CLIs"
 
 # /usr/local/bin is NOT guaranteed to exist. On Apple Silicon it usually does
@@ -1593,6 +1625,7 @@ for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
     warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
   ok "$BIN_DIR/$cli -> $DIR/bin/$cli"
 done
+fi
 
 # --- 7. the wizard ----------------------------------------------------------
 # Everything above wrote files. This turns the checklist that used to be printed
@@ -2516,7 +2549,7 @@ fi
 # the migration re-runs this script from the release to re-template the units,
 # and running it against a half-configured box would be two installers
 # interleaving.
-if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] \
+if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] && [ "$CONVERTED" = 0 ] \
    && [ -z "${FLEETWRIGHT_MIGRATING:-}" ] && [ -x /usr/local/sbin/fleetwright-migrate ] \
    && [ -n "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
   say "Packaged releases"
