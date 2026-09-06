@@ -27,7 +27,7 @@
 // not built.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { RELEASES_DIR, decideRelease, fileUrl, releasePaths, releasesToPrune, verifyDownload } from './release.js';
 
@@ -244,7 +244,22 @@ function prune(base, live, previous, log) {
   } catch {
     return;
   }
-  for (const name of releasesToPrune(present, live, previous)) {
+  // NEWEST FIRST, BY WHEN IT WAS INSTALLED. Version names do not sort against
+  // each other once two channels exist — `v0.2.3` and `main-55` have no order —
+  // so the filesystem is asked instead. A directory that cannot be stat'd sorts
+  // last, which means it is a candidate for removal rather than something that
+  // silently occupies a retention slot.
+  const newestFirst = present
+    .filter((v) => !v.startsWith('.incoming-'))
+    .map((v) => {
+      let at = 0;
+      try { at = statSync(path.join(dir, v)).mtimeMs; } catch { /* sorts last */ }
+      return { v, at };
+    })
+    .sort((a, b) => b.at - a.at)
+    .map((e) => e.v);
+
+  for (const name of releasesToPrune(present, live, previous, { newestFirst })) {
     rmSync(path.join(dir, name), { recursive: true, force: true });
     log(`update: removed release ${name}`);
   }

@@ -502,3 +502,30 @@ test('a migration keeps the checkout, and does not call that a failure', () => {
   // install whose services genuinely did not come up.
   assert.match(sh, /the new services did not start/);
 });
+
+test('re-running the one-liner on a converted box does not un-convert it', () => {
+  // REPORTED: "after migrating it still offers at every installer rerun".
+  //
+  // The repeated offer was the visible half of a REVERT. bootstrap.sh updates
+  // /opt/agent-fleet and runs the install.sh inside it, so PACKAGED is 0 — and
+  // everything downstream then re-pointed the systemd units and the CLI links
+  // back at the checkout, undoing a conversion nobody asked to undo, before
+  // offering to convert again.
+  //
+  // What a box RUNS is what systemd starts. That is the same question
+  // fleetwright-migrate asks, and it is asked the same way here.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  assert.match(sh, /CONVERTED=0/);
+  assert.match(sh, /grep -q "\$FLEET_BASE\/current" \/etc\/systemd\/system\/agent-hub\.service/);
+
+  // The three things that dragged a converted box back, each now conditional.
+  assert.match(sh, /if \[ "\$CONVERTED" = 1 \] && \[ "\$FROM_SOURCE" = 0 \]; then\n\s+#[\s\S]*?its units are left pointing there/);
+  assert.match(sh, /left pointing at the release this box runs/);
+  assert.match(sh, /\[ "\$CHECK_ONLY" != 1 \] && \[ "\$CONVERTED" = 0 \]/, 'the conversion is still offered to a converted box');
+
+  // AND --from-source STILL MOVES IT BACK. That is the documented reversal, and
+  // a guard that refused it would leave a box with no way home.
+  const guards = sh.match(/if \[ "\$CONVERTED" = 1 \] && \[ "\$FROM_SOURCE" = 0 \]; then/g) || [];
+  assert.equal(guards.length, 2, 'a guard forgot to let --from-source through');
+});
