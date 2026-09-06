@@ -519,13 +519,39 @@ test('re-running the one-liner on a converted box does not un-convert it', () =>
   assert.match(sh, /CONVERTED=0/);
   assert.match(sh, /grep -q "\$FLEET_BASE\/current" \/etc\/systemd\/system\/agent-hub\.service/);
 
-  // The three things that dragged a converted box back, each now conditional.
-  assert.match(sh, /if \[ "\$CONVERTED" = 1 \] && \[ "\$FROM_SOURCE" = 0 \]; then\n\s+#[\s\S]*?its units are left pointing there/);
-  assert.match(sh, /left pointing at the release this box runs/);
+  // Units and links are pointed at the release rather than at this checkout —
+  // see the next test for why they are REWRITTEN rather than skipped.
+  assert.match(sh, /pointing its units at \$FLEET_BASE\/current/);
   assert.match(sh, /\[ "\$CHECK_ONLY" != 1 \] && \[ "\$CONVERTED" = 0 \]/, 'the conversion is still offered to a converted box');
 
   // AND --from-source STILL MOVES IT BACK. That is the documented reversal, and
   // a guard that refused it would leave a box with no way home.
   const guards = sh.match(/if \[ "\$CONVERTED" = 1 \] && \[ "\$FROM_SOURCE" = 0 \]; then/g) || [];
   assert.equal(guards.length, 2, 'a guard forgot to let --from-source through');
+});
+
+test('a converted box gets its units REWRITTEN for the release, not skipped', () => {
+  // THE FIRST VERSION OF THIS GUARD TOOK A HOST DOWN, by being too careful.
+  //
+  // It left the units alone entirely, reasoning that rewriting them to point at
+  // the checkout is a revert. True — and it threw away the other half: a unit
+  // is GENERATED, and an old one is exactly what needs replacing.
+  //
+  // deb13-staging was already converted, carrying a unit written before units
+  // named the module: `node .../current/bin/agent-hub`, against a release whose
+  // bin/ is a shell shim. Thirty-odd restarts deep. The re-run that could have
+  // repaired it politely left it broken.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  // Pointed at the release, and then written — not skipped.
+  assert.match(sh, /UNIT_DIR_SAVED="\$DIR"\n\s+DIR="\$FLEET_BASE\/current"/);
+  const units = sh.slice(sh.indexOf('UNIT_DIR_SAVED="$DIR"'), sh.indexOf('if [ -n "${UNIT_DIR_SAVED:-}" ]'));
+  assert.match(units, /install_unit agent-hub/, 'the units are still skipped on a converted box');
+
+  // And $DIR is put back, or everything after this writes into the release.
+  assert.match(sh, /if \[ -n "\$\{UNIT_DIR_SAVED:-\}" \]; then DIR="\$UNIT_DIR_SAVED"/);
+  assert.match(sh, /if \[ -n "\$\{LINK_DIR_SAVED:-\}" \]; then DIR="\$LINK_DIR_SAVED"/);
+
+  // The offer still does not reappear — that part of the guard was right.
+  assert.match(sh, /\[ "\$CHECK_ONLY" != 1 \] && \[ "\$CONVERTED" = 0 \]/);
 });
