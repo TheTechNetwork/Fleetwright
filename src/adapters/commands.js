@@ -1490,6 +1490,12 @@ export const COMMANDS = {
           kind: 'release',
           pending: Boolean(r.available),
           available: r.available,
+          // CARRIED, BECAUSE `available: null` IS TWO DIFFERENT ANSWERS.
+          // checkRelease answers null both for "nothing waiting" and for
+          // "could not reach GitHub", and only `configured` and `message`
+          // tell them apart. Dropping this here is what let a box that had
+          // never successfully checked render as "up to date".
+          configured: r.configured,
           text: r.message,
         };
       } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {

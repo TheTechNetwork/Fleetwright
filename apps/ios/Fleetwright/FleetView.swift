@@ -591,7 +591,16 @@ private struct SettingsView: View {
             //
             // Two verbs would have been two round trips and two chances to
             // render them apart. One answer cannot disagree with itself.
-            case .check: answer = try await fleet.updates(host: host).text
+            case .check:
+                let r = try await fleet.updates(host: host)
+                answer = r.text
+                // BELIEVE THE REPLY. This is the freshest thing anybody has
+                // about this box — it was computed a moment ago because
+                // somebody pressed a button — and it used to be rendered into
+                // the text field and thrown away, leaving the row beside it
+                // still saying "up to date" with no Apply button. The check
+                // reported an update and the screen offered no way to take it.
+                if let w = r.waiting { applyWaiting(w, to: host) }
             case .applyUpdate: answer = try await fleet.update(host: host, restart: true).text
             case .applyUpgrade: answer = try await fleet.upgrade(host: host, apply: true).text
             case .rebootAsk: answer = try await fleet.reboot(host: host).text
@@ -704,7 +713,7 @@ private struct SettingsView: View {
             // for.
             HStack(spacing: 12) {
                 Button("Check") { Task { await maintain(host.hostId, .check) } }
-                if host.health?.updates?.appPending == true {
+                if host.health?.updates?.appUpdatePending == true {
                     Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
                 }
                 if host.health?.updates?.systemPending == true {
@@ -724,6 +733,17 @@ private struct SettingsView: View {
     /// buys is the second in between, where the alternative is showing somebody
     /// the value they just changed away from.
     @MainActor
+    private func applyWaiting(_ w: Fleet.HostHealth.Waiting, to hostId: String) {
+        guard let i = fleetHosts.firstIndex(where: { $0.hostId == hostId }),
+              let health = fleetHosts[i].health else { return }
+        fleetHosts[i] = Fleet.FleetHost(
+            hostId: fleetHosts[i].hostId,
+            state: fleetHosts[i].state,
+            reason: fleetHosts[i].reason,
+            health: health.withUpdates(w),
+        )
+    }
+
     private func applyChannel(_ channel: String, to hostId: String, pinned: Bool) {
         guard let i = fleetHosts.firstIndex(where: { $0.hostId == hostId }),
               let health = fleetHosts[i].health else { return }
@@ -1548,6 +1568,19 @@ private func describeRunning(_ host: Fleet.FleetHost) -> String {
         parts.append("\(behind) commit\(behind == 1 ? "" : "s") behind")
     } else if let waiting = host.health?.updates?.release?.available {
         parts.append("\(waiting) waiting")
+    } else if host.health?.updates?.appUpdatePending == true {
+        // A migratable checkout is offered a move onto packaged releases. It
+        // counts no commits and names no release version, so both branches
+        // above are silent on it and it read as current with an Apply button —
+        // a row contradicting its own button.
+        parts.append("update waiting")
+    } else if host.health?.updates?.appStatusKnown == false {
+        // "UP TO DATE" IS A CLAIM AND THIS IS WHERE IT WAS BEING INVENTED.
+        // Every packaged box reports `appBehind: nil`, and a box that has never
+        // reached GitHub reports `release.available: nil` — so the else below
+        // fired on both, and a host nobody had successfully checked rendered as
+        // current. Not knowing is its own state and it gets its own words.
+        parts.append("update status unknown")
     } else if host.health?.version?.head != nil {
         parts.append("up to date")
     }

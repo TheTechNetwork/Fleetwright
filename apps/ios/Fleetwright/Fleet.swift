@@ -161,6 +161,11 @@ struct Fleet {
         /// shown as an answer and not as a choice. Said up front rather than
         /// discovered by a refusal.
         var channelPinned: Bool?
+        /// What a check found, as DATA. The host computes `{ app, system }`
+        /// precisely so a row can render a state instead of parsing a sentence
+        /// — and this reply carried it while both apps rendered the sentence
+        /// into a text box and left the row showing a fifteen-minute-old cache.
+        var waiting: HostHealth.Waiting?
     }
 
     /// A task profile: a file on ONE host whose content becomes a new session's
@@ -772,10 +777,24 @@ struct Fleet {
             /// boxes — which is CANNOT TELL, and is why a packaged host showed
             /// nothing here for as long as the packaging existed.
             let release: Release?
+            /// THE HOST'S OWN ANSWER, and the only one that is right for every
+            /// kind of box. Nil from a host too old to send it, in which case
+            /// the derivation below stands in.
+            let appPending: Bool?
 
             /// Is there anything to apply? Two separate answers, because they
             /// are two different actions on two different things.
-            var appPending: Bool { (appBehind ?? 0) > 0 || release?.available != nil }
+            ///
+            /// THE FALLBACK IS WRONG ON A PACKAGED BOX and is kept only for
+            /// hosts that predate `appPending`. `appBehind` is nil on a release
+            /// — there is no history to count — so `?? 0` reads CANNOT TELL as
+            /// NOTHING WAITING, and `release.available` is nil both when
+            /// nothing is waiting and when the check could not reach GitHub.
+            /// Two flavours of "we do not know" rendering as "you are current".
+            var appUpdatePending: Bool { appPending ?? ((appBehind ?? 0) > 0 || release?.available != nil) }
+            /// Can this box answer the question at all? Nil `appPending` from a
+            /// host that sends it means no check has finished or none could.
+            var appStatusKnown: Bool { appPending != nil || (appBehind ?? 0) > 0 || release?.available != nil }
             var systemPending: Bool { !(system ?? "").isEmpty }
         }
         /// What a release-installed box found waiting for it.
@@ -852,11 +871,62 @@ struct Fleet {
         /// than discovered by a refusal afterwards.
         let channelPinned: Bool?
 
+        /// Mirrors `waiting` in the host's `/updates` reply.
+        struct Waiting: Codable, Hashable {
+            struct App: Codable, Hashable {
+                /// `checkout`, `release`, `migratable` or `unknown` — which
+                /// question this box's answer is an answer to.
+                let kind: String?
+                let pending: Bool?
+                let available: String?
+                let configured: Bool?
+                let behind: Int?
+                let text: String?
+            }
+            struct System: Codable, Hashable {
+                let supported: Bool?
+                let pending: Bool?
+                let count: Int?
+                let text: String?
+            }
+            let app: App?
+            let system: System?
+        }
+
         /// The same health with a channel the host has just confirmed.
         ///
         /// Every field is `let`, so this rebuilds rather than mutates — which is
         /// the point: a struct nobody can half-update cannot drift into a state
         /// the host never reported.
+        /// The same rebuild, for what a check just found.
+        ///
+        /// A CHECK IS THE FRESHEST THING ANYBODY HAS ABOUT THIS BOX, and it was
+        /// being rendered into a text box and then discarded while the row went
+        /// on showing a cache. `rebootRequired` is carried over rather than
+        /// invented: the check does not report it, and false would clear a real
+        /// pending reboot.
+        func withUpdates(_ w: Waiting) -> HostHealth {
+            let app = w.app
+            let sys = w.system
+            let next = Updates(
+                appBehind: app?.kind == "checkout" ? app?.behind : nil,
+                // `text` is a sentence either way — "No system packages are
+                // waiting." is a fine answer and a terrible value for a field
+                // whose emptiness hides the Apply upgrade button.
+                system: sys?.pending == true ? sys?.text : nil,
+                rebootRequired: updates?.rebootRequired,
+                release: app?.kind == "release"
+                    ? Release(available: app?.available, configured: app?.configured, message: app?.text)
+                    : nil,
+                appPending: app?.pending,
+            )
+            return HostHealth(
+                account: account, credential: credential, version: version, updates: next,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
+            )
+        }
+
         func withChannel(_ channel: String, pinned: Bool) -> HostHealth {
             HostHealth(
                 account: account, credential: credential, version: version, updates: updates,
@@ -877,7 +947,7 @@ struct Fleet {
 
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.
-        var updatePending: Bool { health?.updates?.appPending == true }
+        var updatePending: Bool { health?.updates?.appUpdatePending == true }
     }
 
     struct Host: Codable, Identifiable, Hashable {

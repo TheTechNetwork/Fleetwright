@@ -306,7 +306,11 @@ test('a mutating verb refreshes what the fleet is told, a read does not', async 
   // cache misleads most.
   const handler = src.slice(src.indexOf('const r = await this.hub.command(line, meta)'));
   const fin = handler.indexOf('} finally {');
-  const push = handler.indexOf('#pushHealth());');
+  // ANCHORED ON THE MUTATING PUSH, not on the first `#pushHealth()` in the
+  // function. `updates` pushes one too now — a check is a read that changes
+  // what this box knows — and it sits ABOVE the finally, so searching for any
+  // push found that one and reported this rule broken when it was not.
+  const push = handler.indexOf('if (isMutating(intent.verb)) setImmediate');
   assert.ok(fin > 0 && push > fin, 'the refresh is not in a finally block');
 });
 

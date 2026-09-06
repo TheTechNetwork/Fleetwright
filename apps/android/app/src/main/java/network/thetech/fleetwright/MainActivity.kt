@@ -860,9 +860,46 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                     // apart; one answer cannot disagree with
                                     // itself.
                                     resultHost = host.hostId
-                                    hostActionResult = Fleet(settings).updates(host.hostId).text
+                                    val r = Fleet(settings).updates(host.hostId)
+                                    hostActionResult = r.text
                                     busyHost = null
                                     fleetHosts = Fleet(settings).fleetHosts()
+                                    // BELIEVE THE REPLY, AFTER the refresh
+                                    // rather than before it — the refresh is
+                                    // what would otherwise overwrite it. This
+                                    // is the freshest thing anybody has about
+                                    // this box: it was computed a moment ago
+                                    // because somebody pressed a button, while
+                                    // the row renders from a cache the host
+                                    // refreshes every fifteen minutes.
+                                    r.waiting?.let { w ->
+                                        fleetHosts = fleetHosts.map {
+                                            if (it.hostId != host.hostId) it
+                                            else it.copy(
+                                                behind = if (w.appKind == "checkout") w.appBehind else null,
+                                                // `systemText` is a sentence either
+                                                // way — "No system packages are
+                                                // waiting." is a fine answer and a
+                                                // bad value for a field whose
+                                                // emptiness hides a button.
+                                                systemUpdates = if (w.systemPending) w.systemText else null,
+                                                release = if (w.appKind == "release") {
+                                                    Fleet.Release(
+                                                        available = w.appAvailable,
+                                                        // Unreachable in practice: only a
+                                                        // host new enough to send `waiting`
+                                                        // gets here, and those always send
+                                                        // `configured` beside it.
+                                                        configured = w.appConfigured ?: true,
+                                                        message = w.appText,
+                                                    )
+                                                } else {
+                                                    null
+                                                },
+                                                appPendingReported = w.appPending,
+                                            )
+                                        }
+                                    }
                                 }
                             },
                         ) { Text("Check") }
@@ -1393,6 +1430,15 @@ private fun describeRunning(host: Fleet.FleetHost): String {
     when {
         behind > 0 -> parts.add("$behind commit${if (behind == 1) "" else "s"} behind")
         host.release?.available != null -> parts.add("${host.release.available} waiting")
+        // A migratable checkout counts no commits and names no release version,
+        // so both branches above are silent on it — and it read as current
+        // beside its own Apply button.
+        host.appPending -> parts.add("update waiting")
+        // "UP TO DATE" IS A CLAIM, AND THIS IS WHERE IT WAS INVENTED. Every
+        // packaged box reports a null commit count, so the branch below fired
+        // on all of them, and on any box that had never reached GitHub. Not
+        // knowing is its own state and gets its own words.
+        !host.appStatusKnown -> parts.add("update status unknown")
         host.version != null -> parts.add("up to date")
     }
     host.channel?.takeIf { it.isNotBlank() }?.let {

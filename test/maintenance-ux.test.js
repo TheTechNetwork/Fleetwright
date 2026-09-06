@@ -59,7 +59,10 @@ test('apply is offered only when something is waiting', () => {
   // reading, which is the opposite of what a maintenance screen is for.
   for (const [name, view] of APPS) {
     const src = read(view);
-    assert.match(src, /appPending/, `${name} offers "apply update" unconditionally`);
+    // `appUpdatePending` on iOS, `appPending` on Android — one name each, and
+    // both now READ THE HOST'S ANSWER rather than re-deriving it from a commit
+    // count that is null on every packaged box.
+    assert.match(src, /app(Update)?Pending/, `${name} offers "apply update" unconditionally`);
     assert.match(src, /systemPending/, `${name} offers "apply upgrade" unconditionally`);
     assert.match(src, /"Apply update"/, `${name} cannot apply a code update`);
     assert.match(src, /"Apply upgrade"/, `${name} cannot apply system packages`);

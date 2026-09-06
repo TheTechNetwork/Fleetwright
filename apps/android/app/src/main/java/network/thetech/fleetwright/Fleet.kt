@@ -245,9 +245,29 @@ class Fleet(
          * rather than discovered by a refusal afterwards.
          */
         val channelPinned: Boolean = false,
+        /**
+         * The host's own answer to "is there something to apply", and the only
+         * one that is right for every kind of box. Null from a host too old to
+         * send it, and null from a host that could not find out.
+         */
+        val appPendingReported: Boolean? = null,
     ) {
-        /** Two separate answers, because they are two actions on two things. */
-        val appPending: Boolean get() = (behind ?: 0) > 0 || release?.available != null
+        /**
+         * Two separate answers, because they are two actions on two things.
+         *
+         * THE FALLBACK IS WRONG ON A PACKAGED BOX and survives only for hosts
+         * that predate [appPendingReported]. `behind` is null on a release —
+         * there is no history to count — so `?: 0` reads CANNOT TELL as NOTHING
+         * WAITING, and `release.available` is null both when nothing is waiting
+         * and when the check could not reach GitHub. Two flavours of "we do not
+         * know" rendering as "you are current", with the Apply button hidden.
+         */
+        val appPending: Boolean
+            get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
+
+        /** Can this box answer the question at all? */
+        val appStatusKnown: Boolean
+            get() = appPendingReported != null || (behind ?: 0) > 0 || release?.available != null
         val systemPending: Boolean get() = !systemUpdates.isNullOrBlank()
     }
 
@@ -285,6 +305,18 @@ class Fleet(
          */
         val isDead: Boolean get() = state == "expired" && refreshable == false
     }
+
+    /** Mirrors `waiting` in the host's `/updates` reply. */
+    data class Waiting(
+        val appKind: String? = null,
+        val appPending: Boolean? = null,
+        val appAvailable: String? = null,
+        val appConfigured: Boolean? = null,
+        val appBehind: Int? = null,
+        val appText: String? = null,
+        val systemPending: Boolean = false,
+        val systemText: String? = null,
+    )
 
     data class Reply(
         val ok: Boolean,
@@ -327,6 +359,15 @@ class Fleet(
          */
         val channel: String? = null,
         val channelPinned: Boolean = false,
+        /**
+         * What a check found, as DATA. The host computes `{ app, system }`
+         * precisely so a row can render a state instead of parsing a sentence,
+         * and this reply carried none of it — so Check printed "main-57 →
+         * main-63 (available)" into a text box while the row beside it went on
+         * showing a fifteen-minute-old cache that said "up to date", with no
+         * Apply button, because the button reads the row.
+         */
+        val waiting: Waiting? = null,
     )
 
     /**
@@ -905,6 +946,23 @@ class Fleet(
                     // answered, `[]` means nothing to offer.
                     channel = json.optString("channel").takeIf { it.isNotBlank() && it != "null" },
                     channelPinned = json.optBoolean("channelPinned"),
+                    waiting = json.optJSONObject("waiting")?.let { w ->
+                        val a = w.optJSONObject("app")
+                        val sy = w.optJSONObject("system")
+                        Waiting(
+                            appKind = a?.optString("kind")?.takeIf { it.isNotBlank() && it != "null" },
+                            // `has` first: optBoolean turns a missing field into
+                            // false, and "nobody could find out" is not "nothing
+                            // is waiting".
+                            appPending = a?.takeIf { it.has("pending") && !it.isNull("pending") }?.optBoolean("pending"),
+                            appAvailable = a?.optString("available")?.takeIf { it.isNotBlank() && it != "null" },
+                            appConfigured = a?.takeIf { it.has("configured") && !it.isNull("configured") }?.optBoolean("configured"),
+                            appBehind = a?.optInt("behind", -1)?.takeIf { it >= 0 },
+                            appText = a?.optString("text")?.takeIf { it.isNotBlank() && it != "null" },
+                            systemPending = sy?.optBoolean("pending") == true,
+                            systemText = sy?.optString("text")?.takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                     profiles = json.optJSONArray("profiles")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->
                             a.optJSONObject(i)?.let { p ->
@@ -982,6 +1040,11 @@ class Fleet(
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },
                     version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
+                    // `has` first: optBoolean would turn a missing field into
+                    // false, which is the difference between "nothing waiting"
+                    // and "nobody could find out" — the whole point of the field.
+                    appPendingReported =
+                        updates?.takeIf { it.has("appPending") && !it.isNull("appPending") }?.optBoolean("appPending"),
                     systemUpdates = updates?.optString("system")?.takeIf { it.isNotBlank() && it != "null" },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
                     release = updates?.optJSONObject("release")?.let { r ->
