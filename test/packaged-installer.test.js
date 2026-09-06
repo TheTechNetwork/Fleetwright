@@ -602,3 +602,37 @@ test('the reporting sections cannot end the installer', () => {
     'the health probe can end the installer again',
   );
 });
+
+test('unit templates come from the installer, not from the payload', () => {
+  // THE BUG THAT KEPT A HOST DOWN ALL DAY, and the reason every repair looked
+  // like it had worked. install_unit read `$DIR/install/<name>.service`, and
+  // $DIR is the PAYLOAD — so a box pointing its units at a release read THAT
+  // RELEASE's template.
+  //
+  // v0.2.3 ships:
+  //
+  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //
+  // written before __ENTRY__ existed. So the __ENTRY__ substitution found
+  // nothing to replace, __DIR__ became the release, and the installer wrote
+  // `current/bin/agent-hub` — the shell shim — every single time, on a box
+  // whose installer had been correct for hours.
+  //
+  // No release built from the current tree can show this: its template is
+  // always up to date. Only an OLD payload can, which is why nothing caught it.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  assert.match(sh, /SELF_DIR="\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)\/\.\." && pwd\)"/);
+  assert.match(sh, /DIR="\$\{AGENT_FLEET_PAYLOAD:-\$SELF_DIR\}"/);
+
+  // The template comes from SELF_DIR; the entry path still comes from $DIR, so
+  // a converted box gets a current template naming the release it runs.
+  const installUnit = sh.slice(sh.indexOf('install_unit() {'), sh.indexOf('\n  ok "$dest"'));
+  assert.match(installUnit, /local from="\$SELF_DIR"/);
+  assert.match(installUnit, /src="\$from\/install\/\$1\.service"/);
+  assert.doesNotMatch(installUnit, /src="\$DIR\/install\//, 'the template is read from the payload again');
+
+  // And a box that IS a release still works: SELF_DIR is that release when
+  // somebody unpacks a tarball and runs its installer by hand.
+  assert.match(installUnit, /\|\| from="\$DIR"/);
+});
