@@ -947,8 +947,26 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                             scope.launch {
                                                 busyHost = host.hostId
                                                 resultHost = host.hostId
+                                                // BELIEVE THE REPLY, NOT THE
+                                                // NEXT REFRESH — see the iOS
+                                                // note. The host pushes a
+                                                // health frame after a mutating
+                                                // verb now, and the refresh
+                                                // below races it; losing that
+                                                // race shows the old channel a
+                                                // second after confirming the
+                                                // new one.
                                                 hostActionResult =
-                                                    Fleet(settings).channel(host.hostId, to = option).text
+                                                    Fleet(settings).channel(host.hostId, to = option).let { r ->
+                                                        r.channel?.let { now ->
+                                                            fleetHosts = fleetHosts.map {
+                                                                if (it.hostId == host.hostId) {
+                                                                    it.copy(channel = now, channelPinned = r.channelPinned)
+                                                                } else it
+                                                            }
+                                                        }
+                                                        r.text
+                                                    }
                                                 busyHost = null
                                                 // Re-read rather than assume:
                                                 // what the row shows afterwards

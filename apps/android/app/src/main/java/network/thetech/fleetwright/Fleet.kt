@@ -316,6 +316,17 @@ class Fleet(
          * it offers "nothing yet" as if it were the fleet's answer.
          */
         val profiles: List<Profile>? = null,
+        /**
+         * Which releases this box takes, when the reply is about that.
+         *
+         * IT TRAVELS SO THE APP DOES NOT HAVE TO WAIT. The fleet list is
+         * rebuilt from the coordinator's cache, which is a health frame old —
+         * so a picker that only trusted the list showed the value somebody had
+         * just changed away from. This is the box's own answer about itself,
+         * and the most recent thing anybody has.
+         */
+        val channel: String? = null,
+        val channelPinned: Boolean = false,
     )
 
     /**
@@ -892,6 +903,8 @@ class Fleet(
                     // missing key and for an explicit null alike, which is
                     // exactly the distinction wanted here: no key means nobody
                     // answered, `[]` means nothing to offer.
+                    channel = json.optString("channel").takeIf { it.isNotBlank() && it != "null" },
+                    channelPinned = json.optBoolean("channelPinned"),
                     profiles = json.optJSONArray("profiles")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->
                             a.optJSONObject(i)?.let { p ->
