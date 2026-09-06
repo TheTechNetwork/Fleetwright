@@ -65,7 +65,27 @@ fi
 if [ -d "$DIR/.git" ]; then
   say "Updating $DIR"
   git -C "$DIR" remote set-url origin "$REPO"
-  git -C "$DIR" fetch --quiet origin "$REF"
+  # AN EXPLICIT REFSPEC, AND STALE TAGS PRUNED. `fetch origin main` names a ref
+  # the remote may hold twice — this repository shipped a TAG called `main`
+  # beside the branch for half a day — and a local tag left behind by an older
+  # release keeps answering after the remote's is gone. Neither is a state
+  # anybody chose, and both are ours to clean up rather than to explain.
+  # A LOCAL TAG WITH THE BRANCH'S NAME shadows it: git resolves refs/tags/ before
+  # refs/heads/, so `git checkout main`, `git log main..` and `git describe` all
+  # answer with the tag. This repository published one for half a day, and every
+  # clone that fetched it still has it — `--prune-tags` does not reach it,
+  # because an explicit branch refspec never consults the tag refspec.
+  #
+  # Deleting it is the self-heal: nothing should ever want a tag named after the
+  # branch it is tracking, and leaving it means every later command is quietly
+  # answering about the wrong commit.
+  if git -C "$DIR" rev-parse -q --verify "refs/tags/$REF" >/dev/null 2>&1; then
+    git -C "$DIR" tag -d "$REF" >/dev/null 2>&1 || true
+    ok "removed a local tag named $REF — it was shadowing the branch"
+  fi
+  git -C "$DIR" fetch --quiet --prune --prune-tags --force \
+    origin "refs/heads/$REF:refs/remotes/origin/$REF" 2>/dev/null \
+    || git -C "$DIR" fetch --quiet --force origin "refs/heads/$REF:refs/remotes/origin/$REF"
 
   # ATTEMPTED, THEN EXPLAINED — rather than predicted. Whether a checkout would
   # destroy something is a question git already answers correctly, and a
@@ -120,6 +140,18 @@ if [ -d "$DIR/.git" ]; then
        Or discard them: cd $DIR && git reset --hard origin/$REF && git clean -fd
        Then run this again." ;;
     esac
+  fi
+  # PROVED, NOT ASSUMED. A fetch that quietly updated nothing leaves the box on
+  # old code while every line above says it worked — which is how a host spent
+  # an afternoon being told to re-run an installer that could not reach the fix
+  # it was being re-run for.
+  WANT="$(git -C "$DIR" rev-parse "origin/$REF")"
+  HAVE="$(git -C "$DIR" rev-parse HEAD)"
+  if [ "$WANT" != "$HAVE" ]; then
+    die "$DIR is at ${HAVE%"${HAVE#???????}"} and origin/$REF is ${WANT%"${WANT#???????}"}.
+       The update did not take. Something local is overriding it — try:
+           git -C $DIR fetch --prune --prune-tags --force origin $REF
+           git -C $DIR reset --hard origin/$REF"
   fi
   ok "$(git -C "$DIR" rev-parse --short HEAD) on $REF"
 elif [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null || true)" ]; then
