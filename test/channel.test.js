@@ -285,3 +285,46 @@ test('a box on GitHub is told where its updates will come from', async () => {
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('a mutating verb refreshes what the fleet is told, a read does not', async () => {
+  // THE RELIABILITY COMPLAINT, and it was the same from the app and from the
+  // API because both read the same thing: the coordinator answers /api/hosts
+  // from the last health frame, and frames go every fifteen seconds.
+  //
+  // So `/channel rolling` succeeded, said so, and the next refresh returned
+  // `stable` — a picker snapping back a second after confirming, which reads as
+  // "the change did not take".
+  //
+  // Pushing a frame after a mutating verb closes it at the source rather than
+  // asking every reader to guess. Reads do not: `list` and `health` change
+  // nothing, and a frame per poll is a busy loop.
+  const src = readFileSync(new URL('../src/fleet/host/sidecar.js', import.meta.url), 'utf8');
+  assert.match(src, /if \(isMutating\(intent\.verb\)\) setImmediate\(\(\) => void this\.#pushHealth\(\)\)/);
+
+  // IN `finally`, so a command that FAILED refreshes too — a refusal often
+  // means the box is not what the caller thought, which is exactly when a stale
+  // cache misleads most.
+  const handler = src.slice(src.indexOf('const r = await this.hub.command(line, meta)'));
+  const fin = handler.indexOf('} finally {');
+  const push = handler.indexOf('#pushHealth());');
+  assert.ok(fin > 0 && push > fin, 'the refresh is not in a finally block');
+});
+
+test('both apps apply the channel the host just confirmed', () => {
+  // Even with an immediate frame, the app's own refresh races it — and losing
+  // that race shows the value somebody just changed away from. The reply is the
+  // box's own answer about itself and the most recent thing anybody has.
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  assert.match(ios, /applyChannel\(now, to: host, pinned: r\.channelPinned \?\? false\)/);
+
+  const kt = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');
+  // Android's Reply did not carry the field at all, so the app never had the
+  // answer to apply.
+  assert.match(kt, /channel = json\.optString\("channel"\)/);
+  assert.match(kt, /channelPinned = json\.optBoolean\("channelPinned"\)/);
+
+  const act = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  assert.match(act, /it\.copy\(channel = now, channelPinned = r\.channelPinned\)/);
+});

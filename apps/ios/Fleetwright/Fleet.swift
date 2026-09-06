@@ -851,6 +851,19 @@ struct Fleet {
         /// answer rather than as a choice. Said before somebody taps, rather
         /// than discovered by a refusal afterwards.
         let channelPinned: Bool?
+
+        /// The same health with a channel the host has just confirmed.
+        ///
+        /// Every field is `let`, so this rebuilds rather than mutates — which is
+        /// the point: a struct nobody can half-update cannot drift into a state
+        /// the host never reported.
+        func withChannel(_ channel: String, pinned: Bool) -> HostHealth {
+            HostHealth(
+                account: account, credential: credential, version: version, updates: updates,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
+            )
+        }
     }
 
     /// A host as the fleet snapshot describes it — state, reason, and whatever

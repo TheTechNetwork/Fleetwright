@@ -600,7 +600,18 @@ private struct SettingsView: View {
             // holding only a phone does not have. loadHosts() below refreshes
             // the row, so what the screen shows afterwards is what the box
             // reported and not what this tap hoped for.
-            case .channel(let to): answer = try await fleet.channel(host: host, to: to).text
+            case .channel(let to):
+                let r = try await fleet.channel(host: host, to: to)
+                answer = r.text
+                // BELIEVE THE REPLY, NOT THE NEXT REFRESH. The host pushes a
+                // health frame after a mutating verb now, but loadHosts() below
+                // races it — and losing that race showed the OLD channel, which
+                // reads as "the change did not take" a second after being told
+                // it did.
+                //
+                // The reply is the box's own answer about itself, and it is the
+                // most recent thing anybody has.
+                if let now = r.channel { applyChannel(now, to: host, pinned: r.channelPinned ?? false) }
             case .rebootDo:
                 answer = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm).text
                 rebootTarget = nil
@@ -704,6 +715,24 @@ private struct SettingsView: View {
             .font(.caption)
             .buttonStyle(.borderless)
             .disabled(busyHost != nil)
+    }
+
+    /// Record a channel the host has just confirmed.
+    ///
+    /// The fleet list is rebuilt from the coordinator's cache on every refresh,
+    /// so this is overwritten within a frame or two — which is correct. What it
+    /// buys is the second in between, where the alternative is showing somebody
+    /// the value they just changed away from.
+    @MainActor
+    private func applyChannel(_ channel: String, to hostId: String, pinned: Bool) {
+        guard let i = fleetHosts.firstIndex(where: { $0.hostId == hostId }),
+              let health = fleetHosts[i].health else { return }
+        fleetHosts[i] = Fleet.FleetHost(
+            hostId: fleetHosts[i].hostId,
+            state: fleetHosts[i].state,
+            reason: fleetHosts[i].reason,
+            health: health.withChannel(channel, pinned: pinned),
+        )
     }
 
     /// Which releases this box takes, as a control or as a fact.

@@ -485,6 +485,27 @@ export class Sidecar {
       const err = /** @type {Error} */ (e);
       this.log.error(`sidecar: ${intent.verb} failed`, err);
       return reply({ ok: false, text: `${intent.verb} failed: ${err.message}`, error: { code: 'internal' } });
+    } finally {
+      // A CHANGE NOBODY IS TOLD ABOUT LOOKS LIKE A CHANGE THAT DID NOT HAPPEN.
+      //
+      // Health goes every fifteen seconds and the coordinator answers /api/hosts
+      // from the last frame it received. So a mutating command succeeded, said
+      // so, and the next refresh returned the OLD value — a channel picker
+      // snapping back to stable, a session list without the session just
+      // started. The app and the API both saw it, because both read the same
+      // cache.
+      //
+      // A frame after a mutating verb closes that at the source rather than
+      // asking every reader to guess. Not after a read: `list` and `health`
+      // change nothing, and a frame per poll would be a busy loop.
+      //
+      // In `finally`, so a command that FAILED also refreshes — a refusal often
+      // means the box is not what the caller thought, and that is exactly when
+      // a stale cache is most misleading.
+      //
+      // And after the reply, never before it: this is a refresh, and nobody
+      // should wait on it to be told what happened.
+      if (isMutating(intent.verb)) setImmediate(() => void this.#pushHealth());
     }
   }
 
