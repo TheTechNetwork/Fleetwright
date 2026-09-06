@@ -44,6 +44,7 @@ done
 
 cleanup() {
   step "Cleaning up"
+  [ -n "${DRILL_SERVER:-}" ] && kill "$DRILL_SERVER" 2>/dev/null
   for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
     systemctl disable --now "$u" >/dev/null 2>&1
     rm -f "/etc/systemd/system/$u.service"
@@ -99,8 +100,28 @@ RELEASE_OUT_DIR="$DIST" RELEASE_VERSION=v-drill node "$ROOT/tools/build-host-pac
   || { echo "could not build a release"; exit 1; }
 ok "built $(basename "$(ls "$DIST"/*.tar.gz)")"
 
-# Served over file://, so the drill needs no network and no publishing.
-MANIFEST="file://$DIST/manifest.json"
+# SERVED OVER HTTP, not file://, and the difference is not cosmetic. The shell
+# helper fetches with curl, which reads file:// happily; applyRelease — the JS
+# half, which is what `/update` uses after a box is converted — fetches with
+# node's `fetch`, which does not. A drill using file:// exercises one half of
+# the update path and is silently unable to exercise the other.
+#
+# A local server on a loopback port is what a real box sees, minus the internet.
+node -e '
+  const http = require("http"), fs = require("fs"), path = require("path");
+  const dir = process.argv[1];
+  http.createServer((req, res) => {
+    const f = path.join(dir, path.basename(req.url.split("?")[0]));
+    fs.readFile(f, (e, b) => e ? (res.statusCode = 404, res.end("no")) : res.end(b));
+  }).listen(0, "127.0.0.1", function () {
+    fs.writeFileSync(process.argv[2], String(this.address().port));
+  });
+' "$DIST" "$WORK/port" &
+DRILL_SERVER=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/port" ] && break; sleep 0.3; done
+[ -s "$WORK/port" ] || { echo "could not start the release server"; exit 1; }
+MANIFEST="http://127.0.0.1:$(cat "$WORK/port")/manifest.json"
+ok "serving releases at $MANIFEST"
 
 install_from_checkout() { # install_from_checkout [extra args...]
   AGENT_FLEET_BASE="$BASE" AGENT_HUB_NO_INSTALL_DEPS=1 \
@@ -237,6 +258,79 @@ step "6. from-source — a converted box asked to return to the checkout"
 install_from_checkout --from-source
 points_at "units name the checkout again" "$CHECKOUT/bin/agent-hub"
 starts "after --from-source"
+
+# --- 7. the update a converted box takes next -------------------------------
+#
+# THE POINT OF CONVERTING, and nothing had ever run it. `releaseLayout` refused
+# a running box's own path for as long as packaging existed — the check compared
+# against `current` while a service reports the resolved release directory — so
+# updating by manifest could not work on any machine, and no test noticed
+# because every fixture named `current` directly.
+
+step "7. update — a converted box takes a newer release"
+install_from_checkout   # back to a known state, then convert again
+convert >/dev/null 2>&1
+BEFORE="$(readlink "$BASE/current")"
+
+# A second release, published at the same address.
+RELEASE_OUT_DIR="$DIST" RELEASE_VERSION=v-drill-2 node "$ROOT/tools/build-host-package.mjs" >/dev/null 2>&1
+NEWEST="$(node -e "console.log(require('$DIST/manifest.json').version)")"
+[ "$NEWEST" = v-drill-2 ] && ok "published $NEWEST at the same manifest URL" || bad "the second release did not build"
+
+# What a running service would report as its own root: the RESOLVED path, not
+# the symlink. This is the exact input that used to be refused.
+RESOLVED="$(readlink -f "$BASE/current")"
+if AGENT_HUB_RELEASE_MANIFEST="$MANIFEST" node -e "
+  import('$ROOT/src/core/release-apply.js').then(async ({ applyRelease }) => {
+    const r = await applyRelease({
+      installDir: '$RESOLVED',
+      manifestUrl: '$MANIFEST',
+      protocol: $(node -e "import('$ROOT/src/fleet/protocol/intents.js').then(m=>console.log(m.PROTOCOL_VERSION))"),
+    });
+    if (!r.ok) { console.error(r.message); process.exit(1); }
+  });
+" >"$WORK/update.log" 2>&1; then
+  ok "the update applied from the path a running service reports"
+else
+  bad "the update was refused"; sed 's/^/       /' "$WORK/update.log" | head -3
+fi
+
+AFTER="$(readlink "$BASE/current")"
+[ "$AFTER" != "$BEFORE" ] && ok "current moved to $(basename "$AFTER")" || bad "current did not move"
+[ -d "$BASE/releases/$(basename "$BEFORE")" ] && ok "the previous release is still there to roll back to" \
+  || bad "the rollback target was pruned"
+starts "after update"
+
+# --- 8. a rollback ----------------------------------------------------------
+
+step "8. rollback — point current at the release before"
+ln -sfn "$BASE/releases/$(basename "$BEFORE")" "$BASE/.current.new"
+mv -Tf "$BASE/.current.new" "$BASE/current"
+starts "after rollback"
+[ "$(readlink "$BASE/current")" = "$BEFORE" ] && ok "back on $(basename "$BEFORE")" || bad "the rollback did not take"
+
+# --- 9. a release that does not match its manifest --------------------------
+#
+# The digest is the whole integrity claim. A drill that only ever feeds it
+# correct tarballs is not testing it.
+
+step "9. tampering — a tarball that does not match its sha256"
+# FROM A NOT-YET-CONVERTED BOX. The helper answers "already on the packaged
+# layout" first, and would never reach the digest — a fixture that skips the
+# check it is testing passes for the wrong reason.
+install_from_checkout --from-source
+cp "$DIST/manifest.json" "$WORK/manifest.good"
+printf 'tampered' >> "$DIST"/*.tar.gz
+GUARD_BEFORE="$(readlink "$BASE/current")"
+if convert >/dev/null 2>&1; then
+  bad "a tampered release was accepted"
+else
+  grep -q "does not match its manifest" "$WORK/migrate.log" && ok "refused, naming the digest" \
+    || { bad "refused for the wrong reason"; tail -2 "$WORK/migrate.log" | sed 's/^/       /'; }
+fi
+[ "$(readlink "$BASE/current")" = "$GUARD_BEFORE" ] && ok "nothing was switched over" || bad "current moved anyway"
+starts "after a refused release"
+cp "$WORK/manifest.good" "$DIST/manifest.json"
 
 step "Result"
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
