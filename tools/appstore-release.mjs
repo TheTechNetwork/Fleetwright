@@ -19,6 +19,8 @@
 // same speed whatever runner waits for it — which is why nothing here waits
 // for review at all. Submission is the delivery; approval is Apple's.
 
+import { storeListing } from './store-listing.mjs';
+
 const KEY_ID = env('ASC_KEY_ID');
 const ISSUER_ID = env('ASC_ISSUER_ID');
 const PRIVATE_KEY = env('ASC_KEY_P8');
@@ -287,7 +289,35 @@ async function main() {
   // refuses the field on an app's FIRST version (there is nothing it is newer
   // than), and that refusal must not sink the submission: notes are a nicety,
   // the version is the delivery.
-  if (WHATS_NEW) {
+  // THE LISTING ITSELF, FROM THE DOCUMENT SOMEBODY WROTE — not only the notes.
+  //
+  // The description and the promotional text lived in apps/store-listing.md,
+  // reviewed in pull requests, and were then retyped into a web console. So the
+  // pipeline built, signed, uploaded, distributed and submitted without a human
+  // touching anything, and stopped one step short of the words on the page —
+  // which is exactly where a listing goes stale, because nobody re-pastes a
+  // description they only changed slightly.
+  //
+  // WRITTEN TOGETHER WITH whatsNew, in one PATCH, because they are one object
+  // and two requests would leave a version half-updated when the second failed.
+  /** @type {Record<string, string>} */
+  const attributes = {};
+  if (WHATS_NEW) attributes.whatsNew = WHATS_NEW;
+  try {
+    const listing = storeListing();
+    attributes.description = listing.full;
+    // The short description is Play's field; on the App Store the equivalent
+    // slot is promotional text, which is the one thing editable WITHOUT a new
+    // version — so the same sentence lands in the place it belongs on each
+    // store rather than being invented twice.
+    attributes.promotionalText = listing.short;
+  } catch (e) {
+    // A LISTING THAT CANNOT BE READ IS NOT A REASON TO DROP A RELEASE. The copy
+    // already on the store is what stays, and it says so.
+    console.log(`::warning::store listing not applied: ${String(e.message).split('\n')[0]}`);
+  }
+
+  if (Object.keys(attributes).length) {
     try {
       const locs = await api(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations?limit=200`);
       const en = locs.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
@@ -295,15 +325,16 @@ async function main() {
         await api(`/v1/appStoreVersionLocalizations/${en.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
-            data: { type: 'appStoreVersionLocalizations', id: en.id, attributes: { whatsNew: WHATS_NEW } },
+            data: { type: 'appStoreVersionLocalizations', id: en.id, attributes },
           }),
         });
-        console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
+        console.log(`listing: ${Object.keys(attributes).join(', ')}`);
+        if (WHATS_NEW) console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
       } else {
         console.log('no en-US localization on the version — finish the listing in App Store Connect');
       }
     } catch (e) {
-      console.log(`::warning::release notes not set: ${String(e.message).split('\n')[0]}`);
+      console.log(`::warning::listing not set: ${String(e.message).split('\n')[0]}`);
     }
   }
 
