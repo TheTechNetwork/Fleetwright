@@ -68,3 +68,41 @@ test('refreshing is refused rather than attempted when it is not permitted', () 
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'not permitted');
 });
+
+test('the advice matches the failure, or says nothing clever', async () => {
+  // REPORTED FROM A BOX WHOSE ROOT IS READ-ONLY:
+  //
+  //   unable to create '/etc/debian_version.dpkg-new': Read-only file system
+  //
+  // and the answer offered was "On the box: sudo apt-get -y upgrade" plus a
+  // note about systemctl status. Running that command there fails identically,
+  // and no service failed to start — so somebody is sent to a machine to type
+  // two things that cannot help.
+  //
+  // A CONFIDENT REMEDY FOR A DIAGNOSIS NOBODY MADE costs more than no remedy:
+  // it spends a trip to the box, and it teaches people the advice is
+  // decoration.
+  const { adviseOnFailure } = await import('../src/core/upgrades.js');
+
+  const readOnly = adviseOnFailure("unable to create '/etc/debian_version.dpkg-new': Read-only file system");
+  assert.match(readOnly, /read-only/i);
+  assert.match(readOnly, /image/i, 'it does not say where the fix actually is');
+  // AND IT WITHDRAWS THE ADVICE THAT CANNOT WORK. Leaving "run it on the box"
+  // beside "the box cannot write" is the contradiction that started this.
+  assert.doesNotMatch(readOnly, /sudo apt-get -y upgrade/);
+  assert.doesNotMatch(readOnly, /systemctl status/);
+
+  // Each of the rest has a different fix, which is the whole reason to tell
+  // them apart.
+  assert.match(adviseOnFailure('E: dpkg was interrupted, you must manually run'), /dpkg --configure -a/);
+  assert.match(adviseOnFailure('E: Could not get lock /var/lib/dpkg/lock-frontend'), /try again in a few minutes/);
+  assert.match(adviseOnFailure('No space left on device'), /apt-get clean/);
+  assert.match(adviseOnFailure('Temporary failure resolving deb.debian.org'), /network or DNS/);
+  assert.match(adviseOnFailure('a password is required'), /sudoers/);
+
+  // AND THE GENERIC SENTENCE SURVIVES, for the case where it is honest: nothing
+  // recognised the failure, so name the command and stop guessing.
+  const unknown = adviseOnFailure('E: something nobody has seen before');
+  assert.match(unknown, /sudo apt-get -y upgrade/);
+  assert.match(unknown, /systemctl status/);
+});
