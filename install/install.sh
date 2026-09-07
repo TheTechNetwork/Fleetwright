@@ -430,6 +430,55 @@ get_env() { # get_env FILE KEY
   sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1 || true
 }
 
+# A CONVERTED BOX IS BROUGHT FORWARD, NOT JUST RE-POINTED.
+#
+# Re-running the one-liner on a packaged box used to rewrite its units, restart
+# it, and leave `current` on whatever release it was already on. That is fine
+# when the release works, and it is the whole problem when it does not:
+#
+#   deb13-staging runs v0.2.3, whose releaseLayout() refuses a packaged box's
+#   own path. Its own update path answers "there is no symlink to swap" — so it
+#   cannot update itself to a version where that is fixed, and fixing main does
+#   not reach it, because a box runs the RELEASE's code and not main's. Check
+#   from the app reported the refusal and nothing could act on it.
+#
+# THE INSTALLER IS THE ONLY WAY IN, and it is the way in precisely because it is
+# the one component that does not come from the release: it comes from the
+# checkout, which the one-liner refreshes. So "re-run the installer" has to mean
+# "bring this box onto the release its channel points at", or the box is stuck
+# with no route out except a person with a shell.
+#
+# Cheap to run every time: the helper fetches one manifest, compares it to the
+# version under `current`, and exits saying "nothing to do" when they match.
+# That is what makes this a self-heal rather than a thing to remember.
+#
+# BEFORE THE UNITS AND THE RESTART BELOW, deliberately. A box whose release is
+# crash-looping is exactly the box that needs this, and restarting the broken
+# release first is how the run dies before reaching the repair.
+refresh_release_if_converted() {
+  [ "$CONVERTED" = 1 ] || return 0
+  [ "$FROM_SOURCE" = 0 ] || return 0          # --from-source is the way BACK
+  [ "$CHECK_ONLY" != 1 ] || return 0
+  [ "$PACKAGED" = 0 ] || return 0             # we ARE the release being laid out
+  [ -z "${FLEETWRIGHT_MIGRATING:-}" ] || return 0   # the helper re-ran us; do not loop
+  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ] || return 0
+
+  # THE TREE'S HELPER, NOT THE INSTALLED SNAPSHOT. /usr/local/sbin's copy was
+  # taken by whichever install ran last, so a fix to the helper would otherwise
+  # not take effect until the run AFTER the one that installed it — which has
+  # already happened once on a real box.
+  HELPER=/usr/local/sbin/fleetwright-migrate
+  [ -x "$SELF_DIR/install/fleetwright-migrate" ] && HELPER="$SELF_DIR/install/fleetwright-migrate"
+  [ -x "$HELPER" ] || return 0
+
+  say "Packaged release"
+  # Failure is NOT fatal: a box that cannot reach GitHub still has a working
+  # release under `current`, and the rest of this run still repairs its units —
+  # which on its own is what fixed a box whose unit template was wrong.
+  FLEETWRIGHT_MIGRATING=1 "$HELPER" \
+    || warn "could not refresh the release — carrying on with the one this box has"
+}
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -1276,6 +1325,15 @@ if (fs.existsSync(SIDECAR_ENV)) {
 NODE
 
 # --- 4. service units -------------------------------------------------------
+# BEFORE THE UNITS ARE WRITTEN AND ANYTHING IS RESTARTED. If this box is on an
+# older release than its channel points at, the release is brought forward first
+# — so the units below are templated from the release this box is ABOUT to run,
+# and not from the one it is leaving.
+#
+# It execs this installer again when it does any work, so everything after this
+# line runs once, against the new release.
+refresh_release_if_converted
+
 say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd units")"
 
 # All three, not just agent-hub. Installing only the hub was a real bug with a

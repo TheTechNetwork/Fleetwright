@@ -92,18 +92,60 @@ STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 # and left exactly as it was.
 #
 # What a box runs is one line, and that is the line to read.
-UNIT=/etc/systemd/system/agent-hub.service
+# THE SAME SEAM THE ENV FILE HAS, AND FOR THE SAME REASON. Every "converted
+# box" path in this file was untestable while this was a literal: a test cannot
+# write /etc/systemd/system without changing the machine it runs on, so the one
+# case that matters most — a converted box that needs to be brought FORWARD —
+# was asserted around rather than driven, and shipped broken.
+#
+# It widens nothing. sudoers resets the environment, so the service user cannot
+# set this through the sudo rule; and even if it could, the only thing it
+# decides is whether this box is treated as already converted. The payload is
+# still checked against the manifest's sha256, the manifest URL still comes from
+# the root-owned env file, and the units still run as the service user.
+UNIT_DIR="${FLEETWRIGHT_UNIT_DIR:-/etc/systemd/system}"
+UNIT="$UNIT_DIR/agent-hub.service"
+CONVERTED=no
 if [ -f "$UNIT" ] && grep '^ExecStart=' "$UNIT" | grep -q "$BASE/current"; then
-  say "already on the packaged layout — nothing to do"
-  exit 0
+  CONVERTED=yes
 fi
-if [ -L "$BASE/current" ]; then
+
+# CONVERTED IS NOT THE SAME QUESTION AS UP TO DATE, and answering the first one
+# deadlocked a box.
+#
+# This used to exit here: "already on the packaged layout — nothing to do". True,
+# and not what anybody was asking. A converted box is one that HAS a release; it
+# says nothing about WHICH, and the whole reason to re-run the installer is that
+# the release a box is on may be broken.
+#
+# deb13-staging is the case that made this urgent. It runs v0.2.3, whose
+# releaseLayout() refuses a packaged box's own path — so its own update path
+# answers "there is no symlink to swap" and it cannot reach a version where that
+# is fixed. Fixing main does not reach it: a box runs the RELEASE's code, not
+# main's.
+#
+# The installer is the only way in, because it is the one component that does
+# NOT come from the release — it comes from the checkout, refreshed by the
+# one-liner, and is therefore always current. A box whose update path is broken
+# can still be updated BY the installer, and refusing here was the one thing
+# standing in the way.
+#
+# So the question moves below the manifest fetch, where the version is known,
+# and becomes: is this box already on the release its channel points at?
+if [ "$CONVERTED" = no ] && [ -L "$BASE/current" ]; then
   # A HALF-FINISHED MIGRATION IS A REASON TO CONTINUE, not to stop. Everything
   # below is idempotent: the version directory is removed and re-extracted, the
   # symlink is replaced atomically, and the installer is re-run.
   say "a previous attempt laid a release out and did not finish — continuing from there"
 fi
-[ -d "$INSTALL_DIR/.git" ] || die "$INSTALL_DIR is neither a checkout nor a release; this does not know what it is looking at."
+
+# A CONVERTED BOX HAS NO CHECKOUT AND DOES NOT NEED ONE. This refusal is for a
+# machine that is neither thing; asking it of a box that is already packaged
+# would refuse every self-heal for want of a directory the migration deletes the
+# need for.
+if [ "$CONVERTED" = no ]; then
+  [ -d "$INSTALL_DIR/.git" ] || die "$INSTALL_DIR is neither a checkout nor a release; this does not know what it is looking at."
+fi
 
 # The channel picks the address, exactly as src/core/release.js does it. Two
 # paths under the operator's own URL — this cannot be pointed somewhere else.
@@ -135,6 +177,24 @@ for v in "$VERSION" "$FILE"; do
     */*|..*|.*|"") die "the manifest's version or filename is not a plain name: $v" ;;
   esac
 done
+
+# ALREADY ON IT IS THE ONLY "NOTHING TO DO", and it is knowable only here.
+#
+# Read from the release's own package.json rather than from anything this script
+# remembers: what a box runs is what is on disk under the symlink, and every
+# other source for that has been wrong at least once.
+if [ "$CONVERTED" = yes ]; then
+  INSTALLED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$BASE/current/package.json" 2>/dev/null | head -1)"
+  if [ -n "$INSTALLED" ] && [ "$INSTALLED" = "$VERSION" ]; then
+    say "already on the packaged layout, running $VERSION — nothing to do"
+    exit 0
+  fi
+  # UNREADABLE IS NOT UP TO DATE. A `current` pointing at a directory with no
+  # package.json is a box mid-way through something, and re-laying the release
+  # is exactly the repair for it — so an empty INSTALLED falls through rather
+  # than being compared to nothing and matching.
+  say "on the packaged layout running ${INSTALLED:-a version that cannot be read}; ${CHANNEL:-stable} now has $VERSION"
+fi
 
 TARBALL_URL="$(printf '%s' "$MANIFEST_URL" | sed 's|/[^/]*$||')/$FILE"
 say "fetching $TARBALL_URL"
