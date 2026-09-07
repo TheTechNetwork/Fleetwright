@@ -93,12 +93,19 @@ struct Reassurance {
     private var hostsPhrase: String { healthy == 1 ? "1 machine healthy" : "\(healthy) machines healthy" }
 
     /// Worth a colour — and never colour alone (§5). The word above always
-    /// carries the meaning; this only agrees with it.
+    /// carries the meaning; this only agrees with it. The tones are the
+    /// design system's, so amber means the same thing here, on the console and
+    /// on Android.
     var tint: Color {
-        if waiting > 0 { return .orange }
-        if blind || !unwell.isEmpty { return .red }
-        return .secondary
+        if waiting > 0 { return Design.Palette.attention }
+        if blind || !unwell.isEmpty { return Design.Palette.bad }
+        return Design.Palette.inkDim
     }
+
+    /// Whether the quiet can be vouched for, which is what decides how loud the
+    /// card is. Calm is LOW CONTRAST on purpose: claims that hold recede,
+    /// claims that fail come forward.
+    var settled: Bool { waiting == 0 && !blind && unwell.isEmpty }
 
     var symbol: String {
         if waiting > 0 { return "hand.raised" }
@@ -115,24 +122,32 @@ struct ReassuranceBanner: View {
     let summary: Reassurance
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: summary.symbol)
-                .foregroundStyle(summary.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(summary.headline).font(.subheadline.weight(.medium))
-                Text(summary.basis).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Design.Space.inside) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                Image(systemName: summary.symbol)
+                    .foregroundStyle(summary.tint)
+                    .accessibilityHidden(true)
+                Text(summary.headline)
+                    .fleetType(.greeting)
+                    .foregroundStyle(Design.Palette.ink)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            Text(summary.basis)
+                .fleetType(.bodySmall)
+                .foregroundStyle(Design.Palette.inkDim)
         }
-        .padding(.vertical, 2)
-        // NO GLASS HERE, deliberately, and it is worth saying why in a change
-        // that adds it everywhere else. This sits INSIDE a list row rather than
-        // floating over anything, and glass on a surface that is not above
-        // something else is decoration — it costs legibility on the one line
-        // this app most wants read, to imitate a depth that is not there.
+        // THE CARD IS THE POINT, and it is the reason this is no longer a row
+        // in a grouped list. This line is the first thing read and the last
+        // thing that should look like a table cell — the greeting is 26pt on
+        // its own card, and the list of sessions is what sits under it.
         //
-        // The material means "this is above the content". Using it where that
-        // is false is how a design language stops carrying information.
+        // A CARD THAT IS ASKING SOMETHING WEARS ITS OWN RING. Settled, the ring
+        // is the same hairline every other card has; unsettled, it is the tone
+        // that the glyph and the headline are already carrying. Calm recedes,
+        // trouble comes forward, and neither depends on the colour being seen.
+        .fleetCard(ring: summary.settled ? Design.Palette.ring : summary.tint.opacity(0.55))
+        // NO GLASS, still, and for the reason the material exists: it means
+        // "this is above the content". This card is the content.
         //
         // One announcement rather than four fragments, because this is the one
         // line on the screen worth hearing first.

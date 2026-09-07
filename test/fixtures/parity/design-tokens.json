@@ -1,0 +1,112 @@
+{
+  "$comment": [
+    "The design system, as one table of numbers with three readers.",
+    "",
+    "THE PROBLEM THIS IS FOR is the one docs/app-parity.md already names for behaviour,",
+    "arriving in a place nobody guards: a value written three times drifts. The console's",
+    "greeting is 26px, the iOS greeting is 26pt and the Android greeting is 26sp, and there",
+    "is nothing about that arrangement that keeps them equal — a designer moves one, two",
+    "surfaces disagree, and the only way to find out is to hold two phones next to a laptop.",
+    "",
+    "ONE FILE, THREE READERS: test/design-parity.test.js reads src/web/console/console.css,",
+    "apps/ios/Fleetwright/Design.swift and apps/android/.../Design.kt and asserts each one",
+    "declares every token below with this value. Change a number here and all three fail",
+    "until all three are updated, which is the point.",
+    "",
+    "WHY A TABLE CAN CHECK THIS WHEN IT COULD NOT CHECK THE REASSURANCE RULE. That rule is",
+    "behaviour, so the fixture supplies inputs and both apps run against it. A token is not",
+    "behaviour — it IS its literal, written in the source — so reading the three files is",
+    "the strongest check available and a genuine one. What it cannot see is a token that is",
+    "declared and never used; that is what the per-surface tests are for.",
+    "",
+    "THE NAMES MAP BY A RULE, not by a lookup table. A token `bodySmall` in the `type`",
+    "scale is `--t-body-small` in CSS and `Design.Text.bodySmall` in Swift and Kotlin:",
+    "kebab-case with the scale's prefix on the web, camelCase in the two apps. A capital",
+    "starts a new word and so does a digit, so `chart1` is `--chart-1`."
+  ],
+  "scales": {
+    "type": {
+      "unit": "px on the web, pt on iOS, sp on Android",
+      "cssPrefix": "--t-",
+      "swift": "Design.Text",
+      "kotlin": "Design.Text",
+      "tokens": {
+        "greeting": 26,
+        "title": 22,
+        "section": 19,
+        "body": 16,
+        "bodySmall": 14,
+        "label": 13,
+        "micro": 12
+      }
+    },
+    "tracking": {
+      "unit": "px / pt / sp, negative — headings only",
+      "cssPrefix": "--ls-",
+      "swift": "Design.Tracking",
+      "kotlin": "Design.Tracking",
+      "tokens": {
+        "greeting": -0.9,
+        "title": -0.8,
+        "section": -0.7
+      }
+    },
+    "space": {
+      "unit": "px / pt / dp",
+      "cssPrefix": "--s-",
+      "swift": "Design.Space",
+      "kotlin": "Design.Space",
+      "tokens": {
+        "page": 26,
+        "group": 22,
+        "groupTight": 16,
+        "inside": 12,
+        "insideTight": 8,
+        "hair": 4
+      }
+    },
+    "radius": {
+      "unit": "px / pt / dp",
+      "cssPrefix": "--r-",
+      "swift": "Design.Radius",
+      "kotlin": "Design.Radius",
+      "tokens": {
+        "frame": 54,
+        "card": 22,
+        "cardSmall": 18,
+        "row": 14,
+        "chip": 8
+      }
+    }
+  },
+  "colours": {
+    "$comment": [
+      "Dark first, because dark is the default and the one tuned for a dark room.",
+      "",
+      "`ring` and `highlight` are NOT here. They are the same idea on all three surfaces —",
+      "separate a card from the page without drawing a border — and three different",
+      "mechanisms: a CSS box-shadow with an inset highlight, a SwiftUI overlay stroke, a",
+      "Compose border under an elevation shadow. A shared hex for them would be a number",
+      "that agrees while the surfaces do not."
+    ],
+    "bg": { "dark": "#0b0d10", "light": "#f7f8fa" },
+    "card": { "dark": "#12151a", "light": "#ffffff" },
+    "inner": { "dark": "#171b22", "light": "#f1f3f7" },
+    "track": { "dark": "#232833", "light": "#e6eaf1" },
+    "ink": { "dark": "#e6e9ef", "light": "#12151a" },
+    "inkDim": { "dark": "#8b93a3", "light": "#5b6474" },
+    "accent": { "dark": "#5b8bef", "light": "#3866d6" },
+    "accentDeep": { "dark": "#3866d6", "light": "#3866d6" },
+    "ok": { "dark": "#4ade80", "light": "#0f7a52" },
+    "attention": { "dark": "#fbbf24", "light": "#a15c00" },
+    "bad": { "dark": "#f87171", "light": "#c02b2b" },
+    "active": { "dark": "#38bdf8", "light": "#0369a1" },
+    "unsure": { "dark": "#a78bfa", "light": "#6d43c8" },
+    "idle": { "dark": "#6b7280", "light": "#9aa2b1" },
+    "chart1": { "dark": "#232833", "light": "#e6eaf1" },
+    "chart2": { "dark": "#2b3f66", "light": "#b9caea" },
+    "chart3": { "dark": "#2f56a3", "light": "#7b9de2" },
+    "chart4": { "dark": "#3866d6", "light": "#3866d6" },
+    "chart5": { "dark": "#7aa7f7", "light": "#1e3f8f" }
+  }
+}

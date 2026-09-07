@@ -9,25 +9,26 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -120,13 +121,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             // MaterialTheme with no argument is lightColorScheme() forever, which
             // is how this app had a dark theme in the manifest and a white screen
-            // in the hand. dynamicColorScheme picks up the wallpaper palette on
-            // Android 12+, which every device running minSdk 36 is.
-            val dark = isSystemInDarkTheme()
-            val context = LocalContext.current
-            MaterialTheme(
-                colorScheme = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context),
-            ) {
+            // in the hand. It was then dynamic colour — the wallpaper's palette —
+            // which fixed the white screen and cost the app any colour of its
+            // own: the same screen came out teal on one phone and mauve on
+            // another, none of it agreed with the console, and "amber means
+            // something is waiting for you" cannot be true when amber is
+            // whatever the wallpaper had.
+            //
+            // FleetwrightTheme is the palette, the type scale and the radius
+            // hierarchy from Design.kt, which is the same table the console and
+            // the iOS app are built from.
+            FleetwrightTheme {
                 FleetScreen(
                     onSignedIn = ::registerForPush,
                     // Read once, from the intent that started this activity. A
@@ -358,7 +363,13 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             }
         },
     ) { padding ->
-        Column(Modifier.padding(padding).padding(16.dp).fillMaxSize()) {
+        Column(
+            Modifier
+                .padding(padding)
+                .padding(horizontal = Design.Space.page, vertical = Design.Space.groupTight)
+                .fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight),
+        ) {
 
             if (showSettings) {
                 SettingsPanel(settings) {
@@ -385,9 +396,19 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             ReassuranceBanner(Reassurance.of(sessions, binHosts))
 
             if (status.isNotBlank()) {
-                Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    Text(status, Modifier.padding(12.dp), fontFamily = FontFamily.Monospace)
-                }
+                // Evidence quoted from somewhere else, so it sits on an inner
+                // surface rather than on a card of its own — it should not look
+                // like something this screen said.
+                Text(
+                    status,
+                    Modifier
+                        .fillMaxWidth()
+                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                        .padding(Design.Space.inside),
+                    fontFamily = FontFamily.Monospace,
+                    style = Design.Style.label,
+                    color = Design.Palette.ink.now,
+                )
             }
 
             // WHAT IS WAITING, because a queue nobody can see is not a queue —
@@ -395,31 +416,33 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
             // commands say what they are when they land, and a list of them on
             // the main screen would be a second inbox to read.
             if (pending > 0) {
-                Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    Text(
-                        if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
-                        else "$pending commands are held on this phone and will be sent when the fleet answers.",
-                        Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+                Text(
+                    if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
+                    else "$pending commands are held on this phone and will be sent when the fleet answers.",
+                    Modifier
+                        .fillMaxWidth()
+                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                        .padding(Design.Space.inside),
+                    style = Design.Style.bodySmall,
+                    color = Design.Palette.inkDim.now,
+                )
             }
 
             if (sessions.isEmpty() && !busy) {
                 Column(
-                    Modifier.padding(top = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    Modifier.padding(top = Design.Space.group),
+                    verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
                 ) {
-                    Text("No sessions", style = MaterialTheme.typography.titleMedium)
+                    Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
                     Text(
                         "Nothing is running on any machine in this fleet. Tap “New session” to start one.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = Design.Style.bodySmall,
+                        color = Design.Palette.inkDim.now,
                     )
                 }
             }
 
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight)) {
                 items(sessions, key = { "${it.hostId}/${it.name}" }) { session ->
                     SessionCard(
                         session = session,
@@ -504,100 +527,175 @@ private fun SessionCard(
             dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
         )
     }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // The title is what a person recognises; the name is the
-                // identity everything else keys on, so both are shown when they
-                // differ rather than hiding one.
-                Text(session.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.weight(1f))
-                // Colour AND the word, never colour alone: the label is what
-                // carries the meaning and the tint only reinforces it, which is
-                // what "differentiate without colour" asks for and is also just
-                // legible to everybody else.
-                val tint = statusColour(session.status)
-                AssistChip(
-                    onClick = {},
-                    label = { Text(session.status) },
-                    colors = AssistChipDefaults.assistChipColors(
-                        labelColor = tint,
-                        leadingIconContentColor = tint,
-                    ),
-                )
-            }
-            if (session.label != session.name) {
-                Text(session.name, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-            }
-            // Where, how long, and whose account — the three questions about a
-            // session somebody started yesterday. One line, secondary: context
-            // rather than the point. The account is hidden when it is
-            // "shared", because on a fleet where nobody has linked one it
-            // would say the same thing on every row and mean nothing.
-            val context = listOfNotNull(
-                session.hostId?.let { "on $it" },
-                session.workspace,
-                session.age,
-                session.account?.takeIf { it != "shared" },
+    // NO BORDER, AND A RING THAT MEANS SOMETHING. Material's Card draws a
+    // filled box; the design says a card is separated by being lifted off the
+    // page, not by being outlined. The one card that wears a tone is the one
+    // asking a question — which is the only card on this screen a person has to
+    // find in a hurry.
+    val ring = if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ring.now
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall, ring = ring)
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // The title is what a person recognises; the name is the
+            // identity everything else keys on, so both are shown when they
+            // differ rather than hiding one.
+            Text(
+                session.label,
+                style = Design.Style.bodyStrong,
+                color = Design.Palette.ink.now,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            if (context.isNotEmpty()) {
-                Text(context.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-            }
-            // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
-            // session mid-build and one that has not moved since Tuesday
-            // looked identical, and the difference is the whole question
-            // somebody opens this app to ask. Null under five minutes, so a
-            // working session never wears it.
-            session.quietFor?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // WHAT IT IS ASKING, and the answer as buttons. Reading a
-            // question on a phone and being unable to answer it is the shape
-            // of the problem, not a smaller version of it. The options are the
-            // ones the HOST published; an ordinal is sent, never text.
-            session.prompt?.let { prompt ->
-                if (prompt.options.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        prompt.question?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                        prompt.options.forEach { option ->
-                            TextButton(onClick = { onAnswer(option.index) }, enabled = !busy) {
-                                Text("${option.index}  ${option.label}")
-                            }
+            Spacer(Modifier.weight(1f))
+            // Colour AND the word, never colour alone: the label is what
+            // carries the meaning and the tint only reinforces it, which is
+            // what "differentiate without colour" asks for and is also just
+            // legible to everybody else.
+            //
+            // A chip drawn by hand rather than an AssistChip: the Material
+            // chip is a 32dp pill with its own outline and its own idea of
+            // padding, and three of the design's rules had to be argued
+            // with to get one line of text out of it.
+            Text(
+                session.status,
+                Modifier
+                    .background(
+                        Design.Palette.inner.now,
+                        RoundedCornerShape(Design.Radius.chip),
+                    )
+                    .padding(horizontal = Design.Space.insideTight, vertical = Design.Space.hair),
+                style = Design.Style.label,
+                color = statusColour(session.status),
+            )
+        }
+        if (session.label != session.name) {
+            Text(
+                session.name,
+                style = Design.Style.micro,
+                fontFamily = FontFamily.Monospace,
+                color = Design.Palette.inkDim.now,
+            )
+        }
+        // Where, how long, and whose account — the three questions about a
+        // session somebody started yesterday. One line, secondary: context
+        // rather than the point. The account is hidden when it is
+        // "shared", because on a fleet where nobody has linked one it
+        // would say the same thing on every row and mean nothing.
+        val context = listOfNotNull(
+            session.hostId?.let { "on $it" },
+            session.workspace,
+            session.age,
+            session.account?.takeIf { it != "shared" },
+        )
+        if (context.isNotEmpty()) {
+            Text(
+                context.joinToString(" · "),
+                style = Design.Style.micro,
+                color = Design.Palette.inkDim.now,
+            )
+        }
+        // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
+        // session mid-build and one that has not moved since Tuesday
+        // looked identical, and the difference is the whole question
+        // somebody opens this app to ask. Null under five minutes, so a
+        // working session never wears it.
+        session.quietFor?.let {
+            Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now)
+        }
+        // WHAT IT IS ASKING, and the answer as buttons. Reading a
+        // question on a phone and being unable to answer it is the shape
+        // of the problem, not a smaller version of it. The options are the
+        // ones the HOST published; an ordinal is sent, never text.
+        session.prompt?.let { prompt ->
+            if (prompt.options.isNotEmpty()) {
+                Column(
+                    Modifier.padding(top = Design.Space.insideTight),
+                    verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                ) {
+                    // THE QUESTION IS THE TITLE HERE. It is why the
+                    // notification arrived and why this card is at the top
+                    // of the list; setting it in the same size as the
+                    // card's own metadata was the app burying its own
+                    // headline.
+                    prompt.question?.let {
+                        Text(it, style = Design.Style.title, color = Design.Palette.ink.now)
+                    }
+                    prompt.options.forEach { option ->
+                        // A row, not a TextButton: 48dp of target whatever
+                        // the label's length, on the control this whole
+                        // notification exists to offer.
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(Design.Radius.row))
+                                .clickable(enabled = !busy) { onAnswer(option.index) }
+                                .background(Design.Palette.inner.now)
+                                .border(
+                                    1.dp,
+                                    Design.Palette.ring.now,
+                                    RoundedCornerShape(Design.Radius.row),
+                                )
+                                .heightIn(min = 48.dp)
+                                .padding(horizontal = Design.Space.inside),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                        ) {
+                            // The ordinal, because an ordinal is what is
+                            // sent — the label never leaves the box.
+                            Text(
+                                "${option.index}",
+                                Modifier
+                                    .background(
+                                        Design.Palette.track.now,
+                                        RoundedCornerShape(Design.Radius.chip),
+                                    )
+                                    .padding(horizontal = Design.Space.insideTight),
+                                style = Design.Style.label,
+                                fontFamily = FontFamily.Monospace,
+                                color = Design.Palette.inkDim.now,
+                            )
+                            Text(
+                                option.label,
+                                style = Design.Style.bodySmall,
+                                color = Design.Palette.ink.now,
+                            )
                         }
                     }
-                } else {
-                    Text(
-                        "Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
+            } else {
+                Text(
+                    "Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.",
+                    style = Design.Style.bodySmall,
+                    color = Design.Palette.inkDim.now,
+                )
             }
+        }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
-                // THE WORKSPACE, on running and stopped sessions alike. The
-                // volume survives a stop — that is what makes a session
-                // resumable — so "collect what it produced" is a thing to do
-                // AFTER the work has finished, which is most of the time.
-                TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
-                if (session.status == "running") {
-                    TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
-                    session.rcUrl?.let { url ->
-                        // The reason Remote Control is worth surfacing at all:
-                        // this is the button that turns a notification into
-                        // actually driving the session.
-                        TextButton(onClick = { onOpen(url) }) { Text("Open") }
-                    }
-                } else if (session.resumable) {
-                    TextButton(onClick = onResume, enabled = !busy) { Text("Resume") }
+        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+            TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
+            // THE WORKSPACE, on running and stopped sessions alike. The
+            // volume survives a stop — that is what makes a session
+            // resumable — so "collect what it produced" is a thing to do
+            // AFTER the work has finished, which is most of the time.
+            TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
+            if (session.status == "running") {
+                TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
+                session.rcUrl?.let { url ->
+                    // The reason Remote Control is worth surfacing at all:
+                    // this is the button that turns a notification into
+                    // actually driving the session.
+                    TextButton(onClick = { onOpen(url) }) { Text("Open") }
                 }
-                if (session.status != "running") {
-                    TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Forget") }
-                }
+            } else if (session.resumable) {
+                TextButton(onClick = onResume, enabled = !busy) { Text("Resume") }
+            }
+            if (session.status != "running") {
+                TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Forget") }
             }
         }
     }
@@ -1483,10 +1581,12 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
  */
 @Composable
 private fun statusColour(status: String): Color = when (status) {
-    "running" -> MaterialTheme.colorScheme.primary
-    "awaiting-input" -> MaterialTheme.colorScheme.error
-    "stopped" -> MaterialTheme.colorScheme.onSurfaceVariant
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
+    // `active`, not the accent: the accent means "you can tap this", and a
+    // status is not an action. A badge that borrows it teaches it two meanings.
+    "running" -> Design.Palette.active.now
+    "awaiting-input" -> Design.Palette.attention.now
+    "ended" -> Design.Palette.ok.now
+    else -> Design.Palette.idle.now
 }
 
 /**

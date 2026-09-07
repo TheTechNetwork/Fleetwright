@@ -45,7 +45,7 @@
   --t-title: 1.375rem;      /* 22px — the question a session is asking */
   --t-section: 1.1875rem;   /* 19px — pane headings */
   --t-body: 1rem;           /* 16px — rows, questions, anything read to decide */
-  --t-body-sm: 0.875rem;    /* 14px — reasons, ledger lines, second-rank prose */
+  --t-body-small: 0.875rem;    /* 14px — reasons, ledger lines, second-rank prose */
   --t-label: 0.8125rem;     /* 13px — badges, hostIds, ordinals */
   --t-micro: 0.75rem;       /* 12px — labels under a name, never load-bearing */
 
@@ -63,9 +63,14 @@
   --s-page: 26px;
   --s-group: 22px;
   --s-group-tight: 16px;
-  --s-in: 12px;
-  --s-in-tight: 8px;
+  --s-inside: 12px;
+  --s-inside-tight: 8px;
   --s-hair: 4px;
+
+  /* The names are the ones in test/fixtures/parity/design-tokens.json, which
+   * is also read by Design.swift and Design.kt. `--s-inside` rather than
+   * `--s-in` so a token maps onto `Design.Space.inside` by a rule rather than
+   * by a lookup table somebody has to maintain. */
 
   /* --- radius -------------------------------------------------------------
    *
@@ -77,7 +82,7 @@
    * later is how two surfaces stop matching. */
   --r-frame: 54px;
   --r-card: 22px;
-  --r-card-sm: 18px;
+  --r-card-small: 18px;
   --r-row: 14px;
   --r-chip: 8px;
   --r-round: 50%;
@@ -217,7 +222,7 @@ body {
 .headline {
   display: flex;
   align-items: baseline;
-  gap: var(--s-in-tight);
+  gap: var(--s-inside-tight);
   margin: 0 0 var(--s-group-tight);
   font-size: var(--t-greeting);
   font-weight: 600;
@@ -227,14 +232,14 @@ body {
 .unsettled .headline .glyph { color: var(--attention); }
 .headline .glyph { font-family: var(--mono); font-weight: 700; letter-spacing: normal; }
 
-.claims { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-in-tight); }
+.claims { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-inside-tight); }
 
 .claim {
   display: grid;
   grid-template-columns: 1.4em 1fr;
-  gap: var(--s-in-tight);
+  gap: var(--s-inside-tight);
   align-items: start;
-  font-size: var(--t-body-sm);
+  font-size: var(--t-body-small);
 }
 .claim .glyph { font-family: var(--mono); font-weight: 700; }
 .claim.holds { color: var(--ink-dim); }
@@ -269,7 +274,7 @@ body {
  * wide tracking, which is a style for a column head in a table and reads as
  * chrome above a card. */
 .rail h2, .side h2 {
-  margin: 0 0 var(--s-in);
+  margin: 0 0 var(--s-inside);
   font-size: var(--t-section);
   font-weight: 600;
   letter-spacing: var(--ls-section);
@@ -277,7 +282,7 @@ body {
 }
 
 .hosts, .sessions, .asks, .ledger, .options { list-style: none; margin: 0; padding: 0; }
-.hosts, .sessions, .asks { display: flex; flex-direction: column; gap: var(--s-in); }
+.hosts, .sessions, .asks { display: flex; flex-direction: column; gap: var(--s-inside); }
 
 /* --- a machine ------------------------------------------------------------
  *
@@ -287,21 +292,21 @@ body {
 
 .host {
   background: var(--card);
-  border-radius: var(--r-card-sm);
+  border-radius: var(--r-card-small);
   box-shadow: inset var(--s-hair) 0 0 var(--idle), var(--card-shadow);
-  padding: var(--s-in) var(--s-group-tight);
+  padding: var(--s-inside) var(--s-group-tight);
 }
 .host.state-healthy { box-shadow: inset var(--s-hair) 0 0 var(--ok), var(--card-shadow); }
 .host.state-degraded { box-shadow: inset var(--s-hair) 0 0 var(--attention), var(--card-shadow); }
 .host.state-offline { box-shadow: inset var(--s-hair) 0 0 var(--bad), var(--card-shadow); }
 .host.state-unknown { box-shadow: inset var(--s-hair) 0 0 var(--unsure), var(--card-shadow); }
 
-.host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-in-tight); }
+.host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-inside-tight); }
 .host-id { font-family: var(--mono); font-size: var(--t-label); }
 
 /* Verbatim and never truncated: the registry works to make "we don't know"
  * unrepresentable as a benign value, and nothing used to render it. */
-.reason { margin: var(--s-in-tight) 0 0; font-size: var(--t-body-sm); color: var(--ink-dim); }
+.reason { margin: var(--s-inside-tight) 0 0; font-size: var(--t-body-small); color: var(--ink-dim); }
 .labels { margin: var(--s-hair) 0 0; font-size: var(--t-micro); color: var(--ink-dim); }
 
 /* --- badges: a word and a glyph, tint agreeing --------------------------- */
@@ -322,23 +327,23 @@ body {
   border-radius: var(--r-card);
   box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-drop), 0 0 0 1px var(--ring-attention);
   padding: var(--s-group-tight);
-  margin-bottom: var(--s-in);
+  margin-bottom: var(--s-inside);
 }
-.ask-head { display: flex; justify-content: space-between; gap: var(--s-in-tight); font-size: var(--t-label); color: var(--ink-dim); }
+.ask-head { display: flex; justify-content: space-between; gap: var(--s-inside-tight); font-size: var(--t-label); color: var(--ink-dim); }
 .ask-what { font-weight: 600; color: var(--ink); font-size: var(--t-body); }
 .ask-where { font-family: var(--mono); }
 .question {
-  margin: var(--s-in) 0 var(--s-group-tight);
+  margin: var(--s-inside) 0 var(--s-group-tight);
   font-size: var(--t-title);
   font-weight: 600;
   letter-spacing: var(--ls-title);
 }
 
-.options { display: flex; flex-wrap: wrap; gap: var(--s-in-tight); }
+.options { display: flex; flex-wrap: wrap; gap: var(--s-inside-tight); }
 .option {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-in-tight);
+  gap: var(--s-inside-tight);
   background: var(--inner);
   color: var(--ink);
   border: 0;
@@ -348,7 +353,7 @@ body {
   min-height: 44px;
   padding: 0 var(--s-group-tight);
   font: inherit;
-  font-size: var(--t-body-sm);
+  font-size: var(--t-body-small);
   cursor: pointer;
 }
 .option:hover { box-shadow: 0 0 0 1px var(--accent); }
@@ -358,22 +363,22 @@ body {
   color: var(--ink-dim);
   background: var(--track);
   border-radius: var(--r-chip);
-  padding: 0 var(--s-in-tight);
+  padding: 0 var(--s-inside-tight);
   font-size: var(--t-label);
 }
-.withheld { margin: 0; font-size: var(--t-body-sm); color: var(--ink-dim); }
+.withheld { margin: 0; font-size: var(--t-body-small); color: var(--ink-dim); }
 
 /* --- the wall ------------------------------------------------------------- */
 
 .srow {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: var(--s-hair) var(--s-in-tight);
+  gap: var(--s-hair) var(--s-inside-tight);
   align-items: baseline;
   background: var(--card);
   border-radius: var(--r-row);
   box-shadow: var(--card-shadow);
-  padding: var(--s-in) var(--s-group-tight);
+  padding: var(--s-inside) var(--s-group-tight);
 }
 .s-title { font-weight: 600; }
 .s-name, .s-host {
@@ -388,7 +393,7 @@ body {
 
 /* --- who did what --------------------------------------------------------- */
 
-.ledger { display: flex; flex-direction: column; gap: var(--s-in); font-size: var(--t-body-sm); }
+.ledger { display: flex; flex-direction: column; gap: var(--s-inside); font-size: var(--t-body-small); }
 .entry { display: flex; flex-direction: column; gap: var(--s-hair); }
 .e-who { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-dim); }
 

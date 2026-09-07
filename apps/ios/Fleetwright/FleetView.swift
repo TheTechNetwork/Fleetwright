@@ -50,6 +50,11 @@ struct FleetApp: View {
         // The content is the point; the chrome is not. On the way down the
         // tab bar shrinks to a pill and gives the list its height back.
         .tabBarMinimizeBehavior(.onScrollDown)
+        // THE ACCENT, ONCE, AT THE ROOT. Every button, link and selected tab in
+        // the app inherits it, which is the difference between an app with a
+        // colour and an app wearing whichever blue the system happened to
+        // supply. #3866D6 in light, lifted in dark so it clears the ground.
+        .tint(Design.Palette.accent)
         // Nowhere to point a coordinator at yet, so start where that is fixed
         // rather than showing an empty session list and a modal about it.
         .onAppear { if !settings.configured { tab = .settings } }
@@ -100,33 +105,38 @@ struct FleetView: View {
                 // because reading five rows and concluding none of them is
                 // asking anything is work somebody redoes every time they open
                 // the app — which is the loop the anxiety runs in.
-                Section {
-                    ReassuranceBanner(summary: Reassurance(sessions: sessions, hosts: fleetHosts))
-                }
+                ReassuranceBanner(summary: Reassurance(sessions: sessions, hosts: fleetHosts))
+                    .fleetRow()
                 if !status.isEmpty {
-                    Section {
-                        Text(status)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
+                    // THE COORDINATOR'S OWN WORDS, on an inner surface rather
+                    // than a card: this is evidence quoted from somewhere else,
+                    // and it should not look like something this screen said.
+                    Text(status)
+                        .fleetType(.labelMono)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textSelection(.enabled)
+                        .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
+                                   fill: Design.Palette.inner)
+                        .fleetRow()
                 }
                 // WHAT IS WAITING, because a queue nobody can see is not a
                 // queue — it is a surprise arriving later. The count is enough:
                 // each command says what it is when it lands, and a list of
                 // them here would be a second inbox to read.
                 if !outbox.held.isEmpty {
-                    Section {
-                        Label(
-                            outbox.held.count == 1
-                                ? "1 command is held on this phone and will be sent when the fleet answers."
-                                : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
-                            systemImage: "tray.full"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    }
+                    Label(
+                        outbox.held.count == 1
+                            ? "1 command is held on this phone and will be sent when the fleet answers."
+                            : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
+                        systemImage: "tray.full"
+                    )
+                    .fleetType(.bodySmall)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
+                               fill: Design.Palette.inner)
+                    .fleetRow()
                 }
-                Section {
+                Group {
                     if sessions.isEmpty && !busy {
                         // ContentUnavailableView rather than a grey sentence:
                         // it is the system's empty state, so it inherits the
@@ -166,20 +176,31 @@ struct FleetView: View {
                             }
                         }
                     }
-                    ForEach(sessions) { session in
-                        SessionRow(session: session, busy: busy, fleet: fleet,
-                                   stop: { await act { try await fleet.stop(session.name) } },
-                                   resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
-                                   forget: { await act { try await fleet.forget(session.name) } },
-                                   answer: { option in
-                                       await act {
-                                           try await fleet.answer(session.name, option: option,
-                                                                  promptId: session.prompt?.id)
-                                       }
-                                   })
-                    }
+                }
+                .fleetRow()
+                ForEach(sessions) { session in
+                    SessionRow(session: session, busy: busy, fleet: fleet,
+                               stop: { await act { try await fleet.stop(session.name) } },
+                               resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
+                               forget: { await act { try await fleet.forget(session.name) } },
+                               answer: { option in
+                                   await act {
+                                       try await fleet.answer(session.name, option: option,
+                                                              promptId: session.prompt?.id)
+                                   }
+                               })
+                        .fleetRow()
                 }
             }
+            // A STACK OF CARDS, NOT A TABLE. `.plain` drops the grouped
+            // list's inset panels and grey separators — every one of which
+            // draws a box the design says should not be there — and the rows
+            // put themselves on cards instead. The ground is ours rather than
+            // the system's, so the cards have something to sit above.
+            .listStyle(.plain)
+            .listRowSpacing(Design.Space.groupTight)
+            .scrollContentBackground(.hidden)
+            .background(Design.Palette.bg)
             .refreshable { await refresh() }
             // The product is called Fleetwright; this said "agent-fleet",
             // which is the repository. A person who installed one app and is
@@ -383,22 +404,30 @@ private struct SessionRow: View {
     let answer: (Int) async -> Void
     @State private var confirmingForget = false
 
+    /// A session that is asking something wears the attention ring, and it is
+    /// the only card on the screen that ever wears anything but the hairline.
+    private var ring: Color {
+        session.prompt != nil ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(session.label).font(.headline)
-                Spacer()
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                Text(session.label)
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+                Spacer(minLength: 0)
                 StatusBadge(status: session.status)
             }
             // Both are shown when they differ: the title is what a person
             // recognises, the name is what everything else keys on.
             if session.label != session.name {
-                Text(session.name).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                Text(session.name).fleetType(.microMono).foregroundStyle(Design.Palette.inkDim)
             }
             // Where, how long, and whose account — the three questions about a
             // session somebody started yesterday. One line, secondary, because
             // they are context rather than the point.
-            HStack(spacing: 6) {
+            HStack(spacing: Design.Space.hair) {
                 if let host = session.hostId { Text("on \(host)") }
                 if let workspace = session.workspace { Text("· \(workspace)") }
                 if let age = session.age { Text("· \(age)") }
@@ -409,8 +438,8 @@ private struct SessionRow: View {
                     Text("· \(account)")
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .fleetType(.micro)
+            .foregroundStyle(Design.Palette.inkDim)
             // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
             // session mid-build and one that has not moved since Tuesday
             // looked identical, and the difference is the whole question
@@ -418,8 +447,8 @@ private struct SessionRow: View {
             // working session never wears it.
             if let quiet = session.quietFor {
                 Label(quiet, systemImage: "pause.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.inkDim)
             }
             // WHAT IT IS ASKING, and the answer as a row of buttons.
             //
@@ -429,37 +458,69 @@ private struct SessionRow: View {
             // options are the ones the HOST published — an ordinal is sent,
             // never text.
             if let prompt = session.prompt, let options = prompt.options, !options.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Design.Space.insideTight) {
                     if let question = prompt.question, !question.isEmpty {
-                        Text(question).font(.callout)
+                        // THE QUESTION IS THE TITLE HERE. It is why the
+                        // notification arrived and why this row is at the top
+                        // of the list; setting it in the same size as the row's
+                        // own metadata was the app burying its own headline.
+                        Text(question)
+                            .fleetType(.title)
+                            .foregroundStyle(Design.Palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(options) { option in
                         Button {
                             Task { await answer(option.index) }
                         } label: {
-                            HStack(spacing: 8) {
+                            HStack(spacing: Design.Space.insideTight) {
+                                // The ordinal, because an ordinal is what is
+                                // sent — the label never leaves the box.
                                 Text("\(option.index)")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                    .fleetType(.labelMono)
+                                    .foregroundStyle(Design.Palette.inkDim)
+                                    .padding(.horizontal, Design.Space.insideTight)
+                                    .padding(.vertical, Design.Space.hair)
+                                    .background(
+                                        Design.Palette.track,
+                                        in: RoundedRectangle(cornerRadius: Design.Radius.chip,
+                                                             style: .continuous)
+                                    )
                                 Text(option.label)
-                                Spacer()
+                                    .fleetType(.bodySmall)
+                                    .foregroundStyle(Design.Palette.ink)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
                             }
+                            // 44pt, whatever the label's length: this is the
+                            // control the whole notification exists to offer.
+                            .frame(minHeight: 44)
+                            .padding(.horizontal, Design.Space.inside)
+                            .background(
+                                Design.Palette.inner,
+                                in: RoundedRectangle(cornerRadius: Design.Radius.row,
+                                                     style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Design.Radius.row, style: .continuous)
+                                    .strokeBorder(Design.Palette.ring, lineWidth: 1)
+                            )
                         }
                         .disabled(busy)
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.top, Design.Space.insideTight)
             } else if session.prompt != nil {
                 // A permission dialog names a command, so without the fleet
                 // switch its labels do not leave the box. Saying so beats
                 // showing nothing.
                 Text("Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .fleetType(.bodySmall)
+                    .foregroundStyle(Design.Palette.inkDim)
             }
 
-            HStack(spacing: 16) {
+            HStack(spacing: Design.Space.groupTight) {
                 if session.isRunning {
                     Button("Stop") { Task { await stop() } }.disabled(busy)
                     if let url = session.rcUrl, let link = URL(string: url) {
@@ -498,10 +559,11 @@ private struct SessionRow: View {
             } message: {
                 Text("This cannot be undone. Stop keeps everything and can be resumed; forget keeps nothing.")
             }
-            .font(.callout)
+            .fleetType(.bodySmall)
             .buttonStyle(.borderless)
+            .padding(.top, Design.Space.hair)
         }
-        .padding(.vertical, 2)
+        .fleetCard(radius: Design.Radius.cardSmall, ring: ring)
     }
 }
 
@@ -1543,24 +1605,37 @@ private struct StatusBadge: View {
         }
     }
 
+    /// The tone, which only ever agrees with the word beside it.
+    ///
+    /// `running` is the design system's `active` — a sky blue — rather than the
+    /// app's accent. The accent means "you can tap this"; a status is not an
+    /// action, and a badge that borrows the accent teaches the accent to mean
+    /// two things.
     private var tint: Color {
         switch status {
-        case "running": return .accentColor
-        case "awaiting-input": return .orange
-        default: return .secondary
+        case "running": return Design.Palette.active
+        case "awaiting-input": return Design.Palette.attention
+        case "ended": return Design.Palette.ok
+        default: return Design.Palette.idle
         }
     }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Design.Space.hair) {
             // Decorative: the word beside it is the label, and VoiceOver
             // announcing "play circle fill, running" is worse than "running".
             Image(systemName: symbol)
                 .accessibilityHidden(true)
             Text(status)
         }
-        .font(.caption)
+        .fleetType(.label)
         .foregroundStyle(tint)
+        .padding(.horizontal, Design.Space.insideTight)
+        .padding(.vertical, Design.Space.hair)
+        .background(
+            Design.Palette.inner,
+            in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous)
+        )
     }
 }
 

@@ -107,9 +107,9 @@ ${css}
 /* The switcher is preview furniture, not part of the console — but it reads
    from the same tokens, because a chrome bar with its own hardcoded greys is
    the first place a palette starts to fork. */
-.preview-bar{display:flex;align-items:center;gap:var(--s-in);padding:var(--s-in) var(--s-group-tight);box-shadow:0 1px 0 var(--ring);background:var(--card);position:sticky;top:0;z-index:2}
+.preview-bar{display:flex;align-items:center;gap:var(--s-inside);padding:var(--s-inside) var(--s-group-tight);box-shadow:0 1px 0 var(--ring);background:var(--card);position:sticky;top:0;z-index:2}
 .preview-label{font-size:var(--t-label);color:var(--ink-dim)}
-.preview-pick{flex:1;max-width:24rem;background:var(--inner);color:var(--ink);border:0;box-shadow:0 0 0 1px var(--ring);border-radius:var(--r-chip);min-height:44px;padding:0 var(--s-in);font:inherit;font-size:var(--t-body-sm)}
+.preview-pick{flex:1;max-width:24rem;background:var(--inner);color:var(--ink);border:0;box-shadow:0 0 0 1px var(--ring);border-radius:var(--r-chip);min-height:44px;padding:0 var(--s-inside);font:inherit;font-size:var(--t-body-small)}
 </style>
 </head>
 <body>

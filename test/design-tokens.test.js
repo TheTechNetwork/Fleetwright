@@ -139,14 +139,16 @@ test('every step of space, every radius and every size comes off the scale', () 
 });
 
 test('the system the docs describe is the system in the file', () => {
-  // docs/console-design.md §5 names these. A token renamed in one and not the
-  // other is a design doc that describes a page nobody is looking at.
+  // docs/design-system.md names these, and so do Design.swift and Design.kt —
+  // test/design-parity.test.js is what holds the three of them equal. This one
+  // is narrower and still worth having: a token renamed here and nowhere else
+  // is a stylesheet that has quietly left the system.
   const dark = Object.fromEntries(declarations(PALETTES[0].body).map((d) => [d.prop, d.value]));
   for (const token of [
-    '--t-greeting', '--t-title', '--t-section', '--t-body', '--t-body-sm', '--t-label', '--t-micro',
+    '--t-greeting', '--t-title', '--t-section', '--t-body', '--t-body-small', '--t-label', '--t-micro',
     '--ls-greeting', '--ls-title', '--ls-section',
-    '--s-page', '--s-group', '--s-group-tight', '--s-in', '--s-in-tight', '--s-hair',
-    '--r-frame', '--r-card', '--r-card-sm', '--r-row', '--r-chip', '--r-round',
+    '--s-page', '--s-group', '--s-group-tight', '--s-inside', '--s-inside-tight', '--s-hair',
+    '--r-frame', '--r-card', '--r-card-small', '--r-row', '--r-chip', '--r-round',
     '--ring', '--highlight', '--shadow-drop', '--card-shadow',
     '--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5',
   ]) {
