@@ -1488,7 +1488,21 @@ export const COMMANDS = {
         const r = await checkRelease(ctx.cfg);
         app = {
           kind: 'release',
-          pending: Boolean(r.available),
+          // TRI-STATE, AND NULL IS A REAL VALUE. `Boolean(r.available)` reports
+          // "cannot tell" as "nothing waiting", which is the reassuring half of
+          // an unanswered question — the exact failure the `appPending` field
+          // was added to remove, and it would have come back the moment the
+          // sidecar started reading its health from this reply instead of
+          // computing its own.
+          //
+          // `configured: false` is a box that does not know where its releases
+          // come from. A message about not being able to check is a box that
+          // could not reach GitHub. Neither of those is up to date.
+          pending: r.configured !== true
+            ? null
+            : r.available
+              ? true
+              : (/could not check/i.test(r.message || '') ? null : false),
           available: r.available,
           // CARRIED, BECAUSE `available: null` IS TWO DIFFERENT ANSWERS.
           // checkRelease answers null both for "nothing waiting" and for
@@ -1536,6 +1550,11 @@ export const COMMANDS = {
         supported: s.supported,
         pending: Boolean(summary),
         count: s.count,
+        // CARRIED, because the sidecar's health frame is built from this reply
+        // now rather than from its own computation — and this is the one field
+        // that was only ever computed there. A box needing a reboot would
+        // otherwise stop saying so the moment the two paths became one.
+        rebootRequired: s.rebootRequired,
         text: !s.supported
           ? `No package information here (${s.reason ?? 'unsupported'}).`
           : (summary ?? 'No system packages are waiting.'),
