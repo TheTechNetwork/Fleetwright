@@ -8,9 +8,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 
 import { createRequire } from 'node:module';
 
@@ -256,5 +256,72 @@ test('a refusal names the machine, because Claude is linked per machine', () => 
     const src = read(file);
     assert.ok(!/under Your credentials/.test(src), `${file} still names a screen`);
     assert.match(src, /cfg\.hostname|ctx\.cfg\.hostname/, `${file} does not name the machine`);
+  }
+});
+
+test('an unreadable store is not an empty one', () => {
+  // REPORTED BY A SESSION THAT NOTICED TWO ANSWERS DISAGREEING: `status` said
+  // "nobody has linked a personal account" while `health` on the same box said
+  // two were linked. Health was right.
+  //
+  // list() caught everything and answered [] with the comment "no directory
+  // yet: nobody has linked anything" — which is true of ENOENT and of nothing
+  // else. A directory that exists and REFUSES is a question that was not
+  // answered, and reporting it as zero is how "the disk is unreadable" becomes
+  // "sessions started here cannot do anything".
+  const dir = mkdtempSync(path.join(tmpdir(), 'accounts-unreadable-'));
+  try {
+    // Absent is still nobody, which is the case the catch was written for.
+    assert.deepEqual(new Accounts(path.join(dir, 'not-here')).list(), []);
+
+    // A file where the directory should be: exists, and cannot be read as one.
+    const notADir = path.join(dir, 'accounts');
+    writeFileSync(notADir, 'this is not a directory');
+    assert.throws(() => new Accounts(dir).list(), /ENOTDIR|EACCES|ENOTDIR/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('status reads the store that exists, not a property nothing sets', () => {
+  // `ctx.accounts?.list?.() ?? []` read a property that appears in no ctx
+  // anywhere — every other command builds the store from ctx.cfg.stateDir — so
+  // it was [] on every box, on every call, since it was written. The optional
+  // chaining is what hid it: a dependency never supplied and a directory with
+  // nothing in it produce the same value.
+  const src = readFileSync(new URL('../src/adapters/commands.js', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('function describeAccounts(ctx)'), src.indexOf('/**\n * The one case where switching'));
+  assert.match(fn, /new Accounts\(ctx\.cfg\.stateDir\)\.list\(\)/);
+  // CODE, NOT COMMENTS — the paragraph above the function names `ctx.accounts`
+  // to explain why it is gone, and a test matching it anywhere would fail
+  // because somebody wrote down the reason.
+  const code = fn.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /ctx\.accounts/, 'it is reading a property nothing sets again');
+  // And an unreadable store says so rather than claiming nobody has linked.
+  assert.match(fn, /could not read the linked accounts/);
+});
+
+test('status counts the accounts that are actually linked', async () => {
+  // THE BEHAVIOUR, not the source. The bug was that this sentence could never
+  // report a linked account on any box — so a test that only reads the file
+  // would pass on the broken version too, as long as the words were there.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const dir = mkdtempSync(path.join(tmpdir(), 'status-accounts-'));
+  try {
+    const store = new Accounts(dir);
+    // save() takes the CONTENTS of a .credentials.json, as a string.
+    store.save('a@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+    store.save('b@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'y' } }));
+
+    const reply = await dispatch(/** @type {any} */ ({
+      cfg: { stateDir: dir, installDir: dir, hostname: 'h', releaseManifest: '' },
+      login: { status: () => ({ loggedIn: true, email: 'box@example.com' }) },
+      sessions: { list: () => [] },
+    }), '/status');
+
+    assert.match(reply.text, /2 accounts linked/, reply.text.slice(0, 300));
+    assert.doesNotMatch(reply.text, /nobody has linked a personal account/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

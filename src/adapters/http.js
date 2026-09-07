@@ -158,7 +158,21 @@ export class HttpAdapter {
         // Claude-shaped fault a HOST can have now that a machine has no
         // account of its own — whose account is missing is a per-session
         // question, answered by name at the point somebody asks.
-        claudeAccounts: new Accounts(this.cfg.stateDir).list().length,
+        // NULL IS CANNOT TELL, and the health frame already treats it that way
+        // — sidecar.js reads this as a number or null and both phones render
+        // the null as "not reported" rather than as zero.
+        //
+        // It has to be caught HERE rather than swallowed in list(): a store
+        // that refuses used to answer [] and this reported nobody linked, on a
+        // box with people linked. Letting it throw instead would take the whole
+        // of /api/state with it, which is a worse answer than an honest gap.
+        claudeAccounts: (() => {
+          try {
+            return new Accounts(this.cfg.stateDir).list().length;
+          } catch {
+            return null;
+          }
+        })(),
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
         sessions,
         // What has been forgotten but not yet deleted. Additive: an older
