@@ -64,6 +64,10 @@ export class HubError extends Error {
  * @property {string} [channel] which releases that box installs
  * @property {boolean} [channelPinned] its environment is forcing the channel,
  *   so an app must show the answer and not offer to change it
+ * @property {{ variant: string, image: string, pinned: boolean }} [sandbox]
+ *   which image new sessions on that box run in, and whether its environment
+ *   names the image outright — so an app shows the answer rather than offering
+ *   a change that will be refused
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, carried as data so an app never parses the rendered text
  * @property {{

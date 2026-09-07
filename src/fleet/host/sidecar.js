@@ -54,6 +54,7 @@ import { promptId, describePrompt } from './prompt.js';
 import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { readChannel, pinnedByEnv } from '../../core/channel.js';
+import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -513,6 +514,10 @@ export class Sidecar {
         // Which releases this box takes, as data — a picker rendered by parsing
         // the sentence above would break the first time the wording changed.
         ...(r.channel ? { channel: r.channel, channelPinned: Boolean(r.channelPinned) } : {}),
+        // Which image new sessions run in, as data, for the same reason as the
+        // channel beside it: a picker built by parsing the sentence breaks the
+        // first time somebody improves the wording.
+        ...(r.sandbox ? { sandbox: r.sandbox } : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {
@@ -766,6 +771,17 @@ export class Sidecar {
         // Whether that is forced by the box's environment, so an app disables
         // the control instead of offering a change that will be refused.
         channelPinned: this.hubConfig ? pinnedByEnv(this.hubConfig) : null,
+        // WHICH IMAGE SESSIONS RUN IN, carried with health for the same reason
+        // as the channel: the app draws a list of machines, and a variant
+        // picker that had to ask each box separately would be a round trip per
+        // row and a row that could not draw until it answered.
+        //
+        // Null on a host too old to send it, which is CANNOT TELL and never
+        // "minimal" — a fleet where every old box claims to have no browser is
+        // a fleet where `tag: browser` looks broken.
+        sandbox: this.hubConfig
+          ? { variant: readVariant(this.hubConfig), image: sessionImage(this.hubConfig), pinned: sandboxPinned(this.hubConfig) }
+          : null,
       };
     } catch (e) {
       const err = /** @type {Error & {code?: string}} */ (e);
@@ -931,6 +947,8 @@ export function toCommandLine({ verb, params, actor }) {
       return '/updates';
     case 'channel':
       return p.to ? `/channel ${p.to}` : '/channel';
+    case 'sandbox':
+      return p.to ? `/sandbox ${p.to}` : '/sandbox';
     // THE WORKSPACE. Quoted with the same care as everything else here: a
     // path is a filename and never a command, so it travels as one argument.
     case 'files':

@@ -53,6 +53,9 @@
  * @property {{ app: any, system: any }} [waiting] what is waiting for this box,
  *   as data: the app half and the OS half, each naming its own subject
  * @property {string} [channel]   which releases this box installs
+ * @property {{variant: string, image: string, pinned: boolean}} [sandbox] which
+ *   image new sessions run in, as data — a picker parsed out of the prose would
+ *   break the first time the prose improved
  * @property {boolean} [channelPinned] the environment is forcing it, so the app
  *   must not offer to change it
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
@@ -72,6 +75,7 @@ import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf }
 import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
+import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState } from '../core/migrate.js';
@@ -674,6 +678,54 @@ export const COMMANDS = {
         ok: r.ok,
         text: r.ok ? `${r.message}${addressNote(ctx.cfg, wanted)}` : r.message,
         ...(r.ok ? { channel: r.channel, channelPinned: false } : { channel: current, channelPinned: pinnedByEnv(ctx.cfg) }),
+      };
+    },
+  },
+
+  sandbox: {
+    usage: '/sandbox [minimal|browser]',
+    short: 'Which image new sessions run in',
+    help:
+      'Ask with no argument to see which image this box runs sessions in. `minimal` has no browser and ' +
+      'is the default; `browser` is the same image with Chromium in it, about 400MB larger. Running ' +
+      'sessions keep the image they started in — this decides what the next one gets.',
+    run: (ctx, args) => {
+      const [wanted] = args;
+      const describe = () => ({
+        variant: readVariant(ctx.cfg),
+        image: sessionImage(ctx.cfg),
+        pinned: sandboxPinned(ctx.cfg),
+      });
+      if (!wanted) {
+        const now = describe();
+        return {
+          ok: true,
+          text:
+            `New sessions on this box run in ${now.image}.\n` +
+            (now.variant === 'browser'
+              ? 'That image has Chromium in it.'
+              : now.variant === 'minimal'
+                ? 'That image has no browser. Switch to `browser` if a session needs one.'
+                // NEITHER OF OURS, SAID AS ITS OWN ANSWER rather than rounded to
+                // the default. A box pointed at its own image is not "minimal",
+                // and telling somebody it is would be a screen reporting a state
+                // it does not know.
+                : 'That is not one of the two published variants, so this box is on an image somebody chose.') +
+            (now.pinned ? '\n\nNamed by AGENT_HUB_SANDBOX_IMAGE in this box\'s environment, so it cannot be changed from here.' : ''),
+          sandbox: now,
+        };
+      }
+      const r = writeVariant(ctx.cfg, wanted);
+      return {
+        ok: r.ok,
+        // THE PULL IS NOT DONE HERE, and the message says so rather than
+        // leaving somebody to find out when a session takes four minutes to
+        // start. Pulling 400MB inside a command that is meant to answer a phone
+        // would block the reply past every timeout between here and the app —
+        // ensureSandboxImage already fetches on first use, which is where the
+        // waiting belongs and where there is already a message about it.
+        text: r.ok ? `${r.message}\nThe image is fetched when the next session needs it, which takes a few minutes the first time.` : r.message,
+        sandbox: describe(),
       };
     },
   },

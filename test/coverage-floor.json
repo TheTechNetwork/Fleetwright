@@ -1,7 +1,7 @@
 {
   "bin/agent-fleet-mcp": 98,
   "bin/agent-hub": 50,
-  "src/adapters/commands.js": 73,
+  "src/adapters/commands.js": 72,
   "src/adapters/http.js": 80,
   "src/config.js": 96,
   "src/core/accounts.js": 99,
@@ -33,6 +33,7 @@
   "src/core/restart-watch.js": 97,
   "src/core/runners.js": 97,
   "src/core/sandbox-args.js": 100,
+  "src/core/sandbox-variant.js": 98,
   "src/core/text.js": 100,
   "src/core/titles.js": 97,
   "src/core/tmux.js": 82,

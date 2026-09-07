@@ -923,6 +923,7 @@
                       "renew",
                       "restore",
                       "resume",
+                      "sandbox",
                       "start",
                       "status",
                       "stop",

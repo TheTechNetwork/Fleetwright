@@ -126,6 +126,7 @@ and "dead host" is the one it retries.
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |
 | `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
+| `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
@@ -267,6 +268,38 @@ The channel travels **with health**, not fetched per host when a screen opens �
 a list of machines would otherwise be a round trip per row. `null` there is
 *cannot tell*, meaning a host older than this verb, and must not be rendered as
 `stable`.
+
+**`sandbox` is `channel`'s sibling, deliberately.** It decides which of the two
+published images new sessions run in: `minimal` has no browser and is the
+default, `browser` is the same image with Chromium. Same storage, same
+env-wins-and-refuses rule, same "travels with health so a list of machines is
+not a round trip per row", same `null` meaning *cannot tell*.
+
+**A bounded enum, never an image reference.** A verb that took an image name
+would let a coordinator point a box at any registry on the internet and run
+somebody's credentials inside whatever came back. The fixed verb set bounds
+nothing the moment one of its verbs takes a free-form string.
+
+**A session asks for a browser by ROUTING, not by naming an image.** There is no
+`variant` parameter on `start`, and that is the flag-day rule paying for itself
+again: a new verb costs an old host an `unknown_verb`, a new parameter costs
+every host at once. So the question travels beside the intent, in the envelope
+that already exists:
+
+| Ask | How |
+|---|---|
+| a session that can open a browser | `start` with `tag: browser` |
+| this box's default | `sandbox { to }` with `host: <name>` |
+| every box with a label's default | `sandbox { to }` with `tag: <label>` |
+
+`browser` is an **auto label** (`src/fleet/host/auto-labels.js`), derived from
+the image the host actually resolves rather than from the one it was configured
+with — so changing the variant from a phone changes what `tag: browser` finds,
+with nobody maintaining a list.
+
+Running sessions keep the image they started in. The new image is fetched when
+the next session needs it, not inside the verb: pulling 400MB in a command meant
+to answer a phone would block the reply past every timeout on the way.
 
 `update`, `upgrade` and `reboot` join `logs` in going to one named box, for the
 same two reasons: merging four apt runs into one reply answers nobody, and the

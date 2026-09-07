@@ -22,6 +22,7 @@
 // operator naming something this file also derives is not a conflict.
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
+import { sessionImage, variantOf } from '../../core/sandbox-variant.js';
 
 /**
  * The operating system, in the words somebody would type.
@@ -61,7 +62,9 @@ function distroLabels(readFile) {
 /**
  * Everything this machine can say about itself.
  *
- * @param {{ sandboxImage?: string }} [cfg]
+ * @param {any} [cfg] agent-hub's config, or the parts of it this reads —
+ *   `sandboxImage` and `stateDir`. Loosely typed on purpose: callers pass a
+ *   fragment, and the alternative was every test constructing 50 unused fields
  * @param {{ platform?: () => string, arch?: () => string, readFile?: (p: string, enc: string) => string }} [io]
  */
 export function autoLabels(cfg = {}, io = {}) {
@@ -80,10 +83,18 @@ export function autoLabels(cfg = {}, io = {}) {
 
   // WHETHER A SESSION HERE CAN OPEN A BROWSER, which is the label this was
   // built for. It is a property of the IMAGE this box runs sessions in, and
-  // nothing else on the machine can answer it — so a box pointed at the `:web`
-  // tag says so, and `tag: browser` finds it without anybody maintaining a
-  // list of which hosts were configured how.
-  if (/(^|[:/-])web($|[:@-])/.test(String(cfg.sandboxImage || ''))) out.add('browser');
+  // nothing else on the machine can answer it — so a box on the `:web` tag says
+  // so, and `tag: browser` finds it without anybody maintaining a list of which
+  // hosts were configured how.
+  //
+  // ASKED OF THE RESOLVED IMAGE, NOT THE CONFIGURED ONE. Since the `sandbox`
+  // verb, the variant is a file in the state directory that a phone can change,
+  // and cfg.sandboxImage is only where the box started. Reading the static one
+  // here would have left the label saying what the box was configured as while
+  // it ran something else — and routing by that label is precisely how a
+  // session asks for a browser, so it would send browser work to a box with no
+  // browser and the tag would say it was fine.
+  if (variantOf(sessionImage(cfg)) === 'browser') out.add('browser');
 
   return [...out].sort();
 }

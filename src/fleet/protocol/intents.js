@@ -297,6 +297,38 @@ export const VERBS = Object.freeze({
       'build of main, on every merge. Ask with no `to` to find out which one a host is on. Changing it ' +
       'does not update anything by itself — it decides what the next update is allowed to be.',
   },
+  // WHICH IMAGE SESSIONS RUN IN, changed from a phone. Same shape as `channel`
+  // above and for the same reasons, which is why it is a verb and not a
+  // parameter on `start`:
+  //
+  //  - A NEW VERB IS FREE. An old host answers `unknown_verb` and the caller
+  //    learns something true. Adding `variant` to `start` would be a flag day —
+  //    `bad_params` arrives AFTER the version check has already agreed.
+  //
+  //  - PER-HOST AND PER-LABEL NEED NO NEW MECHANISM. The envelope already
+  //    carries `host` and `tag` beside the intent, so "this box" and "every box
+  //    labelled gpu" are this one verb aimed two ways. That is the whole reason
+  //    placement travels beside the intent rather than inside it.
+  //
+  //  - AND A SESSION ASKS FOR A BROWSER BY ROUTING, not by naming an image.
+  //    auto-labels puts `browser` on exactly the hosts whose variant is the web
+  //    one, so `tag: browser` on a `start` lands somewhere that has one.
+  //
+  // A BOUNDED ENUM, NOT AN IMAGE REFERENCE. A verb that took an image name
+  // would let a coordinator point this box at any registry on the internet and
+  // run a person's credentials inside whatever came back. The fixed verb set
+  // only bounds anything if the verbs are specific.
+  sandbox: {
+    params: {
+      to: { type: 'enum', required: false, values: ['minimal', 'browser'] },
+    },
+    mutating: true,
+    summary:
+      'Which image new sessions on a host run in. `minimal` has no browser and is the default; `browser` ' +
+      'is the same image with Chromium, for a session that has to look at a page it built. Ask with no ' +
+      '`to` to find out which one a host is on. Running sessions keep the image they started in, and a ' +
+      'host whose image is named in its own environment refuses rather than pretending.',
+  },
   profiles: {
     params: {},
     mutating: false,

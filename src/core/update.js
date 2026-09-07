@@ -31,6 +31,7 @@ import { log } from '../log.js';
 import { Connections } from './connectors.js';
 import { refreshSandboxImage, podmanAvailable } from './podman.js';
 import { requestRestart } from './restart-watch.js';
+import { sessionImage } from './sandbox-variant.js';
 
 /** Long enough for a slow network, short enough that chat does not time out. */
 const GIT_TIMEOUT_MS = 60_000;
@@ -373,7 +374,7 @@ const STEPS = [
       if (!cfg.sandbox) return { ok: true, changed: false };
       // Local builds are not pullable, and a box that builds its own image is
       // saying it wants that one.
-      if (String(cfg.sandboxImage || '').startsWith('localhost/')) {
+      if (String(sessionImage(cfg) || '').startsWith('localhost/')) {
         return { ok: true, changed: false, text: 'Sandbox image is built locally — not refreshed.' };
       }
       if (!podmanAvailable(cfg)) return { ok: true, changed: false };

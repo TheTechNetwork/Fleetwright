@@ -34,6 +34,7 @@
 
 import { isValidName } from './names.js';
 import { podman, sandboxNames, podmanAvailable, workspaceExists } from './podman.js';
+import { sessionImage } from './sandbox-variant.js';
 
 /** Bytes of a file this will return. Generous for source, refuses a blob. */
 export const MAX_READ_BYTES = 256 * 1024;
@@ -144,7 +145,7 @@ function run(cfg, name, script, args, { write = false, stdin } = {}) {
       // container that cannot dial out cannot exfiltrate what it just read.
       '--network',
       'none',
-      cfg.sandboxImage,
+      sessionImage(cfg),
       'sh',
       '-c',
       CONFINE + script,

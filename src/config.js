@@ -162,6 +162,12 @@ export function loadConfig(env = process.env) {
       'AGENT_HUB_SANDBOX_IMAGE',
       `ghcr.io/${str('AGENT_HUB_SANDBOX_IMAGE_OWNER', 'thetechnetwork').toLowerCase()}/fleetwright-session:latest`,
     ),
+    // WAS THE IMAGE NAMED OUTRIGHT? `sandboxImage` always has a value, so
+    // nothing downstream could tell "the operator chose this" from "this is our
+    // default" — and the difference decides whether the `sandbox` verb may
+    // change it. Recorded here because this is the only place that can still
+    // see the environment as it was.
+    sandboxImagePinned: 'AGENT_HUB_SANDBOX_IMAGE' in process.env,
     // Build the image on demand if it is missing, rather than refusing to start
     // a session over something we know how to fix. The first session on a fresh
     // box pays a few minutes for it; every one after that is instant.
