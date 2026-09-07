@@ -319,3 +319,76 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   assert.match(android, /onNewIntent/);
   assert.match(android, /WebAuth\.deliver/);
 });
+
+test('installing the App is not a broken sign-in link', async () => {
+  // REPORTED FROM THE LIVE COORDINATOR, on a page headed "Not connected":
+  //
+  //   /oauth/github/callback?code=…&installation_id=159793900&setup_action=install
+  //
+  // Two flows arrive at this one URL and only one of them was ours.
+  // AUTHORIZATION starts in the app: we mint a state, GitHub hands it back,
+  // and there is a person to attach the token to. INSTALLATION starts on
+  // GitHub's own page: it sends `installation_id` and `setup_action` and no
+  // state, because nobody here started it.
+  //
+  // The second was being told its link had expired or been used, which is
+  // alarming and untrue — nothing expired and the install worked.
+  const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
+  const r = await core.finishGithubAuthorization({
+    code: '6aa010f044fb4ab1c82f',
+    state: null,
+    setupAction: 'install',
+    installationId: '159793900',
+    origin: 'https://f.example',
+  });
+
+  assert.equal(r.ok, true, 'an installation was reported as a failure');
+  assert.equal(r.installed, true);
+  assert.doesNotMatch(r.text, /expired|already used/);
+  // It says what is still missing, and where. An install with nothing to do
+  // next is a person who thinks they are connected and is not.
+  assert.match(r.text, /installed/i);
+  assert.match(r.text, /Connect/);
+});
+
+test('an installation is attributed to nobody, because nobody proved anything', async () => {
+  // NO STATE MEANS NO VERIFIED ACTOR. Storing a token for whoever happens to be
+  // holding the URL is the thing every other flow here refuses to do, and an
+  // installation callback is exactly the shape that invites it: there is a
+  // `code` in the query, and exchanging it would produce a real token belonging
+  // to a real GitHub account. It is nobody's until somebody signs in and asks.
+  const dispatched = [];
+  const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
+  core.dispatch = async (spec) => { dispatched.push(spec); return { ok: true }; };
+
+  await core.finishGithubAuthorization({
+    code: 'a-real-code', state: null, setupAction: 'install', installationId: '1', origin: 'https://f.example',
+  });
+  assert.deepEqual(dispatched, [], 'an unattributed installation stored a credential');
+});
+
+test('a missing state with no installation is still an expired link', async () => {
+  // The ambiguity is deliberate and stays: unknown, expired and replayed get
+  // one message, because telling a stranger which it was tells them whether a
+  // state exists. `setup_action` is what separates the honest third case.
+  const core = new CoordinatorCore({ logger: quiet, githubApp: APP });
+  const r = await core.finishGithubAuthorization({ code: 'c', state: null, origin: 'https://f.example' });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /expired or was already used/);
+});
+
+test('the installed page does not bounce back into the app', () => {
+  // Every other outcome redirects, because the app was waiting for an answer.
+  // This one was not started from the app, so there is nothing waiting and
+  // nothing that knows to say "you are not connected yet" — bouncing would hide
+  // the only sentence explaining what is left to do.
+  const installed = callbackPage({ ok: true, installed: true, text: 'installed, connect from the app' });
+  assert.doesNotMatch(installed, /location\.replace/);
+  assert.match(installed, /GitHub App installed/);
+  // The link out is still there for somebody who wants it.
+  assert.match(installed, /Back to Fleetwright/);
+
+  // And the ordinary outcomes are unchanged.
+  assert.match(callbackPage({ ok: true, text: 'done' }), /location\.replace/);
+  assert.match(callbackPage({ ok: false, text: 'no' }), /location\.replace/);
+});

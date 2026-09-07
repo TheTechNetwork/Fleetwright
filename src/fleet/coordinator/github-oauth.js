@@ -227,21 +227,27 @@ export function appReturnUrl({ ok, provider = 'github' }) {
 /**
  * The page a browser lands on afterwards.
  *
- * @param {{ ok: boolean, text: string }} result
+ * @param {{ ok: boolean, text: string, installed?: boolean }} result
  */
-export function callbackPage({ ok, text }) {
+export function callbackPage({ ok, text, installed }) {
   const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
   const back = appReturnUrl({ ok });
   // The redirect is attempted immediately AND offered as a link. A custom
   // scheme fails silently when the app is not installed — on a desktop
   // browser, or in a private window — so the page has to work on its own
   // afterwards rather than being a blank screen that redirected nowhere.
+  //
+  // EXCEPT AFTER AN INSTALLATION, which is the one outcome with something left
+  // to do. Bouncing straight back into the app would hide the sentence saying
+  // the account is not connected yet, and the app has no way to know it should
+  // say it — the install did not come from there, so nothing was waiting for an
+  // answer. The person reads it or nobody does.
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${ok ? 'Connected' : 'Not connected'}</title>
+<title>${installed ? 'App installed' : ok ? 'Connected' : 'Not connected'}</title>
 <style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}
 a.back{display:inline-block;margin-top:1rem}</style>
-<h1>${ok ? 'GitHub connected' : 'Not connected'}</h1>
+<h1>${installed ? 'GitHub App installed' : ok ? 'GitHub connected' : 'Not connected'}</h1>
 <p>${safe}</p>
 <p><a class="back" href="${back}">Back to Fleetwright</a></p>
-<script>location.replace(${JSON.stringify(back)})</script>`;
+${installed ? '' : `<script>location.replace(${JSON.stringify(back)})</script>`}`;
 }

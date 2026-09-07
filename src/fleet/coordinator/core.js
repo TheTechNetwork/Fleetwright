@@ -1115,9 +1115,10 @@ export class CoordinatorCore {
    * for a flow it did not start — which is what `redeem` is for, and why it is
    * the first thing that happens.
    *
-   * @param {{ code?: unknown, state?: unknown, origin: string }} args
+   * @param {{ code?: unknown, state?: unknown, origin: string,
+   *   setupAction?: unknown, installationId?: unknown }} args
    */
-  async finishGithubAuthorization({ code, state, origin }) {
+  async finishGithubAuthorization({ code, state, origin, setupAction, installationId }) {
     const clientId = this.githubApp?.clientId;
     const clientSecret = this.githubApp?.clientSecret;
     if (!clientId || !clientSecret) {
@@ -1125,6 +1126,36 @@ export class CoordinatorCore {
     }
     const flow = this.pendingGithub.redeem(state);
     if (!flow) {
+      // TWO FLOWS ARRIVE AT THIS ONE URL, and only one of them was ours.
+      //
+      //   AUTHORIZATION — somebody tapped Connect in the app. We minted a
+      //     state, GitHub hands it back, and there is a person to attach the
+      //     token to.
+      //
+      //   INSTALLATION — somebody installed the App from GitHub's own page.
+      //     GitHub sends `installation_id` and `setup_action=install` and NO
+      //     state, because we did not start it.
+      //
+      // The second was being reported as "that sign-in link has expired or was
+      // already used", which is alarming and untrue: nothing expired, the
+      // install worked. A real report of it:
+      //
+      //   /oauth/github/callback?code=…&installation_id=159793900&setup_action=install
+      //
+      // NOT ATTRIBUTED TO WHOEVER LOADED THE PAGE. No state means no verified
+      // actor, and storing a token for the person who happens to be holding the
+      // URL is precisely the thing every other flow here refuses to do. So this
+      // says what happened and where to finish, and stores nothing.
+      if (setupAction) {
+        return {
+          ok: true,
+          installed: true,
+          text:
+            'The Fleetwright GitHub App is installed on your account. ' +
+            'To connect it to your Fleetwright sign-in, open the app and tap Connect under GitHub — ' +
+            'that step is what tells the fleet which account is yours.',
+        };
+      }
       // Deliberately one message for unknown, expired and replayed. Telling a
       // stranger which of those it was is telling them whether a state exists.
       return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
