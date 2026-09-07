@@ -142,7 +142,7 @@ async function runHook() {
 
 async function doctor({ repair = false } = {}) {
   let bad = 0;
-  /** @type {Array<{ what: string, run: () => boolean, needsRoot?: boolean }>} */
+  /** @type {Array<{ what: string, run: () => boolean }>} */
   const repairs = [];
   const ok = (label, good, detail = '') => {
     if (!good) bad++;
@@ -247,7 +247,6 @@ async function doctor({ repair = false } = {}) {
         // chown that fails prints a permission error about fixing a permission
         // error, which reads as the tool being broken.
         run: () => chownTree(layout.base),
-        needsRoot: true,
       });
     }
   }
@@ -263,7 +262,6 @@ async function doctor({ repair = false } = {}) {
         // almost nothing, which is how a counter reached 6423.
         what: 'clear the failure counter and start agent-hub',
         run: () => systemctl(['reset-failed', 'agent-hub']) && systemctl(['start', 'agent-hub']),
-        needsRoot: true,
       });
     }
   }
@@ -295,19 +293,28 @@ async function doctor({ repair = false } = {}) {
   if (repair) {
     console.log('');
     for (const r of repairs) {
-      if (r.needsRoot && process.getuid?.() !== 0) {
-        console.log(`skip  ${r.what} — needs root: sudo agent-hub doctor --repair`);
-        continue;
-      }
+      // ATTEMPTED, NOT PREDICTED. This asked `process.getuid() !== 0` and
+      // skipped, which is a guess about authority and it is wrong in both
+      // directions: polkit lets a session user start a service on plenty of
+      // boxes, so it refused work that would have succeeded — and being root is
+      // not sufficient for the chown either, if the tree is on a read-only
+      // mount or the user does not exist.
+      //
+      // The tool being called already knows the answer and says it plainly.
+      // Guessing it here also made the outcome depend on WHO RAN THE SUITE:
+      // green for me as root, red on CI as a normal user, from a test written
+      // to remove exactly that kind of dependency.
       let done = false;
+      let why = '';
       try {
         done = r.run() !== false;
       } catch (e) {
-        done = false;
-        console.log(`FAIL  ${r.what} — ${e.message}`);
-        continue;
+        why = e.message;
       }
-      console.log(`${done ? ' ok ' : 'FAIL'}  ${r.what}`);
+      // The remedy travels with the failure, because "FAIL" on its own is a
+      // dead end for the one person who can act on it.
+      const hint = done ? '' : `  — try: sudo agent-hub doctor --repair${why ? ` (${why})` : ''}`;
+      console.log(`${done ? ' ok ' : 'FAIL'}  ${r.what}${hint}`);
       // A REPAIR THAT DID NOT WORK IS STILL A FAILURE. Reporting the attempt
       // and exiting 0 is how "doctor says it fixed it" and "the box is still
       // broken" end up in the same sentence.

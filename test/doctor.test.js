@@ -235,12 +235,24 @@ test('a repair that failed is a failure, not a line of output', () => {
   // appear in the same sentence. Reporting the ATTEMPT and exiting 0 is how
   // they do.
   const src = readFileSync(new URL('../bin/agent-hub', import.meta.url), 'utf8');
-  const block = src.slice(src.indexOf('if (repair) {'));
-  assert.match(block.slice(0, 900), /if \(!done\) bad\+\+/);
-  // And a root-only repair is SKIPPED with the command to run, not attempted
-  // and reported as broken: a chown that fails prints a permission error about
-  // fixing a permission error, which reads as the tool being broken.
-  assert.match(block.slice(0, 900), /needs root: sudo agent-hub doctor --repair/);
+  // The whole block, not a slice of it: a fixed window silently stops
+  // covering the thing it guards the moment a comment grows.
+  const block = src.slice(src.indexOf('if (repair) {'), src.indexOf('process.exit(bad'));
+  assert.match(block, /if \(!done\) bad\+\+/);
+  // AND THE REMEDY TRAVELS WITH THE FAILURE. "FAIL" on its own is a dead end
+  // for the one person who can act on it.
+  assert.match(block, /try: sudo agent-hub doctor --repair/);
+  // NOT PREDICTED FROM uid. This used to skip when `getuid() !== 0`, which is a
+  // guess about authority and wrong in both directions — polkit lets a session
+  // user start a service on plenty of boxes, and being root is not sufficient
+  // if the tree is on a read-only mount. It also made the OUTCOME depend on who
+  // ran the suite: green as root, red on CI, from a test written to remove
+  // exactly that dependency.
+  // CODE, NOT COMMENTS. The first version of this matched `getuid` anywhere in
+  // the block and tripped on the comment explaining why the uid check was
+  // REMOVED — a test failing because somebody wrote down why it should pass.
+  const code = block.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /getuid/);
 });
 
 

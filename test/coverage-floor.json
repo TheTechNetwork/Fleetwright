@@ -1,6 +1,6 @@
 {
   "bin/agent-fleet-mcp": 98,
-  "bin/agent-hub": 48,
+  "bin/agent-hub": 50,
   "src/adapters/commands.js": 71,
   "src/adapters/http.js": 80,
   "src/config.js": 96,
