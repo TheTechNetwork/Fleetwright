@@ -726,3 +726,35 @@ test('the converted-box guard is defined after the words it speaks', () => {
     assert.ok(guardAt > defAt, `the CONVERTED block calls ${fn} before it is defined`);
   }
 });
+
+test('an existing box keeps its own service user, whoever is running the installer', () => {
+  // THE ORDER USED TO BE AGENT_HUB_USER, SUDO_USER, whoami — right for a first
+  // install and wrong for every later one. On an existing box the service user
+  // is a property of the MACHINE, not of the person at the keyboard.
+  //
+  // What it cost: fleetwright-migrate ends by handing off to this installer,
+  // and that handoff sets neither variable — it is already root, so there is no
+  // SUDO_USER. RUN_USER became `root`, so the chown that gives the service user
+  // its release tree ran as `chown -R root` on a root-owned tree: a no-op that
+  // reported success. The box came out of the migration unable to apply its own
+  // updates, with EACCES on every attempt. #411 added that chown; this is why
+  // it did nothing on the path that matters most.
+  //
+  // Caught by the drill only once the drill stopped running everything as root
+  // — a drill that cannot be the wrong user cannot find a permissions bug.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  assert.match(sh, /RUN_USER="\$\{AGENT_HUB_USER:-\$\(unit_user \|\| printf/);
+  // Read from the unit's own User= line, which is what systemd actually starts
+  // it as — the same rule fleetwright-migrate states about what a box RUNS.
+  assert.match(sh, /sed -n 's\/\^User=\[\[:space:\]\]\*\/\/p'/);
+  // AND THE NAME HAS TO STILL EXIST. A unit naming a deleted account would hand
+  // every chown below a user that cannot own anything.
+  assert.match(sh, /id "\$got" >\/dev\/null 2>&1/);
+  // An explicit AGENT_HUB_USER still wins: setting it is deliberately changing
+  // the answer, and this is an upgrade path, not a lock.
+  assert.ok(
+    sh.indexOf('AGENT_HUB_USER:-$(unit_user') < sh.indexOf('SUDO_USER:-$(id -un)'),
+    'the environment no longer overrides the unit',
+  );
+});

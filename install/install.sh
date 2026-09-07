@@ -191,7 +191,45 @@ esac
 # in the middle of two hundred lines of output is a warning nobody read.
 MISSING=()
 
-RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-$(id -un)}}"
+# WHO THIS SERVICE RUNS AS — READ FROM THE UNIT, NOT GUESSED FROM WHO IS TYPING.
+#
+# The order used to be AGENT_HUB_USER, then SUDO_USER, then whoever is running
+# this. That is right for a FIRST install and wrong for every later one, because
+# on an existing box the service user is a property of the machine and not of
+# the person at the keyboard.
+#
+# WHAT IT COST. fleetwright-migrate ends by handing off to this installer, and
+# that handoff sets neither variable — it is already root, so there is no
+# SUDO_USER. RUN_USER became `root`, so the chown that gives the service user
+# its release tree ran as `chown -R root` on a root-owned tree: a no-op that
+# reported success. The box came out of the migration unable to apply its own
+# updates, with
+#
+#     update failed: EACCES: permission denied,
+#     mkdir '/opt/fleetwright/releases/.incoming-main-67'
+#
+# on every attempt afterwards. #411 fixed the missing chown; this is why it
+# still did nothing on the path that matters most.
+#
+# It also stops a quieter one: person B running `sudo ./install.sh` on a box
+# installed by person A used to re-point the units at B and chown the tree to
+# them — a rerun silently changing whose service this is.
+#
+# The unit is the answer, which is the same rule fleetwright-migrate states
+# about what a box RUNS. An explicit AGENT_HUB_USER still wins: somebody setting
+# it is deliberately changing the answer.
+unit_user() {
+  for u in /etc/systemd/system/agent-hub.service /etc/systemd/system/agent-fleet-sidecar.service; do
+    [ -f "$u" ] || continue
+    # `User=` only, and the first one: a unit has other lines with users in them.
+    got="$(sed -n 's/^User=[[:space:]]*//p' "$u" | head -1)"
+    # A NAME THAT STILL EXISTS. A unit naming a deleted account would otherwise
+    # hand every chown below a user that cannot own anything.
+    [ -n "$got" ] && id "$got" >/dev/null 2>&1 && { printf '%s' "$got"; return 0; }
+  done
+  return 1
+}
+RUN_USER="${AGENT_HUB_USER:-$(unit_user || printf '%s' "${SUDO_USER:-$(id -un)}")}"
 
 # Resolved once, up here, because finding node depends on it — sudo hides
 # anything a version manager put in this directory.

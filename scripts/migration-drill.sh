@@ -29,6 +29,32 @@ BASE="$WORK/opt/fleetwright"
 CHECKOUT="$WORK/opt/agent-fleet"
 DIST="$WORK/dist"
 
+# A SERVICE USER THAT IS NOT ROOT, because a drill that cannot be the wrong
+# user cannot find a permissions bug — and one got past it.
+#
+#   update failed: EACCES: permission denied,
+#   mkdir '/opt/fleetwright/releases/.incoming-main-67'
+#
+# on every update attempt from a converted box. The installer chowns the tree so
+# updates work without root, and that chown was gated on `$DIR/.git` — the
+# checkout case. A release has no .git, fleetwright-migrate runs as root, and
+# nothing ever gave the service user the one directory a packaged update writes
+# to. Converting a box removed its ability to update itself.
+#
+# Every scenario here ran as root, so RUN_USER was root, every chown was a
+# no-op, and every path was writable by definition. Thirteen scenarios and not
+# one of them could have seen it.
+#
+# The user is created here and removed in cleanup, so the drill still installs
+# nothing permanent on the machine it runs on.
+DRILL_USER="${DRILL_USER:-fleetdrill}"
+
+# What the box would ACTUALLY answer, asked as the service user rather than as
+# root — for whom every question about permission is answered yes.
+as_service_user() { # as_service_user <command...>
+  su -s /bin/sh -c "$*" "$DRILL_USER"
+}
+
 PASS=0; FAIL=0
 ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; PASS=$((PASS+1)); }
 # A KNOWN STARTING STATE, because a scenario that inherits the last one's
@@ -53,6 +79,19 @@ for f in /etc/systemd/system/agent-hub.service /etc/agent-hub.env /var/lib/agent
   [ -e "$f" ] && { echo "refusing: $f exists — this machine has an install on it"; exit 1; }
 done
 
+# CREATED HERE, AND ONLY IF IT IS NOT ALREADY SOMEBODY'S. A drill that adopts an
+# existing account would remove it in cleanup, which is a considerably worse
+# outcome than a failed test.
+DRILL_USER_CREATED=0
+if id "$DRILL_USER" >/dev/null 2>&1; then
+  echo "using the existing $DRILL_USER account (it will not be removed)"
+else
+  useradd --system --create-home --shell /usr/sbin/nologin "$DRILL_USER" 2>/dev/null \
+    || useradd --system --create-home "$DRILL_USER" 2>/dev/null \
+    || { echo "refusing: could not create $DRILL_USER, so nothing here would run as a service user"; exit 1; }
+  DRILL_USER_CREATED=1
+fi
+
 cleanup() {
   step "Cleaning up"
   [ -n "${DRILL_SERVER:-}" ] && kill "$DRILL_SERVER" 2>/dev/null
@@ -72,6 +111,10 @@ cleanup() {
   mkdir -p "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
   cp "$WORK"/*.log "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}/" 2>/dev/null || true
   rm -rf "$WORK"
+  # ONLY IF THIS RUN MADE IT. See above.
+  if [ "${DRILL_USER_CREATED:-0}" = 1 ]; then
+    userdel -r "$DRILL_USER" >/dev/null 2>&1 || userdel "$DRILL_USER" >/dev/null 2>&1 || true
+  fi
   echo "  logs in ${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
   echo "  removed everything this drill created"
 }
@@ -135,8 +178,22 @@ MANIFEST="http://127.0.0.1:$(cat "$WORK/port")/manifest.json"
 ok "serving releases at $MANIFEST"
 
 install_from_checkout() { # install_from_checkout [extra args...]
-  AGENT_FLEET_BASE="$BASE" AGENT_HUB_NO_INSTALL_DEPS=1 \
+  # AGENT_HUB_USER, so the units name a real unprivileged account and the
+  # installer's chowns have something to do. Without it RUN_USER falls back to
+  # whoever is running the drill, which is root.
+  AGENT_FLEET_BASE="$BASE" AGENT_HUB_NO_INSTALL_DEPS=1 AGENT_HUB_USER="$DRILL_USER" \
     bash "$CHECKOUT/install/install.sh" --no-wizard "$@" >"$WORK/install.log" 2>&1
+}
+
+# CAN THE SERVICE USER DO ITS OWN JOB? Asked after anything that lays out or
+# re-points a release, because that is when ownership changes hands.
+writable_by_service_user() { # writable_by_service_user <what>
+  if as_service_user "test -w '$BASE' && test -w '$BASE/releases'" 2>/dev/null; then
+    ok "$1: $DRILL_USER can write the release tree"
+  else
+    bad "$1: $DRILL_USER cannot write $BASE — updates will fail with EACCES"
+    ls -ld "$BASE" "$BASE/releases" 2>&1 | sed 's/^/       /'
+  fi
 }
 
 convert() {
@@ -229,6 +286,10 @@ if convert; then ok "the migration finished"; else
 fi
 points_at "units name the release, by module" "$BASE/current/lib/agent-hub.mjs"
 [ -L "$BASE/current" ] && ok "current points at $(basename "$(readlink "$BASE/current")")" || bad "no current symlink"
+# THE MOMENT THE BUG APPEARED. fleetwright-migrate runs as root and creates the
+# release tree root-owned, so this is where a converted box quietly lost the
+# ability to apply its own updates.
+writable_by_service_user "after converting"
 starts "converted"
 
 # --- 3. the one-liner, run again --------------------------------------------
@@ -237,6 +298,9 @@ step "3. rerun — the one-liner on a converted box"
 install_from_checkout
 points_at "units still name the release" "$BASE/current/lib/agent-hub.mjs"
 grep -q "$CHECKOUT/bin" /etc/systemd/system/agent-hub.service && bad "it reverted to the checkout" || ok "it did not revert"
+# AND THE RERUN IS THE REPAIR for a box already in that state, so it has to
+# leave the tree writable rather than merely not break it further.
+writable_by_service_user "after a rerun"
 starts "after rerun"
 
 # --- 4. the state deb13-staging was in --------------------------------------
@@ -298,16 +362,26 @@ NEWEST="$(node -e "console.log(require('$DIST/manifest.json').version)")"
 # What a running service would report as its own root: the RESOLVED path, not
 # the symlink. This is the exact input that used to be refused.
 RESOLVED="$(readlink -f "$BASE/current")"
-if AGENT_HUB_RELEASE_MANIFEST="$MANIFEST" node -e "
-  import('$ROOT/src/core/release-apply.js').then(async ({ applyRelease }) => {
-    const r = await applyRelease({
-      installDir: '$RESOLVED',
-      manifestUrl: '$MANIFEST',
-      protocol: $(node -e "import('$ROOT/src/fleet/protocol/intents.js').then(m=>console.log(m.PROTOCOL_VERSION))"),
-    });
-    if (!r.ok) { console.error(r.message); process.exit(1); }
-  });
-" >"$WORK/update.log" 2>&1; then
+# AS THE SERVICE USER, WHICH IS WHO ACTUALLY DOES THIS. Running it as root was
+# the hole that let an EACCES reach a production box: `mkdir
+# '/opt/fleetwright/releases/.incoming-main-67'` failed on every update from a
+# converted machine, and thirteen scenarios could not see it because root can
+# write anything.
+#
+# From $CHECKOUT rather than $ROOT: the service user has no business reading the
+# developer's tree, and a failure to read it would look like a failed update.
+PROTO="$(node -e "import('$ROOT/src/fleet/protocol/intents.js').then(m=>console.log(m.PROTOCOL_VERSION))")"
+cat > "$WORK/apply.mjs" <<APPLY
+import { applyRelease } from '$CHECKOUT/src/core/release-apply.js';
+const r = await applyRelease({
+  installDir: '$RESOLVED',
+  manifestUrl: '$MANIFEST',
+  protocol: $PROTO,
+});
+if (!r.ok) { console.error(r.message); process.exit(1); }
+APPLY
+chmod a+r "$WORK/apply.mjs"
+if as_service_user "AGENT_HUB_RELEASE_MANIFEST='$MANIFEST' $(command -v node) '$WORK/apply.mjs'" >"$WORK/update.log" 2>&1; then
   ok "the update applied from the path a running service reports"
 else
   bad "the update was refused"; sed 's/^/       /' "$WORK/update.log" | head -3
