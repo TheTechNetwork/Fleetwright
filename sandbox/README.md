@@ -118,11 +118,24 @@ than one that quietly downloads 150MB into a container about to be thrown away.
 ### What it does not confine
 
 Chromium's own sandbox needs user namespaces, which a rootless container may or
-may not grant. CI tries without `--no-sandbox` first and records which way it
-went on the image actually shipped, rather than reaching for the flag and not
-thinking about it.
+may not grant. Whether yours does depends on the runtime, its seccomp profile
+and the kernel — so it is a property of *your box*, and it is not knowable when
+the image is built.
 
-Where it does need `--no-sandbox`, know the trade: **a page the browser renders
+`entrypoint.sh` therefore asks, at container start, on the box the session is
+about to run on: if `unshare --user` works, chromium keeps its own sandbox and
+nothing is passed; if it does not, `CHROMIUM_FLAGS=--no-sandbox` is exported and
+two lines say so in the session log. Debian's `/usr/bin/chromium` is a wrapper
+that reads that variable, so every tool shelling out to `chromium` gets the
+right answer without knowing this paragraph exists.
+
+CI runs the same question, but **under docker** — and a session runs under
+rootless podman. Those two differ on precisely what is being measured, so the
+smoke job's warning names its runtime: it proves the browser starts and says
+which way it had to, and it is not the answer for your host. The one that
+decides what your session gets is the line in your session log.
+
+Where the flag *is* needed, know the trade: **a page the browser renders
 is as confined as the session is, and no more.** The session container is the
 boundary — it holds that person's credentials and has root inside — so pointing
 a browser at hostile HTML puts that page inside the same blast radius. That is

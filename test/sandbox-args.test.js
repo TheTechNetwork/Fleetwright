@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { unsafeSandboxArgs, unsafeSandboxMessage } from '../src/core/sandbox-args.js';
 
 test('the options that end containment are refused', () => {
@@ -123,8 +126,73 @@ test('whether the browser keeps its own sandbox is measured, not assumed', () =>
   // And it records the trade rather than hiding it: a page rendered without the
   // browser's sandbox is inside the session container, with the session's
   // credentials, and somebody should know that before pointing a fleet at it.
-  assert.match(job, /::warning::chromium needs --no-sandbox/);
-  assert.match(job, /as confined as the session is, and no more/);
+  // AND IT NAMES THE RUNTIME. This job runs under docker; a session runs under
+  // rootless podman (`AGENT_HUB_PODMAN_BIN`), and the two differ on exactly the
+  // thing being measured — seccomp defaults and user namespaces. Left unnamed,
+  // this was a true answer about a container we do not ship into, presented as
+  // the answer about the one we do.
+  assert.match(job, /::warning::under docker, chromium needs --no-sandbox/);
+  assert.match(job, /rootless podman and is probed separately by entrypoint\.sh/);
+});
+
+// The block entrypoint.sh runs on the real box, lifted out and executed here so
+// this test is about behaviour rather than about the file containing a word.
+function probe(bin) {
+  const src = readFileSync(new URL('../sandbox/entrypoint.sh', import.meta.url), 'utf8');
+  const from = src.indexOf('if command -v chromium');
+  const to = src.indexOf('\nfi\n', from);
+  assert.ok(from > 0 && to > from, 'the chromium probe is no longer where this test looks');
+  const block = src.slice(from, to + 4);
+  // PATH is REPLACED, not prepended: with the real /usr/bin/unshare still
+  // reachable, the "no unshare" case silently found it and the test passed by
+  // measuring the machine running the suite instead of the case it named.
+  const out = execFileSync('sh', ['-c', `exec 2>&1; PATH=${bin}; ${block}\necho "FLAGS=[$CHROMIUM_FLAGS]"`], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return out;
+}
+
+function fakeBins(names) {
+  const dir = mkdtempSync(join(tmpdir(), 'probe-'));
+  for (const [name, code] of Object.entries(names)) {
+    writeFileSync(join(dir, name), `#!/bin/sh\nexit ${code}\n`, { mode: 0o755 });
+  }
+  return dir;
+}
+
+test('the browser keeps its sandbox where the box can give it one', () => {
+  // A box whose kernel and runtime allow a user namespace: the flag is NOT set.
+  // This is the case that made the probe worth writing — --no-sandbox as a
+  // build-time default would have taken chromium's confinement away on every
+  // host, including the ones that never needed it taken away.
+  const out = probe(fakeBins({ chromium: 0, unshare: 0 }));
+  assert.match(out, /FLAGS=\[\]/);
+  assert.match(out, /keeps its own sandbox/);
+});
+
+test('a box with no user namespace is degraded out loud, not silently', () => {
+  const out = probe(fakeBins({ chromium: 0, unshare: 1 }));
+  assert.match(out, /FLAGS=\[--no-sandbox\]/);
+  // SAID INTO THE SESSION LOG. The person reading a transcript later should not
+  // have to work out which of the two happened.
+  assert.match(out, /as confined as this session is, and no more/);
+});
+
+test('no way to ask is answered as no, and says so differently', () => {
+  // Without unshare the question cannot be put, and "cannot tell" resolves to
+  // the safe-for-function side — but with its own sentence, because "no user
+  // namespace" and "no way to check" send somebody to different places.
+  const out = probe(fakeBins({ chromium: 0 }));
+  assert.match(out, /FLAGS=\[--no-sandbox\]/);
+  assert.match(out, /cannot be checked/);
+});
+
+test('a session with no browser is not told about browser sandboxes', () => {
+  // The minimal image is the default and most sessions run on it. It gets no
+  // CHROMIUM_FLAGS and no line in its log about a binary it does not have.
+  const out = probe(fakeBins({ unshare: 1 }));
+  assert.match(out, /FLAGS=\[\]/);
+  assert.doesNotMatch(out, /chromium/);
 });
 
 test('the Containerfile is checked by something before a builder sees it', () => {

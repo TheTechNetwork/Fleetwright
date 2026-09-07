@@ -172,8 +172,17 @@ jobs:
               # with its sandbox off is inside the session container with the
               # session credentials, and somebody should know that is the trade
               # before they point a fleet at this tag.
-              echo "--- chromium runs only with --no-sandbox ---"
-              echo "::warning::chromium needs --no-sandbox in this container; a page it renders is as confined as the session is, and no more"
+              echo "--- chromium runs only with --no-sandbox, under DOCKER ---"
+              # NAMES THE RUNTIME, because this job runs under docker and a
+              # session runs under rootless podman. Their seccomp profiles and
+              # their user-namespace defaults differ, so this is a true answer
+              # about a DIFFERENT container — worth having, and not the one that
+              # decides what a session gets.
+              #
+              # entrypoint.sh probes the real one at container start and sets
+              # CHROMIUM_FLAGS there. This is the build-time canary: it proves
+              # the browser runs at all, and says which way it had to.
+              echo "::warning::under docker, chromium needs --no-sandbox. A session runs under rootless podman and is probed separately by entrypoint.sh — see it in the session log"
             else
               echo "chromium is installed and will not render a page either way"
               exit 1
