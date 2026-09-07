@@ -12,6 +12,7 @@
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
+import { autoLabels } from '../src/fleet/host/auto-labels.js';
 import { updateStatus } from '../src/core/update.js';
 import { installedVersion } from '../src/core/release-apply.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
@@ -137,7 +138,16 @@ const sidecar = new Sidecar({
     hub,
     transport,
     hostId: cfg.hostId,
-    labels: cfg.labels,
+    // WHAT THE OPERATOR SAID, PLUS WHAT THE MACHINE KNOWS. Labels are how work
+    // is aimed — `tag: macos` on a start, filtered before ranking — and they
+    // came only from AGENT_FLEET_LABELS, so every one was somebody having
+    // remembered to type it at install time. The facts that never change and
+    // are never wrong were the ones most likely to be missing.
+    //
+    // Derived at startup from the machine rather than stored, and unioned with
+    // the operator's own: "gpu", "prod", "noisy-neighbour" are decisions no
+    // amount of introspection produces.
+    labels: [...new Set([...cfg.labels, ...autoLabels(loadConfig())])].sort(),
     maxSkewMs: cfg.maxSkewMs,
     promptText: cfg.promptText,
     idleRestartMs: cfg.idleRestartMs,
