@@ -302,7 +302,12 @@ export function runUpgrade(cfg, { actor = null } = {}) {
     const detail = upgradeFailureDetail(r);
     return {
       ok: false,
-      text: `apt-get upgrade failed:\n${detail}\n\n${adviseOnFailure(detail)}`,
+      // cfg IS THREADED THROUGH, so the advice can ask systemd rather than
+      // print the command that would. Without it the read-only branch falls
+      // back to a plain `systemctl` on PATH, which is right on an ordinary box
+      // and wrong on one that set AGENT_HUB_SYSTEMCTL_BIN — and being wrong
+      // there is silent.
+      text: `apt-get upgrade failed:\n${detail}\n\n${adviseOnFailure(detail, '/proc/self/mountinfo', cfg)}`,
     };
   }
 
@@ -377,6 +382,128 @@ export function etcMount(path = '/proc/self/mountinfo') {
 }
 
 /**
+ * What systemd actually loaded for this service, asked of systemd.
+ *
+ * THE LAST STEP THAT STILL NEEDED A SHELL. `etcMount` above proves /etc is
+ * read-only in this namespace and therefore that it is ours; it cannot say
+ * WHICH of the three reasons, so the message ended with two `systemctl show`
+ * lines and a trip to the box. On a product whose premise is that nothing
+ * should need SSH, "here is the command, go and type it" is the answer being
+ * dodged — and it was asked for twice before this was written.
+ *
+ * `systemctl show` needs no privileges: it reads what the manager already has
+ * loaded. So the process that noticed the problem is the process that can ask.
+ *
+ * `NeedDaemonReload` IS ONE OF THE THREE ANSWERS and is easy to leave out. It
+ * is systemd comparing the unit on disk with the one it is running, so `yes`
+ * means the file was fixed and the running service is still the old one — an
+ * installer that wrote the unit and a service that never picked it up look
+ * identical from every other angle.
+ *
+ * @param {import('../config.js').Config|{systemctlBin: string}} cfg
+ * @param {string} [unit]
+ * @returns {{ ok: boolean, protectSystem: string, readWritePaths: string, dropIns: string, fragment: string, needsReload: string, why: string }}
+ */
+export function unitProtection(cfg, unit = 'agent-hub') {
+  const blank = { ok: false, protectSystem: '', readWritePaths: '', dropIns: '', fragment: '', needsReload: '', why: '' };
+  const props = ['ProtectSystem', 'ReadWritePaths', 'DropInPaths', 'FragmentPath', 'NeedDaemonReload'];
+  let r;
+  try {
+    r = spawnSync(cfg.systemctlBin, ['show', unit, ...props.map((p) => `--property=${p}`)], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+  } catch (e) {
+    return { ...blank, why: `could not run ${cfg.systemctlBin}: ${/** @type {Error} */ (e).message}` };
+  }
+  if (r.status !== 0) {
+    // A box with no systemd at all is an ordinary answer here, not an error —
+    // and `full`/`ReadWritePaths` mean nothing on one, so the caller has to be
+    // able to tell that from "systemd said no".
+    return { ...blank, why: String(r.stderr || r.stdout || `${cfg.systemctlBin} exited ${r.status}`).trim().slice(0, 200) };
+  }
+  /** @type {Record<string, string>} */
+  const seen = {};
+  for (const line of String(r.stdout || '').split('\n')) {
+    // `split('=')` would cut a path containing one. The first `=` is the
+    // separator and everything after it is the value, including nothing at all
+    // — an unset property prints `ReadWritePaths=` and that empty string is the
+    // answer, not a missing line.
+    const at = line.indexOf('=');
+    if (at > 0) seen[line.slice(0, at)] = line.slice(at + 1);
+  }
+  return {
+    ok: true,
+    protectSystem: seen.ProtectSystem ?? '',
+    readWritePaths: seen.ReadWritePaths ?? '',
+    dropIns: seen.DropInPaths ?? '',
+    fragment: seen.FragmentPath ?? '',
+    needsReload: seen.NeedDaemonReload ?? '',
+    why: '',
+  };
+}
+
+/**
+ * The read-only-/etc case, once systemd has been asked which of the three it is.
+ *
+ * @param {{ ok: boolean, protectSystem: string, readWritePaths: string, dropIns: string, fragment: string, needsReload: string, why: string }} u
+ */
+function adviseOnProtectedEtc(u) {
+  if (!u.ok) {
+    return (
+      `This service could not ask systemd why (${u.why || 'no reason given'}), so the two possibilities are:\n` +
+      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p DropInPaths -p NeedDaemonReload\n' +
+      '    ReadWritePaths empty  → the unit predates the fix; re-running the installer writes it.\n' +
+      '    ReadWritePaths=/etc   → a drop-in is overriding it, and DropInPaths names the file.'
+    );
+  }
+  // SYSTEMD ANSWERS 0 FOR A UNIT IT HAS NEVER HEARD OF, with every property at
+  // its default — so `ProtectSystem=no, ReadWritePaths=` comes back for a box
+  // that has no such unit, and reading that as "the unit predates the fix"
+  // would send somebody to re-run an installer over a service that is not what
+  // is confining them. An empty FragmentPath is how systemd says "no such unit".
+  if (!u.fragment) {
+    return (
+      'systemd has no unit called agent-hub loaded, so this service was not started by the unit\n' +
+      'this advice is about — something else made /etc read-only for it. Worth checking what\n' +
+      'actually launched it, and whether that carries ProtectSystem= or ReadOnlyPaths=.'
+    );
+  }
+  // A whole path in a space-separated list, not a substring: `/etcetera` starts
+  // with `/etc` and is not it.
+  const has = u.readWritePaths.split(/\s+/).filter(Boolean).includes('/etc');
+  if (u.needsReload === 'yes') {
+    // THE ONE THAT LOOKS LIKE EVERY OTHER ONE. The file on disk is right and
+    // the running service is the old one, so reading the unit would say the fix
+    // is applied while the namespace says it is not.
+    return (
+      `systemd says the unit on disk has changed since this service started (NeedDaemonReload=yes),\n` +
+      `so it is still running the OLD one — which is why the file looks correct and /etc is not.\n\n` +
+      'On the box:\n' +
+      '  sudo systemctl daemon-reload && sudo systemctl restart agent-hub'
+    );
+  }
+  if (has) {
+    return (
+      `The unit already asks for it — ReadWritePaths=${u.readWritePaths} — and systemd did not apply it,\n` +
+      'so something is overriding this unit. Re-running the installer will NOT help.\n\n' +
+      (u.dropIns
+        ? `A drop-in is in the way. systemd loaded these on top of ${u.fragment || 'the unit'}:\n` +
+          `${u.dropIns.split(/\s+/).filter(Boolean).map((f) => `  ${f}`).join('\n')}\n` +
+          'Look for ReadWritePaths= or ProtectSystem= in those, and remove or correct the line.'
+        : `systemd reports no drop-ins, and ${u.fragment || 'the unit'} is what it loaded. That is a\n` +
+          'disagreement between the unit and the namespace worth reporting as a bug — with the output of:\n' +
+          '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p FragmentPath -p DropInPaths')
+    );
+  }
+  return (
+    `systemd loaded this unit with ProtectSystem=${u.protectSystem || 'full'} and ReadWritePaths empty,\n` +
+    `so it predates the fix${u.fragment ? ` — the file is ${u.fragment}` : ''}. Re-running the installer writes it:\n` +
+    '  curl -fsSL <your coordinator>/install | sudo sh'
+  );
+}
+
+/**
  * What to do about it, for the failures apt actually has.
  *
  * THIS USED TO SAY ONE THING FOR EVERYTHING:
@@ -402,12 +529,15 @@ export function etcMount(path = '/proc/self/mountinfo') {
  * the failure.
  *
  * @param {string} detail what apt and dpkg said
+ * @param {import('../config.js').Config|{systemctlBin: string}|null} [cfg] so the
+ *   advice can ask systemd which of the three reasons it is, rather than print
+ *   the command that would
  * @param {string} [mountInfo] where to measure the mounts, so a test can supply
  *   a fixture rather than asserting against whatever the machine running it
  *   happens to have mounted — which is how this test would silently change its
  *   mind depending on the box, and this file is about exactly that mistake
  */
-export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo') {
+export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg = /** @type {any} */ (null)) {
   const said = String(detail || '');
 
   if (/password is required|not allowed/i.test(said)) {
@@ -442,14 +572,16 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo') {
     // on what is usually true.
     const mount = etcMount(mountInfo);
     if (mount.readOnly === true) {
+      // AND THEN ASK SYSTEMD WHICH OF THE THREE, rather than printing the
+      // command that would. The first version of this branch ended with two
+      // `systemctl show` lines and a trip to the box, on a product whose whole
+      // premise is that nothing should need one — and it was asked for twice
+      // before anybody thought to have the service ask for itself.
       return (
         `Measured from this service just now: ${mount.where} is mounted READ-ONLY in this process's\n` +
         `mount namespace (${mount.evidence}). dpkg inherited that namespace, and sudo does not\n` +
         'escape one, so this is ours and not the disk.\n\n' +
-        'agent-hub.service should carry ReadWritePaths=/etc beneath ProtectSystem=full. On the box:\n' +
-        '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p FragmentPath -p DropInPaths\n\n' +
-        'If ReadWritePaths is already /etc, a drop-in is overriding it — DropInPaths above names the\n' +
-        'file. If it is empty, this unit predates the fix and re-running the installer writes it.'
+        adviseOnProtectedEtc(unitProtection(cfg || /** @type {any} */ ({ systemctlBin: 'systemctl' })))
       );
     }
     if (mount.readOnly === false) {
