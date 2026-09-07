@@ -694,3 +694,35 @@ test('the release tree is the service user\'s, and root keeps what matters', () 
   assert.match(sh, /dest="\/etc\/systemd\/system\/\$1\.service"/);
   assert.match(sh, /chmod 0644 "\$dest"/);
 });
+
+test('the converted-box guard is defined after the words it speaks', () => {
+  // THE GUARD KILLED THE INSTALLER ON EXACTLY THE BOXES IT WAS ADDED TO RESCUE.
+  //
+  // It sat twenty lines above `warn()`, and its else-branch calls `warn`. Under
+  // `set -euo pipefail` that is not a missing message, it is
+  //
+  //     install.sh: line 131: warn: command not found
+  //
+  // and the installer EXITS having done nothing. Which boxes take the
+  // else-branch? Only the broken ones — a release directory missing or empty.
+  // Every healthy box took the if-branch and never noticed, so the guard was
+  // silently fatal for a fortnight on the one population it existed for.
+  //
+  // Found by drilling it: scenarios 10, 11 and 13 all failed with the units
+  // still naming a release that was not there, because install.sh had died
+  // before writing any. One cause, three symptoms, and no test could see it
+  // because reading the file finds the guard exactly where it should be.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const warnAt = sh.indexOf('\nwarn() {');
+  const guardAt = sh.indexOf('\nCONVERTED=0');
+  assert.ok(warnAt > 0 && guardAt > 0, 'the installer no longer has both');
+  assert.ok(guardAt > warnAt, 'CONVERTED is decided before warn() exists — see line 131');
+
+  // AND THE SAME QUESTION FOR EVERY OTHER HELPER IT USES, because the next one
+  // added will be added at the top of the file too.
+  for (const fn of ['say', 'ok', 'warn', 'die']) {
+    const defAt = sh.indexOf(`\n${fn}()`);
+    assert.ok(defAt > 0, `${fn}() is gone`);
+    assert.ok(guardAt > defAt, `the CONVERTED block calls ${fn} before it is defined`);
+  }
+});

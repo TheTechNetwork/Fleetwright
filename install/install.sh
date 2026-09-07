@@ -109,6 +109,41 @@ FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 #
 # What a box RUNS is what systemd starts, which is the same question
 # fleetwright-migrate asks and the same way it asks it.
+# CONVERTED IS DECIDED BELOW, after say/ok/warn exist. See the block following
+# their definitions — it used to be here, and calling `warn` twenty lines before
+# `warn` was defined killed the installer under `set -e` on exactly the boxes it
+# was added to rescue.
+
+# Set only when the new agent-hub has been SEEN to start. Section 8 will not
+# remove the install it replaced without it.
+SERVICES_STARTED=0
+OLD_UNIT_BACKUP_DIR=""
+ENV_FILE=/etc/agent-hub.env
+SIDECAR_ENV=/etc/agent-fleet-sidecar.env
+COORD_ENV=/etc/agent-fleet-coordinator.env
+say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+ok()   { printf '  ok   %s\n' "$*"; }
+warn() { printf '  warn %s\n' "$*"; }
+die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
+
+# MOVED DOWN, BECAUSE IT SPOKE BEFORE IT COULD SPEAK.
+#
+# This block was twenty lines above `warn()`, and its else-branch calls `warn`.
+# Under `set -euo pipefail` that is not a missing message — it is
+#
+#     install.sh: line 131: warn: command not found
+#
+# and the installer EXITS, having done nothing. Which boxes hit the else-branch?
+# Only the broken ones. So the guard added to rescue a box whose release is
+# missing killed the installer on precisely those boxes and no others, while
+# every healthy box took the if-branch and never noticed.
+#
+# Found by drilling it, not by reading it: scenarios 10 and 13 both failed with
+# the units still naming a release that was not there, because install.sh had
+# died before it wrote any. The same shape as `CHECK_ONLY` being read before the
+# argument loop set it — code placed above the thing it depends on — and the fix
+# is the same one: move the block, do not paper over the symptom.
+#
 CONVERTED=0
 if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
    && grep -q "$FLEET_BASE/current" /etc/systemd/system/agent-hub.service 2>/dev/null; then
@@ -135,17 +170,6 @@ if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
   fi
 fi
 
-# Set only when the new agent-hub has been SEEN to start. Section 8 will not
-# remove the install it replaced without it.
-SERVICES_STARTED=0
-OLD_UNIT_BACKUP_DIR=""
-ENV_FILE=/etc/agent-hub.env
-SIDECAR_ENV=/etc/agent-fleet-sidecar.env
-COORD_ENV=/etc/agent-fleet-coordinator.env
-say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
-ok()   { printf '  ok   %s\n' "$*"; }
-warn() { printf '  warn %s\n' "$*"; }
-die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
 # --- what this script is installing onto -----------------------------------
 #
