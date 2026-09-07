@@ -751,7 +751,7 @@ private struct SettingsView: View {
             if let accounts = host.health?.claudeAccounts {
                 Text(describeWhoCanStart(accounts, account: host.health?.account))
                     .fleetType(.micro)
-                    .foregroundStyle(accounts == 0 ? .red : .secondary)
+                    .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
             }
             // THE SECOND WAY TO BE SIGNED OUT, and the one that was invisible.
             // The line above reports on who has linked an account; this reports
@@ -774,7 +774,7 @@ private struct SettingsView: View {
             // somebody asks the questions.
             Text(describeRunning(host))
                 .fleetType(.micro)
-                .foregroundStyle(host.updatePending ? .orange : .secondary)
+                .foregroundStyle(host.updatePending ? Design.Palette.attention : Design.Palette.inkDim)
             // WHAT THE OS HAS WAITING, kept separate because it is a different
             // subject with a different button — the whole reason `updates`
             // exists as a verb is that these two were being read as one.
@@ -784,6 +784,25 @@ private struct SettingsView: View {
             if host.health?.updates?.rebootRequired == true {
                 Text("reboot required").fleetType(.micro).foregroundStyle(Design.Palette.attention)
             }
+    }
+
+    /// A machine that wants something wears the attention ring.
+    ///
+    /// THE SAME RULE THE SESSION LIST FOLLOWS, and the same sentence: calm
+    /// recedes, trouble comes forward. A session asking a question is the only
+    /// card on that screen wearing anything but the hairline; here it is a
+    /// machine that is not healthy, has an update waiting, or cannot start a
+    /// session because nobody has connected Claude to it.
+    ///
+    /// THREE THINGS, NOT ONE, because "healthy" is the box's opinion of itself
+    /// and says nothing about whether it can do the job. A host reporting
+    /// normally that nobody can start work on is exactly the row that used to
+    /// disappear into nine identical grey lines.
+    private func hostRing(_ host: Fleet.FleetHost) -> Color {
+        let unwell = (host.state ?? "unknown") != "healthy"
+        let waiting = host.updatePending
+        let unusable = (host.health?.claudeAccounts ?? 1) == 0
+        return unwell || waiting || unusable ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
     }
 
     /// Check, apply, reboot — and the channel that decides what "apply" means.
@@ -1223,7 +1242,7 @@ private struct SettingsView: View {
                                 Button(host.isRevoked ? "Readmit" : "Replace key") {
                                     Task { await mintBoundPin(for: host.hostId, readmit: host.isRevoked) }
                                 }
-                                .tint(.blue)
+                                .tint(Design.Palette.accent)
                             }
                         }
                     } header: {
@@ -1306,15 +1325,45 @@ private struct SettingsView: View {
                         Text("No hosts reporting yet.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     ForEach(fleetHosts) { host in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(host.hostId).fleetType(.labelMono)
-                                Spacer()
+                        // A CARD, LIKE A SESSION IS. This was a Form row: nine
+                        // lines of .micro grey stacked at 3pt, where the
+                        // hostname, "23 commits behind" and "1 person" were all
+                        // the same size and the same weight. A screen somebody
+                        // opens because something is wrong should not need
+                        // reading start to finish to find out which machine.
+                        //
+                        // The design system already answered this for sessions
+                        // and the fleet did not get it — #423 rebuilt the
+                        // session list around cards and restyled this list in
+                        // place, which left it looking like the thing it used
+                        // to be.
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                                // THE CARD'S HEADLINE, at the weight a headline
+                                // gets. Monospace stays — a hostname is a name
+                                // you compare character by character against a
+                                // terminal — but micro was making the one thing
+                                // you are looking for the smallest text on the
+                                // row.
+                                Text(host.hostId)
+                                    .fleetType(.bodyStrong)
+                                    .foregroundStyle(Design.Palette.ink)
+                                Spacer(minLength: 0)
                                 Text(host.state ?? "unknown")
-                                    .fleetType(.micro)
+                                    .fleetType(.label)
                                     // Colour reinforces the word; it never
                                     // carries the meaning alone.
-                                    .foregroundStyle(host.state == "healthy" ? .green : .orange)
+                                    //
+                                    // FROM THE PALETTE. This was `.green` and
+                                    // `.orange` — SwiftUI's own, which are not
+                                    // the two this product uses and do not move
+                                    // between themes with the rest of the
+                                    // screen. The palette has had `ok` and
+                                    // `attention` since the design system
+                                    // landed; four call sites never took them.
+                                    .foregroundStyle(host.state == "healthy"
+                                                     ? Design.Palette.ok
+                                                     : Design.Palette.attention)
                             }
                             // The registry works to make "we don't know"
                             // unrepresentable as a benign value. Rendering the
@@ -1381,9 +1430,10 @@ private struct SettingsView: View {
                             NavigationLink("Sign in to Claude") {
                                 CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
                             }
-                            .fleetType(.micro)
+                            .fleetType(.label)
                         }
-                        .padding(.vertical, 2)
+                        .fleetCard(radius: Design.Radius.cardSmall, ring: hostRing(host))
+                        .fleetRow()
                     }
                 } header: {
                     Text("Fleet")

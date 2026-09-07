@@ -181,7 +181,7 @@ struct FilesView: View {
         } label: {
             Label("Copy", systemImage: "doc.on.doc")
         }
-        .tint(.blue)
+        .tint(Design.Palette.accent)
     }
 
     // MARK: - Talking to the fleet

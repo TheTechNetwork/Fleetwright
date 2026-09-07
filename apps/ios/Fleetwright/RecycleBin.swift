@@ -51,7 +51,8 @@ struct RecycleBinView: View {
                         Text(entry.item.title ?? entry.item.name).fleetType(.bodyStrong)
                         Text(describeBinned(entry.item, on: entry.host))
                             .fleetType(.micro)
-                            .foregroundStyle((entry.item.remaining ?? "").hasPrefix("goes") ? .orange : .secondary)
+                            .foregroundStyle((entry.item.remaining ?? "").hasPrefix("goes")
+                                             ? Design.Palette.attention : Design.Palette.inkDim)
                         HStack(spacing: 16) {
                             Button("Restore") { Task { await act(entry.host, entry.item.name, restore: true) } }
                             Button("Delete now", role: .destructive) {

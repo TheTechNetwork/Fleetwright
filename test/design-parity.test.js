@@ -21,7 +21,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -193,5 +193,53 @@ test('the table says why it exists, in the file that has to be edited to break i
   for (const spec of Object.values(TABLE.scales)) {
     assert.equal(typeof spec.unit, 'string', 'a scale does not say what its numbers are in');
     assert.ok(Object.keys(spec.tokens).length > 0);
+  }
+});
+
+test('no screen reaches past the palette for a colour', () => {
+  // THE GAP THAT LET FOUR SITES THROUGH. design-tokens.test.js fails a colour
+  // written outside the palette in console.css, and the apps' builds fail an
+  // unresolved symbol — but `.green` and `.orange` are neither. They are
+  // SwiftUI's own, they compile, and they are not the two this product uses:
+  // they do not move between themes with the rest of the screen, so a status
+  // word ends up a different green from every other green on the page.
+  //
+  // The design system landed with `ok`, `attention` and `active` in the palette
+  // and four call sites still asking SwiftUI. Nothing said so, because every
+  // existing check reads a token FILE and this is about call sites.
+  //
+  // THE WHOLE CALL, NOT THE FIRST TOKEN IN IT. The first version of this
+  // matched a colour immediately after the paren and found nothing, because
+  // every real site was a TERNARY — `.foregroundStyle(x ? .orange : .secondary)`
+  // — which is the shape this is for. Caught by mutating a fixed site back and
+  // watching the test stay green.
+  const SWIFT_COLOURS = /\.(green|orange|red|yellow|blue|purple|pink|mint|teal|indigo|brown|gray|grey|secondary|tertiary)\b/g;
+  const dir = 'apps/ios/Fleetwright';
+
+  for (const file of readdirSync(new URL(`../${dir}`, import.meta.url)).filter((f) => f.endsWith('.swift'))) {
+    // Design.swift is where the palette IS, so it is the one file allowed to
+    // name a colour that did not come from it.
+    if (file === 'Design.swift') continue;
+    const src = bare(readFileSync(new URL(`../${dir}/${file}`, import.meta.url), 'utf8'));
+
+    for (const call of ['foregroundStyle(', 'foregroundColor(', 'tint(']) {
+      let at = src.indexOf(call);
+      while (at >= 0) {
+        // Paren-matched, so a ternary or a nested call is read whole.
+        let depth = 0;
+        let end = at + call.length - 1;
+        for (; end < src.length; end += 1) {
+          if (src[end] === '(') depth += 1;
+          if (src[end] === ')') { depth -= 1; if (depth === 0) break; }
+        }
+        const body = src.slice(at + call.length, end);
+        const found = [...body.matchAll(SWIFT_COLOURS)].map((m) => m[1]);
+        assert.deepEqual(
+          found, [],
+          `${file}: ${call}…) styles with SwiftUI's .${found.join(', .')} rather than Design.Palette`,
+        );
+        at = src.indexOf(call, end);
+      }
+    }
   }
 });
