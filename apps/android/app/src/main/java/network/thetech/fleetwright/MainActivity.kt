@@ -37,6 +37,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.installations.FirebaseInstallations
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -1477,8 +1479,15 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         var confirmRevoke by remember { mutableStateOf<Fleet.Client?>(null) }
         LaunchedEffect(signedIn) {
             if (!signedIn) return@LaunchedEffect
-            clients = Fleet(settings).clients()
-            events = Fleet(settings).events()
+            // TWO ANSWERS, ONE WAIT. These were sequential, so the section sat
+            // empty for two round trips one after another before it drew
+            // anything. They do not depend on each other.
+            coroutineScope {
+                val devices = async { Fleet(settings).clients() }
+                val happened = async { Fleet(settings).events() }
+                clients = devices.await()
+                events = happened.await()
+            }
         }
 
         Text("Devices", style = Design.Style.section, color = Design.Palette.ink.now)

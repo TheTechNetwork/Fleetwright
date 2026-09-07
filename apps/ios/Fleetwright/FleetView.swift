@@ -356,6 +356,10 @@ struct FleetView: View {
         guard settings.configured else { return }
         busy = true
         defer { busy = false }
+        // THE BIN'S HOSTS DO NOT DEPEND ON THE SESSION LIST, so they are asked
+        // for at the same time rather than after it. Started here and awaited
+        // below, which is where the answer is used.
+        async let reporting = fleet.fleetHosts()
         do {
             let reply = try await fleet.list()
             sessions = reply.sessions ?? []
@@ -385,15 +389,24 @@ struct FleetView: View {
         // blank the session list that already arrived, and an empty bin and an
         // unreachable coordinator are allowed to look the same HERE because
         // the sessions above have already said which it was.
-        fleetHosts = (try? await fleet.fleetHosts()) ?? fleetHosts
+        if let got = try? await reporting { fleetHosts = got }
 
         // ONLY WHEN THERE IS NOTHING TO SHOW. This is a fan-out across the
         // fleet, and asking it on every refresh would spend a round trip per
         // pull to answer a question that only matters on an empty screen — the
         // one case where nothing else is competing for the time.
         if sessions.isEmpty {
-            let reply = try? await fleet.connections()
-            myClaudeHosts = reply?.connections?.linked("claude")?.hosts ?? []
+            // NOT `?? []`, AND THIS ONE DECIDES WHAT SCREEN SOMEBODY SEES.
+            //
+            // `myClaudeHosts` is optional precisely so that "we have not asked"
+            // and "asked, and nobody" stay different — needsSetup says so in as
+            // many words two hundred lines up. Coalescing a FAILED ask to the
+            // empty array collapses them, and the app then tells a person whose
+            // fleet is perfectly set up that nothing is set up yet, because one
+            // request did not come back.
+            if let reply = try? await fleet.connections() {
+                myClaudeHosts = reply.connections?.linked("claude")?.hosts ?? []
+            }
         }
     }
 
@@ -920,10 +933,37 @@ private struct SettingsView: View {
     @MainActor
     private func loadHosts() async {
         guard !settings.credential.isEmpty else { return }
+
+        // FOUR ANSWERS, ONE WAIT. These were four sequential awaits: the screen
+        // sat blank for four round trips, one after another, before it drew
+        // anything — and every button on it calls this again when it finishes.
+        // On a phone on mobile data that is most of a second of nothing,
+        // repeated after every tap, which is the whole of "it feels slow".
+        //
+        // They do not depend on each other. `async let` starts all four and
+        // waits once, so the cost is the slowest of them rather than the sum.
+        let fleet = Fleet(settings: settings)
+        async let reporting = fleet.fleetHosts()
+        async let enrolled = fleet.enrolledHosts()
+        async let devices = fleet.clients()
+        async let happened = fleet.events()
+
+        // AND A FAILED REQUEST IS NOT AN EMPTY FLEET.
+        //
+        // Every one of these was `(try? await …) ?? []`, which turns "the
+        // network blinked" into "you have no machines" — the screen goes blank,
+        // and then fills in again a moment later. It is the null-is-not-empty
+        // rule, written down in this project more than once, broken in the app
+        // that displays the answer.
+        //
+        // Keeping what we had is what somebody would expect: a list that was
+        // right ten seconds ago is a better answer than nothing, and the next
+        // refresh corrects it.
+        //
         // Both lists: enrolled is the membership (fingerprints, revocation),
         // fleet is what they are saying right now. Different questions.
-        fleetHosts = (try? await Fleet(settings: settings).fleetHosts()) ?? []
-        hosts = (try? await Fleet(settings: settings).enrolledHosts()) ?? []
+        if let got = try? await reporting { fleetHosts = got }
+        if let got = try? await enrolled { hosts = got }
         // WHO CAN REACH THIS FLEET, AND WHAT HAPPENED. Both routes have been in
         // openapi.json and served by both coordinators since before either app
         // existed in its current shape, and neither app ever asked.
@@ -931,8 +971,8 @@ private struct SettingsView: View {
         // `try?` like the two above: a coordinator too old to serve these
         // answers 404, and an empty section is the right way to say "this fleet
         // does not offer that" — not a failed screen.
-        clients = (try? await Fleet(settings: settings).clients()) ?? []
-        events = (try? await Fleet(settings: settings).events()) ?? []
+        if let got = try? await devices { clients = got }
+        if let got = try? await happened { events = got }
     }
 
     /// "elibrody2@gmail.com · last used 2 hours ago", or as much as is known.
