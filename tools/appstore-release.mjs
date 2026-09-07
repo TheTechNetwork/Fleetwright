@@ -19,6 +19,9 @@
 // same speed whatever runner waits for it — which is why nothing here waits
 // for review at all. Submission is the delivery; approval is Apple's.
 
+import { storeListing } from './store-listing.mjs';
+import { uploadScreenshots } from './appstore-screenshots.mjs';
+
 const KEY_ID = env('ASC_KEY_ID');
 const ISSUER_ID = env('ASC_ISSUER_ID');
 const PRIVATE_KEY = env('ASC_KEY_P8');
@@ -101,6 +104,77 @@ async function api(path, init = {}) {
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * What is missing from the listing, before anything is created.
+ *
+ * WHY THIS RUNS FIRST. Everything below it writes: it creates an App Store
+ * version, attaches a build, sets the release notes, and only THEN asks Apple
+ * to accept it — which is where an incomplete listing refuses, attribute by
+ * attribute, in Apple's words. So the first submission of a new app left a
+ * half-built version behind and a raw refusal in the log, and the answer was a
+ * line of prose pointing at a checklist in docs/ci.md.
+ *
+ * None of this is fixable from here — nothing in this repository can supply a
+ * screenshot or a privacy answer — which is exactly why it should be reported
+ * BEFORE the writes rather than discovered after them. A refusal that names
+ * every missing thing at once, before touching anything, is a list somebody can
+ * work through. Four rounds of "and also…" is not.
+ *
+ * READ-ONLY, and it never throws on its own account: an API shape that changed,
+ * or a permission this key does not have, must not stop a release that would
+ * otherwise have gone out. It is a better error message, not a new gate.
+ *
+ * @returns {Promise<string[]>} human-readable descriptions of what is missing
+ */
+async function listingGaps(appId, versionString) {
+  const gaps = [];
+  try {
+    // The primary locale's own text. Absent here is the commonest first-time
+    // failure, and the one that reads worst afterwards: Apple complains about
+    // `description` on a version this script just created.
+    const infos = await api(`/v1/apps/${appId}/appInfos?limit=1`);
+    const info = infos.data?.[0];
+    if (info) {
+      const cat = info.relationships?.primaryCategory?.data;
+      if (!cat) gaps.push('no primary category');
+      // ageRatingDeclaration is a relationship; its absence is the age rating
+      // never having been answered.
+      const rating = info.relationships?.ageRatingDeclaration?.data;
+      if (!rating) gaps.push('the age rating questionnaire has not been answered');
+    }
+
+    // The version's localisations carry description, keywords and support URL.
+    // Checked against the version if it exists, and against the app's newest
+    // otherwise — on a first run there is no version yet, which is not a gap.
+    const versions = await api(
+      `/v1/apps/${appId}/appStoreVersions?filter[versionString]=${encodeURIComponent(versionString)}&filter[platform]=IOS&limit=1`,
+    );
+    const v = versions.data?.[0];
+    if (v) {
+      const locs = await api(`/v1/appStoreVersions/${v.id}/appStoreVersionLocalizations?limit=50`);
+      const primary = locs.data?.[0];
+      if (!primary) {
+        gaps.push('no localisation on this version — description and keywords are unset');
+      } else {
+        const a = primary.attributes || {};
+        if (!a.description) gaps.push(`no description for ${a.locale || 'the primary locale'}`);
+        if (!a.keywords) gaps.push(`no keywords for ${a.locale || 'the primary locale'}`);
+        if (!a.supportUrl) gaps.push('no support URL');
+        // SCREENSHOTS ARE PER LOCALISATION, and a version with none is refused
+        // for every device size at once — the longest and least readable of
+        // Apple's refusals.
+        const sets = await api(`/v1/appStoreVersionLocalizations/${primary.id}/appScreenshotSets?limit=10`);
+        if (!(sets.data || []).length) gaps.push('no screenshots on this version');
+      }
+    }
+  } catch (e) {
+    // NOT A FAILURE. See above: this is a better message, not a new gate.
+    console.log(`::debug::could not pre-check the listing (${String(e.message).split('\n')[0]})`);
+    return [];
+  }
+  return gaps;
+}
+
 async function main() {
   const apps = await api(`/v1/apps?filter[bundleId]=${encodeURIComponent(BUNDLE_ID)}&limit=1`);
   const app = apps.data[0];
@@ -145,6 +219,18 @@ async function main() {
   }
   if (!versionString) throw new Error(`build ${BUILD_NUMBER} has no version train — cannot name an App Store version`);
   console.log(`build ${BUILD_NUMBER} is VALID (${build.id}), version ${versionString}`);
+
+  // WHAT THE LISTING IS MISSING, SAID BEFORE ANYTHING IS WRITTEN. Everything
+  // below this line creates or changes something in App Store Connect, and the
+  // refusal for an incomplete listing arrives at the very END — after a version
+  // exists, a build is attached and notes are set. One list, up front, beats
+  // four rounds of Apple saying "and also".
+  const gaps = await listingGaps(app.id, versionString);
+  if (gaps.length) {
+    console.log('::warning::this listing is not finished, and App Review will refuse it:');
+    for (const g of gaps) console.log(`::warning::  - ${g}`);
+    console.log('::warning::none of these can be set from here — the once-ever checklist is in docs/ci.md');
+  }
 
   // The App Store version: found if it exists, created if not. Found-first is
   // what makes a re-run safe, and it is also how a version Apple rejected gets
@@ -204,7 +290,35 @@ async function main() {
   // refuses the field on an app's FIRST version (there is nothing it is newer
   // than), and that refusal must not sink the submission: notes are a nicety,
   // the version is the delivery.
-  if (WHATS_NEW) {
+  // THE LISTING ITSELF, FROM THE DOCUMENT SOMEBODY WROTE — not only the notes.
+  //
+  // The description and the promotional text lived in apps/store-listing.md,
+  // reviewed in pull requests, and were then retyped into a web console. So the
+  // pipeline built, signed, uploaded, distributed and submitted without a human
+  // touching anything, and stopped one step short of the words on the page —
+  // which is exactly where a listing goes stale, because nobody re-pastes a
+  // description they only changed slightly.
+  //
+  // WRITTEN TOGETHER WITH whatsNew, in one PATCH, because they are one object
+  // and two requests would leave a version half-updated when the second failed.
+  /** @type {Record<string, string>} */
+  const attributes = {};
+  if (WHATS_NEW) attributes.whatsNew = WHATS_NEW;
+  try {
+    const listing = storeListing();
+    attributes.description = listing.full;
+    // The short description is Play's field; on the App Store the equivalent
+    // slot is promotional text, which is the one thing editable WITHOUT a new
+    // version — so the same sentence lands in the place it belongs on each
+    // store rather than being invented twice.
+    attributes.promotionalText = listing.short;
+  } catch (e) {
+    // A LISTING THAT CANNOT BE READ IS NOT A REASON TO DROP A RELEASE. The copy
+    // already on the store is what stays, and it says so.
+    console.log(`::warning::store listing not applied: ${String(e.message).split('\n')[0]}`);
+  }
+
+  if (Object.keys(attributes).length) {
     try {
       const locs = await api(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations?limit=200`);
       const en = locs.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
@@ -212,16 +326,46 @@ async function main() {
         await api(`/v1/appStoreVersionLocalizations/${en.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
-            data: { type: 'appStoreVersionLocalizations', id: en.id, attributes: { whatsNew: WHATS_NEW } },
+            data: { type: 'appStoreVersionLocalizations', id: en.id, attributes },
           }),
         });
-        console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
+        console.log(`listing: ${Object.keys(attributes).join(', ')}`);
+        if (WHATS_NEW) console.log(`what's new: ${WHATS_NEW.split('\n')[0].slice(0, 72)}`);
       } else {
         console.log('no en-US localization on the version — finish the listing in App Store Connect');
       }
     } catch (e) {
-      console.log(`::warning::release notes not set: ${String(e.message).split('\n')[0]}`);
+      console.log(`::warning::listing not set: ${String(e.message).split('\n')[0]}`);
     }
+  }
+
+  // SCREENSHOTS, BEFORE THE SUBMISSION AND NOT AFTER IT. A version missing a
+  // required display size is refused at submission, so the ordering here is the
+  // feature: this is the last thing that can still change the version, and the
+  // next call asks Apple to accept it.
+  //
+  // It is also why this is an import rather than another workflow step — a
+  // second job could not be placed between two calls inside this one.
+  //
+  // ONLY ON A FULL RELEASE, which is where this whole file runs, and only if
+  // needed: a display type that already has screenshots is left alone.
+  try {
+    const locs = await api(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations?limit=200`);
+    const en = locs.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
+    if (en) {
+      const n = await uploadScreenshots({
+        api,
+        localizationId: en.id,
+        dir: process.env.SCREENSHOTS_DIR || undefined,
+        force: process.env.SCREENSHOTS_FORCE === 'true',
+      });
+      if (n) console.log(`${n} screenshot${n === 1 ? '' : 's'} uploaded`);
+    }
+  } catch (e) {
+    // THE SAME RULE AS THE LISTING. Whatever is already on the store stays, and
+    // a submission with the previous version's screenshots is a submission; a
+    // release that stopped here is not.
+    console.log(`::warning::screenshots not uploaded: ${String(e.message).split('\n')[0]}`);
   }
 
   // Submission, via the reviewSubmissions flow (appStoreVersionSubmissions is
