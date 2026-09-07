@@ -101,6 +101,77 @@ async function api(path, init = {}) {
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * What is missing from the listing, before anything is created.
+ *
+ * WHY THIS RUNS FIRST. Everything below it writes: it creates an App Store
+ * version, attaches a build, sets the release notes, and only THEN asks Apple
+ * to accept it — which is where an incomplete listing refuses, attribute by
+ * attribute, in Apple's words. So the first submission of a new app left a
+ * half-built version behind and a raw refusal in the log, and the answer was a
+ * line of prose pointing at a checklist in docs/ci.md.
+ *
+ * None of this is fixable from here — nothing in this repository can supply a
+ * screenshot or a privacy answer — which is exactly why it should be reported
+ * BEFORE the writes rather than discovered after them. A refusal that names
+ * every missing thing at once, before touching anything, is a list somebody can
+ * work through. Four rounds of "and also…" is not.
+ *
+ * READ-ONLY, and it never throws on its own account: an API shape that changed,
+ * or a permission this key does not have, must not stop a release that would
+ * otherwise have gone out. It is a better error message, not a new gate.
+ *
+ * @returns {Promise<string[]>} human-readable descriptions of what is missing
+ */
+async function listingGaps(appId, versionString) {
+  const gaps = [];
+  try {
+    // The primary locale's own text. Absent here is the commonest first-time
+    // failure, and the one that reads worst afterwards: Apple complains about
+    // `description` on a version this script just created.
+    const infos = await api(`/v1/apps/${appId}/appInfos?limit=1`);
+    const info = infos.data?.[0];
+    if (info) {
+      const cat = info.relationships?.primaryCategory?.data;
+      if (!cat) gaps.push('no primary category');
+      // ageRatingDeclaration is a relationship; its absence is the age rating
+      // never having been answered.
+      const rating = info.relationships?.ageRatingDeclaration?.data;
+      if (!rating) gaps.push('the age rating questionnaire has not been answered');
+    }
+
+    // The version's localisations carry description, keywords and support URL.
+    // Checked against the version if it exists, and against the app's newest
+    // otherwise — on a first run there is no version yet, which is not a gap.
+    const versions = await api(
+      `/v1/apps/${appId}/appStoreVersions?filter[versionString]=${encodeURIComponent(versionString)}&filter[platform]=IOS&limit=1`,
+    );
+    const v = versions.data?.[0];
+    if (v) {
+      const locs = await api(`/v1/appStoreVersions/${v.id}/appStoreVersionLocalizations?limit=50`);
+      const primary = locs.data?.[0];
+      if (!primary) {
+        gaps.push('no localisation on this version — description and keywords are unset');
+      } else {
+        const a = primary.attributes || {};
+        if (!a.description) gaps.push(`no description for ${a.locale || 'the primary locale'}`);
+        if (!a.keywords) gaps.push(`no keywords for ${a.locale || 'the primary locale'}`);
+        if (!a.supportUrl) gaps.push('no support URL');
+        // SCREENSHOTS ARE PER LOCALISATION, and a version with none is refused
+        // for every device size at once — the longest and least readable of
+        // Apple's refusals.
+        const sets = await api(`/v1/appStoreVersionLocalizations/${primary.id}/appScreenshotSets?limit=10`);
+        if (!(sets.data || []).length) gaps.push('no screenshots on this version');
+      }
+    }
+  } catch (e) {
+    // NOT A FAILURE. See above: this is a better message, not a new gate.
+    console.log(`::debug::could not pre-check the listing (${String(e.message).split('\n')[0]})`);
+    return [];
+  }
+  return gaps;
+}
+
 async function main() {
   const apps = await api(`/v1/apps?filter[bundleId]=${encodeURIComponent(BUNDLE_ID)}&limit=1`);
   const app = apps.data[0];
@@ -145,6 +216,18 @@ async function main() {
   }
   if (!versionString) throw new Error(`build ${BUILD_NUMBER} has no version train — cannot name an App Store version`);
   console.log(`build ${BUILD_NUMBER} is VALID (${build.id}), version ${versionString}`);
+
+  // WHAT THE LISTING IS MISSING, SAID BEFORE ANYTHING IS WRITTEN. Everything
+  // below this line creates or changes something in App Store Connect, and the
+  // refusal for an incomplete listing arrives at the very END — after a version
+  // exists, a build is attached and notes are set. One list, up front, beats
+  // four rounds of Apple saying "and also".
+  const gaps = await listingGaps(app.id, versionString);
+  if (gaps.length) {
+    console.log('::warning::this listing is not finished, and App Review will refuse it:');
+    for (const g of gaps) console.log(`::warning::  - ${g}`);
+    console.log('::warning::none of these can be set from here — the once-ever checklist is in docs/ci.md');
+  }
 
   // The App Store version: found if it exists, created if not. Found-first is
   // what makes a re-run safe, and it is also how a version Apple rejected gets
