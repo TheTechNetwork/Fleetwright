@@ -30,6 +30,11 @@
  * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
+ * @property {string[]} [hostLabels] what the sidecar says this box is already
+ *   labelled — AGENT_FLEET_LABELS plus what the machine derived. Carried as a
+ *   field because AGENT_FLEET_LABELS is in the SIDECAR's environment and
+ *   nothing here can read it, and `/labels` has to tell a label it stores from
+ *   a fact it cannot remove
  * @property {string} [runnerRepo] the fleet's runner repository, as owner/repo.
  *   Delivered to this host on the coordinator's config frame, so no box is
  *   configured with it — see src/fleet/protocol/config-frame.js
@@ -53,6 +58,9 @@
  * @property {{ app: any, system: any }} [waiting] what is waiting for this box,
  *   as data: the app half and the OS half, each naming its own subject
  * @property {string} [channel]   which releases this box installs
+ * @property {string[]} [setLabels] the labels set on this box from an app, as
+ *   data, so a screen re-renders from the reply instead of waiting for the next
+ *   health frame
  * @property {{variant: string, image: string, pinned: boolean}} [sandbox] which
  *   image new sessions run in, as data — a picker parsed out of the prose would
  *   break the first time the prose improved
@@ -76,6 +84,8 @@ import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
+import { readLabels, addLabel, removeLabel, describeLabels } from '../core/labels.js';
+import { autoLabels } from '../fleet/host/auto-labels.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState } from '../core/migrate.js';
@@ -727,6 +737,55 @@ export const COMMANDS = {
         text: r.ok ? `${r.message}\nThe image is fetched when the next session needs it, which takes a few minutes the first time.` : r.message,
         sandbox: describe(),
       };
+    },
+  },
+
+  labels: {
+    usage: '/labels [+label|-label]',
+    short: 'The labels this box carries',
+    help:
+      'Labels are how work is aimed: `tag: gpu` on a start, and the scheduler filters before it ranks. ' +
+      '`/labels +gpu` adds one, `/labels -gpu` takes it off. Labels the machine derives about itself, and ' +
+      'ones from AGENT_FLEET_LABELS, are listed but cannot be removed from here.',
+    run: (ctx, args) => {
+      // WHAT THIS BOX ALREADY CARRIES FROM ELSEWHERE, so an add can decline to
+      // shadow a fact and a remove can say where the label actually comes from.
+      // The sidecar puts the real list here; without one this is empty, which
+      // is honest — agent-hub on its own does not know the fleet's labels.
+      const given = Array.isArray(ctx.hostLabels) ? ctx.hostLabels : [];
+      // WHICH OF THOSE THE MACHINE DERIVED. Computed here rather than sent,
+      // because agent-hub owns the configuration auto-labels reads — the two
+      // agree by construction instead of by both being kept up to date.
+      // Anything given that is not derived came from AGENT_FLEET_LABELS.
+      const auto = autoLabels(ctx.cfg);
+      const env = given.filter((l) => !auto.includes(l));
+      const known = [...new Set([...given, ...auto])];
+      const [arg] = args;
+      const answer = (/** @type {{ok: boolean, message: string, labels: string[]}} */ r) => ({
+        ok: r.ok,
+        text: r.message,
+        // The set as DATA, so an app re-renders from the reply rather than
+        // waiting for the next health frame — the stale-cache bug the sidecar's
+        // post-mutation refresh already exists for, closed a second way.
+        setLabels: r.labels,
+      });
+      if (!arg) {
+        const set = readLabels(ctx.cfg);
+        const all = describeLabels({ auto, env, set });
+        return {
+          ok: true,
+          text: all.length
+            ? `This box has ${all.length} ${all.length === 1 ? 'label' : 'labels'}:\n` +
+              all.map((/** @type {{name: string, source: string}} */ l) => `  ${l.name}  (${l.source === 'set' ? 'set here' : l.source === 'env' ? 'AGENT_FLEET_LABELS' : 'from the machine'})`).join('\n')
+            : 'This box has no labels, so only work that names it by host can land here.',
+          setLabels: set,
+        };
+      }
+      // `+gpu` and `-gpu`, because a bare word would have to mean one of them
+      // and whichever it meant would be wrong half the time.
+      if (arg.startsWith('+')) return answer(addLabel(ctx.cfg, arg.slice(1), known));
+      if (arg.startsWith('-')) return answer(removeLabel(ctx.cfg, arg.slice(1), known));
+      return { ok: false, text: 'Say `/labels +gpu` to add one or `/labels -gpu` to take it off. `/labels` on its own lists them.' };
     },
   },
 

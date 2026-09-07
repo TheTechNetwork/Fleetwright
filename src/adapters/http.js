@@ -270,6 +270,18 @@ export class HttpAdapter {
         // An origin, not a URL with a path: this becomes a workflow input that
         // tells a machine which fleet to join.
         ['coordinator', /^https?:\/\/[A-Za-z0-9._-]{1,253}(:\d{1,5})?$/],
+        // WHAT THE SIDECAR ALREADY KNOWS THIS BOX IS LABELLED, comma-joined.
+        // agent-hub can derive the auto labels itself — it owns the config they
+        // come from — but AGENT_FLEET_LABELS is in the SIDECAR's env file and
+        // nothing here can read it. Without this, `/labels -arm64` would say
+        // "this box does not have that" about a label the app is displaying.
+        //
+        // Context and not an argument, by the same rule as the two above: it is
+        // something this box was given rather than something a caller typed.
+        // Charset-checked here rather than trusted from its usual caller,
+        // because a value validated only by its usual caller is validated only
+        // until there are two.
+        ['hostLabels', /^[A-Za-z0-9][A-Za-z0-9_.,-]{0,1023}$/],
       ])) {
         if (body[field] === undefined || body[field] === null) continue;
         if (typeof body[field] !== 'string' || !re.test(body[field])) {
@@ -322,7 +334,10 @@ export class HttpAdapter {
       // shorter secret, not a safer one.
       log.info(`http: ${clientLabel(req)} → ${redactCommandLine(line).slice(0, 120)}`);
       const reply = await dispatch(
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta },
+        // Split back into a list here, so a command reads labels and never a
+        // string it has to remember to parse.
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta,
+          ...(meta.hostLabels ? { hostLabels: String(meta.hostLabels).split(',').filter(Boolean) } : {}) },
         line,
       );
       return json(res, 200, reply);

@@ -127,6 +127,7 @@ and "dead host" is the one it retries.
 | `updates` | — | | `/updates` |
 | `channel` | `to?` (`stable`\|`rolling`) | ✅ | `/channel [stable\|rolling]` |
 | `sandbox` | `to?` (`minimal`\|`browser`) | ✅ | `/sandbox [minimal\|browser]` |
+| `labels` | `add?`, `remove?` | ✅ | `/labels [+label\|-label]` |
 | `connect` | `provider?` (`claude`\|`github`\|`cloudflare`), `scope?` (`me`\|`host`) | ✅ | `/connect`, `/login for <email>` |
 | `link` | `provider`, `secret`, `scope?` | ✅ | `/link <provider> <token>`, `/code <value>` |
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
@@ -300,6 +301,37 @@ with nobody maintaining a list.
 Running sessions keep the image they started in. The new image is fetched when
 the next session needs it, not inside the verb: pulling 400MB in a command meant
 to answer a phone would block the reply past every timeout on the way.
+
+**`labels` is the third sibling, and the one the other two aim through.** A
+label is what `tag` matches on, so it decides which boxes a fan-out reaches.
+They came from `AGENT_FLEET_LABELS` in a root-owned env file and from
+`auto-labels.js`, so "this box is on the noisy switch, keep long jobs off it"
+was a decision somebody could make and not express.
+
+Three sources, and the source travels as data:
+
+| Source | Where from | Removable from an app |
+|---|---|---|
+| `auto` | the machine's own facts — os, arch, distribution, browser | no |
+| `env` | `AGENT_FLEET_LABELS`, set at install | no |
+| `set` | added from an app | yes |
+
+**An auto label cannot be switched off from a phone,** and the refusal says
+where it comes from. `arm64` is a fact; a fact somebody can turn off is not one,
+and `tag: arm64` finding a box that turned its label off is the scheduler lying
+about what it matched. An app that showed a flat list would offer a Remove that
+gets refused — a control that exists and does not work, which is C-2 in the
+place it is easiest to get wrong.
+
+**`add` and `remove`, never a list.** A `set` that replaced the whole list makes
+two people editing labels from two phones a last-write-wins race over a value
+neither of them read.
+
+`AGENT_FLEET_LABELS` lives in the **sidecar's** environment, which agent-hub
+cannot read — so the sidecar carries what the box is already labelled beside the
+command, the same way `provision` carries the runner repository. Without it,
+`/labels -arm64` would answer "this box does not have that" about a label the
+app is displaying.
 
 `update`, `upgrade` and `reboot` join `logs` in going to one named box, for the
 same two reasons: merging four apt runs into one reply answers nobody, and the

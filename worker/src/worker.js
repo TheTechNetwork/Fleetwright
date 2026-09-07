@@ -1482,6 +1482,7 @@ const OPENAPI = JSON.stringify({
                       "files",
                       "forget",
                       "health",
+                      "labels",
                       "link",
                       "list",
                       "logs",

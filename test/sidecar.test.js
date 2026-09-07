@@ -332,7 +332,11 @@ test('health reports what the scheduler ranks on', async (t) => {
   assert.equal(h.maxSessions, 5);
   assert.equal(h.running, 1);
   assert.equal(h.free, 4);
-  assert.deepEqual(h.labels, ['gpu', 'debian13']);
+  // SORTED, since labels became composable. The frame is the union of what the
+  // operator set, what the machine derived, and what somebody added from an
+  // app, and a union has no natural order — so it gets a stable one rather than
+  // a different arrangement depending on which source answered first.
+  assert.deepEqual(h.labels, ['debian13', 'gpu']);
   assert.equal(h.loggedIn, true);
   assert.equal(h.loadavg.length, 3);
 });
@@ -578,4 +582,46 @@ test('stopping the sidecar leaves agent-hub and its sessions alone', async (t) =
   await sidecar.start();
   await sidecar.stop();
   assert.deepEqual(stub.commands, [], 'no /stop is issued on shutdown');
+});
+
+// --- labels -----------------------------------------------------------------
+
+test('labels translate to one command that cannot become two', async (t) => {
+  const { sidecar, stub } = await setup(t);
+  await sidecar.handle(intent({ verb: 'labels', id: 'idem-lab-0001' }));
+  await sidecar.handle(intent({ verb: 'labels', params: { add: 'gpu' }, id: 'idem-lab-0002' }));
+  await sidecar.handle(intent({ verb: 'labels', params: { remove: 'gpu' }, id: 'idem-lab-0003' }));
+  assert.deepEqual(stub.commands, ['/labels', '/labels +gpu', '/labels -gpu']);
+});
+
+test('what the box is already labelled travels beside the command', async (t) => {
+  // AGENT_FLEET_LABELS is in the SIDECAR's environment and nothing in agent-hub
+  // can read it. Without this, `/labels -gpu` answers "this box does not have
+  // that" about a label the app is displaying.
+  const { sidecar, stub } = await setup(t);
+  await sidecar.handle(intent({ verb: 'labels', params: { remove: 'gpu' }, id: 'idem-lab-0004' }));
+  assert.equal(stub.bodies.at(-1).hostLabels, 'gpu,debian13');
+});
+
+test('only the labels verb carries them, so nothing else grows a field', async (t) => {
+  const { sidecar, stub } = await setup(t);
+  await sidecar.handle(intent({ verb: 'list', id: 'idem-lab-0005' }));
+  assert.equal(stub.bodies.at(-1).hostLabels, undefined);
+});
+
+test('a label added from an app reaches the scheduler without a restart', async (t) => {
+  // Health goes out every fifteen seconds and the coordinator filters and ranks
+  // on the last frame it received. A list frozen at construction would mean a
+  // label added from a phone arrived at the next service restart — which is the
+  // whole failure this verb exists to remove.
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = await import('node:path');
+  const stateDir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-labels-'));
+  const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir }) });
+
+  assert.deepEqual(sidecar.labels, ['debian13', 'gpu']);
+  const { addLabel } = await import('../src/core/labels.js');
+  addLabel(/** @type {any} */ ({ stateDir }), 'noisy');
+  assert.deepEqual(sidecar.labels, ['debian13', 'gpu', 'noisy']);
 });

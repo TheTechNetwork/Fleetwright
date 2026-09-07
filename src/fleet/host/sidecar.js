@@ -55,6 +55,7 @@ import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { readChannel, pinnedByEnv } from '../../core/channel.js';
 import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
+import { readLabels } from '../../core/labels.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -169,7 +170,11 @@ export class Sidecar {
      */
     this.config = new Map();
     this.hostId = hostId || os.hostname();
-    this.labels = labels;
+    // WHAT THIS BOX WAS GIVEN: AGENT_FLEET_LABELS plus what auto-labels derived
+    // at startup. Kept separate from the composed list below because agent-hub
+    // needs the difference — a label it stores is removable and a fact the
+    // machine derives is not, and one flat list cannot say which is which.
+    this.givenLabels = labels;
     // Injected rather than read here: the sidecar knows about a coordinator
     // and an agent-hub, and nothing about git checkouts or package managers.
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null} */
@@ -435,6 +440,12 @@ export class Sidecar {
       // what this box pinned at enrolment, so a runner is told to join the
       // fleet this machine is actually in rather than one the coordinator
       // names for itself.
+      // WHAT THIS BOX IS ALREADY LABELLED, so agent-hub can tell a label it
+      // stores from a fact the machine derives — and refuse a remove with the
+      // reason rather than with "this box does not have that" about a label the
+      // app is displaying. AGENT_FLEET_LABELS is in this process's environment
+      // and in no other, which is why it has to travel.
+      if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
       if (intent.verb === 'provision') {
         const repo = this.config.get('runnerRepo');
         if (repo) meta.runnerRepo = repo;
@@ -623,6 +634,25 @@ export class Sidecar {
    * with a reason, never a default that reads as benign — a scheduler that sees
    * 0 will simply skip this host, while one that sees null can say why.
    */
+  /**
+   * Every label this box carries, right now.
+   *
+   * A GETTER AND NOT A FIELD, because the point of the `labels` verb is that
+   * this changes without a restart. Health goes out every fifteen seconds and
+   * the coordinator ranks and filters on the last frame it received, so a list
+   * frozen at construction would mean a label added from a phone reached the
+   * scheduler on the next service restart — which is the "the product names a
+   * fix and only a shell can apply it" shape this whole file argues against.
+   *
+   * One small file read on a path taken four times a minute.
+   *
+   * @returns {string[]}
+   */
+  get labels() {
+    const set = this.hubConfig ? readLabels(this.hubConfig) : [];
+    return [...new Set([...this.givenLabels, ...set])].sort();
+  }
+
   async health() {
     const [load1, load5, load15] = os.loadavg();
     /** @type {Record<string, any>} */
@@ -949,6 +979,11 @@ export function toCommandLine({ verb, params, actor }) {
       return p.to ? `/channel ${p.to}` : '/channel';
     case 'sandbox':
       return p.to ? `/sandbox ${p.to}` : '/sandbox';
+    // `+gpu` / `-gpu`, so one command expresses both and a bare word never has
+    // to mean one of them. Both are `name`-typed, so neither can carry a space
+    // or become a second flag.
+    case 'labels':
+      return p.add ? `/labels +${p.add}` : p.remove ? `/labels -${p.remove}` : '/labels';
     // THE WORKSPACE. Quoted with the same care as everything else here: a
     // path is a filename and never a command, so it travels as one argument.
     case 'files':
