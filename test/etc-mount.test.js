@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { etcMount, adviseOnFailure } from '../src/core/upgrades.js';
+import { mountFor, pathFromDpkg, adviseOnFailure } from '../src/core/upgrades.js';
 
 /** Write a mountinfo fixture and return its path. */
 function mounts(lines) {
@@ -30,7 +30,7 @@ const ROOT_RO = '25 1 8:1 / / ro,relatime shared:1 - ext4 /dev/sda1 ro';
 const ETC_RO = '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro';
 
 test('an ordinary box reports /etc writable, through the root mount', () => {
-  const m = etcMount(mounts([ROOT_RW]));
+  const m = mountFor('/etc', mounts([ROOT_RW]));
   assert.equal(m.readOnly, false);
   assert.match(m.where, /via \//);
   assert.match(m.evidence, /rw$/);
@@ -41,7 +41,7 @@ test('ProtectSystem stacks a read-only /etc over a writable root, and that wins'
   // service is standing on a read-only layer over one path. Reading the FIRST
   // matching line would report the disk and miss the layer — which is exactly
   // the wrong answer, because it is the reassuring one.
-  const m = etcMount(mounts([ROOT_RW, ETC_RO]));
+  const m = mountFor('/etc', mounts([ROOT_RW, ETC_RO]));
   assert.equal(m.readOnly, true);
   assert.equal(m.where, '/etc');
 });
@@ -49,7 +49,7 @@ test('ProtectSystem stacks a read-only /etc over a writable root, and that wins'
 test('the longest mountpoint wins regardless of the order it appears in', () => {
   // mountinfo is not sorted by depth, and a `/etc` line above the `/` line must
   // not be overwritten by it.
-  const m = etcMount(mounts([ETC_RO, ROOT_RW]));
+  const m = mountFor('/etc', mounts([ETC_RO, ROOT_RW]));
   assert.equal(m.readOnly, true);
   assert.equal(m.where, '/etc');
 });
@@ -57,12 +57,12 @@ test('the longest mountpoint wins regardless of the order it appears in', () => 
 test('a later mount at the same point is on top of the earlier one', () => {
   // A stack is resolved by taking the top, and the top is what a write meets.
   const rw = '37 25 8:1 /etc /etc rw,relatime - ext4 /dev/sda1 rw';
-  assert.equal(etcMount(mounts([ROOT_RW, ETC_RO, rw])).readOnly, false);
-  assert.equal(etcMount(mounts([ROOT_RW, rw, ETC_RO])).readOnly, true);
+  assert.equal(mountFor('/etc', mounts([ROOT_RW, ETC_RO, rw])).readOnly, false);
+  assert.equal(mountFor('/etc', mounts([ROOT_RW, rw, ETC_RO])).readOnly, true);
 });
 
 test('a genuinely read-only disk is reported as the disk', () => {
-  const m = etcMount(mounts([ROOT_RO]));
+  const m = mountFor('/etc', mounts([ROOT_RO]));
   assert.equal(m.readOnly, true);
   assert.match(m.where, /via \//);
 });
@@ -71,13 +71,13 @@ test('errors=remount-ro on a writable mount is not read-only', () => {
   // `ro` is a whole option, not a substring. Nearly every ext4 root carries
   // `errors=remount-ro`, so a substring test would call every box in the world
   // read-only and send all of them to the wrong advice.
-  const m = etcMount(mounts(['25 1 8:1 / / rw,relatime,errors=remount-ro - ext4 /dev/sda1 rw,errors=remount-ro']));
+  const m = mountFor('/etc', mounts(['25 1 8:1 / / rw,relatime,errors=remount-ro - ext4 /dev/sda1 rw,errors=remount-ro']));
   assert.equal(m.readOnly, false);
 });
 
 test('a mountpoint that merely starts with the same letters is not /etc', () => {
   // `/etcetera` is not a parent of `/etc`, and a naive prefix test says it is.
-  const m = etcMount(mounts([ROOT_RW, '40 25 8:1 / /etcetera ro,relatime - ext4 /dev/sda1 ro']));
+  const m = mountFor('/etc', mounts([ROOT_RW, '40 25 8:1 / /etcetera ro,relatime - ext4 /dev/sda1 ro']));
   assert.equal(m.readOnly, false);
   assert.match(m.where, /via \//);
 });
@@ -87,7 +87,7 @@ test('optional fields are skipped by the separator, not by counting', () => {
   // the separator exists. Counting to a fixed index reads the fstype as an
   // option on any mount that carries a propagation tag.
   const many = '36 25 8:1 /etc /etc ro,relatime shared:16 master:2 propagate_from:2 - ext4 /dev/sda1 ro';
-  const m = etcMount(mounts([ROOT_RW, many]));
+  const m = mountFor('/etc', mounts([ROOT_RW, many]));
   assert.equal(m.readOnly, true);
   assert.match(m.evidence, /ext4/);
 });
@@ -95,9 +95,28 @@ test('optional fields are skipped by the separator, not by counting', () => {
 test('a kernel that cannot be read says so, and is not rounded to either answer', () => {
   // CANNOT TELL IS ITS OWN ANSWER. Rounding it to the likely one is how the
   // first two versions of this advice went wrong.
-  const m = etcMount('/definitely/not/here');
+  const m = mountFor('/etc', '/definitely/not/here');
   assert.equal(m.readOnly, null);
   assert.match(m.evidence, /could not read/);
+});
+
+test('the failing path is read out of what dpkg said, not assumed', () => {
+  // THE FOURTH TIME THIS WAS MEASURED IN THE WRONG PLACE. `ProtectSystem=full`
+  // failed on /etc; loosening it to `true` made the very next dpkg run fail on
+  // /usr/bin/locale-check — whereupon the advice measured /etc, found it
+  // writable, and reported that ProtectSystem was not the cause while
+  // ProtectSystem was the cause.
+  assert.equal(pathFromDpkg("unable to create '/usr/bin/locale-check.dpkg-new' (while processing './usr/bin/locale-check')"), '/usr/bin');
+  assert.equal(pathFromDpkg("unable to create '/etc/debian_version.dpkg-new' (while processing './etc/debian_version')"), '/etc');
+  // THE DIRECTORY, not the file: a read-only mount is what makes it unwritable,
+  // and the file itself does not exist yet — that is the whole error.
+  assert.equal(pathFromDpkg("unable to remove newly-extracted version of '/usr/bin/locale-check'"), '/usr/bin');
+  // Nothing recognisable is null, and the caller falls back rather than
+  // measuring a path it invented.
+  assert.equal(pathFromDpkg('E: Sub-process /usr/bin/dpkg returned an error code (1)'), null);
+  assert.equal(pathFromDpkg(''), null);
+  // A relative path is not a path this can measure.
+  assert.equal(pathFromDpkg("unable to create './usr/bin/x'"), null);
 });
 
 test('the advice follows the measurement, not the error string', () => {

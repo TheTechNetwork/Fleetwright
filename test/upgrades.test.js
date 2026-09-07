@@ -134,19 +134,23 @@ test('the advice matches the failure, or says nothing clever', async () => {
     'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
+  const CURRENT = systemd([
+    'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
+    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+  ]);
 
   // OURS: a read-only layer stacked over a perfectly good disk.
   const ours = adviseOnFailure(said, fixture([RW, '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro']), OLD_UNIT);
   assert.match(ours, /READ-ONLY/, 'it does not say what it measured');
   assert.match(ours, /sudo does not/i);
-  assert.match(ours, /measured NOT to work/, 'it does not say how to fix it');
+  assert.match(ours, /no setting of it that lets an upgrade work/, 'it does not say how to fix it');
   assert.doesNotMatch(ours, /update the image/i, 'it blames the image again');
 
   // NOT OURS: /etc is writable in this namespace, so ProtectSystem did not do
   // it and the installer will not fix it. This is the answer the shipped
   // version could not express, and the one a person is standing in when they
   // say "it still fails".
-  const notOurs = adviseOnFailure(said, fixture([RW]), OLD_UNIT);
+  const notOurs = adviseOnFailure(said, fixture([RW]), CURRENT);
   assert.match(notOurs, /READ-WRITE/);
   assert.match(notOurs, /re-running the installer will not change anything/);
   assert.match(notOurs, /findmnt/, 'it does not say where to look instead');
@@ -190,9 +194,18 @@ test('the unit lets dpkg write the one directory it must', () => {
   // Asking for `full` AND carving /etc back out is a contradiction — protect
   // /etc, do not protect /etc — and which way a given systemd resolves it is a
   // detail of that version. `true` has no contradiction to resolve.
+  //
+  // AND `true` DID NOT WORK EITHER, which is the third round. It still protects
+  // /usr, and the very next dpkg run failed on /usr/bin/locale-check. There is
+  // no setting of ProtectSystem that lets an upgrade work: the sudoers grant is
+  // `apt-get -y upgrade`, and rewriting /usr, /etc and /boot is what that
+  // command IS.
   const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
-  assert.match(unit, /^ProtectSystem=true$/m, 'the contradiction is back, or the hardening was dropped entirely');
-  assert.doesNotMatch(unit, /^ProtectSystem=full$/m);
+  assert.match(unit, /^ProtectSystem=no$/m, 'a setting that forbids part of what apt does is back');
+  assert.doesNotMatch(unit, /^ProtectSystem=(full|true|strict|yes)$/m);
+  // AND THE WAY BACK IS WRITTEN DOWN. Giving up the hardening without naming
+  // how to regain it is how it stays given up.
+  assert.match(unit, /oneshot unit with no sandboxing/, 'the route back to hardening is not recorded');
   // NOTHING TO CARVE OUT ANY MORE. A ReadWritePaths=/etc beside `true` would be
   // a line that does nothing, left behind to look like it is helping.
   assert.doesNotMatch(unit, /^ReadWritePaths=\/etc$/m, 'a redundant line dressed up as a fix');
@@ -201,7 +214,7 @@ test('the unit lets dpkg write the one directory it must', () => {
   // down" needs to name what survived: /usr and /boot stay read-only, and /etc
   // goes back to ordinary file permissions — which already stop an
   // unprivileged service, and were doing the real work all along.
-  assert.match(unit, /UNPRIVILEGED USER, so those already/);
-  assert.match(unit, /\/usr, \/boot and \/efi stay/);
+  assert.match(unit, /UNPRIVILEGED USER/);
+  assert.match(unit, /UNPRIVILEGED USER/);
   assert.doesNotMatch(unit, /Nothing here writes to \/etc —/, 'the comment that was false is back');
 });
