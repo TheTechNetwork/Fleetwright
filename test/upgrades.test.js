@@ -139,7 +139,7 @@ test('the advice matches the failure, or says nothing clever', async () => {
   const ours = adviseOnFailure(said, fixture([RW, '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro']), OLD_UNIT);
   assert.match(ours, /READ-ONLY/, 'it does not say what it measured');
   assert.match(ours, /sudo does not/i);
-  assert.match(ours, /predates the fix/, 'it does not say how to fix it');
+  assert.match(ours, /measured NOT to work/, 'it does not say how to fix it');
   assert.doesNotMatch(ours, /update the image/i, 'it blames the image again');
 
   // NOT OURS: /etc is writable in this namespace, so ProtectSystem did not do
@@ -181,14 +181,27 @@ test('the unit lets dpkg write the one directory it must', () => {
   //
   // The unit's own comment said "Nothing here writes to /etc". True of
   // agent-hub's code, false of the thing agent-hub exists to launch.
+  //
+  // AND THE FIRST FIX FOR IT DID NOT WORK, which is why the assertion changed.
+  // `full` plus `ReadWritePaths=/etc` was measured on the box that reported it,
+  // after installing: systemd loaded the unit, reported ReadWritePaths=/etc and
+  // no drop-ins, and left /etc read-only in the namespace regardless.
+  //
+  // Asking for `full` AND carving /etc back out is a contradiction — protect
+  // /etc, do not protect /etc — and which way a given systemd resolves it is a
+  // detail of that version. `true` has no contradiction to resolve.
   const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
-  assert.match(unit, /^ProtectSystem=full$/m, 'the hardening was dropped rather than narrowed');
-  assert.match(unit, /^ReadWritePaths=\/etc$/m, 'dpkg still cannot write /etc');
+  assert.match(unit, /^ProtectSystem=true$/m, 'the contradiction is back, or the hardening was dropped entirely');
+  assert.doesNotMatch(unit, /^ProtectSystem=full$/m);
+  // NOTHING TO CARVE OUT ANY MORE. A ReadWritePaths=/etc beside `true` would be
+  // a line that does nothing, left behind to look like it is helping.
+  assert.doesNotMatch(unit, /^ReadWritePaths=\/etc$/m, 'a redundant line dressed up as a fix');
 
-  // NOT A WEAKENING, and the reason is worth keeping next to it: the service
-  // runs unprivileged, so ordinary file permissions already stop it writing
-  // /etc. The namespace was redundant for everything except the one operation
-  // that legitimately has root through a sudoers rule naming its command line.
-  assert.match(unit, /unprivileged user, so ordinary file permissions/);
+  // WHAT IS STILL PROTECTED, said out loud, because "we turned the hardening
+  // down" needs to name what survived: /usr and /boot stay read-only, and /etc
+  // goes back to ordinary file permissions — which already stop an
+  // unprivileged service, and were doing the real work all along.
+  assert.match(unit, /UNPRIVILEGED USER, so those already/);
+  assert.match(unit, /\/usr, \/boot and \/efi stay/);
   assert.doesNotMatch(unit, /Nothing here writes to \/etc —/, 'the comment that was false is back');
 });
