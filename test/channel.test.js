@@ -17,6 +17,7 @@ import { manifestUrlFor } from '../src/core/release.js';
 import { dispatch } from '../src/adapters/commands.js';
 import { VERBS } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 /** @param {object} [extra] */
 function fixture(extra = {}) {
@@ -318,8 +319,12 @@ test('both apps apply the channel the host just confirmed', () => {
   // Even with an immediate frame, the app's own refresh races it — and losing
   // that race shows the value somebody just changed away from. The reply is the
   // box's own answer about itself and the most recent thing anybody has.
-  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-  assert.match(ios, /applyChannel\(now, to: host, pinned: r\.channelPinned \?\? false\)/);
+  const ios = iosSources();
+  // THE PROPERTY, NOT THE FUNCTION THAT USED TO CARRY IT. `applyChannel` patched
+  // the value back into the list because the card was the control panel; the
+  // machine's own page keeps its own channel and sets it from the reply. Same
+  // rule, one fewer indirection.
+  assert.match(ios, /if let now = reply\.channel \{ channel = now; channelPinned = reply\.channelPinned \?\? false \}/);
 
   const kt = readFileSync(
     new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');

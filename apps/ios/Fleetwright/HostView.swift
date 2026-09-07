@@ -1,3 +1,4 @@
+import LocalAuthentication
 import SwiftUI
 
 /// One machine, everything about it, on a page of its own.
@@ -61,8 +62,14 @@ struct HostView: View {
     @State private var channel: String?
     @State private var channelPinned = false
     @State private var rebootPin = ""
+    /// Where in the ceremony this page is, so it can show one step rather than
+    /// all of them.
+    @State private var rebootStage: RebootStage = .idle
+    private enum RebootStage { case idle, asking, confirming }
+    /// Face ID was unavailable or declined, so the hostname is asked for the
+    /// way the chat flow asks for it.
+    @State private var needsTypedConfirmation = false
     @State private var rebootConfirm = ""
-    @State private var rebooting = false
     @State private var confirmingRevoke = false
     @State private var pin = ""
 
@@ -201,27 +208,59 @@ struct HostView: View {
 
     @ViewBuilder private var dangerSection: some View {
         Section {
-            Button("Reboot", role: .destructive) {
-                rebooting = true
-                run { try await fleet.reboot(host: hostId) }
-            }
-            if rebooting {
-                // TWO STEPS, AND THE PIN COMES FROM THE BOX. A coordinator that
-                // could mint it could reboot the fleet, so the machine issues
-                // its own — and the hostname is typed out because a remote
-                // reboot should be harder than a local one, not easier.
-                TextField("PIN from the box", text: $rebootPin)
-                    .fleetType(.labelMono)
-                TextField("Type \(hostId) to confirm", text: $rebootConfirm)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                Button("Reboot \(hostId)", role: .destructive) {
-                    run { try await fleet.reboot(host: hostId, pin: rebootPin, confirm: rebootConfirm) }
-                    rebooting = false
-                    rebootPin = ""
-                    rebootConfirm = ""
+            // ONE STEP AT A TIME, AND ONLY THE ONE YOU ARE ON.
+            //
+            // This showed all three at once — a Reboot button, a PIN field, a
+            // "type the hostname" field and a second Reboot button, every one of
+            // them visible and most of them inert — while the box's own reply at
+            // the bottom of the page said "Step 2 of 3". Four controls for a
+            // sequence, with nothing saying which one was live.
+            //
+            // The ceremony itself is right and stays: three confirmations that
+            // are different IN KIND, because tapping yes three times is one
+            // decision made three times. What changes is that the screen shows
+            // one of them at a time, and that the third is asked in the way a
+            // phone can ask it.
+            switch rebootStage {
+            case .idle:
+                Button("Reboot", role: .destructive) {
+                    rebootStage = .asking
+                    run {
+                        let r = try await fleet.reboot(host: hostId)
+                        rebootStage = .confirming
+                        return r
+                    }
                 }
-                .disabled(rebootConfirm != hostId || rebootPin.isEmpty)
+            case .asking:
+                Text("Asking \(hostId) for a PIN…")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            case .confirming:
+                // THE PIN STILL COMES FROM THE BOX, and that is the property
+                // worth keeping: a coordinator that could mint it could reboot
+                // the fleet. It is one-time, it expires, and it cannot be typed
+                // in advance. The reply above shows it.
+                TextField("PIN from \(hostId)", text: $rebootPin)
+                    .fleetType(.labelMono)
+                    .keyboardType(.numberPad)
+                if needsTypedConfirmation {
+                    TextField("Type \(hostId) to confirm", text: $rebootConfirm)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Reboot \(hostId)", role: .destructive) {
+                        Task { await sendReboot(confirm: rebootConfirm) }
+                    }
+                    .disabled(rebootConfirm != hostId || rebootPin.isEmpty)
+                } else {
+                    Button("Confirm reboot", role: .destructive) {
+                        Task { await confirmReboot() }
+                    }
+                    .disabled(rebootPin.isEmpty)
+                }
+                Button("Cancel") {
+                    rebootStage = .idle
+                    rebootPin = ""
+                }
             }
             if enrolled?.isRevoked == false {
                 Button("Revoke this host", role: .destructive) { confirmingRevoke = true }
@@ -259,6 +298,73 @@ struct HostView: View {
             Text("It is disconnected immediately, and its sessions keep running without it. "
                  + "Getting it back means a new pin, typed on that box.")
         }
+    }
+
+    /// Step three, asked in the way a phone can ask it.
+    ///
+    /// THE CHAT CEREMONY TYPES THE HOSTNAME, and reboot.js says exactly why:
+    /// it is "the step that makes wrong box impossible, which is the mistake
+    /// actually worth preventing". That reasoning is about a command line,
+    /// where `/reboot` could mean any machine in the fleet.
+    ///
+    /// ON THIS SCREEN THE WRONG BOX IS ALREADY IMPOSSIBLE. You navigated to
+    /// this machine, its name is in the title bar, the PIN came from it, and
+    /// the confirmation names it. What retyping a name visible one line above
+    /// proves is that somebody can copy — not that they meant it.
+    ///
+    /// So the question the phone should ask is the one it is uniquely good at:
+    /// is the person holding it the person who owns it. Face ID answers that,
+    /// instantly, and cannot be produced by a pocket.
+    ///
+    /// THE PIN IS UNTOUCHED. It is the half that carries the security property
+    /// — the box issued it, a coordinator cannot mint it, it expires and cannot
+    /// be replayed — and no amount of biometrics replaces it.
+    ///
+    /// AND IT FALLS BACK RATHER THAN LOCKING SOMEBODY OUT. A device with no
+    /// biometrics, a failed scan, a person wearing a mask: the hostname field
+    /// comes back, because "we could not identify you" must not mean "you
+    /// cannot reboot your own machine".
+    private func confirmReboot() async {
+        let context = LAContext()
+        context.localizedFallbackTitle = "Type the hostname instead"
+        var problem: NSError?
+        let canAsk = context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &problem)
+        if canAsk {
+            do {
+                let ok = try await context.evaluatePolicy(
+                    .deviceOwnerAuthentication,
+                    localizedReason: "Reboot \(hostId). Every session running on it will end.",
+                )
+                if !ok { return }
+            } catch {
+                // Cancelled, or no match. Not an error worth a red box: the
+                // person declined, and declining is a valid answer to
+                // "did you mean this".
+                needsTypedConfirmation = true
+                return
+            }
+        } else {
+            needsTypedConfirmation = true
+            return
+        }
+        await sendReboot(confirm: hostId)
+    }
+
+    /// The reboot itself, once something has vouched for the person.
+    private func sendReboot(confirm: String) async {
+        busy = true
+        defer { busy = false }
+        do {
+            result = try await fleet.reboot(host: hostId, pin: rebootPin, confirm: confirm).text ?? ""
+        } catch {
+            result = error.localizedDescription
+        }
+        rebootStage = .idle
+        rebootPin = ""
+        rebootConfirm = ""
+        needsTypedConfirmation = false
+        await reload()
+        await onChange()
     }
 
     /// Re-read this host from the fleet snapshot.

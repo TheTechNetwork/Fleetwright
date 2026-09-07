@@ -76,6 +76,19 @@ targets:
         # a justification for it that this app does not have.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # WHY THE APP ASKS FOR FACE ID, in the words iOS shows on the sheet.
+        #
+        # It is used for one thing: confirming a reboot, which ends every
+        # session on a machine. The chat flow proves deliberateness by making
+        # somebody TYPE the hostname — the step that makes "wrong box"
+        # impossible. On a phone the wrong box is already impossible, because
+        # you are on that machine's page with its name in the title bar, so the
+        # question left is whether the person holding the phone meant it.
+        # That is the question Face ID answers, and it answers it better than
+        # retyping a name that is on the screen above.
+        NSFaceIDUsageDescription: >-
+          Confirming a reboot, which ends every session running on that
+          machine.
         # THE DSN, READ AT LAUNCH. Not a secret — it identifies a project and
         # grants only the ability to post events to it. Empty means no
         # reporting, which is what a fork or a fresh clone gets; FleetwrightApp

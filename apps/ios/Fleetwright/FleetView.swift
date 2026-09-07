@@ -647,13 +647,10 @@ private struct SettingsView: View {
     /// it is replying about is.
     @State private var resultHost: String?
     @State private var busyHost: String?
-    @State private var rebootTarget: String?
     /// Deleting for good is the one action here with no undo left, so it asks
     /// once — a confirmation nobody can tap through by accident on a phone in
     /// a pocket. `forget` deliberately does not ask, because it is reversible.
     @State private var purgeTarget: String?
-    @State private var rebootPin = ""
-    @State private var rebootConfirm = ""
     /// The one host whose controls are showing, if any.
     ///
     /// ONE AT A TIME. Several open at once is the wall this replaced, arrived at
@@ -680,80 +677,14 @@ private struct SettingsView: View {
     @State private var confirmingClientRevoke: Fleet.Client?
     @State private var clientResult = ""
 
-    // CHECK AND APPLY, SEPARATELY, FOR BOTH — which is what was asked for and
-    // what the verbs always supported. The app had it backwards in two
-    // different directions: Update always restarted (apply with no check) and
-    // Upgrade never applied (check with no apply).
-    private enum Maintenance { case check, applyUpdate, applyUpgrade, rebootAsk, rebootDo, channel(String) }
-
-    /// One place for all four, so the busy flag and the result text cannot
-    /// drift apart between them.
-    @MainActor
-    private func maintain(_ host: String, _ what: Maintenance) async {
-        busyHost = host
-        resultHost = host
-        defer { busyHost = nil }
-        do {
-            let fleet = Fleet(settings: settings)
-            // A STRING RATHER THAN A REPLY, because one case asks two verbs and
-            // there is no honest single Reply to hand back for that pair.
-            let answer: String?
-            switch what {
-            // ONE VERB, BOTH SUBJECTS. This was `upgrade` alone — the
-            // operating system — while the button sat between two things that
-            // can be out of date, and it produced a screen contradicting
-            // itself: "The box is up to date." printed directly above "running
-            // 0223f94 · 1 commit behind". Both sentences were true, about
-            // different things, and whichever one somebody believed the other
-            // taught them the screen was unreliable.
-            //
-            // Two verbs would have been two round trips and two chances to
-            // render them apart. One answer cannot disagree with itself.
-            case .check:
-                let r = try await fleet.updates(host: host)
-                answer = r.text
-                // BELIEVE THE REPLY. This is the freshest thing anybody has
-                // about this box — it was computed a moment ago because
-                // somebody pressed a button — and it used to be rendered into
-                // the text field and thrown away, leaving the row beside it
-                // still saying "up to date" with no Apply button. The check
-                // reported an update and the screen offered no way to take it.
-                if let w = r.waiting { applyWaiting(w, to: host) }
-            case .applyUpdate: answer = try await fleet.update(host: host, restart: true).text
-            case .applyUpgrade: answer = try await fleet.upgrade(host: host, apply: true).text
-            case .rebootAsk: answer = try await fleet.reboot(host: host).text
-            // WHICH RELEASES THIS BOX TAKES. It used to be a line in
-            // /etc/agent-hub.env, which meant SSH — the one thing somebody
-            // holding only a phone does not have. loadHosts() below refreshes
-            // the row, so what the screen shows afterwards is what the box
-            // reported and not what this tap hoped for.
-            case .channel(let to):
-                let r = try await fleet.channel(host: host, to: to)
-                answer = r.text
-                // BELIEVE THE REPLY, NOT THE NEXT REFRESH. The host pushes a
-                // health frame after a mutating verb now, but loadHosts() below
-                // races it — and losing that race showed the OLD channel, which
-                // reads as "the change did not take" a second after being told
-                // it did.
-                //
-                // The reply is the box's own answer about itself, and it is the
-                // most recent thing anybody has.
-                if let now = r.channel { applyChannel(now, to: host, pinned: r.channelPinned ?? false) }
-            case .rebootDo:
-                answer = try await fleet.reboot(host: host, pin: rebootPin, confirm: rebootConfirm).text
-                rebootTarget = nil
-                rebootPin = ""
-                rebootConfirm = ""
-            }
-            // NAMED, because this one string is shown in a single field above
-            // a list of machines. An answer with no host on it is an answer
-            // about whichever box somebody last tapped, which is a guess.
-            hostActionResult = answer ?? ""
-        } catch {
-            hostActionResult = error.localizedDescription
-        }
-        await loadHosts()
-    }
+    // `maintain` AND ITS Maintenance ENUM WERE HERE. Every one of their cases
+    // — check, apply, upgrade, reboot, channel — is HostView's now, asked on
+    // the page for the machine it is about, with one busy flag and one answer
+    // that cannot be about a different box.
+    //
+    // The shared versions were the reason an answer had to be TAGGED with a
+    // hostId before it could be rendered in the right row. There is nothing
+    // left to tag.
 
     /// What this box says about itself, as lines.
     ///
@@ -836,95 +767,18 @@ private struct SettingsView: View {
         return unwell || waiting || unusable ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring
     }
 
-    /// Check, apply, reboot — and the channel that decides what "apply" means.
-    @ViewBuilder
-    private func maintenanceRow(for host: Fleet.FleetHost) -> some View {
-            // MAINTENANCE, which used to need SSH. Update is safe and
-            // idempotent so it is one tap; reboot is two steps and asks for the
-            // hostname, exactly as it does in chat — a remote reboot should be
-            // harder than a local one, not easier.
-            //
-            // Check always; apply only when there is something to apply. A
-            // button that is always offered teaches people to press it without
-            // reading, which is the opposite of what a maintenance screen is
-            // for.
-            HStack(spacing: 12) {
-                Button("Check") { Task { await maintain(host.hostId, .check) } }
-                if host.health?.updates?.appUpdatePending == true {
-                    Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
-                }
-                if host.health?.updates?.systemPending == true {
-                    Button("Apply upgrade") { Task { await maintain(host.hostId, .applyUpgrade) } }
-                }
-                Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
-            }
-            .fleetType(.micro)
-            .buttonStyle(.borderless)
-            .disabled(busyHost != nil)
-    }
+    // `maintenanceRow` AND `channelControl` WERE HERE AND ARE GONE. Both were
+    // defined and neither was called: HostView carries the whole of what a
+    // machine can be asked to do now, and a view that is written and never
+    // called renders exactly like one that was never written — which is a
+    // sentence this file already had to write once, about this same function.
+    //
+    // The reboot ceremony went with them, and its state with that.
 
-    /// Record a channel the host has just confirmed.
-    ///
-    /// The fleet list is rebuilt from the coordinator's cache on every refresh,
-    /// so this is overwritten within a frame or two — which is correct. What it
-    /// buys is the second in between, where the alternative is showing somebody
-    /// the value they just changed away from.
-    @MainActor
-    private func applyWaiting(_ w: Fleet.HostHealth.Waiting, to hostId: String) {
-        guard let i = fleetHosts.firstIndex(where: { $0.hostId == hostId }),
-              let health = fleetHosts[i].health else { return }
-        fleetHosts[i] = Fleet.FleetHost(
-            hostId: fleetHosts[i].hostId,
-            state: fleetHosts[i].state,
-            reason: fleetHosts[i].reason,
-            health: health.withUpdates(w),
-        )
-    }
-
-    private func applyChannel(_ channel: String, to hostId: String, pinned: Bool) {
-        guard let i = fleetHosts.firstIndex(where: { $0.hostId == hostId }),
-              let health = fleetHosts[i].health else { return }
-        fleetHosts[i] = Fleet.FleetHost(
-            hostId: fleetHosts[i].hostId,
-            state: fleetHosts[i].state,
-            reason: fleetHosts[i].reason,
-            health: health.withChannel(channel, pinned: pinned),
-        )
-    }
-
-    /// Which releases this box takes, as a control or as a fact.
-    ///
-    /// Absent on a host that predates the verb — nil, which is CANNOT TELL and
-    /// not `stable`. An app that guessed would label a box confidently and
-    /// wrongly, which is the rule `credential` and `updates` are written around
-    /// a few lines above.
-    @ViewBuilder
-    private func channelControl(for host: Fleet.FleetHost) -> some View {
-        // ONLY WHEN IT IS A CHOICE. A pinned box used to render "Channel:
-        // stable — set on the box" as a line of its own, on every row, saying
-        // the same eleven words about every machine. The fact still travels —
-        // describeRunning puts it at the end of the version line, where it is
-        // three words and in context.
-        if let channel = host.health?.channel, host.health?.channelPinned != true {
-            Picker("Channel", selection: channelBinding(host.hostId, current: channel)) {
-                Text("Stable").tag("stable")
-                Text("Rolling").tag("rolling")
-            }
-            .pickerStyle(.segmented)
-            .fleetType(.micro)
-            .disabled(busyHost != nil)
-        }
-    }
-
-    /// The picker's binding, named rather than inline for the same reason
-    /// `channelControl` exists: a `Binding(get:set:)` holding a `Task` is a
-    /// closure the type checker has to work out in the middle of a view body.
-    private func channelBinding(_ hostId: String, current: String) -> Binding<String> {
-        Binding(
-            get: { current },
-            set: { wanted in Task { await maintain(hostId, .channel(wanted)) } }
-        )
-    }
+    // `applyWaiting` AND `applyChannel` WERE HERE. They existed to patch a
+    // host's health back into the list after an action, because the card WAS
+    // the control panel and had nowhere else to put the answer. HostView keeps
+    // its own health and re-reads itself, so there is nothing to patch.
 
     /// Restore or purge, in one place so the busy flag and the result text
     /// cannot drift apart — the same reason `maintain` exists.
@@ -1335,55 +1189,21 @@ private struct SettingsView: View {
                                     .foregroundStyle(Design.Palette.inkDim)
                             }
                         }
-                        ForEach(hosts) { host in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(host.hostId).fleetType(.bodyStrong)
-                                    if host.isRevoked {
-                                        Text("revoked").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
-                                    }
-                                }
-                                // The fingerprint is here so it can be compared
-                                // with what the box itself prints. Two machines
-                                // claiming one name is exactly the situation
-                                // where you need to know which key is which.
-                                Text(host.fingerprint)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(Design.Palette.inkDim)
-                            }
-                            .swipeActions {
-                                if !host.isRevoked {
-                                    // Asked first. A swipe and a tap is not a
-                                    // deliberate enough gesture for something
-                                    // that disconnects a machine mid-session
-                                    // and can only be undone by typing a new
-                                    // pin on the box — which is the errand this
-                                    // app exists to avoid.
-                                    Button("Revoke", role: .destructive) { confirmingRevoke = host.hostId }
-                                }
-                                // THE TWO CASES THE COORDINATOR REFUSES AN
-                                // UNBOUND PIN FOR, and until now the only way
-                                // through either was a curl with the
-                                // break-glass admin token — the credential this
-                                // whole design exists to stop needing.
-                                //
-                                // Both refusals name the remedy and neither was
-                                // reachable from here, which is the same shape
-                                // as a drifted host that can only be fixed with
-                                // a shell.
-                                //
-                                // No admin check: /api/enroll accepts any
-                                // signed-in credential, so this is a screen
-                                // that was missing rather than a permission
-                                // that was.
-                                Button(host.isRevoked ? "Readmit" : "Replace key") {
-                                    Task { await mintBoundPin(for: host.hostId, readmit: host.isRevoked) }
-                                }
-                                .tint(Design.Palette.accent)
-                            }
-                        }
+                        // THE PER-HOST ROWS ARE GONE, and the width was how
+                        // it showed. This section is a Form section at the
+                        // system's inset; the fleet cards below sit at the
+                        // design's page margin — 26 — so the two lists of the
+                        // same three machines did not even line up with each
+                        // other.
+                        //
+                        // Two lists of one thing is the fault; the ragged edge
+                        // was the symptom. A machine's fingerprint, its
+                        // revocation and its replacement key are on that
+                        // machine's page now, beside everything else it says,
+                        // and this section is what it was always for: adding a
+                        // machine that is not here yet.
                     } header: {
-                        Text("Hosts")
+                        Text("Add a machine")
                             .fleetType(.section)
                             .foregroundStyle(Design.Palette.ink)
                             .textCase(nil)
@@ -1401,29 +1221,6 @@ private struct SettingsView: View {
                                 .buttonStyle(.borderless)
                             }
                         }
-                        if let target = rebootTarget {
-                        // Step two, in the app: the pin the host issued and
-                        // the hostname typed out. Both come from the person,
-                        // and the pin comes from the box — a coordinator that
-                        // could mint it could reboot the fleet.
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Reboot \(target)").fleetType(.bodySmall)
-                            Text("Every running session on it dies.").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
-                            TextField("Pin from the box", text: $rebootPin)
-                                .keyboardType(.numberPad)
-                            TextField("Type the hostname to confirm", text: $rebootConfirm)
-                                .autocorrectionDisabled()
-                            HStack {
-                                Button("Ask for a pin") { Task { await maintain(target, .rebootAsk) } }
-                                Spacer()
-                                Button("Reboot", role: .destructive) { Task { await maintain(target, .rebootDo) } }
-                                    .disabled(rebootPin.isEmpty || rebootConfirm != target)
-                                Button("Cancel") { rebootTarget = nil }
-                            }
-                            .fleetType(.micro)
-                        }
-                        .padding(.vertical, 4)
-                    }
                 Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
                     }
