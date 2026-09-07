@@ -659,6 +659,19 @@ private struct SettingsView: View {
     /// ONE AT A TIME. Several open at once is the wall this replaced, arrived at
     /// by tapping instead of by default.
     @State private var expandedHost: String?
+    /// HAS THE FIRST ANSWER ARRIVED? Distinct from "the answer was nothing",
+    /// which is the same distinction this project argues for everywhere else
+    /// and did not make on its own opening screen.
+    ///
+    /// Every list here starts empty, so for the second or so before the fleet
+    /// replies the app said "No hosts reporting yet", "No devices reported" and
+    /// "Nothing recorded yet" — three confident statements about a question
+    /// nobody had asked. On a cold start that is the whole first impression:
+    /// an app that looks broken and then silently fills in.
+    ///
+    /// A splash screen would hide it. This says it instead, which is cheaper
+    /// and true.
+    @State private var loaded = false
     /// The devices holding a credential for this fleet, and what happened
     /// lately. Both were in openapi.json and served by both coordinators
     /// before either app asked for them.
@@ -973,6 +986,9 @@ private struct SettingsView: View {
         // does not offer that" — not a failed screen.
         if let got = try? await devices { clients = got }
         if let got = try? await happened { events = got }
+        // AFTER the four, not before: "loaded" means an answer arrived, and
+        // setting it first would put the empty states back one line earlier.
+        loaded = true
     }
 
     /// "elibrody2@gmail.com · last used 2 hours ago", or as much as is known.
@@ -1443,7 +1459,8 @@ private struct SettingsView: View {
                 if shows(.machines) {
                 Section {
                     if fleetHosts.isEmpty {
-                        Text("No hosts reporting yet.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        Text(loaded ? "No hosts reporting yet." : "Asking the fleet…")
+                            .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     ForEach(fleetHosts) { host in
                         // A CARD, LIKE A SESSION IS. This was a Form row: nine
@@ -1562,9 +1579,9 @@ private struct SettingsView: View {
                                 HostView(
                                     settings: settings,
                                     hostId: host.hostId,
-                                    health: host.health,
-                                    state: host.state,
-                                    reason: host.reason,
+                                    initialHealth: host.health,
+                                    initialState: host.state,
+                                    initialReason: host.reason,
                                     enrolled: hosts.first { $0.hostId == host.hostId },
                                     onChange: { await loadHosts() },
                                 )
@@ -1656,7 +1673,8 @@ private struct SettingsView: View {
                 if shows(.you) {
                 Section {
                     if clients.isEmpty {
-                        Text("No devices reported.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        Text(loaded ? "No devices reported." : "Asking the fleet…")
+                            .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     // IN USE FIRST, ABANDONED LAST. The coordinator sorts by
                     // when a credential was MINTED, which on a real account put
@@ -1703,7 +1721,8 @@ private struct SettingsView: View {
                 if shows(.you) {
                 Section {
                     if events.isEmpty {
-                        Text("Nothing recorded yet.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        Text(loaded ? "Nothing recorded yet." : "Asking the fleet…")
+                            .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     // NEWEST FIRST HERE, oldest-first on the wire. The
                     // coordinator returns them in the order they happened,

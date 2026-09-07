@@ -29,18 +29,33 @@ import SwiftUI
 struct HostView: View {
     let settings: Settings
     let hostId: String
-    /// What the fleet last reported. Passed in rather than fetched: the list
-    /// already has it, and a page that starts blank to ask a question it was
-    /// handed the answer to is the fault this whole change is about.
-    let health: Fleet.HostHealth?
-    let state: String?
-    let reason: String?
+    /// What the fleet last reported when this page opened.
+    ///
+    /// Passed in rather than fetched: the list already has it, and a page that
+    /// starts blank to ask a question it was handed the answer to is the fault
+    /// this whole change is about. It seeds the state below and is not read
+    /// again.
+    let initialHealth: Fleet.HostHealth?
+    let initialState: String?
+    let initialReason: String?
     /// The membership record: fingerprint and whether it has been revoked.
     let enrolled: Fleet.Host?
     /// Called when this page changes something the list should know about.
     var onChange: () async -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
+    /// WHAT THIS MACHINE IS SAYING NOW, and the reason it is state rather than
+    /// a parameter.
+    ///
+    /// These were `let`s captured when the page was pushed, so nothing on it
+    /// could ever change: Check answered, the reply appeared in the box at the
+    /// bottom, and the summary above went on saying what it said when the page
+    /// opened. "Apply update" could not appear no matter what the check found,
+    /// because the value it is gated on was a constant. The page had to be left
+    /// and re-entered to show its own answer.
+    @State private var health: Fleet.HostHealth?
+    @State private var state: String?
+    @State private var reason: String?
     @State private var busy = false
     @State private var result = ""
     @State private var channel: String?
@@ -118,8 +133,11 @@ struct HostView: View {
         .navigationBarTitleDisplayMode(.inline)
         .disabled(busy)
         .task {
-            channel = health?.channel
-            channelPinned = health?.channelPinned ?? false
+            health = initialHealth
+            state = initialState
+            reason = initialReason
+            channel = initialHealth?.channel
+            channelPinned = initialHealth?.channelPinned ?? false
         }
     }
 
@@ -243,6 +261,21 @@ struct HostView: View {
         }
     }
 
+    /// Re-read this host from the fleet snapshot.
+    ///
+    /// One request, and it keeps what it had if the request fails: a page that
+    /// blanks because the network blinked is the fault the list was just fixed
+    /// for.
+    private func reload() async {
+        guard let hosts = try? await fleet.fleetHosts() else { return }
+        guard let mine = hosts.first(where: { $0.hostId == hostId }) else { return }
+        health = mine.health
+        state = mine.state
+        reason = mine.reason
+        if let now = mine.health?.channel { channel = now }
+        channelPinned = mine.health?.channelPinned ?? channelPinned
+    }
+
     private func sectionHead(_ text: String) -> some View {
         Text(text).fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
     }
@@ -259,9 +292,21 @@ struct HostView: View {
                 // mutating verb, but the list's own refresh races it, and losing
                 // that race shows the value somebody just changed away from.
                 if let now = reply.channel { channel = now; channelPinned = reply.channelPinned ?? false }
+                // AND THE ANSWER LANDS ON THE PAGE THAT ASKED FOR IT. A check
+                // that reports an update in a text box while the summary above
+                // it still says "update status unknown" is a screen arguing
+                // with itself — and the button that would act on it is gated on
+                // the half that did not move.
+                if let w = reply.waiting { health = health?.withUpdates(w) }
             } catch {
                 result = error.localizedDescription
             }
+            // EVERYTHING ELSE THIS MACHINE SAYS, once the action has landed.
+            // The reply is authoritative about updates and silent about the
+            // rest — accounts, credential, version, whether it is still
+            // healthy — so the page re-reads itself rather than waiting to be
+            // left and re-entered.
+            await reload()
             await onChange()
         }
     }
