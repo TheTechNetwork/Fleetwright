@@ -349,14 +349,28 @@ export function adviseOnFailure(detail) {
     return 'That is the sudoers rule missing — see /upgrade with AGENT_HUB_SYSTEM_UPGRADE unset for the exact line.';
   }
   if (/read-only file system/i.test(said)) {
-    // NOTHING ON THIS BOX CAN FIX THIS, which is the point of saying it. A
-    // read-only root is a container or an image built to be immutable, and the
-    // answer is somewhere else entirely — a new image, not a command.
+    // ALMOST ALWAYS OURS, AND I GOT THIS WRONG ONCE ALREADY. The first version
+    // of this blamed the image and said nothing typed on the box would help —
+    // told to somebody whose filesystem was perfectly writable.
+    //
+    // agent-hub.service sets `ProtectSystem=full`, which makes /usr, /boot AND
+    // /etc read-only for the service and every child of it. A mount namespace
+    // is not something `sudo` escapes, so the sanctioned `sudo -n apt-get`
+    // inherited it and dpkg could not write /etc/debian_version.
+    //
+    // The unit ships with ReadWritePaths=/etc now, so a box that still shows
+    // this is running an older one — which is a re-run of the installer, not a
+    // new image. Naming the unit is what makes that findable; "your filesystem
+    // is read-only" sent somebody to look at a filesystem that was fine.
     return (
-      'The root filesystem is mounted read-only, so no package can be installed here — ' +
-      'this is a container or an immutable image rather than something apt can fix.\n' +
-      'Update the image this box runs, or remount it writable if that is a mistake. ' +
-      'Nothing typed on the box will help while it is read-only.'
+      'That is almost certainly this service rather than the box: agent-hub.service sets\n' +
+      'ProtectSystem=full, which makes /etc read-only for it AND every command it runs —\n' +
+      'sudo does not escape a mount namespace, so dpkg cannot write /etc/debian_version.\n\n' +
+      'Fixed by re-running the installer, which adds ReadWritePaths=/etc:\n' +
+      '  curl -fsSL <your coordinator>/install | sudo sh\n\n' +
+      'To confirm it is that rather than a genuinely read-only disk, on the box:\n' +
+      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths\n' +
+      '  touch /etc/.writable-check && rm /etc/.writable-check   # works in a normal shell'
     );
   }
   if (/dpkg was interrupted|dpkg --configure -a/i.test(said)) {
