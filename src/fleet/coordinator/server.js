@@ -740,6 +740,9 @@ export class Coordinator {
       const result = await this.core.finishGithubAuthorization({
         code: url.searchParams.get('code'),
         state: url.searchParams.get('state'),
+        // The installation half of the flow, which arrives with no state.
+        setupAction: url.searchParams.get('setup_action'),
+        installationId: url.searchParams.get('installation_id'),
         origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
       });
       res.writeHead(result.ok ? 200 : 400, {

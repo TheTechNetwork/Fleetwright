@@ -768,6 +768,9 @@ export class Fleet {
       const result = await this.core.finishGithubAuthorization({
         code: url.searchParams.get('code'),
         state: url.searchParams.get('state'),
+        // The installation half of the flow, which arrives with no state.
+        setupAction: url.searchParams.get('setup_action'),
+        installationId: url.searchParams.get('installation_id'),
         origin: url.origin,
       });
       // HTML, not JSON: the thing reading this is a browser somebody was sent
