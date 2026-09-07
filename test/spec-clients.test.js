@@ -55,7 +55,19 @@ const MCP = readAll('../src/mcp', '.js');
  * @param {string} src @param {string} stem
  */
 const calls = (src, stem) =>
-  new RegExp(`${stem.replace(/[/.]/g, '\\$&')}(?=["'\`)/?]|\\s|$)`).test(src);
+  // EVERY METACHARACTER, NOT THE TWO I HAPPENED TO THINK OF. This escaped `/`
+  // and `.` — and `/` needs no escaping in a RegExp CONSTRUCTOR at all (only in
+  // a literal, where it would end the pattern), so the one character it went
+  // out of its way to handle was the one that did not need it, while `\` and
+  // every other metacharacter went through untouched.
+  //
+  // CodeQL caught it. Nothing here is attacker-controlled — the stems come from
+  // openapi.json, which is ours — but "the input happens to be safe today" is a
+  // property of the CALLER, not of this function, and the caller is one
+  // `route.split('{')[0]` away from handing it a brace. A sanitiser with an
+  // arbitrary subset is the shape this repository keeps getting caught by:
+  // true where it was written, quietly false one layer up.
+  new RegExp(`${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=["'\`)/?]|\\s|$)`).test(src);
 
 /**
  * Routes no client is expected to call, each with the reason.
@@ -124,4 +136,29 @@ test('what a notification was about can be read after the fact, everywhere', () 
   for (const [name, src] of [['iOS', IOS], ['Android', ANDROID], ['MCP', MCP]]) {
     assert.ok(calls(src, '/api/events'), `${name} cannot say what happened while it was away`);
   }
+});
+
+
+test('the route matcher treats its argument as a literal, not as a pattern', () => {
+  // CodeQL flagged the escape as incomplete and it was: `/` and `.` were
+  // handled, `\` and every other metacharacter were not.
+  //
+  // THE `.` CASE DOES NOT PROVE THE FIX — the old version escaped that one, so
+  // a test using it would have passed against the bug. Backslash is the
+  // discriminator, and it is here for that reason rather than for coverage.
+  assert.equal(calls('/api/1"', '\\d'), false, 'a backslash escape is being interpreted as a pattern');
+  // The rest of the class, so the next one added is not a subset again.
+  assert.equal(calls('/apiZx"', '/api.x'), false, 'a dot is matching any character');
+  assert.equal(calls('/api/xxx"', '/api/x+'), false, 'a quantifier is being applied');
+  assert.equal(calls('/api/a"', '/api/(a|b)'), false, 'a group is being applied');
+
+  // And it still matches what it is for: the literal route, ending at a quote,
+  // a paren, or a path segment the client appends.
+  assert.equal(calls('get("/api/events")', '/api/events'), true);
+  assert.equal(calls('send("DELETE", "/api/clients/" + id)', '/api/clients'), true);
+  // A LONGER ROUTE IS A DIFFERENT ROUTE. This is the whole reason it is not
+  // `includes`: that version was satisfied by /api/eventsXX, so a typo'd route
+  // passed the test whose entire job is finding routes nobody calls. Found by
+  // mutation, not by reading.
+  assert.equal(calls('get("/api/eventsXX")', '/api/events'), false);
 });
