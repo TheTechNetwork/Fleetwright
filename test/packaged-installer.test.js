@@ -643,3 +643,54 @@ test('unit templates come from the installer, not from the payload', () => {
   // somebody unpacks a tarball and runs its installer by hand.
   assert.match(installUnit, /\|\| from="\$DIR"/);
 });
+
+test('converting a box does not take away its ability to update itself', () => {
+  // REPORTED FROM A BOX THAT HAD JUST BEEN CONVERTED, on every update attempt:
+  //
+  //   update failed: EACCES: permission denied,
+  //   mkdir '/opt/fleetwright/releases/.incoming-main-67'
+  //
+  // The installer chowns the tree to the service user so that /update can work
+  // without root — and that chown is gated on `$DIR/.git`, the CHECKOUT case. A
+  // release has no .git. fleetwright-migrate runs as root and creates the
+  // release tree root-owned, so converting a box left it unable to apply its
+  // own updates: the app's Apply update could not work by construction, and
+  // every update needed the root helper.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  // The base, not just the current release: an update mkdirs
+  // `releases/.incoming-<v>`, replaces `releases/<v>` and swaps the symlink in
+  // the base itself.
+  assert.match(sh, /chown -R "\$RUN_USER" "\$FLEET_BASE"/);
+
+  // RECURSIVE, and that is not tidiness. Pruning old releases REMOVES them, and
+  // removing a root-owned tree needs write on the directories inside it rather
+  // than only on their parent.
+  assert.doesNotMatch(sh, /chown "\$RUN_USER" "\$FLEET_BASE"\s*$/m);
+
+  // AND IT SAYS WHAT TO DO WHEN IT CANNOT. A silent failure here is an EACCES
+  // hours later, on a box whose owner has no reason to connect the two.
+  const block = sh.slice(sh.indexOf('chown -R "$RUN_USER" "$FLEET_BASE"'));
+  assert.match(block.slice(0, 600), /EACCES/);
+  assert.match(block.slice(0, 600), /fleetwright-migrate/);
+});
+
+test('the release tree is the service user\'s, and root keeps what matters', () => {
+  // The grant is the same one the checkout already had, which is why it is not
+  // a widening: the service user can replace the code it runs, it could always
+  // do that, and it IS the thing running that code.
+  //
+  // What must stay out of reach — asserted, because "the same as before" is a
+  // claim somebody should be able to check.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+
+  // The sudoers rule names a path OUTSIDE the tree the service user owns. A
+  // rule naming a script that user can rewrite is root with extra steps.
+  assert.match(sh, /NOPASSWD: \/usr\/local\/sbin\/fleetwright-migrate/);
+  assert.doesNotMatch(sh, /NOPASSWD:[^\n]*\$FLEET_BASE/);
+  assert.doesNotMatch(sh, /NOPASSWD:[^\n]*\$DIR/);
+
+  // The units are written to /etc and chmod 0644 root-owned, not into the tree.
+  assert.match(sh, /dest="\/etc\/systemd\/system\/\$1\.service"/);
+  assert.match(sh, /chmod 0644 "\$dest"/);
+});
