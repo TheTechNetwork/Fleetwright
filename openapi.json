@@ -911,6 +911,7 @@
                       "files",
                       "forget",
                       "health",
+                      "labels",
                       "link",
                       "list",
                       "logs",

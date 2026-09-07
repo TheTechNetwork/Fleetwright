@@ -329,6 +329,36 @@ export const VERBS = Object.freeze({
       '`to` to find out which one a host is on. Running sessions keep the image they started in, and a ' +
       'host whose image is named in its own environment refuses rather than pretending.',
   },
+  // HOW WORK IS AIMED, changed from a phone. Third sibling of `channel` and
+  // `sandbox`, same storage and the same refuse-rather-than-lie rule.
+  //
+  // Labels came from AGENT_FLEET_LABELS in a root-owned env file and from
+  // auto-labels.js, so "this box is on the noisy switch, keep long jobs off it"
+  // was a decision somebody could make and not express.
+  //
+  // TWO OPTIONAL PARAMS AND NOT A LIST, because a `set` that replaced the whole
+  // list would make two people editing labels from two phones a last-write-wins
+  // race over a value neither of them read. Add and remove are what a person
+  // actually means, and they compose.
+  //
+  // AND AN AUTO LABEL CANNOT BE REMOVED HERE. `arm64` is a fact; a fact that
+  // can be switched off from a phone is not one, and `tag: arm64` finding a box
+  // that turned its label off is the scheduler lying about what it matched. The
+  // host refuses and names where the label comes from — the same shape as the
+  // tag refusal, which already does this well.
+  labels: {
+    params: {
+      add: { type: 'name', required: false, describe: 'A label to put on this host. Lower-cased.' },
+      remove: { type: 'name', required: false, describe: 'A label to take off this host. Only one it was given here — a label the machine derives about itself is refused, with a reason.' },
+    },
+    mutating: true,
+    summary:
+      'The labels a host carries, and where each one came from: `auto` is a fact the machine derives ' +
+      'about itself (os, architecture, distribution, whether its image has a browser), `env` is ' +
+      'AGENT_FLEET_LABELS at install time, and `set` is one added from here. Ask with no parameters for ' +
+      'the list. Only a `set` label can be removed; the other two are refused and say why. Labels are ' +
+      'what `tag` matches on when work is aimed at part of a fleet.',
+  },
   profiles: {
     params: {},
     mutating: false,

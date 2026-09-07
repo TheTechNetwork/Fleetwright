@@ -57,6 +57,7 @@ test('the verb set is exactly what is documented', () => {
     'files',
     'forget',
     'health',
+    'labels',
     'link',
     'list',
     'logs',
@@ -216,6 +217,10 @@ test('only state-changing verbs are marked mutating', () => {
     // update is allowed to be. Asking with no `to` reads — but a verb is
     // mutating or it is not, and the idempotency key is what stops a retried
     // change being applied twice against a box that has moved on since.
+    // labels writes a file in the state directory that decides what `tag`
+    // matches on this box, which is what the scheduler filters on — as
+    // state-changing as anything here, and the idempotency key is what stops a
+    // retried add being applied against a box that has moved on since.
     // sandbox is channel's sibling in every way, including this one: it writes
     // a file in the state directory that decides which image the next session
     // runs in, and it changes what `tag: browser` finds, because the browser
@@ -225,7 +230,7 @@ test('only state-changing verbs are marked mutating', () => {
     // one — the reply comes back long before the runner does, so a caller that
     // retries on a slow answer is exactly the case.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);
