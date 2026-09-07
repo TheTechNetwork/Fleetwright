@@ -23,6 +23,7 @@ import { log } from '../log.js';
 import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
+import { sessionImage, variantOf } from './sandbox-variant.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -111,7 +112,7 @@ export function sandboxNames(name) {
  * @param {import('../config.js').Config} cfg
  */
 export function sandboxImageExists(cfg) {
-  return exists(cfg, 'image', cfg.sandboxImage);
+  return exists(cfg, 'image', sessionImage(cfg));
 }
 
 /**
@@ -137,56 +138,66 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   // there reached nobody until somebody pulled by hand, which is the same
   // shape as a deploy filter that names the wrong directory: true when
   // written, quietly false later.
-  if (refresh && !cfg.sandboxImage.startsWith('localhost/')) {
+  // ONE RESOLUTION FOR THE WHOLE FUNCTION. Reading the variant twice inside a
+  // build could pull one tag and tag the result as the other, if somebody
+  // changed it from a phone while the build was running.
+  const image = sessionImage(cfg);
+  if (refresh && !image.startsWith('localhost/')) {
     const pulled = refreshSandboxImage(cfg);
     // A failed refresh is NOT fatal. The box has a working image; the network
     // is what failed. Falling through to the existence check leaves it running
     // on what it has rather than breaking an update over a registry hiccup.
     if (pulled.ok) return { ok: true, built: pulled.changed };
-    log.warn(`sandbox: could not refresh ${cfg.sandboxImage}: ${pulled.message}`);
+    log.warn(`sandbox: could not refresh ${image}: ${pulled.message}`);
   }
   if (sandboxImageExists(cfg)) return { ok: true, built: false };
 
   const manual =
-    `Build it with:\n  podman build -t ${cfg.sandboxImage} -f ${cfg.sandboxContainerfile} ` +
+    `Build it with:\n  podman build -t ${image} -f ${cfg.sandboxContainerfile} ` +
     `${path.dirname(cfg.sandboxContainerfile)}\n(or re-run install/install.sh)`;
 
   if (!cfg.sandboxAutoBuild) {
-    return { ok: false, message: `the sandbox image ${cfg.sandboxImage} is not built, and auto-build is off.\n${manual}` };
+    return { ok: false, message: `the sandbox image ${image} is not built, and auto-build is off.\n${manual}` };
   }
 
-  const isLocal = cfg.sandboxImage.startsWith('localhost/');
+  const isLocal = image.startsWith('localhost/');
   if (!isLocal) {
-    log.info(`sandbox: pulling ${cfg.sandboxImage}`);
-    const pulled = podman(cfg, ['pull', cfg.sandboxImage]);
+    log.info(`sandbox: pulling ${image}`);
+    const pulled = podman(cfg, ['pull', image]);
     if (pulled.status === 0) return { ok: true, built: true };
-    return { ok: false, message: `could not pull ${cfg.sandboxImage}: ${pulled.stderr.trim().slice(0, 300)}` };
+    return { ok: false, message: `could not pull ${image}: ${pulled.stderr.trim().slice(0, 300)}` };
   }
 
   if (!existsSync(cfg.sandboxContainerfile)) {
     return {
       ok: false,
-      message: `the sandbox image ${cfg.sandboxImage} is not built and ${cfg.sandboxContainerfile} does not exist.\n${manual}`,
+      message: `the sandbox image ${image} is not built and ${cfg.sandboxContainerfile} does not exist.\n${manual}`,
     };
   }
 
   // This blocks the session that asked for it, which is the point — it is the
   // difference between waiting once and being told to go and do it yourself.
-  log.warn(`sandbox: ${cfg.sandboxImage} is not built — building it now, this takes a few minutes`);
+  log.warn(`sandbox: ${image} is not built — building it now, this takes a few minutes`);
   const context = path.dirname(cfg.sandboxContainerfile);
   const built = spawnSync(
     cfg.podmanBin,
-    ['build', '-t', cfg.sandboxImage, '-f', cfg.sandboxContainerfile, context],
+    // --build-arg, because a LOCAL build of the browser variant is the same
+    // Containerfile with the conditional layer switched on. Without this a box
+    // that builds rather than pulls would tag a minimal image `:web` and every
+    // browser session on it would fail at `chromium: not found` — with the tag
+    // saying it should have worked.
+    ['build', '-t', image, ...(variantOf(image) === 'browser' ? ['--build-arg', 'WITH_CHROMIUM=1'] : []),
+      '-f', cfg.sandboxContainerfile, context],
     { encoding: 'utf8', timeout: BUILD_TIMEOUT_MS },
   );
   if (built.status === 0) {
-    log.info(`sandbox: built ${cfg.sandboxImage}`);
+    log.info(`sandbox: built ${image}`);
     return { ok: true, built: true };
   }
   // The last few lines of a build log are the ones that say what failed; the
   // rest is layers succeeding.
   const tail = String(built.stderr || built.stdout || '').trim().split('\n').slice(-6).join('\n');
-  return { ok: false, message: `could not build ${cfg.sandboxImage}:\n${tail}\n\n${manual}` };
+  return { ok: false, message: `could not build ${image}:\n${tail}\n\n${manual}` };
 }
 
 /**
@@ -237,7 +248,7 @@ function volumeExists(cfg, volume) {
  */
 export function refreshSandboxImageIfStale(cfg) {
   const every = cfg.sandboxRefreshMs ?? 0;
-  if (!every || String(cfg.sandboxImage || '').startsWith('localhost/')) return { changed: false };
+  if (!every || String(sessionImage(cfg) || '').startsWith('localhost/')) return { changed: false };
   const stamp = path.join(cfg.stateDir, '.sandbox-image-checked');
   try {
     const age = Date.now() - statSync(stamp).mtimeMs;
@@ -275,11 +286,11 @@ export function refreshSandboxImageIfStale(cfg) {
  */
 export function refreshSandboxImage(cfg, { timeout } = {}) {
   const digest = () => {
-    const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', cfg.sandboxImage]);
+    const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', sessionImage(cfg)]);
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
   const before = digest();
-  const pulled = podman(cfg, ['pull', cfg.sandboxImage], { timeout });
+  const pulled = podman(cfg, ['pull', sessionImage(cfg)], { timeout });
   if (pulled.status !== 0) {
     return { ok: false, changed: false, message: pulled.stderr.trim().slice(0, 200) };
   }
@@ -473,7 +484,7 @@ export function credentialSourceForAccount(cfg, account) {
  */
 export function volumeAccount(cfg, volume) {
   const r = podman(cfg, [
-    'run', '--rm', '-v', `${volume}:/dest:ro`, cfg.sandboxImage,
+    'run', '--rm', '-v', `${volume}:/dest:ro`, sessionImage(cfg),
     'sh', '-c', 'cat /dest/.oauth-account.json 2>/dev/null || true',
   ]);
   if (r.status !== 0) return null;
@@ -561,7 +572,7 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // credential-broker.js. Nothing about the Claude credential changes — that
   // one is read by a CLI we do not control, from a path it expects, so it is
   // still a file in the volume.
-  const r = podman(cfg, ['run', '--rm', ...mounts, cfg.sandboxImage, 'sh', '-c', copy]);
+  const r = podman(cfg, ['run', '--rm', ...mounts, sessionImage(cfg), 'sh', '-c', copy]);
   if (r.status !== 0) {
     return {
       ok: false,

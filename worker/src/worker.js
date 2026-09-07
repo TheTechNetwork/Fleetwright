@@ -1494,6 +1494,7 @@ const OPENAPI = JSON.stringify({
                       "renew",
                       "restore",
                       "resume",
+                      "sandbox",
                       "start",
                       "status",
                       "stop",

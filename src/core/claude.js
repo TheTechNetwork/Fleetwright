@@ -7,6 +7,7 @@
 import { capturePane, hasSession, sendKeys } from './tmux.js';
 import { dewrapPane, RC_URL_RE } from './pane.js';
 import { log } from '../log.js';
+import { sessionImage } from './sandbox-variant.js';
 
 /** @param {number} ms */
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -117,7 +118,7 @@ function sandboxArgv(cfg, name, hookSocket) {
   if (cfg.sandboxPidsLimit) argv.push(`--pids-limit=${cfg.sandboxPidsLimit}`);
   for (const extra of cfg.sandboxExtraArgs) argv.push(extra);
 
-  argv.push(cfg.sandboxImage);
+  argv.push(sessionImage(cfg));
   return argv;
 }
 
