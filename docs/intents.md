@@ -291,7 +291,25 @@ that already exists:
 |---|---|
 | a session that can open a browser | `start` with `tag: browser` |
 | this box's default | `sandbox { to }` with `host: <name>` |
-| every box with a label's default | `sandbox { to }` with `tag: <label>` |
+| every box with a label's default | `sandbox { to }` with `tag: <label>` — a fan-out |
+
+**A setting is not new work, and `channel` was routed as though it were.**
+`channel`, `sandbox` and `labels` change what a box *is*; none of them starts
+anything. They fell through to the placement path that ranks by free capacity
+and round-robins, which was wrong twice over and both halves were reachable from
+a phone: a **full box could not be configured at all** (`schedulable()` drops it,
+so the answer was a capacity error about a setting), and **`tag` silently picked
+one** of the matching hosts and reported success without saying which.
+
+They now sit with `update`, `upgrade` and `reboot` — questions about one box,
+answered whether or not it is busy — and `tag` **fans out** over every reachable
+host carrying it, which is what makes "per label" a real answer rather than a
+description of round-robin. `reachable()` and not `schedulable()`: a degraded box
+is exactly the one somebody wants to move off rolling.
+
+`reboot`, `upgrade`, `update` and `logs` deliberately do **not** fan out on a
+tag. "Reboot everything labelled prod" is a fleet-wide outage expressible in one
+line, and four apt runs merged into one reply answers nobody.
 
 `browser` is an **auto label** (`src/fleet/host/auto-labels.js`), derived from
 the image the host actually resolves rather than from the one it was configured

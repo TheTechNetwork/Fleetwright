@@ -237,7 +237,36 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
+  // A SETTING IS NOT NEW WORK, and `channel` has been routed as though it were
+  // since the day it shipped.
+  //
+  // These three change what a box IS — which releases it takes, which image its
+  // sessions run in, what work aimed at a tag finds here. None of them starts
+  // anything, so falling through to the new-work path below was wrong twice
+  // over, and both halves were reachable from a phone:
+  //
+  //   A FULL BOX COULD NOT BE CONFIGURED AT ALL. That path filters on
+  //   `schedulable()`, which drops any host with no free capacity — so the
+  //   answer to "change this box's channel" on a busy machine was "it is
+  //   healthy: undefined", produced by a capacity check that has no business
+  //   being consulted about a setting.
+  //
+  //   AND `tag` SILENTLY PICKED ONE. It ranked the matching hosts by free
+  //   capacity and round-robined between them, so `channel { to } + tag: prod`
+  //   moved ONE production box and reported success. Nothing said which.
+  //
+  // So they are grouped with `update`, `upgrade` and `reboot` — questions about
+  // one box, answered by a box whether or not it is busy — and `tag` FANS OUT
+  // rather than choosing. Fanning out is what makes "every box with this label"
+  // expressible, which is the whole reason placement travels beside the intent:
+  // `host` says which one, `tag` says which ones, and neither is a parameter
+  // any host had to learn.
+  //
+  // Mutating fan-out is not new here — `link` and `unlink` already do it, and
+  // core.js mints per-host idempotency ids for exactly this.
+  const setting = verb === 'channel' || verb === 'sandbox' || verb === 'labels';
   if (
+    setting ||
     verb === 'logs' ||
     verb === 'update' ||
     verb === 'upgrade' ||
@@ -259,6 +288,25 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
             code: 'host_unavailable',
             reason: `${preferHost} is not connected. Reachable: ${reachable.map((h) => h.hostId).join(', ')}.`,
           };
+    }
+    // EVERY BOX CARRYING THE LABEL, for a setting. A tag on a reboot or an
+    // upgrade is deliberately NOT this: "reboot everything labelled prod" is a
+    // fleet-wide outage expressible in one line, and the refusal below names
+    // the boxes instead so somebody says which one out loud.
+    const wanted = setting ? normaliseLabels(preferLabels) : [];
+    if (wanted.length) {
+      const matching = reachable.filter((h) => wanted.every((l) => (h.health?.labels || []).includes(l)));
+      if (!matching.length) {
+        const seen = [...new Set(reachable.flatMap((h) => h.health?.labels || []))].sort();
+        return {
+          kind: 'refused',
+          code: 'no_host_matches',
+          reason:
+            `No connected host carries every tag: ${wanted.join(', ')}. ` +
+            (seen.length ? `Tags in this fleet: ${seen.join(', ')}.` : 'No host reports any tags at all.'),
+        };
+      }
+      return { kind: 'fanout', hosts: matching };
     }
     if (reachable.length === 1) return { kind: 'host', host: reachable[0] };
     return {
