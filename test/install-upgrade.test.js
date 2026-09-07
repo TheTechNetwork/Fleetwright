@@ -130,10 +130,14 @@ test('curling a coordinator means joining that coordinator, without being asked 
   assert.match(SH, /if \[ -n "\$JOINING" \]; then/);
   assert.match(SH, /ok "joining \$JOINING"/);
 
-  // Telegram is not asked either: somebody joining a fleet drives it from the
-  // app, and a question about a chat bot mid-flow is a question about
-  // something else. The env keys stay for anyone who wants them.
-  assert.match(SH, /if \[ -z "\$JOINING" \] && \[ -z "\$\(get_env "\$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN\)" \]/);
+  // Telegram is not asked AT ALL any more — the adapter is archived, so the
+  // prompt configured a feature that does nothing, which is worse than not
+  // offering it: somebody answers it, is told "Telegram bot configured", and
+  // messages a bot that will never reply. See docs/telegram.md.
+  assert.doesNotMatch(SH, /ask TG_TOKEN/);
+  assert.doesNotMatch(SH, /set_env "\$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN/);
+  // The key is still READ once, so a box that has one is told it is inert.
+  assert.match(SH, /Telegram : archived/);
 
   // Local and stdio are NOT a fleet being joined — they are what the wizard
   // offers to set up — so they must not suppress the questions.

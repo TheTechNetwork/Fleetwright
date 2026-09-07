@@ -1,3 +1,11 @@
+> **Telegram is archived.** This document describes the hub as it was built,
+> and the Telegram adapter is no longer started — see
+> [`telegram.md`](./telegram.md) for what it did, which decisions in it are
+> still load-bearing elsewhere, and the identity question that retired it. The
+> surfaces now are the app, the MCP server, the web UI and the CLI; everything
+> else below is unchanged, because they all go through the same command
+> registry the bot did.
+
 # agent-hub — the session manager
 
 > **This is the upstream agent-hub README, kept as the session manager's manual.**
