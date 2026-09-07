@@ -720,6 +720,72 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: data)
     }
 
+    /// WHICH DEVICES CAN REACH THIS FLEET. Never a credential — the coordinator
+    /// keeps a hash, which is what makes them worth hashing.
+    ///
+    /// Documented on both coordinators since devices existed, implemented by
+    /// neither app: a phone that was lost could be revoked only by somebody
+    /// with a terminal, which is the one thing this product exists not to
+    /// require. Sign-in mints one of these per device on purpose — so that
+    /// revoking one leaves every other alone — and that is worth nothing while
+    /// nobody can see the list.
+    func clients() async throws -> [Client] {
+        let data = try await get("/api/clients")
+        struct Reply: Codable { let clients: [Client]? }
+        return try JSONDecoder().decode(Reply.self, from: data).clients ?? []
+    }
+
+    func revokeClient(_ id: String) async throws -> Reply {
+        let path = "/api/clients/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
+        return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
+    }
+
+    /// What happened while you were asleep.
+    ///
+    /// Push wakes a phone; this is what it missed. Half of that pair shipped —
+    /// the notification arrives, and an app that has been closed since
+    /// yesterday has no way to find out what it was about beyond whatever
+    /// sentence fitted on the lock screen.
+    func events() async throws -> [Event] {
+        let data = try await get("/api/events")
+        struct Reply: Codable { let events: [Event]? }
+        return try JSONDecoder().decode(Reply.self, from: data).events ?? []
+    }
+
+    /// A device that holds a credential for this fleet. No secret in it.
+    struct Client: Codable, Identifiable, Hashable {
+        let id: String
+        let name: String?
+        /// The person it was minted for. Nil on a credential from before
+        /// sign-in carried one, which is worth showing as absent rather than
+        /// attributed to whoever is looking.
+        let email: String?
+        let createdAt: Double?
+        /// Nil means it has never been used — not "used long ago". Somebody
+        /// deciding what to revoke needs those to look different.
+        let lastSeenAt: Double?
+    }
+
+    /// One thing that happened, as the fleet recorded it.
+    ///
+    /// Every field but `event` and `at` is optional, because they describe
+    /// different kinds of occurrence: a session ending names a session, a host
+    /// being revoked names a host, and an intent names a verb and an actor.
+    struct Event: Codable, Identifiable, Hashable {
+        let event: String
+        let at: Double
+        let hostId: String?
+        let name: String?
+        let text: String?
+        /// The verified email of whoever asked. Null for events the fleet
+        /// originated itself, which is a real distinction: "the fleet did this"
+        /// and "somebody did this" are not the same news.
+        let actor: String?
+        let verb: String?
+        let url: String?
+        var id: String { "\(event)-\(at)-\(name ?? hostId ?? "")" }
+    }
+
     /// What a box says about itself. Every field optional: an older sidecar
     /// sends none of them, and the app must show a host with less information
     /// rather than no host at all.

@@ -1329,6 +1329,97 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         // identical from here, which is to say they look like nothing at all.
         // This asks the coordinator to send one now and reports what happened,
         // so the answer arrives before the notification that matters does.
+        // WHO CAN REACH THIS FLEET, AND WHAT HAPPENED WHILE THIS WAS CLOSED.
+        // Both routes are in openapi.json and served by both coordinators, and
+        // neither app ever asked for either. Signing in mints one credential
+        // per device precisely so that revoking one leaves the others alone,
+        // and that property was worth nothing while nobody could see the list:
+        // a lost phone could be revoked only from a terminal.
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        var clients by remember { mutableStateOf<List<Fleet.Client>>(emptyList()) }
+        var events by remember { mutableStateOf<List<Fleet.Event>>(emptyList()) }
+        var clientResult by rememberSaveable { mutableStateOf("") }
+        var confirmRevoke by remember { mutableStateOf<Fleet.Client?>(null) }
+        LaunchedEffect(signedIn) {
+            if (!signedIn) return@LaunchedEffect
+            clients = Fleet(settings).clients()
+            events = Fleet(settings).events()
+        }
+
+        Text("Devices", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Each sign-in mints a credential for that device alone, so revoking one leaves the " +
+                "others working.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        if (clients.isEmpty()) {
+            Text("No devices reported.", style = MaterialTheme.typography.bodySmall)
+        }
+        for (c in clients) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.name ?: "unnamed device")
+                    Text(describeClient(c), style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { confirmRevoke = c }) { Text("Revoke") }
+            }
+        }
+        if (clientResult.isNotBlank()) {
+            Text(clientResult, style = MaterialTheme.typography.bodySmall)
+        }
+        confirmRevoke?.let { c ->
+            AlertDialog(
+                onDismissRequest = { confirmRevoke = null },
+                title = { Text("Revoke ${c.name ?: "this device"}?") },
+                text = {
+                    Text(
+                        "That device stops being able to reach this fleet, and its push " +
+                            "notifications stop. Every other device keeps working. Signing in " +
+                            "again on it mints a new one.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val target = c
+                        confirmRevoke = null
+                        scope.launch {
+                            // The refusal reaches the screen. A discarded error
+                            // reads as "it came back", which cost an evening on
+                            // the host revocation this mirrors.
+                            clientResult = Fleet(settings).revokeClient(target.id).text
+                            clients = Fleet(settings).clients()
+                        }
+                    }) { Text("Revoke") }
+                },
+                dismissButton = { TextButton(onClick = { confirmRevoke = null }) { Text("Cancel") } },
+            )
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        Text("Recent activity", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "What happened while this app was closed. A notification wakes the phone; this is " +
+                "the rest of it.",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        if (events.isEmpty()) {
+            Text("Nothing recorded yet.", style = MaterialTheme.typography.bodySmall)
+        }
+        // NEWEST FIRST HERE, oldest-first on the wire. The coordinator returns
+        // them in the order they happened, which is right for a log and wrong
+        // for a screen somebody opens to find out what they missed.
+        for (e in events.reversed()) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(describeEvent(e))
+                Text(describeEventWho(e), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
         var pushResult by rememberSaveable { mutableStateOf("") }
         OutlinedButton(
@@ -1386,6 +1477,53 @@ private fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
  * Three lines collapsed into one, in the order somebody asks the questions:
  * what is it running, is that current, and what will it take next.
  */
+/**
+ * "elibrody2@gmail.com · never used", or as much as is known.
+ *
+ * NEVER USED AND USED LONG AGO MUST LOOK DIFFERENT. `lastSeenAt` is null for a
+ * credential that has never been spent, and rendering that as an epoch date is
+ * the difference between spotting a credential somebody minted and never
+ * collected and scrolling straight past it.
+ */
+private fun describeClient(c: Fleet.Client): String {
+    val parts = mutableListOf<String>()
+    c.email?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+    parts.add(c.lastSeenAt?.let { "last used ${relative(it)}" } ?: "never used")
+    return parts.joinToString(" · ")
+}
+
+/**
+ * The sentence for one event, with its subject named.
+ *
+ * The fleet records `text` for the events that have something to say and not
+ * for the rest, so this falls back to the event's own name — a blank row in a
+ * list of things that happened is worse than a terse one.
+ */
+private fun describeEvent(e: Fleet.Event): String = when {
+    !e.text.isNullOrBlank() -> e.text
+    !e.name.isNullOrBlank() -> "${e.event} — ${e.name}"
+    else -> e.event
+}
+
+/** "on deb132 · elibrody2@gmail.com · 20 minutes ago". */
+private fun describeEventWho(e: Fleet.Event): String {
+    val parts = mutableListOf<String>()
+    e.hostId?.takeIf { it.isNotBlank() }?.let { parts.add("on $it") }
+    // NULL ACTOR IS NOT AN UNKNOWN PERSON — it is the fleet acting on its own,
+    // which is a different kind of news and says so.
+    parts.add(e.actor?.takeIf { it.isNotBlank() } ?: "the fleet")
+    parts.add(relative(e.at).toString())
+    return parts.joinToString(" · ")
+}
+
+/** Milliseconds since the epoch, as words. */
+private fun relative(at: Long): CharSequence =
+    android.text.format.DateUtils.getRelativeTimeSpanString(
+        at,
+        System.currentTimeMillis(),
+        android.text.format.DateUtils.MINUTE_IN_MILLIS,
+    )
+
 private fun describeRunning(host: Fleet.FleetHost): String {
     val parts = mutableListOf<String>()
     host.version?.takeIf { it.isNotBlank() }?.let { parts.add(it) }

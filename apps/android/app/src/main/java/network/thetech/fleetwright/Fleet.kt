@@ -836,6 +836,108 @@ class Fleet(
     data class Host(val hostId: String, val fingerprint: String, val revoked: Boolean)
 
     /**
+     * A device that holds a credential for this fleet. No secret in it — the
+     * coordinator keeps a hash, which is what makes them worth hashing.
+     */
+    data class Client(
+        val id: String,
+        val name: String?,
+        /**
+         * The person it was minted for. Null on a credential from before
+         * sign-in carried one, which is worth showing as absent rather than
+         * attributed to whoever happens to be looking.
+         */
+        val email: String?,
+        val createdAt: Long?,
+        /**
+         * Null means it has never been used — not "used long ago". Somebody
+         * deciding what to revoke needs those two to look different.
+         */
+        val lastSeenAt: Long?,
+    )
+
+    /** One thing that happened, as the fleet recorded it. */
+    data class Event(
+        val event: String,
+        val at: Long,
+        val hostId: String?,
+        val name: String?,
+        val text: String?,
+        /**
+         * The verified email of whoever asked. Null for events the fleet
+         * originated itself — "the fleet did this" and "somebody did this" are
+         * not the same news.
+         */
+        val actor: String?,
+        val verb: String?,
+        val url: String?,
+    )
+
+    /**
+     * WHICH DEVICES CAN REACH THIS FLEET.
+     *
+     * Documented on both coordinators since devices existed, implemented by
+     * neither app: a phone that was lost could be revoked only by somebody with
+     * a terminal, which is the one thing this product exists not to require.
+     * Sign-in mints one credential per device on purpose — so revoking one
+     * leaves every other alone — and that is worth nothing while nobody can see
+     * the list.
+     */
+    suspend fun clients(): List<Client> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/clients")
+            val arr = json.optJSONArray("clients") ?: return@runCatching emptyList<Client>()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                Client(
+                    id = o.optString("id"),
+                    name = o.optString("name").takeIf { it.isNotBlank() && it != "null" },
+                    email = o.optString("email").takeIf { it.isNotBlank() && it != "null" },
+                    createdAt = o.optLong("createdAt", 0L).takeIf { it > 0L },
+                    // `has` first: optLong would turn a missing field into 0,
+                    // and "never used" must not render as 1970.
+                    lastSeenAt = o.takeIf { it.has("lastSeenAt") && !it.isNull("lastSeenAt") }?.optLong("lastSeenAt"),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun revokeClient(id: String): Reply = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = send("DELETE", "/api/clients/" + id, null)
+            Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
+        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+    }
+
+    /**
+     * What happened while you were asleep.
+     *
+     * Push wakes a phone; this is what it missed. Half of that pair shipped —
+     * the notification arrives, and an app that has been closed since yesterday
+     * has no way to find out what it was about beyond whatever sentence fitted
+     * on the lock screen.
+     */
+    suspend fun events(): List<Event> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/events")
+            val arr = json.optJSONArray("events") ?: return@runCatching emptyList<Event>()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                Event(
+                    event = o.optString("event"),
+                    at = o.optLong("at", 0L),
+                    hostId = o.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                    name = o.optString("name").takeIf { it.isNotBlank() && it != "null" },
+                    text = o.optString("text").takeIf { it.isNotBlank() && it != "null" },
+                    actor = o.optString("actor").takeIf { it.isNotBlank() && it != "null" },
+                    verb = o.optString("verb").takeIf { it.isNotBlank() && it != "null" },
+                    url = o.optString("url").takeIf { it.isNotBlank() && it != "null" },
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /**
      * Register this device for push.
      *
      * Called with whatever token the messaging SDK hands us. Kept separate from

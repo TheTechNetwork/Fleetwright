@@ -136,6 +136,35 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     local: true,
   },
   {
+    // THE FIRST TOOL WHOSE SUBJECT IS THE COORDINATOR, not a host, and that is
+    // worth saying out loud because everything else here is generated from the
+    // verb registry on purpose.
+    //
+    // `/api/events` is not a verb and must not become one: a verb is something
+    // a HOST is asked to do, and this is the coordinator's own record of what
+    // happened across the fleet. Inventing a verb for it would put a question
+    // no host can answer into the protocol every host validates.
+    //
+    // So it goes through the same `local: true` door `fleet_await` uses — a
+    // tool this server answers itself — and openapi.json stays the contract
+    // rather than a document with a route in it that no client can reach.
+    //
+    // WHY AN AGENT WANTS IT. An agent picking work back up has exactly the
+    // problem push was built for: something happened while it was not looking,
+    // and `list` shows the state now rather than what changed. A session that
+    // errored and was cleaned up is invisible to every other tool here.
+    name: 'fleet_events',
+    verb: null,
+    description:
+      'What happened across the fleet recently — sessions that ended, errored or asked for input, hosts ' +
+      'that joined or were revoked. Use this to pick up work after being away: `fleet_list` shows the ' +
+      'state now, and this shows what changed to get there. Oldest first.',
+    schema: {},
+    requires: [],
+    local: true,
+    coordinator: '/api/events',
+  },
+  {
     name: 'fleet_read_log',
     verb: 'logs',
     description:
@@ -226,11 +255,14 @@ function schemaFor(name, spec) {
  *   `budgetMinutes` is stated in the descriptions that need it — the lifecycle
  *   is the agent's to manage, so the numbers it manages against have to be in
  *   front of it rather than in a document somebody else read.
- * @returns {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>}
+ * @returns {Array<{ name: string, description: string, inputSchema: any, verb: string|null, mutating: boolean, local?: boolean, coordinator?: string }>}
  */
 export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15, maxWaitSeconds = 900 } = {}) {
   const extra = new Set(allow || []);
-  /** @type {Array<{ name: string, description: string, inputSchema: any, verb: string, mutating: boolean, local?: boolean }>} */
+  // `verb` is null on a COORDINATOR tool, whose subject is the fleet's own
+  // record rather than a host — see fleet_events. `coordinator` is the route it
+  // reads, and its presence is what the server dispatches on.
+  /** @type {Array<{ name: string, description: string, inputSchema: any, verb: string|null, mutating: boolean, local?: boolean, coordinator?: string }>} */
   const tools = Object.entries(VERBS)
     .filter(([verb]) => !deny.includes(verb) || extra.has(verb))
     .map(([verb, def]) => {
@@ -292,6 +324,22 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
     });
 
   for (const alias of aliasesFor(maxWaitSeconds)) {
+    // A COORDINATOR TOOL HAS NO BASE VERB, because its subject is not a host.
+    // It carries no `host` parameter for the same reason: naming one would ask
+    // the fleet to route a question the fleet itself answers.
+    if (alias.coordinator) {
+      if (deny.includes(alias.name.replace(/^fleet_/, '')) && !extra.has(alias.name.replace(/^fleet_/, ''))) continue;
+      tools.push({
+        name: alias.name,
+        description: alias.description,
+        inputSchema: { type: 'object', properties: { ...alias.schema }, additionalProperties: false },
+        verb: null,
+        mutating: false,
+        local: true,
+        coordinator: alias.coordinator,
+      });
+      continue;
+    }
     const base = tools.find((t) => t.verb === alias.verb);
     // Only if the verb it aliases is actually exposed — otherwise a denied
     // verb would come back through the side door under another name.
@@ -322,6 +370,8 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
   // parameter it cannot work without. Caught by a test that lists the tools and
   // reads their schemas, which is what a client does.
   for (const tool of tools) {
+    // `tool.verb` is null on a coordinator tool, and OVERRIDE is keyed by verb.
+    if (!tool.verb) continue;
     for (const gone of OVERRIDE[tool.verb]?.omit || []) {
       if (tool.name === `fleet_${tool.verb}`) delete tool.inputSchema.properties[gone];
     }
