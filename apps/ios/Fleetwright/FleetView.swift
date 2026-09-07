@@ -641,6 +641,11 @@ private struct SettingsView: View {
     @State private var purgeTarget: String?
     @State private var rebootPin = ""
     @State private var rebootConfirm = ""
+    /// The one host whose controls are showing, if any.
+    ///
+    /// ONE AT A TIME. Several open at once is the wall this replaced, arrived at
+    /// by tapping instead of by default.
+    @State private var expandedHost: String?
     /// The devices holding a credential for this fleet, and what happened
     /// lately. Both were in openapi.json and served by both coordinators
     /// before either app asked for them.
@@ -1368,18 +1373,28 @@ private struct SettingsView: View {
                             // The registry works to make "we don't know"
                             // unrepresentable as a benign value. Rendering the
                             // reason verbatim is what makes that work visible.
-                            if let reason = host.reason, !reason.isEmpty {
-                                Text(reason).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                            //
+                            // ONLY WHEN IT IS NEWS. "reporting normally" under a
+                            // badge reading "healthy" is the same fact twice,
+                            // and a card that says everything twice is a card
+                            // nobody finishes reading. The reason is here for
+                            // the state that is NOT normal, which is the state
+                            // it was written for.
+                            if let reason = host.reason, !reason.isEmpty, (host.state ?? "") != "healthy" {
+                                Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                             }
-                            if let account = host.health?.account {
-                                // Built in a function, not as a chain of `+`
-                                // with optional maps inside it: that shape is
-                                // what made the Swift type checker give up in
-                                // #125, and it fails at BUILD time on CI
-                                // rather than anywhere I can see it.
-                                Text(describeAccount(account))
-                                    .fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
-                            }
+                            // THE ACCOUNT LINE IS GONE, because it was printed
+                            // twice. describeWhoCanStart already carries the
+                            // address, the plan and the org — it was changed to
+                            // carry them when those two lines were merged — and
+                            // this one was left above it, so every card read
+                            //
+                            //   signed in as eli@x.com · max · eli@x.com's Organization
+                            //   1 person · eli@x.com · max
+                            //
+                            // The merge happened inside the function and not at
+                            // the call site, which is how a fix leaves the thing
+                            // it fixed still on screen.
                             // THREE CALLS RATHER THAN THREE BLOCKS, and it is
                             // the Swift type checker asking, not a style rule.
                             // This row's body grew past what the compiler will
@@ -1389,50 +1404,91 @@ private struct SettingsView: View {
                             // to run out of time on. The line an error like
                             // that names is not the line that caused it.
                             healthLines(for: host)
-                            maintenanceRow(for: host)
-                            // AND THE CHANNEL PICKER, which this row lost when
-                            // the result box took its place. It was still
-                            // DEFINED — channelControl(for:) sat there,
-                            // correct and unreachable — so nothing failed to
-                            // compile and no test noticed: the parity suite
-                            // reads the file for the function and the strings,
-                            // and both were present.
+
+                            // EVERYTHING ELSE IS BEHIND A TAP, and this is the
+                            // difference between a card and a control panel.
                             //
-                            // A view that is written and never called renders
-                            // exactly like one that was never written.
-                            channelControl(for: host)
-                            // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used
-                            // to be a single string rendered in the enrolment
-                            // section above the "Fleet" header — so "The box is
-                            // up to date." appeared above a list of four
-                            // machines, belonging to none of them and sitting
-                            // directly over a row that said "1 commit behind".
-                            if resultHost == host.hostId, !hostActionResult.isEmpty {
-                                ScrollView {
-                                    Text(hostActionResult)
-                                        .font(.system(.caption2, design: .monospaced))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .textSelection(.enabled)
+                            // At rest every host showed Check, Reboot, a
+                            // full-width channel picker and a sign-in link —
+                            // four controls, on every machine, all the time,
+                            // for a fleet where the ordinary answer is "nothing
+                            // needs you". Three hosts came to about a thousand
+                            // points of chrome under six lines of fact, and the
+                            // eye had nothing to land on because every card was
+                            // identical and every card was loud.
+                            //
+                            // Reboot is the sharpest case: a destructive action
+                            // one tap away on a machine nobody asked about.
+                            //
+                            // So the card is what a machine IS, and tapping it
+                            // is asking to do something. Calm recedes.
+                            if expandedHost == host.hostId {
+                                maintenanceRow(for: host)
+                                // AND THE CHANNEL PICKER, which this row lost when
+                                // the result box took its place. It was still
+                                // DEFINED — channelControl(for:) sat there,
+                                // correct and unreachable — so nothing failed to
+                                // compile and no test noticed: the parity suite
+                                // reads the file for the function and the strings,
+                                // and both were present.
+                                //
+                                // A view that is written and never called renders
+                                // exactly like one that was never written.
+                                channelControl(for: host)
+                                // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used
+                                // to be a single string rendered in the enrolment
+                                // section above the "Fleet" header — so "The box is
+                                // up to date." appeared above a list of four
+                                // machines, belonging to none of them and sitting
+                                // directly over a row that said "1 commit behind".
+                                if resultHost == host.hostId, !hostActionResult.isEmpty {
+                                    ScrollView {
+                                        Text(hostActionResult)
+                                            .font(.system(.caption2, design: .monospaced))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .textSelection(.enabled)
+                                    }
+                                    .frame(maxHeight: 160)
+                                    .padding(8)
+                                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
                                 }
-                                .frame(maxHeight: 160)
-                                .padding(8)
-                                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                                // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
+                                // this row is where it belongs: it is a login the
+                                // BOX performs in a pane, not a token that travels.
+                                //
+                                // GitHub and Cloudflare moved out to their own
+                                // section — they are the person's, they go to every
+                                // machine, and keeping them under a host
+                                // contradicted the sentence at the bottom of the
+                                // screen that said so.
+                                NavigationLink("Sign in to Claude") {
+                                    CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
+                                }
+                                .fleetType(.label)
+                            } else if host.updatePending {
+                                // THE ONE ACTION THAT SURVIVES COLLAPSE. The
+                                // ring says "look here" and hiding the remedy
+                                // behind a tap would make the ring a riddle.
+                                // Nothing else is offered, because nothing else
+                                // is being asked for.
+                                Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
+                                    .fleetType(.label)
+                                    .buttonStyle(.borderless)
+                                    .disabled(busyHost != nil)
+                                    .padding(.top, Design.Space.hair)
                             }
-                            // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
-                            // this row is where it belongs: it is a login the
-                            // BOX performs in a pane, not a token that travels.
-                            //
-                            // GitHub and Cloudflare moved out to their own
-                            // section — they are the person's, they go to every
-                            // machine, and keeping them under a host
-                            // contradicted the sentence at the bottom of the
-                            // screen that said so.
-                            NavigationLink("Sign in to Claude") {
-                                CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
-                            }
-                            .fleetType(.label)
                         }
                         .fleetCard(radius: Design.Radius.cardSmall, ring: hostRing(host))
+                        // THE WHOLE CARD IS THE TARGET, not a chevron somebody
+                        // has to aim at. contentShape, because a VStack only
+                        // takes taps where it drew something and the gaps
+                        // between lines are most of it.
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                expandedHost = expandedHost == host.hostId ? nil : host.hostId
+                            }
+                        }
                         .fleetRow()
                     }
                 } header: {
