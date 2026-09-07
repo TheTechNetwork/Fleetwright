@@ -258,18 +258,44 @@ jobs:
           # ago, serving today's tarball, with nothing red and a comment above
           # it claiming otherwise. Moving the git ref is what actually moves a
           # tag, and `force` is required because this is not a fast-forward.
-          if ! gh api -X PATCH "repos/$GH_REPO/git/refs/tags/rolling" \
-                 -f sha="$GITHUB_SHA" -F force=true >/dev/null; then
+          # THE WRITE'S OWN ANSWER IS THE AUTHORITATIVE ONE. PATCH returns the
+          # ref it just wrote, and that response cannot be stale — it is the
+          # write. Checking it here separates "the move did not happen" from
+          # "a later read had not caught up", which are different failures with
+          # different fixes and were being reported as one.
+          moved=$(gh api -X PATCH "repos/$GH_REPO/git/refs/tags/rolling" \
+                    -f sha="$GITHUB_SHA" -F force=true --jq '.object.sha') || {
             echo "::error::could not move the rolling tag to $GITHUB_SHA"
+            exit 1
+          }
+          if [ "$moved" != "$GITHUB_SHA" ]; then
+            echo "::error::the move returned $moved, not $GITHUB_SHA"
             exit 1
           fi
 
-          # AND PROVED, because the failure this replaces was an API call that
-          # reported success and changed nothing. Asserting the thing rather
-          # than the call is the only version of this check worth having.
-          at=$(gh api "repos/$GH_REPO/git/refs/tags/rolling" --jq '.object.sha')
+          # AND PROVED BY READING IT BACK, because the failure this replaces was
+          # an API call that reported success and changed nothing. Asserting the
+          # thing rather than the call is the only version of this worth having.
+          #
+          # RETRIED, THOUGH, AND THAT IS NOT TIMIDITY. A single immediate read
+          # failed a release whose tag had moved correctly: the GET came back
+          # with the PREVIOUS merge's commit, and by the time anybody looked the
+          # tag was where it should be. GitHub's ref reads are not
+          # read-after-write consistent, so one sample cannot tell a tag that
+          # did not move from a tag that has not propagated.
+          #
+          # Bounded, so a tag that genuinely never moved is still a failure —
+          # which is the whole point of the check — and it says which of the two
+          # it was rather than leaving somebody to guess.
+          at=""
+          for attempt in 1 2 3 4 5 6; do
+            at=$(gh api "repos/$GH_REPO/git/refs/tags/rolling" --jq '.object.sha')
+            [ "$at" = "$GITHUB_SHA" ] && break
+            echo "rolling still reads $at (attempt $attempt) — waiting for the ref to propagate"
+            sleep 5
+          done
           if [ "$at" != "$GITHUB_SHA" ]; then
-            echo "::error::the rolling tag is at $at, not $GITHUB_SHA"
+            echo "::error::the rolling tag still reads $at after 30s, not $GITHUB_SHA — the move was accepted, so something else is moving it"
             exit 1
           fi
           echo "rolling is at $at"
