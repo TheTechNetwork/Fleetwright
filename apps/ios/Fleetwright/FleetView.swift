@@ -981,15 +981,80 @@ private struct SettingsView: View {
     /// credential that has never been spent, and rendering that as an epoch date —
     /// or worse, as "now" — is the difference between spotting a credential
     /// somebody minted and never collected and scrolling past it.
+    /// Devices that have actually been used, newest first.
+    private var clientsInUse: [Fleet.Client] {
+        clients.filter { $0.lastSeenAt != nil }.sorted { ($0.lastSeenAt ?? 0) > ($1.lastSeenAt ?? 0) }
+    }
+
+    /// Minted and never spent — an abandoned sign-in.
+    private var clientsNeverUsed: [Fleet.Client] {
+        clients.filter { $0.lastSeenAt == nil }
+    }
+
+    @ViewBuilder private func clientRow(_ c: Fleet.Client) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(c.name ?? "unnamed device").fleetType(.body)
+            Text(describeClient(c)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+        }
+        .swipeActions {
+            Button("Revoke", role: .destructive) { confirmingClientRevoke = c }
+        }
+    }
+
     private func describeClient(_ c: Fleet.Client) -> String {
+        // THE ADDRESS IS IN THE TITLE ALREADY. Every row read
+        //
+        //   iPhone (elibrody2@gmail.com)
+        //   elibrody2@gmail.com · never used
+        //
+        // which is the same fault this screen was just cleaned up for, shipped
+        // one section down by the same hand. Eleven rows, most of them
+        // identical, and the only thing that told them apart was printed twice.
+        //
+        // So this says the one thing that DIFFERS between two devices with the
+        // same name — when it was last used — and the address only when it is
+        // somebody else's, which is the case where it is news.
         var parts: [String] = []
-        if let email = c.email, !email.isEmpty { parts.append(email) }
+        if let email = c.email, !email.isEmpty, email != settings.signedInAs { parts.append(email) }
         if let seen = c.lastSeenAt {
             parts.append("last used \(relative(seen))")
         } else {
-            parts.append("never used")
+            // NOT "never used" AS A FOOTNOTE. A credential minted and never
+            // spent is an abandoned sign-in, and on this screen there were
+            // seven of them — it is the reason somebody is here, not a detail.
+            parts.append("never used — safe to revoke")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// Consecutive identical events, collapsed to one row and a count.
+    ///
+    /// The coordinator's ring is a LOG: every intent, in order, which is the
+    /// right thing for it to keep. A screen headed "what happened while you
+    /// were away" is a different question, and answering it with nine
+    /// consecutive lines reading "asked for connect" is answering it with the
+    /// log — which is how a summary becomes something nobody reads.
+    ///
+    /// CONSECUTIVE ONLY, not grouped across the list. Two bursts of the same
+    /// verb an hour apart are two things that happened, and merging them would
+    /// lose the second one's time.
+    private var runs: [EventRun] {
+        var out: [EventRun] = []
+        for e in events.reversed() {
+            if let last = out.last, last.event.event == e.event, last.event.name == e.name,
+               last.event.hostId == e.hostId, last.event.actor == e.actor {
+                out[out.count - 1].count += 1
+            } else {
+                out.append(EventRun(event: e, count: 1))
+            }
+        }
+        return out
+    }
+
+    private struct EventRun: Identifiable {
+        let event: Fleet.Event
+        var count: Int
+        var id: String { event.id }
     }
 
     /// The sentence for one event, with its subject named.
@@ -1004,13 +1069,24 @@ private struct SettingsView: View {
         return e.event
     }
 
-    /// "on deb132 · 20 minutes ago", and who asked when somebody did.
+    /// "on deb132 · 20 minutes ago", and who asked when it was not you.
     private func describeEventWho(_ e: Fleet.Event) -> String {
         var parts: [String] = []
-        if let h = e.hostId, !h.isEmpty { parts.append("on \(h)") }
-        // NULL ACTOR IS NOT AN UNKNOWN PERSON — it is the fleet acting on its own,
-        // which is a different kind of news and says so.
-        if let a = e.actor, !a.isEmpty { parts.append(a) } else { parts.append("the fleet") }
+        // "on coordinator" IS NOT A PLACE. It is where everything happens, so
+        // it distinguished nothing and appeared on nearly every line.
+        if let h = e.hostId, !h.isEmpty, h != "coordinator" { parts.append("on \(h)") }
+        // NULL ACTOR IS NOT AN UNKNOWN PERSON — it is the fleet acting on its
+        // own, which is a different kind of news and says so.
+        //
+        // AND YOUR OWN NAME IS NOT NEWS EITHER. Every line read
+        // "elibrody2@gmail.com asked for connect" over
+        // "on coordinator · elibrody2@gmail.com · 1 hour ago" — the address
+        // twice, in a list where every entry was the same person.
+        if let a = e.actor, !a.isEmpty {
+            if a != settings.signedInAs { parts.append(a) }
+        } else {
+            parts.append("the fleet")
+        }
         parts.append(relative(e.at))
         return parts.joined(separator: " · ")
     }
@@ -1462,74 +1538,39 @@ private struct SettingsView: View {
                             //
                             // So the card is what a machine IS, and tapping it
                             // is asking to do something. Calm recedes.
-                            if expandedHost == host.hostId {
-                                maintenanceRow(for: host)
-                                // AND THE CHANNEL PICKER, which this row lost when
-                                // the result box took its place. It was still
-                                // DEFINED — channelControl(for:) sat there,
-                                // correct and unreachable — so nothing failed to
-                                // compile and no test noticed: the parity suite
-                                // reads the file for the function and the strings,
-                                // and both were present.
-                                //
-                                // A view that is written and never called renders
-                                // exactly like one that was never written.
-                                channelControl(for: host)
-                                // THIS HOST'S ANSWER, IN THIS HOST'S ROW. It used
-                                // to be a single string rendered in the enrolment
-                                // section above the "Fleet" header — so "The box is
-                                // up to date." appeared above a list of four
-                                // machines, belonging to none of them and sitting
-                                // directly over a row that said "1 commit behind".
-                                if resultHost == host.hostId, !hostActionResult.isEmpty {
-                                    ScrollView {
-                                        Text(hostActionResult)
-                                            .font(.system(.caption2, design: .monospaced))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .textSelection(.enabled)
-                                    }
-                                    .frame(maxHeight: 160)
-                                    .padding(8)
-                                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-                                }
-                                // CLAUDE SIGN-IN IS THE ONLY PER-MACHINE ONE, and
-                                // this row is where it belongs: it is a login the
-                                // BOX performs in a pane, not a token that travels.
-                                //
-                                // GitHub and Cloudflare moved out to their own
-                                // section — they are the person's, they go to every
-                                // machine, and keeping them under a host
-                                // contradicted the sentence at the bottom of the
-                                // screen that said so.
-                                NavigationLink("Sign in to Claude") {
-                                    CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
-                                }
-                                .fleetType(.label)
-                            } else if host.updatePending {
-                                // THE ONE ACTION THAT SURVIVES COLLAPSE. The
-                                // ring says "look here" and hiding the remedy
-                                // behind a tap would make the ring a riddle.
-                                // Nothing else is offered, because nothing else
-                                // is being asked for.
-                                Button("Apply update") { Task { await maintain(host.hostId, .applyUpdate) } }
-                                    .fleetType(.label)
-                                    .buttonStyle(.borderless)
-                                    .disabled(busyHost != nil)
-                                    .padding(.top, Design.Space.hair)
-                            }
+                            // EVERYTHING YOU CAN DO ABOUT A MACHINE IS ON THE
+                            // MACHINE'S OWN PAGE. This was four controls under
+                            // every card, then — worse — the same four behind a
+                            // tap that expanded the row in place. A row that
+                            // grows inside a List jumps: the height changes with
+                            // no transition to carry it, and what arrives is the
+                            // same wall all at once.
+                            //
+                            // The instinct was right and the place was wrong.
+                            // "This card is doing too much" is not answered by
+                            // doing it on demand; a machine is a subject and
+                            // deserves a page. A push animates itself.
                         }
                         .fleetCard(radius: Design.Radius.cardSmall, ring: hostRing(host))
-                        // THE WHOLE CARD IS THE TARGET, not a chevron somebody
-                        // has to aim at. contentShape, because a VStack only
-                        // takes taps where it drew something and the gaps
-                        // between lines are most of it.
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.snappy(duration: 0.2)) {
-                                expandedHost = expandedHost == host.hostId ? nil : host.hostId
-                            }
-                        }
                         .fleetRow()
+                        // A LINK, NOT A TAP GESTURE. The push transition, the
+                        // back button and the accessibility affordance all come
+                        // with it; a gesture on a card gets none of those and
+                        // has to invent each one badly.
+                        .background(
+                            NavigationLink("") {
+                                HostView(
+                                    settings: settings,
+                                    hostId: host.hostId,
+                                    health: host.health,
+                                    state: host.state,
+                                    reason: host.reason,
+                                    enrolled: hosts.first { $0.hostId == host.hostId },
+                                    onChange: { await loadHosts() },
+                                )
+                            }
+                            .opacity(0)
+                        )
                     }
                 } header: {
                     Text("Fleet")
@@ -1617,14 +1658,27 @@ private struct SettingsView: View {
                     if clients.isEmpty {
                         Text("No devices reported.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
-                    ForEach(clients) { c in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(c.name ?? "unnamed device")
-                            Text(describeClient(c)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                    // IN USE FIRST, ABANDONED LAST. The coordinator sorts by
+                    // when a credential was MINTED, which on a real account put
+                    // seven never-used sign-ins above the phone in your hand.
+                    // The question this screen answers is "which of these is
+                    // still live", so that is the order.
+                    ForEach(clientsInUse) { c in
+                        clientRow(c)
+                    }
+                    // AND THE ABANDONED ONES FOLD AWAY. A credential minted and
+                    // never spent is the ordinary residue of signing in twice;
+                    // eleven rows of it buried the two that matter. They are
+                    // still here, still revocable, and no longer the first
+                    // thing on the screen.
+                    if !clientsNeverUsed.isEmpty {
+                        DisclosureGroup("\(clientsNeverUsed.count) never used") {
+                            ForEach(clientsNeverUsed) { c in
+                                clientRow(c)
+                            }
                         }
-                        .swipeActions {
-                            Button("Revoke", role: .destructive) { confirmingClientRevoke = c }
-                        }
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
                     }
                     if !clientResult.isEmpty {
                         Text(clientResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
@@ -1655,10 +1709,25 @@ private struct SettingsView: View {
                     // coordinator returns them in the order they happened,
                     // which is right for a log and wrong for a screen somebody
                     // opens to find out what they missed.
-                    ForEach(events.reversed()) { e in
+                    ForEach(runs) { run in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(describeEvent(e))
-                            Text(describeEventWho(e)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(describeEvent(run.event)).fleetType(.body)
+                                if run.count > 1 {
+                                    // NINE LINES SAYING "asked for connect" IS
+                                    // ONE FACT. A log repeats because a person
+                                    // tapped a button nine times; a screen
+                                    // reporting what happened should say that
+                                    // once and say how many.
+                                    Text("×\(run.count)")
+                                        .fleetType(.label)
+                                        .foregroundStyle(Design.Palette.inkDim)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            Text(describeEventWho(run.event))
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
                         }
                     }
                 } header: {
@@ -1966,7 +2035,9 @@ private func describeBinned(_ item: Fleet.Binned) -> String {
 /// The org is dropped when it is only the address again. Google and Anthropic
 /// both name a personal organisation that way, so on a single-person account it
 /// is guaranteed noise.
-private func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) -> String {
+// NOT file-private: HostView renders the same sentence, and a second copy of
+// it is how two screens start describing one fact differently.
+func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) -> String {
     // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
     // "Nobody" alone says what is wrong without saying what to do about it —
     // naming the Claude account is what makes it actionable. The other cases

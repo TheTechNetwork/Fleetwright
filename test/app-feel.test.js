@@ -71,3 +71,45 @@ test('"we have not asked" and "asked, and nobody" stay different', () => {
   // And the distinction it protects is still written down where it is read.
   assert.match(VIEW, /guard !fleetHosts\.isEmpty, let mine = myClaudeHosts else \{ return false \}/);
 });
+
+test('a fact is not printed twice on one row', () => {
+  // THE SAME FAULT, SHIPPED ONE SECTION DOWN BY THE SAME HAND. The fleet card
+  // was cleaned up for printing the account twice, and the Devices and Recent
+  // activity sections added in the same week read:
+  //
+  //   iPhone (elibrody2@gmail.com)              elibrody2@gmail.com asked for connect
+  //   elibrody2@gmail.com · never used          on coordinator · elibrody2@gmail.com · 1 hour ago
+  //
+  // Eleven rows of the first, nine of the second, each saying the one thing
+  // that could tell them apart twice and the thing that could not, once.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+
+  // The address only when it is somebody ELSE'S, which is when it is news.
+  const client = view.slice(view.indexOf('private func describeClient'), view.indexOf('/// Consecutive identical events'));
+  assert.match(client, /email != settings\.signedInAs/);
+
+  const who = view.slice(view.indexOf('private func describeEventWho'), view.indexOf('/// Milliseconds since the epoch'));
+  assert.match(who, /a != settings\.signedInAs/);
+  // "on coordinator" is not a place. It is where everything happens, so it
+  // distinguished nothing and appeared on nearly every line.
+  assert.match(who, /h != "coordinator"/);
+});
+
+test('the lists are ordered by what somebody came to find', () => {
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+
+  // IN USE FIRST. The coordinator sorts by when a credential was MINTED, which
+  // on a real account put seven never-used sign-ins above the phone in the
+  // hand holding it.
+  assert.match(view, /clientsInUse[\s\S]{0,200}?sorted \{ \(\$0\.lastSeenAt \?\? 0\) > \(\$1\.lastSeenAt \?\? 0\) \}/);
+  // And the abandoned ones fold away rather than being deleted from the screen:
+  // still there, still revocable, no longer first.
+  assert.match(view, /DisclosureGroup\("\\\(clientsNeverUsed\.count\) never used"\)/);
+
+  // NINE LINES SAYING "asked for connect" IS ONE FACT. Consecutive only —
+  // two bursts an hour apart are two things that happened, and merging them
+  // would lose the second one's time.
+  assert.match(view, /private var runs: \[EventRun\]/);
+  assert.match(view, /out\[out\.count - 1\]\.count \+= 1/);
+  assert.match(view, /Text\("×\\\(run\.count\)"\)/);
+});
