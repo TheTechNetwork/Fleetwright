@@ -212,5 +212,37 @@ else
   printf 'FAILED\n'; fail=1
 fi
 
+# THE ONE CHECK THAT USED TO BE CI-ONLY, and it cost a round trip every time.
+#
+# A commit message is the last thing written and the first thing CI rejects: an
+# 83-character subject failed a pull request whose code had been green for an
+# hour, and the fix was a rebase. Everything else in this file exists so that
+# does not happen; there was no reason for this to be the exception.
+#
+# THE SAME RANGE CI USES — this branch against main — rather than the last
+# commit, because a rebase can leave an old subject behind two commits down and
+# `HEAD~1..HEAD` would never look at it.
+#
+# Skipped rather than failed when there is nothing to compare against: a
+# detached head, a shallow clone, or somebody sitting on main has no range, and
+# a check that fails for want of a question is a check people learn to skip.
+printf 'commits    ... '
+if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then
+  printf 'skipped (not a git checkout)\n'
+elif [ -n "${VERIFY_SKIP_COMMITS:-}" ]; then
+  printf 'skipped (VERIFY_SKIP_COMMITS)\n'
+else
+  base="$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD 2>/dev/null || true)"
+  if [ -z "$base" ] || [ "$base" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
+    printf 'skipped (nothing on this branch yet)\n'
+  elif out=$(npx --no-install commitlint --from "$base" --to HEAD 2>&1); then
+    printf '%s ok\n' "$(git rev-list --count "$base"..HEAD)"
+  else
+    printf 'FAILED\n'
+    printf '%s\n' "$out" | sed 's/^/  /'
+    fail=1
+  fi
+fi
+
 [ "$fail" = 0 ] && printf '\nALL GREEN\n' || printf '\nSOMETHING FAILED — do not commit\n'
 exit "$fail"
