@@ -61,6 +61,19 @@ struct HostView: View {
     @State private var result = ""
     @State private var channel: String?
     @State private var channelPinned = false
+    /// Which image new sessions here run in, and whether that is the box's own
+    /// environment talking. State for the same reason the channel is: the
+    /// picker has to move when the host confirms, not fifteen seconds later.
+    @State private var sandbox: Fleet.HostHealth.Sandbox?
+    /// Every label this box carries, and the subset that can be taken off. Two
+    /// lists rather than one flag per chip, because that is the shape the host
+    /// sends and re-deriving it here is a second place to be wrong.
+    @State private var labels: [String] = []
+    @State private var setLabels: [String] = []
+    /// The label being typed. Cleared when it lands, whether or not it worked —
+    /// a field still holding a name that was refused looks like it can be
+    /// pressed again.
+    @State private var newLabel = ""
     @State private var rebootPin = ""
     /// Where in the ceremony this page is, so it can show one step rather than
     /// all of them.
@@ -98,6 +111,10 @@ struct HostView: View {
             .listRowBackground(Design.Palette.card)
 
             channelSection
+
+            sandboxSection
+
+            labelsSection
 
             Section {
                 NavigationLink("Sign in to Claude") {
@@ -147,6 +164,9 @@ struct HostView: View {
             reason = initialReason
             channel = initialHealth?.channel
             channelPinned = initialHealth?.channelPinned ?? false
+            sandbox = initialHealth?.sandbox
+            labels = initialHealth?.labels ?? []
+            setLabels = initialHealth?.setLabels ?? []
         }
     }
 
@@ -206,6 +226,119 @@ struct HostView: View {
             Text("Stable takes published releases. Rolling takes the newest build of main, on every merge.")
         }
         .listRowBackground(Design.Palette.card)
+    }
+
+    /// WHICH IMAGE A SESSION HERE GETS. Two states, so a segmented control —
+    /// the same shape as the channel above it, because it is the same kind of
+    /// question and answering it differently would make two identical decisions
+    /// look like different ones.
+    @ViewBuilder private var sandboxSection: some View {
+        Section {
+            if let now = sandbox {
+                if now.pinned == true || (now.variant != "minimal" && now.variant != "browser") {
+                    // AN ANSWER, NOT A CHOICE. Either the box's environment
+                    // names the image, or it is on one that is neither variant —
+                    // and in both cases a picker would have to show a third
+                    // segment for a state it cannot switch to, or silently
+                    // round the box to one of the two it is not on.
+                    LabeledContent("Image") {
+                        Text(now.pinned == true ? "set on the box" : "not one of ours")
+                            .fleetType(.label)
+                    }
+                    if let image = now.image, !image.isEmpty {
+                        Text(image)
+                            .fleetType(.labelMono)
+                            .foregroundStyle(Design.Palette.inkDim)
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    Picker("Image", selection: Binding(
+                        get: { now.variant ?? "minimal" },
+                        set: { pick in run { try await fleet.sandbox(host: hostId, to: pick) } }
+                    )) {
+                        Text("No browser").tag("minimal")
+                        Text("Browser").tag("browser")
+                    }
+                    .pickerStyle(.segmented)
+                }
+            } else {
+                // NIL IS CANNOT TELL. A host older than this verb sends nothing,
+                // and a control defaulted to "No browser" would tell somebody
+                // their box has no Chromium when it might.
+                Text("This host has not said which image it runs sessions in.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        } header: {
+            sectionHead("Sessions")
+        } footer: {
+            Text("The browser image is the same one with Chromium in it, for a session that has to look at a page it built. Running sessions keep the image they started in.")
+        }
+        .listRowBackground(Design.Palette.card)
+    }
+
+    /// WHAT WORK AIMED AT PART OF THE FLEET WILL FIND HERE.
+    ///
+    /// Remove appears on exactly the labels it works for. `arm64` and `gpu`
+    /// look identical in the list the host sends, and the host refuses to drop
+    /// one of them — so a swipe on every row would be a control that does
+    /// nothing on half of them, discoverable only by trying it.
+    @ViewBuilder private var labelsSection: some View {
+        Section {
+            if labels.isEmpty {
+                Text("No labels, so only work that names this host can land here.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+            ForEach(labels, id: \.self) { label in
+                HStack {
+                    Text(label).fleetType(.label).foregroundStyle(Design.Palette.ink)
+                    Spacer(minLength: 0)
+                    if !setLabels.contains(label) {
+                        // WHY IT CANNOT COME OFF, next to it. Without this the
+                        // only difference between the two kinds is a missing
+                        // swipe, which reads as a bug.
+                        Text("from the machine")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                }
+                .swipeActions(edge: .trailing) {
+                    if setLabels.contains(label) {
+                        Button("Remove", role: .destructive) {
+                            run { try await fleet.labels(host: hostId, remove: label) }
+                        }
+                    }
+                }
+            }
+            HStack {
+                TextField("Add a label", text: $newLabel)
+                    // A LABEL IS COMPARED FOR EQUALITY by the scheduler, so iOS
+                    // capitalising it would store one that can never be matched
+                    // — which looks exactly like tags being broken.
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .fleetType(.label)
+                    .onSubmit(addLabel)
+                Button("Add", action: addLabel)
+                    .disabled(newLabel.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            sectionHead("Labels")
+        } footer: {
+            Text("Labels are how work is aimed: a session asked for with a tag lands on a host carrying it. The ones the machine works out about itself cannot be removed.")
+        }
+        .listRowBackground(Design.Palette.card)
+    }
+
+    private func addLabel() {
+        let wanted = newLabel.trimmingCharacters(in: .whitespaces)
+        guard !wanted.isEmpty else { return }
+        // CLEARED THE MOMENT IT LEAVES, whether or not it works. A field still
+        // holding a name that was refused looks like it can be pressed again,
+        // and the reason it was refused is in the box at the bottom.
+        newLabel = ""
+        run { try await fleet.labels(host: hostId, add: wanted) }
     }
 
     @ViewBuilder private var dangerSection: some View {
@@ -414,6 +547,13 @@ struct HostView: View {
         reason = mine.reason
         if let now = mine.health?.channel { channel = now }
         channelPinned = mine.health?.channelPinned ?? channelPinned
+        // KEPT IF THE SNAPSHOT DOES NOT CARRY IT, rather than cleared. A host
+        // that has not sent a frame since this page opened, or one older than
+        // these verbs, would otherwise blank a picker and a list the person is
+        // looking at — the same fault the guards above exist for.
+        if let now = mine.health?.sandbox { sandbox = now }
+        if let now = mine.health?.labels { labels = now }
+        if let now = mine.health?.setLabels { setLabels = now }
     }
 
     private func sectionHead(_ text: String) -> some View {
@@ -438,6 +578,19 @@ struct HostView: View {
                 // with itself — and the button that would act on it is gated on
                 // the half that did not move.
                 if let w = reply.waiting { health = health?.withUpdates(w) }
+                if let now = reply.sandbox { sandbox = now; health = health?.withSandbox(now) }
+                // BOTH LISTS MOVE TOGETHER. The reply says which labels are SET
+                // here; the full list is that plus everything the machine
+                // derives, which is what this page already has minus the ones
+                // it knows are removable. Recomputing it keeps a chip from
+                // lingering after a Remove, or from missing after an Add, for
+                // the fifteen seconds until the next health frame.
+                if let set = reply.setLabels {
+                    let derived = labels.filter { !setLabels.contains($0) }
+                    labels = Array(Set(derived).union(set)).sorted()
+                    setLabels = set.sorted()
+                    health = health?.withLabels(all: labels, set: setLabels)
+                }
             } catch {
                 result = error.localizedDescription
             }

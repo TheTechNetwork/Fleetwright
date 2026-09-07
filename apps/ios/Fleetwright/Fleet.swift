@@ -161,6 +161,16 @@ struct Fleet {
         /// shown as an answer and not as a choice. Said up front rather than
         /// discovered by a refusal.
         var channelPinned: Bool?
+        /// Which image new sessions run in, after this reply. A field for the
+        /// same reason as the channel above it, and the segmented control is
+        /// rendered straight from it rather than from the next health frame —
+        /// which is fifteen seconds away, on the one screen where the person is
+        /// looking directly at the thing they just changed.
+        var sandbox: HostHealth.Sandbox?
+        /// The labels set from an app, after this reply. Not the whole list: a
+        /// label the machine derives is not this verb's to report, and merging
+        /// the two here would let a reply put `arm64` into the removable set.
+        var setLabels: [String]?
         /// What a check found, as DATA. The host computes `{ app, system }`
         /// precisely so a row can render a state instead of parsing a sentence
         /// — and this reply carried it while both apps rendered the sentence
@@ -441,6 +451,34 @@ struct Fleet {
         var params: [String: String] = [:]
         if let to, !to.isEmpty { params["to"] = to }
         return try await intent("channel", params: params, host: host)
+    }
+
+    /// Which image new sessions on a box run in — and, with `to`, change it.
+    ///
+    /// `channel`'s sibling, and bare is a question for the same reason. The
+    /// browser variant shipped as a second tag and choosing it meant editing
+    /// AGENT_HUB_SANDBOX_IMAGE in a root-owned file and restarting the service.
+    func sandbox(host: String, to: String? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let to, !to.isEmpty { params["to"] = to }
+        return try await intent("sandbox", params: params, host: host)
+    }
+
+    /// The labels a box carries, and with `add` or `remove`, change them.
+    ///
+    /// ONE AT A TIME AND NEVER A LIST, which is the verb's shape rather than a
+    /// simplification here: a call that replaced the whole list would make two
+    /// people editing labels from two phones a last-write-wins race over a
+    /// value neither of them read.
+    ///
+    /// A label the machine derives about itself is refused by the host, with
+    /// the reason. The screen does not offer it, but the refusal is what makes
+    /// that true rather than a convention this app happens to follow.
+    func labels(host: String, add: String? = nil, remove: String? = nil) async throws -> Reply {
+        var params: [String: String] = [:]
+        if let add, !add.isEmpty { params["add"] = add }
+        if let remove, !remove.isEmpty { params["remove"] = remove }
+        return try await intent("labels", params: params, host: host)
     }
 
     /// What the operating system has waiting, and optionally install it.
@@ -946,6 +984,27 @@ struct Fleet {
         /// answer rather than as a choice. Said before somebody taps, rather
         /// than discovered by a refusal afterwards.
         let channelPinned: Bool?
+        /// Which image new sessions run in, and whether the box's environment
+        /// names it outright.
+        ///
+        /// NIL IS CANNOT TELL, the same as `channel` above. A host older than
+        /// the sandbox verb sends nothing, and rendering that as "minimal"
+        /// would tell somebody their box has no browser when it might.
+        struct Sandbox: Codable, Hashable {
+            let variant: String?
+            let image: String?
+            let pinned: Bool?
+        }
+        let sandbox: Sandbox?
+        /// What `tag` matches on for this box: os, architecture, distribution,
+        /// whether its image has a browser, plus anything set here or in
+        /// AGENT_FLEET_LABELS.
+        let labels: [String]?
+        /// WHICH OF THOSE CAN BE TAKEN OFF. The flat list cannot say — `arm64`
+        /// and `gpu` look identical in it, and the host refuses to drop one of
+        /// them. Rendering the flat list would put a Remove on every chip and
+        /// let somebody discover by tapping which ones do nothing.
+        let setLabels: [String]?
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -1000,6 +1059,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
+                sandbox: sandbox, labels: labels, setLabels: setLabels,
             )
         }
 
@@ -1008,6 +1068,35 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
+                sandbox: sandbox, labels: labels, setLabels: setLabels,
+            )
+        }
+
+        /// The same health with an image the host has just confirmed.
+        ///
+        /// A REBUILD AND NOT A MUTATION, like the two above: a struct nobody can
+        /// half-update cannot drift into a state the host never reported.
+        func withSandbox(_ sandbox: Sandbox) -> HostHealth {
+            HostHealth(
+                account: account, credential: credential, version: version, updates: updates,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
+                sandbox: sandbox, labels: labels, setLabels: setLabels,
+            )
+        }
+
+        /// The same health with labels the host has just confirmed.
+        ///
+        /// BOTH LISTS MOVE TOGETHER. Updating `setLabels` and leaving `labels`
+        /// alone would draw a chip that is gone, or hide one that is there,
+        /// until the next health frame fifteen seconds later — and the person
+        /// is looking straight at the thing they just changed.
+        func withLabels(all: [String], set: [String]) -> HostHealth {
+            HostHealth(
+                account: account, credential: credential, version: version, updates: updates,
+                loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
+                maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
+                sandbox: sandbox, labels: all, setLabels: set,
             )
         }
     }

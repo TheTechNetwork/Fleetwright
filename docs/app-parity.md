@@ -211,6 +211,8 @@ it is very easy to re-enter one merge at a time.
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
 | **readmit a revoked host / replace a host's key** | swipe the host row | button on the host row | curl |
 | **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
+| **which image sessions run in** (`sandbox`) | segmented picker on the host page | chips in the host sheet | `/sandbox` |
+| **what work aimed at a tag finds** (`labels`) | chips on the host page, Remove on the removable ones | chips in the host sheet, ✕ on the removable ones | `/labels` |
 
 **A gap this table caught, in the round that added the profile row.** Android's
 `SessionKind` had no `host` field at all, while iOS has had one since placement
@@ -361,6 +363,19 @@ and the catalogue's `wants` was already on screen to tell them apart.
 Written because a beta tester found **four documents giving four answers** and
 could not tell what installing the beta would get them (#336). One table, and
 everything else defers to it.
+
+### The host page, and the gap that is open on purpose
+
+iOS gives a machine a page of its own (`HostView.swift`); Android still puts
+most of a machine's controls in its fleet card. The two settings added with the
+sandbox and label verbs went into `HostSheet.kt` on Android rather than into
+that card, because both are a choice plus a list that grows and the card is
+already the wall iOS took apart.
+
+So the two features are on both phones and the STRUCTURE is not the same yet.
+Written down rather than left to be discovered, because a gap one commit wide is
+invisible in a summary — which is the argument for this document over the
+intention.
 
 | | State | Evidence |
 |---|---|---|

@@ -246,6 +246,30 @@ class Fleet(
          */
         val channelPinned: Boolean = false,
         /**
+         * Which image new sessions run in, and whether the box's environment
+         * names it outright.
+         *
+         * NULL IS CANNOT TELL, the same rule as [channel] above. A host older
+         * than the sandbox verb sends nothing, and rendering that as "minimal"
+         * would tell somebody their box has no browser when it might.
+         */
+        val sandboxVariant: String? = null,
+        val sandboxImage: String? = null,
+        val sandboxPinned: Boolean = false,
+        /**
+         * What `tag` matches on for this box: os, architecture, distribution,
+         * whether its image has a browser, plus anything set from an app or in
+         * AGENT_FLEET_LABELS.
+         */
+        val labels: List<String> = emptyList(),
+        /**
+         * WHICH OF THOSE CAN BE TAKEN OFF. The flat list cannot say — `arm64`
+         * and `gpu` look identical in it, and the host refuses to drop one of
+         * them. Rendering the flat list would put a Remove on every chip and
+         * let somebody discover by tapping which ones do nothing.
+         */
+        val setLabels: List<String> = emptyList(),
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -359,6 +383,21 @@ class Fleet(
          */
         val channel: String? = null,
         val channelPinned: Boolean = false,
+        /**
+         * Which image new sessions run in, after this reply, for the same
+         * reason the channel travels: the list is rebuilt from a cache that is
+         * a health frame old, so a control trusting only the list shows the
+         * value somebody just changed away from.
+         */
+        val sandboxVariant: String? = null,
+        val sandboxImage: String? = null,
+        val sandboxPinned: Boolean = false,
+        /**
+         * The labels SET from an app, after this reply. Not the whole list: a
+         * label the machine derives is not this verb's to report, and merging
+         * the two here would let a reply put `arm64` into the removable set.
+         */
+        val setLabels: List<String>? = null,
         /**
          * What a check found, as DATA. The host computes `{ app, system }`
          * precisely so a row can render a state instead of parsing a sentence,
@@ -634,6 +673,38 @@ class Fleet(
      */
     suspend fun channel(host: String, to: String? = null): Reply =
         intent("channel", buildMap { if (!to.isNullOrBlank()) put("to", to) }, host = host)
+
+    /**
+     * Which image new sessions on a box run in — and, with [to], change it.
+     *
+     * [channel]'s sibling, and bare is a question for the same reason. The
+     * browser variant shipped as a second tag and choosing it meant editing
+     * AGENT_HUB_SANDBOX_IMAGE in a root-owned file and restarting the service.
+     */
+    suspend fun sandbox(host: String, to: String? = null): Reply =
+        intent("sandbox", buildMap { if (!to.isNullOrBlank()) put("to", to) }, host = host)
+
+    /**
+     * The labels a box carries, and with [add] or [remove], change them.
+     *
+     * ONE AT A TIME AND NEVER A LIST, which is the verb's shape rather than a
+     * simplification here: a call that replaced the whole list would make two
+     * people editing labels from two phones a last-write-wins race over a value
+     * neither of them read.
+     *
+     * A label the machine derives about itself is refused by the host, with the
+     * reason. The screen does not offer it, but the refusal is what makes that
+     * true rather than a convention this app happens to follow.
+     */
+    suspend fun labels(host: String, add: String? = null, remove: String? = null): Reply =
+        intent(
+            "labels",
+            buildMap {
+                if (!add.isNullOrBlank()) put("add", add)
+                if (!remove.isNullOrBlank()) put("remove", remove)
+            },
+            host = host,
+        )
 
     /** What the OS has waiting, and optionally install it. */
     suspend fun upgrade(host: String, apply: Boolean = false): Reply =
@@ -1048,6 +1119,17 @@ class Fleet(
                     // answered, `[]` means nothing to offer.
                     channel = json.optString("channel").takeIf { it.isNotBlank() && it != "null" },
                     channelPinned = json.optBoolean("channelPinned"),
+                    sandboxVariant = json.optJSONObject("sandbox")?.optString("variant")?.takeIf { it.isNotBlank() && it != "null" },
+                    sandboxImage = json.optJSONObject("sandbox")?.optString("image")?.takeIf { it.isNotBlank() && it != "null" },
+                    sandboxPinned = json.optJSONObject("sandbox")?.optBoolean("pinned") == true,
+                    // ABSENT STAYS NULL, present-and-empty is a real answer.
+                    // `optJSONArray` returns null for both a missing key and an
+                    // explicit null, which is the distinction wanted: no key
+                    // means this reply was not about labels, `[]` means none are
+                    // set here — and the second one must clear the last chip.
+                    setLabels = json.optJSONArray("setLabels")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                    },
                     waiting = json.optJSONObject("waiting")?.let { w ->
                         val a = w.optJSONObject("app")
                         val sy = w.optJSONObject("system")
@@ -1158,6 +1240,15 @@ class Fleet(
                     },
                     channel = health?.optString("channel")?.takeIf { it.isNotBlank() && it != "null" },
                     channelPinned = health?.optBoolean("channelPinned") == true,
+                    sandboxVariant = health?.optJSONObject("sandbox")?.optString("variant")?.takeIf { it.isNotBlank() && it != "null" },
+                    sandboxImage = health?.optJSONObject("sandbox")?.optString("image")?.takeIf { it.isNotBlank() && it != "null" },
+                    sandboxPinned = health?.optJSONObject("sandbox")?.optBoolean("pinned") == true,
+                    labels = health?.optJSONArray("labels")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                    } ?: emptyList(),
+                    setLabels = health?.optJSONArray("setLabels")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                    } ?: emptyList(),
                     bin = health?.optJSONArray("bin")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i ->
                             arr.optJSONObject(i)?.let { b ->

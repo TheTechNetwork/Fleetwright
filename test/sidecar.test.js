@@ -337,6 +337,11 @@ test('health reports what the scheduler ranks on', async (t) => {
   // app, and a union has no natural order — so it gets a stable one rather than
   // a different arrangement depending on which source answered first.
   assert.deepEqual(h.labels, ['debian13', 'gpu']);
+  // AND WHICH OF THEM CAN COME OFF. `debian13` and `gpu` are indistinguishable
+  // in the list above, and one of them the host will refuse to drop — so a
+  // screen that offered Remove on both would have a control that does not work
+  // on half the rows, discoverable only by tapping it.
+  assert.deepEqual(h.setLabels, []);
   assert.equal(h.loggedIn, true);
   assert.equal(h.loadavg.length, 3);
 });
