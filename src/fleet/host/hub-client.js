@@ -66,6 +66,11 @@ export class HubError extends Error {
  *   so an app must show the answer and not offer to change it
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, carried as data so an app never parses the rendered text
+ * @property {{
+ *   app: { kind?: string, pending?: boolean, available?: string|null, configured?: boolean, behind?: number|null, text?: string },
+ *   system: { supported?: boolean, pending?: boolean, count?: number, text?: string },
+ * }} [waiting] what a check found, as data — kind, pending, version — so a row
+ *   renders a state instead of parsing a sentence
  */
 
 export class HubClient {

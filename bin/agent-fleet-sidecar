@@ -164,6 +164,8 @@ const sidecar = new Sidecar({
     // treats as CANNOT TELL rather than as "no updates" — the distinction that
     // stops a fleet reporting every host as current while it is still looking.
     updates: () => lastUpdates,
+    // How a fresh check gets to be the cached answer. See adoptUpdates.
+    adoptUpdates,
     // The commit on disk right now. From updateStatus rather than a constant
     // baked at build time: the restart watcher can put this process on new
     // code without anything rebuilding, and what a person reading the app
@@ -227,6 +229,27 @@ const sidecar = new Sidecar({
         system: describeSystemUpdates(system),
         rebootRequired: system.rebootRequired,
         release,
+        // IS THERE SOMETHING TO APPLY — ANSWERED HERE, NOT RE-DERIVED TWICE ON
+        // TWO PHONES. Both apps computed it as `behind > 0 || release.available
+        // != null`, which is right for a checkout, WRONG for every packaged box
+        // and wrong in the dangerous direction:
+        //
+        //   `appBehind` is null on a release — there is no history to count —
+        //   and both apps read that as `?? 0`, turning CANNOT TELL into
+        //   NOTHING WAITING.
+        //
+        //   `release.available` is null when the check FAILED as well as when
+        //   nothing is waiting (release-check.js returns null for both), so a
+        //   box that has never once reached GitHub reported itself current.
+        //
+        // The result was a host showing "main-57 · up to date" with no Apply
+        // button, while Check on the same row answered "main-57 → main-63
+        // (available)". Two answers to one question, and the wrong one was the
+        // one on the row.
+        //
+        // Null is a real value here and means CANNOT TELL: no check has
+        // finished, or the one that did could not reach anything.
+        appPending: appPending(app, packaged, release),
       };
     } catch (e) {
       // Left at whatever it was. A failed check is not news — the previous
@@ -236,6 +259,66 @@ const sidecar = new Sidecar({
     } finally {
       refreshing = false;
     }
+  }
+
+  /**
+   * Tri-state, and the third state is the point.
+   *
+   * @returns {boolean|null} true = something waiting, false = nothing waiting,
+   *   null = nobody could find out.
+   */
+  function appPending(app, packaged, release) {
+    if (packaged) {
+      // `configured: false` is a box that does not know where its releases come
+      // from, and a failed fetch answers `available: null` with a message. Both
+      // are CANNOT TELL, and neither is "up to date".
+      if (!release || release.configured !== true) return null;
+      if (release.available) return true;
+      return release.message && /could not check/i.test(release.message) ? null : false;
+    }
+    if (!app.ok) return null;
+    return (app.behind ?? 0) > 0;
+  }
+
+  /**
+   * Take the answer a check just produced as this box's cached truth.
+   *
+   * THE CACHE AND THE BUTTON DISAGREED BECAUSE THEY WERE TWO COMPUTATIONS. A
+   * health frame reports from a cache refreshed every fifteen minutes; the
+   * `updates` verb computes fresh, because somebody is standing there having
+   * pressed Check. So the reply said an update was waiting and the row it was
+   * rendered next to went on saying "up to date" — and the Apply button, which
+   * is gated on the row's data and not on the reply, never appeared. There was
+   * no way to apply the update the box had just told you about.
+   *
+   * The fresh answer is strictly better than the cached one, so it becomes the
+   * cached one. Called by the sidecar with the reply's `waiting` block.
+   */
+  function adoptUpdates(waiting) {
+    if (!waiting || typeof waiting !== 'object') return;
+    const app = waiting.app ?? {};
+    const sys = waiting.system ?? {};
+    lastUpdates = {
+      // Only a checkout counts commits; the other kinds have none, and writing
+      // 0 here would be the same lie by another route.
+      appBehind: app.kind === 'checkout' ? (app.behind ?? null) : null,
+      // `sys.text` carries a SENTENCE either way — "No system packages are
+      // waiting." is a perfectly good answer and a perfectly bad value for a
+      // field whose emptiness is what hides the Apply upgrade button.
+      system: sys.pending ? sys.text : null,
+      // NOT IN THE REPLY, so it is carried over rather than invented. `false`
+      // here would clear a pending-reboot flag on a box that still needs one.
+      rebootRequired: lastUpdates?.rebootRequired ?? false,
+      release:
+        app.kind === 'release'
+          ? { available: app.available ?? null, configured: app.configured ?? true, message: app.text ?? null }
+          : null,
+      // A MIGRATABLE CHECKOUT HAS SOMETHING WAITING TOO — it is offered the move
+      // onto packaged releases. It counts no commits and has no release
+      // version, so both of the old signals were null on it and it rendered as
+      // up to date with nothing to press.
+      appPending: typeof app.pending === 'boolean' ? app.pending : null,
+    };
   }
 
   setTimeout(() => void refreshUpdates(), 0).unref?.();

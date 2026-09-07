@@ -15,7 +15,13 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from 'node
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { readFileSync } from 'node:fs';
+
 import { dispatch } from '../src/adapters/commands.js';
+import { Sidecar } from '../src/fleet/host/sidecar.js';
+import { HubClient } from '../src/fleet/host/hub-client.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { startStubHub } from './helpers/stub-hub.js';
 import { VERBS, isMutating } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 
@@ -147,4 +153,184 @@ test('a checkout that could be migrated says that, not a commit count', async ()
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+// --- the check that nobody could act on -------------------------------------
+//
+// THE COMPLAINT, from a screenshot of a real fleet: a host row reading
+// "main-57 · up to date · rolling" with only Check and Reboot beside it, and
+// Check's own answer printed underneath saying "Fleetwright: main-57 → main-63
+// (available)". The box had just been told there was an update and the screen
+// offered no way to take it.
+//
+// Three separate defects, each of which alone was enough:
+//
+//   THE REPLY'S DATA WAS DROPPED. `/updates` returns `{ app, system }` — kind,
+//     pending, version — precisely so a row can render a state instead of
+//     parsing a sentence, and the sidecar forwarded only `text`.
+//
+//   THE ROW READ A DIFFERENT COMPUTATION. Health reports from a cache the host
+//     refreshes every fifteen minutes; the verb computes fresh, because
+//     somebody is standing there having pressed a button. Two answers to one
+//     question, and the button is gated on the stale one.
+//
+//   BOTH APPS INVENTED "UP TO DATE". `appBehind` is null on every packaged box
+//     — there is no history to count — and `release.available` is null both
+//     when nothing is waiting and when the check could not reach GitHub. Read
+//     as `?? 0` and `!= nil`, all three of those became "you are current".
+
+test('a release carries whether the box knows where to look', async () => {
+  // `available: null` IS TWO DIFFERENT ANSWERS — nothing waiting, and could not
+  // ask — and only `configured` and `message` tell them apart. Dropping it here
+  // is what let a box that had never once reached GitHub render as up to date.
+  const box = packagedBox();
+  try {
+    const r = await dispatch(
+      /** @type {any} */ ({ cfg: { installDir: box.installDir, stateDir: box.base, hostname: 'h', releaseManifest: '' } }),
+      '/updates',
+    );
+    assert.equal(r.waiting.app.kind, 'release');
+    assert.equal(typeof r.waiting.app.configured, 'boolean');
+  } finally {
+    rmSync(box.base, { recursive: true, force: true });
+  }
+});
+
+/** A sidecar in front of a stub hub that answers /updates with a given block. */
+async function sidecarAnswering(t, waiting) {
+  const stub = await startStubHub({
+    onCommand: (line) => (line.startsWith('/updates') ? { ok: true, text: 'checked', waiting } : { ok: true, text: 'ok' }),
+  });
+  t.after(() => stub.close());
+  /** @type {object[]} */
+  const sent = [];
+  /** @type {any[]} */
+  const adopted = [];
+  /** @type {((m: unknown) => Promise<void>)|null} */
+  let handler = null;
+  const sidecar = new Sidecar({
+    hub: new HubClient({ baseUrl: stub.baseUrl, token: null, readTimeoutMs: 2000 }),
+    transport: /** @type {any} */ ({
+      origin: 'https://coord.example',
+      onMessage: (h) => { handler = h; },
+      send: (m) => { sent.push(m); },
+      start: async () => true,
+      stop: async () => true,
+    }),
+    hostId: 'h1',
+    healthIntervalMs: 0,
+    watch: false,
+    updates: () => ({ appBehind: null, system: null, rebootRequired: false, release: null, appPending: null }),
+    adoptUpdates: (w) => adopted.push(w),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  await sidecar.start();
+  t.after(() => sidecar.stop());
+  const ask = () =>
+    /** @type {any} */ (handler)({
+      v: PROTOCOL_VERSION, kind: 'intent', id: 'idem-0000042', verb: 'updates', params: {}, issuedAt: Date.now(),
+    });
+  return { sent, adopted, ask };
+}
+
+test('the check answer reaches the app as data, not only as prose', async (t) => {
+  const waiting = {
+    app: { kind: 'release', pending: true, available: 'main-63', configured: true, text: 'main-57 → main-63 (available)' },
+    system: { supported: true, pending: false, count: 0, text: 'No system packages are waiting.' },
+  };
+  const { sent, ask } = await sidecarAnswering(t, waiting);
+  await ask();
+  const reply = sent.find((m) => /** @type {any} */ (m).kind === 'reply');
+  // A row deciding whether to offer Apply update by searching the prose would
+  // break the first time the wording changed — and until now it could not even
+  // do that, because the prose was all it got.
+  assert.deepEqual(/** @type {any} */ (reply).waiting, waiting);
+});
+
+test('the fresh check becomes the cached answer, and the fleet is told', async (t) => {
+  const { sent, adopted, ask } = await sidecarAnswering(t, {
+    app: { kind: 'release', pending: true, available: 'main-63', configured: true, text: 'available' },
+    system: { supported: true, pending: false, count: 0, text: 'none' },
+  });
+  await ask();
+  // A CHECK IS A READ THAT CHANGES WHAT THIS BOX KNOWS. `updates` moves nothing
+  // on the machine, so it is deliberately not in isMutating() — which is why it
+  // refreshed nothing, and why the row went on contradicting the reply for up
+  // to fifteen minutes.
+  assert.equal(adopted.length, 1);
+  assert.equal(adopted[0].app.available, 'main-63');
+  // The frame is built from this.health(), which does its own I/O, so this
+  // waits for it rather than assuming a tick is enough.
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline && !sent.some((m) => /** @type {any} */ (m).kind === 'health')) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.ok(
+    sent.some((m) => /** @type {any} */ (m).kind === 'health'),
+    'the check refreshed nothing the coordinator can see',
+  );
+});
+
+test('a reply with no waiting block adopts nothing', async (t) => {
+  // An older hub answers with prose alone. Adopting `undefined` would replace a
+  // real cached answer with nothing, which is worse than the staleness.
+  const { adopted, ask } = await sidecarAnswering(t, undefined);
+  await ask();
+  assert.equal(adopted.length, 0);
+});
+
+test('the host answers "is there something waiting" itself, in three states', () => {
+  // Both apps derived it as `behind > 0 || release.available != null`, which is
+  // right for a checkout and wrong for every other kind of box. The host knows
+  // which kind it is; nobody else has to guess.
+  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  assert.match(src, /appPending: appPending\(app, packaged, release\)/);
+  // NULL IS A VALUE HERE and means CANNOT TELL: no check has finished, or the
+  // one that did could not reach anything. A boolean cannot say that, and
+  // `false` says the reassuring half of it.
+  assert.match(src, /if \(!release \|\| release\.configured !== true\) return null;/);
+  assert.match(src, /if \(!app\.ok\) return null;/);
+});
+
+test('neither app claims a box is current when nobody could find out', () => {
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  // The branch that used to fire on every packaged host.
+  assert.match(ios, /appStatusKnown == false \{[\s\S]{0,600}?update status unknown/);
+  // And the button reads the host's answer rather than re-deriving it.
+  assert.match(ios, /updates\?\.appUpdatePending == true \{\s+Button\("Apply update"\)/);
+  assert.doesNotMatch(ios, /updates\?\.appPending == true \{\s+Button/);
+
+  const act = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  assert.match(act, /!host\.appStatusKnown -> parts\.add\("update status unknown"\)/);
+  // A migratable checkout counts no commits and names no release version, so
+  // both of the old signals were silent on it and it rendered as current
+  // beside its own Apply button.
+  assert.match(act, /host\.appPending -> parts\.add\("update waiting"\)/);
+
+  const kt = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');
+  // `has` before `optBoolean`, because optBoolean turns a missing field into
+  // false — which is the exact difference this field exists to carry.
+  assert.match(kt, /it\.has\("appPending"\) && !it\.isNull\("appPending"\)/);
+  assert.match(kt, /appPendingReported \?\: \(\(behind \?\: 0\) > 0/);
+});
+
+test('both apps apply the check the host just ran', () => {
+  // Even with an immediate frame the app's own refresh races it, and losing
+  // that race restores the row that said "up to date".
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  assert.match(ios, /if let w = r\.waiting \{ applyWaiting\(w, to: host\) \}/);
+
+  const act = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  assert.match(act, /r\.waiting\?\.let \{ w ->/);
+  // AFTER the refresh, not before it — the refresh is what would otherwise
+  // overwrite it.
+  const check = act.slice(act.indexOf('val r = Fleet(settings).updates(host.hostId)'));
+  assert.ok(
+    check.indexOf('fleetHosts = Fleet(settings).fleetHosts()') < check.indexOf('r.waiting?.let'),
+    'the reply is applied before the refresh that overwrites it',
+  );
 });

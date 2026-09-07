@@ -129,11 +129,13 @@ export class Sidecar {
    *   renewIntervalMs?: number,
    *   hubConfig?: any,
    *   watch?: boolean,
-   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null,
+   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null })|null,
+   *   adoptUpdates?: ((waiting: any) => void)|null,
    *   version?: (() => { head: string|null, branch: string|null }|null)|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
+    adoptUpdates = null,
     version = null,
     promptText = false,
     idleRestartMs = 0,
@@ -171,6 +173,9 @@ export class Sidecar {
     // and an agent-hub, and nothing about git checkouts or package managers.
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null} */
     this.updates = updates;
+    // Lets a fresh check replace the cached answer health reports. See the
+    // `updates` verb below, and adoptUpdates in bin/agent-fleet-sidecar.
+    this.adoptUpdates = adoptUpdates;
     this.version = version;
     // Whether a prompt that quotes the session may leave the box.
     this.promptText = promptText;
@@ -445,6 +450,27 @@ export class Sidecar {
       this.log.info(`sidecar: ${actor} → ${redactCommandLine(line)}`);
       const r = await this.hub.command(line, meta);
 
+      // A CHECK IS A READ THAT CHANGES WHAT THIS BOX KNOWS. `updates` is not
+      // mutating — it moves nothing on the machine — so it is deliberately not
+      // in isMutating(), and that is why it never refreshed anything. But it is
+      // the one verb whose entire job is finding out, and the answer it finds
+      // is strictly fresher than the fifteen-minute cache the health frame
+      // reports from.
+      //
+      // So the fresh answer BECOMES the cached one, and a frame goes out
+      // carrying it. Without this, pressing Check told you an update was
+      // waiting and left the row saying "up to date" with nothing to press —
+      // the reply and the row disagreeing for up to fifteen minutes, which is
+      // indistinguishable from the check not working.
+      if (intent.verb === 'updates' && r.waiting) {
+        try {
+          this.adoptUpdates?.(r.waiting);
+        } catch (e) {
+          this.log.warn(`sidecar: could not adopt the update check: ${/** @type {Error} */ (e).message}`);
+        }
+        setImmediate(() => void this.#pushHealth());
+      }
+
       const sessions = Array.isArray(r.sessions) ? await this.#enrich(r.sessions) : undefined;
       // A single-session reply gets the URL hoisted to the top level: §7 asks
       // for flat JSON and one round trip per action, because the consumer is a
@@ -463,6 +489,14 @@ export class Sidecar {
         // What a stored token can actually do, when it was just asked. Scope
         // names, an account, and what is absent — never the token.
         ...(r.check ? { check: r.check } : {}),
+        // WHAT IS WAITING, AS DATA, and it was computed and then thrown away
+        // here. `/updates` returns `{ app, system }` — kind, pending, version —
+        // precisely so a row can render a state instead of parsing a sentence,
+        // and this reply forwarded only the sentence. So Check printed
+        // "main-57 → main-63 (available)" into a text box, and the row beside
+        // it went on rendering from a fifteen-minute-old cache that said
+        // otherwise, with no Apply button because the button reads the row.
+        ...(r.waiting ? { waiting: r.waiting } : {}),
         // A directory listing, as DATA. The rendered text is for a person; an
         // app needs the names, kinds and sizes separately or it is reduced to
         // parsing emoji out of a string.
