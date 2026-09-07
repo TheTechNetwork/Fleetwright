@@ -44,7 +44,22 @@ purge                             destroy a conversation with no recovery
 writefile, copyfile, deletefile   the workspace's destructive half
 connect, link, unlink, renew      move somebody's credentials around
 answer                            ← the interesting one
+labels                            where everybody else's work lands
 ```
+
+**`sandbox` is offered and `labels` is not,** which looks inconsistent from the
+outside and is the same rule applied twice. The variant decides what the next
+session on ONE box gets — a bigger image, a browser in it — and nothing already
+running changes and nothing lands anywhere new. A label decides where OTHER
+PEOPLE'S work goes: an agent that adds `gpu` to a box with no GPU has silently
+redirected somebody's next session to a machine that cannot do the job, and the
+misroute reads as the scheduler being wrong.
+
+The read is not lost with the write. `health` carries `labels`, so an agent
+deciding where to aim its own work still sees what every box carries — it just
+cannot change what everybody else's work matches. Withholding a write and taking
+the read with it is the dead end `update` and `forget` were both rehabilitated
+out of.
 
 `fleet_provision` is **not** withheld, and it is the one on this list that costs
 money — it starts a machine on GitHub's hardware and any session it runs bills
