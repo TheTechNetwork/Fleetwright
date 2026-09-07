@@ -25,11 +25,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { iosSources } from './helpers/ios-sources.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
 const IOS_CLIENT = read('apps/ios/Fleetwright/Fleet.swift');
-const IOS_VIEW = read('apps/ios/Fleetwright/FleetView.swift');
+const IOS_VIEW = iosSources();
 const DROID_CLIENT = read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt');
 const DROID_VIEW = read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
 
@@ -63,9 +64,12 @@ test('both apps offer the right verb for the state the host is in', () => {
   // Readmit for a revoked host, Replace key for a live one. Two different
   // refusals, two different remedies, and showing the wrong word would send
   // somebody to a pin the coordinator declines.
-  assert.match(IOS_VIEW, /host\.isRevoked \? "Readmit" : "Replace key"/);
+  // On iOS this moved onto the machine's own page, where `enrolled` is that
+  // machine's membership record — so the condition reads the same fact under a
+  // different name. The property is the word shown, not the expression.
+  assert.match(IOS_VIEW, /enrolled\?\.isRevoked == true \? "Readmit" : "Replace key"/);
   assert.match(DROID_VIEW, /if \(host\.revoked\) "Readmit" else "Replace key"/);
-  assert.match(IOS_VIEW, /mintBoundPin\(for: host\.hostId, readmit: host\.isRevoked\)/);
+  assert.match(IOS_VIEW, /mintHostPin\(hostId: hostId, readmit: enrolled\?\.isRevoked == true\)/);
   assert.match(DROID_VIEW, /hostId = host\.hostId, readmit = host\.revoked/);
 });
 

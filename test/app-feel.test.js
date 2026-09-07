@@ -166,3 +166,60 @@ test('an app that has not asked yet does not claim there is nothing', () => {
   assert.ok(load.indexOf('loaded = true') > load.lastIndexOf('if let got = try? await'),
     'loaded is set before the answers land');
 });
+
+test('the reboot ceremony shows one step at a time', () => {
+  // The page showed all of it at once: a Reboot button, a PIN field, a "type
+  // the hostname" field and a second Reboot button — every one visible, most of
+  // them inert — while the box's own reply at the bottom said "Step 2 of 3".
+  // Four controls for a sequence, with nothing saying which was live.
+  const host = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
+  assert.match(host, /private enum RebootStage \{ case idle, asking, confirming \}/);
+  assert.match(host, /switch rebootStage \{/);
+});
+
+test('Face ID replaces the typed hostname, and not the PIN', () => {
+  // WHICH HALF DOES WHAT. reboot.js says the typed hostname is "the step that
+  // makes wrong box impossible", and that reasoning is about a command line
+  // where /reboot could mean any machine. On this screen the wrong box is
+  // already impossible: you navigated to it, its name is in the title bar, the
+  // PIN came from it. What retyping a name visible one line above proves is
+  // that somebody can copy.
+  //
+  // THE PIN IS UNTOUCHED, and that is the half carrying the security property:
+  // the box issued it, a coordinator cannot mint it, it expires, it cannot be
+  // replayed. No amount of biometrics replaces that.
+  const host = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
+  assert.match(host, /import LocalAuthentication/);
+  assert.match(host, /evaluatePolicy\(\s*\.deviceOwnerAuthentication/);
+  assert.match(host, /fleet\.reboot\(host: hostId, pin: rebootPin, confirm: confirm\)/);
+
+  // AND IT FALLS BACK RATHER THAN LOCKING SOMEBODY OUT. No biometrics, a failed
+  // scan, a mask: the hostname field comes back, because "we could not identify
+  // you" must not mean "you cannot reboot your own machine".
+  assert.match(host, /needsTypedConfirmation = true/);
+  assert.match(host, /Type \\\(hostId\) to confirm/);
+
+  // The reason string names the cost, because a system sheet is the last place
+  // somebody reads before it happens.
+  assert.match(host, /Every session running on it will end/);
+
+  // And the app declares why it asks, in the words iOS shows on the sheet.
+  const project = readFileSync(new URL('../apps/ios/project.yml', import.meta.url), 'utf8');
+  assert.match(project, /NSFaceIDUsageDescription/);
+});
+
+test('one list of machines, at one width', () => {
+  // "The hosts section width isn't even." It was two lists of the same three
+  // machines: a Form section at the system's inset, and cards at the design's
+  // page margin. Two lists of one thing is the fault; the ragged edge was how
+  // it showed.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  assert.ok(!view.includes('ForEach(hosts) { host in'), 'the second list of machines is back');
+  assert.match(view, /Text\("Add a machine"\)/, 'the enrolment section lost its name');
+  // And the machinery that existed only to drive controls on the card is gone
+  // with them — a view that is written and never called renders exactly like
+  // one that was never written.
+  for (const dead of ['maintenanceRow(', 'channelControl(', 'applyWaiting(', 'applyChannel(', 'channelBinding(']) {
+    assert.ok(!view.includes(dead), `${dead}) is defined and never called`);
+  }
+});

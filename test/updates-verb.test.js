@@ -24,6 +24,7 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { startStubHub } from './helpers/stub-hub.js';
 import { VERBS, isMutating } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 /** A box laid out the way a release install leaves one. */
 function packagedBox(installed = 'v0.2.2') {
@@ -305,7 +306,7 @@ test('the host answers "is there something waiting" itself, in three states', ()
 });
 
 test('neither app claims a box is current when nobody could find out', () => {
-  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const ios = iosSources();
   // The branch that used to fire on every packaged host.
   assert.match(ios, /appStatusKnown == false \{[\s\S]{0,600}?update status unknown/);
   // And the button reads the host's answer rather than re-deriving it.
@@ -331,8 +332,11 @@ test('neither app claims a box is current when nobody could find out', () => {
 test('both apps apply the check the host just ran', () => {
   // Even with an immediate frame the app's own refresh races it, and losing
   // that race restores the row that said "up to date".
-  const ios = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-  assert.match(ios, /if let w = r\.waiting \{ applyWaiting\(w, to: host\) \}/);
+  const ios = iosSources();
+  // The reply lands on the screen that asked for it. It used to be patched into
+  // the list by applyWaiting; the machine's page holds its own health and
+  // updates that instead, which is the same rule with one fewer indirection.
+  assert.match(ios, /if let w = reply\.waiting \{ health = health\?\.withUpdates\(w\) \}/);
 
   const act = readFileSync(
     new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');

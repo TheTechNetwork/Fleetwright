@@ -16,10 +16,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { iosSources } from './helpers/ios-sources.js';
+
+/** Sentinel: read every Swift file rather than one named screen. */
+const IOS_ALL = Symbol('ios');
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const APPS = [
-  ['iOS', 'apps/ios/Fleetwright/FleetView.swift', 'apps/ios/Fleetwright/Fleet.swift'],
+  // The whole app, not one screen: a host's controls live on HostView now,
+  // and a test that names a file asserts where code LIVES while claiming to
+  // assert what it DOES.
+  ['iOS', IOS_ALL, 'apps/ios/Fleetwright/Fleet.swift'],
   [
     'Android',
     'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt',
@@ -29,8 +36,12 @@ const APPS = [
 
 test('both apps offer a check that applies nothing, and asks about both subjects', () => {
   for (const [name, view] of APPS) {
-    const src = read(view);
-    assert.match(src, /"Check"/, `${name} has no check`);
+    const src = view === IOS_ALL ? iosSources() : read(view);
+    // THE WORD, NOT THE EXACT LABEL. iOS says "Check for updates" on the
+    // machine's own page, which is better than the bare "Check" this asserted:
+    // a button labelled with a verb and no object is the ambiguity the
+    // `updates` verb exists to remove.
+    assert.match(src, /"Check(?: for updates)?"/, `${name} has no check`);
 
     // THE `updates` VERB, NOT `upgrade`. This test used to assert `upgrade`,
     // which is the operating system alone — and that is exactly what shipped:
@@ -41,7 +52,11 @@ test('both apps offer a check that applies nothing, and asks about both subjects
     //
     // One verb answers both halves, so the two cannot be rendered apart and
     // cannot arrive from two round trips in either order.
-    assert.match(src, /updates\((host: )?host(\.hostId)?\)/, `${name}'s check does not ask about both kinds of update`);
+    assert.match(
+      src,
+      /updates\((host: )?host(Id)?(\.hostId)?\)/,
+      `${name}'s check does not ask about both kinds of update`,
+    );
 
     // And the check must not be the thing that APPLIES. `updates` is a read;
     // `upgrade(apply:)` and `update(restart:)` are the two that act, and they
@@ -58,14 +73,14 @@ test('apply is offered only when something is waiting', () => {
   // A button that is always offered teaches people to press it without
   // reading, which is the opposite of what a maintenance screen is for.
   for (const [name, view] of APPS) {
-    const src = read(view);
+    const src = view === IOS_ALL ? iosSources() : read(view);
     // `appUpdatePending` on iOS, `appPending` on Android — one name each, and
     // both now READ THE HOST'S ANSWER rather than re-deriving it from a commit
     // count that is null on every packaged box.
     assert.match(src, /app(Update)?Pending/, `${name} offers "apply update" unconditionally`);
     assert.match(src, /systemPending/, `${name} offers "apply upgrade" unconditionally`);
     assert.match(src, /"Apply update"/, `${name} cannot apply a code update`);
-    assert.match(src, /"Apply upgrade"/, `${name} cannot apply system packages`);
+    assert.match(src, /"Apply (?:system )?upgrade"/, `${name} cannot apply system packages`);
   }
 });
 
@@ -84,7 +99,7 @@ test('what the OS has waiting is actually displayed', () => {
   // health.updates.system has been sent on every report since maintenance
   // shipped. Neither app rendered it, so "what is available" was only ever
   // visible by tapping a button that also did something.
-  assert.match(read(APPS[0][1]), /updates\?\.system/, 'iOS does not show the system updates it receives');
+  assert.match(iosSources(), /updates\?\.system/, 'iOS does not show the system updates it receives');
   assert.match(read(APPS[1][2]), /systemUpdates/, 'Android does not parse the system updates it receives');
   assert.match(read(APPS[1][1]), /systemUpdates/, 'Android does not show the system updates it receives');
 });
@@ -93,7 +108,7 @@ test('host output is rendered as output, not as a caption', () => {
   // "Update works although the output is hard to read." It is several lines of
   // a host's own text, with paths and commit ids in it, and it was going into
   // a squeezed grey caption that ran together into one paragraph.
-  const ios = read(APPS[0][1]);
+  const ios = iosSources();
   assert.match(ios, /design: \.monospaced/, 'iOS still renders host output in the body font');
   assert.match(ios, /textSelection\(\.enabled\)/, 'iOS host output cannot be copied');
   const android = read(APPS[1][1]);
