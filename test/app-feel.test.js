@@ -113,3 +113,56 @@ test('the lists are ordered by what somebody came to find', () => {
   assert.match(view, /out\[out\.count - 1\]\.count \+= 1/);
   assert.match(view, /Text\("×\\\(run\.count\)"\)/);
 });
+
+test('a page shows the answer it just received', () => {
+  // "Clicking check takes a sec but we get a response — why doesn't the page
+  // refresh? Requires going in and out, almost like everything is static."
+  //
+  // It WAS static. `health`, `state` and `reason` were `let`s captured when the
+  // page was pushed, so nothing on it could change: the check answered, the
+  // reply appeared in the box at the bottom, and the summary above went on
+  // saying what it said when the page opened. "Apply update" could not appear
+  // no matter what the check found, because the value gating it was a constant.
+  const host = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
+
+  assert.match(host, /@State private var health: Fleet\.HostHealth\?/);
+  assert.match(host, /@State private var state: String\?/);
+  // The passed-in values seed the state and are not read again.
+  assert.match(host, /let initialHealth: Fleet\.HostHealth\?/);
+  assert.match(host, /health = initialHealth/);
+
+  // The reply lands on the page that asked for it...
+  assert.match(host, /if let w = reply\.waiting \{ health = health\?\.withUpdates\(w\) \}/);
+  // ...and everything the reply is silent about is re-read, rather than waiting
+  // for somebody to leave the page and come back.
+  assert.match(host, /private func reload\(\) async/);
+  assert.match(host, /await reload\(\)/);
+  // A failed reload keeps what it had: a page that blanks because the network
+  // blinked is the fault the list was just fixed for.
+  assert.match(host, /guard let hosts = try\? await fleet\.fleetHosts\(\) else \{ return \}/);
+});
+
+test('an app that has not asked yet does not claim there is nothing', () => {
+  // "On app start the app looks empty or broken."
+  //
+  // Every list starts empty, so for the second before the fleet replies the app
+  // said "No hosts reporting yet", "No devices reported" and "Nothing recorded
+  // yet" — three confident statements about a question nobody had asked. On a
+  // cold start that is the whole first impression.
+  //
+  // The same null-is-not-empty rule this project argues for everywhere else,
+  // and did not make on its own opening screen. A splash would hide it; this
+  // says it, which is cheaper and true.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  assert.match(view, /@State private var loaded = false/);
+  for (const claim of ['No hosts reporting yet.', 'No devices reported.', 'Nothing recorded yet.']) {
+    assert.ok(
+      view.includes(`Text(loaded ? "${claim}" : "Asking the fleet…")`),
+      `"${claim}" is stated before an answer has arrived`,
+    );
+  }
+  // Set AFTER the four requests, not before: "loaded" means an answer arrived.
+  const load = view.slice(view.indexOf('private func loadHosts() async'), view.indexOf('/// "elibrody2@gmail.com'));
+  assert.ok(load.indexOf('loaded = true') > load.lastIndexOf('if let got = try? await'),
+    'loaded is set before the answers land');
+});
