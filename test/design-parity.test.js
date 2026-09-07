@@ -263,7 +263,7 @@ test('a fleet card says each fact once, and shows controls only when asked', () 
   const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
   const card = view.slice(
     view.indexOf('A CARD, LIKE A SESSION IS'),
-    view.indexOf('.fleetRow()', view.indexOf('.contentShape(Rectangle())')),
+    view.indexOf('} header: {', view.indexOf('A CARD, LIKE A SESSION IS')),
   );
 
   // THE ACCOUNT WAS PRINTED TWICE. describeWhoCanStart already carries the
@@ -277,28 +277,20 @@ test('a fleet card says each fact once, and shows controls only when asked', () 
   // reading "healthy" is the same fact twice.
   assert.match(card, /host\.reason.*!reason\.isEmpty.*!==?\s*"healthy"|!= "healthy"/s);
 
-  // CONTROLS BEHIND A TAP. Reboot is the sharpest case: a destructive action
-  // one tap away on a machine nobody asked about.
-  assert.match(card, /if expandedHost == host\.hostId \{/);
-  for (const control of ['maintenanceRow(for: host)', 'channelControl(for: host)']) {
-    const at = card.indexOf(control);
-    assert.ok(at > card.indexOf('if expandedHost == host.hostId'), `${control} still renders at rest`);
+  // A MACHINE HAS A PAGE, and the card carries no controls at all.
+  //
+  // The first attempt put them behind a tap that expanded the row in place, and
+  // that was worse: a row that grows inside a List jumps, because the height
+  // changes with no transition to carry it, and what arrives is the same wall
+  // all at once. The instinct was right and the place was wrong.
+  for (const control of ['maintenanceRow(for: host)', 'channelControl(for: host)', 'Button("Apply update")']) {
+    assert.ok(!card.includes(control), `${control} is back on the card`);
   }
+  assert.ok(!card.includes('expandedHost'), 'the row expands in place again');
 
-  // EXCEPT THE ONE THING BEING ASKED FOR. The ring says "look here", and hiding
-  // the remedy behind a tap would make the ring a riddle.
-  // Order, not distance: a character window fails the day somebody writes a
-  // longer comment, which teaches people to widen the number rather than read
-  // what it was for.
-  const collapsedBranch = card.indexOf('} else if host.updatePending {');
-  assert.ok(collapsedBranch > 0, 'a pending update offers nothing while collapsed');
-  assert.ok(
-    card.indexOf('Button("Apply update")', collapsedBranch) > collapsedBranch,
-    'the collapsed branch does not offer the update',
-  );
-
-  // The whole card is the target, not a chevron somebody has to aim at — a
-  // VStack only takes taps where it drew something, and the gaps between lines
-  // are most of it.
-  assert.match(card, /\.contentShape\(Rectangle\(\)\)/);
+  // A LINK, NOT A TAP GESTURE. The push transition, the back button and the
+  // accessibility affordance all come with it; a gesture on a card gets none of
+  // those and has to invent each one badly.
+  assert.match(card, /NavigationLink\(""\) \{[\s\S]{0,200}?HostView\(/);
+  assert.ok(!card.includes('.onTapGesture'), 'a raw gesture is standing in for a link again');
 });
