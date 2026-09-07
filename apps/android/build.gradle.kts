@@ -9,7 +9,7 @@ plugins {
   //      1.9.25 but you appear to be using Kotlin version 1.9.24
   //
   // Versioned together, that mismatch cannot be expressed.
-  id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
+  id("org.jetbrains.kotlin.plugin.compose") version "2.4.20" apply false
   // Reads google-services.json and generates the Firebase config the SDK looks
   // for at runtime. Applied conditionally in app/build.gradle.kts, not here —
   // see the comment there.
