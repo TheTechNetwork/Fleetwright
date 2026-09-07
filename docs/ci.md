@@ -696,8 +696,8 @@ the version page:
 
 | | |
 |---|---|
-| Description, promotional text, keywords, support URL | written for the store page |
-| Screenshots | 6.9" and 6.5" iPhone at minimum; from a running app, like the Play ones |
+| Description, promotional text | **applied from [`store-listing.md`](../apps/store-listing.md)** on every full release. Keywords and support URL are still typed once |
+| Screenshots | **generated and uploaded** — `./scripts/ios-screenshots.sh` writes `apps/ios/store/screenshots/<display type>/`, you review and commit them, and a full release attaches them before submitting. Nothing to do by hand unless you want different shots |
 | Privacy policy URL | `https://fleet.thetech.network/privacy`, same as Play |
 | App Privacy | same answers as Play's data safety form, and from the same single source: [`store-listing.md`](../apps/store-listing.md)'s "Data safety" section (email address collected, linked, app functionality) |
 | Age rating | the questionnaire; utility, no user-generated content → 4+ |

@@ -14,6 +14,19 @@ struct FleetwrightApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var settings = Settings()
 
+    init() {
+        // A SCREENSHOT RUN STARTS ON THE DEMO, so the pictures show a fleet
+        // rather than an empty state with a Connect button. It writes exactly
+        // what the Demo button in Settings writes — see Screenshots.swift for
+        // why that is the only thing it can write.
+        if Screenshots.wantsDemo {
+            let s = Settings()
+            s.coordinatorURL = Demo.coordinatorURL
+            s.signedInAs = Demo.label
+            s.credential = Demo.credential
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             FleetApp(settings: settings)
