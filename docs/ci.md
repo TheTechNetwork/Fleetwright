@@ -440,7 +440,7 @@ testing, where people install from a link and never see a store page. Plus the
 |---|---|
 | Privacy policy | `https://fleet.thetech.network/privacy` |
 | Ads | none |
-| Data safety | changed when sign-in and push landed — the email address is collected and linked to the user, for app functionality. [`store-listing.md`](../apps/android/store/store-listing.md)'s "Data safety" section is the one source for these answers; do not fill the form from here |
+| Data safety | changed when sign-in and push landed — the email address is collected and linked to the user, for app functionality. [`store-listing.md`](../apps/store-listing.md)'s "Data safety" section is the one source for these answers; do not fill the form from here |
 | Content rating | utility, no user-generated content, no communication → Everyone |
 | Target audience | **18+**, which keeps the Families policy and its extra review out of it |
 
@@ -699,7 +699,7 @@ the version page:
 | Description, promotional text, keywords, support URL | written for the store page |
 | Screenshots | 6.9" and 6.5" iPhone at minimum; from a running app, like the Play ones |
 | Privacy policy URL | `https://fleet.thetech.network/privacy`, same as Play |
-| App Privacy | same answers as Play's data safety form, and from the same single source: [`store-listing.md`](../apps/android/store/store-listing.md)'s "Data safety" section (email address collected, linked, app functionality) |
+| App Privacy | same answers as Play's data safety form, and from the same single source: [`store-listing.md`](../apps/store-listing.md)'s "Data safety" section (email address collected, linked, app functionality) |
 | Age rating | the questionnaire; utility, no user-generated content → 4+ |
 | Category | Developer Tools |
 | Pricing and availability | free, all territories — set once, outlives versions |

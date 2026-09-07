@@ -64,7 +64,13 @@ test('release notes are a nicety and cannot sink the shipment', () => {
   // version is the delivery; the notes decorate it.
   const notes = SRC.indexOf('appStoreVersionLocalizations');
   assert.ok(notes > 0, 'the localization step is gone');
-  assert.match(SRC, /::warning::release notes not set/);
+  // The message is now about the whole LISTING, because the notes stopped being
+  // the only thing written there — the description and promotional text come
+  // from apps/store-listing.md in the same PATCH. The property is unchanged and
+  // is what this guards: a refusal here warns, it does not throw.
+  assert.match(SRC, /::warning::listing not set/);
+  const block = SRC.slice(SRC.indexOf('const attributes = {}'), SRC.indexOf('// Submission, via'));
+  assert.doesNotMatch(block, /throw /, 'a failed listing update now sinks the release');
 });
 
 test('an incomplete listing points at the checklist', () => {

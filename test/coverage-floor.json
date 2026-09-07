@@ -81,6 +81,7 @@
   "src/mcp/tools.js": 100,
   "tools/build-host-package.mjs": 100,
   "tools/rollout.mjs": 100,
+  "tools/store-listing.mjs": 96,
   "worker/src/demo.js": 94,
   "worker/src/fleet-do.js": 67,
   "worker/src/pages.js": 100,

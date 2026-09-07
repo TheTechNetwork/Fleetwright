@@ -322,7 +322,7 @@ test('the privacy policy describes the app that exists', async () => {
   // It is the URL App Store Connect points at, and it predated sign-in: it said
   // Fleetwright collects nothing, that there is no account, and that you type an
   // API token into Settings. All three became false, and it contradicted the
-  // Data Safety declaration in apps/android/store/store-listing.md.
+  // Data Safety declaration in apps/store-listing.md.
   const res = await get('/privacy');
   const html = await res.text();
 
