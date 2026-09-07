@@ -126,3 +126,17 @@ test('whether the browser keeps its own sandbox is measured, not assumed', () =>
   assert.match(job, /::warning::chromium needs --no-sandbox/);
   assert.match(job, /as confined as the session is, and no more/);
 });
+
+test('the Containerfile is checked by something before a builder sees it', () => {
+  // `sandbox ... parses` in verify.sh meant entrypoint.sh and tool-shim.sh —
+  // the two shell scripts beside it. Nothing looked at the file that actually
+  // builds the image, so three bare `//` left by a converted comment block
+  // reached main and failed four minutes into a build matrix:
+  //
+  //   Containerfile:141
+  //   >>> //
+  //   ERROR: dockerfile parse error on line 141: unknown instruction: //
+  const verify = readFileSync(new URL('../scripts/verify.sh', import.meta.url), 'utf8');
+  assert.match(verify, /check-containerfile\.mjs sandbox\/Containerfile/);
+  assert.match(verify, /^printf 'container  \.\.\. '$/m);
+});

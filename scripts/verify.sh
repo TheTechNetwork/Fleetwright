@@ -205,6 +205,17 @@ fi
 # would first be seen by somebody whose session could not start.
 # tool-shim.sh is a template: @TOOL@ substitutes into a filename, which parses
 # on its own, so it is checked as written.
+# THE CONTAINERFILE, WHICH `sandbox ... parses` DID NOT COVER. That line meant
+# the two shell scripts beside it; nothing looked at the file that actually
+# builds the image, so three bare `//` from a converted comment block reached
+# main and failed four minutes into a build matrix.
+printf 'container  ... '
+if node scripts/check-containerfile.mjs sandbox/Containerfile >/dev/null 2>&1; then
+  printf 'parses\n'
+else
+  printf 'FAILED\n'; node scripts/check-containerfile.mjs sandbox/Containerfile 2>&1 | sed 's/^/  /'; fail=1
+fi
+
 printf 'sandbox    ... '
 if sh -n sandbox/entrypoint.sh 2>/dev/null && sh -n sandbox/tool-shim.sh 2>/dev/null; then
   printf 'parses\n'
