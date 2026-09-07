@@ -243,3 +243,47 @@ test('prereq says so when the new node is not the one on PATH', () => {
   assert.match(sh, /your shell's/);
   assert.match(sh, /that is expected, and the services use the one above/);
 });
+
+test('an update soaks before it is proposed, and a security fix does not', () => {
+  // WHAT THE SOAK IS FOR, because "wait three days" reads like caution and is
+  // not. This project pins every version and CI builds the APK, the iOS app and
+  // the Worker on every pull request, so a version that is merely BROKEN says
+  // so in minutes. Nothing here needs protecting from bugs.
+  //
+  // It is the supply chain. The npm and Actions attacks of the last few years
+  // share one shape: a malicious version is published, and it is found and
+  // pulled within hours to a couple of days. The repository that updates within
+  // the hour is the one that catches it.
+  const config = JSON.parse(read('renovate.json'));
+  assert.equal(config.minimumReleaseAge, '3 days');
+
+  // STRICT, OR THE SOAK IS DECORATION. Renovate's default filter lets an update
+  // through when its other checks pass; `strict` is what actually holds the
+  // pull request back until the age is met. Without this the setting is
+  // recorded and does nothing, which is worse than not having it — it is a
+  // protection somebody will believe in.
+  assert.equal(config.internalChecksFilter, 'strict');
+
+  // AND THE CARVE-OUT, WHICH IS THE HALF THAT COULD KILL SOMEBODY QUIETLY. In
+  // an advisory the reasoning inverts: the known-bad version is the one already
+  // INSTALLED, and three days of soaking is three more days of running it.
+  //
+  // `null` rather than "0 days", because null is how Renovate says "inherit
+  // nothing" — a zero would be a number that looks deliberate and behaves the
+  // same, right up until somebody reads it as a duration and edits it.
+  assert.equal(config.vulnerabilityAlerts.minimumReleaseAge, null);
+  assert.deepEqual(config.vulnerabilityAlerts.schedule, ['at any time']);
+
+  // IT MATTERS MOST WHERE AUTOMERGE IS ON. A grouped Actions patch merges with
+  // nobody reading it, so the soak is the only thing between this repository
+  // and a version that was compromised at breakfast and yanked by lunch. If a
+  // rule ever turns automerge on WITHOUT inheriting the wait, that is the one
+  // to notice.
+  for (const rule of config.packageRules || []) {
+    if (!rule.automerge) continue;
+    assert.notEqual(
+      rule.minimumReleaseAge, 0,
+      `${rule.groupName || rule.description}: automerges with the soak disabled`,
+    );
+  }
+});
