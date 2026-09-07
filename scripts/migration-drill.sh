@@ -31,6 +31,17 @@ DIST="$WORK/dist"
 
 PASS=0; FAIL=0
 ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; PASS=$((PASS+1)); }
+# A KNOWN STARTING STATE, because a scenario that inherits the last one's
+# wreckage tests whatever happened rather than what it says it tests. The first
+# runs of scenarios 12 and 13 did exactly that: they asserted against a box some
+# earlier failure had left on the checkout, and reported it as the bug they were
+# written to find.
+reset_to_converted() {
+  install_from_checkout >/dev/null 2>&1
+  if ! convert; then cp "$WORK/migrate.log" "$WORK/reset.log" 2>/dev/null; return 1; fi
+  grep -q "$BASE/current" /etc/systemd/system/agent-hub.service || return 1
+  return 0
+}
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
@@ -59,7 +70,7 @@ cleanup() {
   # The logs outlive the drill: a failure you cannot read afterwards is a
   # failure you get to reproduce.
   mkdir -p "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
-  cp "$WORK"/*.log "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}/" 2>/dev/null
+  cp "$WORK"/*.log "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}/" 2>/dev/null || true
   rm -rf "$WORK"
   echo "  logs in ${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
   echo "  removed everything this drill created"
@@ -129,6 +140,13 @@ install_from_checkout() { # install_from_checkout [extra args...]
 }
 
 convert() {
+  # SAY WHY IT COULD NOT EVEN START. A missing or unreadable helper produced an
+  # empty log and a bare non-zero exit, which reads as "the migration failed"
+  # and is a different problem entirely.
+  [ -f "$CHECKOUT/install/fleetwright-migrate" ] \
+    || { echo "no helper at $CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log"; return 1; }
+  [ -f /etc/agent-hub.env ] \
+    || { echo "no /etc/agent-hub.env — nothing says where releases come from" >"$WORK/migrate.log"; return 1; }
   FLEETWRIGHT_ENV_FILE=/etc/agent-hub.env AGENT_FLEET_BASE="$BASE" \
     sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1
 }
@@ -319,7 +337,12 @@ step "9. tampering — a tarball that does not match its sha256"
 # layout" first, and would never reach the digest — a fixture that skips the
 # check it is testing passes for the wrong reason.
 install_from_checkout --from-source
+# BOTH ARTIFACTS BACKED UP, not just the manifest. Restoring one of the two
+# left a corrupt tarball on the server for every scenario that followed — each
+# of which then correctly refused it, and reported that as its own failure. The
+# digest check was working the entire time; the fixture was the bug.
 cp "$DIST/manifest.json" "$WORK/manifest.good"
+for t in "$DIST"/*.tar.gz; do cp "$t" "$WORK/$(basename "$t").good"; done
 printf 'tampered' >> "$DIST"/*.tar.gz
 GUARD_BEFORE="$(readlink "$BASE/current")"
 if convert >/dev/null 2>&1; then
@@ -331,6 +354,7 @@ fi
 [ "$(readlink "$BASE/current")" = "$GUARD_BEFORE" ] && ok "nothing was switched over" || bad "current moved anyway"
 starts "after a refused release"
 cp "$WORK/manifest.good" "$DIST/manifest.json"
+for g in "$WORK"/*.tar.gz.good; do cp "$g" "$DIST/$(basename "$g" .good)"; done
 
 # --- 10. a converted box whose release is gone ------------------------------
 #
@@ -349,7 +373,14 @@ step "10. a converted box whose release directory is gone"
 install_from_checkout >/dev/null 2>&1
 convert >/dev/null 2>&1
 GONE="$(readlink -f "$BASE/current")"
-rm -rf "$GONE"
+# NEVER DELETE ANYTHING THAT IS NOT A RELEASE. `current` points at the checkout
+# on a box that has been reverted, and `rm -rf $(readlink -f current)` would
+# then delete the checkout — the drill destroying its own fixture, and on a real
+# box the thing that is the way back.
+case "$GONE" in
+  "$BASE/releases/"*) rm -rf "$GONE" ;;
+  *) bad "refusing to delete $GONE — that is not a release directory"; GONE="" ;;
+esac
 [ -e "$BASE/current" ] && bad "the fixture did not break the symlink" || ok "reproduced: current dangles, nothing behind it"
 
 install_from_checkout
@@ -394,6 +425,72 @@ else
   bad "the installer left it dead"
   journalctl -u agent-hub -n 4 --no-pager 2>/dev/null | sed 's/^/       /'
 fi
+
+# --- 12. a release whose unit TEMPLATES predate the fix ----------------------
+#
+# THE ONE EVERY OTHER SCENARIO MISSED, because they all build the release from
+# the code under test — so its templates are always current, and the bug cannot
+# appear.
+#
+# install_unit read `$DIR/install/<name>.service`, and $DIR is the PAYLOAD. A
+# box pointing its units at a release therefore read THAT RELEASE's template.
+# v0.2.3's predates __ENTRY__ and hardcodes `__DIR__/bin/agent-hub`, so the
+# substitution found nothing to replace and every repair wrote the same broken
+# unit — on a box whose installer had been correct for hours.
+
+step "12. an old release, whose unit template hardcodes bin/"
+# A PRECONDITION, ASSERTED. Earlier scenarios leave the box on the checkout, and
+# a fixture that quietly starts from the wrong state tests nothing while
+# reporting a pass — which is the failure mode this whole drill exists to avoid.
+if reset_to_converted; then ok "precondition: the box is converted"
+else bad "precondition: could not get to a converted box"; tail -3 "$WORK/reset.log" | sed 's/^/       /'; fi
+REL="$(readlink -f "$BASE/current")"
+# Exactly what v0.2.3 ships.
+printf 'ExecStart=__NODE__ __DIR__/bin/agent-hub serve\n' > "$REL/install/agent-hub.service"
+printf '#!/bin/sh\n# Shipped by an old release.\nexec node "$(dirname "$0")/../lib/agent-hub.mjs" "$@"\n' > "$REL/bin/agent-hub"
+grep -q '__ENTRY__' "$REL/install/agent-hub.service" && bad "the fixture did not take" \
+  || ok "reproduced: the release's template hardcodes bin/"
+
+install_from_checkout
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+case "$TARGET" in
+  */lib/agent-hub.mjs) ok "the unit names the module, from this installer's template" ;;
+  *) bad "the old template won: $TARGET" ;;
+esac
+starts "after an old release's template"
+
+# --- 13. a partial release ---------------------------------------------------
+#
+# THE DIRECTORY IS THERE AND THE PAYLOAD IS NOT. A real box reached this:
+# `current` resolves, `releases/<version>/` exists, and lib/ is missing —
+# an unpack that died, or a tree somebody half-removed.
+#
+# It is a nastier shape than scenario 10 (the release GONE) because every cheap
+# check passes. The symlink resolves. The directory exists. Only opening the
+# file it is supposed to run says otherwise, and nothing did.
+
+step "13. a converted box whose release has no payload"
+if reset_to_converted; then ok "precondition: the box is converted"
+else bad "precondition: could not get to a converted box"; tail -3 "$WORK/reset.log" | sed 's/^/       /'; fi
+
+REL="$(readlink -f "$BASE/current")"
+case "$REL" in
+  "$BASE"/releases/*) rm -rf "${REL:?}/lib" ;;
+  *) bad "current does not point into the release tree: $REL" ;;
+esac
+[ -d "$REL" ] && [ ! -e "$REL/lib/agent-hub.mjs" ] \
+  && ok "reproduced: the release directory is there, the payload is not" \
+  || bad "the fixture did not take"
+
+install_from_checkout
+# THE BOX MUST END UP RUNNING SOMETHING. Which of the two remedies it picks is
+# not the assertion — putting it back on the checkout and re-laying the release
+# are both correct answers. Leaving the units pointed at an empty directory is
+# not, and that is what happened.
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+if [ -f "$TARGET" ]; then ok "the unit names something that exists: $TARGET"
+else bad "the unit names $TARGET, which is not there"; fi
+starts "after a partial release"
 
 step "Result"
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"

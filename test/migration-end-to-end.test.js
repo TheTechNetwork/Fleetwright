@@ -26,6 +26,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
+
+/**
+ * What was on this machine before any of this ran.
+ *
+ * Read at module load, which is before the first test, so the last test can ask
+ * whether anything APPEARED rather than whether anything exists — see the
+ * tripwire at the bottom of this file for why that distinction is the whole
+ * value of it.
+ */
+const UNITS_AT_START = new Map(
+  ['/etc/systemd/system/agent-hub.service', '/etc/systemd/system/agent-fleet-sidecar.service']
+    .map((p) => [p, existsSync(p)]),
+);
 const HELPER = path.join(ROOT, 'install', 'fleetwright-migrate');
 
 /**
@@ -36,6 +49,30 @@ const HELPER = path.join(ROOT, 'install', 'fleetwright-migrate');
  * which is a directory, served over file://, because curl reads those and a
  * test that needed the network would be a test nobody runs.
  */
+/**
+ * Replace `install/install.sh` inside the built release, and re-digest.
+ *
+ * THE MANIFEST HAS TO FOLLOW. A rewritten tarball whose digest is stale is
+ * refused before anything else is exercised, which would make every test using
+ * it pass for the wrong reason.
+ *
+ * @param {string} dist @param {string} work @param {string} body
+ */
+function rewriteReleaseInstaller(dist, work, body) {
+  const tar = readdirSync(dist).find((f) => f.endsWith('.tar.gz'));
+  if (!tar) return;
+  const stage = path.join(work, 'stage');
+  mkdirSync(stage, { recursive: true });
+  spawnSync('tar', ['-xzf', path.join(dist, tar), '-C', stage]);
+  const [name] = readdirSync(stage);
+  writeFileSync(path.join(stage, name, 'install', 'install.sh'), body);
+  chmodSync(path.join(stage, name, 'install', 'install.sh'), 0o755);
+  spawnSync('tar', ['-czf', path.join(dist, tar), '-C', stage, name]);
+  const m = JSON.parse(readFileSync(path.join(dist, 'manifest.json'), 'utf8'));
+  m.sha256 = createHash('sha256').update(readFileSync(path.join(dist, tar))).digest('hex');
+  writeFileSync(path.join(dist, 'manifest.json'), JSON.stringify(m, null, 2));
+}
+
 function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {}) {
   const work = mkdtempSync(path.join(tmpdir(), 'migrate-e2e-'));
   const dist = path.join(work, 'dist');
@@ -55,25 +92,37 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
   // nothing to copy and, more importantly, nothing shared with another test
   // file running at the same time.
 
-  // A RELEASE WHOSE OWN INSTALLER IS BROKEN, when asked for. The smoke check
-  // exists for exactly this, and a test that only ever sees good releases is
-  // not testing the check.
-  if (brokenReleaseInstaller) {
-    const tar = readdirSync(dist).find((f) => f.endsWith('.tar.gz'));
-    const stage = path.join(work, 'stage');
-    mkdirSync(stage, { recursive: true });
-    spawnSync('tar', ['-xzf', path.join(dist, tar ?? ''), '-C', stage]);
-    const [name] = readdirSync(stage);
-    writeFileSync(path.join(stage, name, 'install', 'install.sh'), '#!/bin/bash\nexit 3\n');
-    chmodSync(path.join(stage, name, 'install', 'install.sh'), 0o755);
-    spawnSync('tar', ['-czf', path.join(dist, tar ?? ''), '-C', stage, name]);
-    // The manifest's digest has to follow, or the download is refused before
-    // anything else is exercised — which would make this test pass for the
-    // wrong reason.
-    const m = JSON.parse(readFileSync(path.join(dist, 'manifest.json'), 'utf8'));
-    m.sha256 = createHash('sha256').update(readFileSync(path.join(dist, tar ?? ''))).digest('hex');
-    writeFileSync(path.join(dist, 'manifest.json'), JSON.stringify(m, null, 2));
-  }
+  // THE RELEASE'S OWN INSTALLER IS ALWAYS REPLACED, and that is a fix rather
+  // than a convenience.
+  //
+  // The helper's LAST ACT is to hand off to an installer, preferring the
+  // checkout's and falling back to the one inside the release. A test with no
+  // checkout takes the fallback — and the fallback was the real install.sh.
+  //
+  // On a machine that is root with systemd, which is every CI container and was
+  // this sandbox, that RAN. It wrote /etc/systemd/system/agent-hub.service and
+  // agent-fleet-sidecar.service, /etc/agent-hub.env and /var/lib/agent-hub,
+  // enabled the units, and pointed them at the fixture's temp directory — which
+  // `t.after` then deleted. The machine was left with two enabled services
+  // aimed at a path that no longer existed, by a test suite.
+  //
+  // It also broke the next thing to run: migration-drill.sh refuses to start on
+  // a box that already has an install, which is how this was found.
+  //
+  // A TEST MUST NOT INSTALL A SERVICE ON THE MACHINE RUNNING IT. So neither
+  // installer the helper can reach is ever the real one. install.sh is
+  // exercised for real in test/packaged-installer.test.js, which reads it.
+  rewriteReleaseInstaller(
+    dist,
+    work,
+    brokenReleaseInstaller
+      // A RELEASE WHOSE OWN INSTALLER IS BROKEN. The smoke check exists for
+      // exactly this, and a test that only ever sees good releases is not
+      // testing the check.
+      ? '#!/bin/bash\nexit 3\n'
+      : '#!/bin/bash\n# The release\'s installer, stubbed. See rewriteReleaseInstaller.\n' +
+        `printf 'HANDOFF-FROM-RELEASE args=%s\\n' "$*" > ${JSON.stringify(path.join(work, 'handoff-release'))}\n`,
+  );
 
   // The box: a checkout, an env file, and a state directory.
   const checkout = path.join(work, 'opt', 'agent-fleet');
@@ -401,12 +450,16 @@ test('a converted box needs no checkout to be brought forward', (t) => {
 
     const r = migrate(f);
     const out = `${r.stdout}${r.stderr}`;
-    // NOT asserting exit 0. With no checkout there is no fake installer to hand
-    // off to, so the helper correctly falls back to the release's own — which
-    // is the real install.sh and needs root and a real machine. What is being
-    // tested is everything BEFORE that: the refusal must not fire, and the
-    // release must be laid out.
+    assert.equal(r.status, 0, out.slice(0, 500));
     assert.doesNotMatch(out, /neither a checkout nor a release/, out.slice(0, 500));
+    // AND IT HANDED OFF TO THE RELEASE'S OWN INSTALLER, which is the whole
+    // point of the fallback. This used to be unasserted because the fallback
+    // ran the REAL install.sh — which on a root machine with systemd installed
+    // services on whatever was running the tests. Both installers the helper
+    // can reach are stubs now, so the fallback is a thing this can check
+    // instead of a thing it had to avoid.
+    assert.equal(existsSync(path.join(f.work, 'handoff-release')), true,
+      'the release\'s own installer was never reached');
     assert.match(out, /laid out .*releases\/v9\.9\.9/, out.slice(0, 500));
     assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true);
     assert.match(out, /this box has no checkout to use/, out.slice(0, 800));
@@ -426,4 +479,35 @@ test('the installer brings a converted box forward before it writes units', (t) 
   assert.ok(call < units, 'the release is refreshed after the units are written');
   // And it must not loop: the helper re-runs the installer.
   assert.match(src, /\[ -z "\$\{FLEETWRIGHT_MIGRATING:-\}" \] \|\| return 0/);
+});
+
+test('nothing in this file can install a service on the machine running it', () => {
+  // A TRIPWIRE, because the failure is invisible where it happens. The suite
+  // passed; the damage was to /etc on the machine, found later by a different
+  // script refusing to start.
+  //
+  // The helper hands off to an installer as its last act — the checkout's if it
+  // has one, the release's otherwise. Both are stubbed by the fixture, and this
+  // reads the file for a third path being added that is neither.
+  const src = readFileSync(new URL('./migration-end-to-end.test.js', import.meta.url), 'utf8');
+
+  // Every fixture goes through the rewrite. A `fixture()` variant that skipped
+  // it would put the real install.sh back inside the release.
+  assert.match(src, /rewriteReleaseInstaller\(\s*dist,\s*work,/);
+  assert.equal(
+    (src.match(/function fixture\(/g) || []).length, 1,
+    'a second fixture would need its own rewrite, and would not have one',
+  );
+
+  // And the machine itself, which is the thing that actually got hurt.
+  //
+  // APPEARED, NOT EXISTS. Somebody may be running this suite on a box that has
+  // Fleetwright installed — the install test box does — and a test that fails
+  // there is a test people learn to ignore, which is worse than not having it.
+  // What is wrong is a unit that was not there when this file loaded and is
+  // there now.
+  for (const p of UNITS_AT_START.keys()) {
+    if (UNITS_AT_START.get(p)) continue; // theirs, and none of this file's business
+    assert.equal(existsSync(p), false, `${p} did not exist when this file loaded and does now`);
+  }
 });
