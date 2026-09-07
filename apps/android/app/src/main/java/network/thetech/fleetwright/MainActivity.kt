@@ -827,11 +827,28 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         var rebootPin by remember { mutableStateOf("") }
         var rebootConfirm by remember { mutableStateOf("") }
         var credentialsFor by remember { mutableStateOf<String?>(null) }
+        var settingsFor by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(settings.configured) {
             if (settings.configured) fleetHosts = Fleet(settings).fleetHosts()
         }
         credentialsFor?.let { target ->
             CredentialsSheet(settings, target, onDismiss = { credentialsFor = null })
+        }
+        // FROM THE LIST'S OWN RECORD, so the sheet opens already knowing what
+        // the machine is set to rather than blanking to ask a question it was
+        // handed the answer to. Nothing to show if that host has gone since the
+        // tap, which is a refresh landing between two frames and not a fault.
+        settingsFor?.let { target ->
+            fleetHosts.firstOrNull { it.hostId == target }?.let { host ->
+                HostSheet(
+                    settings,
+                    host,
+                    onDismiss = { settingsFor = null },
+                    // Re-read rather than assume: what the row shows afterwards
+                    // is what the box reported, not what a tap hoped for.
+                    onChanged = { scope.launch { fleetHosts = Fleet(settings).fleetHosts() } },
+                )
+            }
         }
         if (fleetHosts.isNotEmpty()) {
             Text("Fleet", style = Design.Style.section, color = Design.Palette.ink.now)
@@ -1036,6 +1053,12 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             onClick = { rebootTarget = host.hostId; rebootPin = ""; rebootConfirm = "" },
                         ) { Text("Reboot") }
                         TextButton(onClick = { credentialsFor = host.hostId }) { Text("Credentials") }
+                        // SETTINGS, BEHIND A TAP, because the two behind it are
+                        // a segmented choice and a list that grows — and putting
+                        // them in this card would rebuild the wall iOS has just
+                        // taken apart. What lands on this machine, and what makes
+                        // work land on it at all.
+                        TextButton(onClick = { settingsFor = host.hostId }) { Text("Settings") }
                     }
                     // THE UPDATE CHANNEL, beside the button it decides the
                     // meaning of: "Apply update" installs whatever this says is

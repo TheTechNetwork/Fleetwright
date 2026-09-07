@@ -660,6 +660,16 @@ export class Sidecar {
       hostId: this.hostId,
       protocol: PROTOCOL_VERSION,
       labels: this.labels,
+      // WHICH OF THOSE CAN BE TAKEN OFF, so a screen offers Remove on exactly
+      // the ones it works for. The flat list above cannot say: `arm64` and
+      // `gpu` look identical in it, and one of them is a fact the host refuses
+      // to drop. An app rendering the flat list would show a control that
+      // exists and does not work, which is C-2 in the place it is easiest to
+      // get wrong — and the person only finds out by tapping.
+      //
+      // Sent rather than asked for, like the channel and the variant beside it:
+      // a list of machines must not become a round trip per row.
+      setLabels: this.hubConfig ? readLabels(this.hubConfig) : [],
       loadavg: [load1, load5, load15],
       freeMemBytes: os.freemem(),
       totalMemBytes: os.totalmem(),
