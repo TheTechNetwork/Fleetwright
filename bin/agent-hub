@@ -9,6 +9,7 @@
 //
 //   agent-hub serve            run the service (what systemd starts)
 //   agent-hub doctor           check this box can actually run sessions
+//   agent-hub doctor --repair  and fix what can be fixed safely
 //   agent-hub hook             SessionStart hook — reads Claude's JSON on stdin
 //   agent-hub <command...>     any chat command, e.g. `agent-hub list`
 
@@ -19,6 +20,10 @@ import { Registry } from '../src/core/registry.js';
 import { titleFromTranscript } from '../src/core/titles.js';
 import { existsSync } from 'node:fs';
 import { readApiToken, apiTokenFile } from '../src/core/api-token.js';
+import { updateStatus } from '../src/core/update.js';
+import { releaseLayout } from '../src/core/release-apply.js';
+import { checkRelease } from '../src/core/release-check.js';
+import { accessSync, constants as fsConstants, mkdirSync } from 'node:fs';
 
 const argv = process.argv.slice(2);
 const sub = argv[0] || 'serve';
@@ -36,7 +41,7 @@ switch (sub) {
     await runHook();
     break;
   case 'doctor':
-    await doctor();
+    await doctor({ repair: argv.includes('--repair') });
     break;
   case 'help':
   case '--help':
@@ -52,6 +57,7 @@ function usage() {
 
   agent-hub serve              run the service (systemd calls this)
   agent-hub doctor             check this box can run sessions
+  agent-hub doctor --repair    and fix what can be fixed safely
   agent-hub hook               SessionStart hook (reads Claude's JSON on stdin)
   agent-hub <command...>       run a command against the running hub, e.g.
 
@@ -134,8 +140,10 @@ async function runHook() {
   process.exit(0);
 }
 
-async function doctor() {
+async function doctor({ repair = false } = {}) {
   let bad = 0;
+  /** @type {Array<{ what: string, run: () => boolean, needsRoot?: boolean }>} */
+  const repairs = [];
   const ok = (label, good, detail = '') => {
     if (!good) bad++;
     console.log(`${good ? ' ok ' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
@@ -175,18 +183,187 @@ async function doctor() {
     const r = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(3000) });
     hubUp = r.ok;
   } catch { /* down */ }
-  ok(`hub reachable at ${base}`, hubUp, hubUp ? '' : 'systemctl status agent-hub');
+  // ONE FACT, ONCE. "hub unreachable" and "agent-hub.service is inactive" are
+  // the same news, and printing both is how a screen ends up contradicting
+  // itself — the defect the `updates` verb exists to remove, one tool over. The
+  // unit is the more useful of the two because it carries the remedy, so when
+  // there is a unit it gets to be the one that speaks.
+  const unit = unitState();
+  if (!unit.known || hubUp) {
+    ok(`hub reachable at ${base}`, hubUp, hubUp ? '' : 'is it running? there is no systemd unit here');
+  }
 
-  ok(
-    'a control surface is configured',
-    Boolean(cfg.telegram.token) || cfg.webEnabled,
-    cfg.telegram.token ? 'telegram' : 'web only',
-  );
-  if (cfg.telegram.token && cfg.telegram.allowedUsers.length === 0) {
-    console.log('warn  AGENT_HUB_TELEGRAM_ALLOWED_USERS is empty — message the bot /whoami, then add the id');
+  ok('a control surface is configured', cfg.webEnabled, 'web, app, MCP and CLI');
+
+  // --- the install itself ---------------------------------------------------
+  //
+  // EVERY CHECK BELOW IS A STATE A REAL BOX REACHED, and none of them was
+  // visible from here. doctor asked whether this box could run a SESSION; the
+  // afternoons lost were all to whether it could run ITSELF.
+  const status = updateStatus(cfg);
+  const layout = releaseLayout(cfg.installDir);
+  // THE LAYOUT DECIDES WHETHER THIS IS A RELEASE BOX, NOT THE PAYLOAD.
+  //
+  // `updateStatus` answers `packaged: true` only when lib/agent-hub.mjs is
+  // there — reasonable for its own question, and exactly backwards here: on a
+  // partial release it answers neither-checkout-nor-release, so gating on it
+  // skipped every check below on the one box that most needed them. doctor
+  // would have printed seven cheerful lines about tmux and said nothing at all
+  // about the reason the service was in a restart loop.
+  if (status.packaged || layout.ok) {
+    ok('the release layout is intact', layout.ok, layout.ok ? cfg.installDir : layout.message);
+
+    // AND THE PAYLOAD IS ACTUALLY THERE, which the layout check does not ask.
+    // releaseLayout validates the SHAPE of the path — that this is
+    // <base>/current or <base>/releases/<version> — and a directory with no
+    // lib/ in it passes that perfectly.
+    //
+    // It is the nastier of the two broken states, because every cheap check
+    // agrees: the symlink resolves, the directory exists, `current` looks
+    // right. Only opening the file the unit is supposed to run says otherwise,
+    // and nothing did — so a box sat in a restart loop with a layout check
+    // reporting `ok`.
+    const entry = `${cfg.installDir}/lib/agent-hub.mjs`;
+    ok(
+      'the release has something to run',
+      existsSync(entry),
+      existsSync(entry) ? '' : `${entry} is missing — re-run the installer, which will re-lay this release`,
+    );
+
+    // THE ONE THAT ONLY SHOWS UP WHEN YOU TRY TO UPDATE, and then as an EACCES
+    // from deep inside an unpack. Converting a box creates the release tree as
+    // root, and the service user could not write it — so the box could not
+    // apply its own updates and had no way to find that out until it failed.
+    if (layout.ok) {
+      const writable = canWrite(layout.base) && canWrite(`${layout.base}/releases`);
+      ok(
+        'updates can be applied without root',
+        writable,
+        writable ? '' : `${layout.base} is not writable by ${whoami()} — re-run the installer`,
+      );
+      if (!writable) repairs.push({
+        what: `make ${layout.base} writable by ${whoami()}`,
+        // NOT ATTEMPTED WITHOUT ROOT, and named rather than tried-and-failed: a
+        // chown that fails prints a permission error about fixing a permission
+        // error, which reads as the tool being broken.
+        run: () => chownTree(layout.base),
+        needsRoot: true,
+      });
+    }
+  }
+
+  // --- the service -----------------------------------------------------------
+  if (unit.known) {
+    ok(`agent-hub.service is ${unit.state}`, unit.state === 'active', unit.detail);
+    if (unit.state !== 'active') {
+      repairs.push({
+        // RESET-FAILED FIRST. systemd stops trying after StartLimitBurst and
+        // then answers "Start request repeated too quickly" to every start —
+        // so a plain restart on a box in that state does nothing and says
+        // almost nothing, which is how a counter reached 6423.
+        what: 'clear the failure counter and start agent-hub',
+        run: () => systemctl(['reset-failed', 'agent-hub']) && systemctl(['start', 'agent-hub']),
+        needsRoot: true,
+      });
+    }
+  }
+
+  // --- what is waiting -------------------------------------------------------
+  //
+  // OFFERED, NEVER APPLIED, INCLUDING UNDER --repair. Updating is the one thing
+  // here that changes what this box RUNS, and a tool called "doctor --repair"
+  // silently moving a machine onto new code is a surprise nobody asked for. It
+  // is also the one remedy that is genuinely a decision: a box mid-session has
+  // a reason to wait.
+  if (cfg.releaseManifest) {
+    const rel = await checkRelease(cfg);
+    if (rel.available) {
+      console.log(`note  an update is waiting: ${rel.available}`);
+      console.log('      to take it:  agent-hub update');
+      console.log('      not applied by --repair, on purpose — this changes what the box runs');
+    } else if (rel.configured === false) {
+      ok('this box knows where its releases come from', false, rel.message);
+    }
+  }
+
+  if (repairs.length && !repair) {
+    console.log('');
+    console.log(`${repairs.length} of these can be fixed for you:  agent-hub doctor --repair`);
+    for (const r of repairs) console.log(`      - ${r.what}`);
+  }
+
+  if (repair) {
+    console.log('');
+    for (const r of repairs) {
+      if (r.needsRoot && process.getuid?.() !== 0) {
+        console.log(`skip  ${r.what} — needs root: sudo agent-hub doctor --repair`);
+        continue;
+      }
+      let done = false;
+      try {
+        done = r.run() !== false;
+      } catch (e) {
+        done = false;
+        console.log(`FAIL  ${r.what} — ${e.message}`);
+        continue;
+      }
+      console.log(`${done ? ' ok ' : 'FAIL'}  ${r.what}`);
+      // A REPAIR THAT DID NOT WORK IS STILL A FAILURE. Reporting the attempt
+      // and exiting 0 is how "doctor says it fixed it" and "the box is still
+      // broken" end up in the same sentence.
+      if (!done) bad++;
+    }
+    if (!repairs.length) console.log('nothing to repair');
   }
 
   process.exit(bad ? 1 : 0);
+}
+
+/** Can this process write here? Asked of the directory, not guessed from uid. */
+function canWrite(dir) {
+  try {
+    accessSync(dir, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function whoami() {
+  try {
+    return process.env.USER || String(process.getuid?.());
+  } catch {
+    return 'this user';
+  }
+}
+
+function chownTree(dir) {
+  const who = cfg.runUser || process.env.SUDO_USER || '';
+  if (!who) return false;
+  return spawnSync('chown', ['-R', who, dir]).status === 0;
+}
+
+function systemctl(args) {
+  return spawnSync(cfg.systemctlBin, args).status === 0;
+}
+
+/**
+ * What systemd thinks of agent-hub.service.
+ *
+ * `known: false` on a box with no unit — a checkout somebody runs by hand is
+ * not broken, and reporting it as a failed service would be the reassuring kind
+ * of wrong in reverse.
+ */
+function unitState() {
+  if (!existsSync('/etc/systemd/system/agent-hub.service')) return { known: false };
+  const r = spawnSync(cfg.systemctlBin, ['is-active', 'agent-hub'], { encoding: 'utf8' });
+  const state = (r.stdout || '').trim() || 'unknown';
+  let detail = '';
+  if (state !== 'active') {
+    const j = spawnSync(cfg.systemctlBin, ['is-failed', 'agent-hub'], { encoding: 'utf8' });
+    detail = (j.stdout || '').trim() === 'failed' ? 'failed — journalctl -u agent-hub' : '';
+  }
+  return { known: true, state, detail };
 }
 
 // --- helpers ---------------------------------------------------------------
