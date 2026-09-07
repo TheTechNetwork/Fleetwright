@@ -1726,6 +1726,39 @@ if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER
   fi
 fi
 
+# AND THE SAME THING FOR A PACKAGED BOX, which had no equivalent at all.
+#
+#   update failed: EACCES: permission denied,
+#   mkdir '/opt/fleetwright/releases/.incoming-main-67'
+#
+# on every update attempt, from a box that had just been converted. The chown
+# above is gated on `$DIR/.git` — the CHECKOUT case — and a release has no .git,
+# so nothing ever gave the service user the release tree. fleetwright-migrate
+# runs as root and creates it root-owned, so CONVERTING A BOX TOOK AWAY ITS
+# ABILITY TO UPDATE ITSELF: every update afterwards needed the root helper, and
+# the app's Apply update could not work by construction.
+#
+# It is the whole tree and not just the base, because an update touches all of
+# it: it mkdirs `releases/.incoming-<v>`, replaces `releases/<v>`, swaps the
+# `current` symlink, and PRUNES old releases — and removing a root-owned tree
+# needs write on the directories inside it, not only on their parent.
+#
+# THE GRANT IS THE SAME ONE THE CHECKOUT ALREADY HAD, which is the reason this
+# is not a widening. The service user can replace the code it runs; it could
+# always do that, and it IS the thing running that code, so there is nothing to
+# escalate to. What stays out of reach is unchanged: the units are root-owned in
+# /etc, the env file is root-owned and 0600, and the sudoers rule names
+# /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, so that
+# a service user who can rewrite the tree still cannot rewrite what runs as root.
+if [ -d "$FLEET_BASE" ] && [ "$(stat -c %U "$FLEET_BASE" 2>/dev/null)" != "$RUN_USER" ]; then
+  if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
+    ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
+  else
+    warn "could not chown $FLEET_BASE to $RUN_USER — updates will fail with EACCES"
+    warn "  every update will need: sudo /usr/local/sbin/fleetwright-migrate"
+  fi
+fi
+
 # --- 6. CLIs on PATH --------------------------------------------------------
 # Same reasoning as the units: pointed at the release, not skipped and not
 # dragged back to the checkout. A command line on one tree and services on
