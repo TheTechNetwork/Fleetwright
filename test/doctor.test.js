@@ -14,7 +14,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, chmodSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
@@ -57,12 +57,41 @@ async function box({ available = null } = {}) {
   }
   const state = path.join(work, 'state');
   mkdirSync(state, { recursive: true });
+
+  // A TMUX AND A CLAUDE OF ITS OWN, and this is about the coverage floor as
+  // much as about the assertions.
+  //
+  // doctor probes whatever is on PATH. On a box with claude installed and
+  // logged in it takes the success branches and prints an account; on a bare CI
+  // container it takes the failure branches. Same test, same result, DIFFERENT
+  // LINES EXECUTED — so the coverage number for bin/agent-hub depended on what
+  // was installed on the machine running the suite, and a floor recorded on one
+  // box read eight points lower on another.
+  //
+  // That is not a flaky test, which is why it took a re-baseline to notice: it
+  // is a test whose ENVIRONMENT is an input nobody declared.
+  const fakeBin = path.join(work, 'bin');
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(path.join(fakeBin, 'tmux'), '#!/bin/sh\necho "tmux 3.5a"\n');
+  writeFileSync(
+    path.join(fakeBin, 'claude'),
+    // Answers both shapes doctor asks for: `--version`, and `auth status
+    // --json`. Logged in, with an address, so the branch that formats one runs.
+    '#!/bin/sh\n' +
+      'case "$*" in\n' +
+      '  *--version*) echo "9.9.9 (Claude Code)" ;;\n' +
+      '  *"auth status"*) echo \'{"loggedIn":true,"email":"drill@example.com","subscriptionType":"max"}\' ;;\n' +
+      '  *) exit 1 ;;\n' +
+      'esac\n',
+  );
+  for (const f of ['tmux', 'claude']) chmodSync(path.join(fakeBin, f), 0o755);
   return {
     work,
     base,
     current: path.join(base, 'current'),
     state,
     server,
+    fakeBin,
     get manifest() {
       if (!server) return '';
       const a = /** @type {any} */ (server.address());
@@ -98,6 +127,9 @@ function doctor(b, args = []) {
 function envFor(b) {
   return {
     ...process.env,
+    // ONLY the fixture's binaries, so the machine's own are never consulted.
+    PATH: `${b.fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AGENT_HUB_CLAUDE_BIN: path.join(b.fakeBin, 'claude'),
     // Nothing of this machine's: doctor reads /etc/agent-hub.env otherwise,
     // and a test that inherits a real box's config tests that box.
     AGENT_HUB_ENV_FILE: path.join(b.work, 'nonexistent.env'),
@@ -176,4 +208,28 @@ test('a repair that failed is a failure, not a line of output', () => {
   // and reported as broken: a chown that fails prints a permission error about
   // fixing a permission error, which reads as the tool being broken.
   assert.match(block.slice(0, 900), /needs root: sudo agent-hub doctor --repair/);
+});
+
+
+test('doctor sees the fixture\'s tools, never the machine\'s', async (t) => {
+  // THE COVERAGE FLOOR IS WHY THIS EXISTS, not the assertion.
+  //
+  // doctor probes whatever is on PATH, so on a box with claude installed and
+  // logged in it takes the success branches, and on a bare container it takes
+  // the failure ones. Same test, same result, DIFFERENT LINES EXECUTED — so
+  // bin/agent-hub's coverage depended on what was installed on the machine
+  // running the suite, and a floor recorded on one box read eight points lower
+  // on another and reported a regression that had not happened.
+  //
+  // check-coverage.mjs already has this story about Docker and
+  // files-container.test.js. Its guard is for a test that SKIPS itself; this is
+  // a test that runs everywhere and does different work, which the guard cannot
+  // see. So the environment stops being an input.
+  const b = await box();
+  t.after(() => b.close());
+
+  const { out } = await doctor(b);
+  // These strings exist nowhere but the fixture's fake binaries.
+  assert.match(out, /9\.9\.9 \(Claude Code\)/, out.slice(0, 900));
+  assert.match(out, /drill@example\.com \(max\)/, out.slice(0, 900));
 });
