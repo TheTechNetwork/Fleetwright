@@ -157,6 +157,31 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   // API call that reported success and changed nothing.
   assert.match(job, /\$\{?at\}? != "\$GITHUB_SHA"|"\$at" != "\$GITHUB_SHA"/);
 
+  // THE WRITE IS CHECKED SEPARATELY FROM THE READ, because they fail for
+  // different reasons and were reported as one.
+  //
+  // A release failed with "the rolling tag is at <previous merge>, not
+  // <this one>" on a tag that had moved perfectly — the read simply came back
+  // before GitHub had caught up, and by the time anybody looked the tag was
+  // right. GitHub's ref reads are not read-after-write consistent, so ONE
+  // SAMPLE CANNOT TELL a tag that did not move from a tag that has not
+  // propagated.
+  //
+  // PATCH returns the ref it just wrote and that response cannot be stale, so
+  // it is the authoritative check on the move itself.
+  assert.match(job, /moved=\$\(gh api -X PATCH/, 'the move no longer reads its own answer');
+  assert.match(job, /"\$moved" != "\$GITHUB_SHA"/, 'the write is not checked, only a later read');
+
+  // And the read-back RETRIES, bounded — so a tag that genuinely never moved is
+  // still a failure, which is the entire point of the check, while a slow ref
+  // is not. Unbounded would turn the assertion into a hang; absent, into the
+  // flake that produced this comment.
+  assert.match(job, /for attempt in [\d ]+; do/, 'the read-back does not retry');
+  assert.match(job, /sleep \d+/, 'it retries without waiting, which reads the same cache again');
+  // It says WHICH of the two happened. "not $GITHUB_SHA" alone sent somebody
+  // looking at a tag that was already correct.
+  assert.match(job, /the move was accepted, so something else is moving it/);
+
   // AND THE PREVIOUS TARBALL IS REMOVED. The name carries the build number, so
   // --clobber cannot reach it: every merge uploaded a new name beside the last
   // one and the release grew a tarball per merge, on an address whose whole
