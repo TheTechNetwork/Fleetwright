@@ -243,3 +243,62 @@ test('no screen reaches past the palette for a colour', () => {
     }
   }
 });
+
+test('a fleet card says each fact once, and shows controls only when asked', () => {
+  // "You redesigned to the current design while keeping the cluttered look."
+  // Fair: the first pass restyled the CONTAINER and left the contents, and the
+  // contents were the mess. A card read:
+  //
+  //   deb132                                          healthy
+  //   reporting normally
+  //   signed in as eli@x.com · max · eli@x.com's Organization
+  //   1 person · eli@x.com · max
+  //   main-71 · update status unknown · rolling
+  //   Check   Reboot
+  //   [ Stable | Rolling ]
+  //   Sign in to Claude                                      >
+  //
+  // Six lines of fact, two of them the same fact, one of them the badge again,
+  // and four controls under every machine whether or not anything was wanted.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const card = view.slice(
+    view.indexOf('A CARD, LIKE A SESSION IS'),
+    view.indexOf('.fleetRow()', view.indexOf('.contentShape(Rectangle())')),
+  );
+
+  // THE ACCOUNT WAS PRINTED TWICE. describeWhoCanStart already carries the
+  // address, the plan and the org — it was changed to carry them when those
+  // two lines were merged, and the outer line was left above it. The merge
+  // happened inside the function and not at the call site, which is how a fix
+  // leaves the thing it fixed still on screen.
+  assert.doesNotMatch(card, /describeAccount\(/, 'the account is rendered twice again');
+
+  // AND THE REASON ONLY WHEN IT IS NEWS. "reporting normally" under a badge
+  // reading "healthy" is the same fact twice.
+  assert.match(card, /host\.reason.*!reason\.isEmpty.*!==?\s*"healthy"|!= "healthy"/s);
+
+  // CONTROLS BEHIND A TAP. Reboot is the sharpest case: a destructive action
+  // one tap away on a machine nobody asked about.
+  assert.match(card, /if expandedHost == host\.hostId \{/);
+  for (const control of ['maintenanceRow(for: host)', 'channelControl(for: host)']) {
+    const at = card.indexOf(control);
+    assert.ok(at > card.indexOf('if expandedHost == host.hostId'), `${control} still renders at rest`);
+  }
+
+  // EXCEPT THE ONE THING BEING ASKED FOR. The ring says "look here", and hiding
+  // the remedy behind a tap would make the ring a riddle.
+  // Order, not distance: a character window fails the day somebody writes a
+  // longer comment, which teaches people to widen the number rather than read
+  // what it was for.
+  const collapsedBranch = card.indexOf('} else if host.updatePending {');
+  assert.ok(collapsedBranch > 0, 'a pending update offers nothing while collapsed');
+  assert.ok(
+    card.indexOf('Button("Apply update")', collapsedBranch) > collapsedBranch,
+    'the collapsed branch does not offer the update',
+  );
+
+  // The whole card is the target, not a chevron somebody has to aim at — a
+  // VStack only takes taps where it drew something, and the gaps between lines
+  // are most of it.
+  assert.match(card, /\.contentShape\(Rectangle\(\)\)/);
+});
