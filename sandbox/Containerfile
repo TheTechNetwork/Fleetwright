@@ -125,6 +125,50 @@ RUN set -e; \
       chmod +x "/usr/local/bin/$tool"; \
     done
 
+# A BROWSER, WHEN THE IMAGE IS BUILT WITH ONE.
+#
+# THE RULE ABOVE STILL STANDS, and this is the argued exception rather than the
+# first crack in it. "Not a place to put your toolchain" is right because a
+# session has real root and can `apt install` anything, and all of it is thrown
+# away — so baking a tool in buys a faster start and costs the property that
+# makes the image trustworthy.
+#
+# Chromium is the case where that arithmetic changes:
+#
+#   IT IS NOT A TOOL, IT IS A CAPABILITY. Checking that a page renders, that a
+#     form submits, that something works with scripts off — an agent that cannot
+#     open a browser cannot check its own web work, and asks a person to.
+#
+#   THE INSTALL IS NOT SMALL. Chromium and its fonts are several hundred
+#     megabytes and a few minutes, PER SESSION, repeated. That is not "a faster
+#     start", it is the difference between a thing somebody uses and a thing
+#     they work around.
+#
+# SO IT IS A VARIANT, NOT THE DEFAULT. The minimal image stays minimal and is
+# still what every box gets; a box that wants a browser is pointed at the other
+# tag. Nobody pays for a capability they do not use, and the rule above is not
+# quietly rewritten to accommodate one exception.
+#
+#    podman build --build-arg WITH_CHROMIUM=1 -t agent-session:web -f sandbox/Containerfile sandbox/
+#    AGENT_HUB_SANDBOX_IMAGE=ghcr.io/<owner>/fleetwright-session:web
+ARG WITH_CHROMIUM=0
+RUN if [ "$WITH_CHROMIUM" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        chromium fonts-liberation fonts-noto-color-emoji \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# WHERE PLAYWRIGHT AND PUPPETEER LOOK. Both will otherwise download their own
+# copy on first use — inside a container that is discarded, so it downloads
+# again on the next session, which is the whole cost this variant exists to
+# remove. Set unconditionally: on the minimal image it names a binary that is
+# not there, and a tool that says "chromium is missing" is better than one that
+# quietly fetches 150MB.
+ENV CHROME_BIN=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 COPY entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
 

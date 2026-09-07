@@ -92,6 +92,43 @@ if (!JSON.stringify(settings.hooks.SessionStart).includes(cmd)) {
 NODE
 fi
 
+# CAN THIS BROWSER KEEP ITS OWN SANDBOX? Asked here, on the box, because here
+# is the only place the answer is true.
+#
+# Chromium's sandbox needs a user namespace. Whether a container can make one
+# depends on the runtime, its seccomp profile, and the kernel's
+# unprivileged_userns_clone — so it is a property of the machine the session is
+# running on, and it is not knowable when the image is built.
+#
+# CI measures it too, and CI measures DOCKER while a session runs under rootless
+# podman. That answer is about a different container: it is worth having, and it
+# is not this one. The probe below is the one that decides what the session gets.
+#
+# Debian's /usr/bin/chromium is a wrapper that reads CHROMIUM_FLAGS, so this
+# reaches every tool that shells out to `chromium` without any of them knowing.
+# --no-sandbox is set ONLY when the sandbox cannot be entered: a browser that
+# keeps its own confinement should keep it, and the flag is not a default
+# somebody once pasted.
+if command -v chromium >/dev/null 2>&1; then
+  # NOT ANSWERABLE IS NOT THE SAME AS NO. Without `unshare` this cannot tell,
+  # and it degrades the browser rather than guessing it will be fine — but it
+  # says which of the two happened, because "no user namespace" and "no way to
+  # ask" send somebody to different places.
+  if ! command -v unshare >/dev/null 2>&1; then
+    echo "sandbox: no unshare here, so chromium's sandbox cannot be checked — running with --no-sandbox" >&2
+    export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:+$CHROMIUM_FLAGS }--no-sandbox"
+  elif unshare --user --map-root-user true >/dev/null 2>&1; then
+    echo "sandbox: chromium keeps its own sandbox (user namespaces available)" >&2
+  else
+    # SAID OUT LOUD, to the session's log, because it is a real reduction and
+    # the person reading a transcript later should not have to guess. A page
+    # this browser renders is as confined as the session is, and no more.
+    echo "sandbox: chromium has no user namespace here, so it runs with --no-sandbox" >&2
+    echo "sandbox: a page it renders is as confined as this session is, and no more" >&2
+    export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:+$CHROMIUM_FLAGS }--no-sandbox"
+  fi
+fi
+
 # exec so claude is PID 1's direct child and signals reach it — and so the
 # container's lifetime IS the session's lifetime, which is what lets a dead
 # container end the tmux session and reconcile see "ended".

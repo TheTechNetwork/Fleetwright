@@ -85,3 +85,58 @@ container cannot report against a neighbour's. See `docs/hook-socket.md`.
 You own a base image with node, git and a CLI in it. Both are pinned by `ARG`
 (`NODE_MAJOR`, `CLAUDE_VERSION`) so a rebuild is reproducible and an upgrade is a
 deliberate one-line change. Point Renovate at them.
+
+## A browser, when you ask for one
+
+`ghcr.io/<owner>/fleetwright-session:web` is the same image with Chromium in it.
+
+```sh
+# on the box
+AGENT_HUB_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:web
+```
+
+**Why it is a second tag and not the default.** The Containerfile argues that
+this is not a place to put a toolchain — a session has real root and can install
+anything, and all of it is discarded, so baking a tool in buys a faster start and
+costs the property that makes the image trustworthy. That argument holds.
+
+Chromium is the case where the arithmetic changes: it is a capability rather than
+a tool — an agent that cannot open a browser cannot check its own web work — and
+its install is hundreds of megabytes and several minutes, **per session,
+repeated**. That is not a faster start; it is the difference between something
+people use and something they work around.
+
+So the minimal image stays what every box gets, and a box that wants a browser is
+pointed at the other tag. One Containerfile, one build-arg: a second file would
+be a second thing to keep in step, and the half nobody uses is the half that rots.
+
+`CHROME_BIN`, `PUPPETEER_EXECUTABLE_PATH` and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD`
+are set on **both** images. On the minimal one they name a binary that is not
+there — deliberately, because a tool that says "chromium is missing" is better
+than one that quietly downloads 150MB into a container about to be thrown away.
+
+### What it does not confine
+
+Chromium's own sandbox needs user namespaces, which a rootless container may or
+may not grant. Whether yours does depends on the runtime, its seccomp profile
+and the kernel — so it is a property of *your box*, and it is not knowable when
+the image is built.
+
+`entrypoint.sh` therefore asks, at container start, on the box the session is
+about to run on: if `unshare --user` works, chromium keeps its own sandbox and
+nothing is passed; if it does not, `CHROMIUM_FLAGS=--no-sandbox` is exported and
+two lines say so in the session log. Debian's `/usr/bin/chromium` is a wrapper
+that reads that variable, so every tool shelling out to `chromium` gets the
+right answer without knowing this paragraph exists.
+
+CI runs the same question, but **under docker** — and a session runs under
+rootless podman. Those two differ on precisely what is being measured, so the
+smoke job's warning names its runtime: it proves the browser starts and says
+which way it had to, and it is not the answer for your host. The one that
+decides what your session gets is the line in your session log.
+
+Where the flag *is* needed, know the trade: **a page the browser renders
+is as confined as the session is, and no more.** The session container is the
+boundary — it holds that person's credentials and has root inside — so pointing
+a browser at hostile HTML puts that page inside the same blast radius. That is
+survivable for checking your own work and is not a general-purpose safe browser.
