@@ -226,6 +226,19 @@ fi
 # Skipped rather than failed when there is nothing to compare against: a
 # detached head, a shallow clone, or somebody sitting on main has no range, and
 # a check that fails for want of a question is a check people learn to skip.
+# AND WHETHER THE HOOK IS ON, because this check cannot catch the message it is
+# usually run against. verify.sh is run BEFORE committing, so the range below is
+# the messages already written and never the one about to be — it has missed two
+# bad subjects for that reason, and both reached CI.
+#
+# The hook is the only place the message exists and the commit has not happened
+# yet. Said once, not failed on: hooks are opt-in per clone by design, and a
+# gate that refuses to run because somebody has not configured their checkout is
+# a gate people route around.
+if [ "$(git config core.hooksPath 2>/dev/null)" != ".githooks" ] && [ -x .githooks/commit-msg ]; then
+  printf 'hooks      ... off — `git config core.hooksPath .githooks` checks messages before they are written\n'
+fi
+
 printf 'commits    ... '
 if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then
   printf 'skipped (not a git checkout)\n'

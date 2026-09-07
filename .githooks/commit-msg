@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+# The commit message, checked at the only moment it can still be changed freely.
+#
+# WHY THIS EXISTS, and it is not a preference. verify.sh gained a commitlint
+# step so a bad subject would stop being something CI found. It has now missed
+# two of them, both mine, for the same structural reason: verify.sh is run
+# BEFORE committing, so the message it checks is the one already written and
+# never the one about to be. The check is correct and cannot fire at the moment
+# it is used.
+#
+# A commit-msg hook is the only point where the message exists and the commit
+# has not happened yet. That is the whole argument.
+#
+# ENABLE IT ONCE, per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# Hooks are not cloned — git will not run a hook out of a repository by default,
+# because that would make `git clone` execute somebody else's code. Pointing
+# core.hooksPath at a versioned directory is opting in deliberately, which is
+# the right shape for this and the reason it is not automatic.
+set -eu
+
+MSG_FILE="$1"
+
+# `commitlint --edit` reads the file git is about to commit, which is exactly
+# the case a range cannot cover: there is no commit yet to name.
+if ! npx --no-install commitlint --edit "$MSG_FILE"; then
+  printf '\n'
+  printf 'The message is still in %s — fix it and commit again.\n' "$MSG_FILE"
+  printf 'Nothing was committed.\n'
+  exit 1
+fi
