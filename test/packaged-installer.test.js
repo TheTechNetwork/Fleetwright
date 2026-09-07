@@ -127,7 +127,14 @@ test('a half-finished migration is resumed, not declared complete', () => {
   const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
 
   // THE UNIT IS THE ANSWER. What a box runs is what systemd starts.
-  assert.match(mig, /UNIT=\/etc\/systemd\/system\/agent-hub\.service/);
+  //
+  // The directory is now a seam with /etc/systemd/system as its default, so
+  // that a test can pose "is this box converted" without writing units onto the
+  // machine running the suite. That is not a loosening of this rule: it is what
+  // finally made the rule executable, in migration-end-to-end.test.js, rather
+  // than only readable here.
+  assert.match(mig, /UNIT_DIR="\$\{FLEETWRIGHT_UNIT_DIR:-\/etc\/systemd\/system\}"/);
+  assert.match(mig, /UNIT="\$UNIT_DIR\/agent-hub\.service"/);
   // EXECSTART, NOT THE WHOLE FILE. A unit names the tree in WorkingDirectory
   // and EnvironmentFile too, so grepping the file asks "does this mention the
   // release" when the question is "does it RUN from it" — and a box whose

@@ -113,9 +113,28 @@ function migrate(f, extraEnv = {}) {
       ...process.env,
       FLEETWRIGHT_ENV_FILE: f.envFile,
       AGENT_FLEET_BASE: f.base,
+      // A UNIT DIRECTORY OF ITS OWN, so "is this box converted" can be posed at
+      // all. It was a literal /etc/systemd/system, which meant every converted
+      // path in the helper could only be tested by writing units onto the
+      // machine running the tests — so none of them were, and the one that
+      // mattered was wrong.
+      FLEETWRIGHT_UNIT_DIR: path.join(f.work, 'etc', 'systemd', 'system'),
       ...extraEnv,
     },
   });
+}
+
+/** Write the unit a converted box has: ExecStart naming `<base>/current`. */
+function declareConverted(f, entry = 'lib/agent-hub.mjs') {
+  const dir = path.join(f.work, 'etc', 'systemd', 'system');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'agent-hub.service'),
+    // WorkingDirectory names the tree too, on purpose: the helper must read
+    // ExecStart and not the whole file, which is a distinction a real box has
+    // already been misjudged on.
+    `[Service]\nWorkingDirectory=${f.base}/current\nExecStart=/usr/bin/node ${f.base}/current/${entry} serve\n`,
+  );
 }
 
 test('a box converts: fetched, verified, laid out, handed off', (t) => {
@@ -269,4 +288,142 @@ test('a converted box can take the NEXT update, which is the point of converting
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }
+});
+
+
+// --- the box that could not be reached --------------------------------------
+
+test('a converted box on an older release is brought forward, not refused', (t) => {
+  // THE DEADLOCK, from a real machine. deb13-staging runs v0.2.3, whose
+  // releaseLayout() refuses a packaged box's own path — so its own update path
+  // answers "there is no symlink to swap", and it cannot reach a version where
+  // that is fixed. Fixing main does not reach it either: a box runs the
+  // RELEASE's code, not main's.
+  //
+  // The installer is the only way in, because it is the one component that does
+  // NOT come from the release — and it refused too, with "already on the
+  // packaged layout — nothing to do". True, and the wrong question: converted
+  // says a box HAS a release, never WHICH.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    // A box already packaged, on an older release than the channel now has.
+    const old = path.join(f.base, 'releases', 'v0.0.1');
+    mkdirSync(path.join(old, 'lib'), { recursive: true });
+    writeFileSync(path.join(old, 'package.json'), JSON.stringify({ version: 'v0.0.1' }));
+    writeFileSync(path.join(old, 'lib', 'agent-hub.mjs'), '// the release that cannot update itself');
+    symlinkSync(old, path.join(f.base, 'current'));
+    declareConverted(f);
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 0, out.slice(0, 500));
+    assert.doesNotMatch(out, /nothing to do/, out.slice(0, 500));
+
+    // And it actually moved: `current` points at the new release, the old one
+    // is still on disk, and the handoff happened.
+    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true,
+      'the newer release was never laid out');
+    assert.equal(
+      readFileSync(path.join(f.base, 'current', 'package.json'), 'utf8').includes('v9.9.9'),
+      true,
+      'current still points at the release the box was stuck on',
+    );
+    assert.equal(existsSync(path.join(f.work, 'handoff')), true, 'the installer was never re-run');
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('a converted box already on the newest release does nothing', (t) => {
+  // The other half, and the reason this is safe to run on every installer
+  // rerun: it must be a cheap no-op, or "self-heal every time" becomes
+  // "re-download and restart every time".
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    assert.equal(migrate(f).status, 0);
+    declareConverted(f);
+    // The first run handed off, which is what converting does. Clear the marker
+    // so the second run's silence is its own.
+    rmSync(path.join(f.work, 'handoff'), { force: true });
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 0, out.slice(0, 500));
+    assert.match(out, /already on the packaged layout, running v9\.9\.9 — nothing to do/, out.slice(0, 500));
+    // Nothing was handed off, so nothing restarted.
+    assert.equal(existsSync(path.join(f.work, 'handoff')), false, 'a no-op re-ran the installer');
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('a converted box whose current is unreadable is repaired, not called current', (t) => {
+  // UNREADABLE IS NOT UP TO DATE. A `current` pointing at a directory with no
+  // package.json is a box half-way through something — the state a partial
+  // release leaves — and comparing an empty version string against the
+  // manifest's must not match.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    const broken = path.join(f.base, 'releases', 'v9.9.9');
+    mkdirSync(broken, { recursive: true });   // no package.json, no lib/
+    symlinkSync(broken, path.join(f.base, 'current'));
+    declareConverted(f);
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 0, out.slice(0, 500));
+    assert.doesNotMatch(out, /nothing to do/, out.slice(0, 500));
+    assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'agent-hub.mjs')), true,
+      'the partial release was left in place');
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('a converted box needs no checkout to be brought forward', (t) => {
+  // The refusal below this in the helper — "neither a checkout nor a release" —
+  // is for a machine that is neither. Asking it of a box that is ALREADY
+  // packaged would refuse every self-heal for want of a directory that
+  // converting exists to stop depending on.
+  const f = fixture();
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    const old = path.join(f.base, 'releases', 'v0.0.1');
+    mkdirSync(path.join(old, 'lib'), { recursive: true });
+    writeFileSync(path.join(old, 'package.json'), JSON.stringify({ version: 'v0.0.1' }));
+    symlinkSync(old, path.join(f.base, 'current'));
+    declareConverted(f);
+    // No checkout at all: the box was converted and the tree removed.
+    rmSync(f.checkout, { recursive: true, force: true });
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    // NOT asserting exit 0. With no checkout there is no fake installer to hand
+    // off to, so the helper correctly falls back to the release's own — which
+    // is the real install.sh and needs root and a real machine. What is being
+    // tested is everything BEFORE that: the refusal must not fire, and the
+    // release must be laid out.
+    assert.doesNotMatch(out, /neither a checkout nor a release/, out.slice(0, 500));
+    assert.match(out, /laid out .*releases\/v9\.9\.9/, out.slice(0, 500));
+    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true);
+    assert.match(out, /this box has no checkout to use/, out.slice(0, 800));
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('the installer brings a converted box forward before it writes units', (t) => {
+  // A box whose release is crash-looping is exactly the box that needs this,
+  // and restarting the broken release first is how the run dies before reaching
+  // the repair. Ordering is the whole point, so it is asserted.
+  const src = readFileSync(path.join(ROOT, 'install', 'install.sh'), 'utf8');
+  const call = src.indexOf('\nrefresh_release_if_converted\n');
+  const units = src.indexOf('install_unit agent-hub');
+  assert.ok(call > 0, 'the installer never refreshes a converted box');
+  assert.ok(call < units, 'the release is refreshed after the units are written');
+  // And it must not loop: the helper re-runs the installer.
+  assert.match(src, /\[ -z "\$\{FLEETWRIGHT_MIGRATING:-\}" \] \|\| return 0/);
 });
