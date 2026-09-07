@@ -20,6 +20,7 @@
 // for review at all. Submission is the delivery; approval is Apple's.
 
 import { storeListing } from './store-listing.mjs';
+import { uploadScreenshots } from './appstore-screenshots.mjs';
 
 const KEY_ID = env('ASC_KEY_ID');
 const ISSUER_ID = env('ASC_ISSUER_ID');
@@ -336,6 +337,35 @@ async function main() {
     } catch (e) {
       console.log(`::warning::listing not set: ${String(e.message).split('\n')[0]}`);
     }
+  }
+
+  // SCREENSHOTS, BEFORE THE SUBMISSION AND NOT AFTER IT. A version missing a
+  // required display size is refused at submission, so the ordering here is the
+  // feature: this is the last thing that can still change the version, and the
+  // next call asks Apple to accept it.
+  //
+  // It is also why this is an import rather than another workflow step — a
+  // second job could not be placed between two calls inside this one.
+  //
+  // ONLY ON A FULL RELEASE, which is where this whole file runs, and only if
+  // needed: a display type that already has screenshots is left alone.
+  try {
+    const locs = await api(`/v1/appStoreVersions/${version.id}/appStoreVersionLocalizations?limit=200`);
+    const en = locs.data.find((/** @type {any} */ l) => l.attributes.locale === 'en-US');
+    if (en) {
+      const n = await uploadScreenshots({
+        api,
+        localizationId: en.id,
+        dir: process.env.SCREENSHOTS_DIR || undefined,
+        force: process.env.SCREENSHOTS_FORCE === 'true',
+      });
+      if (n) console.log(`${n} screenshot${n === 1 ? '' : 's'} uploaded`);
+    }
+  } catch (e) {
+    // THE SAME RULE AS THE LISTING. Whatever is already on the store stays, and
+    // a submission with the previous version's screenshots is a submission; a
+    // release that stopped here is not.
+    console.log(`::warning::screenshots not uploaded: ${String(e.message).split('\n')[0]}`);
   }
 
   // Submission, via the reviewSubmissions flow (appStoreVersionSubmissions is
