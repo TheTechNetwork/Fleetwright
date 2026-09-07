@@ -65,29 +65,80 @@ test('a value containing = survives, because the FIRST = is the separator', () =
   // reported half-named, in the one message whose job is to name the file.
   const odd = '/etc/systemd/system/agent-hub.service.d/10-ProtectSystem=off.conf';
   const lines = [
-    'ProtectSystem=true', 'ReadWritePaths=/etc', `DropInPaths=${odd}`,
+    'ProtectSystem=no', 'ReadWritePaths=', `DropInPaths=${odd}`,
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ];
   assert.equal(unitProtection(fakeSystemctl(lines)).dropIns, odd);
   assert.match(adviseOnFailure(said, mounts(RO_ETC), fakeSystemctl(lines)), /10-ProtectSystem=off\.conf/);
 });
 
-test('ProtectSystem=full is itself the diagnosis now', () => {
+test('the path in the error is the path measured, not /etc', () => {
+  // THE BUG THIS ROUND, AND THE FOURTH TIME SOMETHING WAS MEASURED NEXT TO THE
+  // QUESTION RATHER THAN AT IT.
+  //
+  // `ProtectSystem=full` failed on /etc. Loosening it to `true` made the very
+  // next dpkg run fail on /usr/bin/locale-check — and the advice measured /etc,
+  // found it read-WRITE, and reported "ProtectSystem is NOT what stopped dpkg
+  // and re-running the installer will not change anything" while ProtectSystem
+  // was stopping it, one directory over.
+  //
+  // Testing pathFromDpkg on its own does not catch that: the parse was right
+  // and it was not wired in. This asserts the whole path.
+  const usrFailure =
+    "unable to create '/usr/bin/locale-check.dpkg-new' " +
+    "(while processing './usr/bin/locale-check'): Read-only file system";
+  const etcWritableUsrNot = [
+    '25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw',
+    '36 25 8:1 /usr /usr ro,relatime - ext4 /dev/sda1 rw',
+  ];
+  const cfg = fakeSystemctl([
+    'ProtectSystem=true', 'ReadWritePaths=', 'DropInPaths=',
+    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+  ]);
+  const advice = adviseOnFailure(usrFailure, mounts(etcWritableUsrNot), cfg);
+  assert.match(advice, /READ-ONLY/, 'it measured somewhere the failure was not');
+  assert.match(advice, /\/usr\/bin/, 'it does not name the path that actually failed');
+  assert.doesNotMatch(advice, /READ-WRITE/);
+  assert.doesNotMatch(advice, /will not change anything/, 'it told them the fix would not help, while it would');
+});
+
+test('any ProtectSystem at all is itself the diagnosis now', () => {
   // The unit shipped `full` + ReadWritePaths=/etc to carve /etc back out, and
   // that was MEASURED on a real box and did not work: systemd reported the unit
   // loaded, ReadWritePaths=/etc, no drop-ins, and left /etc read-only anyway.
   // So `full` means "this box is on the older unit", with or without the carve.
-  for (const rwp of ['ReadWritePaths=', 'ReadWritePaths=/etc']) {
+  // `full` blocked /etc; `full` + ReadWritePaths=/etc was loaded by systemd and
+  // left /etc read-only anyway; `true` blocked /usr/bin. Each fix addressed the
+  // path in the last error and uncovered the next, because the sudoers grant is
+  // `apt-get -y upgrade` and rewriting /usr, /etc and /boot is what it IS.
+  for (const [ps, rwp] of [['full', 'ReadWritePaths='], ['full', 'ReadWritePaths=/etc'], ['true', 'ReadWritePaths='], ['strict', 'ReadWritePaths=']]) {
     const cfg = fakeSystemctl([
-      'ProtectSystem=full', rwp, 'DropInPaths=',
+      `ProtectSystem=${ps}`, rwp, 'DropInPaths=',
       'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
     ]);
     const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
     assert.match(advice, /READ-ONLY/);
-    assert.match(advice, /measured NOT to work/, `${rwp} was not recognised as the old unit`);
-    assert.match(advice, /ProtectSystem=true/);
+    assert.match(advice, /no setting of it that lets an upgrade work/, `${ps} ${rwp} was not recognised as an old unit`);
+    assert.match(advice, /ProtectSystem=no/);
     assert.match(advice, /curl -fsSL/);
   }
+});
+
+test('a current unit is NOT told to re-run the installer', () => {
+  // THE BUG THAT SHIPPED INSIDE THE FIX. The conclusion used to be keyed on
+  // ReadWritePaths being ABSENT, because the fixed unit was `full` +
+  // ReadWritePaths=/etc. Removing that pair made an absent ReadWritePaths what
+  // a CORRECT unit looks like, and this branch went on reading it as broken —
+  // telling a box on the current unit to re-run the installer, which is the
+  // exact wrong answer this whole function was rewritten to stop giving.
+  const cfg = fakeSystemctl([
+    'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
+    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+  ]);
+  const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
+  assert.match(advice, /This unit is current/);
+  assert.doesNotMatch(advice, /curl -fsSL/, 'it tells them to re-run the installer they already ran');
+  assert.match(advice, /dmesg/, 'it does not say where to look instead');
 });
 
 test('a unit with the carve-out is NOT read as correctly configured', () => {
@@ -100,19 +151,19 @@ test('a unit with the carve-out is NOT read as correctly configured', () => {
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
-  assert.doesNotMatch(advice, /worth reporting as a bug/);
+  assert.doesNotMatch(advice, /This unit is current/);
   assert.match(advice, /curl -fsSL/);
 });
 
 test('a drop-in over a current unit is named, not guessed at', () => {
   const cfg = fakeSystemctl([
-    'ProtectSystem=true', 'ReadWritePaths=/etc',
+    'ProtectSystem=no', 'ReadWritePaths=',
     'DropInPaths=/etc/systemd/system/agent-hub.service.d/override.conf',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
-  assert.match(advice, /already asks for it/);
-  assert.match(advice, /will NOT help/);
+  assert.match(advice, /This unit is current/);
+  assert.match(advice, /drop-ins on top of it/);
   assert.doesNotMatch(advice, /curl -fsSL/, 'it tells them to do the thing that already failed');
   // AND IT NAMES THE FILE, because "a drop-in is overriding it" without saying
   // which one is another trip to the box.
@@ -121,11 +172,11 @@ test('a drop-in over a current unit is named, not guessed at', () => {
 
 test('a unit that asks for it with no drop-in is reported as a disagreement', () => {
   const cfg = fakeSystemctl([
-    'ProtectSystem=true', 'ReadWritePaths=/etc', 'DropInPaths=',
+    'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
-  assert.match(advice, /worth reporting as a bug/);
+  assert.match(advice, /neither the\nunit nor this service/);
   assert.doesNotMatch(advice, /curl -fsSL/);
 });
 
@@ -179,13 +230,12 @@ test('a systemctl that is not there does not throw out of the advice', () => {
   assert.match(advice, /could not ask systemd why/);
 });
 
-test('/etc is matched as a whole path in the list', () => {
+test('a multi-entry ReadWritePaths survives whole', () => {
   // `/etcetera` starts with `/etc` and is not it. A substring test would report
   // the fix as applied on a box that never asked for it.
   const cfg = fakeSystemctl([
-    'ProtectSystem=true', 'ReadWritePaths=/etcetera /var/tmp', 'DropInPaths=',
+    'ProtectSystem=no', 'ReadWritePaths=/etcetera /var/tmp', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
-  // Not "already asks for it": /etcetera is not /etc, so this unit does not ask.
-  assert.match(adviseOnFailure(said, mounts(RO_ETC), cfg), /predates the fix/);
+  assert.equal(unitProtection(cfg).readWritePaths, '/etcetera /var/tmp');
 });

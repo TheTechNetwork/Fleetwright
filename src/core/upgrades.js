@@ -322,7 +322,35 @@ export function runUpgrade(cfg, { actor = null } = {}) {
 }
 
 /**
- * Whether /etc is read-only IN THIS PROCESS'S MOUNT NAMESPACE.
+ * The path dpkg could not write, out of what it said.
+ *
+ * dpkg names it twice and both are useful:
+ *
+ *   unable to create '/usr/bin/locale-check.dpkg-new' (while processing './usr/bin/locale-check')
+ *
+ * The first is the real target. `.dpkg-new` is dpkg's temporary name for the
+ * file it is about to rename into place, and the DIRECTORY is what has to be
+ * writable — so the suffix comes off and the parent is what gets measured.
+ *
+ * Returns null when nothing recognisable is there, and the caller falls back to
+ * /etc, which is the path this failure has hit most often.
+ *
+ * @param {string} detail
+ * @returns {string|null}
+ */
+export function pathFromDpkg(detail) {
+  const m = /unable to (?:create|remove(?: newly-extracted version of)?) '([^']+)'/.exec(String(detail || ''));
+  if (!m) return null;
+  const file = m[1].replace(/\.dpkg-(?:new|tmp|dist)$/, '');
+  if (!file.startsWith('/')) return null;
+  // The DIRECTORY, because that is what a read-only mount makes unwritable —
+  // and the file itself may not exist yet, which is the whole error.
+  const at = file.lastIndexOf('/');
+  return at > 0 ? file.slice(0, at) : '/';
+}
+
+/**
+ * Whether a path is read-only IN THIS PROCESS'S MOUNT NAMESPACE.
  *
  * The whole point is that this is asked by the process that will run dpkg,
  * rather than reasoned about from a unit file somewhere else. A mount namespace
@@ -341,15 +369,21 @@ export function runUpgrade(cfg, { actor = null } = {}) {
  * final entry rather than the first. Reading the first is how this would report
  * the underlying read-write disk and miss the read-only layer over it.
  *
+ * @param {string} [target] the path to ask about. NOT hardcoded to /etc, and
+ *   that was a real bug: `ProtectSystem=full` fails on /etc, and once that was
+ *   loosened to `true` the very next dpkg run failed on /usr/bin/locale-check —
+ *   whereupon this measured /etc, found it writable, and reported that
+ *   ProtectSystem was not the cause while ProtectSystem was the cause. Measure
+ *   the path that actually failed
  * @param {string} [path] the mountinfo to read, so a test can supply one
  * @returns {{ readOnly: boolean|null, where: string, evidence: string }}
  */
-export function etcMount(path = '/proc/self/mountinfo') {
+export function mountFor(target = '/etc', path = '/proc/self/mountinfo') {
   let raw;
   try {
     raw = readFileSync(path, 'utf8');
   } catch (e) {
-    return { readOnly: null, where: '/etc', evidence: `could not read ${path}: ${/** @type {Error} */ (e).message}` };
+    return { readOnly: null, where: target, evidence: `could not read ${path}: ${/** @type {Error} */ (e).message}` };
   }
   /** @type {{ point: string, opts: string, fstype: string, source: string }|null} */
   let best = null;
@@ -363,20 +397,20 @@ export function etcMount(path = '/proc/self/mountinfo') {
     if (f.length < 6) continue;
     const point = f[4];
     const opts = f[5];
-    if (point !== '/' && point !== '/etc' && !'/etc'.startsWith(`${point}/`)) continue;
+    if (point !== '/' && point !== target && !target.startsWith(`${point}/`)) continue;
     // `>=` and not `>`: a later line at the SAME depth is stacked on top of the
     // earlier one, and the top of the stack is what a write actually meets.
     if (best && best.point.length > point.length) continue;
     const a = after.split(' ');
     best = { point, opts, fstype: a[0] || '?', source: a[1] || '?' };
   }
-  if (!best) return { readOnly: null, where: '/etc', evidence: 'no mount in this namespace covers /etc' };
+  if (!best) return { readOnly: null, where: target, evidence: `no mount in this namespace covers ${target}` };
   // The option list is the authority, and `ro` is a whole word in it — a
   // substring test would match `errors=remount-ro` on a read-write mount.
   const readOnly = best.opts.split(',').includes('ro');
   return {
     readOnly,
-    where: best.point === '/etc' ? '/etc' : `/etc, via ${best.point}`,
+    where: best.point === target ? target : `${target}, via ${best.point}`,
     evidence: `${best.source} on ${best.point}, ${best.fstype}, ${readOnly ? 'ro' : 'rw'}`,
   };
 }
@@ -488,52 +522,58 @@ function adviseOnProtectedEtc(u) {
     );
   }
 
-  // `full` IS THE ANSWER NOW, WHATEVER ReadWritePaths SAYS.
+  // ANY ProtectSystem AT ALL IS THE ANSWER, and narrowing this to `full` was
+  // the third wrong version of it.
   //
-  // The unit shipped `ProtectSystem=full` plus `ReadWritePaths=/etc` to carve
-  // /etc back out, and that was measured on a real box and did not work:
-  // systemd reported the unit loaded, ReadWritePaths=/etc, no drop-ins, and
-  // left /etc read-only in the namespace anyway. The two are a contradiction —
-  // protect /etc, do not protect /etc — and which way a given systemd resolves
-  // it is a detail of that version.
+  // The walk went: `full` blocked /etc; `full` + ReadWritePaths=/etc was loaded
+  // by systemd and left /etc read-only anyway, measured on the box; `true`
+  // blocked /usr/bin. Each fix addressed the path in the last error and
+  // uncovered the next, because the sudoers grant is `apt-get -y upgrade` and
+  // rewriting /usr, /etc and /boot is what that command IS.
   //
-  // So the unit says `ProtectSystem=true` now, which has nothing to resolve,
-  // and a box still reporting `full` is a box on the older unit. That holds
-  // whether or not ReadWritePaths is set beside it, which is why it is checked
-  // BEFORE it: the previous version of this branch read `full` +
-  // ReadWritePaths=/etc as "configured correctly, must be a drop-in" and would
-  // have sent somebody looking for a file that does not exist.
-  if (u.protectSystem === 'full') {
+  // So the unit says `no`, and anything else is a unit that predates that.
+  if (u.protectSystem && u.protectSystem !== 'no') {
     return (
-      `systemd loaded this unit with ProtectSystem=full${u.readWritePaths ? ` and ReadWritePaths=${u.readWritePaths}` : ''},\n` +
-      'which is the combination measured NOT to work: asking systemd to protect /etc and to leave /etc\n' +
-      'writable is a contradiction, and it does not resolve the same way everywhere.\n\n' +
-      'The unit uses ProtectSystem=true now — /usr and /boot stay read-only, and /etc goes back to\n' +
-      'ordinary file permissions, which already stop an unprivileged service. This box is on the older\n' +
-      `one${u.fragment ? ` (${u.fragment})` : ''}. Re-running the installer writes the new one:\n` +
+      `systemd loaded this unit with ProtectSystem=${u.protectSystem}${u.readWritePaths ? ` and ReadWritePaths=${u.readWritePaths}` : ''}.\n` +
+      'Every setting of that makes some of /usr, /boot and /etc read-only for this service and every\n' +
+      'command it runs — and `apt-get -y upgrade`, which is the one thing this service is allowed to do\n' +
+      'as root, rewrites exactly those. There is no setting of it that lets an upgrade work.\n\n' +
+      `The unit uses ProtectSystem=no now. This box is on an older one${u.fragment ? ` (${u.fragment})` : ''}.\n` +
+      'Re-running the installer writes it:\n' +
       '  curl -fsSL <your coordinator>/install | sudo sh'
     );
   }
-  // A whole path in a space-separated list, not a substring: `/etcetera` starts
-  // with `/etc` and is not it.
-  const has = u.readWritePaths.split(/\s+/).filter(Boolean).includes('/etc');
-  if (has) {
+  // EVERYTHING BELOW IS A CURRENT UNIT, and this branch had an older meaning
+  // baked into it twice over.
+  //
+  // It used to conclude "predates the fix" from ReadWritePaths being ABSENT,
+  // because the fixed unit was `full` + `ReadWritePaths=/etc`. #452 removed
+  // that pair, so an absent ReadWritePaths is now what a CORRECT unit looks
+  // like — and this branch went on reading it as the broken one. A box on the
+  // current unit with a read-only /etc for any other reason was told to re-run
+  // the installer, which is the exact wrong answer this whole function was
+  // rewritten to stop giving, shipped inside the fix for it.
+  //
+  // So the conclusion is keyed on ProtectSystem, which is the thing that
+  // actually decides it. `full` is handled above; anything else — `yes`,
+  // `true`, `strict`, `no` — is a unit that is not making /etc read-only, so
+  // something else did.
+  if (u.dropIns) {
     return (
-      `The unit already asks for it — ReadWritePaths=${u.readWritePaths} — and systemd did not apply it,\n` +
-      'so something is overriding this unit. Re-running the installer will NOT help.\n\n' +
-      (u.dropIns
-        ? `A drop-in is in the way. systemd loaded these on top of ${u.fragment || 'the unit'}:\n` +
-          `${u.dropIns.split(/\s+/).filter(Boolean).map((f) => `  ${f}`).join('\n')}\n` +
-          'Look for ReadWritePaths= or ProtectSystem= in those, and remove or correct the line.'
-        : `systemd reports no drop-ins, and ${u.fragment || 'the unit'} is what it loaded. That is a\n` +
-          'disagreement between the unit and the namespace worth reporting as a bug — with the output of:\n' +
-          '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p FragmentPath -p DropInPaths')
+      `This unit is current (ProtectSystem=${u.protectSystem || 'unset'}), so it is not what made /etc\n` +
+      'read-only — but systemd loaded drop-ins on top of it:\n' +
+      `${u.dropIns.split(/\s+/).filter(Boolean).map((f) => `  ${f}`).join('\n')}\n` +
+      'Look for ProtectSystem=, ReadOnlyPaths= or InaccessiblePaths= in those.'
     );
   }
   return (
-    `systemd loaded this unit with ProtectSystem=${u.protectSystem || 'full'} and ReadWritePaths empty,\n` +
-    `so it predates the fix${u.fragment ? ` — the file is ${u.fragment}` : ''}. Re-running the installer writes it:\n` +
-    '  curl -fsSL <your coordinator>/install | sudo sh'
+    `This unit is current (ProtectSystem=${u.protectSystem || 'unset'}) with no drop-ins, so neither the\n` +
+    'unit nor this service is what made /etc read-only. Somewhere else did:\n' +
+    '  systemctl show agent-hub -p ReadOnlyPaths -p InaccessiblePaths -p TemporaryFileSystem\n' +
+    '  findmnt -o TARGET,SOURCE,OPTIONS /etc      # a read-only mount over /etc\n' +
+    '  dmesg | tail                               # a filesystem remounted read-only after an error\n\n' +
+    'That last one is the case that matters: a disk that hit an I/O error goes read-only by itself, ' +
+    'and it will keep failing until it is checked.'
   );
 }
 
@@ -604,7 +644,9 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg 
     // It does not have to reason about the unit file: it can look at its own
     // mounts. So it does, and what it says depends on what it found rather than
     // on what is usually true.
-    const mount = etcMount(mountInfo);
+    // THE PATH THAT ACTUALLY FAILED, not the one this bug first appeared at.
+    const failed = pathFromDpkg(said) || '/etc';
+    const mount = mountFor(failed, mountInfo);
     if (mount.readOnly === true) {
       // AND THEN ASK SYSTEMD WHICH OF THE THREE, rather than printing the
       // command that would. The first version of this branch ended with two

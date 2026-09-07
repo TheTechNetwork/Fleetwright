@@ -54,46 +54,43 @@ ProtectClock=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectProc=invisible
-# `true` AND NOT `full`, WHICH IS THE SECOND ATTEMPT AT THIS.
+# `no`, AND THIS IS THE THIRD ATTEMPT, SO THE REASONING IS WRITTEN OUT IN FULL.
 #
-# `full` adds /etc to the /usr and /boot that `true` already protects. The one
-# thing this service exists to launch writes /etc — a mount namespace is not
-# something `sudo` escapes, so the sanctioned `sudo -n apt-get upgrade`
-# inherited it too:
+# This service's ONE privileged operation is `sudo -n apt-get -y upgrade`,
+# granted by a sudoers rule naming that exact command line. Rewriting /usr, /etc
+# and /boot IS WHAT THAT COMMAND IS. Every setting of ProtectSystem forbids some
+# of it, and a mount namespace is not something `sudo` escapes, so the sanctioned
+# upgrade inherits whatever this line says.
 #
-#   unable to create '/etc/debian_version.dpkg-new'
-#     (while processing './etc/debian_version'): Read-only file system
+# Watch the failure walk from one protected path to the next:
 #
-# Reported from a box whose filesystem is perfectly writable. It was ours, and
-# `/upgrade` could not have worked on any box carrying this unit, for any
-# package with a conffile — which is most of them.
+#   full   → unable to create '/etc/debian_version.dpkg-new': Read-only file system
+#   +ReadWritePaths=/etc
+#          → systemd loaded it, reported ReadWritePaths=/etc and no drop-ins,
+#            and left /etc read-only anyway. Measured on the box.
+#   true   → unable to create '/usr/bin/locale-check.dpkg-new': Read-only file system
 #
-# THE FIRST ATTEMPT WAS `full` PLUS `ReadWritePaths=/etc`, AND IT DID NOT WORK.
-# Measured on the box that reported it, after the fix had been installed:
+# Three rounds, each fixing the path in the last error and uncovering the next.
+# `true` still protects /usr and /boot, and dpkg writes both, so it was never
+# going to be the last one. There is no setting of this that lets apt work.
 #
-#   systemctl show → ProtectSystem=full  ReadWritePaths=/etc  DropInPaths=
-#   /proc/<pid>/mountinfo → 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 rw,...
+# WHAT IS ACTUALLY GIVEN UP IS SMALL, AND WORTH STATING PRECISELY RATHER THAN
+# WAVING AT. The service runs as an UNPRIVILEGED USER. Ordinary file permissions
+# already stop it writing /usr, /boot and /etc — the namespace was redundant for
+# everything it does on its own account. It was load-bearing only against a
+# service that had somehow gained privileges — and the privilege this one is
+# granted is `apt-get -y upgrade`, which rewrites those directories as its
+# purpose. ProtectSystem was defending the door that the sudoers rule holds open
+# on purpose.
 #
-# The unit asks for it, systemd loaded the unit, nothing overrides it, and /etc
-# is still read-only in the namespace. I do not know why that resolves this way
-# here and not elsewhere, and three wrong explanations of this exact failure is
-# enough — so this stops asking systemd to resolve a contradiction rather than
-# trying to win the argument about precedence.
-#
-# `full` and `ReadWritePaths=/etc` ARE a contradiction: protect /etc, and do not
-# protect /etc. Whichever way a given systemd resolves it is a detail of that
-# version, and a unit whose correctness depends on it is a unit that works on
-# the boxes we tested and not the ones we did not.
-#
-# WHAT IS ACTUALLY LOST IS LESS THAN IT LOOKS. /usr, /boot and /efi stay
-# read-only, which is the part that matters for a service that should never
-# rewrite its own runtime. /etc goes back to being guarded by ordinary file
-# permissions — and the service runs as an UNPRIVILEGED USER, so those already
-# stop it writing /etc. The namespace was redundant for everything except the
-# one operation that legitimately has root, through a sudoers rule naming that
-# exact command line. It blocked the sanctioned path while permissions did the
-# real work.
-ProtectSystem=true
+# THE HARDENING CAN COME BACK, AND HERE IS HOW. Give the upgrade its own
+# oneshot unit with no sandboxing, and grant this service `systemctl start
+# agent-hub-upgrade.service` and nothing else. agent-hub keeps ProtectSystem,
+# dpkg gets a clean namespace, and the sudoers grant narrows from "run apt as
+# root" to "start one named unit". That is the right shape and it is not built —
+# it changes how output is captured and how failures are detected, and this box
+# has been unable to take a security update through four rounds of this.
+ProtectSystem=no
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
@@ -121,12 +118,14 @@ RuntimeDirectoryMode=0700
 #                         ~/.local/share/containers, and the Claude credential
 #                         is in ~/.claude.
 #   ProtectSystem=strict  podman run fails.
-#   ProtectSystem=full    /etc read-only for every child too, and dpkg writes
-#                         there. Tried with ReadWritePaths=/etc to carve it back
-#                         out; measured on a real box, systemd loaded that unit
-#                         and left /etc read-only anyway. See the note above
-#                         ProtectSystem= for the measurement. `true` is what
-#                         this needs, and it keeps /usr and /boot.
+#   ProtectSystem=full    dpkg cannot write /etc. Tried with ReadWritePaths=/etc
+#                         to carve it back out; systemd loaded that unit and
+#                         left /etc read-only anyway, measured on a real box.
+#   ProtectSystem=true    dpkg cannot write /usr. This is the one that shows
+#                         there is no working setting: the sudoers grant is
+#                         `apt-get -y upgrade`, whose job is rewriting exactly
+#                         the directories every level of this protects. See the
+#                         note above ProtectSystem= for the way out.
 #   ProtectKernelTunables podman run fails.
 #   ProtectControlGroups  podman run fails; it writes its own cgroup.
 #   ProtectHostname       podman run fails.
