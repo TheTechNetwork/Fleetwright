@@ -119,26 +119,41 @@ test('the advice matches the failure, or says nothing clever', async () => {
   };
   const RW = '25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw';
 
+  // A SYSTEMD FIXTURE TOO, for the same reason as the mountinfo one: the
+  // read-only branch now ASKS systemd which of the three reasons it is, so
+  // asserting against the machine running the suite would make this test agree
+  // with whatever units that box happens to have. test/unit-protection.test.js
+  // covers the three answers; this one only needs the shape.
+  const systemd = (lines) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'systemctl-'));
+    const bin = path.join(dir, 'systemctl');
+    writeFileSync(bin, `#!/bin/sh\n${lines.map((l) => `echo ${JSON.stringify(l)}`).join('\n')}\n`, { mode: 0o755 });
+    return { systemctlBin: bin };
+  };
+  const OLD_UNIT = systemd([
+    'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
+    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+  ]);
+
   // OURS: a read-only layer stacked over a perfectly good disk.
-  const ours = adviseOnFailure(said, fixture([RW, '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro']));
+  const ours = adviseOnFailure(said, fixture([RW, '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro']), OLD_UNIT);
   assert.match(ours, /READ-ONLY/, 'it does not say what it measured');
   assert.match(ours, /sudo does not/i);
-  assert.match(ours, /ReadWritePaths/, 'it does not say how to fix it');
-  assert.match(ours, /systemctl show agent-hub/);
+  assert.match(ours, /predates the fix/, 'it does not say how to fix it');
   assert.doesNotMatch(ours, /update the image/i, 'it blames the image again');
 
   // NOT OURS: /etc is writable in this namespace, so ProtectSystem did not do
   // it and the installer will not fix it. This is the answer the shipped
   // version could not express, and the one a person is standing in when they
   // say "it still fails".
-  const notOurs = adviseOnFailure(said, fixture([RW]));
+  const notOurs = adviseOnFailure(said, fixture([RW]), OLD_UNIT);
   assert.match(notOurs, /READ-WRITE/);
   assert.match(notOurs, /re-running the installer will not change anything/);
   assert.match(notOurs, /findmnt/, 'it does not say where to look instead');
 
   // CANNOT TELL is its own answer, and rounding it to either of the two above
   // is how both earlier versions went wrong.
-  const unmeasurable = adviseOnFailure(said, '/definitely/not/here');
+  const unmeasurable = adviseOnFailure(said, '/definitely/not/here', OLD_UNIT);
   assert.match(unmeasurable, /could not read its own mounts/);
   assert.match(unmeasurable, /findmnt/);
   assert.match(unmeasurable, /ReadWritePaths/);

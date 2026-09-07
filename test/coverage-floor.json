@@ -40,7 +40,7 @@
   "src/core/tmux.js": 82,
   "src/core/trust.js": 46,
   "src/core/update.js": 83,
-  "src/core/upgrades.js": 92,
+  "src/core/upgrades.js": 93,
   "src/core/which.js": 96,
   "src/fleet/apns-node.js": 47,
   "src/fleet/coordinator/clients.js": 100,
