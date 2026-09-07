@@ -104,9 +104,12 @@ writeFileSync(
 <title>Fleetwright console</title>
 <style>
 ${css}
-.preview-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
-.preview-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-dim)}
-.preview-pick{flex:1;max-width:24rem;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;min-height:38px;padding:0 10px;font:inherit;font-size:.9rem}
+/* The switcher is preview furniture, not part of the console — but it reads
+   from the same tokens, because a chrome bar with its own hardcoded greys is
+   the first place a palette starts to fork. */
+.preview-bar{display:flex;align-items:center;gap:var(--s-in);padding:var(--s-in) var(--s-group-tight);box-shadow:0 1px 0 var(--ring);background:var(--card);position:sticky;top:0;z-index:2}
+.preview-label{font-size:var(--t-label);color:var(--ink-dim)}
+.preview-pick{flex:1;max-width:24rem;background:var(--inner);color:var(--ink);border:0;box-shadow:0 0 0 1px var(--ring);border-radius:var(--r-chip);min-height:44px;padding:0 var(--s-in);font:inherit;font-size:var(--t-body-sm)}
 </style>
 </head>
 <body>

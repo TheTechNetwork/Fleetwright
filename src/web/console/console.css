@@ -14,37 +14,175 @@
  * NEVER COLOUR ALONE (docs/psychology.md §5). Every tone below is reinforcement
  * for a word and a glyph that are already in the markup. Deleting this entire
  * file leaves a page that still says everything it means.
+ *
+ * EVERY VALUE IS A TOKEN, and that is the rule test/design-tokens.test.js
+ * enforces rather than hopes for. A colour, a radius or a step of space written
+ * as a literal in a rule is a value that exists in one theme and one place:
+ * the light palette drifted from the dark one twice that way before the whole
+ * palette moved into `:root`. Rules below reference `var(--…)`; the numbers
+ * live at the top of this file and nowhere else.
  */
 
 :root {
   color-scheme: dark light;
+
+  /* --- type ---------------------------------------------------------------
+   *
+   * One family, one mono, and NO WEBFONT FETCH. Inter Tight is the design's
+   * face and is used when the machine already has it; the stack behind it is
+   * the system UI face. The page ships as a single inlined file that has to
+   * open on a phone with no network and inside file viewers that will not
+   * fetch anything — an `@import` from a font CDN turns "openable" into "as
+   * long as you are online", which is the one property this page is built to
+   * keep.
+   *
+   * Sizes are rem so a person's own font-size setting still moves them. The
+   * px figures in the comments are the design's, at the default 16px root. */
+  --font: 'Inter Tight', 'InterTight', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --t-greeting: 1.625rem;   /* 26px — the assurance headline, once per page */
+  --t-title: 1.375rem;      /* 22px — the question a session is asking */
+  --t-section: 1.1875rem;   /* 19px — pane headings */
+  --t-body: 1rem;           /* 16px — rows, questions, anything read to decide */
+  --t-body-sm: 0.875rem;    /* 14px — reasons, ledger lines, second-rank prose */
+  --t-label: 0.8125rem;     /* 13px — badges, hostIds, ordinals */
+  --t-micro: 0.75rem;       /* 12px — labels under a name, never load-bearing */
+
+  /* Tighter as it gets bigger: large text set at normal tracking reads loose
+   * and accidental. Negative tracking is never applied below --t-section,
+   * where it costs legibility and buys nothing. */
+  --ls-greeting: -0.9px;
+  --ls-title: -0.8px;
+  --ls-section: -0.7px;
+
+  /* --- space --------------------------------------------------------------
+   *
+   * Dense and predictable: page margin, the gap between groups of cards, and
+   * the gap inside one. Three questions, three answers, no fourth value. */
+  --s-page: 26px;
+  --s-group: 22px;
+  --s-group-tight: 16px;
+  --s-in: 12px;
+  --s-in-tight: 8px;
+  --s-hair: 4px;
+
+  /* --- radius -------------------------------------------------------------
+   *
+   * A hierarchy rather than a value, so nesting reads as nesting: the frame
+   * around everything, then cards, then the rows and chips inside them, then
+   * circles. --r-frame and --r-round have no consumer on this page yet; they
+   * are here because the store screenshots and the icon buttons in the work
+   * queue are the same design system, and a second set of numbers invented
+   * later is how two surfaces stop matching. */
+  --r-frame: 54px;
+  --r-card: 22px;
+  --r-card-sm: 18px;
+  --r-row: 14px;
+  --r-chip: 8px;
+  --r-round: 50%;
+
+  /* --- colour: dark, which is the default and the one tuned for a dark room
+   *
+   * The ground is not #000 so a lit card does not punch a hole in the retina,
+   * and ink is not #fff so a wall of text is not glare. */
   --bg: #0b0d10;
-  --panel: #12151a;
-  --line: #232833;
+  --card: #12151a;
+  --inner: #171b22;
+  --track: #232833;
   --ink: #e6e9ef;
   --ink-dim: #8b93a3;
+
+  /* Separation without a border. A card edged in a hairline reads as a box on
+   * a page; a card lifted by an inset highlight, a soft drop shadow and a 1px
+   * ring reads as a surface above it. Same job, quieter. */
+  --ring: rgba(255, 255, 255, 0.07);
+  --highlight: rgba(255, 255, 255, 0.05);
+  --shadow-drop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 24px rgba(0, 0, 0, 0.22);
+
+  /* Interactive only — links, focus, the ring on a card you are about to act
+   * on. NEVER a state: a colour that means both "clickable" and "working" means
+   * neither. #3866D6 is the brand value and stays the fill in both themes;
+   * dark lifts the tint used for hairlines and text so it clears the ground. */
+  --accent: #5b8bef;
+  --accent-deep: #3866D6;
+
+  /* The four meanings the palette carries. The vocabulary carries fourteen —
+   * the difference is a word and a glyph, not two reds in an order nobody
+   * remembers. --active is deliberately a sky blue rather than a second
+   * indigo: "working" must not be mistakable for "clickable". */
   --ok: #4ade80;
   --attention: #fbbf24;
   --bad: #f87171;
-  --active: #60a5fa;
+  --active: #38bdf8;
   --unsure: #a78bfa;
   --idle: #6b7280;
-  --s1: 4px;
-  --s2: 8px;
-  --s3: 14px;
-  --s4: 22px;
-  --radius: 10px;
+
+  /* Charts and contribution grids: five steps from the muted track to the
+   * strongest blue the ground will carry. Step 4 is the brand accent, so a
+   * chart and a button are visibly the same system. */
+  --chart-1: #232833;
+  --chart-2: #2b3f66;
+  --chart-3: #2f56a3;
+  --chart-4: var(--accent-deep);
+  --chart-5: #7aa7f7;
+
+  /* Composed once, used everywhere. A card that assembles its own shadow is a
+   * card that will be assembled differently next time. */
+  --card-shadow: inset 0 1px 0 var(--highlight), var(--shadow-drop), 0 0 0 1px var(--ring);
+  --ring-attention: color-mix(in srgb, var(--attention) 55%, transparent);
 }
 
+/* Light, defined in both directions so the toggle wins either way and the page
+ * never borrows a ground it did not choose. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
     --bg: #f7f8fa;
-    --panel: #ffffff;
-    --line: #e2e6ee;
+    --card: #ffffff;
+    --inner: #f1f3f7;
+    --track: #e6eaf1;
     --ink: #12151a;
     --ink-dim: #5b6474;
     --idle: #9aa2b1;
+    --ring: rgba(16, 20, 28, 0.09);
+    --highlight: rgba(255, 255, 255, 0.9);
+    --shadow-drop: 0 1px 2px rgba(16, 20, 28, 0.06), 0 10px 24px rgba(16, 20, 28, 0.05);
+    --accent: #3866D6;
+    --ok: #0f7a52;
+    --attention: #a15c00;
+    --bad: #c02b2b;
+    --active: #0369a1;
+    --unsure: #6d43c8;
+    --chart-1: #e6eaf1;
+    --chart-2: #b9caea;
+    --chart-3: #7b9de2;
+    --chart-4: var(--accent-deep);
+    --chart-5: #1e3f8f;
   }
+}
+
+:root[data-theme='light'] {
+  --bg: #f7f8fa;
+  --card: #ffffff;
+  --inner: #f1f3f7;
+  --track: #e6eaf1;
+  --ink: #12151a;
+  --ink-dim: #5b6474;
+  --idle: #9aa2b1;
+  --ring: rgba(16, 20, 28, 0.09);
+  --highlight: rgba(255, 255, 255, 0.9);
+  --shadow-drop: 0 1px 2px rgba(16, 20, 28, 0.06), 0 10px 24px rgba(16, 20, 28, 0.05);
+  --accent: #3866D6;
+  --ok: #0f7a52;
+  --attention: #a15c00;
+  --bad: #c02b2b;
+  --active: #0369a1;
+  --unsure: #6d43c8;
+  --chart-1: #e6eaf1;
+  --chart-2: #b9caea;
+  --chart-3: #7b9de2;
+  --chart-4: var(--accent-deep);
+  --chart-5: #1e3f8f;
 }
 
 * { box-sizing: border-box; }
@@ -53,11 +191,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font);
+  font-size: var(--t-body);
+  line-height: 1.5;
   -webkit-text-size-adjust: 100%;
 }
 
-.console { padding: var(--s3); max-width: 1600px; margin: 0 auto; }
+.console { padding: var(--s-page); max-width: 1600px; margin: 0 auto; }
 
 /* --- the assurance panel -------------------------------------------------
  *
@@ -66,37 +206,37 @@ body {
  * claims that hold recede, claims that fail come forward. */
 
 .confidence {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: var(--s3);
-  margin-bottom: var(--s3);
+  background: var(--card);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+  padding: var(--s-group-tight);
+  margin-bottom: var(--s-group);
 }
-.confidence.unsettled { border-color: color-mix(in srgb, var(--attention) 45%, var(--line)); }
+.confidence.unsettled { box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-drop), 0 0 0 1px var(--ring-attention); }
 
 .headline {
   display: flex;
   align-items: baseline;
-  gap: var(--s2);
-  margin: 0 0 var(--s3);
-  font-size: clamp(1.15rem, 4.5vw, 1.5rem);
+  gap: var(--s-in-tight);
+  margin: 0 0 var(--s-group-tight);
+  font-size: var(--t-greeting);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--ls-greeting);
 }
 .settled .headline .glyph { color: var(--ok); }
 .unsettled .headline .glyph { color: var(--attention); }
-.headline .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.headline .glyph { font-family: var(--mono); font-weight: 700; letter-spacing: normal; }
 
-.claims { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.claims { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-in-tight); }
 
 .claim {
   display: grid;
   grid-template-columns: 1.4em 1fr;
-  gap: var(--s2);
+  gap: var(--s-in-tight);
   align-items: start;
-  font-size: 0.94rem;
+  font-size: var(--t-body-sm);
 }
-.claim .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.claim .glyph { font-family: var(--mono); font-weight: 700; }
 .claim.holds { color: var(--ink-dim); }
 .claim.holds .glyph { color: var(--ok); }
 .claim.fails { color: var(--ink); }
@@ -109,9 +249,9 @@ body {
 .c-remedy {
   grid-column: 2;
   display: block;
-  font-size: 0.86rem;
+  font-size: var(--t-label);
   color: var(--ink-dim);
-  margin-top: 2px;
+  margin-top: var(--s-hair);
 }
 /* The remedy, because a person reading an error has less working memory
  * available than usual (docs/psychology.md §6). */
@@ -119,49 +259,55 @@ body {
 
 /* --- panes ---------------------------------------------------------------- */
 
-.panes { display: flex; flex-direction: column; gap: var(--s3); }
+.panes { display: flex; flex-direction: column; gap: var(--s-group); }
 
 @media (min-width: 900px) {
-  .panes { display: grid; grid-template-columns: 17rem minmax(0, 1fr) 19rem; gap: var(--s3); align-items: start; }
+  .panes { display: grid; grid-template-columns: 17rem minmax(0, 1fr) 19rem; gap: var(--s-group); align-items: start; }
 }
 
+/* Section headings, not shouted labels. The old ones were 12px uppercase with
+ * wide tracking, which is a style for a column head in a table and reads as
+ * chrome above a card. */
 .rail h2, .side h2 {
-  margin: 0 0 var(--s2);
-  font-size: 0.76rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-dim);
+  margin: 0 0 var(--s-in);
+  font-size: var(--t-section);
+  font-weight: 600;
+  letter-spacing: var(--ls-section);
+  color: var(--ink);
 }
 
 .hosts, .sessions, .asks, .ledger, .options { list-style: none; margin: 0; padding: 0; }
-.hosts, .sessions, .asks { display: flex; flex-direction: column; gap: var(--s2); }
+.hosts, .sessions, .asks { display: flex; flex-direction: column; gap: var(--s-in); }
 
-/* --- a machine ------------------------------------------------------------ */
+/* --- a machine ------------------------------------------------------------
+ *
+ * No border, and the state bar is an inset rather than a `border-left`: a
+ * 3px edge on a 22px radius clips into a wedge, and the bar is a redundant
+ * encoding of something the badge already says in a word. */
 
 .host {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--line);
-  border-radius: var(--radius);
-  padding: var(--s2) var(--s3);
+  background: var(--card);
+  border-radius: var(--r-card-sm);
+  box-shadow: inset var(--s-hair) 0 0 var(--idle), var(--card-shadow);
+  padding: var(--s-in) var(--s-group-tight);
 }
-.host.state-healthy { border-left-color: var(--ok); }
-.host.state-degraded { border-left-color: var(--attention); }
-.host.state-offline { border-left-color: var(--bad); }
-.host.state-unknown { border-left-color: var(--unsure); }
+.host.state-healthy { box-shadow: inset var(--s-hair) 0 0 var(--ok), var(--card-shadow); }
+.host.state-degraded { box-shadow: inset var(--s-hair) 0 0 var(--attention), var(--card-shadow); }
+.host.state-offline { box-shadow: inset var(--s-hair) 0 0 var(--bad), var(--card-shadow); }
+.host.state-unknown { box-shadow: inset var(--s-hair) 0 0 var(--unsure), var(--card-shadow); }
 
-.host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
-.host-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
+.host-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-in-tight); }
+.host-id { font-family: var(--mono); font-size: var(--t-label); }
 
 /* Verbatim and never truncated: the registry works to make "we don't know"
  * unrepresentable as a benign value, and nothing used to render it. */
-.reason { margin: var(--s1) 0 0; font-size: 0.84rem; color: var(--ink-dim); }
-.labels { margin: var(--s1) 0 0; font-size: 0.78rem; color: var(--ink-dim); }
+.reason { margin: var(--s-in-tight) 0 0; font-size: var(--t-body-sm); color: var(--ink-dim); }
+.labels { margin: var(--s-hair) 0 0; font-size: var(--t-micro); color: var(--ink-dim); }
 
 /* --- badges: a word and a glyph, tint agreeing --------------------------- */
 
-.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; white-space: nowrap; }
-.badge .glyph { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.badge { display: inline-flex; align-items: center; gap: var(--s-hair); font-size: var(--t-label); white-space: nowrap; }
+.badge .glyph { font-family: var(--mono); font-weight: 700; }
 .tone-ok { color: var(--ok); }
 .tone-attention { color: var(--attention); }
 .tone-bad { color: var(--bad); }
@@ -172,71 +318,79 @@ body {
 /* --- what is being asked -------------------------------------------------- */
 
 .ask {
-  background: var(--panel);
-  border: 1px solid color-mix(in srgb, var(--attention) 50%, var(--line));
-  border-radius: var(--radius);
-  padding: var(--s3);
-  margin-bottom: var(--s2);
+  background: var(--card);
+  border-radius: var(--r-card);
+  box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-drop), 0 0 0 1px var(--ring-attention);
+  padding: var(--s-group-tight);
+  margin-bottom: var(--s-in);
 }
-.ask-head { display: flex; justify-content: space-between; gap: var(--s2); font-size: 0.8rem; color: var(--ink-dim); }
-.ask-what { font-weight: 600; color: var(--ink); font-size: 0.95rem; }
-.question { margin: var(--s2) 0 var(--s3); font-size: 1.02rem; }
+.ask-head { display: flex; justify-content: space-between; gap: var(--s-in-tight); font-size: var(--t-label); color: var(--ink-dim); }
+.ask-what { font-weight: 600; color: var(--ink); font-size: var(--t-body); }
+.ask-where { font-family: var(--mono); }
+.question {
+  margin: var(--s-in) 0 var(--s-group-tight);
+  font-size: var(--t-title);
+  font-weight: 600;
+  letter-spacing: var(--ls-title);
+}
 
-.options { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.options { display: flex; flex-wrap: wrap; gap: var(--s-in-tight); }
 .option {
   display: inline-flex;
   align-items: center;
-  gap: var(--s2);
-  background: transparent;
+  gap: var(--s-in-tight);
+  background: var(--inner);
   color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--r-row);
+  box-shadow: 0 0 0 1px var(--ring);
   /* 44px minimum: this gets used on a phone whether or not it was designed to. */
   min-height: 44px;
-  padding: 0 var(--s3);
+  padding: 0 var(--s-group-tight);
   font: inherit;
-  font-size: 0.92rem;
+  font-size: var(--t-body-sm);
   cursor: pointer;
 }
-.option:hover, .option:focus-visible { border-color: var(--active); outline: none; }
+.option:hover { box-shadow: 0 0 0 1px var(--accent); }
+.option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ordinal {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   color: var(--ink-dim);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 0 6px;
-  font-size: 0.8rem;
+  background: var(--track);
+  border-radius: var(--r-chip);
+  padding: 0 var(--s-in-tight);
+  font-size: var(--t-label);
 }
-.withheld { margin: 0; font-size: 0.86rem; color: var(--ink-dim); }
+.withheld { margin: 0; font-size: var(--t-body-sm); color: var(--ink-dim); }
 
 /* --- the wall ------------------------------------------------------------- */
 
 .srow {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px var(--s2);
+  gap: var(--s-hair) var(--s-in-tight);
   align-items: baseline;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: var(--s2) var(--s3);
+  background: var(--card);
+  border-radius: var(--r-row);
+  box-shadow: var(--card-shadow);
+  padding: var(--s-in) var(--s-group-tight);
 }
-.s-title { font-weight: 550; }
+.s-title { font-weight: 600; }
 .s-name, .s-host {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.76rem;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
   color: var(--ink-dim);
 }
 .s-name { grid-column: 1; }
 .s-host { grid-column: 1; }
 .srow .badge { grid-row: 1; grid-column: 2; }
-.srow.state-waiting { border-color: color-mix(in srgb, var(--attention) 50%, var(--line)); }
+.srow.state-waiting { box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-drop), 0 0 0 1px var(--ring-attention); }
 
 /* --- who did what --------------------------------------------------------- */
 
-.ledger { display: flex; flex-direction: column; gap: var(--s2); font-size: 0.84rem; }
-.entry { display: flex; flex-direction: column; gap: 1px; }
-.e-who { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; color: var(--ink-dim); }
+.ledger { display: flex; flex-direction: column; gap: var(--s-in); font-size: var(--t-body-sm); }
+.entry { display: flex; flex-direction: column; gap: var(--s-hair); }
+.e-who { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-dim); }
 
 /* --- the coordinator is unreachable --------------------------------------
  *
@@ -244,3 +398,12 @@ body {
  * elsewhere; a ticking clock over frozen data is the most convincing lie a
  * stale UI tells. */
 .console.stale .panes { filter: saturate(0.35); opacity: 0.75; }
+
+/* --- when the shadows are not there --------------------------------------
+ *
+ * Forced-colours mode drops every box-shadow, and a borderless card is then a
+ * card with nothing around it at all — three panes of text run together. The
+ * separation comes back as a border the mode will actually paint. */
+@media (forced-colors: active) {
+  .confidence, .host, .ask, .srow, .option { border: 1px solid; }
+}

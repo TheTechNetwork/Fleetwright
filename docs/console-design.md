@@ -615,33 +615,104 @@ plus a `▸` gutter caret plus a raised surface; focus is a 2 px offset ring in
 
 ## 5. Visual language
 
-One family (system UI), one mono, no webfonts, no icon font, no SVG sprites.
-Glyphs are single characters that exist in every system font we will meet.
+One family, one mono, no icon font, no SVG sprites. Glyphs are single
+characters that exist in every system font we will meet.
+
+**The face is Inter Tight, and it is not fetched.** It is used when the machine
+already has it and the system UI face carries the page otherwise. The console
+ships as one inlined file that has to open on a phone with no network and
+inside file viewers that will not run a script — an `@import` from a font CDN
+turns "openable" into "openable if you are online", and openable is the
+property the whole build exists to keep.
+
+**The numbers below are the implementation.** They were not, once: this section
+described `--surface`, `--line-strong` and `--ask`, and the stylesheet had
+`--panel`, `--line` and `--attention`. A design doc that names tokens the page
+does not have is a doc nobody can check a change against.
+`test/design-tokens.test.js` now reads `console.css` and asserts the parts of
+this section that are true or false rather than tasteful.
 
 ### Type scale
 
-Root 16 px. Five sizes and no others.
+Root 16 px, seven sizes, and no eighth. Sizes are `rem` so a person's own
+font-size setting still moves them; the px figures are at the default root.
 
-| Token | Size | Line | Use |
+| Token | Size | Tracking | Use |
 |---|---|---|---|
-| `--t-micro` | 0.6875rem / 11px | 1.3 | Column heads, host meta labels. Uppercase, `letter-spacing: .08em`. Never for anything a person must read to make a decision. |
-| `--t-meta` | 0.8125rem / 13px | 1.45 | Ages, hostIds, ledger lines |
-| `--t-body` | 0.9375rem / 15px | 1.5 | Rows, reasons, consequences — the default |
-| `--t-lead` | 1.0625rem / 17px | 1.4 | Session title, the prompt question |
-| `--t-head` | 1.375rem / 22px | 1.25 | The Ask headline, empty-state headings |
+| `--t-greeting` | 1.625rem / 26px | `--ls-greeting`, -0.9px | The assurance headline. Once per page |
+| `--t-title` | 1.375rem / 22px | `--ls-title`, -0.8px | The question a session is asking |
+| `--t-section` | 1.1875rem / 19px | `--ls-section`, -0.7px | Pane headings |
+| `--t-body` | 1rem / 16px | normal | Rows, session titles, anything read to decide |
+| `--t-body-sm` | 0.875rem / 14px | normal | Reasons, ledger lines, second-rank prose |
+| `--t-label` | 0.8125rem / 13px | normal | Badges, hostIds, ordinals |
+| `--t-micro` | 0.75rem / 12px | normal | Labels under a name. Never load-bearing |
 
-Mono is `0.8125rem / 1.5` for pane text, `tab-size: 8`. Mono is used for
-`hostId`, session `name`, timestamps, and anything captured from a pane — that
-is, for **things that are identifiers or evidence**. Prose is never mono.
+Headings are tightened and nothing else is. Large text set at normal tracking
+reads loose and accidental; the same tightening at 13px costs legibility and
+buys nothing, so the three `--ls-*` tokens stop at `--t-section` and the test
+fails a rule that tightens anything smaller.
+
+Pane headings are sentence case at 19px, not 12px uppercase with wide tracking.
+The uppercase micro-label is a style for a column head in a table, and above a
+card it reads as chrome rather than as the name of what is under it.
+
+Mono is used for `hostId`, session `name`, timestamps, and anything captured
+from a pane — that is, for **things that are identifiers or evidence**. Prose
+is never mono.
 
 Prose blocks are capped at `68ch` even on a 3440 screen. The extra width goes
 to the detail pane, not to longer lines.
 
 ### Spacing
 
-4 px base. Steps: `4 · 8 · 12 · 16 · 24 · 32 · 48`. Pane gutters 16 px below
-1600 px, 24 px above. Row height 44 px comfortable, 32 px compact. Nothing is
-allowed a value off the scale.
+Dense and predictable, and stated as the three questions a layout actually
+asks: how far from the edge of the page, how far between groups of cards, how
+far inside one.
+
+| Token | Value | Use |
+|---|---|---|
+| `--s-page` | 26px | The page margin |
+| `--s-group` | 22px | Between groups of cards — the panes, the assurance panel and what follows it |
+| `--s-group-tight` | 16px | Between cards in a list, and a card's own padding |
+| `--s-in` | 12px | Inside a component |
+| `--s-in-tight` | 8px | Inside a row: a glyph and its word |
+| `--s-hair` | 4px | A line and the line under it |
+
+Row height is 44 px minimum on anything tappable, because this gets used on a
+phone whether or not it was designed to. Nothing is allowed a value off the
+scale, and `test/design-tokens.test.js` fails a `padding`, `margin`, `gap`,
+`border-radius`, `font-size` or `letter-spacing` that is a fresh px value
+rather than a token.
+
+### Radius
+
+A hierarchy rather than a value, so nesting reads as nesting.
+
+| Token | Value | Use |
+|---|---|---|
+| `--r-frame` | 54px | The device frame. No consumer on this page — it is here so the store screenshots and the console are one system |
+| `--r-card` | 22px | The assurance panel, an Ask |
+| `--r-card-sm` | 18px | A host card |
+| `--r-row` | 14px | A session row, an option button |
+| `--r-chip` | 8px | An ordinal, a chip |
+| `--r-round` | 50% | Circular icon buttons, when they arrive |
+
+### Cards have no borders
+
+Zero visible edges. Separation is an inset highlight, a soft drop shadow and a
+subtle 1px ring — `--card-shadow`, composed once in `:root` so a card cannot
+assemble its own. A card edged in a hairline reads as a box on a page; a card
+lifted off the ground reads as a surface above it, which is what it is.
+
+Two consequences worth writing down:
+
+- **The host's state bar is an inset, not a `border-left`.** A 3px edge on an
+  18px radius clips into a wedge. It is `inset 4px 0 0 <tone>` in front of the
+  card's own shadow, and it is redundant encoding for a badge that already says
+  the word.
+- **Forced-colours mode paints no shadows at all**, so a borderless card there
+  is three panes of text running together. The borders come back under
+  `@media (forced-colors: active)` and nowhere else.
 
 ### Colour tokens
 
@@ -651,31 +722,58 @@ word and a glyph, not with two reds a person has to remember the order of.
 
 | Token | Meaning | Dark | Light |
 |---|---|---|---|
-| `--bg` | page ground | `#0d0f13` | `#f4f6f8` |
-| `--surface` | panes | `#14171d` | `#ffffff` |
-| `--surface-2` | selected row, insets | `#1b1f27` | `#eaeef3` |
-| `--line` | hairlines | `#252b34` | `#dfe4ea` |
-| `--line-strong` | pane borders | `#39414e` | `#c2cad4` |
-| `--ink` | body text | `#e6e9ee` | `#14171c` |
-| `--ink-dim` | meta, stopped, unknown | `#98a2b0` | `#59626f` |
-| `--ink-faint` | disabled, hairline labels | `#6a7482` | `#8b94a1` |
-| `--ok` | healthy, working | `#46c08b` | `#0f7a52` |
-| `--ask` | **waiting for you, and nothing else** | `#ffb340` | `#8a4f00` |
-| `--ask-fill` | the Ask's ground | `rgba(255,179,64,.10)` | `rgba(255,179,64,.16)` |
-| `--bad` | broken, degraded, offline, refused | `#f0736c` | `#b3261e` |
-| `--accent` | interactive only — links, focus, selection. **Never a state.** | `#7aa2ff` | `#2159c9` |
+| `--bg` | page ground | `#0b0d10` | `#f7f8fa` |
+| `--card` | cards | `#12151a` | `#ffffff` |
+| `--inner` | inner surfaces — an option button's ground | `#171b22` | `#f1f3f7` |
+| `--track` | tracks, chips, the empty end of a ramp | `#232833` | `#e6eaf1` |
+| `--ink` | body text | `#e6e9ef` | `#12151a` |
+| `--ink-dim` | meta, stopped, unknown | `#8b93a3` | `#5b6474` |
+| `--ring` | the 1px ring around a card | `rgba(255,255,255,.07)` | `rgba(16,20,28,.09)` |
+| `--highlight` | the inset highlight along its top edge | `rgba(255,255,255,.05)` | `rgba(255,255,255,.9)` |
+| `--shadow-drop` | the drop shadow under it | two layers, black | two layers, ink |
+| `--accent` | interactive only — links, focus, hover. **Never a state.** | `#5b8bef` | `#3866D6` |
+| `--accent-deep` | the brand blue, unchanged by theme | `#3866D6` | `#3866D6` |
+| `--ok` | healthy, finished | `#4ade80` | `#0f7a52` |
+| `--attention` | **waiting for you, degraded, and nothing else** | `#fbbf24` | `#a15c00` |
+| `--bad` | broken, offline, refused | `#f87171` | `#c02b2b` |
+| `--active` | working | `#38bdf8` | `#0369a1` |
+| `--unsure` | we cannot say | `#a78bfa` | `#6d43c8` |
+| `--idle` | stopped | `#6b7280` | `#9aa2b1` |
 
-Dark is the default and the one tuned for a dark room: the ground is `#0d0f13`,
-not `#000`, so a bright pane inset does not punch a hole in the retina, and body
-ink is `#e6e9ee`, not `#fff`, so a wall of text is not glare. Body text is ≥ 7:1
-on its own surface in both themes; `--ink-dim` is ≥ 4.5:1. `--ask` on
-`--ask-fill` clears 4.5:1 in both.
+**The primary accent is `#3866D6`.** It stays exactly that as a fill and as the
+end of the ramp in both themes; dark raises the *interactive tint* to `#5b8bef`
+so a hairline and a focus ring clear a `#0b0d10` ground, which `#3866D6` does
+not. And `--active` is a sky blue rather than a second indigo on purpose:
+"working" must not be mistakable for "clickable".
 
-Light and dark are both defined up front on `:root`, with the dark block
-repeated under `@media (prefers-color-scheme: dark)` *and* under
-`:root[data-theme="dark"]`, so the toggle wins in both directions and the page
-never borrows a ground it did not choose. (`src/web/index.html` already does
-this correctly; keep it.)
+Dark is the default and the one tuned for a dark room: the ground is `#0b0d10`,
+not `#000`, so a lit card does not punch a hole in the retina, and body ink is
+`#e6e9ef`, not `#fff`, so a wall of text is not glare.
+
+### The ramp
+
+Charts and contribution grids use five steps from the muted track colour to the
+strongest blue the ground will carry, with the brand accent at step 4 so a
+chart and a button are visibly the same system. No surface consumes it yet; it
+is defined here rather than invented later by whoever builds the first chart,
+because a second set of blues is how two surfaces stop matching.
+
+| Token | Dark | Light |
+|---|---|---|
+| `--chart-1` | `#232833` | `#e6eaf1` |
+| `--chart-2` | `#2b3f66` | `#b9caea` |
+| `--chart-3` | `#2f56a3` | `#7b9de2` |
+| `--chart-4` | `var(--accent-deep)` | `var(--accent-deep)` |
+| `--chart-5` | `#7aa7f7` | `#1e3f8f` |
+
+Light is declared **twice** — once under `@media (prefers-color-scheme: light)`
+for the system preference and once under `:root[data-theme='light']` for an
+explicit choice — so the toggle wins in both directions and the page never
+borrows a ground it did not choose. Twice is also how the two stop matching,
+silently, and the page looks right until somebody flips the switch: the test
+asserts the two blocks declare the same tokens with the same values.
+(`src/web/index.html` carries its own palette and is out of scope here, as the
+scope note at the top of this document says.)
 
 ### What carries meaning besides colour
 
