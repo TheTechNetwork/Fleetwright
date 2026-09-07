@@ -16,6 +16,7 @@
 // needs root, which this service deliberately does not have — see runUpgrade.
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
 
 import { log } from '../log.js';
@@ -316,6 +317,66 @@ export function runUpgrade(cfg, { actor = null } = {}) {
 }
 
 /**
+ * Whether /etc is read-only IN THIS PROCESS'S MOUNT NAMESPACE.
+ *
+ * The whole point is that this is asked by the process that will run dpkg,
+ * rather than reasoned about from a unit file somewhere else. A mount namespace
+ * is exactly the thing a unit file is one step removed from: the file says what
+ * was asked for, and this says what the kernel did — and they disagree whenever
+ * a drop-in, an older unit on disk, or a `systemctl edit` is in the way.
+ *
+ * /proc/self/mountinfo, per mount:
+ *
+ *   36 25 0:31 / /etc ro,relatime shared:16 - tmpfs tmpfs ro
+ *   ^id ^parent ^dev ^root ^MOUNTPOINT ^OPTIONS
+ *
+ * THE LONGEST MATCHING MOUNTPOINT WINS, and the LAST such line wins after that.
+ * /etc usually has no mount of its own and inherits `/`; when ProtectSystem is
+ * in play it gets one stacked on top, and a stack is resolved by taking the
+ * final entry rather than the first. Reading the first is how this would report
+ * the underlying read-write disk and miss the read-only layer over it.
+ *
+ * @param {string} [path] the mountinfo to read, so a test can supply one
+ * @returns {{ readOnly: boolean|null, where: string, evidence: string }}
+ */
+export function etcMount(path = '/proc/self/mountinfo') {
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (e) {
+    return { readOnly: null, where: '/etc', evidence: `could not read ${path}: ${/** @type {Error} */ (e).message}` };
+  }
+  /** @type {{ point: string, opts: string, fstype: string, source: string }|null} */
+  let best = null;
+  for (const line of raw.split('\n')) {
+    // The optional fields between the mountpoint and the `-` separator vary in
+    // number, which is why the separator exists and why this splits on it
+    // rather than counting to a fixed index.
+    const [before, after] = line.split(' - ');
+    if (!after) continue;
+    const f = before.split(' ');
+    if (f.length < 6) continue;
+    const point = f[4];
+    const opts = f[5];
+    if (point !== '/' && point !== '/etc' && !'/etc'.startsWith(`${point}/`)) continue;
+    // `>=` and not `>`: a later line at the SAME depth is stacked on top of the
+    // earlier one, and the top of the stack is what a write actually meets.
+    if (best && best.point.length > point.length) continue;
+    const a = after.split(' ');
+    best = { point, opts, fstype: a[0] || '?', source: a[1] || '?' };
+  }
+  if (!best) return { readOnly: null, where: '/etc', evidence: 'no mount in this namespace covers /etc' };
+  // The option list is the authority, and `ro` is a whole word in it — a
+  // substring test would match `errors=remount-ro` on a read-write mount.
+  const readOnly = best.opts.split(',').includes('ro');
+  return {
+    readOnly,
+    where: best.point === '/etc' ? '/etc' : `/etc, via ${best.point}`,
+    evidence: `${best.source} on ${best.point}, ${best.fstype}, ${readOnly ? 'ro' : 'rw'}`,
+  };
+}
+
+/**
  * What to do about it, for the failures apt actually has.
  *
  * THIS USED TO SAY ONE THING FOR EVERYTHING:
@@ -341,8 +402,12 @@ export function runUpgrade(cfg, { actor = null } = {}) {
  * the failure.
  *
  * @param {string} detail what apt and dpkg said
+ * @param {string} [mountInfo] where to measure the mounts, so a test can supply
+ *   a fixture rather than asserting against whatever the machine running it
+ *   happens to have mounted — which is how this test would silently change its
+ *   mind depending on the box, and this file is about exactly that mistake
  */
-export function adviseOnFailure(detail) {
+export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo') {
   const said = String(detail || '');
 
   if (/password is required|not allowed/i.test(said)) {
@@ -362,15 +427,59 @@ export function adviseOnFailure(detail) {
     // this is running an older one — which is a re-run of the installer, not a
     // new image. Naming the unit is what makes that findable; "your filesystem
     // is read-only" sent somebody to look at a filesystem that was fine.
+    //
+    // AND THEN THAT WAS WRONG TOO, WHICH IS WHY THIS NOW MEASURES.
+    //
+    // The advice above shipped in #441, which is also the release that added
+    // ReadWritePaths=/etc. So a box running #441 or later already had the fix
+    // the message told it to go and get — and one of them re-ran the installer,
+    // as instructed, and failed identically. Twice now this function has
+    // produced a confident remedy for a diagnosis nobody made.
+    //
+    // The process reading this IS the process whose namespace dpkg inherited.
+    // It does not have to reason about the unit file: it can look at its own
+    // mounts. So it does, and what it says depends on what it found rather than
+    // on what is usually true.
+    const mount = etcMount(mountInfo);
+    if (mount.readOnly === true) {
+      return (
+        `Measured from this service just now: ${mount.where} is mounted READ-ONLY in this process's\n` +
+        `mount namespace (${mount.evidence}). dpkg inherited that namespace, and sudo does not\n` +
+        'escape one, so this is ours and not the disk.\n\n' +
+        'agent-hub.service should carry ReadWritePaths=/etc beneath ProtectSystem=full. On the box:\n' +
+        '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p FragmentPath -p DropInPaths\n\n' +
+        'If ReadWritePaths is already /etc, a drop-in is overriding it — DropInPaths above names the\n' +
+        'file. If it is empty, this unit predates the fix and re-running the installer writes it.'
+      );
+    }
+    if (mount.readOnly === false) {
+      // THE CASE THE OLD MESSAGE COULD NOT EXPRESS, and the one a person is
+      // standing in when they say "it still fails". Sending them to re-run the
+      // installer again would spend a second trip to the box on a fix that has
+      // already been applied.
+      return (
+        `Measured from this service just now: ${mount.where} is mounted READ-WRITE in this process's\n` +
+        `mount namespace (${mount.evidence}), so ProtectSystem is NOT what stopped dpkg — and\n` +
+        're-running the installer will not change anything.\n\n' +
+        'Something else made that one path read-only. Worth looking at, in this order:\n' +
+        '  findmnt -o TARGET,SOURCE,OPTIONS /etc      # a separate read-only mount over /etc\n' +
+        '  systemctl show agent-hub -p ReadOnlyPaths -p DropInPaths\n' +
+        '  dmesg | tail                               # a filesystem remounted read-only after an error\n\n' +
+        'That last one is the case that matters: a disk that hit an I/O error goes read-only by itself, ' +
+        'and it will keep failing until it is checked.'
+      );
+    }
+    // COULD NOT TELL, said as itself. /proc/self/mountinfo is how this is
+    // measured and a kernel that does not offer it leaves the question open —
+    // which is a different answer from either of the two above, and rounding it
+    // to the likely one is how the first two versions of this went wrong.
     return (
-      'That is almost certainly this service rather than the box: agent-hub.service sets\n' +
-      'ProtectSystem=full, which makes /etc read-only for it AND every command it runs —\n' +
-      'sudo does not escape a mount namespace, so dpkg cannot write /etc/debian_version.\n\n' +
-      'Fixed by re-running the installer, which adds ReadWritePaths=/etc:\n' +
-      '  curl -fsSL <your coordinator>/install | sudo sh\n\n' +
-      'To confirm it is that rather than a genuinely read-only disk, on the box:\n' +
-      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths\n' +
-      '  touch /etc/.writable-check && rm /etc/.writable-check   # works in a normal shell'
+      'dpkg could not write to /etc. This service could not read its own mounts to say whether that\n' +
+      `is ours (${mount.evidence}), so both are still open:\n\n` +
+      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p DropInPaths\n' +
+      '    ProtectSystem=full with no ReadWritePaths=/etc is ours, and re-running the installer fixes it.\n' +
+      '  findmnt -o TARGET,SOURCE,OPTIONS /etc\n' +
+      '    a read-only mount there is the box, and re-running the installer will not help.'
     );
   }
   if (/dpkg was interrupted|dpkg --configure -a/i.test(said)) {
