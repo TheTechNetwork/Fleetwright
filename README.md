@@ -44,7 +44,7 @@ coordinator ──ws──▶ sidecar ──http──▶ session manager ──
 ```
 
 The **session manager** is `agent-hub` — start, resume and stop tmux-backed
-Claude Code sessions from Telegram, a web UI or a CLI. It came from
+Claude Code sessions from the app, an MCP server, a web UI or a CLI. It came from
 [`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub),
 sits at its upstream paths, and is code we intend to contribute back to. See
 [`docs/upstream-agent-hub.md`](./docs/upstream-agent-hub.md).
@@ -83,9 +83,10 @@ which fleet, because you already said. It installs what is missing, asks for the
 six-digit pin you mint in the app, enrols the box and starts the services.
 
 The pin is the only thing it asks for. Nothing else is needed to join a fleet,
-and the questions that were in the way — Telegram, whether to run a coordinator
-here — are for somebody setting one up rather than joining one, so they are
-asked only when there is no fleet in the URL.
+and the question that was in the way — whether to run a coordinator here — is
+for somebody setting one up rather than joining one, so it is asked only when
+there is no fleet in the URL. (Telegram used to be asked for here too; it is
+archived, and [`docs/telegram.md`](./docs/telegram.md) says why.)
 
 **No fleet to join yet?** Then there is no URL to curl, and the clone path
 below is yours: [`docs/first-session.md`](./docs/first-session.md) runs it

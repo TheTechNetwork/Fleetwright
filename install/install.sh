@@ -1080,7 +1080,7 @@ if [ -f "$ENV_FILE" ]; then
 else
   install -m 0600 "$DIR/install/agent-hub.env.example" "$ENV_FILE"
   ok "wrote $ENV_FILE from the template"
-  warn "EDIT IT before starting: set AGENT_HUB_TELEGRAM_TOKEN and AGENT_HUB_TELEGRAM_ALLOWED_USERS"
+  ok "edit it to change anything — the defaults work"
 fi
 
 # WHERE THIS BOX'S RELEASES COME FROM, derived from the repository it was
@@ -1741,28 +1741,13 @@ if [ "$WIZARD" = yes ]; then
 
   # --- Telegram ------------------------------------------------------------
   #
-  # NOT ASKED WHEN THE FLEET IS ALREADY DECIDED. Arriving with
-  # AGENT_FLEET_COORDINATOR_URL set means somebody ran the one-liner off a
-  # coordinator — they are joining a fleet and will drive it from the app, and
-  # a question about a chat bot in the middle of that is a question about
-  # something else. The keys stay in the env file for anyone who wants them.
-  if [ -z "$JOINING" ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ]; then
-    printf '  Telegram is the recommended way to drive this: outbound only, no port to\n'
-    printf '  open. Create a bot by messaging @BotFather and sending /newbot.\n'
-    ask TG_TOKEN "Telegram bot token (blank to skip Telegram)"
-    if [ -n "$TG_TOKEN" ]; then
-      set_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN "$TG_TOKEN"
-      ok "Telegram bot configured"
-      printf '\n  Every id you allow gets unsupervised shell access on this box. If you do\n'
-      printf '  not know yours, leave it blank — message the bot /whoami once it is up\n'
-      printf '  and it will tell you, even before you are on the list.\n'
-      ask TG_USERS "Telegram user ids allowed to run commands (comma separated)"
-      [ -n "$TG_USERS" ] && set_env "$ENV_FILE" AGENT_HUB_TELEGRAM_ALLOWED_USERS "$TG_USERS"
-    else
-      ok "skipping Telegram — the web UI and CLI still work"
-    fi
-    printf '\n'
-  fi
+  # TELEGRAM IS NO LONGER ASKED FOR. The adapter is archived — see
+  # docs/telegram.md — so this prompt configured a feature that does nothing,
+  # which is worse than not offering it: somebody answers it, sees "Telegram bot
+  # configured", and messages a bot that will never reply.
+  #
+  # The env key is still READ, once, so that a box that has one gets told. It is
+  # never written here again.
 
   # --- is this box the coordinator too? ------------------------------------
   #
@@ -2515,9 +2500,12 @@ if [ "$WIZARD" = yes ]; then
   fi
 
   printf '\n'
-  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ] && printf '  Telegram : configured\n'
-  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_ALLOWED_USERS)" ] \
-    || printf '  Telegram : no allowlist yet — message the bot /whoami, then put the id in\n             AGENT_HUB_TELEGRAM_ALLOWED_USERS in %s\n' "$ENV_FILE"
+  # SAID ONLY WHEN IT IS SET, and then to say it does nothing. A box carrying a
+  # token from before the adapter was archived would otherwise start clean, log
+  # nothing and answer no messages — which reads as a broken bot rather than an
+  # absent one, and sends whoever set it looking at Telegram.
+  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ] \
+    && printf '  Telegram : archived — the token in %s is not read. See docs/telegram.md\n' "$ENV_FILE"
   [ "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" = "1" ] && printf '  Sandbox  : on\n'
   [ "$FLEET_LOCAL" = 1 ] && printf '  Fleet    : coordinator and host, both on this box\n'
 

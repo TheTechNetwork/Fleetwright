@@ -315,15 +315,20 @@ export function loadConfig(env = process.env) {
     // internal hook endpoint keeps working either way.
     webEnabled: bool('AGENT_HUB_WEB', true),
 
-    // --- Telegram ----------------------------------------------------------
+    // --- Telegram, archived --------------------------------------------------
+    //
+    // The adapter is unwired and lives at archive/telegram/telegram.js; the
+    // reasoning is in docs/telegram.md, including the one that retired it —
+    // a Telegram user id is not a person this fleet can verify, and every
+    // per-person credential in this project turns on being able to say which
+    // verified person is asking.
+    //
+    // THE TOKEN IS STILL READ, and only for that: a box that has it set gets a
+    // warning saying so. A setting that is present and inert is worse than one
+    // that is gone, because it reads as a broken bot rather than an absent one.
+    // The other two keys are not read by anything and are not pretended to be.
     telegram: {
       token: str('AGENT_HUB_TELEGRAM_TOKEN'),
-      // Numeric Telegram user ids allowed to run commands. There is no "open to
-      // everyone" mode: a session here is unsupervised shell access on this
-      // box, so an empty allowlist means the bot answers /whoami (so you can
-      // learn your id) and refuses everything else.
-      allowedUsers: list('AGENT_HUB_TELEGRAM_ALLOWED_USERS'),
-      apiBase: str('AGENT_HUB_TELEGRAM_API', 'https://api.telegram.org'),
     },
 
     // Overridable so a test can point them at a stub rather than the real ones.
@@ -376,16 +381,17 @@ export function validateConfig(cfg) {
     errors.push('AGENT_HUB_TOKEN is shorter than 16 characters — generate one with `openssl rand -hex 24`.');
   }
 
-  if (!cfg.telegram.token) {
-    warnings.push('No AGENT_HUB_TELEGRAM_TOKEN — the Telegram adapter is disabled.');
-  } else if (cfg.telegram.allowedUsers.length === 0) {
+  // NOT WARNED ABOUT WHEN ABSENT. "No AGENT_HUB_TELEGRAM_TOKEN — the Telegram
+  // adapter is disabled" told every box in the fleet about a feature that no
+  // longer exists, every start, for ever.
+  if (cfg.telegram.token) {
     warnings.push(
-      'AGENT_HUB_TELEGRAM_ALLOWED_USERS is empty — the bot will refuse every command except /whoami. ' +
-        'Message the bot /whoami, then add the id it returns.',
+      'AGENT_HUB_TELEGRAM_TOKEN is set and the Telegram adapter is archived — nothing reads it. ' +
+        'See docs/telegram.md.',
     );
   }
-  if (!cfg.telegram.token && !cfg.webEnabled) {
-    warnings.push('Neither Telegram nor the web UI is enabled — only the CLI can drive this hub.');
+  if (!cfg.webEnabled) {
+    warnings.push('The web UI is disabled — the app, the MCP server and the CLI can still drive this hub.');
   }
 
   return { errors, warnings };

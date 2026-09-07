@@ -18,7 +18,6 @@ import { Connections } from './core/connectors.js';
 import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
 import { HttpAdapter } from './adapters/http.js';
-import { TelegramAdapter } from './adapters/telegram.js';
 
 export async function main() {
   const cfg = loadConfig();
@@ -123,9 +122,18 @@ export async function main() {
   await http.start();
   adapters.push(http);
 
+  // TELEGRAM IS ARCHIVED — see docs/telegram.md, which is the part that had to
+  // outlive the code. The adapter is at archive/telegram/telegram.js, unwired.
+  //
+  // A TOKEN THAT IS SET AND DOES NOTHING IS THE WORST OF THE THREE STATES. A
+  // box configured for Telegram would otherwise start clean, log nothing, and
+  // answer no messages — which reads as a broken bot rather than an absent one,
+  // and sends whoever set it looking at Telegram.
   if (cfg.telegram.token) {
-    const telegram = new TelegramAdapter(cfg, { sessions, login });
-    if (await telegram.start()) adapters.push(telegram);
+    log.warn(
+      'AGENT_HUB_TELEGRAM_TOKEN is set, and the Telegram adapter is archived — nothing will read it. ' +
+        'The app and the MCP server are the surfaces now; see docs/telegram.md.',
+    );
   }
 
   if (cfg.restoreOnStart) {
