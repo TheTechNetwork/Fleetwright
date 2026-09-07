@@ -355,7 +355,16 @@ function systemctl(args) {
  * of wrong in reverse.
  */
 function unitState() {
-  if (!existsSync('/etc/systemd/system/agent-hub.service')) return { known: false };
+  // THE SAME SEAM fleetwright-migrate HAS, and for the same reason: a hardcoded
+  // /etc path is a path no test can pose a question about.
+  //
+  // The cost of not having it was not a missing test, it was a WRONG COVERAGE
+  // FLOOR. This block only runs on a machine that happens to have the unit
+  // installed — so it ran on the box that recorded the floor, which had a
+  // leftover from an earlier drill, and never on CI. Seven points of
+  // bin/agent-hub were "coverage" of whatever was lying around in /etc.
+  const unitDir = process.env.FLEETWRIGHT_UNIT_DIR || '/etc/systemd/system';
+  if (!existsSync(`${unitDir}/agent-hub.service`)) return { known: false };
   const r = spawnSync(cfg.systemctlBin, ['is-active', 'agent-hub'], { encoding: 'utf8' });
   const state = (r.stdout || '').trim() || 'unknown';
   let detail = '';
