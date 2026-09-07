@@ -476,13 +476,31 @@ function describeBin(bin) {
  * @param {any} ctx
  */
 function describeAccounts(ctx) {
-  const linked = (() => {
-    try {
-      return ctx.accounts?.list?.() ?? [];
-    } catch {
-      return [];
-    }
-  })();
+  // THIS READ A PROPERTY NOTHING EVER SET, and therefore always answered
+  // "nobody". `ctx.accounts` appears in no ctx anywhere — every other command
+  // builds the store the way the line below does — so
+  //
+  //     ctx.accounts?.list?.() ?? []
+  //
+  // was `[]` on every box, on every call, since it was written. The optional
+  // chaining is what hid it: a dependency that was never supplied and a
+  // directory with nothing in it produce the same value, so the sentence read
+  // as a finding rather than as a missing wire.
+  //
+  // Found from the outside, by two answers disagreeing: `status` said "nobody
+  // has linked a personal account" while `health` on the same box said two
+  // were linked. Health was right — it reads the same store, correctly, in
+  // http.js — and the disagreement is the only reason anybody looked.
+  let linked;
+  try {
+    linked = new Accounts(ctx.cfg.stateDir).list();
+  } catch (e) {
+    // AND A STORE THAT CANNOT BE READ IS NOT AN EMPTY ONE. Saying "nobody has
+    // linked an account" because a directory refused is the confident half of
+    // a question that was not answered — and it is the sentence that tells
+    // somebody their working box cannot start sessions.
+    return `could not read the linked accounts (${/** @type {Error} */ (e).message})`;
+  }
   if (linked.length) {
     return `${linked.length} account${linked.length === 1 ? '' : 's'} linked — a session runs as whoever starts it`;
   }

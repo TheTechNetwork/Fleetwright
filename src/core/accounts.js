@@ -277,8 +277,16 @@ export class Accounts {
         )
         .map((f) => f.slice(0, -'.json'.length))
         .sort();
-    } catch {
-      return []; // no directory yet: nobody has linked anything
+    } catch (e) {
+      // ENOENT ONLY. A directory that does not exist yet is genuinely nobody
+      // linked; a directory that exists and REFUSES is a question that was not
+      // answered, and returning [] for both is how "the disk is unreadable"
+      // becomes "sessions started here cannot do anything".
+      //
+      // The caller decides what to say about it. This one only knows which of
+      // the two happened, and that is the part worth not throwing away.
+      if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return [];
+      throw e;
     }
   }
 
