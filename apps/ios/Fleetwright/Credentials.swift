@@ -136,7 +136,7 @@ struct CredentialsView: View {
                             }
                         }
                     }
-                    Text(pending.hint).font(.caption).foregroundStyle(.secondary)
+                    Text(pending.hint).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
 
                     // NO PASTE FIELD FOR AN APP FLOW, because there is nothing
                     // to copy. GitHub sends the result to the coordinator,
@@ -150,7 +150,7 @@ struct CredentialsView: View {
                         Button("Cancel", role: .cancel) { clear() }
                     } else {
                         Text(pending.isSignIn ? "2. Come back and paste the code" : "2. Come back and paste the token")
-                            .font(.caption)
+                            .fleetType(.micro)
                         // THE FAILURE THE CLI ITSELF ASKS ABOUT. Its refusal
                         // reads "Invalid code. Please make sure the full code
                         // was copied" — a partial copy is the common way this
@@ -160,8 +160,8 @@ struct CredentialsView: View {
                         // refusal after it.
                         if pending.isSignIn {
                             Text("Copy the whole thing, including anything after a #.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .fleetType(.micro)
+                                .foregroundStyle(Design.Palette.inkDim)
                         }
                         HStack {
                             // The one field in this app that holds a live
@@ -201,9 +201,14 @@ struct CredentialsView: View {
             }
 
             if !result.isEmpty {
-                Section { Text(result).font(.callout) }
+                Section { Text(result).fleetType(.bodySmall) }
             }
         }
+        // The design's ground, and the rows on the card colour, so this screen
+        // belongs to the same app as the one that pushed it.
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .listRowBackground(Design.Palette.card)
         .navigationTitle("Credentials")
         // A dialog rather than a picker in the row: this is a one-off choice
         // that starts something, not a setting to leave sitting there.
@@ -247,7 +252,7 @@ struct CredentialsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(provider.label)
             if let linked = connections.linked(provider.provider) {
-                Text(describeLinked(linked)).font(.caption).foregroundStyle(.secondary)
+                Text(describeLinked(linked)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                 // MISSING PERMISSIONS, said here rather than discovered in a
                 // session. The asked-for list grows; a token minted before it
                 // grew still verifies, still says "connected", and then fails
@@ -258,13 +263,13 @@ struct CredentialsView: View {
                 if linked.needsReconnect == true {
                     Text("Reconnect this — it still works but can no longer renew itself, so it stops within "
                          + "eight hours. One tap below; nothing to copy or paste.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.bad)
                 }
                 if let missing = linked.missing, !missing.isEmpty {
                     Text("missing \(missing.joined(separator: ", "))")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.attention)
                 }
                 // WHERE IT ACTUALLY IS. A credential reaches the machines that
                 // were reachable when it was stored — so a host enrolled
@@ -274,11 +279,11 @@ struct CredentialsView: View {
                 // leaving somebody to discover it inside a session.
                 if let absent = linked.absentFrom, !absent.isEmpty {
                     Text("not on \(absent.joined(separator: ", ")) — connect again to include \(absent.count == 1 ? "it" : "them")")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.attention)
                 }
             } else {
-                Text("not connected").font(.caption).foregroundStyle(.secondary)
+                Text("not connected").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
             }
             HStack(spacing: 12) {
                 Button(actionLabel(provider, connections.linked(provider.provider), on: targetHost(provider))) {
@@ -302,7 +307,7 @@ struct CredentialsView: View {
                     Button("Forget", role: .destructive) { Task { await forget(provider) } }
                 }
             }
-            .font(.caption)
+            .fleetType(.micro)
             .buttonStyle(.borderless)
             .disabled(busy)
 
@@ -312,7 +317,7 @@ struct CredentialsView: View {
             if let result = checks[provider.provider] {
                 DisclosureGroup(describeCheck(result), isExpanded: bindingForDetail(provider.provider)) {
                     if let granted = result.granted, !granted.isEmpty {
-                        Text("Has: \(granted.joined(separator: ", "))").font(.caption2)
+                        Text("Has: \(granted.joined(separator: ", "))").fleetType(.micro)
                     } else if result.granted == nil {
                         // TWO DIFFERENT REASONS FOR THE SAME NIL, and telling
                         // them apart is the difference between "this is fine"
@@ -330,14 +335,14 @@ struct CredentialsView: View {
                         Text((provider.wants ?? []).isEmpty
                             ? "\(provider.label) does not report what a token was granted."
                             : "This token has no scopes to report — an app or fine-grained token carries permissions instead, set where it was created.")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                     }
                     if let missing = result.missing, !missing.isEmpty {
                         Text("Asked for and not granted: \(missing.joined(separator: ", "))")
-                            .font(.caption2).foregroundStyle(.orange)
+                            .fleetType(.micro).foregroundStyle(Design.Palette.attention)
                     }
                 }
-                .font(.caption)
+                .fleetType(.micro)
             }
         }
         .padding(.vertical, 2)

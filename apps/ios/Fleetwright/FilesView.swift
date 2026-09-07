@@ -44,7 +44,7 @@ struct FilesView: View {
                 // the workspace" from "this session has no workspace", and each
                 // one is a different thing to do next.
                 Section {
-                    Text(problem).foregroundStyle(.red).font(.callout)
+                    Text(problem).foregroundStyle(Design.Palette.bad).fleetType(.bodySmall)
                 }
             }
 
@@ -62,9 +62,14 @@ struct FilesView: View {
             }
 
             if entries.isEmpty && !loading && problem == nil {
-                Text("This directory is empty.").foregroundStyle(.secondary)
+                Text("This directory is empty.").foregroundStyle(Design.Palette.inkDim)
             }
         }
+        // The design's ground, and the rows on the card colour, so this screen
+        // belongs to the same app as the one that pushed it.
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .listRowBackground(Design.Palette.card)
         .navigationTitle(path.isEmpty ? "Workspace" : path)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
@@ -158,7 +163,7 @@ struct FilesView: View {
                     // it is a link is not surprised by that refusal.
                     Label(entry.name, systemImage: entry.kind == "link" ? "link" : "doc.text")
                     Spacer()
-                    Text(size(entry.size)).font(.caption).foregroundStyle(.secondary)
+                    Text(size(entry.size)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                 }
             }
             .swipeActions { deleteButton(entry) }
@@ -302,7 +307,7 @@ private struct FileEditor: View {
             TextEditor(text: $body_)
                 // MONOSPACED. This is source and output, and a proportional
                 // font moves the columns somebody is reading.
-                .font(.system(.footnote, design: .monospaced))
+                .fleetType(.labelMono)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .navigationTitle(file.name)

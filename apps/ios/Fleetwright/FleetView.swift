@@ -732,7 +732,7 @@ private struct SettingsView: View {
             // host and says nothing at all.
             if let accounts = host.health?.claudeAccounts {
                 Text(describeWhoCanStart(accounts, account: host.health?.account))
-                    .font(.caption2)
+                    .fleetType(.micro)
                     .foregroundStyle(accounts == 0 ? .red : .secondary)
             }
             // THE SECOND WAY TO BE SIGNED OUT, and the one that was invisible.
@@ -747,7 +747,7 @@ private struct SettingsView: View {
             // stop reading.
             if let credential = host.health?.credential, credential.isDead {
                 Text(credential.summary ?? "Sessions started here will come up signed out.")
-                    .font(.caption2).foregroundStyle(.red)
+                    .fleetType(.micro).foregroundStyle(Design.Palette.bad)
             }
             // WHAT IT IS RUNNING, AND WHAT IS WAITING, on one line — including
             // the channel, which had a line of its own on every row saying the
@@ -755,16 +755,16 @@ private struct SettingsView: View {
             // releases it takes: one sentence, read left to right, in the order
             // somebody asks the questions.
             Text(describeRunning(host))
-                .font(.caption2)
+                .fleetType(.micro)
                 .foregroundStyle(host.updatePending ? .orange : .secondary)
             // WHAT THE OS HAS WAITING, kept separate because it is a different
             // subject with a different button — the whole reason `updates`
             // exists as a verb is that these two were being read as one.
             if let system = host.health?.updates?.system, !system.isEmpty {
-                Text("OS: \(system)").font(.caption2).foregroundStyle(.orange)
+                Text("OS: \(system)").fleetType(.micro).foregroundStyle(Design.Palette.attention)
             }
             if host.health?.updates?.rebootRequired == true {
-                Text("reboot required").font(.caption2).foregroundStyle(.orange)
+                Text("reboot required").fleetType(.micro).foregroundStyle(Design.Palette.attention)
             }
     }
 
@@ -790,7 +790,7 @@ private struct SettingsView: View {
                 }
                 Button("Reboot", role: .destructive) { rebootTarget = host.hostId }
             }
-            .font(.caption)
+            .fleetType(.micro)
             .buttonStyle(.borderless)
             .disabled(busyHost != nil)
     }
@@ -843,7 +843,7 @@ private struct SettingsView: View {
                 Text("Rolling").tag("rolling")
             }
             .pickerStyle(.segmented)
-            .font(.caption)
+            .fleetType(.micro)
             .disabled(busyHost != nil)
         }
     }
@@ -1016,6 +1016,9 @@ private struct SettingsView: View {
                         .keyboardType(.URL)
                 } header: {
                     Text("Coordinator")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     // WHICH BUILD THIS IS. The marketing version is the same
                     // across every TestFlight build of a release, so it cannot
@@ -1045,8 +1048,8 @@ private struct SettingsView: View {
                         // already saying it.
                         if settings.coordinatorURL.isEmpty {
                             Text("Add a coordinator URL above first — signing in means signing in to a fleet.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
                         }
                         // ONE TAP INTO A FLEET THAT ISN'T REAL.
                         //
@@ -1094,10 +1097,13 @@ private struct SettingsView: View {
                         Button("Sign out", role: .destructive) { settings.signOut() }
                     }
                     if !signInResult.isEmpty {
-                        Text(signInResult).font(.footnote).foregroundStyle(.secondary)
+                        Text(signInResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                 } header: {
                     Text("You")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     // Two things worth saying before somebody hits the button
                     // and gets a refusal they cannot interpret: the fleet is a
@@ -1124,8 +1130,8 @@ private struct SettingsView: View {
                         Toggle("Temporary host (CI runner)", isOn: $ephemeralPin)
                         if ephemeralPin {
                             Text("Retired the moment it disconnects, and its key revoked. Never chosen automatically for work — it has the most free capacity in the fleet precisely because it is about to disappear.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
                         }
                         Button("Mint a pin for a new host") {
                             Task {
@@ -1147,20 +1153,20 @@ private struct SettingsView: View {
                                     // anywhere else and the refusal arrives on
                                     // the box rather than here.
                                     Text("for \(bound) only")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
+                                        .fleetType(.micro)
+                                        .foregroundStyle(Design.Palette.attention)
                                 }
                                 Text("On that box:  agent-fleet-sidecar enrol \(pin)")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                    .fleetType(.microMono)
+                                    .foregroundStyle(Design.Palette.inkDim)
                             }
                         }
                         ForEach(hosts) { host in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack {
-                                    Text(host.hostId).font(.headline)
+                                    Text(host.hostId).fleetType(.bodyStrong)
                                     if host.isRevoked {
-                                        Text("revoked").font(.caption).foregroundStyle(.secondary)
+                                        Text("revoked").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                                     }
                                 }
                                 // The fingerprint is here so it can be compared
@@ -1169,7 +1175,7 @@ private struct SettingsView: View {
                                 // where you need to know which key is which.
                                 Text(host.fingerprint)
                                     .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Design.Palette.inkDim)
                             }
                             .swipeActions {
                                 if !host.isRevoked {
@@ -1204,17 +1210,20 @@ private struct SettingsView: View {
                         }
                     } header: {
                         Text("Hosts")
+                            .fleetType(.section)
+                            .foregroundStyle(Design.Palette.ink)
+                            .textCase(nil)
                     } footer: {
                         if let target = purgeTarget {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Delete \(target) for good?").font(.callout)
+                                Text("Delete \(target) for good?").fleetType(.bodySmall)
                                 Text("The conversation and the workspace go with it. This is the only step here that cannot be undone — forgetting was reversible, this is not.")
-                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                                 HStack(spacing: 12) {
                                     Button("Delete", role: .destructive) { Task { await binAction(target, restore: false) } }
                                     Button("Cancel") { purgeTarget = nil }
                                 }
-                                .font(.caption)
+                                .fleetType(.micro)
                                 .buttonStyle(.borderless)
                             }
                         }
@@ -1224,8 +1233,8 @@ private struct SettingsView: View {
                         // and the pin comes from the box — a coordinator that
                         // could mint it could reboot the fleet.
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Reboot \(target)").font(.callout)
-                            Text("Every running session on it dies.").font(.caption2).foregroundStyle(.secondary)
+                            Text("Reboot \(target)").fleetType(.bodySmall)
+                            Text("Every running session on it dies.").fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                             TextField("Pin from the box", text: $rebootPin)
                                 .keyboardType(.numberPad)
                             TextField("Type the hostname to confirm", text: $rebootConfirm)
@@ -1237,7 +1246,7 @@ private struct SettingsView: View {
                                     .disabled(rebootPin.isEmpty || rebootConfirm != target)
                                 Button("Cancel") { rebootTarget = nil }
                             }
-                            .font(.caption)
+                            .fleetType(.micro)
                         }
                         .padding(.vertical, 4)
                     }
@@ -1276,15 +1285,15 @@ private struct SettingsView: View {
                 if shows(.machines) {
                 Section {
                     if fleetHosts.isEmpty {
-                        Text("No hosts reporting yet.").font(.footnote).foregroundStyle(.secondary)
+                        Text("No hosts reporting yet.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     ForEach(fleetHosts) { host in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack {
-                                Text(host.hostId).font(.system(.body, design: .monospaced))
+                                Text(host.hostId).fleetType(.labelMono)
                                 Spacer()
                                 Text(host.state ?? "unknown")
-                                    .font(.caption)
+                                    .fleetType(.micro)
                                     // Colour reinforces the word; it never
                                     // carries the meaning alone.
                                     .foregroundStyle(host.state == "healthy" ? .green : .orange)
@@ -1293,7 +1302,7 @@ private struct SettingsView: View {
                             // unrepresentable as a benign value. Rendering the
                             // reason verbatim is what makes that work visible.
                             if let reason = host.reason, !reason.isEmpty {
-                                Text(reason).font(.caption2).foregroundStyle(.secondary)
+                                Text(reason).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                             }
                             if let account = host.health?.account {
                                 // Built in a function, not as a chain of `+`
@@ -1302,7 +1311,7 @@ private struct SettingsView: View {
                                 // #125, and it fails at BUILD time on CI
                                 // rather than anywhere I can see it.
                                 Text(describeAccount(account))
-                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                             }
                             // THREE CALLS RATHER THAN THREE BLOCKS, and it is
                             // the Swift type checker asking, not a style rule.
@@ -1354,12 +1363,15 @@ private struct SettingsView: View {
                             NavigationLink("Sign in to Claude") {
                                 CredentialsView(settings: settings, host: host.hostId, onlyClaude: true)
                             }
-                            .font(.caption)
+                            .fleetType(.micro)
                         }
                         .padding(.vertical, 2)
                     }
                 } header: {
                     Text("Fleet")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     Text("What each machine reports about itself: whether it is signed in, which plan, "
                          + "and whether its code is behind.")
@@ -1411,6 +1423,9 @@ private struct SettingsView: View {
                     ShortcutsLink()
                 } header: {
                     Text("Siri and Shortcuts")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     // A multi-line literal, not a chain of `+`. Five string
                     // literals joined with + is enough to make Swift's type
@@ -1436,22 +1451,25 @@ private struct SettingsView: View {
                 if shows(.you) {
                 Section {
                     if clients.isEmpty {
-                        Text("No devices reported.").font(.footnote).foregroundStyle(.secondary)
+                        Text("No devices reported.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     ForEach(clients) { c in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(c.name ?? "unnamed device")
-                            Text(describeClient(c)).font(.caption).foregroundStyle(.secondary)
+                            Text(describeClient(c)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                         }
                         .swipeActions {
                             Button("Revoke", role: .destructive) { confirmingClientRevoke = c }
                         }
                     }
                     if !clientResult.isEmpty {
-                        Text(clientResult).font(.footnote).foregroundStyle(.secondary)
+                        Text(clientResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                 } header: {
                     Text("Devices")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     // WHY THIS SCREEN EXISTS. Signing in mints one credential
                     // per device precisely so that revoking one leaves every
@@ -1467,7 +1485,7 @@ private struct SettingsView: View {
                 if shows(.you) {
                 Section {
                     if events.isEmpty {
-                        Text("Nothing recorded yet.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Nothing recorded yet.").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     // NEWEST FIRST HERE, oldest-first on the wire. The
                     // coordinator returns them in the order they happened,
@@ -1476,11 +1494,14 @@ private struct SettingsView: View {
                     ForEach(events.reversed()) { e in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(describeEvent(e))
-                            Text(describeEventWho(e)).font(.caption).foregroundStyle(.secondary)
+                            Text(describeEventWho(e)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                         }
                     }
                 } header: {
                     Text("Recent activity")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 } footer: {
                     // THE OTHER HALF OF PUSH. A notification wakes the phone;
                     // this is what it was about. Only one of those shipped, so
@@ -1505,13 +1526,23 @@ private struct SettingsView: View {
                     }
                     .disabled(!settings.configured)
                     if !pushResult.isEmpty {
-                        Text(pushResult).font(.footnote).foregroundStyle(.secondary)
+                        Text(pushResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                 } header: {
                     Text("Notifications")
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .textCase(nil)
                 }
                 }
             }
+            // The design's ground, and the rows on the card colour. A grouped
+            // Form's default is the system's grey, which is a different app's
+            // grey — the list behind this sheet stopped using it two screens
+            // ago and this one saying otherwise is the seam.
+            .scrollContentBackground(.hidden)
+            .background(Design.Palette.bg)
+            .listRowBackground(Design.Palette.card)
             // THE TAB'S OWN NAME. Both tabs rendered this view and both said
             // "Settings", so the Fleet tab was titled after the sheet it used
             // to be part of — a screen announcing itself as somewhere else.
@@ -1666,8 +1697,8 @@ struct SessionKindsView: View {
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                         TextField("Title prefix (optional)", text: $kind.titlePrefix)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
                         // Only when the fleet has answered with something. A
                         // picker whose only entry is "Nothing" is furniture,
                         // and on a fleet with no profiles it would be furniture
@@ -1677,7 +1708,7 @@ struct SessionKindsView: View {
                                 Text("Nothing — start idle").tag("")
                                 ForEach(uniqueProfiles, id: \.self) { name in Text(name).tag(name) }
                             }
-                            .font(.footnote)
+                            .fleetType(.label)
                         }
                     }
                 }
@@ -1700,6 +1731,9 @@ struct SessionKindsView: View {
                 }
             } header: {
                 Text("Words")
+                    .fleetType(.section)
+                    .foregroundStyle(Design.Palette.ink)
+                    .textCase(nil)
             } footer: {
                 // Said, because otherwise the first thing anybody does is add a
                 // word and then wonder why Siri has not heard of it.
@@ -1711,6 +1745,11 @@ struct SessionKindsView: View {
                 """)
             }
         }
+        // The design's ground, and the rows on the card colour, so this screen
+        // belongs to the same app as the one that pushed it.
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .listRowBackground(Design.Palette.card)
         .navigationTitle("Session kinds")
         .task { profiles = (try? await Fleet(settings: settings).profiles()) ?? [] }
         // Saved on the way out rather than on every keystroke: this writes the

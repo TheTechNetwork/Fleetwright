@@ -75,7 +75,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                                 .joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             TextButton(
                                 enabled = !busy,
                                 onClick = {
@@ -107,7 +107,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                                 + "cannot be undone — forgetting was reversible, this is not.",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             TextButton(
                                 enabled = !busy,
                                 onClick = {

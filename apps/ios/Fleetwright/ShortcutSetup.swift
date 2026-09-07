@@ -54,7 +54,7 @@ struct ShortcutSetupView: View {
                     Section("Examples") {
                         ForEach(examples, id: \.self) { example in
                             Button(example) { phrase = example }
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(Design.Palette.ink)
                         }
                     }
                 }
@@ -98,11 +98,16 @@ struct ShortcutSetupView: View {
                         // not observe is the kind of confident lie this project
                         // keeps finding in its own output.
                         Text("Saved here. It works once you have finished the steps above in Shortcuts.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
                     }
                 }
             }
+            // The design's ground, and the rows on the card colour, so this screen
+            // belongs to the same app as the one that pushed it.
+            .scrollContentBackground(.hidden)
+            .background(Design.Palette.bg)
+            .listRowBackground(Design.Palette.card)
             .navigationTitle("Say it your way")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
