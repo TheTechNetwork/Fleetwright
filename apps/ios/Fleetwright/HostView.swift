@@ -77,6 +77,18 @@ struct HostView: View {
 
     private var fleet: Fleet { Fleet(settings: settings) }
 
+    /// We asked it to reboot, and it has not said anything since.
+    ///
+    /// TIME-BOUNDED, because "rebooting" is a claim with a shelf life: a box
+    /// that has not come back in five minutes is not still rebooting, it is a
+    /// box that did not come back — and saying otherwise is the reassuring kind
+    /// of wrong this project spends its time removing.
+    private var rebooting: Bool {
+        guard let at = rebootedAt else { return false }
+        if Date().timeIntervalSince(at) > 300 { return false }
+        return state != "healthy"
+    }
+
     var body: some View {
         List {
             Section {
@@ -123,7 +135,12 @@ struct HostView: View {
 
             dangerSection
 
-            if !result.isEmpty {
+            // THE BOX'S OWN WORDS, WHEN THEY ADD SOMETHING. The reboot reply is
+            // already said at the top, in the summary, in a sentence written
+            // for a person — repeating it in a monospace transcript at the
+            // bottom of the page is the same fact twice, and the copy at the
+            // bottom is the one nobody scrolls to.
+            if !result.isEmpty && !rebooting {
                 Section {
                     // THE BOX'S OWN WORDS, on an inner surface: this is quoted
                     // from somewhere else and should not look like something
@@ -159,10 +176,19 @@ struct HostView: View {
     @ViewBuilder private var summary: some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
             HStack(alignment: .firstTextBaseline) {
-                Text(state ?? "unknown")
+                Text(rebooting ? "rebooting" : (state ?? "unknown"))
                     .fleetType(.bodyStrong)
-                    .foregroundStyle(state == "healthy" ? Design.Palette.ok : Design.Palette.attention)
+                    .foregroundStyle(rebooting ? Design.Palette.active
+                                     : state == "healthy" ? Design.Palette.ok : Design.Palette.attention)
                 Spacer(minLength: 0)
+            }
+            if rebooting {
+                // THE SENTENCE THE HOST SENT, where a person will read it. It
+                // was in a monospace box at the bottom of a long page, under
+                // the fold, next to a card that said the machine was offline.
+                Text("Asked to reboot. It will go quiet for a minute or two, then dial back in.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
             }
             // Only when it is news. "reporting normally" under the word
             // "healthy" is the same fact twice.
@@ -384,6 +410,23 @@ struct HostView: View {
         await sendReboot(confirm: hostId)
     }
 
+    /// This machine is on its way down because we asked it to.
+    ///
+    /// A HOST YOU JUST REBOOTED IS NOT A HOST THAT WENT OFFLINE. The page said
+    ///
+    ///   offline
+    ///   socket closed: 1000 shutting down
+    ///
+    /// in the attention colour, seconds after somebody pressed Reboot — every
+    /// word true, the whole of it reading as a fault, on a screen where the
+    /// person had caused it deliberately. The coordinator's half of that is
+    /// fixed in describeClose; this is the half only the app can know, because
+    /// only the app knows the reboot was asked for FROM HERE.
+    ///
+    /// It clears when the machine says something again — reload() overwrites
+    /// the state, and a box that has dialled back in is no longer rebooting.
+    @State private var rebootedAt: Date?
+
     /// The reboot itself, once something has vouched for the person.
     private func sendReboot(confirm: String) async {
         busy = true
@@ -397,6 +440,9 @@ struct HostView: View {
         rebootPin = ""
         rebootConfirm = ""
         needsTypedConfirmation = false
+        // ONLY IF IT WORKED. A refused reboot is not a rebooting machine, and
+        // saying so would hide the refusal behind a reassuring sentence.
+        if result.localizedCaseInsensitiveContains("rebooting") { rebootedAt = Date() }
         await reload()
         await onChange()
     }

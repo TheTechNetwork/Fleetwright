@@ -19,6 +19,7 @@
 // is a good sign the rule was right.
 
 import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
+import { describeClose } from '../../src/fleet/coordinator/registry.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
@@ -995,7 +996,7 @@ export class Fleet {
 
   /** @param {WebSocket} socket @param {number} code @param {string} reason */
   async webSocketClose(socket, code, reason) {
-    this.#socketGone(socket, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
+    this.#socketGone(socket, describeClose(code, reason));
   }
 
   /** @param {WebSocket} socket @param {any} error */

@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 
 import { reboot, cancelReboot } from '../src/core/reboot.js';
+import { readFileSync } from 'node:fs';
+import { describeClose } from '../src/fleet/coordinator/registry.js';
 
 const CFG = /** @type {any} */ ({ systemReboot: true, runUser: 'agent' });
 const ok = () => ({ status: 0, stderr: '' });
@@ -146,4 +148,42 @@ test('the counts travel as data, so a screen sizes its own ceremony', () => {
   const empty = reboot(CFG, [], { actor: 'fleet:x@y.z', sessions: [], exec: ok });
   assert.equal(typeof empty.reboot.pinRequired, 'boolean');
   assert.equal(empty.reboot.hostname, os.hostname());
+});
+
+test('a clean goodbye is not a fault', () => {
+  // A HOST YOU JUST REBOOTED IS NOT A HOST THAT WENT OFFLINE. The page said
+  //
+  //   offline
+  //   socket closed: 1000 shutting down
+  //
+  // in the attention colour, seconds after somebody pressed Reboot. Every word
+  // true, the whole of it reading as a fault, on a screen where the person had
+  // caused it deliberately.
+  //
+  // 1000 is the code for a NORMAL closure and `shutting down` is the host being
+  // polite on its way out.
+  assert.match(describeClose(1000, 'shutting down'), /shut down cleanly/);
+  assert.match(describeClose(1000, ''), /disconnected cleanly/);
+  assert.doesNotMatch(describeClose(1000, 'shutting down'), /1000|socket closed/);
+
+  // AND A DROP IS STILL A DROP. Collapsing these would trade one bad screen for
+  // a worse one: 1006 means the connection died without a goodbye, which is a
+  // different diagnosis from a host that said one.
+  assert.match(describeClose(1006, ''), /without a goodbye/);
+
+  // The code survives for the cases where the answer is not obvious — it is the
+  // thing worth having when nothing else explains it.
+  assert.match(describeClose(4321, 'something odd'), /4321/);
+  assert.match(describeClose(4321, 'something odd'), /something odd/);
+});
+
+test('both coordinators say it the same way', () => {
+  // openapi.json requires them to behave identically, and this is a string a
+  // person reads on a host card.
+  const node = readFileSync(new URL('../src/fleet/coordinator/server.js', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../worker/src/fleet-do.js', import.meta.url), 'utf8');
+  for (const [name, src] of [['node', node], ['worker', worker]]) {
+    assert.match(src, /describeClose\(code, reason\)/, `${name} still formats the close code itself`);
+    assert.doesNotMatch(src, /`socket closed: \$\{code\}/, `${name} still shows the raw code`);
+  }
 });

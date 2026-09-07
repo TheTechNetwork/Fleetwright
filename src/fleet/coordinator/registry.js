@@ -381,3 +381,40 @@ export class HostRegistry {
     return this.cursor++;
   }
 }
+
+/**
+ * Why a host stopped talking, in words rather than in a close code.
+ *
+ * A HOST THAT SAID GOODBYE IS NOT A HOST THAT FELL OVER, and the screen could
+ * not tell them apart. Rebooting a machine from the app — which the app itself
+ * had just asked for — showed
+ *
+ *   offline
+ *   socket closed: 1000 shutting down
+ *
+ * in the attention colour, at the top of that machine's page. Every word of it
+ * is true and the whole of it reads as a fault: 1000 is the code for a NORMAL
+ * closure, `shutting down` is the host being polite on its way out, and the
+ * person seeing it had pressed the button that caused it.
+ *
+ * THE CODE STAYS, at the end, because it is the thing worth having when the
+ * answer is not obvious — 1006 (no close frame) and 1000 (a clean goodbye) are
+ * genuinely different diagnoses and collapsing them would trade one bad screen
+ * for a worse one.
+ *
+ * @param {number} code @param {string} [reason]
+ */
+export function describeClose(code, reason = '') {
+  const said = String(reason || '').trim();
+  if (code === 1000) {
+    // The host closed on purpose. `shutting down` is what a sidecar sends when
+    // it is stopping for a restart or a reboot, which is the commonest reason
+    // anybody sees this at all.
+    return /shut|restart|reboot/i.test(said)
+      ? 'it shut down cleanly and will dial back in when it returns'
+      : 'it disconnected cleanly';
+  }
+  if (code === 1001) return 'it went away';
+  if (code === 1006) return 'the connection dropped without a goodbye';
+  return `the connection closed (${code}${said ? `: ${said}` : ''})`;
+}

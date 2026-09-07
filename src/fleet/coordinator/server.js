@@ -22,6 +22,7 @@
 // the verb set again on arrival. A compromised coordinator can start and stop
 // sessions. It cannot run anything.
 
+import { describeClose } from './registry.js';
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -380,7 +381,7 @@ export class Coordinator {
       // every log, routed to by nothing.
       if (this.connections.get(hostId) !== conn) return;
       this.connections.delete(hostId);
-      this.core.hostDisconnected(hostId, `socket closed: ${code}${reason ? ` ${reason}` : ''}`);
+      this.core.hostDisconnected(hostId, describeClose(code, reason));
     });
     conn.on('error', (e) => this.log.warn(`coordinator: ${hostId} socket error: ${e.message}`));
 
