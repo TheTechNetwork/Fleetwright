@@ -35,6 +35,21 @@ struct FleetApp: View {
     @State private var tab: Tabs = .sessions
     private enum Tabs: Hashable { case sessions, fleet, settings }
 
+    /// The tab a screenshot run asked for, if this launch is one.
+    ///
+    /// Applied in `onAppear` beside the unconfigured-app rule below, so the two
+    /// things that can choose a tab are in one place and their order is
+    /// visible — a screenshot run has already been pointed at the demo, so it
+    /// is configured, and the two never both fire.
+    private var screenshotTab: Tabs? {
+        switch Screenshots.tab {
+        case "sessions": return .sessions
+        case "fleet": return .fleet
+        case "settings": return .settings
+        default: return nil
+        }
+    }
+
     var body: some View {
         TabView(selection: $tab) {
             Tab("Sessions", systemImage: "square.stack.3d.up", value: Tabs.sessions) {
@@ -52,7 +67,10 @@ struct FleetApp: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         // Nowhere to point a coordinator at yet, so start where that is fixed
         // rather than showing an empty session list and a modal about it.
-        .onAppear { if !settings.configured { tab = .settings } }
+        .onAppear {
+            if let t = screenshotTab { tab = t }
+            else if !settings.configured { tab = .settings }
+        }
     }
 }
 
