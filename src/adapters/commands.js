@@ -1621,7 +1621,10 @@ export const COMMANDS = {
     run: async (ctx, args) => {
       const running = (await ctx.sessions.list()).filter((s) => s.status === 'running').map((s) => s.name);
       const r = reboot(ctx.cfg, args, { actor: ctx.actor, sessions: running });
-      return { ok: r.ok, text: r.text };
+      // THE COUNTS AS DATA, so a screen can size its own ceremony rather than
+      // reading a number out of the sentence. An empty host asks for a
+      // fingerprint; a host with work on it asks for the pin the box issued.
+      return { ok: r.ok, text: r.text, ...(r.reboot ? { reboot: r.reboot } : {}) };
     },
   },
 

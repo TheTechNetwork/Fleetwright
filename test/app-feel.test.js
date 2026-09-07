@@ -223,3 +223,30 @@ test('one list of machines, at one width', () => {
     assert.ok(!view.includes(dead), `${dead}) is defined and never called`);
   }
 });
+
+test('the app asks for as much as the host says the loss is worth', () => {
+  // "Reboot isn't technically the end of the world. An empty host should be a
+  // Face ID reboot, that's it."
+  //
+  // THE HOST DECIDES, not the app. It is the only party that knows what is
+  // running, and a client that counted sessions itself would be a second
+  // opinion about the thing the ceremony exists to protect.
+  const host = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
+  assert.match(host, /if reply\.reboot\?\.pinRequired == false \{\s*\n\s*await confirmReboot\(\)/);
+  assert.match(host, /\} else \{\s*\n\s*rebootStage = \.confirming/);
+
+  // And when there IS a pin, the count is said above the field rather than in a
+  // paragraph at the bottom — it is the reason there is a pin at all.
+  assert.match(host, /sessions are running on \\\(hostId\)\. They will not survive\./);
+});
+
+test('the cost travels as data, not as a number in a sentence', () => {
+  // The same rule as `waiting`, `entries` and `channel`: a screen that read the
+  // count out of the prose would break the first time the wording changed.
+  const reboot = readFileSync(new URL('../src/core/reboot.js', import.meta.url), 'utf8');
+  assert.match(reboot, /reboot: \{ sessions: 0, pinRequired: false, hostname \}/);
+  assert.match(reboot, /reboot: \{ sessions: sessions\.length, pinRequired: true, hostname \}/);
+
+  const sidecar = readFileSync(new URL('../src/fleet/host/sidecar.js', import.meta.url), 'utf8');
+  assert.match(sidecar, /\.\.\.\(r\.reboot \? \{ reboot: r\.reboot \} : \{\}\)/);
+});

@@ -71,6 +71,8 @@ export class HubError extends Error {
  *   system: { supported?: boolean, pending?: boolean, count?: number, text?: string },
  * }} [waiting] what a check found, as data — kind, pending, version — so a row
  *   renders a state instead of parsing a sentence
+ * @property {{ sessions: number, pinRequired: boolean, hostname: string }} [reboot]
+ *   what a reboot would cost, so a screen asks for as much as the loss is worth
  */
 
 export class HubClient {
