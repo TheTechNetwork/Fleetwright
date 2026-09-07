@@ -6,7 +6,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { describeSystemUpdates, refreshPackageLists, runUpgrade } from '../src/core/upgrades.js';
 
@@ -94,14 +96,52 @@ test('the advice matches the failure, or says nothing clever', async () => {
   // read-only for the service AND every child of it. `sudo` does not escape a
   // mount namespace, so the sanctioned apt-get inherited it. The box was fine;
   // we were the read-only part.
-  const readOnly = adviseOnFailure("unable to create '/etc/debian_version.dpkg-new': Read-only file system");
-  assert.match(readOnly, /ProtectSystem=full/, 'it does not name the thing that actually did it');
-  assert.match(readOnly, /sudo does not escape a mount namespace/i);
-  assert.match(readOnly, /re-running the installer/, 'it does not say how to fix it');
-  // A WAY TO TELL THE TWO APART, because a genuinely read-only disk exists too
-  // and this advice must not send that person in circles.
-  assert.match(readOnly, /systemctl show agent-hub/);
-  assert.doesNotMatch(readOnly, /update the image/i, 'it blames the image again');
+  // AND THEN IT WAS WRONG A SECOND TIME, which is why it now MEASURES.
+  //
+  // That fix and this advice shipped in the SAME release, so every box the
+  // message could reach already had ReadWritePaths=/etc — and one of them
+  // re-ran the installer, as instructed, and failed identically. Twice this
+  // function produced a confident remedy for a diagnosis nobody made.
+  //
+  // The process running dpkg is the process whose namespace dpkg inherits, so
+  // it reads its own mounts instead of reasoning about a unit file. A unit file
+  // says what was ASKED FOR; mountinfo says what the kernel DID.
+  //
+  // THE FIXTURES ARE THE POINT OF THIS ASSERTION. Measuring the machine running
+  // the suite would make this test agree with whatever that box has mounted,
+  // and the two answers below are the two it has to tell apart.
+  const said = "unable to create '/etc/debian_version.dpkg-new': Read-only file system";
+  const fixture = (lines) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'advice-'));
+    const file = path.join(dir, 'mountinfo');
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    return file;
+  };
+  const RW = '25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw';
+
+  // OURS: a read-only layer stacked over a perfectly good disk.
+  const ours = adviseOnFailure(said, fixture([RW, '36 25 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 ro']));
+  assert.match(ours, /READ-ONLY/, 'it does not say what it measured');
+  assert.match(ours, /sudo does not/i);
+  assert.match(ours, /ReadWritePaths/, 'it does not say how to fix it');
+  assert.match(ours, /systemctl show agent-hub/);
+  assert.doesNotMatch(ours, /update the image/i, 'it blames the image again');
+
+  // NOT OURS: /etc is writable in this namespace, so ProtectSystem did not do
+  // it and the installer will not fix it. This is the answer the shipped
+  // version could not express, and the one a person is standing in when they
+  // say "it still fails".
+  const notOurs = adviseOnFailure(said, fixture([RW]));
+  assert.match(notOurs, /READ-WRITE/);
+  assert.match(notOurs, /re-running the installer will not change anything/);
+  assert.match(notOurs, /findmnt/, 'it does not say where to look instead');
+
+  // CANNOT TELL is its own answer, and rounding it to either of the two above
+  // is how both earlier versions went wrong.
+  const unmeasurable = adviseOnFailure(said, '/definitely/not/here');
+  assert.match(unmeasurable, /could not read its own mounts/);
+  assert.match(unmeasurable, /findmnt/);
+  assert.match(unmeasurable, /ReadWritePaths/);
 
   // Each of the rest has a different fix, which is the whole reason to tell
   // them apart.
