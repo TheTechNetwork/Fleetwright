@@ -77,7 +77,10 @@ test('the answer travels as data, not only as prose', async () => {
     // A row that decided whether to show "Apply update" by searching the prose
     // would break the first time the wording changed — the same rule that put
     // `profiles`, `entries` and `channel` in fields.
-    assert.equal(typeof r.waiting.app.pending, 'boolean');
+    // TRI-STATE ON THE APP HALF: true, false, or null for cannot-tell. The
+    // system half is genuinely binary — apt either has packages waiting or it
+    // does not, and it says separately when it could not look.
+    assert.ok([true, false, null].includes(r.waiting.app.pending));
     assert.equal(typeof r.waiting.system.pending, 'boolean');
     // And it says which KIND of box it measured, because "3 commits behind" and
     // "v0.2.3 is waiting" are answers to different questions and only one of
@@ -284,13 +287,21 @@ test('the host answers "is there something waiting" itself, in three states', ()
   // Both apps derived it as `behind > 0 || release.available != null`, which is
   // right for a checkout and wrong for every other kind of box. The host knows
   // which kind it is; nobody else has to guess.
-  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
-  assert.match(src, /appPending: appPending\(app, packaged, release\)/);
-  // NULL IS A VALUE HERE and means CANNOT TELL: no check has finished, or the
-  // one that did could not reach anything. A boolean cannot say that, and
+  // IT MOVED, AND MOVING IT WAS THE POINT. This lived in the sidecar, computed
+  // from a config the sidecar does not have — so it answered null on every box
+  // for ever. It is now in the command, in the process that HAS the manifest
+  // URL, and the sidecar adopts the answer.
+  const cmds = readFileSync(new URL('../src/adapters/commands.js', import.meta.url), 'utf8');
+  const release = cmds.slice(cmds.indexOf("kind: 'release',"), cmds.indexOf('available: r.available,'));
+  // NULL IS A VALUE HERE and means CANNOT TELL: the box does not know where its
+  // releases come from, or could not reach them. A boolean cannot say that, and
   // `false` says the reassuring half of it.
-  assert.match(src, /if \(!release \|\| release\.configured !== true\) return null;/);
-  assert.match(src, /if \(!app\.ok\) return null;/);
+  assert.match(release, /r\.configured !== true\s*\n?\s*\? null/);
+  assert.match(release, /could not check\/i\.test\(r\.message \|\| ''\) \? null : false/);
+
+  // And the sidecar no longer has an opinion of its own to disagree with.
+  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /function appPending\(/, 'the sidecar computes it again');
 });
 
 test('neither app claims a box is current when nobody could find out', () => {
@@ -333,4 +344,65 @@ test('both apps apply the check the host just ran', () => {
     check.indexOf('fleetHosts = Fleet(settings).fleetHosts()') < check.indexOf('r.waiting?.let'),
     'the reply is applied before the refresh that overwrites it',
   );
+});
+
+// --- the answer nobody could ever get ---------------------------------------
+//
+// "Why is update status unknown? Why isn't that loaded into the app
+// automatically, why a check to get it, and an app restart loses it?"
+//
+// Three symptoms, one cause, and it was permanent rather than transient.
+
+test('the sidecar asks agent-hub rather than recomputing with a config it lacks', () => {
+  // THE BUG. The sidecar worked this out itself: loadConfig(), then
+  // checkRelease(). But loadConfig() reads agent-hub's SCHEMA out of the
+  // SIDECAR's environment, and /etc/agent-fleet-sidecar.env carries no
+  // AGENT_HUB_* keys at all — the installer copies exactly three things into
+  // it: the hub URL, the hub token and the coordinator URL.
+  //
+  // So `releaseManifest` was the empty default, checkRelease answered
+  // `configured: false` — "this box does not know where its releases come
+  // from" — and appPending was null. On every packaged host, from the day it
+  // was installed, with no amount of waiting fixing it.
+  //
+  // Pressing Check worked, which made it look like a refresh problem: that goes
+  // through agent-hub, which reads /etc/agent-hub.env and HAS the manifest. Two
+  // processes, two configurations, one question, and the one that could answer
+  // it was not the one being asked. The answer then survived only until the
+  // timer overwrote it with null again.
+  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const refresh = src.slice(src.indexOf('async function refreshUpdates()'), src.indexOf('setTimeout(() => void refreshUpdates()'));
+
+  assert.match(refresh, /await hub\.command\('\/updates'\)/, 'the sidecar computes this itself again');
+  assert.match(refresh, /adoptUpdates\(reply\.waiting\)/);
+
+  // CODE, NOT COMMENTS. The paragraph above this explains what it used to do,
+  // and naming `loadConfig` and `checkRelease` there is the point of it — a
+  // test that matched them anywhere would fail because somebody wrote down why
+  // they are gone.
+  const code = refresh.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /loadConfig\(\)/, 'it is reading agent-hub settings from the sidecar env again');
+  assert.doesNotMatch(code, /checkRelease|updateAvailable/, 'two processes are answering one question again');
+});
+
+test('the env file the sidecar reads has none of the settings it needed', () => {
+  // The fact underneath the bug, asserted so the fix is not undone by somebody
+  // "tidying" the template. If AGENT_HUB_RELEASE_MANIFEST is ever added here,
+  // that is a second place for it to be right or wrong.
+  const template = readFileSync(new URL('../install/agent-fleet-sidecar.env.example', import.meta.url), 'utf8');
+  assert.doesNotMatch(template, /AGENT_HUB_RELEASE_MANIFEST|AGENT_HUB_INSTALL_DIR/);
+});
+
+test('rebootRequired survives the two paths becoming one', () => {
+  // It was the ONE field only the sidecar's own computation produced. Folding
+  // the paths together without carrying it would have made a box needing a
+  // reboot quietly stop saying so — a regression with no error attached.
+  const cmds = readFileSync(new URL('../src/adapters/commands.js', import.meta.url), 'utf8');
+  assert.match(cmds, /rebootRequired: s\.rebootRequired/);
+
+  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  // Carried over when ABSENT rather than defaulted to false: an older hub not
+  // sending it must not be read as an answer.
+  assert.match(src, /typeof sys\.rebootRequired === 'boolean'/);
+  assert.match(src, /lastUpdates\?\.rebootRequired \?\? false/);
 });

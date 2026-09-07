@@ -12,9 +12,7 @@
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
-import { updateAvailable, updateStatus } from '../src/core/update.js';
-import { systemUpdates, describeSystemUpdates, refreshPackageLists } from '../src/core/upgrades.js';
-import { checkRelease } from '../src/core/release-check.js';
+import { updateStatus } from '../src/core/update.js';
 import { installedVersion } from '../src/core/release-apply.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
@@ -207,50 +205,38 @@ const sidecar = new Sidecar({
     if (refreshing) return;
     refreshing = true;
     try {
-      const hub = loadConfig();
-      const app = updateAvailable(hub);
-      // At most every six hours and only if permitted. A box that never
-      // refreshes its own lists answers "no updates" indefinitely, which is the
-      // reassuring kind of wrong.
-      refreshPackageLists(hub);
-      const system = systemUpdates();
-      // THE RELEASE, for a packaged box. `updateAvailable` above answers in
-      // commits and needs a git checkout; a released host has none, so it
-      // reported `appBehind: null` — CANNOT TELL — for ever, and both phones
-      // correctly showed nothing. The pipeline was complete and nothing was
-      // looking at it.
+      // ASKED, NOT RECOMPUTED — and the bug this fixes was permanent and on
+      // every box.
       //
-      // Only for a packaged box: on a checkout the git answer is the real one
-      // and asking GitHub as well would be two answers to one question.
-      const packaged = updateStatus(hub).packaged === true;
-      const release = packaged ? await checkRelease(hub) : null;
-      lastUpdates = {
-        appBehind: app.ok ? app.behind : null,
-        system: describeSystemUpdates(system),
-        rebootRequired: system.rebootRequired,
-        release,
-        // IS THERE SOMETHING TO APPLY — ANSWERED HERE, NOT RE-DERIVED TWICE ON
-        // TWO PHONES. Both apps computed it as `behind > 0 || release.available
-        // != null`, which is right for a checkout, WRONG for every packaged box
-        // and wrong in the dangerous direction:
-        //
-        //   `appBehind` is null on a release — there is no history to count —
-        //   and both apps read that as `?? 0`, turning CANNOT TELL into
-        //   NOTHING WAITING.
-        //
-        //   `release.available` is null when the check FAILED as well as when
-        //   nothing is waiting (release-check.js returns null for both), so a
-        //   box that has never once reached GitHub reported itself current.
-        //
-        // The result was a host showing "main-57 · up to date" with no Apply
-        // button, while Check on the same row answered "main-57 → main-63
-        // (available)". Two answers to one question, and the wrong one was the
-        // one on the row.
-        //
-        // Null is a real value here and means CANNOT TELL: no check has
-        // finished, or the one that did could not reach anything.
-        appPending: appPending(app, packaged, release),
-      };
+      // This used to work it out here: loadConfig(), updateAvailable(),
+      // checkRelease(). But loadConfig() reads agent-hub's SCHEMA out of the
+      // SIDECAR's environment, and /etc/agent-fleet-sidecar.env carries no
+      // AGENT_HUB_* keys at all — the installer copies exactly three things
+      // into it, the hub URL, the hub token and the coordinator URL.
+      //
+      // So `cfg.releaseManifest` was the empty default, checkRelease answered
+      // `configured: false` — "this box does not know where its releases come
+      // from" — and appPending was null. For ever. Every packaged host in the
+      // fleet reported "update status unknown" from the day it was installed,
+      // and no amount of waiting fixed it because nothing about it was
+      // transient.
+      //
+      // Pressing Check worked, which is what made it look like a refresh
+      // problem: that goes through agent-hub, which reads /etc/agent-hub.env
+      // and HAS the manifest URL. Two processes, two configurations, one
+      // question — and the one that could answer it was not the one being
+      // asked. The answer then survived until this timer overwrote it with
+      // null again, which is why it also "came back" after a while.
+      //
+      // agent-hub already answers this: `/updates` returns `{ app, system }`,
+      // computed against the real configuration, and the `updates` VERB has
+      // been forwarding it to the apps all along. So the sidecar asks the same
+      // question through the same door and adopts the same answer. One
+      // computation, in the process that has the configuration, and the health
+      // frame can no longer disagree with the button.
+      const reply = await hub.command('/updates');
+      if (reply?.waiting) adoptUpdates(reply.waiting);
+      else log.warn('sidecar: agent-hub answered /updates without a waiting block');
     } catch (e) {
       // Left at whatever it was. A failed check is not news — the previous
       // answer is stale rather than wrong, and replacing it with null would
@@ -259,25 +245,6 @@ const sidecar = new Sidecar({
     } finally {
       refreshing = false;
     }
-  }
-
-  /**
-   * Tri-state, and the third state is the point.
-   *
-   * @returns {boolean|null} true = something waiting, false = nothing waiting,
-   *   null = nobody could find out.
-   */
-  function appPending(app, packaged, release) {
-    if (packaged) {
-      // `configured: false` is a box that does not know where its releases come
-      // from, and a failed fetch answers `available: null` with a message. Both
-      // are CANNOT TELL, and neither is "up to date".
-      if (!release || release.configured !== true) return null;
-      if (release.available) return true;
-      return release.message && /could not check/i.test(release.message) ? null : false;
-    }
-    if (!app.ok) return null;
-    return (app.behind ?? 0) > 0;
   }
 
   /**
@@ -306,9 +273,15 @@ const sidecar = new Sidecar({
       // waiting." is a perfectly good answer and a perfectly bad value for a
       // field whose emptiness is what hides the Apply upgrade button.
       system: sys.pending ? sys.text : null,
-      // NOT IN THE REPLY, so it is carried over rather than invented. `false`
-      // here would clear a pending-reboot flag on a box that still needs one.
-      rebootRequired: lastUpdates?.rebootRequired ?? false,
+      // NOW IN THE REPLY, and it had to be: this used to be the one field only
+      // the sidecar's own computation produced, so folding the two paths into
+      // one would have made a box needing a reboot quietly stop saying so.
+      // Carried over when absent, because `false` would CLEAR the flag on a box
+      // that still needs one — an older hub not sending it must not be read as
+      // an answer.
+      rebootRequired: typeof sys.rebootRequired === 'boolean'
+        ? sys.rebootRequired
+        : (lastUpdates?.rebootRequired ?? false),
       release:
         app.kind === 'release'
           ? { available: app.available ?? null, configured: app.configured ?? true, message: app.text ?? null }
