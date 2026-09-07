@@ -469,9 +469,13 @@ function adviseOnProtectedEtc(u) {
       'actually launched it, and whether that carries ProtectSystem= or ReadOnlyPaths=.'
     );
   }
-  // A whole path in a space-separated list, not a substring: `/etcetera` starts
-  // with `/etc` and is not it.
-  const has = u.readWritePaths.split(/\s+/).filter(Boolean).includes('/etc');
+  // FIRST, BECAUSE IT INVALIDATES EVERYTHING BELOW IT. NeedDaemonReload is
+  // systemd comparing the unit on disk with the one it is running, so `yes`
+  // means every property above describes the OLD file — and a conclusion drawn
+  // from ProtectSystem or ReadWritePaths would be a conclusion about a unit
+  // that is no longer on disk. Checked after the `full` branch, a box whose
+  // file had just been fixed would be told to re-run the installer it had
+  // already run.
   if (u.needsReload === 'yes') {
     // THE ONE THAT LOOKS LIKE EVERY OTHER ONE. The file on disk is right and
     // the running service is the old one, so reading the unit would say the fix
@@ -483,6 +487,36 @@ function adviseOnProtectedEtc(u) {
       '  sudo systemctl daemon-reload && sudo systemctl restart agent-hub'
     );
   }
+
+  // `full` IS THE ANSWER NOW, WHATEVER ReadWritePaths SAYS.
+  //
+  // The unit shipped `ProtectSystem=full` plus `ReadWritePaths=/etc` to carve
+  // /etc back out, and that was measured on a real box and did not work:
+  // systemd reported the unit loaded, ReadWritePaths=/etc, no drop-ins, and
+  // left /etc read-only in the namespace anyway. The two are a contradiction —
+  // protect /etc, do not protect /etc — and which way a given systemd resolves
+  // it is a detail of that version.
+  //
+  // So the unit says `ProtectSystem=true` now, which has nothing to resolve,
+  // and a box still reporting `full` is a box on the older unit. That holds
+  // whether or not ReadWritePaths is set beside it, which is why it is checked
+  // BEFORE it: the previous version of this branch read `full` +
+  // ReadWritePaths=/etc as "configured correctly, must be a drop-in" and would
+  // have sent somebody looking for a file that does not exist.
+  if (u.protectSystem === 'full') {
+    return (
+      `systemd loaded this unit with ProtectSystem=full${u.readWritePaths ? ` and ReadWritePaths=${u.readWritePaths}` : ''},\n` +
+      'which is the combination measured NOT to work: asking systemd to protect /etc and to leave /etc\n' +
+      'writable is a contradiction, and it does not resolve the same way everywhere.\n\n' +
+      'The unit uses ProtectSystem=true now — /usr and /boot stay read-only, and /etc goes back to\n' +
+      'ordinary file permissions, which already stop an unprivileged service. This box is on the older\n' +
+      `one${u.fragment ? ` (${u.fragment})` : ''}. Re-running the installer writes the new one:\n` +
+      '  curl -fsSL <your coordinator>/install | sudo sh'
+    );
+  }
+  // A whole path in a space-separated list, not a substring: `/etcetera` starts
+  // with `/etc` and is not it.
+  const has = u.readWritePaths.split(/\s+/).filter(Boolean).includes('/etc');
   if (has) {
     return (
       `The unit already asks for it — ReadWritePaths=${u.readWritePaths} — and systemd did not apply it,\n` +

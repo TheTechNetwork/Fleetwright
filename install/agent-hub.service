@@ -54,28 +54,46 @@ ProtectClock=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectProc=invisible
-ProtectSystem=full
-# AND /etc BACK, because the one thing this service exists to launch writes
-# there. `ProtectSystem=full` makes /usr, /boot AND /etc read-only for the
-# service and every child of it — and a mount namespace is not something `sudo`
-# escapes, so the sanctioned `sudo -n apt-get upgrade` inherited it too:
+# `true` AND NOT `full`, WHICH IS THE SECOND ATTEMPT AT THIS.
+#
+# `full` adds /etc to the /usr and /boot that `true` already protects. The one
+# thing this service exists to launch writes /etc — a mount namespace is not
+# something `sudo` escapes, so the sanctioned `sudo -n apt-get upgrade`
+# inherited it too:
 #
 #   unable to create '/etc/debian_version.dpkg-new'
 #     (while processing './etc/debian_version'): Read-only file system
 #
-# Reported from a box whose filesystem is perfectly writable. It was ours.
-# `/upgrade` could not have worked on any box with this unit, for any package
-# carrying a conffile — which is most of them.
+# Reported from a box whose filesystem is perfectly writable. It was ours, and
+# `/upgrade` could not have worked on any box carrying this unit, for any
+# package with a conffile — which is most of them.
 #
-# THE COMMENT BELOW SAID "Nothing here writes to /etc", and that was true of
-# agent-hub's own code and false of the thing agent-hub is for.
+# THE FIRST ATTEMPT WAS `full` PLUS `ReadWritePaths=/etc`, AND IT DID NOT WORK.
+# Measured on the box that reported it, after the fix had been installed:
 #
-# WHY THIS IS NOT THE HARDENING IT LOOKS LIKE. The service runs as an
-# unprivileged user, so ordinary file permissions already stop it writing /etc —
-# the namespace was redundant for everything except the one operation that
-# legitimately has root, through a sudoers rule naming that exact command line.
-# It was blocking the sanctioned path while permissions did the real work.
-ReadWritePaths=/etc
+#   systemctl show → ProtectSystem=full  ReadWritePaths=/etc  DropInPaths=
+#   /proc/<pid>/mountinfo → 8:1 /etc /etc ro,relatime - ext4 /dev/sda1 rw,...
+#
+# The unit asks for it, systemd loaded the unit, nothing overrides it, and /etc
+# is still read-only in the namespace. I do not know why that resolves this way
+# here and not elsewhere, and three wrong explanations of this exact failure is
+# enough — so this stops asking systemd to resolve a contradiction rather than
+# trying to win the argument about precedence.
+#
+# `full` and `ReadWritePaths=/etc` ARE a contradiction: protect /etc, and do not
+# protect /etc. Whichever way a given systemd resolves it is a detail of that
+# version, and a unit whose correctness depends on it is a unit that works on
+# the boxes we tested and not the ones we did not.
+#
+# WHAT IS ACTUALLY LOST IS LESS THAN IT LOOKS. /usr, /boot and /efi stay
+# read-only, which is the part that matters for a service that should never
+# rewrite its own runtime. /etc goes back to being guarded by ordinary file
+# permissions — and the service runs as an UNPRIVILEGED USER, so those already
+# stop it writing /etc. The namespace was redundant for everything except the
+# one operation that legitimately has root, through a sudoers rule naming that
+# exact command line. It blocked the sanctioned path while permissions did the
+# real work.
+ProtectSystem=true
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
@@ -102,11 +120,13 @@ RuntimeDirectoryMode=0700
 #   ProtectHome           rootless podman keeps its storage in
 #                         ~/.local/share/containers, and the Claude credential
 #                         is in ~/.claude.
-#   ProtectSystem=strict  podman run fails. `full` is what this needs, PLUS
-#                         ReadWritePaths=/etc above: `full` makes /etc read-only
-#                         for every child too, and dpkg writes there. This
-#                         comment used to say "nothing here writes to /etc",
-#                         which was true of this code and false of apt.
+#   ProtectSystem=strict  podman run fails.
+#   ProtectSystem=full    /etc read-only for every child too, and dpkg writes
+#                         there. Tried with ReadWritePaths=/etc to carve it back
+#                         out; measured on a real box, systemd loaded that unit
+#                         and left /etc read-only anyway. See the note above
+#                         ProtectSystem= for the measurement. `true` is what
+#                         this needs, and it keeps /usr and /boot.
 #   ProtectKernelTunables podman run fails.
 #   ProtectControlGroups  podman run fails; it writes its own cgroup.
 #   ProtectHostname       podman run fails.

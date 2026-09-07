@@ -64,36 +64,49 @@ test('a value containing = survives, because the FIRST = is the separator', () =
   // one — so a drop-in under a directory with an `=` in its name would be
   // reported half-named, in the one message whose job is to name the file.
   const odd = '/etc/systemd/system/agent-hub.service.d/10-ProtectSystem=off.conf';
-  const u = unitProtection(fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etc', `DropInPaths=${odd}`,
+  const lines = [
+    'ProtectSystem=true', 'ReadWritePaths=/etc', `DropInPaths=${odd}`,
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
-  ]));
-  assert.equal(u.dropIns, odd);
-  assert.match(adviseOnFailure(said, mounts(RO_ETC), fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etc', `DropInPaths=${odd}`,
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
-  ])), /10-ProtectSystem=off\.conf/);
+  ];
+  assert.equal(unitProtection(fakeSystemctl(lines)).dropIns, odd);
+  assert.match(adviseOnFailure(said, mounts(RO_ETC), fakeSystemctl(lines)), /10-ProtectSystem=off\.conf/);
 });
 
-test('a unit that predates the fix is told to re-run the installer', () => {
+test('ProtectSystem=full is itself the diagnosis now', () => {
+  // The unit shipped `full` + ReadWritePaths=/etc to carve /etc back out, and
+  // that was MEASURED on a real box and did not work: systemd reported the unit
+  // loaded, ReadWritePaths=/etc, no drop-ins, and left /etc read-only anyway.
+  // So `full` means "this box is on the older unit", with or without the carve.
+  for (const rwp of ['ReadWritePaths=', 'ReadWritePaths=/etc']) {
+    const cfg = fakeSystemctl([
+      'ProtectSystem=full', rwp, 'DropInPaths=',
+      'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    ]);
+    const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
+    assert.match(advice, /READ-ONLY/);
+    assert.match(advice, /measured NOT to work/, `${rwp} was not recognised as the old unit`);
+    assert.match(advice, /ProtectSystem=true/);
+    assert.match(advice, /curl -fsSL/);
+  }
+});
+
+test('a unit with the carve-out is NOT read as correctly configured', () => {
+  // THE TRAP IN THE OBVIOUS ORDER. Checking ReadWritePaths before ProtectSystem
+  // reads `full` + `/etc` as "asks for it, so it must be a drop-in" — and with
+  // DropInPaths empty that becomes "report a bug", sending somebody to look for
+  // a file that does not exist. This is the exact state the box reported.
   const cfg = fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
+    'ProtectSystem=full', 'ReadWritePaths=/etc', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
-  assert.match(advice, /READ-ONLY/);
-  assert.match(advice, /predates the fix/);
+  assert.doesNotMatch(advice, /worth reporting as a bug/);
   assert.match(advice, /curl -fsSL/);
-  assert.match(advice, /agent-hub\.service/);
 });
 
-test('a unit that already asks for it is NOT told to re-run the installer', () => {
-  // THE CASE THIS WHOLE FILE EXISTS FOR. Somebody re-ran the installer, as
-  // instructed, and failed identically — because the release carrying the
-  // advice was the release carrying the fix. Repeating the instruction is the
-  // one thing this must never do.
+test('a drop-in over a current unit is named, not guessed at', () => {
   const cfg = fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etc',
+    'ProtectSystem=true', 'ReadWritePaths=/etc',
     'DropInPaths=/etc/systemd/system/agent-hub.service.d/override.conf',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
@@ -108,7 +121,7 @@ test('a unit that already asks for it is NOT told to re-run the installer', () =
 
 test('a unit that asks for it with no drop-in is reported as a disagreement', () => {
   const cfg = fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etc', 'DropInPaths=',
+    'ProtectSystem=true', 'ReadWritePaths=/etc', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
@@ -120,8 +133,11 @@ test('a service still running the old unit is told to reload, not reinstall', ()
   // THE ONE THAT LOOKS LIKE EVERY OTHER ONE. The file on disk is right and the
   // running service is the old one, so reading the unit says the fix is applied
   // while the namespace says it is not.
+  // AND IT IS CHECKED FIRST, before ProtectSystem. `yes` means every other
+  // property describes the file as it USED to be, so a box whose unit had just
+  // been fixed would otherwise be told to re-run the installer it just ran.
   const cfg = fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etc', 'DropInPaths=',
+    'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=yes',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
@@ -167,8 +183,9 @@ test('/etc is matched as a whole path in the list', () => {
   // `/etcetera` starts with `/etc` and is not it. A substring test would report
   // the fix as applied on a box that never asked for it.
   const cfg = fakeSystemctl([
-    'ProtectSystem=full', 'ReadWritePaths=/etcetera /var/tmp', 'DropInPaths=',
+    'ProtectSystem=true', 'ReadWritePaths=/etcetera /var/tmp', 'DropInPaths=',
     'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
   ]);
+  // Not "already asks for it": /etcetera is not /etc, so this unit does not ask.
   assert.match(adviseOnFailure(said, mounts(RO_ETC), cfg), /predates the fix/);
 });
