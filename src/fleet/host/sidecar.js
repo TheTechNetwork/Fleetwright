@@ -497,6 +497,11 @@ export class Sidecar {
         // it went on rendering from a fifteen-minute-old cache that said
         // otherwise, with no Apply button because the button reads the row.
         ...(r.waiting ? { waiting: r.waiting } : {}),
+        // WHAT A REBOOT WILL COST, as data. The app asks for a fingerprint when
+        // nothing is running and for the box's pin when something is, and it
+        // cannot know which without being told — reading it out of the prose
+        // would break the first time the wording changed.
+        ...(r.reboot ? { reboot: r.reboot } : {}),
         // A directory listing, as DATA. The rendered text is for a person; an
         // app needs the names, kinds and sizes separately or it is reduced to
         // parsing emoji out of a string.

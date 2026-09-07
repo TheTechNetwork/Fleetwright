@@ -29,7 +29,15 @@ import { log } from '../log.js';
 /** Long enough to read the list of sessions, short enough to not sit around. */
 const CHALLENGE_TTL_MS = 120_000;
 
-/** @type {{ pin: string, actor: string|null, at: number, stage: number }|null} */
+/**
+ * The ceremony in flight, if there is one.
+ *
+ * `pin: null` is an EMPTY HOST — step one found nothing running, so there is
+ * no pin to match and the hostname alone finishes it. Set by step one and only
+ * by step one: no argument turns the pin off.
+ *
+ * @type {{ pin: string|null, actor: string|null, at: number, stage: number }|null}
+ */
 let pending = null;
 
 /** @param {() => number} [now] */
@@ -70,21 +78,52 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   const hostname = os.hostname();
   const current = live(now);
 
-  // Step 1: no arguments. Say what will be lost, then issue the PIN.
+  // Step 1: no arguments. Say what will be lost, and ask for as much as the
+  // loss is worth.
   if (!args.length) {
+    // THE CEREMONY COSTS WHAT THE REBOOT COSTS, which it did not before.
+    //
+    // Three confirmations were asked of every reboot, including one of a box
+    // with nothing running on it — where the whole loss is a machine being
+    // away for thirty seconds and coming back. That is not the end of the
+    // world, and a ritual that treats it as one is a ritual people learn to
+    // rush, which is exactly how the case that DOES matter gets rushed too.
+    //
+    // An empty host asks once. A host with work on it names the work and asks
+    // for something only that machine could have issued.
+    if (!sessions.length) {
+      pending = { pin: null, actor, at: now(), stage: 2 };
+      return {
+        ok: true,
+        reboot: { sessions: 0, pinRequired: false, hostname },
+        text:
+          `Reboot ${hostname}?\n\nNo sessions are running, so nothing is lost — the box goes ` +
+          `away and comes back.\n\nConfirm with:\n  /reboot ${hostname}`,
+      };
+    }
+
     // Six DIGITS, not hex. This gets typed on a phone, where a numeric keypad
     // is the difference between confirming and giving up — and randomInt is
     // uniform over the range, unlike the modulo of a random byte string.
     const pin = String(randomInt(0, 1_000_000)).padStart(6, '0');
     pending = { pin, actor, at: now(), stage: 1 };
-    const loss = sessions.length
-      ? `This will kill ${sessions.length} running session${sessions.length === 1 ? '' : 's'}:\n` +
-        sessions.map((s) => `  ${s}`).join('\n') +
-        '\n\nA reboot takes the tmux server with it. Nothing here resumes them afterwards.'
-      : 'No sessions are running.';
     return {
       ok: true,
-      text: `Reboot ${hostname}?\n\n${loss}\n\nStep 2 of 3 — confirm with:\n  /reboot ${pin}`,
+      // AS DATA, so a screen can size its own ceremony rather than parsing this
+      // sentence for a number. The apps ask for a fingerprint when this says
+      // nothing is running and for the PIN when it does not.
+      reboot: { sessions: sessions.length, pinRequired: true, hostname },
+      // STILL THREE STEPS WHEN THERE IS WORK TO LOSE, and still the PIN on its
+      // own first: sending the pin and the hostname together is refused, and
+      // telling somebody to do it in one go would be telling them to fail.
+      // The phone collapses this into two things a PERSON does — type the pin,
+      // then a fingerprint — without collapsing the protocol.
+      text:
+        `Reboot ${hostname}?\n\n` +
+        `This will kill ${sessions.length} running session${sessions.length === 1 ? '' : 's'}:\n` +
+        sessions.map((s) => `  ${s}`).join('\n') +
+        '\n\nA reboot takes the tmux server with it. Nothing here resumes them afterwards.' +
+        `\n\nStep 2 of 3 — confirm with:\n  /reboot ${pin}`,
     };
   }
 
@@ -96,29 +135,42 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
   if (current.actor !== actor) {
     return { ok: false, text: 'That reboot was started by somebody else. /reboot to start your own.' };
   }
-  if (args[0] !== current.pin) {
-    return { ok: false, text: 'That PIN does not match. /reboot to start again.' };
-  }
+  // AN EMPTY HOST NEEDS NO PIN, so the hostname alone finishes it. `pin: null`
+  // is set by step one and only by step one — there is no argument that turns
+  // the PIN off, and a box that had sessions when it was asked keeps needing
+  // one even if they end while somebody is deciding.
+  if (current.pin === null) {
+    if (args[0] !== hostname) {
+      return {
+        ok: false,
+        text: `This box is ${hostname}, not ${args[0]}. Nothing was done. /reboot to start again.`,
+      };
+    }
+  } else {
+    if (args[0] !== current.pin) {
+      return { ok: false, text: 'That PIN does not match. /reboot to start again.' };
+    }
 
-  // Step 2: the PIN alone. Ask for the hostname.
-  if (args.length === 1) {
-    pending = { ...current, stage: 2, at: now() };
-    return {
-      ok: true,
-      text:
-        `Step 3 of 3 — type the hostname to confirm which machine this is:\n` +
-        `  /reboot ${current.pin} ${hostname}`,
-    };
-  }
+    // Step 2: the PIN alone. Ask for the hostname.
+    if (args.length === 1) {
+      pending = { ...current, stage: 2, at: now() };
+      return {
+        ok: true,
+        text:
+          `Step 3 of 3 — type the hostname to confirm which machine this is:\n` +
+          `  /reboot ${current.pin} ${hostname}`,
+      };
+    }
 
-  if (current.stage < 2) {
-    return { ok: false, text: 'Confirm the PIN on its own first: /reboot ' + current.pin };
-  }
-  if (args[1] !== hostname) {
-    return {
-      ok: false,
-      text: `This box is ${hostname}, not ${args[1]}. Nothing was done. /reboot to start again.`,
-    };
+    if (current.stage < 2) {
+      return { ok: false, text: 'Confirm the PIN on its own first: /reboot ' + current.pin };
+    }
+    if (args[1] !== hostname) {
+      return {
+        ok: false,
+        text: `This box is ${hostname}, not ${args[1]}. Nothing was done. /reboot to start again.`,
+      };
+    }
   }
 
   pending = null;

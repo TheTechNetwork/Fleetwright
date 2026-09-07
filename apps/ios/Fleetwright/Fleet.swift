@@ -166,6 +166,16 @@ struct Fleet {
         /// — and this reply carried it while both apps rendered the sentence
         /// into a text box and left the row showing a fifteen-minute-old cache.
         var waiting: HostHealth.Waiting?
+        /// What a reboot would cost, so the screen asks for as much as the loss
+        /// is worth: a fingerprint when nothing is running, the box's pin when
+        /// something is.
+        var reboot: RebootCost?
+
+        struct RebootCost: Codable, Hashable {
+            let sessions: Int
+            let pinRequired: Bool
+            let hostname: String
+        }
     }
 
     /// A task profile: a file on ONE host whose content becomes a new session's

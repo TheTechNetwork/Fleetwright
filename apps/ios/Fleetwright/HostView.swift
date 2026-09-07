@@ -69,6 +69,8 @@ struct HostView: View {
     /// Face ID was unavailable or declined, so the hostname is asked for the
     /// way the chat flow asks for it.
     @State private var needsTypedConfirmation = false
+    /// What the machine said a reboot would cost, from its own step one.
+    @State private var cost: Fleet.Reply.RebootCost?
     @State private var rebootConfirm = ""
     @State private var confirmingRevoke = false
     @State private var pin = ""
@@ -225,21 +227,25 @@ struct HostView: View {
             case .idle:
                 Button("Reboot", role: .destructive) {
                     rebootStage = .asking
-                    run {
-                        let r = try await fleet.reboot(host: hostId)
-                        rebootStage = .confirming
-                        return r
-                    }
+                    Task { await askToReboot() }
                 }
             case .asking:
                 Text("Asking \(hostId) for a PIN…")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             case .confirming:
-                // THE PIN STILL COMES FROM THE BOX, and that is the property
-                // worth keeping: a coordinator that could mint it could reboot
-                // the fleet. It is one-time, it expires, and it cannot be typed
-                // in advance. The reply above shows it.
+                // WHAT IT WILL COST, said before it is asked for. The count is
+                // the reason there is a pin at all, so it goes above the field
+                // rather than in a paragraph at the bottom of the page.
+                Text(cost?.sessions == 1
+                     ? "1 session is running on \(hostId). It will not survive."
+                     : "\(cost?.sessions ?? 0) sessions are running on \(hostId). They will not survive.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+                // THE PIN COMES FROM THE BOX, and that is what it is for: it
+                // proves this confirmation followed a question THAT machine
+                // answered, within two minutes, and it cannot be typed in
+                // advance or replayed.
                 TextField("PIN from \(hostId)", text: $rebootPin)
                     .fleetType(.labelMono)
                     .keyboardType(.numberPad)
@@ -297,6 +303,34 @@ struct HostView: View {
         } message: {
             Text("It is disconnected immediately, and its sessions keep running without it. "
                  + "Getting it back means a new pin, typed on that box.")
+        }
+    }
+
+    /// Step one: ask the machine what a reboot would cost.
+    ///
+    /// AN EMPTY HOST GOES STRAIGHT TO THE FINGERPRINT. Nothing is lost — the
+    /// box goes away and comes back — so the host issues no pin, and the one
+    /// question left is whether the person holding the phone meant it. Three
+    /// confirmations for that is a ritual people learn to rush, and rushing is
+    /// the habit they bring to the reboot that DOES cost something.
+    private func askToReboot() async {
+        busy = true
+        do {
+            let reply = try await fleet.reboot(host: hostId)
+            result = reply.text ?? ""
+            cost = reply.reboot
+            busy = false
+            // THE HOST DECIDES, not the app. It knows what is running; the app
+            // asks for as much as the host says the loss is worth.
+            if reply.reboot?.pinRequired == false {
+                await confirmReboot()
+            } else {
+                rebootStage = .confirming
+            }
+        } catch {
+            result = error.localizedDescription
+            busy = false
+            rebootStage = .idle
         }
     }
 
