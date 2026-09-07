@@ -100,7 +100,7 @@ fun FilesSheet(
     LaunchedEffect(path) { load() }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+        Column(Modifier.padding(horizontal = Design.Space.group).padding(bottom = Design.Space.group)) {
             Text(
                 if (path.isEmpty()) "Workspace" else path,
                 style = MaterialTheme.typography.titleMedium,
@@ -114,15 +114,15 @@ fun FilesSheet(
                 Icon(Icons.Filled.Add, contentDescription = null)
                 Text("  New file")
             }
-            Spacer(Modifier.padding(4.dp))
+            Spacer(Modifier.padding(Design.Space.hair))
 
             problem?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.padding(4.dp))
+                Spacer(Modifier.padding(Design.Space.hair))
             }
 
             if (loading && entries.isEmpty()) {
-                CircularProgressIndicator(Modifier.padding(16.dp))
+                CircularProgressIndicator(Modifier.padding(Design.Space.groupTight))
             }
 
             LazyColumn {
@@ -133,7 +133,7 @@ fun FilesSheet(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { path = parentOf(path) }
-                                .padding(vertical = 12.dp),
+                                .padding(vertical = Design.Space.inside),
                         )
                         HorizontalDivider()
                     }
@@ -161,7 +161,7 @@ fun FilesSheet(
                                     }
                                 }
                             }
-                            .padding(vertical = 12.dp),
+                            .padding(vertical = Design.Space.inside),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // A symlink is drawn as what it is: the host may refuse
@@ -194,7 +194,7 @@ fun FilesSheet(
                     item {
                         Text(
                             "This directory is empty.",
-                            Modifier.padding(vertical = 12.dp),
+                            Modifier.padding(vertical = Design.Space.inside),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

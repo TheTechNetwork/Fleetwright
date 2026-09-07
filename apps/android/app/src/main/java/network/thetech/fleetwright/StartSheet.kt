@@ -117,7 +117,7 @@ fun StartSheet(
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(Design.Space.inside),
             ) {
                 OutlinedTextField(
                     value = brief,
@@ -148,7 +148,7 @@ fun StartSheet(
                 // button labelled Start.
                 val offered = profiles.orEmpty()
                 if (offered.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Task", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { profile = "" },
@@ -190,7 +190,7 @@ fun StartSheet(
                     }
                 }
                 if (kinds.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Kind", style = MaterialTheme.typography.labelMedium)
                         kinds.forEach { k ->
                             AssistChip(
@@ -216,7 +216,7 @@ fun StartSheet(
                 // Only when there is a choice. One host is not a decision,
                 // and a picker with one entry is furniture.
                 if (hosts.size > 1) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Where", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { host = "" },

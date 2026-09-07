@@ -67,7 +67,7 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                 kinds.forEachIndexed { i, k ->
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
                     ) {
                         OutlinedTextField(
                             value = k.word,
@@ -94,7 +94,7 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                     // whose only entry is "Nothing" is furniture, and on a fleet
                     // with no profiles it would imply a broken feature.
                     if (offered.isNotEmpty()) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             AssistChip(
                                 onClick = { kinds[i] = k.copy(profile = "") },
                                 label = { Text(if (k.profile.isBlank()) "Idle \u2713" else "Idle") },
@@ -108,7 +108,7 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     OutlinedTextField(
                         value = newWord,
                         onValueChange = { newWord = it },

@@ -60,16 +60,18 @@ struct StartSheet: View {
                         .lineLimit(2...5)
                         .onChange(of: brief) { _, _ in scheduleSuggestion() }
                 } header: {
-                    Text("About")
+                    Text("About").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                 } footer: {
                     // Said plainly, because "we will generate a name" reads as
                     // "we will send this somewhere" unless it does not.
                     Text(Naming.canSuggest
                          ? "A title is suggested on this device. Nothing here is sent anywhere to name it."
                          : "Optional. Helps you recognise this session later.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
                 }
 
-                Section("Title") {
+                Section {
                     HStack {
                         TextField("Optional", text: $title)
                             // A title the person has touched is theirs. Compared
@@ -93,6 +95,8 @@ struct StartSheet: View {
                         Button("Suggest again") { Task { titleIsUntouched = true; await suggest() } }
                             .disabled(suggesting)
                     }
+                } header: {
+                    Text("Title").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                 }
 
                 // WHAT IT WILL DO, and it is above Kind and Where because it
@@ -125,16 +129,18 @@ struct StartSheet: View {
                             if owners.count == 1, let only = owners.first { host = only }
                         }
                     } header: {
-                        Text("Task")
+                        Text("Task").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
                         Text(profile.isEmpty
                              ? "It will start idle, waiting for you. Nothing is asked of it until you open it."
                              : "It starts with this as its first message. The task lives on the host — this app never sends the words.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
                     }
                 }
 
                 if !kinds.isEmpty {
-                    Section("Kind") {
+                    Section {
                         Picker("Kind", selection: $kind) {
                             Text("None").tag(SessionKind?.none)
                             ForEach(kinds) { k in Text(k.displayName).tag(SessionKind?.some(k)) }
@@ -152,24 +158,36 @@ struct StartSheet: View {
                                 profile = kindProfile
                             }
                         }
+                    } header: {
+                        Text("Kind").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     }
                 }
 
                 // Only shown when there is a choice to make. One host is not a
                 // decision, and a picker with one entry is furniture.
                 if hosts.count > 1 {
-                    Section("Where") {
+                    Section {
                         Picker("Host", selection: $host) {
                             Text("Wherever fits").tag("")
                             ForEach(hosts, id: \.self) { h in Text(h).tag(h) }
                         }
+                    } header: {
+                        Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     }
                 }
 
                 if !error.isEmpty {
-                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
+                    Section {
+                        Text(error).foregroundStyle(Design.Palette.bad).fleetType(.bodySmall)
+                    }
                 }
             }
+            // The form's own ground rather than the system's grouped grey, and
+            // its rows on the card colour: the sheet is part of the same app as
+            // the list behind it, which is not what two different greys say.
+            .scrollContentBackground(.hidden)
+            .background(Design.Palette.bg)
+            .listRowBackground(Design.Palette.card)
             .task {
                 // The enrolled list, which the settings screen already uses.
                 // Loaded here rather than passed in so the sheet works from

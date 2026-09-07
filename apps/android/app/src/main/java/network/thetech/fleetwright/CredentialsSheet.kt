@@ -156,7 +156,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             TextButton(
                                 enabled = !busy,
                                 onClick = {
@@ -370,7 +370,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                                     + "hours into a session. It goes to every machine in the fleet.",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             if (!p.isAppFlow) TextButton(
                                 enabled = secret.isNotBlank() && !busy,
                                 onClick = {

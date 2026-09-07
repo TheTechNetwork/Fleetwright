@@ -615,67 +615,63 @@ plus a `▸` gutter caret plus a raised surface; focus is a 2 px offset ring in
 
 ## 5. Visual language
 
-One family (system UI), one mono, no webfonts, no icon font, no SVG sprites.
-Glyphs are single characters that exist in every system font we will meet.
+**The type scale, the spacing steps, the radius hierarchy and the palette are
+[`docs/design-system.md`](./design-system.md).** They stopped being this
+document's the moment the two apps started using them: the numbers live in
+`test/fixtures/parity/design-tokens.json`, three surfaces declare them, and
+`test/design-parity.test.js` fails a change that moves one and not the others.
+Repeating the tables here is how a doc starts describing a page nobody is
+looking at — which is what this section did for months, naming `--surface`,
+`--line-strong` and `--ask` while the stylesheet had `--panel`, `--line` and
+`--attention`.
 
-### Type scale
+What is below is what is true of **this page** and not of the phones.
 
-Root 16 px. Five sizes and no others.
+One family, one mono, no icon font, no SVG sprites. Glyphs are single characters
+that exist in every system font we will meet.
 
-| Token | Size | Line | Use |
-|---|---|---|---|
-| `--t-micro` | 0.6875rem / 11px | 1.3 | Column heads, host meta labels. Uppercase, `letter-spacing: .08em`. Never for anything a person must read to make a decision. |
-| `--t-meta` | 0.8125rem / 13px | 1.45 | Ages, hostIds, ledger lines |
-| `--t-body` | 0.9375rem / 15px | 1.5 | Rows, reasons, consequences — the default |
-| `--t-lead` | 1.0625rem / 17px | 1.4 | Session title, the prompt question |
-| `--t-head` | 1.375rem / 22px | 1.25 | The Ask headline, empty-state headings |
+### What the console does with the scale
 
-Mono is `0.8125rem / 1.5` for pane text, `tab-size: 8`. Mono is used for
-`hostId`, session `name`, timestamps, and anything captured from a pane — that
-is, for **things that are identifiers or evidence**. Prose is never mono.
+| Element | Role |
+|---|---|
+| The assurance headline | `--t-greeting`, 26px, tracking -0.9px |
+| The question an Ask is asking | `--t-title`, 22px, tracking -0.8px |
+| Pane headings (Machines, What happened) | `--t-section`, 19px, tracking -0.7px |
+| Session rows, claims, option labels | `--t-body` / `--t-body-small` |
+| Badges, hostIds, ordinals | `--t-label` |
+| The name under a title, ledger actors | `--t-micro` |
 
-Prose blocks are capped at `68ch` even on a 3440 screen. The extra width goes
-to the detail pane, not to longer lines.
+Pane headings are sentence case at 19px, not 12px uppercase with wide tracking.
+The uppercase micro-label is a style for a column head in a table, and above a
+card it reads as chrome rather than as the name of what is under it.
 
-### Spacing
+Mono is used for `hostId`, session `name`, timestamps, and anything captured
+from a pane — that is, for **things that are identifiers or evidence**. Prose is
+never mono.
 
-4 px base. Steps: `4 · 8 · 12 · 16 · 24 · 32 · 48`. Pane gutters 16 px below
-1600 px, 24 px above. Row height 44 px comfortable, 32 px compact. Nothing is
-allowed a value off the scale.
+Prose blocks are capped at `68ch` even on a 3440 screen. The extra width goes to
+the detail pane, not to longer lines.
 
-### Colour tokens
+### What the console does that the phones cannot
 
-The palette carries **four meanings**. The vocabulary carries fourteen. The
-difference is deliberate: distinguishing `DEGRADED` from `BROKEN` is done with a
-word and a glyph, not with two reds a person has to remember the order of.
+- **Two light palettes.** Light is declared once under
+  `@media (prefers-color-scheme: light)` for the system preference and once
+  under `:root[data-theme='light']` for an explicit choice, so the toggle wins
+  in both directions and the page never borrows a ground it did not choose.
+  Twice is also how the two stop matching, silently, and the page looks right
+  until somebody flips the switch — `test/design-tokens.test.js` asserts the two
+  blocks declare the same tokens with the same values.
+- **Forced-colours mode**, which paints no `box-shadow` at all. A borderless
+  card there is three panes of text running together, so the borders come back
+  under `@media (forced-colors: active)` and nowhere else.
+- **Every value is a token, enforced.** `test/design-tokens.test.js` fails a
+  colour written outside the palette blocks and a `padding`, `margin`, `gap`,
+  `border-radius`, `font-size` or `letter-spacing` that is a fresh px value.
+  Neither app has an equivalent, because neither can be read that cheaply.
 
-| Token | Meaning | Dark | Light |
-|---|---|---|---|
-| `--bg` | page ground | `#0d0f13` | `#f4f6f8` |
-| `--surface` | panes | `#14171d` | `#ffffff` |
-| `--surface-2` | selected row, insets | `#1b1f27` | `#eaeef3` |
-| `--line` | hairlines | `#252b34` | `#dfe4ea` |
-| `--line-strong` | pane borders | `#39414e` | `#c2cad4` |
-| `--ink` | body text | `#e6e9ee` | `#14171c` |
-| `--ink-dim` | meta, stopped, unknown | `#98a2b0` | `#59626f` |
-| `--ink-faint` | disabled, hairline labels | `#6a7482` | `#8b94a1` |
-| `--ok` | healthy, working | `#46c08b` | `#0f7a52` |
-| `--ask` | **waiting for you, and nothing else** | `#ffb340` | `#8a4f00` |
-| `--ask-fill` | the Ask's ground | `rgba(255,179,64,.10)` | `rgba(255,179,64,.16)` |
-| `--bad` | broken, degraded, offline, refused | `#f0736c` | `#b3261e` |
-| `--accent` | interactive only — links, focus, selection. **Never a state.** | `#7aa2ff` | `#2159c9` |
+`src/web/index.html` carries its own palette and is out of scope here, as the
+scope note at the top of this document says.
 
-Dark is the default and the one tuned for a dark room: the ground is `#0d0f13`,
-not `#000`, so a bright pane inset does not punch a hole in the retina, and body
-ink is `#e6e9ee`, not `#fff`, so a wall of text is not glare. Body text is ≥ 7:1
-on its own surface in both themes; `--ink-dim` is ≥ 4.5:1. `--ask` on
-`--ask-fill` clears 4.5:1 in both.
-
-Light and dark are both defined up front on `:root`, with the dark block
-repeated under `@media (prefers-color-scheme: dark)` *and* under
-`:root[data-theme="dark"]`, so the toggle wins in both directions and the page
-never borrows a ground it did not choose. (`src/web/index.html` already does
-this correctly; keep it.)
 
 ### What carries meaning besides colour
 

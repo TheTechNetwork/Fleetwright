@@ -19,6 +19,20 @@ thing being copied looked like. The right question is what each surface is
 > `test/fixtures/parity/`, run by a Kotlin unit test and a Swift one. See
 > "Testing the apps" in [`ci.md`](./ci.md).
 
+## The apps look like the product now, which they did not
+
+Written down here because "parity" was being read as a feature list, and the
+first thing somebody meets is not a feature. iOS was stock SwiftUI and Android
+was Material 3 with `dynamicColorScheme` — the phone's *wallpaper* palette — so
+the same screen came out teal on one device and mauve on another, neither
+agreed with the console, and `amber means something is waiting for you` cannot
+be true when amber is whatever the wallpaper had.
+
+Both apps now build from the same token table as the console:
+[`docs/design-system.md`](./design-system.md), enforced by
+`test/design-parity.test.js`. What is restyled and what is still Material's or
+SwiftUI's own layout is listed at the end of that document.
+
 ## What the gap actually is
 
 The chat surface exposes **16 commands**:

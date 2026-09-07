@@ -5,14 +5,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 
 /**
  * The line that says nothing needs you, and why it is confident of that.
@@ -88,6 +86,13 @@ data class Reassurance(
         else parts += if (healthy == 1) "1 machine healthy" else "$healthy machines healthy"
         return parts.joinToString(" · ")
     }
+
+    /**
+     * Whether the quiet can be vouched for, which is what decides how loud the
+     * card is. Calm is LOW CONTRAST on purpose: claims that hold recede, claims
+     * that fail come forward. Matches `Reassurance.settled` in Swift.
+     */
+    val settled: Boolean get() = waiting == 0 && !blind && unwell.isEmpty()
 }
 
 /**
@@ -98,30 +103,43 @@ data class Reassurance(
 @Composable
 fun ReassuranceBanner(summary: Reassurance, modifier: Modifier = Modifier) {
     // NEVER COLOUR ALONE (§5). The headline always carries the meaning; this
-    // only agrees with it, and a reader who cannot see it loses nothing.
+    // only agrees with it, and a reader who cannot see it loses nothing. The
+    // tones are the design system's, so amber means the same thing here, on the
+    // console and on the iPhone.
     val tint: Color = when {
-        summary.waiting > 0 -> MaterialTheme.colorScheme.tertiary
-        summary.blind || summary.unwell.isNotEmpty() -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurface
+        summary.waiting > 0 -> Design.Palette.attention.now
+        summary.blind || summary.unwell.isNotEmpty() -> Design.Palette.bad.now
+        else -> Design.Palette.inkDim.now
     }
     Column(
         modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            // A CARD THAT IS ASKING SOMETHING WEARS ITS OWN RING. Settled, the
+            // ring is the hairline every other card has; unsettled, it is the
+            // tone the headline is already carrying. Calm recedes, trouble
+            // comes forward, and neither depends on the colour being seen.
+            .fleetCard(ring = if (summary.settled) Design.Palette.ring.now else tint)
+            .padding(Design.Space.groupTight)
             // One announcement rather than two fragments: this is the line on
             // the screen worth hearing first.
             .semantics(mergeDescendants = true) {
                 contentDescription = "${summary.headline}. ${summary.basis}"
             },
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.inside),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(summary.headline, style = MaterialTheme.typography.titleSmall, color = tint)
+        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+            // 26sp, and it is the only thing on the screen set that big. This
+            // line is read first or the app has not done its job.
+            Text(
+                summary.headline,
+                style = Design.Style.greeting,
+                // Ink when the quiet holds, the tone when it does not. Calm
+                // reads as ordinary text; trouble is the only thing on this
+                // screen that is coloured for its own sake — and the sentence
+                // says which it is either way.
+                color = if (summary.settled) Design.Palette.ink.now else tint,
+            )
         }
-        Text(
-            summary.basis,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(summary.basis, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
     }
 }

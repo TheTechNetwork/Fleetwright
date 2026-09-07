@@ -34,7 +34,7 @@ struct RecycleBinView: View {
             if items.isEmpty {
                 Section {
                     Text("Nothing here.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Design.Palette.inkDim)
                 } footer: {
                     // Says what the feature IS, to somebody who has never used
                     // it. An empty screen that only says "empty" teaches
@@ -48,9 +48,9 @@ struct RecycleBinView: View {
             ForEach(items, id: \.item.name) { entry in
                 Section {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(entry.item.title ?? entry.item.name).font(.headline)
+                        Text(entry.item.title ?? entry.item.name).fleetType(.bodyStrong)
                         Text(describeBinned(entry.item, on: entry.host))
-                            .font(.caption)
+                            .fleetType(.micro)
                             .foregroundStyle((entry.item.remaining ?? "").hasPrefix("goes") ? .orange : .secondary)
                         HStack(spacing: 16) {
                             Button("Restore") { Task { await act(entry.host, entry.item.name, restore: true) } }
@@ -68,8 +68,8 @@ struct RecycleBinView: View {
                 Section {
                     Text("Delete \(target.name) for good?")
                     Text("The conversation and the workspace go with it. This is the only step here that cannot be undone — forgetting was reversible, this is not.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
                     Button("Delete", role: .destructive) {
                         Task { await act(target.host, target.name, restore: false) }
                     }
@@ -78,9 +78,14 @@ struct RecycleBinView: View {
             }
 
             if !result.isEmpty {
-                Section { Text(result).font(.footnote).foregroundStyle(.secondary) }
+                Section { Text(result).fleetType(.label).foregroundStyle(Design.Palette.inkDim) }
             }
         }
+        // The design's ground, and the rows on the card colour, so this screen
+        // belongs to the same app as the one that pushed it.
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .listRowBackground(Design.Palette.card)
         .navigationTitle("Recycle bin")
     }
 

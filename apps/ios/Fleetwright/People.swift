@@ -57,17 +57,17 @@ struct PeopleView: View {
                 if invites.isEmpty && loaded {
                     Text("Nobody invited yet. The people in this deployment's own allow list are not shown here — "
                          + "they were set when it was deployed.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
                 ForEach(invites) { invite in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(invite.email)
                         if let note = invite.note, !note.isEmpty {
-                            Text(note).font(.caption).foregroundStyle(.secondary)
+                            Text(note).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                         }
-                        Text(describeInvite(invite)).font(.caption2).foregroundStyle(.secondary)
+                        Text(describeInvite(invite)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
                         Button("Withdraw", role: .destructive) { Task { await withdraw(invite) } }
-                            .font(.caption)
+                            .fleetType(.micro)
                             .buttonStyle(.borderless)
                             .disabled(busy)
                     }
@@ -85,9 +85,14 @@ struct PeopleView: View {
             }
 
             if !result.isEmpty {
-                Section { Text(result).font(.callout) }
+                Section { Text(result).fleetType(.bodySmall) }
             }
         }
+        // The design's ground, and the rows on the card colour, so this screen
+        // belongs to the same app as the one that pushed it.
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .listRowBackground(Design.Palette.card)
         .navigationTitle("People")
         .task { await load() }
     }
