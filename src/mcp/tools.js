@@ -75,6 +75,26 @@ export const DEFAULT_DENY = ([
   // here rather than after it: `forget` is recoverable for seven days and this
   // is not recoverable at all.
   'writefile', 'copyfile', 'deletefile',
+  // WHAT WORK AIMED AT A TAG FINDS, which is the fleet's routing table.
+  //
+  // `sandbox` is NOT here and this is, which looks inconsistent and is not. The
+  // variant decides what the NEXT session on one box gets — a bigger image, a
+  // browser in it — and the ask was explicitly that an agent be able to choose
+  // it. Nothing already running changes and nothing lands anywhere new.
+  //
+  // A label changes where OTHER PEOPLE'S work goes. An agent that adds `gpu` to
+  // a box with no GPU has silently redirected somebody else's next session to a
+  // machine that cannot do the job, and the misroute looks like the scheduler
+  // being wrong. That is the "decided on somebody's behalf" shape `answer` is
+  // withheld for, and it is a policy question rather than a permission one.
+  //
+  // READING IS NOT LOST. `health` is exposed and carries `labels`, so an agent
+  // deciding where to aim its own work can still see what each box carries —
+  // it just cannot change what everybody else's work matches.
+  //
+  // An operator who wants it says so with AGENT_FLEET_MCP_ALLOW, like the three
+  // above.
+  'labels',
 
 ]);
 

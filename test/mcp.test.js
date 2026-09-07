@@ -746,3 +746,28 @@ test('an event with nothing but a name still renders as a line', async () => {
   await server.handleLine(rpc(15, 'tools/call', { name: 'fleet_events', arguments: {} }));
   assert.match(written[0].result.content[0].text, /session\.error — sunlit-harbor/);
 });
+
+test('an agent may pick a box\'s image and may not relabel the fleet', () => {
+  // TWO NEW VERBS AND ONLY ONE IS OFFERED, which looks inconsistent from the
+  // outside and is the same rule applied twice.
+  //
+  // `sandbox` decides what the NEXT session on ONE box gets. Nothing running
+  // changes, nothing lands anywhere new, and being able to choose it was the
+  // ask. `labels` decides where everybody ELSE's work goes: an agent that adds
+  // `gpu` to a box with no GPU has silently redirected somebody's next session
+  // to a machine that cannot do the job, and the misroute reads as the
+  // scheduler being wrong.
+  const offered = toolsFor().map((t) => t.name);
+  assert.ok(offered.includes('fleet_sandbox'), 'an agent cannot choose the image');
+  assert.ok(!offered.includes('fleet_labels'), 'an agent can relabel the fleet unasked');
+  assert.ok(DEFAULT_DENY.includes('labels'));
+
+  // AND THE READ IS NOT LOST WITH IT. `health` carries the labels, so an agent
+  // deciding where to aim its OWN work can still see what each box carries.
+  // Withholding the write without leaving the read would be the dead end that
+  // `update` and `forget` were both rehabilitated out of.
+  assert.ok(offered.includes('fleet_health'), 'an agent cannot see what a box is labelled');
+
+  // An operator who wants it says so, like the three destructive file verbs.
+  assert.ok(toolsFor({ allow: ['labels'] }).map((t) => t.name).includes('fleet_labels'));
+});
