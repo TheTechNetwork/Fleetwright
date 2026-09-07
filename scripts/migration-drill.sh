@@ -566,6 +566,105 @@ if [ -f "$TARGET" ]; then ok "the unit names something that exists: $TARGET"
 else bad "the unit names $TARGET, which is not there"; fi
 starts "after a partial release"
 
+# --- 14-18. the refusals ------------------------------------------------------
+#
+# EVERY ONE OF THESE ENDS THE SAME WAY: nothing moved, the box still runs, and
+# the reason is a sentence somebody could act on. That is the entire contract of
+# a refusal, and none of them had ever been exercised — the drill fed the helper
+# correct input in thirteen different shapes and one tampered tarball.
+#
+# What makes them worth having is not that a refusal is likely. It is that a
+# refusal happens on a box that is ALREADY in trouble — no network, a half-built
+# release, a full disk — and the failure mode of a bad refusal is a machine left
+# worse than it was found.
+
+# Asserted the same way every time, so a new refusal is three lines.
+refuses() { # refuses <name> <expected message fragment>
+  BEFORE_LINK="$(readlink "$BASE/current" 2>/dev/null || echo none)"
+  if convert >/dev/null 2>&1; then
+    bad "$1: it was accepted"
+  elif grep -qi -- "$2" "$WORK/migrate.log"; then
+    ok "$1: refused, naming the reason"
+  else
+    bad "$1: refused for the wrong reason"
+    tail -3 "$WORK/migrate.log" | sed 's/^/       /'
+  fi
+  [ "$(readlink "$BASE/current" 2>/dev/null || echo none)" = "$BEFORE_LINK" ] \
+    && ok "$1: nothing was switched over" || bad "$1: current moved anyway"
+}
+
+step "14. the manifest cannot be reached"
+# A box with no network is the commonest reason to be here, and the one where
+# leaving it half-converted is least recoverable.
+install_from_checkout --from-source
+ENV_GOOD="$(grep '^AGENT_HUB_RELEASE_MANIFEST=' /etc/agent-hub.env)"
+sed -i 's|^AGENT_HUB_RELEASE_MANIFEST=.*|AGENT_HUB_RELEASE_MANIFEST=http://127.0.0.1:1/manifest.json|' /etc/agent-hub.env
+refuses "unreachable manifest" "could not fetch"
+starts "after an unreachable manifest"
+sed -i "s|^AGENT_HUB_RELEASE_MANIFEST=.*|$ENV_GOOD|" /etc/agent-hub.env
+
+step "15. the manifest is missing the fields that matter"
+cp "$DIST/manifest.json" "$WORK/manifest.good"
+printf '{"version":"v-drill-3"}\n' > "$DIST/manifest.json"
+refuses "manifest with no file or sha256" "missing version, file or sha256"
+starts "after an incomplete manifest"
+
+step "16. the manifest names a version that is a path"
+# `../../etc` normalises straight out of where it is supposed to land. The same
+# two shapes src/core/release.js refuses, refused here as well, because this
+# script builds directory names out of both fields.
+printf '{"version":"../../etc","file":"x.tar.gz","sha256":"%s"}\n' "$(printf x | sha256sum | cut -d' ' -f1)" > "$DIST/manifest.json"
+refuses "path-shaped version" "not a plain name"
+starts "after a path-shaped version"
+cp "$WORK/manifest.good" "$DIST/manifest.json"
+
+step "17. a release with no installer in it"
+# The migration's last act is to hand off to an installer. A release carrying
+# none is a box that gets unpacked and then stranded, so the smoke check has to
+# refuse BEFORE current moves.
+cp "$DIST/manifest.json" "$WORK/manifest.good"
+for t in "$DIST"/*.tar.gz; do cp "$t" "$WORK/$(basename "$t").good"; done
+STAGE="$WORK/nostage"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+TARBALL="$(ls "$DIST"/*.tar.gz | head -1)"
+tar -xzf "$TARBALL" -C "$STAGE"
+INNER="$(ls "$STAGE" | head -1)"
+rm -rf "$STAGE/$INNER/install"
+tar -czf "$TARBALL" -C "$STAGE" "$INNER"
+node -e "
+  const fs=require('fs'),c=require('crypto');
+  const m=JSON.parse(fs.readFileSync('$DIST/manifest.json','utf8'));
+  m.sha256=c.createHash('sha256').update(fs.readFileSync('$TARBALL')).digest('hex');
+  fs.writeFileSync('$DIST/manifest.json',JSON.stringify(m));
+"
+refuses "release with no install/" "install"
+starts "after a release with no installer"
+cp "$WORK/manifest.good" "$DIST/manifest.json"
+for g in "$WORK"/*.tar.gz.good; do cp "$g" "$DIST/$(basename "$g" .good)"; done
+
+step "18. the base directory cannot be written"
+# The helper checks writability rather than root, on purpose — the same
+# distinction bootstrap.sh makes. This is the case that check exists for, and
+# it must say so rather than failing somewhere deeper with a bare EACCES.
+install_from_checkout --from-source
+# NOT chmod 0555, WHICH IS WHAT THIS TRIED FIRST AND WHY IT FAILED. The helper
+# runs as root — that is the whole point of the sudoers rule — and root writes a
+# 0555 directory without noticing. The scenario reported the product as broken
+# when the fixture could not pose the question.
+#
+# A path under /proc cannot be created by anybody, which is a real answer to
+# "what if the base cannot be written" and one that does not depend on who is
+# asking. On a real box the cause is a read-only mount or a full disk; the
+# helper cannot tell those apart and does not need to.
+UNWRITABLE=/proc/fleetwright-drill-nope/fleetwright
+if AGENT_FLEET_BASE="$UNWRITABLE" FLEETWRIGHT_ENV_FILE=/etc/agent-hub.env \
+     sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1; then
+  bad "an unwritable base was accepted"
+else
+  grep -q "cannot write" "$WORK/migrate.log" && ok "unwritable base: refused, naming the directory" \
+    || { bad "unwritable base: refused for the wrong reason"; tail -3 "$WORK/migrate.log" | sed 's/^/       /'; }
+fi
+starts "after an unwritable base"
+
 step "Result"
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ] || exit 1
