@@ -717,6 +717,11 @@ export class McpServer {
       }
     }
 
+    // A COORDINATOR TOOL — its subject is the fleet's own record, not a host,
+    // so it goes to a route rather than through an intent. See tools.js for why
+    // this is not a verb.
+    if (tool.coordinator) return await this.#coordinatorRead(tool.coordinator);
+
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
     if (tool.local) return await this.#await(params, host ? String(host) : null);
 
@@ -742,7 +747,9 @@ export class McpServer {
     /** @type {any} */
     let reply;
     try {
-      reply = await this.#intent(tool.verb, params, host ? String(host) : null, tag ? String(tag) : null);
+      // Non-null by here: the two branches above return for every tool that
+      // has no verb.
+      reply = await this.#intent(String(tool.verb), params, host ? String(host) : null, tag ? String(tag) : null);
     } catch (e) {
       // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed. isError
       // lets the agent see it and carry on rather than the client treating the
@@ -861,6 +868,55 @@ export class McpServer {
       throw new Error('this credential was refused — it may have been revoked from the app');
     }
     return await res.json();
+  }
+
+  /**
+   * Read one of the coordinator's own routes and render it for an agent.
+   *
+   * SEPARATE FROM #intent BECAUSE THE FAILURE MODES DIFFER. An intent that
+   * fails may have reached a host and been refused; this either answered or did
+   * not. And a coordinator too old to serve the route answers 404, which is
+   * "this fleet does not offer that" and not an error worth an isError flag —
+   * an agent told the fleet is broken will stop, and nothing is broken.
+   *
+   * @param {string} route
+   */
+  async #coordinatorRead(route) {
+    let res;
+    try {
+      res = await this.fetch(`${this.coordinator}${route}`, {
+        headers: { authorization: `Bearer ${this.credential}` },
+      });
+    } catch (e) {
+      // A TOOL ERROR, NOT A PROTOCOL ERROR, the same as the intent path — the
+      // call was well formed and the fleet was unreachable. Returning a
+      // JSON-RPC error here would tell a client this SERVER is broken, which
+      // sends the reader to the wrong place; #intent already learned that.
+      return this.#text(`Could not reach the fleet: ${/** @type {Error} */ (e).message}`, true);
+    }
+    if (res.status === 401 || res.status === 403) {
+      return this.#text('this credential was refused — it may have been revoked from the app', true);
+    }
+    if (res.status === 404) {
+      return this.#text(`This coordinator does not serve ${route}, so there is nothing to report.`);
+    }
+    const body = /** @type {any} */ (await res.json());
+    /** @type {any[]} */
+    const events = Array.isArray(body?.events) ? body.events : [];
+    if (!events.length) return this.#text('Nothing has been recorded recently.');
+    // ONE LINE EACH, WITH EVERY SUBJECT NAMED. An agent reading this is
+    // deciding what to do next, and an event with no host and no actor on it is
+    // a fact about nothing in particular.
+    return this.#text(
+      events
+        .map((/** @type {any} */ e) => {
+          const who = e.actor || 'the fleet';
+          const where = e.hostId ? ` on ${e.hostId}` : '';
+          const what = e.text || (e.name ? `${e.event} — ${e.name}` : e.event);
+          return `${new Date(e.at).toISOString()}  ${what}${where} · ${who}`;
+        })
+        .join('\n'),
+    );
   }
 
   /** @param {string} text @param {boolean} [isError] */

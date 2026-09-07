@@ -561,6 +561,13 @@ private struct SettingsView: View {
     @State private var purgeTarget: String?
     @State private var rebootPin = ""
     @State private var rebootConfirm = ""
+    /// The devices holding a credential for this fleet, and what happened
+    /// lately. Both were in openapi.json and served by both coordinators
+    /// before either app asked for them.
+    @State private var clients: [Fleet.Client] = []
+    @State private var events: [Fleet.Event] = []
+    @State private var confirmingClientRevoke: Fleet.Client?
+    @State private var clientResult = ""
 
     // CHECK AND APPLY, SEPARATELY, FOR BOTH — which is what was asked for and
     // what the verbs always supported. The app had it backwards in two
@@ -813,6 +820,63 @@ private struct SettingsView: View {
         // fleet is what they are saying right now. Different questions.
         fleetHosts = (try? await Fleet(settings: settings).fleetHosts()) ?? []
         hosts = (try? await Fleet(settings: settings).enrolledHosts()) ?? []
+        // WHO CAN REACH THIS FLEET, AND WHAT HAPPENED. Both routes have been in
+        // openapi.json and served by both coordinators since before either app
+        // existed in its current shape, and neither app ever asked.
+        //
+        // `try?` like the two above: a coordinator too old to serve these
+        // answers 404, and an empty section is the right way to say "this fleet
+        // does not offer that" — not a failed screen.
+        clients = (try? await Fleet(settings: settings).clients()) ?? []
+        events = (try? await Fleet(settings: settings).events()) ?? []
+    }
+
+    /// "elibrody2@gmail.com · last used 2 hours ago", or as much as is known.
+    ///
+    /// NEVER USED AND USED LONG AGO MUST LOOK DIFFERENT. `lastSeenAt` is null for a
+    /// credential that has never been spent, and rendering that as an epoch date —
+    /// or worse, as "now" — is the difference between spotting a credential
+    /// somebody minted and never collected and scrolling past it.
+    private func describeClient(_ c: Fleet.Client) -> String {
+        var parts: [String] = []
+        if let email = c.email, !email.isEmpty { parts.append(email) }
+        if let seen = c.lastSeenAt {
+            parts.append("last used \(relative(seen))")
+        } else {
+            parts.append("never used")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The sentence for one event, with its subject named.
+    ///
+    /// The fleet records `text` for the events that have something to say and not
+    /// for the rest, so this falls back to the event's own name rather than to an
+    /// empty row — a blank line in a list of things that happened is worse than a
+    /// terse one.
+    private func describeEvent(_ e: Fleet.Event) -> String {
+        if let t = e.text, !t.isEmpty { return t }
+        if let n = e.name, !n.isEmpty { return "\(e.event) — \(n)" }
+        return e.event
+    }
+
+    /// "on deb132 · 20 minutes ago", and who asked when somebody did.
+    private func describeEventWho(_ e: Fleet.Event) -> String {
+        var parts: [String] = []
+        if let h = e.hostId, !h.isEmpty { parts.append("on \(h)") }
+        // NULL ACTOR IS NOT AN UNKNOWN PERSON — it is the fleet acting on its own,
+        // which is a different kind of news and says so.
+        if let a = e.actor, !a.isEmpty { parts.append(a) } else { parts.append("the fleet") }
+        parts.append(relative(e.at))
+        return parts.joined(separator: " · ")
+    }
+
+    /// Milliseconds since the epoch, as words.
+    private func relative(_ at: Double) -> String {
+        let date = Date(timeIntervalSince1970: at / 1000)
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f.localizedString(for: date, relativeTo: Date())
     }
 
     /// 123 456 — read down a phone, typed into a terminal.
@@ -1309,6 +1373,64 @@ private struct SettingsView: View {
 
                 if shows(.you) {
                 Section {
+                    if clients.isEmpty {
+                        Text("No devices reported.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    ForEach(clients) { c in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(c.name ?? "unnamed device")
+                            Text(describeClient(c)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .swipeActions {
+                            Button("Revoke", role: .destructive) { confirmingClientRevoke = c }
+                        }
+                    }
+                    if !clientResult.isEmpty {
+                        Text(clientResult).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Devices")
+                } footer: {
+                    // WHY THIS SCREEN EXISTS. Signing in mints one credential
+                    // per device precisely so that revoking one leaves every
+                    // other alone — and that property was worth nothing while
+                    // nobody could see the list. A lost phone could be revoked
+                    // only from a terminal, which is the one thing this product
+                    // exists not to require.
+                    Text("Each sign-in mints a credential for that device alone, so revoking one "
+                         + "leaves the others working. Swipe to revoke a device you no longer have.")
+                }
+                }
+
+                if shows(.you) {
+                Section {
+                    if events.isEmpty {
+                        Text("Nothing recorded yet.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    // NEWEST FIRST HERE, oldest-first on the wire. The
+                    // coordinator returns them in the order they happened,
+                    // which is right for a log and wrong for a screen somebody
+                    // opens to find out what they missed.
+                    ForEach(events.reversed()) { e in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(describeEvent(e))
+                            Text(describeEventWho(e)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Recent activity")
+                } footer: {
+                    // THE OTHER HALF OF PUSH. A notification wakes the phone;
+                    // this is what it was about. Only one of those shipped, so
+                    // an app that had been closed since yesterday had no way to
+                    // find out anything beyond the sentence on the lock screen.
+                    Text("What happened while the app was closed. A notification wakes this phone; "
+                         + "this is the rest of it.")
+                }
+                }
+
+                if shows(.you) {
+                Section {
                     Button("Send a test notification") {
                         Task {
                             pushResult = "sending…"
@@ -1333,6 +1455,33 @@ private struct SettingsView: View {
             // to be part of — a screen announcing itself as somewhere else.
             .navigationTitle(focus == .machines ? "Fleet" : "Settings")
             .task { await loadHosts() }
+            .alert(
+                "Revoke \(confirmingClientRevoke?.name ?? "this device")?",
+                isPresented: Binding(
+                    get: { confirmingClientRevoke != nil },
+                    set: { if !$0 { confirmingClientRevoke = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { confirmingClientRevoke = nil }
+                Button("Revoke", role: .destructive) {
+                    guard let c = confirmingClientRevoke else { return }
+                    confirmingClientRevoke = nil
+                    Task {
+                        // The refusal reaches the screen, for the reason the
+                        // host revocation below it learned the hard way: a
+                        // discarded error reads as "it came back".
+                        do {
+                            clientResult = try await Fleet(settings: settings).revokeClient(c.id).text ?? ""
+                        } catch {
+                            clientResult = error.localizedDescription
+                        }
+                        await loadHosts()
+                    }
+                }
+            } message: {
+                Text("That device stops being able to reach this fleet, and its push notifications "
+                     + "stop. Every other device keeps working. Signing in again on it mints a new one.")
+            }
             .alert(
                 "Revoke \(confirmingRevoke ?? "")?",
                 isPresented: Binding(get: { confirmingRevoke != nil }, set: { if !$0 { confirmingRevoke = nil } })

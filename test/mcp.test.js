@@ -50,6 +50,24 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
   // host will refuse, or missing one the verb needs, found by an agent
   // mid-task rather than by anybody reading either file.
   for (const tool of toolsFor()) {
+    // A COORDINATOR TOOL IS THE ONE EXCEPTION, and it is narrow on purpose: its
+    // subject is the fleet's own record rather than a host, so there is no verb
+    // for it to be generated from and there must not be one. A verb is
+    // something a HOST is asked to do, and inventing one for `/api/events`
+    // would put a question no host can answer into the protocol every host
+    // validates.
+    //
+    // It must declare the route it reads, so that "not a verb" cannot become a
+    // door for a hand-written tool that simply forgot to name one.
+    if (tool.verb === null) {
+      assert.ok(tool.coordinator, `${tool.name} has no verb and no coordinator route`);
+      assert.equal(tool.local, true, `${tool.name} reads a coordinator route but is not local`);
+      assert.equal(tool.mutating, false, `${tool.name} is a coordinator READ and must not be mutating`);
+      // No `host`: naming one would ask the fleet to route a question the fleet
+      // itself answers.
+      assert.ok(!('host' in tool.inputSchema.properties), `${tool.name} takes a host it cannot use`);
+      continue;
+    }
     const def = VERBS[tool.verb];
     assert.ok(def, `${tool.name} names a verb that does not exist`);
     // An alias may narrow — fleet_read_log is `logs` with the service half
@@ -612,4 +630,119 @@ test('tools are advertised on every revision we accept', () => {
   // pairing rather than the field: a version mismatch is what made a correctly
   // declared capability unreadable.
   assert.ok(toolsFor().length > 0);
+});
+
+
+// --- the coordinator's own record -------------------------------------------
+//
+// `/api/events` has been in openapi.json and served by BOTH coordinators since
+// push was built, and no client ever asked for it. Push wakes a phone; this is
+// what it missed — and only one half of that pair had a consumer.
+//
+// An agent has the same problem in a different shape: `fleet_list` shows the
+// state now, and a session that errored and was cleaned up is invisible to
+// every other tool here.
+
+/** A server whose fetch answers a GET, which serverWith's cannot. */
+function serverReading(status, body) {
+  const written = [];
+  const asked = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_test_secret',
+    write: (line) => written.push(JSON.parse(line)),
+    fetch: async (url, init) => {
+      asked.push({ url, headers: init?.headers, method: init?.method });
+      return { status, json: async () => body };
+    },
+  });
+  return { server, written, asked };
+}
+
+test('the events tool reads a route, not an intent', async () => {
+  const { server, written, asked } = serverReading(200, {
+    ok: true,
+    events: [
+      { event: 'session.ended', at: 1755000000000, name: 'sunlit-harbor', hostId: 'deb132', actor: 'e@x.com' },
+    ],
+  });
+  await server.handleLine(rpc(9, 'tools/call', { name: 'fleet_events', arguments: {} }));
+
+  // A ROUTE, and a GET. This is the coordinator's own record; there is no host
+  // to ask, which is why it is not a verb.
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].url, 'https://fleet.example/api/events');
+  assert.equal(asked[0].method, undefined);
+  assert.match(asked[0].headers.authorization, /^Bearer fwk_/);
+
+  const text = written[0].result.content[0].text;
+  // EVERY SUBJECT NAMED. An agent reading this is deciding what to do next, and
+  // an event with no host and no actor on it is a fact about nothing.
+  assert.match(text, /sunlit-harbor/);
+  assert.match(text, /on deb132/);
+  assert.match(text, /e@x\.com/);
+});
+
+test('an event the fleet caused says so rather than naming nobody', async () => {
+  // NULL ACTOR IS NOT AN UNKNOWN PERSON. "the fleet did this" and "somebody did
+  // this" are different news, and rendering the first as a blank is how the
+  // second gets assumed.
+  const { server, written } = serverReading(200, {
+    ok: true,
+    events: [{ event: 'host.revoked', at: 1755000000000, hostId: 'deb132', actor: null }],
+  });
+  await server.handleLine(rpc(10, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.match(written[0].result.content[0].text, /the fleet/);
+});
+
+test('a coordinator too old to serve it is not an error', async () => {
+  // 404 here is "this fleet does not offer that", and an agent told the fleet
+  // is broken will stop looking. Nothing is broken.
+  const { server, written } = serverReading(404, {});
+  await server.handleLine(rpc(11, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.equal(written[0].result.isError, undefined);
+  assert.match(written[0].result.content[0].text, /does not serve/);
+});
+
+test('an empty record says so rather than answering nothing', async () => {
+  const { server, written } = serverReading(200, { ok: true, events: [] });
+  await server.handleLine(rpc(12, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.match(written[0].result.content[0].text, /Nothing has been recorded/);
+});
+
+test('a revoked credential says so on a route as well as on an intent', async () => {
+  const { server, written } = serverReading(401, {});
+  await server.handleLine(rpc(13, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.equal(written[0].result.isError, true);
+  assert.match(written[0].result.content[0].text, /revoked from the app/);
+});
+
+
+test('an unreachable fleet on a route is a tool error, not a dead server', async () => {
+  // The same rule the intent path learned: a JSON-RPC error tells the client
+  // THIS SERVER is broken, and sends whoever reads it looking in the wrong
+  // place. The call was well formed and the fleet did not answer.
+  const written = [];
+  const server = new McpServer({
+    coordinator: 'https://fleet.example',
+    credential: 'fwk_test_secret',
+    write: (line) => written.push(JSON.parse(line)),
+    fetch: async () => { throw new Error('getaddrinfo ENOTFOUND fleet.example'); },
+  });
+  await server.handleLine(rpc(14, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.equal(written[0].error, undefined);
+  assert.equal(written[0].result.isError, true);
+  assert.match(written[0].result.content[0].text, /ENOTFOUND/);
+});
+
+test('an event with nothing but a name still renders as a line', async () => {
+  // The fleet records `text` for the events that have something to say and not
+  // for the rest. A blank row in a list of things that happened is worse than a
+  // terse one.
+  const { server, written } = serverReading(200, {
+    ok: true,
+    events: [{ event: 'session.error', at: 1755000000000, name: 'sunlit-harbor' }],
+  });
+  await server.handleLine(rpc(15, 'tools/call', { name: 'fleet_events', arguments: {} }));
+  assert.match(written[0].result.content[0].text, /session\.error — sunlit-harbor/);
 });
