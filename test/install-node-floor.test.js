@@ -287,3 +287,32 @@ test('an update soaks before it is proposed, and a security fix does not', () =>
     );
   }
 });
+
+test('a commit message is checked before it is written, not after', () => {
+  // verify.sh gained a commitlint step so a bad subject would stop being
+  // something CI found. It has since missed two of them, both mine, for the
+  // same structural reason: verify.sh is run BEFORE committing, so the range it
+  // checks is the messages already written and never the one about to be.
+  //
+  // The check is correct and cannot fire at the moment it is used. A commit-msg
+  // hook is the only point where the message exists and the commit has not
+  // happened yet — that is the whole argument for it.
+  const hook = read('.githooks/commit-msg');
+  assert.match(hook, /commitlint --edit "\$MSG_FILE"/, 'the hook does not check the message being written');
+  // `--edit` reads the file git is about to commit, which is exactly the case a
+  // range cannot cover: there is no commit yet to name.
+  assert.doesNotMatch(hook, /--from|--to/, 'the hook checks a range, which is the thing that misses');
+  // It says where the message went, because a rejected commit that eats the
+  // text is a worse gate than no gate.
+  assert.match(hook, /The message is still in/);
+
+  // AND verify.sh SAYS WHEN THE HOOK IS OFF rather than failing. Hooks are
+  // opt-in per clone by design — git will not run one out of a fresh clone,
+  // because that would make `git clone` execute somebody else's code — and a
+  // gate that refuses because somebody has not configured their checkout is a
+  // gate people route around.
+  const verify = read('scripts/verify.sh');
+  assert.match(verify, /core\.hooksPath 2>\/dev\/null.*!= "\.githooks"/);
+  assert.match(verify, /hooks {6}\.\.\. off/);
+  assert.doesNotMatch(verify, /hooksPath[\s\S]{0,200}?fail=1/, 'a missing hook fails the build');
+});

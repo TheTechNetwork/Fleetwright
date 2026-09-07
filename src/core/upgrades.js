@@ -301,14 +301,7 @@ export function runUpgrade(cfg, { actor = null } = {}) {
     const detail = upgradeFailureDetail(r);
     return {
       ok: false,
-      text:
-        `apt-get upgrade failed:\n${detail}\n\n` +
-        (/password is required|not allowed/i.test(detail)
-          ? 'That is the sudoers rule missing — see /upgrade with AGENT_HUB_SYSTEM_UPGRADE unset for the exact line.'
-          // NAMES THE COMMAND, rather than sending somebody to "the box" to
-          // work out what to type. The detail above is the whole of what apt
-          // said that matters; this is for the case where it is not enough.
-          : `On the box: sudo apt-get -y upgrade\nA package whose service failed to start usually explains itself in: systemctl status <name>`),
+      text: `apt-get upgrade failed:\n${detail}\n\n${adviseOnFailure(detail)}`,
     };
   }
 
@@ -320,4 +313,87 @@ export function runUpgrade(cfg, { actor = null } = {}) {
       `Upgraded ${applied} package${applied === 1 ? '' : 's'}.` +
       (after.rebootRequired ? '\n\nA REBOOT IS PENDING. Nothing here will do that for you — sessions are running.' : ''),
   };
+}
+
+/**
+ * What to do about it, for the failures apt actually has.
+ *
+ * THIS USED TO SAY ONE THING FOR EVERYTHING:
+ *
+ *   On the box: sudo apt-get -y upgrade
+ *   A package whose service failed to start usually explains itself in:
+ *   systemctl status <name>
+ *
+ * which is good advice for exactly one failure and wrong for the rest. It was
+ * reported against a box whose root filesystem is mounted read-only:
+ *
+ *   unable to create '/etc/debian_version.dpkg-new': Read-only file system
+ *
+ * Running the suggested command there fails identically, and `systemctl status`
+ * has nothing to do with it — so a person is sent to a machine to type two
+ * things that cannot help. A confident remedy for a diagnosis nobody made costs
+ * more than no remedy: it spends somebody's trip to the box, and it teaches
+ * them that the advice is decoration.
+ *
+ * Each of these has a different fix, which is the whole reason to tell them
+ * apart. The generic sentence stays as the last case, where it is honest —
+ * "here is the command, go and look" is a fine answer when nothing recognises
+ * the failure.
+ *
+ * @param {string} detail what apt and dpkg said
+ */
+export function adviseOnFailure(detail) {
+  const said = String(detail || '');
+
+  if (/password is required|not allowed/i.test(said)) {
+    return 'That is the sudoers rule missing — see /upgrade with AGENT_HUB_SYSTEM_UPGRADE unset for the exact line.';
+  }
+  if (/read-only file system/i.test(said)) {
+    // ALMOST ALWAYS OURS, AND I GOT THIS WRONG ONCE ALREADY. The first version
+    // of this blamed the image and said nothing typed on the box would help —
+    // told to somebody whose filesystem was perfectly writable.
+    //
+    // agent-hub.service sets `ProtectSystem=full`, which makes /usr, /boot AND
+    // /etc read-only for the service and every child of it. A mount namespace
+    // is not something `sudo` escapes, so the sanctioned `sudo -n apt-get`
+    // inherited it and dpkg could not write /etc/debian_version.
+    //
+    // The unit ships with ReadWritePaths=/etc now, so a box that still shows
+    // this is running an older one — which is a re-run of the installer, not a
+    // new image. Naming the unit is what makes that findable; "your filesystem
+    // is read-only" sent somebody to look at a filesystem that was fine.
+    return (
+      'That is almost certainly this service rather than the box: agent-hub.service sets\n' +
+      'ProtectSystem=full, which makes /etc read-only for it AND every command it runs —\n' +
+      'sudo does not escape a mount namespace, so dpkg cannot write /etc/debian_version.\n\n' +
+      'Fixed by re-running the installer, which adds ReadWritePaths=/etc:\n' +
+      '  curl -fsSL <your coordinator>/install | sudo sh\n\n' +
+      'To confirm it is that rather than a genuinely read-only disk, on the box:\n' +
+      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths\n' +
+      '  touch /etc/.writable-check && rm /etc/.writable-check   # works in a normal shell'
+    );
+  }
+  if (/dpkg was interrupted|dpkg --configure -a/i.test(said)) {
+    return 'dpkg was interrupted and has to be finished before anything else installs:\n  sudo dpkg --configure -a';
+  }
+  if (/could not get lock|unable to (?:acquire|lock)/i.test(said)) {
+    return (
+      'Something else is holding apt — usually unattended-upgrades on a timer. ' +
+      'It finishes on its own; try again in a few minutes rather than killing it, ' +
+      'because a half-finished dpkg run is the failure above this one.'
+    );
+  }
+  if (/no space left on device/i.test(said)) {
+    return 'The disk is full. `sudo apt-get clean` frees the package cache, which is often enough to get moving again.';
+  }
+  if (/temporary failure resolving|could not resolve|failed to fetch|connection timed out/i.test(said)) {
+    return 'This box could not reach its package mirror. That is a network or DNS fault rather than an apt one, and apt will work once it can.';
+  }
+  // NOTHING RECOGNISED IT, and this is the honest answer for that: the detail
+  // above is the whole of what apt said, and this names the command rather than
+  // sending somebody to "the box" to work out what to type.
+  return (
+    'On the box: sudo apt-get -y upgrade\n' +
+    'A package whose service failed to start usually explains itself in: systemctl status <name>'
+  );
 }
