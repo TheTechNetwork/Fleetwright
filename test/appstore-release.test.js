@@ -75,3 +75,33 @@ test('an incomplete listing points at the checklist', () => {
   assert.match(SRC, /finish the listing in App Store Connect/);
   assert.match(SRC, /docs\/ci\.md/);
 });
+
+test('what the listing is missing is said before anything is written', () => {
+  // The refusal for an incomplete listing arrives at the very END — after a
+  // version exists, a build is attached and the notes are set — and it is
+  // Apple's own attribute-by-attribute complaint. So the first submission of a
+  // new app left a half-built version behind and a raw error in the log, and
+  // the answer was a line of prose pointing at a checklist.
+  //
+  // Nothing here can supply a screenshot or a privacy answer, which is exactly
+  // why it belongs BEFORE the writes rather than after them. One list somebody
+  // can work through beats four rounds of "and also".
+  const src = readFileSync(new URL('../tools/appstore-release.mjs', import.meta.url), 'utf8');
+
+  const check = src.indexOf('const gaps = await listingGaps(');
+  assert.ok(check > 0, 'the listing is never pre-checked');
+  // BEFORE the first write. Creating the version is the first thing that
+  // changes anything on Apple's side.
+  const firstWrite = src.indexOf("await api('/v1/appStoreVersions', {");
+  assert.ok(firstWrite > 0 && check < firstWrite, 'the pre-check runs after the version is created');
+
+  // A BETTER MESSAGE, NOT A NEW GATE. An API shape that changed, or a
+  // permission this key does not have, must not stop a release that would
+  // otherwise have gone out — so the check swallows its own errors and warns
+  // rather than throwing.
+  const fn = src.slice(src.indexOf('async function listingGaps('), src.indexOf('async function main()'));
+  assert.match(fn, /could not pre-check the listing/);
+  assert.doesNotMatch(fn, /throw new Error/);
+  // It warns; it does not fail the job.
+  assert.match(src, /::warning::this listing is not finished/);
+});
