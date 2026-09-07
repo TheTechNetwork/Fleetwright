@@ -70,6 +70,34 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # THE SAME IMAGE WITH A BROWSER IN IT, as a separate tag rather than a
+      # bigger default. Nobody pays for a capability they are not using: a box
+      # that wants one is pointed at `:web` with AGENT_HUB_SANDBOX_IMAGE, and
+      # every other box keeps the minimal image the Containerfile argues for.
+      #
+      # Built from the same file with one build-arg, so the two cannot drift —
+      # a second Containerfile is a second thing to keep in step, and the half
+      # nobody uses is the half that rots.
+      - id: meta-web
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fleetwright-session
+          tags: |
+            type=raw,value=web,enable={{is_default_branch}}
+            type=sha,format=long,suffix=-web
+
+      - uses: docker/build-push-action@v7.3.0
+        with:
+          context: sandbox
+          file: sandbox/Containerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: WITH_CHROMIUM=1
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # THE IMAGE, RUNNING. Everything above this line proves the Containerfile
   # builds; nothing proved the thing it built works, and the difference is not
   # academic — this image shipped for weeks with a PATH SHIM FOR `gh` AND NO
@@ -115,6 +143,41 @@ jobs:
             node --version
             claude --version
             echo "--- PATH is complete ---"
+          '
+
+      # THE BROWSER VARIANT, RUN. The same argument as the `gh` shim below: an
+      # image that builds is not an image that works, and "chromium is in the
+      # apt line" is not "chromium starts". A browser has more ways to build and
+      # not run than most things — missing fonts, a missing shared library, and
+      # a sandbox it cannot enter.
+      #
+      # THE SANDBOX QUESTION IS ASKED HERE RATHER THAN ASSUMED. Chromium's own
+      # sandbox needs user namespaces, which a rootless container may or may not
+      # give it, and the usual answer is to reach for --no-sandbox and stop
+      # thinking. This tries WITHOUT it first and reports which way it went, so
+      # the answer is measured on the image we ship rather than guessed in a
+      # comment.
+      - name: The browser variant starts, and says whether it keeps its sandbox
+        run: |
+          set -eu
+          docker build --build-arg WITH_CHROMIUM=1 -t agent-session:web -f sandbox/Containerfile sandbox/
+          docker run --rm --entrypoint sh agent-session:web -euc '
+            command -v chromium >/dev/null || { echo "MISSING: chromium"; exit 1; }
+            chromium --version
+            page="data:text/html,<h1>fleetwright</h1>"
+            if chromium --headless --disable-gpu --dump-dom "$page" 2>/dev/null | grep -q fleetwright; then
+              echo "--- chromium runs WITH its own sandbox ---"
+            elif chromium --headless --disable-gpu --no-sandbox --dump-dom "$page" 2>/dev/null | grep -q fleetwright; then
+              # Recorded rather than hidden. A browser rendering hostile HTML
+              # with its sandbox off is inside the session container with the
+              # session credentials, and somebody should know that is the trade
+              # before they point a fleet at this tag.
+              echo "--- chromium runs only with --no-sandbox ---"
+              echo "::warning::chromium needs --no-sandbox in this container; a page it renders is as confined as the session is, and no more"
+            else
+              echo "chromium is installed and will not render a page either way"
+              exit 1
+            fi
           '
 
       # THE BUG THIS WHOLE JOB EXISTS FOR, and the shim is what makes it

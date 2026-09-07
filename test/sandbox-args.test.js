@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { unsafeSandboxArgs, unsafeSandboxMessage } from '../src/core/sandbox-args.js';
 
 test('the options that end containment are refused', () => {
@@ -71,4 +72,57 @@ test('the config refuses to start, and the override downgrades it to a warning',
   // STILL SAID. Somebody who typed the override knows; somebody who inherited
   // the box does not, and this is the line that tells them.
   assert.equal(allowed.warnings.some((w) => /--privileged/.test(w)), true);
+});
+
+test('the browser is a variant, not a bigger default', () => {
+  // The Containerfile's own rule is that this is not a place to put a
+  // toolchain: a session has real root and can install anything, and all of it
+  // is thrown away, so baking a tool in buys a faster start and costs the
+  // property that makes the image trustworthy.
+  //
+  // Chromium is the argued exception rather than the first crack in it — it is
+  // a capability rather than a tool, and its install is hundreds of megabytes
+  // and minutes, PER SESSION, repeated. So it is a second tag, and the minimal
+  // image every box gets stays minimal.
+  const containerfile = readFileSync(new URL('../sandbox/Containerfile', import.meta.url), 'utf8');
+  assert.match(containerfile, /^ARG WITH_CHROMIUM=0$/m, 'the browser is on by default');
+  assert.match(containerfile, /if \[ "\$WITH_CHROMIUM" = "1" \]/);
+
+  // ONE FILE, TWO TAGS. A second Containerfile is a second thing to keep in
+  // step, and the half nobody uses is the half that rots.
+  const workflow = readFileSync(new URL('../.github/workflows/sandbox.yml', import.meta.url), 'utf8');
+  assert.equal((workflow.match(/file: sandbox\/Containerfile/g) || []).length >= 3, true);
+  assert.match(workflow, /build-args: WITH_CHROMIUM=1/);
+  assert.match(workflow, /type=raw,value=web/);
+});
+
+test('the image points the browser drivers at the browser it has', () => {
+  // Playwright and Puppeteer download their own copy otherwise — inside a
+  // container that is discarded, so it downloads again next session, which is
+  // the whole cost this variant exists to remove.
+  const containerfile = readFileSync(new URL('../sandbox/Containerfile', import.meta.url), 'utf8');
+  for (const v of ['CHROME_BIN', 'PUPPETEER_EXECUTABLE_PATH', 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD']) {
+    assert.match(containerfile, new RegExp(`^ENV ${v}=`, 'm'), `${v} is not set`);
+  }
+  // SET ON BOTH IMAGES on purpose: on the minimal one it names a binary that is
+  // not there, and a tool that says "chromium is missing" is better than one
+  // that quietly fetches 150MB into a container about to be thrown away.
+  const at = containerfile.indexOf('ENV CHROME_BIN');
+  const guard = containerfile.indexOf('if [ "$WITH_CHROMIUM" = "1" ]');
+  assert.ok(at > guard, 'the driver hints are inside the conditional');
+});
+
+test('whether the browser keeps its own sandbox is measured, not assumed', () => {
+  // Chromium's sandbox needs user namespaces, which a rootless container may or
+  // may not give it, and the usual response is to reach for --no-sandbox and
+  // stop thinking. The smoke job tries WITHOUT it first and says which way it
+  // went — on the image we actually ship.
+  const workflow = readFileSync(new URL('../.github/workflows/sandbox.yml', import.meta.url), 'utf8');
+  const job = workflow.slice(workflow.indexOf('The browser variant starts'), workflow.indexOf('THE BUG THIS WHOLE JOB EXISTS FOR'));
+  assert.ok(job.indexOf('--dump-dom') < job.indexOf('--no-sandbox'), 'it reaches for --no-sandbox first');
+  // And it records the trade rather than hiding it: a page rendered without the
+  // browser's sandbox is inside the session container, with the session's
+  // credentials, and somebody should know that before pointing a fleet at it.
+  assert.match(job, /::warning::chromium needs --no-sandbox/);
+  assert.match(job, /as confined as the session is, and no more/);
 });
