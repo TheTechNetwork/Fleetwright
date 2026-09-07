@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Three rules, and only three.",
+    "Four rules, and only four.",
     "",
     "GROUP WHAT ONLY WORKS TOGETHER. A bot bumped the Compose compiler alone",
     "and broke the build, because that version is only meaningful paired with",
@@ -22,7 +22,27 @@
     "quietly become 4.127.1, and the manifest still claimed 4.0.0 — a hundred",
     "and twenty-seven minor versions that no PR title ever mentioned. It also",
     "makes the two files say the same thing, so `npm ci` and `npm install` can",
-    "no longer disagree about what this project depends on."
+    "no longer disagree about what this project depends on.",
+    "",
+    "LET A RELEASE SOAK. minimumReleaseAge holds an update back for three days",
+    "before it is proposed at all. Not for stability: this project pins every",
+    "version and CI builds the APK, the iOS app and the Worker on every pull",
+    "request, so a version that is merely broken says so in minutes.",
+    "",
+    "It is for the supply chain. The npm and Actions attacks of the last few",
+    "years share one shape: a malicious version is published, and it is found",
+    "and pulled within hours to a couple of days. The repository that updates",
+    "within the hour is the one that catches it; three days is somebody else",
+    "finding it first.",
+    "",
+    "It matters MOST where automerge is on. A grouped GitHub Actions patch",
+    "merges with nobody reading it, so the soak is the only thing standing",
+    "between this repository and a version that was compromised at breakfast",
+    "and yanked by lunch.",
+    "",
+    "A SECURITY FIX STILL DOES NOT WAIT. vulnerabilityAlerts overrides it to",
+    "nothing, because the reasoning inverts: there the known-bad version is the",
+    "one already installed, and three days is three days of running it."
   ],
   "extends": [
     "config:recommended"
@@ -31,6 +51,8 @@
   "prConcurrentLimit": 10,
   "prHourlyLimit": 4,
   "rebaseWhen": "behind-base-branch",
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
   "packageRules": [
     {
       "description": "Kotlin and the Compose compiler plugin are released together and only work together. Never separately, ever.",
@@ -109,7 +131,15 @@
     }
   ],
   "vulnerabilityAlerts": {
-    "description": "A security fix does not wait for anything.",
+    "description": [
+      "A security fix does not wait for anything, and that now includes the soak.",
+      "",
+      "The reasoning inverts here. Everywhere else the risk is a NEW version",
+      "nobody has looked at yet; in an advisory the known-bad version is the one",
+      "already installed, and three days of soaking is three more days of",
+      "running it."
+    ],
+    "minimumReleaseAge": null,
     "schedule": [
       "at any time"
     ]
