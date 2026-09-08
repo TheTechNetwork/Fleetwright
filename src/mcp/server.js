@@ -182,8 +182,13 @@ function describeHealth(h) {
     lines.push(
       h.claudeAccounts > 0
         ? `claude: ${h.claudeAccounts} account${h.claudeAccounts === 1 ? '' : 's'} linked — sessions run as whoever starts them`
+        // AND THE REMEDY NAMED TELEGRAM, WHICH IS ARCHIVED. Two of the three
+        // places this sentence appears sent people to an adapter that no
+        // longer exists — in the message a beta tester's first run ended at.
+        // A remedy pointing at a surface the product does not have is worse
+        // than no remedy: it costs a search before it costs a shell.
         : 'claude: NOBODY HAS LINKED AN ACCOUNT — a session started here cannot do anything. ' +
-            'Link one from the app, from Telegram with /login for <email>, or on the box with `agent-hub login for <email>`',
+            'Link one from the app, or on the box with `agent-hub login for <email>`',
     );
   } else if (h.loggedIn === true) {
     // An older host with no claudeAccounts field. Its own login is all we know.
