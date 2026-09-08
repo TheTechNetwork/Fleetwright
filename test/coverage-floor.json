@@ -78,7 +78,7 @@
   "src/log.js": 83,
   "src/mcp/authorize-page.js": 98,
   "src/mcp/http.js": 98,
-  "src/mcp/oauth.js": 97,
+  "src/mcp/oauth.js": 100,
   "src/mcp/routes.js": 93,
   "src/mcp/server.js": 98,
   "src/mcp/tools.js": 100,
