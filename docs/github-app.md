@@ -22,9 +22,9 @@ trip through a settings page.
 
 Every piece of the paste UI — numbered steps, the one-tap paste, "delete the
 old one first", the stored scope list — is scaffolding around a step this
-removes. It stays for Cloudflare until an OAuth client is registered there —
-see the correction in connectors.md, which found that Cloudflare does publish
-one after this document claimed otherwise.
+removes. Cloudflare now goes through the same flow once a client is registered
+there — see the correction and the configuration in connectors.md — and the
+paste stays for both providers on any deployment that has registered neither.
 
 ## Who creates it: once per DEPLOYMENT, not once per person
 
@@ -453,11 +453,12 @@ order was the point:
 
 ## What stays as it is
 
-Cloudflare, **for now and not for ever**. This section originally said there was
-no third-party app program; there is one, and the correction lives in
-connectors.md. The paste flow is Cloudflare's route until a client is
-registered — private first, because public visibility requires domain
-verification and cannot be reversed.
+The paste flow, for any deployment that has registered no client. Cloudflare's
+OAuth flow is **built** — this section originally said there was no third-party
+app program, then that the paste stayed "until a client is registered"; the
+correction and the three configuration values live in connectors.md. What
+remains true is the ordering it argued for: private client first, because
+public visibility requires domain verification and cannot be reversed.
 
 The work spent making the paste flow clear is not wasted either way: it is what
 every provider without a program uses, and what any provider uses before its

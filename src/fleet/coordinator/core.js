@@ -19,7 +19,7 @@ import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
-import { PendingAuthorizations, authorizeUrl, exchangeCode } from './github-oauth.js';
+import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
@@ -52,6 +52,7 @@ export class CoordinatorCore {
    *   push?: import('../push.js').Pusher|null,
  *   mailer?: { send: ((m: { to: string, subject: string, text: string }) => Promise<void>)|null, from: string|null }|null,
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
+   *   cloudflareOauth?: { clientId?: string, clientSecret?: string, scopes?: string }|null,
    *   runnerRepo?: string|null,
    * }} [opts]
    */
@@ -71,6 +72,12 @@ export class CoordinatorCore {
     // normal case for a fresh clone and is not an error: the paste route is
     // first-class, not a fallback. See docs/github-app.md.
     githubApp = null,
+    // The Cloudflare OAuth client, same shape and same rule — absent means the
+    // paste route, which stays first-class. `scopes` travels with the client
+    // rather than being a constant here because Cloudflare scopes are chosen
+    // at client registration, and only whoever registered it knows the list.
+    // See docs/connectors.md.
+    cloudflareOauth = null,
     // Where `provision` dispatches runner workflows, as `owner/repo`. Absent
     // is the normal case and is not an error — a fleet with no runner
     // repository refuses `provision` with the one line an operator needs,
@@ -86,6 +93,7 @@ export class CoordinatorCore {
     this.log = logger || { info() {}, warn() {}, error() {}, debug() {} };
     this.push = push;
     this.githubApp = githubApp;
+    this.cloudflareOauth = cloudflareOauth;
     this.runnerRepo = runnerRepo;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
@@ -101,6 +109,12 @@ export class CoordinatorCore {
      * persisting it would mean writing who-is-authorizing-what to disk.
      */
     this.pendingGithub = new PendingAuthorizations({ now });
+    /**
+     * Cloudflare's, in a separate store on purpose: a state minted for one
+     * provider's callback must not be redeemable at the other's, and two maps
+     * make that true without a check somebody could forget.
+     */
+    this.pendingCloudflare = new PendingAuthorizations({ now });
     /**
      * In-flight sign-ins from an MCP client, and the clients that have
      * registered. The remote MCP endpoint's OAuth lives here rather than in the
@@ -189,6 +203,7 @@ export class CoordinatorCore {
     try {
       const frame = buildConfigFrame({
         githubClientSecret: this.githubApp?.clientSecret,
+        cloudflareClientSecret: this.cloudflareOauth?.clientSecret,
         runnerRepo: this.runnerRepo,
       });
       if (frame) send(frame);
@@ -1056,50 +1071,90 @@ export class CoordinatorCore {
    * already drifted — the Worker served 50 and the Node one served none at all.
    */
   /**
-   * Offer the App flow in place of the paste, when there is an App.
+   * Offer an OAuth flow in place of the paste, for each provider this
+   * deployment has registered a client with.
    *
-   * The HOST publishes the catalogue and knows nothing about a GitHub App —
-   * correctly, since the client id and secret belong to the deployment rather
-   * than to any machine. So the coordinator rewrites the one entry it can
-   * improve on, and leaves everything else alone.
+   * The HOST publishes the catalogue and knows nothing about a GitHub App or a
+   * Cloudflare OAuth client — correctly, since a client id and secret belong
+   * to the deployment rather than to any machine. So the coordinator rewrites
+   * the entries it can improve on, and leaves everything else alone.
    *
-   * Cloudflare is untouched, and always will be: there is no third-party app
-   * program to rewrite it to.
+   * This used to say "Cloudflare is untouched, and always will be: there is no
+   * third-party app program to rewrite it to." There is one — the correction
+   * is in docs/connectors.md — and Cloudflare is now the second provider
+   * through the same flow rather than a second design.
    *
    * @param {any} reply       a connect reply carrying `connections`
    * @param {string} hostId   where the flow must come back to
    * @param {string|null} email  whose credential this will be
    * @param {string} origin   this coordinator's public origin
    */
-  offerGithubApp(reply, hostId, email, origin) {
-    const clientId = this.githubApp?.clientId;
-    if (!clientId || !this.githubApp?.clientSecret) return reply;
+  offerOauth(reply, hostId, email, origin) {
     const catalogue = reply?.connections?.catalogue;
     if (!Array.isArray(catalogue)) return reply;
 
-    // An origin we cannot parse means no App offer, and the paste route is
+    /** @type {Record<string, { url: string, hint: string }>} */
+    const offers = {};
+
+    // An origin we cannot parse means no offer, and the paste route is
     // returned untouched. Better a working paste than an authorize URL built
-    // out of something that was not an address.
-    const state = this.newId();
-    const url = authorizeUrl({ clientId, origin, state });
-    if (!url) return reply;
-    this.pendingGithub.mint({ state, hostId, email });
+    // out of something that was not an address. Each provider gets its OWN
+    // state, minted into its own store, so one callback cannot redeem the
+    // other's flow.
+    if (this.githubApp?.clientId && this.githubApp?.clientSecret) {
+      const state = this.newId();
+      const url = authorizeUrl({ clientId: this.githubApp.clientId, origin, state });
+      if (url) {
+        this.pendingGithub.mint({ state, hostId, email });
+        offers.github = {
+          url,
+          hint:
+            'Choose which repositories Fleetwright may see. Nothing is copied or pasted — ' +
+            'GitHub sends the result back, and you can change the repositories or uninstall ' +
+            'it from your GitHub settings at any time.',
+        };
+      }
+    }
+    // ALL THREE OR NO OFFER. Without the scope list the authorize request asks
+    // Cloudflare for nothing, and what comes back is a token that verifies and
+    // then cannot do a single piece of work — a failure discovered four hours
+    // into a session, which is the exact shape this catalogue exists to
+    // prevent. A deployment that sets the id and secret but not the scopes
+    // keeps the paste route, which works.
+    if (this.cloudflareOauth?.clientId && this.cloudflareOauth?.clientSecret && this.cloudflareOauth?.scopes) {
+      const state = this.newId();
+      const url = cloudflareAuthorizeUrl({
+        clientId: this.cloudflareOauth.clientId,
+        origin,
+        state,
+        scopes: this.cloudflareOauth.scopes,
+      });
+      if (url) {
+        this.pendingCloudflare.mint({ state, hostId, email });
+        offers.cloudflare = {
+          url,
+          hint:
+            'Sign in to Cloudflare and approve the access this fleet asks for. Nothing is copied or ' +
+            'pasted — Cloudflare sends the result back, and you can revoke it from your Cloudflare ' +
+            'dashboard at any time.',
+        };
+      }
+    }
+    if (!Object.keys(offers).length) return reply;
+
     return {
       ...reply,
       connections: {
         ...reply.connections,
         catalogue: catalogue.map((c) =>
-          c?.provider === 'github'
+          offers[c?.provider]
             ? {
                 ...c,
-                url,
+                url: offers[c.provider].url,
                 // The app renders no paste field for this one: there is
-                // nothing to copy, which is the entire point of the App.
+                // nothing to copy, which is the entire point of the flow.
                 flow: 'app',
-                hint:
-                  'Choose which repositories Fleetwright may see. Nothing is copied or pasted — ' +
-                  'GitHub sends the result back, and you can change the repositories or uninstall ' +
-                  'it from your GitHub settings at any time.',
+                hint: offers[c.provider].hint,
               }
             : c,
         ),
@@ -1167,25 +1222,71 @@ export class CoordinatorCore {
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
-    // THE ACCESS TOKEN, NEVER THE REFRESH TOKEN. This read
-    // `exchanged.refreshToken ?? exchanged.accessToken`, reaching for the
-    // longer-lived value — and a refresh token is not an API credential. It
-    // authenticates nothing: `GET /user` with one is a 401, every time. The
-    // whole flow worked and then reported "GitHub rejected that token (401)",
-    // which read like a bad token and was a wrong one.
-    //
-    // What a session uses is the access token. The refresh token exists only to
-    // mint the next one, and has nowhere to live until the host can refresh —
-    // which needs the client secret it is sent over the socket, and that is the
-    // next piece rather than this one.
-    //
-    // Stored by the verb that already does it: same validation, same redaction,
-    // same per-person file. A second path into that storage is a second thing
-    // to get right.
+    return this.#storeAuthorizedToken({ provider: 'github', label: 'GitHub', flow, exchanged, clientId });
+  }
+
+  /**
+   * Finish an authorization Cloudflare has redirected back to us.
+   *
+   * The GitHub flow minus the installation branch, which is GitHub's alone: a
+   * Cloudflare OAuth client has no install page, so everything arriving here
+   * either carries a state this coordinator minted or is refused.
+   *
+   * @param {{ code?: unknown, state?: unknown, origin: string }} args
+   */
+  async finishCloudflareAuthorization({ code, state, origin }) {
+    const clientId = this.cloudflareOauth?.clientId;
+    const clientSecret = this.cloudflareOauth?.clientSecret;
+    if (!clientId || !clientSecret) {
+      return { ok: false, text: 'This fleet has no Cloudflare OAuth client configured.' };
+    }
+    const flow = this.pendingCloudflare.redeem(state);
+    if (!flow) {
+      // Deliberately one message for unknown, expired and replayed — same as
+      // GitHub's, and for the same reason: telling a stranger which of those
+      // it was is telling them whether a state exists.
+      return { ok: false, text: 'That sign-in link has expired or was already used. Start again from the app.' };
+    }
+    // A person who pressed Deny arrives here with `error=access_denied` and no
+    // code. The query's own words are NOT echoed — this page is reached by
+    // following a link, and its text must not be writable from the URL.
+    if (typeof code !== 'string' || !code) {
+      return { ok: false, text: 'Cloudflare did not send an authorization code back.' };
+    }
+
+    const exchanged = await exchangeCloudflareCode({ clientId, clientSecret, code, origin });
+    if (!exchanged.ok) return { ok: false, text: exchanged.message };
+
+    return this.#storeAuthorizedToken({ provider: 'cloudflare', label: 'Cloudflare', flow, exchanged, clientId });
+  }
+
+  /**
+   * Store what an authorization produced: the access token on the host, and
+   * the renewal material beside it. One function for both providers, because
+   * the storing half of the flow is where the invariants live and an invariant
+   * implemented twice is one that drifts.
+   *
+   * THE ACCESS TOKEN, NEVER THE REFRESH TOKEN. The GitHub flow once read
+   * `exchanged.refreshToken ?? exchanged.accessToken`, reaching for the
+   * longer-lived value — and a refresh token is not an API credential. It
+   * authenticates nothing: `GET /user` with one is a 401, every time. The
+   * whole flow worked and then reported "GitHub rejected that token (401)",
+   * which read like a bad token and was a wrong one.
+   *
+   * Stored by the verb that already does it: same validation, same redaction,
+   * same per-person file. A second path into that storage is a second thing
+   * to get right.
+   *
+   * @param {{ provider: string, label: string,
+   *   flow: { hostId: string, email: string|null },
+   *   exchanged: { accessToken?: string, refreshToken?: string|null, expiresIn?: number|null },
+   *   clientId: string }} args
+   */
+  async #storeAuthorizedToken({ provider, label, flow, exchanged, clientId }) {
     const secret = exchanged.accessToken;
     const reply = await this.dispatch({
       verb: 'link',
-      params: { provider: 'github', secret },
+      params: { provider, secret },
       actor: flow.email ?? undefined,
       preferHost: flow.hostId,
       // The person authorized in a browser; there is no fleet credential on
@@ -1194,18 +1295,17 @@ export class CoordinatorCore {
     });
     if (reply?.ok === false) return { ok: false, text: reply.text || 'The token could not be stored.' };
 
-    // THE RENEWAL MATERIAL, DEPOSITED ONCE, and this is the piece the comment
-    // above used to say was next. The refresh token was received here and
-    // thrown away, because there was nowhere for it to live — so every GitHub
-    // App connection was dead eight hours after it was made, and reconnecting
-    // was the only remedy.
+    // THE RENEWAL MATERIAL, DEPOSITED ONCE. The refresh token used to be
+    // received here and thrown away, because there was nowhere for it to live
+    // — so every GitHub App connection was dead eight hours after it was made,
+    // and reconnecting was the only remedy.
     //
     // IT GOES TO THE HOST, WITH THE CLIENT SECRET, which is docs/trust.md's
     // rule and not a convenience: "spreading minting keys across hosts means a
     // compromised host costs that host's access; centralising them means a
     // compromised coordinator costs everything." Keeping refresh tokens here
     // would make this internet-facing component hold every member's renewable
-    // GitHub credential, which is the outcome that rule exists to refuse.
+    // credential, which is the outcome that rule exists to refuse.
     //
     // A separate verb rather than two more parameters on `link`, because
     // adding a parameter is the flag day and adding a verb is free — an older
@@ -1218,31 +1318,31 @@ export class CoordinatorCore {
         // and be written to disk beside the refresh token, which is what
         // github-app.md has always said does not happen. It arrives on the
         // config frame instead and stays in the sidecar's memory.
-        params: { provider: 'github', clientId, refresh: exchanged.refreshToken },
+        params: { provider, clientId, refresh: exchanged.refreshToken },
         actor: flow.email ?? undefined,
         preferHost: flow.hostId,
         requester: null,
       });
       renewable = deposited?.ok !== false;
-      // Not fatal. The connection works for eight hours either way, and
-      // failing the whole flow over the part that makes it last would throw
-      // away a credential the person just authorised.
-      if (!renewable) this.log?.warn?.(`github: ${flow.hostId} could not store renewal material: ${deposited?.text}`);
+      // Not fatal. The connection works until the token expires either way,
+      // and failing the whole flow over the part that makes it last would
+      // throw away a credential the person just authorised.
+      if (!renewable) this.log?.warn?.(`${provider}: ${flow.hostId} could not store renewal material: ${deposited?.text}`);
     }
 
     return {
       ok: true,
-      // Honest about the eight hours rather than quiet about them, and honest
-      // about which of the two situations this is. A token that stops working
+      // Honest about the hours rather than quiet about them, and honest about
+      // which of the two situations this is. A token that stops working
       // tomorrow, from a screen that said "connected", is worse than one that
       // said so — and a token that renews itself should not still be
       // apologising for a limitation that no longer applies.
       text: !exchanged.expiresIn
-        ? 'Your sessions can use GitHub now.'
+        ? `Your sessions can use ${label} now.`
         : renewable
-          ? `Your sessions can use GitHub now. The token lasts ${Math.round(exchanged.expiresIn / 3600)} hours and ` +
+          ? `Your sessions can use ${label} now. The token lasts ${Math.round(exchanged.expiresIn / 3600)} hours and ` +
             'that machine renews it by itself from here on.'
-          : `Your sessions can use GitHub now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours, and ` +
+          : `Your sessions can use ${label} now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours, and ` +
             'that machine could not store what it needs to renew it — connect again when it expires.',
     };
   }

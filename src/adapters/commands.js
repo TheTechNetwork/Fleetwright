@@ -1286,16 +1286,19 @@ export const COMMANDS = {
     usage: '/renew <provider> <client-id> <refresh-token>',
     short: 'Let this box keep a connection alive by itself',
     help:
-      'A GitHub App token lasts eight hours and is not renewed by being used — it is replaced by an '
-      + 'exchange that needs the App client secret. This stores what that exchange needs, in a file no '
-      + 'session is given, and the box renews on its own from then on.',
+      'An OAuth access token from GitHub or Cloudflare is not renewed by being used — it is replaced '
+      + 'by an exchange that needs that provider\u2019s client secret. This stores what that exchange '
+      + 'needs, in a file no session is given, and the box renews on its own from then on.',
     run: async (ctx, args) => {
       // The fourth argument is the client secret an older coordinator still
       // sends. It is READ AND DISCARDED: it belongs in the sidecar's memory,
       // delivered on the config frame, not in a file on this box.
       const [provider, clientId, refresh] = args;
-      if (provider !== 'github' || !clientId || !refresh) {
-        return { ok: false, text: 'Usage: /renew github <client-id> <refresh-token>' };
+      // The two providers whose tokens renew by exchange. Not `isProvider`,
+      // which would admit claude — a provider with no refresh tokens and
+      // nothing this file could do with one.
+      if (!['github', 'cloudflare'].includes(provider) || !clientId || !refresh) {
+        return { ok: false, text: 'Usage: /renew <github|cloudflare> <client-id> <refresh-token>' };
       }
       const row = rowForActor(ctx.actor);
       // Fails closed. There is no row to write to, so nothing is written —

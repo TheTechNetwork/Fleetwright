@@ -156,8 +156,11 @@ test('the runner repository arrives on the config frame, shaped', () => {
 test('the config frame is still a fixed list', () => {
   // It should grow slowly and never become a map — asserted here rather than
   // left as an intention, because the way it stops being true is somebody
-  // adding a key that seemed harmless in isolation.
-  assert.deepEqual(Object.keys(CONFIG_KEYS).sort(), ['githubClientSecret', 'runnerRepo']);
+  // adding a key that seemed harmless in isolation. cloudflareClientSecret is
+  // the third entry and the same object as the first: a client secret that
+  // authorises nothing on its own, delivered to the process that spends it and
+  // kept off every disk.
+  assert.deepEqual(Object.keys(CONFIG_KEYS).sort(), ['cloudflareClientSecret', 'githubClientSecret', 'runnerRepo']);
   assert.equal(buildConfigFrame({ runnerRepo: 'me/runners', sandboxImage: 'evil' })?.values.sandboxImage, undefined);
 });
 

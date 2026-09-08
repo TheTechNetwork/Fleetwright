@@ -37,7 +37,7 @@ import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, 
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { RunnerTickets } from './runner-tickets.js';
-import { callbackPage } from './github-oauth.js';
+import { callbackPage } from './oauth.js';
 import { resource } from '../../core/resources.js';
 import { identify } from './identity.js';
 import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
@@ -94,6 +94,26 @@ export class Coordinator {
       // sent to every host on the config frame rather than placed on each of
       // them — see docs/runner-central.md.
       runnerRepo: process.env.AGENT_FLEET_RUNNER_REPO || null,
+      // THE SAME VARIABLES THE WORKER READS, and until now this coordinator
+      // read neither. docs/coordinator-deploy.md has said "set
+      // AGENT_FLEET_GITHUB_CLIENT_ID plus the secret" since the App shipped,
+      // and setting them here did nothing: the core was constructed without
+      // them, so /oauth/github/callback — served below, documented in
+      // openapi.json — answered "no GitHub App configured" on every request,
+      // the connect catalogue never offered the App, and the config frame
+      // never carried the client secret, so no host behind a Node coordinator
+      // could ever renew. The route existing while the feature could not was
+      // exactly the parity failure openapi.test.js cannot see, because both
+      // coordinators SERVED the route; only one could be configured to mean it.
+      githubApp: {
+        clientId: process.env.AGENT_FLEET_GITHUB_CLIENT_ID,
+        clientSecret: process.env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
+      },
+      cloudflareOauth: {
+        clientId: process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID,
+        clientSecret: process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET,
+        scopes: process.env.AGENT_FLEET_CLOUDFLARE_SCOPES,
+      },
     });
     // A minted runner ticket is spent by a job that starts minutes later, so it
     // has to survive a restart in between.
@@ -755,6 +775,23 @@ export class Coordinator {
       return undefined;
     }
 
+    // THE CLOUDFLARE CALLBACK — the same flow, the second provider. Secured by
+    // the same single-use state, checked against its own pending store so a
+    // GitHub state cannot finish a Cloudflare flow or the reverse.
+    if (p === '/oauth/cloudflare/callback' && req.method === 'GET') {
+      const result = await this.core.finishCloudflareAuthorization({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state'),
+        origin: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`,
+      });
+      res.writeHead(result.ok ? 200 : 400, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(callbackPage({ ...result, provider: 'cloudflare' }));
+      return undefined;
+    }
+
     // --- the remote MCP endpoint --------------------------------------------
     //
     // ABOVE THE TOKEN GATE, and every route here has to be. Discovery is what a
@@ -1077,13 +1114,13 @@ export class Coordinator {
         requester: requesterFor(client),
       });
       // A `connect` reply carries the host's catalogue, which offers the paste
-      // route because a host knows nothing about a GitHub App. Only the
-      // coordinator can improve on that, and it rewrites the one entry it can.
+      // route because a host knows nothing about an OAuth client. Only the
+      // coordinator can improve on that, and it rewrites the entries it can.
       return json(
         res,
         200,
         body.verb === 'connect'
-          ? this.core.offerGithubApp(
+          ? this.core.offerOauth(
               reply,
               typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),
               client?.email ?? null,

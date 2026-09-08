@@ -126,7 +126,7 @@ compatibility_flags = ["nodejs_als"]
 #   AGENT_FLEET_PUSH              unset → notifications are logged, not sent,
 #                                 and the coordinator says so at startup
 #   AGENT_FLEET_GITHUB_*          unset → the paste route, which is a
-#                                 first-class answer rather than a fallback
+#   AGENT_FLEET_CLOUDFLARE_*      first-class answer rather than a fallback
 #   AGENT_FLEET_NAME              unset → invitations are not sent, and the
 #   AGENT_FLEET_INVITE_FROM       reply says which happened
 #   AGENT_FLEET_APP_IOS/_ANDROID  unset → an invitation with no app links

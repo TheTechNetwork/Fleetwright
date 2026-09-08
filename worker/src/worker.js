@@ -19,7 +19,7 @@ import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
-import { normaliseOrigin } from '../../src/fleet/coordinator/github-oauth.js';
+import { normaliseOrigin } from '../../src/fleet/coordinator/oauth.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
@@ -304,13 +304,13 @@ curl -fsSL '${target}' | sh
       return callFleet(env, request);
     }
 
-    // THE GITHUB CALLBACK, above the token gate on purpose: GitHub redirects a
-    // BROWSER here, and a browser carries no fleet credential. What stands in
-    // for one is the `state` — unguessable, single-use, minutes-long, and bound
-    // to the host and person who started the flow. That is the whole security
-    // of this route, and it is checked inside the Durable Object because that
-    // is where the pending flow was minted.
-    if (url.pathname === '/oauth/github/callback') {
+    // THE OAUTH CALLBACKS, above the token gate on purpose: the provider
+    // redirects a BROWSER here, and a browser carries no fleet credential.
+    // What stands in for one is the `state` — unguessable, single-use,
+    // minutes-long, and bound to the host and person who started the flow.
+    // That is the whole security of these routes, and it is checked inside the
+    // Durable Object because that is where the pending flow was minted.
+    if (url.pathname === '/oauth/github/callback' || url.pathname === '/oauth/cloudflare/callback') {
       return callFleet(env, request);
     }
 
@@ -1745,6 +1745,53 @@ const OPENAPI = JSON.stringify({
           },
           "400": {
             "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/oauth/cloudflare/callback": {
+      "get": {
+        "summary": "Finish a Cloudflare OAuth authorization",
+        "description": "Where Cloudflare redirects a browser after somebody authorizes this fleet's OAuth client. The same shape as the GitHub callback and secured the same way: unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 with a `state` that is unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured client, every request here is refused.",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connected. An HTML page telling the person they can close the tab.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused \u2014 unknown, expired or already-used state, or Cloudflare declined.",
             "content": {
               "text/html": {
                 "schema": {

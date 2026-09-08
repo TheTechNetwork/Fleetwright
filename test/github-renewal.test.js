@@ -293,3 +293,86 @@ test('a host the coordinator has not configured says so, rather than failing at 
 
   assert.equal(results[0].outcome, 'no-secret');
 });
+
+test('a Cloudflare connection renews through its own endpoint, form-encoded', async (t) => {
+  // Cloudflare's token endpoint is RFC 6749 as written where GitHub's is not:
+  // the request is form-encoded and a refusal is a status code. The provider
+  // table in keepalive.js is what keeps the two exchanges from being one
+  // function with a parameter per disagreement.
+  const s = store(t);
+  s.store.save(HOST_ROW, 'cloudflare', 'cf-access-token-000000000', 'acme', null);
+  s.store.saveRenewal(HOST_ROW, 'cloudflare', { clientId: 'cf-client-id', refresh: 'cf-refresh-000', expiresIn: 1 });
+
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://dash.cloudflare.com/oauth2/token');
+    assert.equal(/** @type {any} */ (init).headers['content-type'], 'application/x-www-form-urlencoded');
+    const form = new URLSearchParams(String(/** @type {any} */ (init).body));
+    assert.equal(form.get('grant_type'), 'refresh_token');
+    assert.equal(form.get('refresh_token'), 'cf-refresh-000');
+    assert.equal(form.get('client_secret'), 'cf-fleet-secret');
+    assert.equal(form.get('client_id'), 'cf-client-id');
+    return new Response(
+      JSON.stringify({ access_token: 'cf-access-second-00000000', refresh_token: 'cf-refresh-second-000', expires_in: 3600 }),
+      { status: 200 },
+    );
+  };
+
+  const results = await renewProviderTokens(s.cfg, { secrets: { cloudflareClientSecret: 'cf-fleet-secret' } });
+
+  assert.deepEqual(results.map((r) => r.outcome), ['renewed']);
+  const env = readFileSync(/** @type {string} */ (s.store.envPathFor(HOST_ROW)), 'utf8');
+  assert.ok(env.includes('cf-access-second-00000000'), 'the new access token was not stored');
+  assert.equal(s.store.readRenewal(HOST_ROW, 'cloudflare')?.refresh, 'cf-refresh-second-000',
+    'the rotated refresh token was dropped — this connection would break at the NEXT renewal');
+});
+
+test('each provider renews with its own secret, and only its own', async (t) => {
+  // A fleet with a GitHub App and no Cloudflare client is a supported fleet.
+  // The GitHub deposit renews; the Cloudflare one says what it is missing
+  // rather than spending the wrong secret at the wrong endpoint.
+  const s = store(t);
+  s.store.saveRenewal(HOST_ROW, 'github', { clientId: CLIENT_ID, refresh: REFRESH, expiresIn: 1 });
+  s.store.saveRenewal(HOST_ROW, 'cloudflare', { clientId: 'cf-client-id', refresh: 'cf-refresh-000', expiresIn: 1 });
+
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /github\.com/, 'only GitHub should be reached — no Cloudflare secret was supplied');
+    return new Response(JSON.stringify({ access_token: ACCESS, refresh_token: REFRESH, expires_in: 28_800 }), { status: 200 });
+  };
+
+  const results = await renewProviderTokens(s.cfg, { secrets: { githubClientSecret: CLIENT } });
+  const byProvider = Object.fromEntries(results.map((r) => [r.provider, r.outcome]));
+  assert.equal(byProvider.github, 'renewed');
+  assert.equal(byProvider.cloudflare, 'no-secret');
+});
+
+test('a Cloudflare refusal and an unreachable Cloudflare are different messages', async () => {
+  // Same split refreshGithubToken makes, on the other provider's wire: a
+  // refused renewal sends somebody to reconnect, a network failure sends them
+  // to wait — and Cloudflare says no with a status code where GitHub says no
+  // with a 200.
+  const { refreshCloudflareToken } = await import('../src/core/connectors.js');
+  const refused = await refreshCloudflareToken({
+    refresh: 'cf-refresh-000', client: 'cf-secret', clientId: 'cf-client-id',
+    fetchImpl: async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'token revoked' }), { status: 400 }),
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /token revoked/);
+
+  const unreachable = await refreshCloudflareToken({
+    refresh: 'cf-refresh-000', client: 'cf-secret', clientId: 'cf-client-id',
+    fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND'); },
+  });
+  assert.equal(unreachable.ok, false);
+  assert.match(unreachable.message, /Could not reach Cloudflare/);
+
+  const empty = await refreshCloudflareToken({
+    refresh: 'cf-refresh-000', client: 'cf-secret', clientId: 'cf-client-id',
+    fetchImpl: async () => new Response(JSON.stringify({ token_type: 'bearer' }), { status: 200 }),
+  });
+  assert.equal(empty.ok, false);
+  assert.match(empty.message, /no access token/);
+});

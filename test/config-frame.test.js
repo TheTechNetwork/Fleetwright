@@ -24,6 +24,18 @@ test('a named value arrives', () => {
   assert.deepEqual(r.dropped, []);
 });
 
+test('both client secrets travel on one frame', () => {
+  // Cloudflare's is the second entry in the fixed set, the same object with
+  // the same custody argument as GitHub's — useless without a refresh token
+  // somebody already granted.
+  const r = readConfigFrame(frame({ githubClientSecret: SECRET, cloudflareClientSecret: 'cfsecret000000000000000000' }));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.values, { githubClientSecret: SECRET, cloudflareClientSecret: 'cfsecret000000000000000000' });
+  assert.deepEqual(buildConfigFrame({ cloudflareClientSecret: 'cfsecret000000000000000000' })?.values, {
+    cloudflareClientSecret: 'cfsecret000000000000000000',
+  });
+});
+
 test('a key the host does not know is dropped, not stored', () => {
   // The whole guardrail. A host that stores whatever it is sent is a host whose
   // behaviour the coordinator writes.

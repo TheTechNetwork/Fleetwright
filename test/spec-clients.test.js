@@ -83,6 +83,7 @@ const NOT_A_CLIENT_ROUTE = {
   '/apple/notifications': 'APNs calls this. Apple is the client.',
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
+  '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
 };
 
 test('every route in the spec is reachable by a primary client, or says why not', () => {

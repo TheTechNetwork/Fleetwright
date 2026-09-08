@@ -320,6 +320,8 @@ unset:
 | `AGENT_FLEET_API_TOKEN` | break-glass admin. `openssl rand -hex 24`. Not what phones use |
 | `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
 | `AGENT_FLEET_APNS_KEY` / `_KEY_ID` / `_TEAM_ID` | the `.p8` and its identifiers, for push to iOS. Optional, same fallback |
+| `AGENT_FLEET_GITHUB_CLIENT_SECRET` | the GitHub App's client secret, for the OAuth code exchange. Optional; without it `connect github` offers the paste route |
+| `AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET` | the Cloudflare OAuth client's secret, same exchange, second provider. Optional; the client id and scope list are `[vars]` in the wrangler config |
 
 And two repository **variables**:
 

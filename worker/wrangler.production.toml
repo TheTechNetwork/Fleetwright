@@ -117,6 +117,18 @@ AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
 AGENT_FLEET_GITHUB_APP_ID = "4758006"
 AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
+# THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow.
+# Commented until a client is registered (dash.cloudflare.com → Manage Account
+# → OAuth clients — private first, because public needs domain verification and
+# cannot be undone; see docs/connectors.md). The id is an identifier like the
+# App's; the SCOPES are the client's registered list verbatim, dot-form
+# permission names plus offline_access for a refresh token, and they live here
+# because only whoever registered the client knows them. The CLIENT SECRET is a
+# `wrangler secret` (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET). Unset, connect
+# offers the paste route, which works.
+# AGENT_FLEET_CLOUDFLARE_CLIENT_ID = ""
+# AGENT_FLEET_CLOUDFLARE_SCOPES = ""
+
 # WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
 # ARE safe for a fork to copy and are the best fork-parity property in the
 # project: the audiences are our bundle id and our Google web client, both

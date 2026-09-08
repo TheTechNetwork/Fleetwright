@@ -76,7 +76,7 @@ access live, and runners are the thing you reach for *from* it.
 ### Why the coordinator does not do this itself
 
 It is the publicly addressable part and it holds no per-person credential —
-`github-oauth.js` says so in its header: the callback exchanges a code and
+`coordinator/oauth.js` says so in its header: the callback exchanges a code and
 relays the result down the socket, and *"nothing is stored at the coordinator"*.
 Making it the dispatcher would mean giving it one, which is the second row of
 the table above.

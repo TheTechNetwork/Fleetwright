@@ -269,13 +269,18 @@ export class Sidecar {
    * says nothing.
    */
   async #renewProviders() {
-    const client = this.config.get('githubClientSecret');
-    // Not a warning. A fleet with no GitHub App configured is a supported
-    // fleet, and warning hourly about a feature nobody turned on is how a log
-    // stops being read.
-    if (!client) return;
+    /** @type {Record<string, string>} */
+    const secrets = {};
+    for (const key of ['githubClientSecret', 'cloudflareClientSecret']) {
+      const value = this.config.get(key);
+      if (value) secrets[key] = value;
+    }
+    // Not a warning. A fleet with no OAuth client configured for any provider
+    // is a supported fleet, and warning hourly about a feature nobody turned
+    // on is how a log stops being read.
+    if (!Object.keys(secrets).length) return;
     try {
-      const results = await renewProviderTokens(this.hubConfig, { secrets: { githubClientSecret: client } });
+      const results = await renewProviderTokens(this.hubConfig, { secrets });
       const renewed = results.filter((r) => r.outcome === 'renewed').length;
       if (renewed) this.log.info(`sidecar: renewed ${renewed} provider token(s)`);
     } catch (e) {
@@ -1123,7 +1128,15 @@ export function toCommandLine({ verb, params, actor }) {
       // ASCII, no whitespace, no quote, no dash to start — so they are two
       // tokens on this line that cannot be split or read as flags. Masked from
       // the provider name onwards by src/core/redact.js.
-      return `/renew ${p.provider} ${p.clientId} ${p.refresh} ${p.client}`;
+      //
+      // `p.client` is NOT forwarded, twice over. Interpolating it after the
+      // coordinator stopped sending it appended the literal word "undefined"
+      // to every deposit — harmless only because /renew discards its fourth
+      // argument. And when an OLDER coordinator does still send it, the value
+      // is the fleet-wide App client secret, which the hub has no use for and
+      // this line has no business carrying: the protocol accepts the parameter
+      // for compatibility and this is where it stops travelling.
+      return `/renew ${p.provider} ${p.clientId} ${p.refresh}`;
     default:
       // Unreachable: validateIntent has already refused anything not in VERBS,
       // and peek/health never get here. Throwing rather than returning a
