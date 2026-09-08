@@ -87,7 +87,7 @@
   "tools/rollout.mjs": 100,
   "tools/store-listing.mjs": 96,
   "worker/src/demo.js": 94,
-  "worker/src/fleet-do.js": 67,
+  "worker/src/fleet-do.js": 66,
   "worker/src/pages.js": 100,
   "worker/src/sentry.js": 100,
   "worker/src/worker.js": 99

@@ -859,9 +859,29 @@ export class Fleet {
       if (!body || typeof body.verb !== 'string') {
         return json({ ok: false, error: { code: 'bad_request' }, text: 'send {verb, params}' }, 400);
       }
+      // ABSENT IS NOT MALFORMED, and this coerced both to `{}`.
+      //
+      // `params: null` and a missing `params` mean "this verb takes none",
+      // which is ordinary and correct. A STRING, a number or a boolean is a
+      // caller who built the request wrongly — and silently substituting `{}`
+      // ran the verb with NO parameters instead of saying so. On `status` that
+      // is merely confusing; on `start` it means a session begins under a
+      // generated name in the default mode, and the caller believes they asked
+      // for something else.
+      //
+      // Found while probing for #313 rather than from a report, which is the
+      // shape of it: the request succeeds, so nobody files anything.
+      //
+      // An ARRAY already reached checkParams and was refused there — arrays are
+      // `typeof 'object'` — so this closes the gap the type check left open
+      // rather than adding a new rule.
+      if (body.params !== undefined && body.params !== null
+        && (typeof body.params !== 'object' || Array.isArray(body.params))) {
+        return json({ ok: false, error: { code: 'bad_params' }, text: 'params must be a JSON object' }, 400);
+      }
       const reply = await this.core.dispatch({
           verb: body.verb,
-          params: body.params && typeof body.params === 'object' ? body.params : {},
+          params: body.params ?? {},
           // The client's own identity wins over anything the request claims:
           // an actor a caller can choose is a label, not an attribution.
           actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
