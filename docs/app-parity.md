@@ -364,19 +364,6 @@ Written because a beta tester found **four documents giving four answers** and
 could not tell what installing the beta would get them (#336). One table, and
 everything else defers to it.
 
-### The host page, and the gap that is open on purpose
-
-iOS gives a machine a page of its own (`HostView.swift`); Android still puts
-most of a machine's controls in its fleet card. The two settings added with the
-sandbox and label verbs went into `HostSheet.kt` on Android rather than into
-that card, because both are a choice plus a list that grows and the card is
-already the wall iOS took apart.
-
-So the two features are on both phones and the STRUCTURE is not the same yet.
-Written down rather than left to be discovered, because a gap one commit wide is
-invisible in a summary — which is the argument for this document over the
-intention.
-
 | | State | Evidence |
 |---|---|---|
 | Both apps compile | **yes** | CI builds them on every PR |
@@ -398,6 +385,19 @@ Worth keeping the shape of that: the claim was withdrawn when it was unproven
 and restored when it was proven, rather than argued about. The evidence is
 somebody with the devices saying it worked, which is the only evidence this
 row could ever have had — no test in this repository can produce it.
+
+### The host page, and the gap that is open on purpose
+
+iOS gives a machine a page of its own (`HostView.swift`); Android still puts
+most of a machine's controls in its fleet card. The two settings added with the
+sandbox and label verbs went into `HostSheet.kt` on Android rather than into
+that card, because both are a choice plus a list that grows and the card is
+already the wall iOS took apart.
+
+So the two features are on both phones and the STRUCTURE is not the same yet.
+Written down rather than left to be discovered, because a gap one commit wide is
+invisible in a summary — which is the argument for this document over the
+intention.
 
 **And the row is narrower than "push works", which is worth saying while the
 correction is fresh.** Delivery is confirmed. A cold-start wake, a locked

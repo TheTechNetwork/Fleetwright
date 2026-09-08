@@ -12,11 +12,12 @@
 > Commands, permission modes, resume behaviour and the web UI below are all
 > current.
 >
-> **What is NOT current, and is upstream's rather than ours:** the *Install*
-> section (it clones the upstream repo — use [`deployment.md`](./deployment.md)
-> or the ten-step [`first-session.md`](./first-session.md)), and any version or
-> dependency claim on this page. A beta tester found node "18+" here against
-> `>= 24` in two other files and could not tell which to believe.
+> **The *Install* section has been REPLACED with ours** — it used to clone
+> upstream's repository and configure a Telegram bot, and a banner warning
+> people off a section still leaves the section. Version and dependency claims
+> elsewhere on this page are upstream's: a beta tester found node "18+" here
+> against `>= 24` in two other files and could not tell which to believe, so
+> where one appears it is marked.
 >
 > The rule for this file: **if a statement is about how to install or what to
 > install, it is upstream's and this repository's own docs win.** Provenance and
@@ -68,27 +69,34 @@ Cloudflare Tunnel (below) or leave it on loopback and use Telegram.
 
 ## Install
 
+**Removed rather than banner'd, which is the whole of finding G4.** This section
+used to be upstream's, and every line of it was wrong here in a different way:
+it cloned `ambersecurityinc/agent-hub` rather than this repository, and three of
+its four steps configured the Telegram bot — BotFather, `AGENT_HUB_TELEGRAM_TOKEN`,
+`AGENT_HUB_TELEGRAM_ALLOWED_USERS` — for an adapter that is archived and no
+longer started.
+
+A banner saying "do not believe the section below" leaves the section below. It
+costs a reader the doubt whether or not they act on it, and a beta tester read
+this page against two others and could not tell which to believe.
+
+**Install this repository's way:**
+
 ```sh
-git clone https://github.com/ambersecurityinc/agent-hub /opt/agent-hub
-sudo /opt/agent-hub/install/install.sh
+curl -fsSL https://<your coordinator>/install | sudo sh
 ```
 
-The installer checks prerequisites, creates `/etc/agent-hub.env`, installs the
-systemd unit, registers the Claude Code **SessionStart hook**, and links the
-`agent-hub` CLI. It is idempotent — re-run it after `git pull`, and it will
-never overwrite your config.
+[`deployment.md`](./deployment.md) is the full account and
+[`first-session.md`](./first-session.md) is the ten-step version. Both are
+current, both are ours, and neither mentions a bot.
 
-Then:
+What the installer does is unchanged and worth knowing: it checks
+prerequisites, creates `/etc/agent-hub.env`, installs the systemd units,
+registers the Claude Code **SessionStart hook**, and links the CLIs. It is
+idempotent, and it never overwrites config you have already edited.
 
-1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
-   into `AGENT_HUB_TELEGRAM_TOKEN` in `/etc/agent-hub.env`.
-2. `systemctl enable --now agent-hub`
-3. Message your bot **`/whoami`** — it answers with your Telegram id even before
-   you are allowed. Put that id in `AGENT_HUB_TELEGRAM_ALLOWED_USERS`, then
-   `systemctl restart agent-hub`.
-4. `agent-hub doctor` to confirm the box can actually run sessions.
-
-Not logged into Claude yet? Send the bot **`/login`** and follow the link.
+Everything below this line is about the session manager itself — commands,
+permission modes, how resume works — and is current.
 
 ---
 
@@ -234,9 +242,16 @@ the port.
 Read this before you add the second name to the allowlist.
 
 - A session is **unsupervised shell access on this box**, running as the hub's
-  user with `--dangerously-skip-permissions`. Everyone on
-  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` has that. Treat the allowlist as a root
-  allowlist, because that is what it is.
+  user with `--dangerously-skip-permissions`. This used to name
+  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` as the list of people who have that, and
+  that adapter is archived — so the sentence described the wrong access
+  control, which is worse in a security section than anywhere else on the page.
+  **What grants it now is the hub's API token**: `/api/command` runs any line it
+  is handed, so whoever holds that token has root on this box. Treat it as a
+  root credential, because that is what it is. The coordinator adds identity in
+  front of it — an OIDC-verified email — but agent-hub itself has one token and
+  cannot tell callers apart; `docs/trust.md` says so where somebody might rely
+  on the difference.
 - `/login` can point the box at a Claude account, and the authorization URL is
   visible to whoever asked. It is not a lesser permission than starting a
   session — set `AGENT_HUB_LOGIN=0` if you want authentication to require SSH.
