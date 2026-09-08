@@ -77,6 +77,26 @@ export function authorizationServerMetadata(origin) {
  * coordinator that restarts mid-sign-in costs somebody one retry, and keeping
  * them at rest would mean a store of live credentials-in-waiting for no gain.
  */
+/**
+ * What one client registration may carry, and how many may exist.
+ *
+ * These are STORAGE BOUNDS. The whole registry is serialised into a single
+ * Durable Object value and DO storage refuses one over 128KiB, so an unbounded
+ * registry is a value that eventually cannot be written — and `/oauth/register`
+ * takes no credential, which makes "eventually" somebody else's choice.
+ *
+ * The same failure has already happened once in this file's neighbour: the
+ * event ring crossed the limit "weeks after the code shipped, on a box where
+ * nothing changed", and was bounded by serialised size at its serialiser. This
+ * is that lesson applied to the key an anonymous caller can grow.
+ *
+ * 200 clients at ~600 bytes each is ~120KB, so the count cap and the size cap
+ * agree rather than one quietly doing nothing.
+ */
+const MAX_REDIRECT_URIS = 10;
+const MAX_REDIRECT_URI_LENGTH = 512;
+const MAX_CLIENTS = 200;
+
 export class Authorizations {
   /** @param {{ now?: () => number }} [opts] */
   constructor({ now = () => Date.now() } = {}) {
@@ -101,12 +121,40 @@ export class Authorizations {
   register(request) {
     const redirectUris = (request?.redirect_uris || []).map(String).filter(Boolean);
     if (!redirectUris.length) return { ok: false, error: 'invalid_redirect_uri' };
-    // Every redirect must be something a browser can be sent back to safely.
+    // HOW MUCH ONE REGISTRATION MAY WEIGH, and this is a storage bound wearing
+    // a validation coat.
+    //
+    // Every client here is serialised into ONE Durable Object value, and DO
+    // storage refuses a value over 128KiB. Nothing capped the number of
+    // redirect URIs or their length, so a single unauthenticated POST carrying
+    // a large `redirect_uris` array could push that value past the limit — at
+    // which point `storage.put('mcpClients', …)` throws, and keeps throwing.
+    //
+    // A real client registers one or two URIs. Ten of 512 characters is far
+    // past generous and nowhere near the cliff.
+    if (redirectUris.length > MAX_REDIRECT_URIS) return { ok: false, error: 'invalid_redirect_uri' };
     for (const uri of redirectUris) {
+      if (uri.length > MAX_REDIRECT_URI_LENGTH) return { ok: false, error: 'invalid_redirect_uri' };
+      // Every redirect must be something a browser can be sent back to safely.
       if (!isSafeRedirect(uri)) return { ok: false, error: 'invalid_redirect_uri' };
     }
     const clientId = `mcp_${randomHex(16)}`;
     this.clients.set(clientId, { redirectUris, name: String(request?.client_name || 'an MCP client').slice(0, 80) });
+    // AND HOW MANY MAY ACCUMULATE. Capping one registration does not bound the
+    // map: the endpoint is open by design, so anybody may register as often as
+    // they like. Oldest out first — a Map keeps insertion order, and the client
+    // nobody has used since is the one whose loss costs least.
+    //
+    // EVICTION IS SAFE HERE AND WOULD NOT BE ELSEWHERE. A client_id grants
+    // nothing on its own; a client whose registration is gone gets
+    // `invalid_client` and registers again, which is the same round trip it
+    // makes the first time. That is why this key can be bounded by dropping
+    // and `hostIds` cannot.
+    while (this.clients.size > MAX_CLIENTS) {
+      const oldest = this.clients.keys().next().value;
+      if (oldest === undefined) break;
+      this.clients.delete(oldest);
+    }
     return { ok: true, clientId, redirectUris };
   }
 
@@ -173,7 +221,16 @@ export class Authorizations {
    * of course.
    */
   serialise() {
-    return [...this.clients.entries()].map(([clientId, c]) => ({ clientId, ...c }));
+    const rows = [...this.clients.entries()].map(([clientId, c]) => ({ clientId, ...c }));
+    // BOUNDED AT THE SERIALISER, which is where the events ring learned to put
+    // it: "one number, owned by the serialiser". register() caps what it
+    // admits, and this is the backstop for rows that arrived some other way —
+    // a restore() from a value written before those caps existed, most
+    // obviously. Oldest first, same rule as above.
+    while (rows.length > 1 && JSON.stringify(rows).length > 100_000) {
+      rows.splice(0, Math.ceil(rows.length / 2));
+    }
+    return rows;
   }
 
   /** @param {any[]} rows */
