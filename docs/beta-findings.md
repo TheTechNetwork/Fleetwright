@@ -62,7 +62,7 @@ system and is absent from the screen where the decision is made.
 | **C2** ([#318](https://github.com/TheTechNetwork/Fleetwright/issues/318)) | **No timestamps on sessions, anywhere.** Three sessions named "disk usage report"; no way to tell which was the real attempt. | **high** | Report §2. |
 | **C3** ([#319](https://github.com/TheTechNetwork/Fleetwright/issues/319)) | **`started by` exists in `status` and not in `list`** — the screen where the choosing happens. | **high** | Report §2. |
 | **C4** ([#320](https://github.com/TheTechNetwork/Fleetwright/issues/320)) | **The credential countdown is only in `fleet_verify`.** "Signed in (11m left)" was decisive and reachable only from a tool called out of desperation. | **high** | Report §1 step 13. |
-| **C5** ([#321](https://github.com/TheTechNetwork/Fleetwright/issues/321)) | **Host drift is not announced.** `deb13-staging` was two versions behind and rejected `fleet_files`; nothing said so until the tester tripped over it. | **medium** | Report §1 step 11. The error itself is the best in the product — it names the fix. |
+| **C5** ([#321](https://github.com/TheTechNetwork/Fleetwright/issues/321)) | **Host drift is not announced.** `deb13-staging` was two versions behind and rejected `fleet_files`; nothing said so until the tester tripped over it. | **medium** | **Fixed.** Protocol drift is a rung on the registry's state ladder: a host whose `protocol` differs from the coordinator's is `degraded`, so it is announced and the scheduler stops sending it work. Checked FIRST, because every remedy below it is itself undeliverable. |
 | **C6** ([#316](https://github.com/TheTechNetwork/Fleetwright/issues/316)) | **"Stopping discards output" lives in a tool description, not in the product.** It is the single most important fact for a returning user, and `fleet_stop`'s confirmation does not mention it. | **high** | Report §3. |
 
 ## D. The deny list blocks recovery
@@ -77,7 +77,7 @@ driving through an app.
 | # | Finding | Severity |
 |---|---|---|
 | **D1** ([#322](https://github.com/TheTechNetwork/Fleetwright/issues/322)) | **Stale sessions have no exit.** Twelve resumables accumulated in three weeks; `forget` and `purge` are denied, so the pile grows every visit and compounds C1. | **high** |
-| **D2** ([#323](https://github.com/TheTechNetwork/Fleetwright/issues/323)) | **A drifted host cannot be fixed from the product.** The error names `agent-hub update --restart`; `update` is denied, and the product provides no shell. | **high** |
+| **D2** ([#323](https://github.com/TheTechNetwork/Fleetwright/issues/323)) | **A drifted host cannot be fixed from the product.** True, and for a different reason than recorded here: `update` is not denied — it came off `DEFAULT_DENY` — it is REFUSED, by the same version check as everything else, before the verb is read. The drift error also named no remedy at all; the one that names `agent-hub update --restart` is `unknown_verb`, which is a different failure and IS fixable from the fleet. Now explained: `unsupported_version` says which version each side speaks, says the fleet cannot fix it, and names the installer. The deadlock itself stands. | **high** |
 | **D3** ([#324](https://github.com/TheTechNetwork/Fleetwright/issues/324)) | **Nothing tells you a lift exists.** The refusal says "ask the person running it to allow that verb explicitly" — but the tester *is* the person running it, and `AGENT_FLEET_MCP_ALLOW` is named nowhere they would look. | **medium** |
 
 ---
