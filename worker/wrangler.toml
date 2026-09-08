@@ -131,6 +131,29 @@ compatibility_flags = ["nodejs_als"]
 #   AGENT_FLEET_INVITE_FROM       reply says which happened
 #   AGENT_FLEET_APP_IOS/_ANDROID  unset → an invitation with no app links
 #   SENTRY_DSN                    unset → no error reporting at all
+#   SENTRY_ENVIRONMENT            unset → "production" in the report. Only read
+#   SENTRY_TRACES_SAMPLE_RATE     when SENTRY_DSN is set; unset → no tracing
+#   AGENT_FLEET_PUBLIC_ORIGIN     the origin this coordinator is reached on,
+#                                 for the MCP server's OAuth metadata. Unset →
+#                                 derived from the request, which is right until
+#                                 something sits in front of it
+#   AGENT_FLEET_AUTH_APPLE_SERVICE  the Services ID "Sign in with Apple" issues
+#                                 the token to. Unset → Apple sign-in is not
+#                                 offered; the other issuers are unaffected
+#   AGENT_FLEET_APNS_BUNDLE_ID    which iOS app a push is addressed to, and
+#   AGENT_FLEET_APNS_SANDBOX      whether to use Apple's sandbox gateway.
+#                                 Unset → the bundle id defaults to ours and
+#                                 the production gateway is used, so a fork
+#                                 shipping its own app must set the first
+#   AGENT_FLEET_ACTIONS_AUDIENCE  which audience a GitHub Actions OIDC token
+#                                 must carry to enrol a runner. UNSET IS NOT
+#                                 "ANYTHING": the code falls back to this
+#                                 coordinator's own origin, which is the
+#                                 correct default and the one nobody could
+#                                 find, because this variable was read by
+#                                 fleet-do.js and written down in no file at
+#                                 all — not here, not in the production
+#                                 config, not in docs/
 #
 # AGENT_FLEET_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
 # rather than a var. It decides who can reach a fleet; it does not belong in a
