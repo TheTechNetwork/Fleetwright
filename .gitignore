@@ -9,6 +9,11 @@ apps/android/.gradle/
 apps/android/build/
 apps/android/app/build/
 apps/android/local.properties
+# Kotlin 2.x writes session files here during every build and removes them
+# after. Transient — but /update refuses a dirty tree, and `git status
+# --porcelain` counts untracked files, so a build in flight would stop a
+# checkout host updating. Same reasoning as *.jks below.
+apps/android/.kotlin/
 
 # google-services.json is NOT ignored, deliberately. It was, from before there
 # was a Firebase project, and leaving it that way would have been a silent
