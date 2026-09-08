@@ -1039,7 +1039,10 @@ export class CoordinatorCore {
     }
 
     try {
-      const answer = explainUnknownVerb(await this.send(placement.host, spec), placement.host);
+      const answer = explainUnsupportedVersion(
+        explainUnknownVerb(await this.send(placement.host, spec), placement.host),
+        placement.host,
+      );
       // THE SESSION IS REAL THE MOMENT THE HOST SAYS SO, not when the next
       // health frame happens to arrive.
       //
@@ -1383,6 +1386,45 @@ export class CoordinatorCore {
 }
 
 /**
+ * `unsupported_version`, which had no explanation at all.
+ *
+ * The sibling of the function below and the more serious of the two, because
+ * the two failures are not the same shape. `unknown_verb` means the host
+ * understood the request and does not have that one command — so everything
+ * else still gets through, INCLUDING `update`, and the fleet can fix it. A
+ * version mismatch is refused by `validateIntent` before the verb is even read,
+ * so nothing at all arrives and the remedy cannot be delivered over the
+ * protocol that is refusing it.
+ *
+ * That difference is the whole message. Told the wrong one, somebody presses
+ * Apply update, watches it be refused for the same reason, and concludes the
+ * product is broken rather than that this box needs a person.
+ *
+ * The bare code reached a phone as one word — `unsupported_version` — while the
+ * verb existed on the coordinator, so the request looked perfectly valid.
+ * Finding D2 says the drift error "names `agent-hub update --restart`". It does
+ * not: that is the OTHER error, and this one named nothing at all.
+ *
+ * @param {any} reply
+ * @param {{ hostId: string, health?: any }|undefined} host
+ */
+function explainUnsupportedVersion(reply, host) {
+  if (reply?.error?.code !== 'unsupported_version' || !host) return reply;
+  const theirs = host.health?.protocol;
+  return {
+    ...reply,
+    text:
+      `${host.hostId} speaks protocol ${theirs ?? 'an older version'} and this fleet speaks ` +
+      `${PROTOCOL_VERSION}, so it refuses every command before reading it — not just this one.\n` +
+      'THE FLEET CANNOT FIX THIS ONE. `update` is refused for exactly the same reason, so no command\n' +
+      'reaches this box while it is on the wrong version. It needs somebody on the machine:\n' +
+      '  curl -fsSL <your coordinator>/install | sudo sh\n' +
+      'Nothing else in the fleet is affected, and this host is already marked degraded so no new work ' +
+      'is being sent to it.',
+  };
+}
+
+/**
  * Turn `unknown_verb` from a host into the sentence somebody can act on.
  *
  * This refusal is the protocol working exactly as designed — adding a verb
@@ -1413,11 +1455,12 @@ function explainUnknownVerb(reply, host) {
     text:
       `${host.hostId} does not know that command — it is running older code than this coordinator` +
       `${head ? ` (${head}${behind > 0 ? `, ${behind} behind` : ''})` : ''}.\n` +
-      'This is the protocol refusing cleanly rather than guessing, and it is fixed on that box:\n' +
-      `  agent-hub update --restart      (a shell on ${host.hostId})\n` +
-      `  /update --restart               (that box's own Telegram bot)\n` +
+      'This is the protocol refusing cleanly rather than guessing, and unlike a version mismatch it is\n' +
+      'fixable from here, because everything EXCEPT the new verb still gets through:\n' +
+      `  Apply update, on ${host.hostId}, from the app or \`fleet_update\`\n` +
+      `  agent-hub update --restart      (or a shell on ${host.hostId})\n` +
       'A pull without a restart looks the same from here — the files are new and the running ' +
-      'service still holds the old command list, which is why both lines say --restart.',
+      'service still holds the old command list, which is why the shell line says --restart.',
   };
 }
 

@@ -106,16 +106,24 @@ test('an old host’s refusal explains itself, and names the way out', () => {
     assert.equal(reply.error.code, 'unknown_verb', 'the code stays machine-readable');
     assert.match(reply.text, /older code/);
     assert.match(reply.text, /agent-hub update --restart/);
-    assert.match(reply.text, /Telegram/);
     assert.match(reply.text, /abc1234/, 'says which commit it is on');
     assert.match(reply.text, /12 behind/);
-    // BOTH remedies carry --restart. A pull that did not restart looks
+    // NOT TELEGRAM ANY MORE. That adapter is archived, so the remedy pointed
+    // at a surface this product no longer has — a remedy naming something that
+    // does not exist is worse than none, which is the argument the rest of
+    // this message is built on.
+    assert.doesNotMatch(reply.text, /Telegram/, 'it names a surface that was archived');
+    // AND THE FLEET'S OWN REMEDY IS OFFERED FIRST, because for THIS failure it
+    // works: `unknown_verb` means everything except the new verb still gets
+    // through, `update` included. That is precisely what separates it from a
+    // version mismatch, where nothing does.
+    assert.match(reply.text, /Apply update/);
+    assert.match(reply.text, /fixable from here/);
+    // The shell line still carries --restart. A pull that did not restart looks
     // identical from the coordinator — new files, a running service still
     // holding the old command list — and is at least as common as being
-    // genuinely behind. Asserted as two specific lines rather than by
-    // counting occurrences, because the prose says the word too.
+    // genuinely behind.
     assert.match(reply.text, /agent-hub update --restart/);
-    assert.match(reply.text, /\/update --restart/);
   });
 });
 

@@ -26,7 +26,13 @@ import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 /** @param {Partial<any>} patch */
 const health = (patch = {}) => ({
   hostId: 'h',
-  protocol: 1,
+  // THE REAL VERSION, not a placeholder. This said `1` while the fleet spoke 3,
+  // which meant nothing until protocol drift became a rung on the state ladder
+  // — at which point every fixture in this file was a DRIFTED host, and every
+  // test below was asserting the wrong rung's reason. A fixture that differs
+  // from production in a field nothing reads is fine right up to the moment
+  // something reads it.
+  protocol: PROTOCOL_VERSION,
   labels: [],
   maxSessions: 5,
   running: 0,

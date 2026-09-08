@@ -1,3 +1,4 @@
+
 // The coordinator's view of the fleet.
 //
 // THE RULE THIS FILE EXISTS TO ENFORCE (design.md §3):
@@ -17,6 +18,8 @@
 // omission, and never a benign-looking zero. A scheduler that sees `free: 0`
 // quietly skips a host; one that sees `free: null, state: 'unknown'` can say
 // why it skipped it.
+
+import { PROTOCOL_VERSION } from '../protocol/intents.js';
 
 /**
  * @typedef {object} HostHealth
@@ -150,7 +153,31 @@ export class HostRegistry {
     // A host whose own agent-hub is unreachable is NOT healthy, even though its
     // socket is fine. It cannot start anything, and saying "healthy" because we
     // can reach the sidecar is exactly the benign-looking lie §3 warns about.
-    if (health.hub && health.hub.reachable === false) {
+    // FIRST, BECAUSE IT IS THE ONLY FAULT THAT MAKES THE OTHERS UNSAYABLE.
+    //
+    // A host on a different protocol version refuses EVERY intent —
+    // `validateIntent` compares `env.v` for exact equality before it looks at
+    // anything else. So the remedies the rungs below name ("link an account
+    // from the app", "sign in again") are themselves undeliverable, and putting
+    // this lower would offer somebody a fix that cannot arrive.
+    //
+    // Until now nothing said so at all: health is not version-gated, so a
+    // drifted box reported `healthy`, the scheduler sent it work, and every
+    // command came back refused. Finding C5 — "nothing said so until the tester
+    // tripped over it".
+    //
+    // A MISSING PROTOCOL IS NOT A MISMATCHED ONE. A host too old to send the
+    // field at all reads as null here, and degrading on that would take out
+    // exactly the boxes least able to recover — so the guard is an integer
+    // check, not a truthiness one.
+    if (Number.isInteger(health.protocol) && health.protocol !== PROTOCOL_VERSION) {
+      host.state = 'degraded';
+      host.reason =
+        `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
+        'sent here is refused before it is read. This is the one fault the fleet cannot fix for you: ' +
+        'the verb that would update this box is refused for the same reason as everything else. ' +
+        'It needs the installer re-run on the machine.';
+    } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
     } else if (health.claudeAccounts === 0) {

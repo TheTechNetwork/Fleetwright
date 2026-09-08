@@ -44,7 +44,7 @@
   "src/core/which.js": 96,
   "src/fleet/apns-node.js": 47,
   "src/fleet/coordinator/clients.js": 100,
-  "src/fleet/coordinator/core.js": 92,
+  "src/fleet/coordinator/core.js": 93,
   "src/fleet/coordinator/credential.js": 100,
   "src/fleet/coordinator/enrollment.js": 98,
   "src/fleet/coordinator/hosts.js": 98,
