@@ -65,11 +65,16 @@ if (file("google-services.json").exists()) {
 val googleWebClientId: String? = run {
   val f = file("google-services.json")
   if (!f.exists()) return@run null
-  @Suppress("UNCHECKED_CAST")
-  val json = groovy.json.JsonSlurper().parse(f) as Map<String, Any>
-  val clients = json["client"] as? List<Map<String, Any>> ?: emptyList()
+  // Star projections, not List<Map<String, Any>>: generics are erased, so a
+  // cast to the latter is unchecked and a malformed file would surface later,
+  // wherever the wrong element was first touched. filterIsInstance checks each
+  // element here instead, and anything that is not a map simply drops out —
+  // the same null client id a missing file produces.
+  val json = groovy.json.JsonSlurper().parse(f) as Map<*, *>
+  val clients = (json["client"] as? List<*>).orEmpty()
   clients.asSequence()
-    .flatMap { (it["oauth_client"] as? List<Map<String, Any>> ?: emptyList()).asSequence() }
+    .filterIsInstance<Map<*, *>>()
+    .flatMap { (it["oauth_client"] as? List<*>).orEmpty().asSequence().filterIsInstance<Map<*, *>>() }
     // client_type 3 is the WEB client. The type 1 entries beside it are the
     // Android clients, which authorise the request and are not what the token
     // is issued for — handing one of those to setServerClientId produces a
@@ -199,12 +204,17 @@ android {
   // and a wiring that silently stops running leaves the tests reading nothing
   // and passing. A source directory cannot fail that way.
   //
-  // srcDir is `test/fixtures` and not `test/fixtures/parity`, so the resource
-  // is named `parity/reassurance.json` — the prefix says where it came from,
-  // and a second table lands beside it rather than at the classpath root.
+  // The directory is `test/fixtures` and not `test/fixtures/parity`, so the
+  // resource is named `parity/reassurance.json` — the prefix says where it came
+  // from, and a second table lands beside it rather than at the classpath root.
+  //
+  // `directories` takes path strings and is the replacement AGP 9 names in
+  // deprecating srcDir. Resolved through rootProject.file first so what lands
+  // in the set is absolute — a bare relative string would leave the resolution
+  // rules to AGP, and this path has to climb out of the project entirely.
   sourceSets {
     getByName("test") {
-      resources.srcDir(rootProject.file("../../test/fixtures"))
+      resources.directories.add(rootProject.file("../../test/fixtures").path)
     }
   }
 
