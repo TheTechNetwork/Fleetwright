@@ -202,7 +202,11 @@ export class HostRegistry {
       // reason without a remedy is half of it.
       host.reason =
         'nobody has linked a Claude account on this host, so no session started here can do anything. ' +
-        'Link one from the app, with `/login for <email>` in Telegram, or on the box with `agent-hub login for <email>`';
+        // TELEGRAM WAS ARCHIVED AND THIS SENTENCE DID NOT NOTICE. It is the
+        // message a beta tester's first run ended at — the one the comment
+        // above calls "a reason without a remedy is half of it" — and half of
+        // the remedy it gave was a surface the product no longer has.
+        'Link one from the app, or on the box with `agent-hub login for <email>`';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this
