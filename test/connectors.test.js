@@ -222,11 +222,37 @@ test('null and empty survive being stored, which is where they used to be lost',
 test('cloudflare reports an inactive token as inactive, not as a network problem', async (t) => {
   const real = globalThis.fetch;
   t.after(() => { globalThis.fetch = real; });
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ success: true, result: { status: 'disabled' } }), { status: 200 });
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    return new Response(JSON.stringify({ success: true, result: { status: 'disabled' } }), { status: 200 });
+  };
   const r = await verifyToken('cloudflare', 'x');
   assert.equal(r.ok, false);
   assert.match(r.message, /disabled/);
+  // "Disabled" is a VERDICT, not a refusal to answer — the fallback below must
+  // not run and rescue a token Cloudflare has already judged.
+  assert.equal(asked.length, 1);
+});
+
+test('cloudflare verifies an OAuth access token the verify endpoint refuses to know', async (t) => {
+  // `/user/tokens/verify` knows API tokens; an access token from the OAuth
+  // flow is a different object the same API accepts on every other route —
+  // wrangler's own whoami tries this endpoint and falls through for exactly
+  // this reason. A working credential reported as bad here would fail the
+  // whole connect flow at the moment of storing.
+  const real = globalThis.fetch;
+  t.after(() => { globalThis.fetch = real; });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/user/tokens/verify')) {
+      return new Response(JSON.stringify({ success: false, errors: [{ message: 'Invalid access token' }] }), { status: 400 });
+    }
+    assert.match(String(url), /\/client\/v4\/accounts/);
+    return new Response(JSON.stringify({ success: true, result: [{ id: 'abc', name: "Acme's Account" }] }), { status: 200 });
+  };
+  const r = await verifyToken('cloudflare', 'cf-oauth-access-token');
+  assert.equal(r.ok, true);
+  assert.equal(r.account, "Acme's Account");
 });
 
 test('an unknown provider is refused by name', async () => {

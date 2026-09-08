@@ -1,19 +1,25 @@
-// The GitHub App's user-to-server flow, shared by both coordinators.
+// The OAuth flows a person finishes in a browser, shared by both coordinators.
 //
-// WHY THE COORDINATOR AND NOT THE HOST. GitHub redirects a browser, and a
-// browser cannot reach a host — hosts dial out and have no inbound route. The
-// coordinator is the only publicly addressable part of this system, so the
+// This file was `github-oauth.js` until Cloudflare grew from "no third-party
+// app program" to a registered OAuth client (the correction is in
+// docs/connectors.md) — at which point the GitHub shape transferred whole:
+// Authorization Code with a client secret, a callback at the coordinator,
+// `state` binding host and person, the result relayed down the socket. Two
+// providers, one flow, so one file.
+//
+// WHY THE COORDINATOR AND NOT THE HOST. The provider redirects a browser, and
+// a browser cannot reach a host — hosts dial out and have no inbound route.
+// The coordinator is the only publicly addressable part of this system, so the
 // callback lands there and the result is relayed down the socket the host
 // already holds open. That is the same shape as everything else here: the
 // public edge holds no state and the host holds no port.
 //
 // WHAT THIS DELIBERATELY DOES NOT DO. It does not mint installation tokens,
-// which would need the App's private key — an object that mints for EVERY
-// installation of the App and therefore cannot live in a party this design
-// treats as compromised. See docs/github-app.md. What it does is the half that
-// works without it: an eight-hour user access token, scoped to the
-// repositories the person chose, with a refresh token that belongs to them
-// alone.
+// which would need the GitHub App's private key — an object that mints for
+// EVERY installation of the App and therefore cannot live in a party this
+// design treats as compromised. See docs/github-app.md. What it does is the
+// half that works without it: a short-lived user access token, scoped to what
+// the person chose, with a refresh token that belongs to them alone.
 
 /** How long somebody has to finish authorizing before the state is refused. */
 const STATE_TTL_MS = 10 * 60_000;
@@ -145,6 +151,38 @@ export function authorizeUrl({ clientId, origin, state }) {
 }
 
 /**
+ * Where to send somebody to authorize with Cloudflare.
+ *
+ * The same three properties as the GitHub URL above, plus one that GitHub does
+ * not need: `scope`. A GitHub App's reach is chosen on GitHub's own consent
+ * screen; a Cloudflare OAuth client's reach is the scopes the AUTHORIZE
+ * REQUEST asks for, drawn from the list registered on the client. They are
+ * dot-delimited API-token permission names (`workers-scripts.edit`,
+ * `account-settings.read` — never a colon form, which Cloudflare rejects),
+ * plus `offline_access` for a refresh token — and they are
+ * configuration rather than a constant here, because only whoever registered
+ * the client knows what it was registered with. A request for a scope the
+ * client does not have is refused by Cloudflare with `invalid_scope`, which is
+ * the visible failure we want over a token quietly granted less than the work
+ * needs.
+ *
+ * @param {{ clientId: string, origin: string, state: string, scopes: string }} args
+ */
+export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes }) {
+  const base = normaliseOrigin(origin);
+  if (!base) return null;
+  const url = new URL('https://dash.cloudflare.com/oauth2/auth');
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('redirect_uri', `${base}/oauth/cloudflare/callback`);
+  // Space-separated per RFC 6749; commas tolerated on the way in because a
+  // list in an environment variable gets written both ways.
+  url.searchParams.set('scope', String(scopes).split(/[\s,]+/).filter(Boolean).join(' '));
+  url.searchParams.set('state', state);
+  return url.toString();
+}
+
+/**
  * Exchange the code for tokens.
  *
  * Never throws: a provider that is down, slow, or answering something
@@ -196,6 +234,69 @@ export async function exchangeCode({ clientId, clientSecret, code, origin, fetch
 }
 
 /**
+ * Exchange a Cloudflare authorization code for tokens.
+ *
+ * Not the GitHub function with a different URL, because the two token
+ * endpoints disagree about everything except the grant. Cloudflare's is RFC
+ * 6749 as written: the request is FORM-ENCODED (a JSON body is a 400), the
+ * client authenticates with `client_secret` in the form (`client_secret_post`,
+ * which its discovery document lists as supported), and a refusal is a non-200
+ * status carrying `error`/`error_description` — where GitHub answers 200 with
+ * an `error` field. Pretending they are one function would mean a parameter
+ * for each disagreement, which is two functions wearing a trench coat.
+ *
+ * The refresh token arrives only when the authorize request carried
+ * `offline_access` AND the client was registered with the refresh-token grant.
+ * Absent is not an error here — the flow still yields a working access token —
+ * and the caller says so to the person, the same way the GitHub flow does when
+ * renewal material cannot be deposited.
+ *
+ * @param {{ clientId: string, clientSecret: string, code: string, origin: string, fetch?: typeof globalThis.fetch }} args
+ */
+export async function exchangeCloudflareCode({ clientId, clientSecret, code, origin, fetch: doFetch = globalThis.fetch }) {
+  const base = normaliseOrigin(origin);
+  if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
+  /** @type {any} */
+  let body;
+  let status = 0;
+  try {
+    const res = await doFetch('https://dash.cloudflare.com/oauth2/token', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        // Must byte-match the authorize request's, or the exchange is refused
+        // — which is the property the redirect binding depends on.
+        redirect_uri: `${base}/oauth/cloudflare/callback`,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }).toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    status = res.status;
+    body = await res.json().catch(() => null);
+  } catch (e) {
+    return { ok: false, message: `Could not reach Cloudflare to finish signing in: ${/** @type {Error} */ (e).message}` };
+  }
+  if (status < 200 || status >= 300 || !body || body.error) {
+    return {
+      ok: false,
+      message: `Cloudflare refused the authorization: ${body?.error_description || body?.error || `it answered ${status}`}`,
+    };
+  }
+  if (typeof body.access_token !== 'string' || !body.access_token) {
+    return { ok: false, message: 'Cloudflare returned no access token.' };
+  }
+  return {
+    ok: true,
+    accessToken: body.access_token,
+    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
+    expiresIn: Number(body.expires_in) || null,
+  };
+}
+
+/**
  * The page a browser lands on afterwards.
  *
  * Deliberately plain and self-closing in tone: the person is in a browser they
@@ -227,11 +328,17 @@ export function appReturnUrl({ ok, provider = 'github' }) {
 /**
  * The page a browser lands on afterwards.
  *
- * @param {{ ok: boolean, text: string, installed?: boolean }} result
+ * `provider` picks the heading and travels on the return URL. From a fixed
+ * two-value vocabulary, never from the request — the words on this page and
+ * the scheme it redirects to must not be steerable by whoever crafted the URL.
+ *
+ * @param {{ ok: boolean, text: string, installed?: boolean, provider?: string }} result
  */
-export function callbackPage({ ok, text, installed }) {
+export function callbackPage({ ok, text, installed, provider = 'github' }) {
+  const which = provider === 'cloudflare' ? 'cloudflare' : 'github';
+  const label = which === 'cloudflare' ? 'Cloudflare' : 'GitHub';
   const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
-  const back = appReturnUrl({ ok });
+  const back = appReturnUrl({ ok, provider: which });
   // The redirect is attempted immediately AND offered as a link. A custom
   // scheme fails silently when the app is not installed — on a desktop
   // browser, or in a private window — so the page has to work on its own
@@ -246,7 +353,7 @@ export function callbackPage({ ok, text, installed }) {
 <title>${installed ? 'App installed' : ok ? 'Connected' : 'Not connected'}</title>
 <style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}
 a.back{display:inline-block;margin-top:1rem}</style>
-<h1>${installed ? 'GitHub App installed' : ok ? 'GitHub connected' : 'Not connected'}</h1>
+<h1>${installed ? 'GitHub App installed' : ok ? `${label} connected` : 'Not connected'}</h1>
 <p>${safe}</p>
 <p><a class="back" href="${back}">Back to Fleetwright</a></p>
 ${installed ? '' : `<script>location.replace(${JSON.stringify(back)})</script>`}`;

@@ -672,7 +672,14 @@ export const VERBS = Object.freeze({
   // handshake had already agreed.
   renew: {
     params: {
-      provider: { type: 'enum', required: true, values: ['github'] },
+      // THE PROVIDERS WHOSE TOKENS RENEW BY EXCHANGE — Claude's renews by
+      // being used, so it is deliberately not here. A new value on an enum is
+      // NOT a flag day the way a new parameter is: an older host answers
+      // `bad_params` to a `renew cloudflare` deposit, the coordinator logs it,
+      // and the connection still works for the token's lifetime — the same
+      // graceful degradation `unknown_verb` gives a host that predates the
+      // verb entirely.
+      provider: { type: 'enum', required: true, values: ['github', 'cloudflare'] },
       // WHICH APP THIS WAS ISSUED BY, carried rather than configured. It is
       // public — it is in every authorization URL the person has already seen
       // — but it travels here so that a host needs NO configuration at all to

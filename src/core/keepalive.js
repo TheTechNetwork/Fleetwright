@@ -41,7 +41,7 @@ import path from 'node:path';
 import { log } from '../log.js';
 import { readCredentialState } from './claude-credential.js';
 import { Accounts } from './accounts.js';
-import { Connections, refreshGithubToken } from './connectors.js';
+import { Connections, refreshGithubToken, refreshCloudflareToken } from './connectors.js';
 
 /** How long a one-shot prompt gets. Generous: a cold CLI start is seconds. */
 const PROMPT_TIMEOUT_MS = 90_000;
@@ -225,16 +225,28 @@ export function renewAllCredentials(cfg, { within } = {}) {
 }
 
 /**
+ * The providers whose tokens renew by exchange, and what each exchange needs:
+ * which config-frame secret unlocks it, and which function speaks that
+ * provider's token endpoint. A provider absent from this table pastes tokens
+ * and never renews — which is Claude, whose credential renews by use above.
+ */
+const RENEWABLE = Object.freeze({
+  github: { secretKey: 'githubClientSecret', refresh: refreshGithubToken },
+  cloudflare: { secretKey: 'cloudflareClientSecret', refresh: refreshCloudflareToken },
+});
+
+/**
  * Renew every stored provider token on this box that can renew itself.
  *
  * DELIBERATELY A DIFFERENT MECHANISM FROM THE CLAUDE LADDER ABOVE, because the
  * providers renew differently and pretending otherwise would build something
  * that runs, reports success and achieves nothing:
  *
- *   Claude  a credential renews when it is USED. Exercising it is the fix.
- *   GitHub  an App user token is NOT renewed by use. It lasts eight hours and
- *           is replaced only by an explicit exchange, which needs the App's
- *           client secret. A thousand API calls extend it by zero seconds.
+ *   Claude      a credential renews when it is USED. Exercising it is the fix.
+ *   GitHub,     an OAuth access token is NOT renewed by use. It expires on
+ *   Cloudflare  schedule and is replaced only by an explicit exchange, which
+ *               needs that provider's client secret. A thousand API calls
+ *               extend it by zero seconds.
  *
  * The material comes from the `renew` intent, deposited once when the
  * connection is made — see src/fleet/protocol/intents.js. A box with no
@@ -255,15 +267,15 @@ export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = D
 
   for (const row of store.renewableRows()) {
     const label = typeof row === 'string' ? row : 'this box';
-    for (const provider of ['github']) {
+    for (const [provider, how] of Object.entries(RENEWABLE)) {
       const material = store.readRenewal(row, provider);
       if (!material) continue;
       // THE SECRET COMES FROM MEMORY, NOT FROM THE FILE. It is delivered on the
       // coordinator's config frame and held by the process that holds that
       // socket; the file on disk carries only a refresh token, which is useless
       // without it. A host that has not been given one cannot renew and says so
-      // rather than failing at GitHub with an error nobody can act on.
-      const client = secrets.githubClientSecret;
+      // rather than failing at the provider with an error nobody can act on.
+      const client = secrets[how.secretKey];
       if (!client) {
         results.push({ row: label, provider, outcome: 'no-secret', detail: 'the coordinator has not supplied a client secret' });
         continue;
@@ -282,16 +294,16 @@ export async function renewProviderTokens(cfg, { within = 2 * 3_600_000, now = D
         // Everything the exchange needs came with the deposit — nothing here
         // is configured on the box, which is what keeps this off the list of
         // questions an install has to ask.
-        const r = await refreshGithubToken({ ...material, client });
+        const r = await how.refresh({ ...material, client });
         if (!r.ok) {
           log.warn(`keepalive: could not renew ${provider} for ${label} — ${r.message}`);
           results.push({ row: label, provider, outcome: 'failed', detail: r.message });
           continue;
         }
-        // BOTH HALVES, OR NEITHER. GitHub rotates the refresh token on every
-        // exchange and invalidates the old one, so storing the access token
+        // BOTH HALVES, OR NEITHER. Both providers rotate the refresh token on
+        // exchange and invalidate the old one, so storing the access token
         // without the new refresh token renews exactly once and breaks every
-        // renewal after it — eight hours later, with nothing to point at.
+        // renewal after it — hours later, with nothing to point at.
         const stored = store.save(row, provider, /** @type {string} */ (r.accessToken));
         if (!stored.ok) {
           results.push({ row: label, provider, outcome: 'failed', detail: stored.message });

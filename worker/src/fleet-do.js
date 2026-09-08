@@ -24,7 +24,7 @@ import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, 
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
-import { callbackPage } from '../../src/fleet/coordinator/github-oauth.js';
+import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 
@@ -81,6 +81,16 @@ export class Fleet {
         clientId: env.AGENT_FLEET_GITHUB_CLIENT_ID,
         clientSecret: env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
         slug: env.AGENT_FLEET_GITHUB_APP_SLUG,
+      },
+      // The Cloudflare OAuth client, same rule: absent means the paste route.
+      // `scopes` is the client's registered scope list (dot-form names, plus
+      // offline_access for a refresh token) and is required for the offer —
+      // see offerOauth in core.js for why an unscoped authorize is worse than
+      // no offer.
+      cloudflareOauth: {
+        clientId: env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID,
+        clientSecret: env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET,
+        scopes: env.AGENT_FLEET_CLOUDFLARE_SCOPES,
       },
       // Where `provision` dispatches runner workflows, as owner/repo. Absent
       // means this fleet cannot start machines and says so — see
@@ -781,6 +791,21 @@ export class Fleet {
       });
     }
 
+    // THE CLOUDFLARE CALLBACK — the same flow, the second provider. Secured by
+    // the same single-use state, checked against its own pending store so a
+    // GitHub state cannot finish a Cloudflare flow or the reverse.
+    if (url.pathname === '/oauth/cloudflare/callback') {
+      const result = await this.core.finishCloudflareAuthorization({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state'),
+        origin: url.origin,
+      });
+      return new Response(callbackPage({ ...result, provider: 'cloudflare' }), {
+        status: result.ok ? 200 : 400,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+
     if (url.pathname === '/api/hosts' && request.method === 'GET') {
       // WHO IS ASKING. This returned every host's health blob verbatim —
       // every session's name, title, working directory, owner and live prompt
@@ -855,13 +880,13 @@ export class Fleet {
           requester: requesterFor(client),
         });
       // A `connect` reply carries the host's catalogue, which offers the paste
-      // route because a host knows nothing about a GitHub App — correctly, the
-      // client id and secret belong to the deployment rather than to any
+      // route because a host knows nothing about an OAuth client — correctly,
+      // the client id and secret belong to the deployment rather than to any
       // machine. The coordinator is the only part that can improve on that, so
-      // it rewrites the one entry it can and leaves the rest alone.
+      // it rewrites the entries it can and leaves the rest alone.
       return json(
         body.verb === 'connect'
-          ? this.core.offerGithubApp(
+          ? this.core.offerOauth(
               reply,
               typeof body.host === 'string' ? body.host : (reply?.hostId ?? ''),
               client?.email ?? null,

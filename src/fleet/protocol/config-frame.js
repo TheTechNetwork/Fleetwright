@@ -42,6 +42,16 @@ export const CONFIG_KEYS = Object.freeze({
     secret: true,
     what: "the GitHub App's client secret, for exchanging refresh tokens",
   },
+  // The Cloudflare OAuth client's secret, the same object with the same
+  // argument: it authorises nothing on its own — useless without a refresh
+  // token somebody already granted — so it may be delivered to hosts, in
+  // memory, where the refresh has to happen. See docs/github-app.md for the
+  // full custody reasoning; Cloudflare's secret inherits it unchanged.
+  cloudflareClientSecret: {
+    max: 4096,
+    secret: true,
+    what: "the Cloudflare OAuth client's secret, for exchanging refresh tokens",
+  },
   // WHERE RUNNERS COME FROM, and the second entry this list has ever had.
   //
   // `owner/repo` — the repository whose workflows a `provision` dispatches

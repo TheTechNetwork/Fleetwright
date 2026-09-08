@@ -222,6 +222,32 @@ export const PROVIDERS = Object.freeze({
       if (body?.success === true && body?.result?.status === 'active') {
         return { ok: true, account: body?.result?.id ? String(body.result.id).slice(0, 8) : undefined, message: 'Cloudflare token verified and active.' };
       }
+      // NOT EVERY WORKING CREDENTIAL ANSWERS THERE. `/user/tokens/verify`
+      // knows API tokens; an access token minted by the OAuth flow is a
+      // different object that the same API accepts on every other route —
+      // wrangler's own `whoami` tries this endpoint and falls through for
+      // exactly this reason. So when the endpoint REFUSED TO ANSWER — never
+      // when it answered "that token is disabled", which is a verdict — ask a
+      // question any working credential can answer: which accounts it reaches.
+      // A success here is a real verification — Cloudflare accepted the
+      // credential and did work with it — and the account name is better on a
+      // screen than a token id anyway. Same shape as the GitHub App-token
+      // correction above: a differently-shaped token is not a lesser token.
+      if (body?.success !== true) {
+        const fallback = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=1', {
+          headers: { authorization: `Bearer ${secret}` },
+          signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+        });
+        const accounts = /** @type {any} */ (await fallback.json().catch(() => null));
+        if (accounts?.success === true) {
+          const name = accounts?.result?.[0]?.name;
+          return {
+            ok: true,
+            account: typeof name === 'string' && name ? name : undefined,
+            message: 'Cloudflare token verified and active.',
+          };
+        }
+      }
       const said = body?.errors?.[0]?.message;
       if (said) return { ok: false, message: `Cloudflare rejected that token: ${said}` };
       if (body?.result?.status) return { ok: false, message: `Cloudflare says that token is ${body.result.status}.` };
@@ -312,6 +338,60 @@ export async function refreshGithubToken({ refresh, client, clientId, fetchImpl 
     refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
     expiresIn: Number(body.expires_in) || null,
     message: 'GitHub renewed the token.',
+  };
+}
+
+/**
+ * Trade a Cloudflare refresh token for a new access token.
+ *
+ * The same contract as `refreshGithubToken` — same rotation warning included:
+ * Cloudflare invalidates the spent refresh token and returns a new one, so a
+ * caller that does not store what comes back has renewed once and broken every
+ * renewal after it.
+ *
+ * Where it differs is the wire, because Cloudflare's token endpoint is RFC
+ * 6749 as written and GitHub's is not: the request is FORM-ENCODED (a JSON
+ * body is a 400), and a refusal is a non-200 status carrying
+ * `error`/`error_description` rather than GitHub's 200-with-an-error.
+ *
+ * @param {{ refresh: string, client: string, clientId: string, fetchImpl?: typeof fetch }} opts
+ * @returns {Promise<{ ok: boolean, message: string, accessToken?: string, refreshToken?: string, expiresIn?: number|null }>}
+ */
+export async function refreshCloudflareToken({ refresh, client, clientId, fetchImpl = fetch }) {
+  /** @type {any} */
+  let body;
+  let status = 0;
+  try {
+    const res = await fetchImpl('https://dash.cloudflare.com/oauth2/token', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+        client_id: clientId,
+        client_secret: client,
+      }).toString(),
+      signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+    });
+    status = res.status;
+    body = await res.json().catch(() => null);
+  } catch (e) {
+    // A network failure is not a dead refresh token, and the difference
+    // decides whether somebody has to go and reconnect.
+    return { ok: false, message: `Could not reach Cloudflare to renew: ${/** @type {Error} */ (e).message}` };
+  }
+  if (status < 200 || status >= 300 || !body || body.error) {
+    return { ok: false, message: `Cloudflare refused the renewal: ${body?.error_description || body?.error || `it answered ${status}`}` };
+  }
+  if (typeof body.access_token !== 'string' || !body.access_token) {
+    return { ok: false, message: 'Cloudflare returned no access token.' };
+  }
+  return {
+    ok: true,
+    accessToken: body.access_token,
+    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
+    expiresIn: Number(body.expires_in) || null,
+    message: 'Cloudflare renewed the token.',
   };
 }
 

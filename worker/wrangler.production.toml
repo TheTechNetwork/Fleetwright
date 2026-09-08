@@ -117,6 +117,30 @@ AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
 AGENT_FLEET_GITHUB_APP_ID = "4758006"
 AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
+# THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow. An
+# identifier like the GitHub App's — it is in the query string of every
+# authorize URL — and OURS: a fork inheriting it gets a flow Cloudflare
+# refuses, because their origin is not this client's redirect URL. Registered
+# PRIVATE (dash.cloudflare.com → Manage Account → OAuth clients), which is the
+# reversible choice; public needs domain verification and cannot be undone —
+# see docs/connectors.md. The CLIENT SECRET is a `wrangler secret`
+# (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET), and the offer stays off until the
+# deploy has synced one.
+AGENT_FLEET_CLOUDFLARE_CLIENT_ID = "5e685e05a2484bf7dc78ce6536e7807d"
+
+# The SCOPES, which must match what the client above is registered with — a
+# requested scope the client lacks fails the authorize with `invalid_scope`,
+# so edit this list and the client's together. Identifiers verbatim from
+# Cloudflare's client-creation screen, mirroring the work the paste-token
+# template in src/core/connectors.js already asks for — Workers and its
+# stores, tail for debugging, Pages, the zone reads and certificate write a
+# custom domain needs — plus the identity reads and `offline_access`, which is
+# what makes a refresh token exist at all. Two catalogue entries have NO OAuth
+# scope offered (DNS write, Page Rules write): raw DNS-record and page-rule
+# edits stay with the pasted token, while Workers custom domains still work —
+# that API writes its own records under the Workers scopes.
+AGENT_FLEET_CLOUDFLARE_SCOPES = "workers-scripts.edit workers-kv-storage.write workers-routes.write workers-r2.write workers-r2-bucket-item.write d1.write workers-tail.read page.write zone.read zone-settings.read ssl-and-certificates.write dns.read account-settings.read memberships.read user-details.read offline_access"
+
 # WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
 # ARE safe for a fork to copy and are the best fork-parity property in the
 # project: the audiences are our bundle id and our Google web client, both

@@ -332,13 +332,17 @@ dropped, and the only stored state is a rate-limit counter per fleet. That is
 specified in [`relay-terms.md`](./relay-terms.md), written before the code
 exists, because it is the kind of promise one log line breaks.
 
-**The GitHub App callback is the third case, and it is only a convenience.**
-`authorizeUrl()` sends `redirect_uri` explicitly and GitHub matches it against
-the App's registered list — on purpose, so one deployment cannot send its users
-to another's coordinator. Your origin is not on ours, so that flow refuses.
-Register your own GitHub App (free) and set `AGENT_FLEET_GITHUB_CLIENT_ID` plus
-the secret. Nothing else depends on it: `connect github` with a pasted token
-and `connect cloudflare` need no callback and work on any coordinator anywhere.
+**The OAuth callbacks are the third case, and they are only a convenience.**
+Both authorize URLs send `redirect_uri` explicitly and the provider matches it
+against the client's registered list — on purpose, so one deployment cannot
+send its users to another's coordinator. Your origin is not on ours, so those
+flows refuse. Register your own GitHub App (free) and set
+`AGENT_FLEET_GITHUB_CLIENT_ID` plus the secret; register your own Cloudflare
+OAuth client and set `AGENT_FLEET_CLOUDFLARE_CLIENT_ID`, the secret, and
+`AGENT_FLEET_CLOUDFLARE_SCOPES` (see connectors.md). Nothing else depends on
+either: `connect github` and `connect cloudflare` with a pasted token need no
+callback and work on any coordinator anywhere. Both coordinators read the same
+variables — the Node one from its environment, the Worker from its config.
 
 ### What a fork must change, and what happens if it does not
 

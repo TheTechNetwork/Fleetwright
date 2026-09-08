@@ -164,7 +164,7 @@ discovered in review.
 Nothing about any authorization. No codes, no tokens, no ciphertext, no
 `state` values after they are redeemed — the pending record is deleted before
 the forward happens, the same way
-[`github-oauth.js`](../src/fleet/coordinator/github-oauth.js) already deletes a
+[`oauth.js`](../src/fleet/coordinator/oauth.js) already deletes a
 pending authorization before acting on it, so a replayed callback is refused.
 
 Same as above: a counter per fleet id, for rate limits.

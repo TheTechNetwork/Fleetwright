@@ -476,8 +476,30 @@ accounts need a public client, which needs domain verification and **cannot be
 undone**. So: private first, because it is reversible and immediately useful;
 public only when a guest actually needs Cloudflare, and knowing it is one-way.
 
-Until a client is registered, the paste route is what Cloudflare uses — and
-that is now a "not yet" rather than a "never", which is a different sentence.
+**Built.** The transfer happened exactly as predicted above: Cloudflare is the
+second provider through the flow the GitHub App uses — its own callback
+(`/oauth/cloudflare/callback`), its own single-use state, the access token
+stored by `link` and the refresh token deposited by `renew`, with the client
+secret arriving on the config frame and the sidecar renewing on its timer.
+A deployment turns it on with three values, because three is what the flow
+needs and none can be invented here:
+
+| | where |
+|---|---|
+| `AGENT_FLEET_CLOUDFLARE_CLIENT_ID` | `[vars]` — an identifier, in every authorize URL |
+| `AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET` | `wrangler secret` / environment — see docs/ci.md |
+| `AGENT_FLEET_CLOUDFLARE_SCOPES` | `[vars]` — the client's registered scope list, verbatim |
+
+The scopes are the one that looks optional and is not. They are **dot-form**
+API-token permission names (`workers-scripts.edit`, `account-settings.read` —
+never a colon form, which Cloudflare rejects), chosen when
+the client is registered and known only to whoever registered it — so they are
+configuration, and without them there is no offer: an authorize request that
+asks for nothing yields a token that verifies and then cannot do a single
+piece of work, discovered four hours into a session. Include `offline_access`
+(and enable the refresh-token grant on the client) or connections work for one
+token lifetime and honestly say so. Absent any of the three, the paste route
+is what `connect cloudflare` offers, and it works everywhere.
 
 ### The old version: Cloudflare has no equivalent
 

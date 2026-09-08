@@ -1,6 +1,7 @@
-// The GitHub App's user-to-server flow, and the one value holding it together.
+// The browser OAuth flows — GitHub's App and Cloudflare's client — and the one
+// value holding them together.
 //
-// GitHub redirects a BROWSER to the coordinator, and a browser carries no
+// The provider redirects a BROWSER to the coordinator, and a browser carries no
 // fleet credential. `state` is the only thing tying that request to a flow
 // this coordinator started — so it has to be unguessable, single-use,
 // short-lived, and bound to both the host and the person. Miss any one and the
@@ -10,11 +11,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { PendingAuthorizations, authorizeUrl, exchangeCode, callbackPage } from '../src/fleet/coordinator/github-oauth.js';
+import {
+  PendingAuthorizations,
+  authorizeUrl,
+  cloudflareAuthorizeUrl,
+  exchangeCode,
+  exchangeCloudflareCode,
+  callbackPage,
+} from '../src/fleet/coordinator/oauth.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 const APP = { clientId: 'Iv23liTEST', clientSecret: 'shh', slug: 'fleetwright-agents' };
+const CF = { clientId: 'cf-client-id', clientSecret: 'cf-shh', scopes: 'account-settings.read workers-scripts.edit offline_access' };
 
 test('a state is redeemable exactly once', () => {
   // A callback replayed from browser history, or delivered twice, must not
@@ -96,20 +105,158 @@ test('the connect reply offers the App only when one is configured', () => {
     },
   };
 
-  const offered = withApp.offerGithubApp(reply, 'box', 'a@b.com', 'https://fleet.example');
+  const offered = withApp.offerOauth(reply, 'box', 'a@b.com', 'https://fleet.example');
   const github = offered.connections.catalogue.find((c) => c.provider === 'github');
   assert.match(github.url, /^https:\/\/github\.com\/login\/oauth\/authorize\?/);
   assert.equal(github.flow, 'app', 'the app must know not to render a paste field');
 
-  // CLOUDFLARE IS UNTOUCHED, and always will be: there is no third-party app
-  // program to rewrite it to.
+  // CLOUDFLARE IS UNTOUCHED when no Cloudflare client is registered — each
+  // provider's offer stands on its own configuration.
   assert.equal(
     offered.connections.catalogue.find((c) => c.provider === 'cloudflare').url,
     'https://dash.cloudflare.com/profile/api-tokens',
   );
 
   // And with no App, the paste route is returned exactly as the host sent it.
-  assert.deepEqual(without.offerGithubApp(reply, 'box', 'a@b.com', 'https://fleet.example'), reply);
+  assert.deepEqual(without.offerOauth(reply, 'box', 'a@b.com', 'https://fleet.example'), reply);
+});
+
+test('a registered Cloudflare client rewrites the cloudflare entry the same way', () => {
+  const core = new CoordinatorCore({ logger: quiet, cloudflareOauth: CF });
+  const reply = {
+    ok: true,
+    connections: {
+      catalogue: [
+        { provider: 'github', url: 'https://github.com/settings/tokens/new' },
+        { provider: 'cloudflare', url: 'https://dash.cloudflare.com/profile/api-tokens' },
+      ],
+      connected: [],
+    },
+  };
+  const offered = core.offerOauth(reply, 'box', 'a@b.com', 'https://fleet.example');
+  const cf = offered.connections.catalogue.find((c) => c.provider === 'cloudflare');
+  assert.match(cf.url, /^https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?/);
+  assert.equal(cf.flow, 'app');
+  // GitHub is untouched: no App is configured here.
+  assert.equal(
+    offered.connections.catalogue.find((c) => c.provider === 'github').url,
+    'https://github.com/settings/tokens/new',
+  );
+  // And its state landed in Cloudflare's OWN pending store — a GitHub
+  // callback must not be able to redeem it.
+  assert.equal(core.pendingCloudflare.pending.size, 1);
+  assert.equal(core.pendingGithub.pending.size, 0);
+});
+
+test('a Cloudflare client without a scope list is no offer at all', () => {
+  // Without scopes the authorize request asks Cloudflare for nothing, and
+  // what comes back is a token that verifies and then cannot do a single
+  // piece of work — discovered four hours into a session. The paste route
+  // stays, which works.
+  const core = new CoordinatorCore({ logger: quiet, cloudflareOauth: { ...CF, scopes: undefined } });
+  const reply = {
+    ok: true,
+    connections: { catalogue: [{ provider: 'cloudflare', url: 'https://dash.cloudflare.com/profile/api-tokens' }], connected: [] },
+  };
+  assert.deepEqual(core.offerOauth(reply, 'box', 'a@b.com', 'https://fleet.example'), reply);
+  assert.equal(core.pendingCloudflare.pending.size, 0, 'no state was minted for a flow that cannot work');
+});
+
+test('the Cloudflare authorize URL names its own redirect and its scopes', () => {
+  const url = new URL(cloudflareAuthorizeUrl({
+    clientId: 'abc',
+    origin: 'https://fleet.example/',
+    state: 'xyz',
+    // Commas tolerated: a list in an environment variable gets written both
+    // ways, and RFC 6749 wants spaces on the wire.
+    scopes: 'account-settings.read,workers-scripts.edit, offline_access',
+  }));
+  assert.equal(url.origin + url.pathname, 'https://dash.cloudflare.com/oauth2/auth');
+  assert.equal(url.searchParams.get('response_type'), 'code');
+  assert.equal(url.searchParams.get('client_id'), 'abc');
+  assert.equal(url.searchParams.get('state'), 'xyz');
+  assert.equal(url.searchParams.get('redirect_uri'), 'https://fleet.example/oauth/cloudflare/callback');
+  assert.equal(url.searchParams.get('scope'), 'account-settings.read workers-scripts.edit offline_access');
+});
+
+test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it is', async () => {
+  // Cloudflare's token endpoint is RFC 6749 as written: a JSON body is a 400,
+  // and a refusal is a status code carrying error/error_description — where
+  // GitHub answers 200 with an error field.
+  let sent = null;
+  const ok = await exchangeCloudflareCode({
+    clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
+    fetch: async (_url, init) => {
+      sent = init;
+      return new Response(JSON.stringify({ access_token: 'cf-token', refresh_token: 'cf-refresh', expires_in: 3600 }), { status: 200 });
+    },
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.accessToken, 'cf-token');
+  assert.equal(ok.refreshToken, 'cf-refresh');
+  assert.equal(sent.headers['content-type'], 'application/x-www-form-urlencoded');
+  const form = new URLSearchParams(String(sent.body));
+  assert.equal(form.get('grant_type'), 'authorization_code');
+  assert.equal(form.get('redirect_uri'), 'https://f.example/oauth/cloudflare/callback');
+  assert.equal(form.get('client_secret'), 'b');
+
+  const refused = await exchangeCloudflareCode({
+    clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
+    fetch: async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'code spent' }), { status: 400 }),
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /code spent/);
+
+  const unreachable = await exchangeCloudflareCode({
+    clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
+    fetch: async () => { throw new Error('ENOTFOUND'); },
+  });
+  assert.equal(unreachable.ok, false);
+  assert.match(unreachable.message, /Could not reach Cloudflare/);
+
+  // A 200 with no token in it is a failure with a name, not an undefined on a
+  // screen.
+  const empty = await exchangeCloudflareCode({
+    clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
+    fetch: async () => new Response(JSON.stringify({ token_type: 'bearer' }), { status: 200 }),
+  });
+  assert.equal(empty.ok, false);
+  assert.match(empty.message, /no access token/);
+
+  // And an origin that is not one refuses before anything is sent — same as
+  // the authorize URL builder, which yields no URL at all.
+  const lost = await exchangeCloudflareCode({ clientId: 'a', clientSecret: 'b', code: 'c', origin: 'nonsense' });
+  assert.equal(lost.ok, false);
+  assert.match(lost.message, /its own address/);
+  assert.equal(cloudflareAuthorizeUrl({ clientId: 'a', origin: 'nonsense', state: 's', scopes: 'account-settings.read' }), null);
+});
+
+test('a Cloudflare callback for a flow this coordinator did not start is refused', async () => {
+  const core = new CoordinatorCore({ logger: quiet, cloudflareOauth: CF });
+  const bogus = await core.finishCloudflareAuthorization({ code: 'c', state: 'invented', origin: 'https://f.example' });
+  assert.equal(bogus.ok, false);
+  assert.match(bogus.text, /expired or was already used/);
+
+  // A GitHub state cannot finish a Cloudflare flow: the two providers keep
+  // separate pending stores, so this needs no check anybody could forget.
+  core.pendingGithub.mint({ state: 'gh-state', hostId: 'box', email: 'a@b.com' });
+  const crossed = await core.finishCloudflareAuthorization({ code: 'c', state: 'gh-state', origin: 'https://f.example' });
+  assert.equal(crossed.ok, false);
+  assert.match(crossed.text, /expired or was already used/);
+
+  // A real state with no code — the person pressed Deny — is refused with a
+  // fixed sentence, never the query's own words.
+  core.pendingCloudflare.mint({ state: 'real', hostId: 'box', email: 'a@b.com' });
+  const noCode = await core.finishCloudflareAuthorization({ code: null, state: 'real', origin: 'https://f.example' });
+  assert.equal(noCode.ok, false);
+  assert.match(noCode.text, /did not send an authorization code/);
+});
+
+test('a fleet with no Cloudflare client configured says so rather than failing oddly', async () => {
+  const core = new CoordinatorCore({ logger: quiet });
+  const r = await core.finishCloudflareAuthorization({ code: 'c', state: 's', origin: 'https://f.example' });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /no Cloudflare OAuth client configured/);
 });
 
 test('a callback for a flow this coordinator did not start is refused', async () => {
@@ -169,7 +316,7 @@ test('neither app asks for a paste when there is nothing to paste', async () => 
 });
 
 test('the origin is parsed, not trimmed — CodeQL was right', async () => {
-  const { normaliseOrigin } = await import('../src/fleet/coordinator/github-oauth.js');
+  const { normaliseOrigin } = await import('../src/fleet/coordinator/oauth.js');
 
   // THE FINDING. `origin.replace(/\/+$/, '')` backtracks: an anchored `\/+$`
   // against a long run of slashes that does NOT end the string is polynomial.
@@ -201,7 +348,7 @@ test('an unparseable origin leaves the paste route rather than breaking it', () 
     ok: true,
     connections: { catalogue: [{ provider: 'github', url: 'https://github.com/settings/tokens/new' }], connected: [] },
   };
-  const out = core.offerGithubApp(reply, 'box', 'a@b.com', 'nonsense');
+  const out = core.offerOauth(reply, 'box', 'a@b.com', 'nonsense');
   // Better a working paste than an authorize URL built out of something that
   // was not an address.
   assert.deepEqual(out, reply);
@@ -212,7 +359,7 @@ test('no anchored quantifier runs on a caller-supplied string', async () => {
   // A tripwire on the shape rather than the instance: the next `\/+$` on a
   // header-derived value would be the same bug with a different name.
   const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('../src/fleet/coordinator/github-oauth.js', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../src/fleet/coordinator/oauth.js', import.meta.url), 'utf8');
   const code = src.split('\n').filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//')).join('\n');
   assert.equal(/replace\(\/[^/]*\+\$\//.test(code), false, 'an anchored + quantifier is back in this file');
 });
@@ -226,8 +373,10 @@ test('the access token is stored, never the refresh token', async () => {
   const src = await import('node:fs').then((fs) =>
     fs.readFileSync(new URL('../src/fleet/coordinator/core.js', import.meta.url), 'utf8'),
   );
-  const fn = /async finishGithubAuthorization\([\s\S]*?\n  \}/.exec(src);
-  assert.ok(fn, 'finishGithubAuthorization is gone');
+  // The storing half now lives in one place for both providers, which is
+  // where the invariant has to hold.
+  const fn = /async #storeAuthorizedToken\([\s\S]*?\n  \}/.exec(src);
+  assert.ok(fn, 'the shared token-storing helper is gone');
   // COMMENTS STRIPPED FIRST. The comment above that line quotes the bug it
   // fixed — `refreshToken ?? accessToken` — so matching raw source finds the
   // explanation and calls it the defect. Third time this shape has cost a
@@ -241,13 +390,24 @@ test('the access token is stored, never the refresh token', async () => {
 });
 
 test('the callback hands control back to the app', async () => {
-  const { appReturnUrl, callbackPage } = await import('../src/fleet/coordinator/github-oauth.js');
+  const { appReturnUrl, callbackPage } = await import('../src/fleet/coordinator/oauth.js');
 
-  // Only two values, both ours. A redirect target a query parameter could
+  // Only fixed values, all ours. A redirect target a query parameter could
   // steer is an open redirect, and this page is reached by following a link
-  // from GitHub.
+  // from the provider.
   assert.equal(appReturnUrl({ ok: true }), 'fleetwright://connected?provider=github&ok=1');
   assert.equal(appReturnUrl({ ok: false }), 'fleetwright://connected?provider=github&ok=0');
+  assert.equal(appReturnUrl({ ok: true, provider: 'cloudflare' }), 'fleetwright://connected?provider=cloudflare&ok=1');
+
+  // The Cloudflare page says Cloudflare and returns with its own provider tag
+  // — and a provider outside the fixed two-value vocabulary cannot steer
+  // either the words or the scheme.
+  const cf = callbackPage({ ok: true, text: 'done', provider: 'cloudflare' });
+  assert.match(cf, /Cloudflare connected/);
+  assert.match(cf, /provider=cloudflare/);
+  const forged = callbackPage({ ok: true, text: 'done', provider: '"><script>x</script>' });
+  assert.equal(forged.includes('<script>x'), false);
+  assert.match(forged, /provider=github/);
 
   // Attempted AND offered. A custom scheme fails silently when the app is not
   // installed — a desktop browser, a private window — so the page has to work
@@ -391,4 +551,56 @@ test('the installed page does not bounce back into the app', () => {
   // And the ordinary outcomes are unchanged.
   assert.match(callbackPage({ ok: true, text: 'done' }), /location\.replace/);
   assert.match(callbackPage({ ok: false, text: 'no' }), /location\.replace/);
+});
+
+test('the Node coordinator reads the same OAuth variables the Worker does', async () => {
+  // docs/coordinator-deploy.md has said "set AGENT_FLEET_GITHUB_CLIENT_ID plus
+  // the secret" since the App shipped, and setting them did NOTHING on this
+  // coordinator: the core was constructed without them, so its
+  // /oauth/github/callback — served, and documented in openapi.json — answered
+  // "no GitHub App configured" on every request, the catalogue never offered
+  // the App, and no host behind a Node coordinator could ever renew. Both
+  // coordinators SERVED the route, so openapi.test.js could not see it: parity
+  // of routes, divergence of configuration.
+  const { Coordinator } = await import('../src/fleet/coordinator/server.js');
+  const names = [
+    'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_GITHUB_CLIENT_SECRET',
+    'AGENT_FLEET_CLOUDFLARE_CLIENT_ID', 'AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET', 'AGENT_FLEET_CLOUDFLARE_SCOPES',
+  ];
+  const saved = names.map((n) => [n, process.env[n]]);
+  try {
+    process.env.AGENT_FLEET_GITHUB_CLIENT_ID = 'Iv23liTEST';
+    process.env.AGENT_FLEET_GITHUB_CLIENT_SECRET = 'shh';
+    process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID = 'cf-id';
+    process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET = 'cf-shh';
+    process.env.AGENT_FLEET_CLOUDFLARE_SCOPES = 'account-settings.read offline_access';
+    const c = new Coordinator({ logger: quiet });
+    assert.equal(c.core.githubApp?.clientId, 'Iv23liTEST');
+    assert.equal(c.core.githubApp?.clientSecret, 'shh');
+    assert.equal(c.core.cloudflareOauth?.clientId, 'cf-id');
+    assert.equal(c.core.cloudflareOauth?.scopes, 'account-settings.read offline_access');
+  } finally {
+    for (const [n, v] of saved) {
+      if (v === undefined) delete process.env[n];
+      else process.env[n] = v;
+    }
+  }
+});
+
+test('the renew deposit forwards no client secret and no literal "undefined"', async () => {
+  // `/renew` grew a fourth argument when the client secret travelled with the
+  // deposit, and kept it on the command line after the coordinator stopped
+  // sending one — so every deposit ended in the word "undefined", harmless
+  // only because the hub discards its fourth argument. Worse, when an OLDER
+  // coordinator does still send the parameter, the value is the fleet-wide
+  // client secret, which the hub has no use for: the protocol accepts it for
+  // compatibility and the command line is where it stops travelling.
+  const { toCommandLine } = await import('../src/fleet/host/sidecar.js');
+  const bare = toCommandLine({ verb: 'renew', params: { provider: 'github', clientId: 'Iv23liTEST', refresh: 'ghr_x' } });
+  assert.equal(bare, '/renew github Iv23liTEST ghr_x');
+  const fromOldCoordinator = toCommandLine({
+    verb: 'renew',
+    params: { provider: 'cloudflare', clientId: 'cf-id', refresh: 'cf-refresh', client: 'the-fleet-wide-secret' },
+  });
+  assert.equal(fromOldCoordinator, '/renew cloudflare cf-id cf-refresh');
 });
