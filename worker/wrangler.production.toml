@@ -117,16 +117,20 @@ AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
 AGENT_FLEET_GITHUB_APP_ID = "4758006"
 AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
-# THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow.
-# The id stays commented until a client is registered (dash.cloudflare.com →
-# Manage Account → OAuth clients — private first, because public needs domain
-# verification and cannot be undone; see docs/connectors.md), and with it
-# commented the offer stays off and connect keeps the paste route, which works.
-# The CLIENT SECRET is a `wrangler secret` (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET).
-# AGENT_FLEET_CLOUDFLARE_CLIENT_ID = ""
-#
-# The SCOPES are decided ahead of the registration, so registering the client
-# is ticking this list and pasting the id. Identifiers verbatim from
+# THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow. An
+# identifier like the GitHub App's — it is in the query string of every
+# authorize URL — and OURS: a fork inheriting it gets a flow Cloudflare
+# refuses, because their origin is not this client's redirect URL. Registered
+# PRIVATE (dash.cloudflare.com → Manage Account → OAuth clients), which is the
+# reversible choice; public needs domain verification and cannot be undone —
+# see docs/connectors.md. The CLIENT SECRET is a `wrangler secret`
+# (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET), and the offer stays off until the
+# deploy has synced one.
+AGENT_FLEET_CLOUDFLARE_CLIENT_ID = "5e685e05a2484bf7dc78ce6536e7807d"
+
+# The SCOPES, which must match what the client above is registered with — a
+# requested scope the client lacks fails the authorize with `invalid_scope`,
+# so edit this list and the client's together. Identifiers verbatim from
 # Cloudflare's client-creation screen, mirroring the work the paste-token
 # template in src/core/connectors.js already asks for — Workers and its
 # stores, tail for debugging, Pages, the zone reads and certificate write a
