@@ -118,16 +118,24 @@ AGENT_FLEET_GITHUB_APP_ID = "4758006"
 AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
 # THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow.
-# Commented until a client is registered (dash.cloudflare.com → Manage Account
-# → OAuth clients — private first, because public needs domain verification and
-# cannot be undone; see docs/connectors.md). The id is an identifier like the
-# App's; the SCOPES are the client's registered list verbatim, dot-form
-# permission names plus offline_access for a refresh token, and they live here
-# because only whoever registered the client knows them. The CLIENT SECRET is a
-# `wrangler secret` (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET). Unset, connect
-# offers the paste route, which works.
+# The id stays commented until a client is registered (dash.cloudflare.com →
+# Manage Account → OAuth clients — private first, because public needs domain
+# verification and cannot be undone; see docs/connectors.md), and with it
+# commented the offer stays off and connect keeps the paste route, which works.
+# The CLIENT SECRET is a `wrangler secret` (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET).
 # AGENT_FLEET_CLOUDFLARE_CLIENT_ID = ""
-# AGENT_FLEET_CLOUDFLARE_SCOPES = ""
+#
+# The SCOPES are decided ahead of the registration, so registering the client
+# is ticking this list and pasting the id. Identifiers verbatim from
+# Cloudflare's client-creation screen, mirroring the work the paste-token
+# template in src/core/connectors.js already asks for — Workers and its
+# stores, tail for debugging, Pages, the zone reads and certificate write a
+# custom domain needs — plus the identity reads and `offline_access`, which is
+# what makes a refresh token exist at all. Two catalogue entries have NO OAuth
+# scope offered (DNS write, Page Rules write): raw DNS-record and page-rule
+# edits stay with the pasted token, while Workers custom domains still work —
+# that API writes its own records under the Workers scopes.
+AGENT_FLEET_CLOUDFLARE_SCOPES = "workers-scripts.edit workers-kv-storage.write workers-routes.write workers-r2.write workers-r2-bucket-item.write d1.write workers-tail.read page.write zone.read zone-settings.read ssl-and-certificates.write dns.read account-settings.read memberships.read user-details.read offline_access"
 
 # WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
 # ARE safe for a fork to copy and are the best fork-parity property in the

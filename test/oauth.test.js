@@ -23,7 +23,7 @@ import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 const APP = { clientId: 'Iv23liTEST', clientSecret: 'shh', slug: 'fleetwright-agents' };
-const CF = { clientId: 'cf-client-id', clientSecret: 'cf-shh', scopes: 'account.read workers_scripts.write offline_access' };
+const CF = { clientId: 'cf-client-id', clientSecret: 'cf-shh', scopes: 'account-settings.read workers-scripts.edit offline_access' };
 
 test('a state is redeemable exactly once', () => {
   // A callback replayed from browser history, or delivered twice, must not
@@ -169,14 +169,14 @@ test('the Cloudflare authorize URL names its own redirect and its scopes', () =>
     state: 'xyz',
     // Commas tolerated: a list in an environment variable gets written both
     // ways, and RFC 6749 wants spaces on the wire.
-    scopes: 'account.read,workers_scripts.write, offline_access',
+    scopes: 'account-settings.read,workers-scripts.edit, offline_access',
   }));
   assert.equal(url.origin + url.pathname, 'https://dash.cloudflare.com/oauth2/auth');
   assert.equal(url.searchParams.get('response_type'), 'code');
   assert.equal(url.searchParams.get('client_id'), 'abc');
   assert.equal(url.searchParams.get('state'), 'xyz');
   assert.equal(url.searchParams.get('redirect_uri'), 'https://fleet.example/oauth/cloudflare/callback');
-  assert.equal(url.searchParams.get('scope'), 'account.read workers_scripts.write offline_access');
+  assert.equal(url.searchParams.get('scope'), 'account-settings.read workers-scripts.edit offline_access');
 });
 
 test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it is', async () => {
@@ -228,7 +228,7 @@ test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it i
   const lost = await exchangeCloudflareCode({ clientId: 'a', clientSecret: 'b', code: 'c', origin: 'nonsense' });
   assert.equal(lost.ok, false);
   assert.match(lost.message, /its own address/);
-  assert.equal(cloudflareAuthorizeUrl({ clientId: 'a', origin: 'nonsense', state: 's', scopes: 'account.read' }), null);
+  assert.equal(cloudflareAuthorizeUrl({ clientId: 'a', origin: 'nonsense', state: 's', scopes: 'account-settings.read' }), null);
 });
 
 test('a Cloudflare callback for a flow this coordinator did not start is refused', async () => {
@@ -573,12 +573,12 @@ test('the Node coordinator reads the same OAuth variables the Worker does', asyn
     process.env.AGENT_FLEET_GITHUB_CLIENT_SECRET = 'shh';
     process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID = 'cf-id';
     process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET = 'cf-shh';
-    process.env.AGENT_FLEET_CLOUDFLARE_SCOPES = 'account.read offline_access';
+    process.env.AGENT_FLEET_CLOUDFLARE_SCOPES = 'account-settings.read offline_access';
     const c = new Coordinator({ logger: quiet });
     assert.equal(c.core.githubApp?.clientId, 'Iv23liTEST');
     assert.equal(c.core.githubApp?.clientSecret, 'shh');
     assert.equal(c.core.cloudflareOauth?.clientId, 'cf-id');
-    assert.equal(c.core.cloudflareOauth?.scopes, 'account.read offline_access');
+    assert.equal(c.core.cloudflareOauth?.scopes, 'account-settings.read offline_access');
   } finally {
     for (const [n, v] of saved) {
       if (v === undefined) delete process.env[n];

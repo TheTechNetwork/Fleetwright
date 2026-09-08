@@ -491,7 +491,8 @@ needs and none can be invented here:
 | `AGENT_FLEET_CLOUDFLARE_SCOPES` | `[vars]` — the client's registered scope list, verbatim |
 
 The scopes are the one that looks optional and is not. They are **dot-form**
-API-token permission names (`account.read`, not `account:read`), chosen when
+API-token permission names (`workers-scripts.edit`, `account-settings.read` —
+never a colon form, which Cloudflare rejects), chosen when
 the client is registered and known only to whoever registered it — so they are
 configuration, and without them there is no offer: an authorize request that
 asks for nothing yields a token that verifies and then cannot do a single

@@ -157,8 +157,9 @@ export function authorizeUrl({ clientId, origin, state }) {
  * not need: `scope`. A GitHub App's reach is chosen on GitHub's own consent
  * screen; a Cloudflare OAuth client's reach is the scopes the AUTHORIZE
  * REQUEST asks for, drawn from the list registered on the client. They are
- * dot-delimited API-token permission names (`account.read`, not
- * `account:read`), plus `offline_access` for a refresh token — and they are
+ * dot-delimited API-token permission names (`workers-scripts.edit`,
+ * `account-settings.read` — never a colon form, which Cloudflare rejects),
+ * plus `offline_access` for a refresh token — and they are
  * configuration rather than a constant here, because only whoever registered
  * the client knows what it was registered with. A request for a scope the
  * client does not have is refused by Cloudflare with `invalid_scope`, which is
