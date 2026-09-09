@@ -1214,6 +1214,12 @@ private struct SettingsView: View {
                                     .foregroundStyle(Design.Palette.inkDim)
                             }
                         }
+                        // AND THE THIRD WAY A MACHINE ARRIVES: a repository's
+                        // own workflow, started by hand, joining a runner as
+                        // you. Minted with curl since it shipped; a screen now.
+                        NavigationLink("Runner tokens") {
+                            RunnerTokensView(settings: settings)
+                        }
                         // THE PER-HOST ROWS ARE GONE, and the width was how
                         // it showed. This section is a Form section at the
                         // system's inset; the fleet cards below sit at the

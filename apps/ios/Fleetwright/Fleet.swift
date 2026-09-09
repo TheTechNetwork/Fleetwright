@@ -793,6 +793,32 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
     }
 
+    /// The runner tokens that are yours — every one for an admin.
+    ///
+    /// The same row shape as a device credential, because it is one: the
+    /// coordinator keeps them in a second registry with a different prefix so
+    /// that one can never authenticate a request. `email` is who a run using
+    /// it is attributed to.
+    func runnerTokens() async throws -> [Client] {
+        let data = try await get("/api/runner-tokens")
+        struct Reply: Codable { let tokens: [Client]? }
+        return try JSONDecoder().decode(Reply.self, from: data).tokens ?? []
+    }
+
+    /// Mint one for a repository. THE TOKEN IS RETURNED ONCE and the
+    /// coordinator keeps a hash, like every other secret it issues.
+    func mintRunnerToken(name: String) async throws -> (id: String, token: String) {
+        let data = try await post("/api/runner-tokens", body: ["name": name])
+        struct Reply: Codable { let id: String; let token: String }
+        let minted = try JSONDecoder().decode(Reply.self, from: data)
+        return (minted.id, minted.token)
+    }
+
+    func revokeRunnerToken(_ id: String) async throws -> Reply {
+        let path = "/api/runner-tokens/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
+        return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
+    }
+
     /// What happened while you were asleep.
     ///
     /// Push wakes a phone; this is what it missed. Half of that pair shipped —
