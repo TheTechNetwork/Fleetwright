@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount, adoptBoxAccount } from '../src/core/accounts.js';
 import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
 import { log } from '../src/log.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const require = createRequire(import.meta.url);
 
@@ -217,10 +218,13 @@ test('no message still promises a shared account to fall back to', () => {
     'the unlink reply': 'src/adapters/commands.js',
     'the auth summary': 'src/core/login.js',
     'the iOS fleet list': 'apps/ios/Fleetwright/FleetView.swift',
-    'the Android fleet list': 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt',
   };
-  for (const [what, file] of Object.entries(surfaces)) {
-    const src = code(read(file));
+  // The Android app as one string: its settings panel is a file of its own now,
+  // and every claim below is about the app rather than about a screen.
+  for (const [what, src] of [
+    ...Object.entries(surfaces).map(([what, file]) => [what, code(read(file))]),
+    ['the Android fleet list', code(androidSources())],
+  ]) {
     assert.ok(!/use the shared account/.test(src), `${what} still promises a shared account`);
     assert.ok(!/authenticate this box/.test(src), `${what} still tells somebody to log the box in`);
     assert.ok(!/NOT signed in/.test(src), `${what} still reports a box as signed out`);
@@ -232,11 +236,10 @@ test('a host reports how many people can start a session on it', () => {
   // absent as an older host rather than as a fault — the distinction this
   // codebase keeps having to restate.
   const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
-  for (const [name, file] of [
-    ['iOS', 'apps/ios/Fleetwright/FleetView.swift'],
-    ['Android', 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'],
+  for (const [name, src] of [
+    ['iOS', read('apps/ios/Fleetwright/FleetView.swift')],
+    ['Android', androidSources()],
   ]) {
-    const src = read(file);
     assert.match(src, /claudeAccounts/, `${name} does not read the count`);
     assert.match(src, /Nobody has connected a Claude account here/, `${name} does not name the real fault`);
   }

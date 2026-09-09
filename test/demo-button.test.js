@@ -15,6 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { androidSources } from './helpers/android-sources.js';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -124,11 +125,12 @@ test('the paste-a-credential field is gone from both apps', () => {
   // user is how the shared-secret habit comes back, and the one real need it
   // still served — getting back in when sign-in itself is broken — belongs to
   // the operator with curl, not on everybody's settings screen.
-  for (const [name, p] of [
-    ['iOS', 'apps/ios/Fleetwright/FleetView.swift'],
-    ['Android', 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'],
+  for (const [name, src] of [
+    ['iOS', read('apps/ios/Fleetwright/FleetView.swift')],
+    // The whole app: the settings panel this asks about lives in
+    // SettingsPanel.kt now, and the question is about the app either way.
+    ['Android', androidSources()],
   ]) {
-    const src = read(p);
     // The comment explaining the removal contains the phrase, so match the UI
     // string as it was actually rendered.
     assert.equal(/Text\("Use a credential instead"\)|DisclosureGroup\("Use a credential instead"/.test(src), false,
