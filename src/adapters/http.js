@@ -49,6 +49,11 @@ export class HttpAdapter {
     // Read once at startup: the UI is a single static file and re-reading it
     // per request buys nothing.
     this.html = readFileSync(resource('src', 'web', 'index.html'), 'utf8');
+    // The same, for the two versions of the page an unauthenticated browser
+    // gets. Built at startup because building them per request would mean
+    // reading the stylesheet on a path anybody can reach without a token.
+    this.gatePage = gatePage(false);
+    this.refusedPage = gatePage(true);
   }
 
   get name() {
@@ -108,14 +113,22 @@ export class HttpAdapter {
     if (!this.#authorised(req, url)) {
       if (p === '/' || p === '/index.html') {
         // A browser hitting the root without a token should get something it
-        // can act on, not a bare 401 body.
-        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
-        return res.end(
-          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem">' +
-            '<h1>agent-hub</h1><p>A token is required. Append <code>?token=…</code> once and ' +
-            'this browser will remember it, or send an <code>Authorization: Bearer …</code> header.</p>',
-        );
+        // can act on, not a bare 401 body — and "act on" is a field it can
+        // type into, because the thing it would be told to do by hand is a
+        // query parameter this same route reads twenty lines below.
+        //
+        // REFUSED IS NOT THE SAME SCREEN AS NOT ASKED. If a credential came
+        // with the request it was wrong, and the page says so rather than
+        // repeating the instructions at somebody who has already followed
+        // them. That is docs/psychology.md §7 on the smallest surface in the
+        // product: the difference between "you have not tried" and "that one
+        // does not work" is the whole answer, and it is free to publish.
+        res.writeHead(401, {
+          'content-type': 'text/html; charset=utf-8',
+          // A cached 401 outlives the token that would have fixed it.
+          'cache-control': 'no-store',
+        });
+        return res.end(presentedCredential(req, url) ? this.refusedPage : this.gatePage);
       }
       return json(res, 401, { error: 'unauthorised' });
     }
@@ -421,6 +434,283 @@ function isLoopback(req) {
 /** @param {import('node:http').IncomingMessage} req */
 function clientLabel(req) {
   return req.socket.remoteAddress || 'unknown';
+}
+
+// --- the page a browser gets instead of the UI -------------------------------
+//
+// THE ONE SCREEN THAT WAS NOT IN THE DESIGN SYSTEM. This page used to be a
+// string of inline styles — `system-ui`, `34rem`, `4rem`, one colour nowhere
+// and therefore whatever the browser's default was — while the stylesheet
+// next door defined a type scale, six steps of space, five radii and two
+// palettes. It is the first thing a person sees on a box they have just
+// stood up, and it looked like a different product from the one they were
+// about to open.
+//
+// WHERE THE NUMBERS COME FROM, which is the decision worth recording. There
+// were two ways to give this page the design system and only one of them
+// survives contact with `test/design-parity.test.js`:
+//
+//   Write the literals here.   Rejected. A colour written twice is a colour
+//                              that drifts, and the whole reason that test
+//                              reads three files is that three copies of
+//                              `#3866D6` did exactly this. A fourth copy on
+//                              the least-visited screen in the product is the
+//                              copy nobody would notice going stale.
+//
+//   Grow parity a 4th surface. Rejected too, for the opposite reason. That
+//                              test asserts a surface declares EVERY token in
+//                              the table, both themes — twenty colours and
+//                              twenty-one numbers. This page uses a third of
+//                              them, so passing would mean shipping tokens no
+//                              rule here references, on an unauthenticated
+//                              path, forever.
+//
+// So it does neither: it READS the palette out of `console.css` at startup and
+// keeps only the tokens its own rules use. One place a web colour is written,
+// no fourth copy to keep in step, and `test/gate-page.test.js` holds the half
+// that is left — that every `var(--…)` below is a token the stylesheet really
+// declares, and that this file writes no colour of its own.
+//
+// The light overrides are read from the `prefers-color-scheme` block rather
+// than the `[data-theme]` one because this page has no theme switch to honour.
+// design-tokens.test.js already holds those two blocks identical, so which one
+// is read is not a choice about which values arrive.
+
+/** Every token the rules below reference. Kept in step by test/gate-page.test.js. */
+const GATE_TOKENS = [
+  '--font', '--mono',
+  '--t-greeting', '--t-body', '--t-body-small', '--t-label',
+  '--ls-greeting',
+  '--s-page', '--s-group', '--s-group-tight', '--s-inside', '--s-inside-tight', '--s-hair',
+  '--r-card', '--r-row', '--r-chip',
+  '--bg', '--card', '--inner', '--ink', '--ink-dim', '--accent', '--bad',
+  '--ring', '--highlight', '--shadow-drop', '--card-shadow',
+];
+
+/**
+ * The body of `<opener> … { … }`, brace-matched.
+ *
+ * Deliberately small, and it can be: `console.css` has no nested rules and is
+ * written to be read this way — test/design-tokens.test.js and
+ * test/design-parity.test.js both already parse it with the same few lines.
+ *
+ * @param {string} css @param {string} opener
+ */
+function cssBlock(css, opener) {
+  const at = css.indexOf(opener);
+  if (at < 0) throw new Error(`console.css no longer has ${opener}`);
+  const open = css.indexOf('{', at);
+  let depth = 0;
+  for (let i = open; i < css.length; i += 1) {
+    if (css[i] === '{') depth += 1;
+    else if (css[i] === '}' && (depth -= 1) === 0) return css.slice(open + 1, i);
+  }
+  throw new Error(`console.css never closes ${opener}`);
+}
+
+/**
+ * `--name: value` pairs from a rule body, commentary removed so a note about a
+ * token is never read as one.
+ *
+ * @param {string} body
+ */
+function cssDeclarations(body) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const [, name, value] of body.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    out[name] = value.trim().replace(/\s+/g, ' ');
+  }
+  return out;
+}
+
+/**
+ * The design system's palette and scale, narrowed to what this page uses.
+ *
+ * @param {string[]} names
+ * @returns {string} a stylesheet fragment: the base palette, then the light one
+ */
+function borrowedPalette(names) {
+  const css = readFileSync(resource('src', 'web', 'console', 'console.css'), 'utf8');
+  const dark = cssDeclarations(cssBlock(css, ':root {'));
+  const light = cssDeclarations(cssBlock(css, ":root:not([data-theme='dark']) {"));
+
+  const emit = (/** @type {Record<string, string>} */ from) =>
+    names.filter((n) => from[n]).map((n) => `${n}:${from[n]}`).join(';');
+
+  const missing = names.filter((n) => !dark[n]);
+  if (missing.length) throw new Error(`console.css no longer declares ${missing.join(', ')}`);
+
+  return `:root{color-scheme:dark light;${emit(dark)}}`
+    + `@media (prefers-color-scheme:light){:root{${emit(light)}}}`;
+}
+
+/**
+ * Did this request carry a credential at all?
+ *
+ * Not "was it valid" — #authorised has already said no. This separates the
+ * person who has not been given a token yet from the one whose token, cookie
+ * or header is wrong, because those two need different sentences and only one
+ * of them is helped by being told how tokens work.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {URL} url
+ */
+function presentedCredential(req, url) {
+  return url.searchParams.has('token')
+    || Boolean(req.headers.authorization)
+    || Boolean(readCookie(String(req.headers.cookie || ''), 'agent_hub_token'));
+}
+
+/**
+ * The whole page, as one response.
+ *
+ * ONE RESPONSE IS A CONSTRAINT, NOT A SHORTCUT. Every byte a browser would
+ * have to come back for — a stylesheet, a font, a script — would be a second
+ * request on a path that has no token, so the CSS is inlined and there is no
+ * script at all. Which also means the form has to work without one: it is a
+ * plain GET to `/`, whose `token` parameter this same route reads and turns
+ * into a cookie. Nothing here is a control that does not do anything.
+ *
+ * @param {boolean} refused  a credential came with the request and was wrong
+ */
+function gatePage(refused) {
+  return `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-hub — a token is required</title>
+<style>
+${borrowedPalette(GATE_TOKENS)}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  /* The page centres its one card rather than sitting under the top edge:
+   * there is exactly one thing to do here and no second screen to scroll to.
+   * Centred by margin:auto on the card and not by align-items, which
+   * clips the top of a flex child taller than its line — which this card
+   * becomes at 200% zoom on a short screen. */
+  min-height:100dvh;
+  display:flex;
+  padding:var(--s-page);
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font);
+  font-size:var(--t-body);
+  line-height:1.5;
+  -webkit-text-size-adjust:100%;
+}
+.gate{
+  margin:auto;
+  width:100%;
+  /* Wide enough for the two code spans below to sit on one line on a laptop,
+   * and it is a max rather than a width, so the phone gets the whole column. */
+  max-width:34rem;
+  background:var(--card);
+  border-radius:var(--r-card);
+  box-shadow:var(--card-shadow);
+  padding:var(--s-group);
+}
+${refused ? `.gate{box-shadow:inset 0 1px 0 var(--highlight),var(--shadow-drop),0 0 0 1px color-mix(in srgb,var(--bad) 55%,transparent)}\n` : ''}\
+h1{
+  margin:0;
+  font-size:var(--t-greeting);
+  font-weight:600;
+  letter-spacing:var(--ls-greeting);
+}
+.lede{margin:var(--s-inside) 0 0;color:var(--ink-dim)}
+/* Refused states are a word and a glyph first. The glyph is the x the
+ * session vocabulary already uses for broken, in the mono face, so the tone
+ * agrees with something that is readable without it. */
+.refused{
+  display:flex;
+  align-items:baseline;
+  gap:var(--s-inside-tight);
+  margin:var(--s-inside) 0 0;
+  color:var(--bad);
+  font-size:var(--t-body-small);
+}
+.refused .glyph{font-family:var(--mono);font-weight:700}
+form{
+  display:flex;
+  flex-wrap:wrap;
+  gap:var(--s-inside-tight);
+  margin:var(--s-group) 0 0;
+}
+label{
+  flex:1 0 100%;
+  color:var(--ink-dim);
+  font-size:var(--t-label);
+}
+input{
+  /* min-width:0 so the field may shrink below its intrinsic size instead of
+   * pushing the button off a 390px screen. */
+  flex:1 1 12rem;
+  min-width:0;
+  min-height:44px;
+  padding:0 var(--s-inside);
+  background:var(--inner);
+  color:var(--ink);
+  border:0;
+  border-radius:var(--r-row);
+  /* A HEAVIER EDGE THAN THE SYSTEM'S HAIRLINE, and the only place on this page
+   * that departs from it. An empty field carries no text of its own, so its
+   * boundary is the entire signal that it is there and can be typed into, and
+   * --ring is a 7%-white hairline that does not come near the 3:1 WCAG
+   * 1.4.11 asks of a control's edge. --ink-dim does: 5.9:1 on the card in
+   * dark, 6.0:1 in light. The button keeps the hairline, because it has a
+   * label doing that job. */
+  box-shadow:0 0 0 1px var(--ink-dim);
+  font:inherit;
+  font-family:var(--mono);
+}
+button{
+  /* 44px, and it wraps under the field rather than shrinking, because this is
+   * opened on a phone at least as often as on a laptop. */
+  flex:0 1 auto;
+  min-height:44px;
+  padding:0 var(--s-group-tight);
+  background:var(--inner);
+  color:var(--ink);
+  border:0;
+  border-radius:var(--r-row);
+  box-shadow:0 0 0 1px var(--ring);
+  font:inherit;
+  font-size:var(--t-body-small);
+  cursor:pointer;
+}
+/* MOTION 1: hover and state only, and nothing transitions into it. */
+input:hover,button:hover{box-shadow:0 0 0 1px var(--accent)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.note{margin:var(--s-group-tight) 0 0;color:var(--ink-dim);font-size:var(--t-body-small)}
+code{
+  font-family:var(--mono);
+  font-size:var(--t-label);
+  background:var(--inner);
+  border-radius:var(--r-chip);
+  padding:0 var(--s-hair);
+  /* A long token or header name breaks inside the span instead of pushing the
+   * card wider than the screen. */
+  overflow-wrap:anywhere;
+}
+/* Forced-colours mode paints no box-shadow, and a card separated only by one
+ * is then not separated at all — the same rule, and the same reason, as the
+ * bottom of console.css. */
+@media (forced-colors:active){
+  .gate,input,button{border:1px solid}
+}
+</style>
+<main class="gate">
+  <h1>agent-hub</h1>
+  <p class="lede">This is a host in a fleet, and it has no sign-in — one token opens everything it serves.</p>
+${refused ? '  <p class="refused"><span class="glyph" aria-hidden="true">x</span> <span>The token this browser sent was not accepted.</span></p>\n' : ''}\
+  <form method="get" action="/">
+    <label for="token">Token</label>
+    <input id="token" name="token" type="password" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="submit">Remember this token</button>
+  </form>
+  <p class="note">Sending it here is the same as appending <code>?token=…</code> to this address once — the answer sets a cookie, so it is not in every link afterwards. A program should send an <code>Authorization: Bearer …</code> header instead and carry no cookie at all.</p>
+</main>
+`;
 }
 
 /** @param {string} header @param {string} name */

@@ -154,11 +154,45 @@ test('a missing token refuses rather than admits everybody', async (t) => {
 
 test('the browser still gets something it can act on', async (t) => {
   // A bare 401 body to somebody who opened the UI in a browser is a dead end.
+  // What it gets instead is a field, because the thing the old page told them
+  // to do by hand — append ?token= — is a parameter this same route reads.
   const h = await hub(t);
   const r = await h.get('/');
 
   assert.equal(r.status, 401);
   assert.match(await r.text(), /token=/);
+  // The page carries the token that would fix it; a cached copy of the refusal
+  // would outlive the refusal.
+  assert.equal(r.headers.get('cache-control'), 'no-store');
+});
+
+test('a token that was tried and refused is not the same page as no token at all', async (t) => {
+  // docs/psychology.md §7: the system has to distinguish "nothing has happened"
+  // from "I cannot tell you", and the smallest version of that is here. Somebody
+  // who has pasted a token and been sent back the instructions for pasting a
+  // token has been told nothing — and the one fact they need, that the thing
+  // they hold is wrong, is a fact this route already has.
+  const h = await hub(t);
+
+  const fresh = await (await h.get('/')).text();
+  assert.doesNotMatch(fresh, /not accepted/, 'a first visit claims a refusal that has not happened');
+
+  // All three ways in, because a stale cookie and a wrong header are the same
+  // news as a wrong query parameter and used to be answered as if they were
+  // the first visit.
+  const byQuery = await (await h.get('/?token=wrong')).text();
+  const byHeader = await (await h.get('/', { authorization: 'Bearer wrong' })).text();
+  const byCookie = await (await h.get('/', { cookie: 'agent_hub_token=wrong' })).text();
+
+  for (const [how, body] of [['?token=', byQuery], ['a header', byHeader], ['a cookie', byCookie]]) {
+    assert.match(body, /The token this browser sent was not accepted\./, `${how} was answered as a first visit`);
+  }
+
+  // And it still says how to try again: being told you are wrong without being
+  // told what to do next is the half of an error message this codebase argues
+  // about (docs/psychology.md §6).
+  assert.match(byQuery, /name="token"/);
+  assert.match(byQuery, /Authorization: Bearer/);
 });
 
 // --- the third client -------------------------------------------------------
