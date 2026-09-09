@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, chmodSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 
@@ -16,6 +16,7 @@ import { createRequire } from 'node:module';
 
 import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount, adoptBoxAccount } from '../src/core/accounts.js';
 import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
+import { log } from '../src/log.js';
 
 const require = createRequire(import.meta.url);
 
@@ -324,4 +325,44 @@ test('status counts the accounts that are actually linked', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a credential file whose mode was widened is tightened before it is read, out loud', () => {
+  // connectors.js grew this guard for GitHub and Cloudflare tokens and this
+  // store did not have it — on the one file that is an account rather than a
+  // token to it. A backup restore, an `rsync -a` under a different umask or
+  // a stray chmod left a live Claude credential readable by every account on
+  // the box, and nothing anywhere said so.
+  const a = new Accounts(dir());
+  a.save('person@example.com', '{"claudeAiOauth":{"accessToken":"x"}}');
+  const file = a.credentialPathFor('person@example.com');
+  assert.ok(file);
+  chmodSync(file, 0o644);
+
+  /** @type {string[]} */
+  const warned = [];
+  const original = log.warn;
+  log.warn = (/** @type {any} */ m) => { warned.push(String(m)); };
+  try {
+    assert.equal(a.read('person@example.com'), '{"claudeAiOauth":{"accessToken":"x"}}', 'read, not refused');
+  } finally {
+    log.warn = original;
+  }
+  assert.equal(statSync(file).mode & 0o777, 0o600, 'tightened back');
+  assert.equal(warned.length, 1, 'and said so once');
+  assert.match(warned[0], /was mode 644/);
+  assert.match(warned[0], /readable by every account/);
+
+  // A file already at 600 is read without a word.
+  warned.length = 0;
+  log.warn = (/** @type {any} */ m) => { warned.push(String(m)); };
+  try {
+    a.read('person@example.com');
+  } finally {
+    log.warn = original;
+  }
+  assert.deepEqual(warned, []);
+
+  // And nobody's credential is still nobody's.
+  assert.equal(a.read('stranger@example.com'), null);
 });

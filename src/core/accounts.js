@@ -307,12 +307,9 @@ export class Accounts {
     // reason given there: a session that cannot read its credential is a
     // worse outcome than one reading a file we just corrected, and the
     // warning is the product.
-    let mode = 0;
-    try {
-      mode = statSync(file).mode & 0o777;
-    } catch {
-      return null;
-    }
+    // credentialPathFor just said the file exists, so a stat that throws is
+    // the same surprise a read that throws would be, and is left to throw.
+    const mode = statSync(file).mode & 0o777;
     if (mode & 0o077) {
       log.warn(
         `accounts: ${file} was mode ${mode.toString(8)} — tightening to 600. Something widened it, and the `
