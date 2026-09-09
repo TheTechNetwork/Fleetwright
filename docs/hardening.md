@@ -10,6 +10,10 @@ where the work goes.
 
 ## Measured, not recommended
 
+**On Linux.** Every directive below is a systemd one and every number is from
+`systemd-analyze`; a Mac host has neither. See [None of this is a Mac](#none-of-this-is-a-mac)
+before following any of it.
+
 Every directive below was tested with `systemd-run`, one property at a time,
 against the thing that unit actually has to do. The **rejected** list is the
 valuable half: this repo runs rootless podman and a tmux server a person
@@ -37,6 +41,43 @@ systemd-run --quiet --wait --pipe --working-directory=$PWD <PROPERTIES> \
 `systemd-analyze security --offline=true install/<unit>.service` reproduces
 these. The gap between the two is not an inconsistency — it is the difference
 between a process that spawns containers and one that spawns nothing.
+
+## None of this is a Mac
+
+`install.sh` installs a Mac host — it detects `Darwin`, installs through
+Homebrew, and writes launchd daemons to `/Library/LaunchDaemons`. Somebody who
+does that and then reads this page gets a hundred lines about a service manager
+their box does not run.
+
+**The units are launchd, and none of these properties exist there.**
+`NoNewPrivileges`, `ProtectSystem`, `PrivateTmp` and the rest are systemd
+directives. launchd has its own, far fewer, and not a mapping of these. The two
+scores above come from `systemd-analyze security`, which has no equivalent to
+run — so there is no number for a Mac host and this page does not have one to
+give.
+
+**And the session half is different too, which matters more.** The premise at
+the top of this page is that hardening the host narrows what a compromised
+agent-hub or sidecar reaches, while what a SESSION can do is bounded by the
+container. On a Mac there is usually no container. `install.sh` says so as it
+goes:
+
+    sandboxing is off — podman on macOS needs a Linux VM, which this does not set up
+
+Rootless podman on macOS is not rootless podman: there is no user namespace to
+be root in, so podman runs a Linux VM, and the installer declines to set one up
+rather than doing it silently. Until somebody runs `podman machine init &&
+podman machine start`, a session on a Mac host is an ordinary process running as
+the service user on the real machine — not root in a filesystem that is thrown
+away on stop. Everything [`trust.md`](./trust.md) says about what a session
+holds still applies; what does not apply is the containment either side of it.
+
+**What this page would need to be true of a Mac** is the launchd equivalent of
+the table below, measured the same way rather than recommended — and the
+`podman machine` question answered one way or the other. Neither is done.
+[`ROADMAP.md`](../ROADMAP.md) carries the macOS host as **partial** for related
+reasons: unsandboxed sessions, and no `StateDirectory`/`RuntimeDirectory`
+equivalent yet.
 
 ## What breaks agent-hub, and how
 
@@ -119,8 +160,10 @@ that nobody has re-read since.
 
 ## What is deliberately still true
 
-A session gets **root inside its container**, and that is the product. Hardening
-the host does not narrow what a session can do to itself, and is not meant to.
+A session gets **root inside its container** — on a box that has one; see
+[None of this is a Mac](#none-of-this-is-a-mac) — and that is the product.
+Hardening the host does not narrow what a session can do to itself, and is not
+meant to.
 What it narrows is what a compromised *agent-hub* or *sidecar* reaches — which is
 the half of the risk that is not the session's by design.
 
