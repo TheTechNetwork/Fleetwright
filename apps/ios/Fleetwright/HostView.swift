@@ -70,6 +70,9 @@ struct HostView: View {
     /// sends and re-deriving it here is a second place to be wrong.
     @State private var labels: [String] = []
     @State private var setLabels: [String] = []
+    /// Which service journals this box can read. Nil until a host says, and
+    /// rendered as a sentence then rather than as three guesses.
+    @State private var logs: [String]?
     /// The label being typed. Cleared when it lands, whether or not it worked —
     /// a field still holding a name that was refused looks like it can be
     /// pressed again.
@@ -138,6 +141,8 @@ struct HostView: View {
             }
             .listRowBackground(Design.Palette.card)
 
+            logsSection
+
             dangerSection
 
             if !result.isEmpty {
@@ -167,6 +172,7 @@ struct HostView: View {
             sandbox = initialHealth?.sandbox
             labels = initialHealth?.labels ?? []
             setLabels = initialHealth?.setLabels ?? []
+            logs = initialHealth?.logs
         }
     }
 
@@ -329,6 +335,59 @@ struct HostView: View {
             Text("Labels are how work is aimed: a session asked for with a tag lands on a host carrying it. The ones the machine works out about itself cannot be removed.")
         }
         .listRowBackground(Design.Palette.card)
+    }
+
+    /// THE JOURNAL, FROM THE PHONE. This is the half of "sign-in status and
+    /// logs on the app" that stayed unbuilt for a week while the roadmap said
+    /// done: the client call existed on both phones and no screen made it.
+    ///
+    /// One button per journal THIS box can read, which the host says in its
+    /// health frame. A box that is a host and not a coordinator gets two
+    /// buttons, not three with one that answers "no log entries" — that
+    /// answer reads as a broken service rather than an absent one, and the
+    /// chat surface has filtered the same way since the verb shipped.
+    ///
+    /// The answer lands in the box at the bottom like every other reply here:
+    /// it is the host's own words, and forty lines of journal is what a
+    /// person reads on a phone at night to find out why something stopped.
+    @ViewBuilder private var logsSection: some View {
+        Section {
+            if let logs {
+                if logs.isEmpty {
+                    Text("None of the services this app knows are installed here.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                ForEach(logs, id: \.self) { source in
+                    Button(logName(source)) { run { try await fleet.logs(host: hostId, service: source) } }
+                }
+            } else {
+                // NIL IS CANNOT TELL. A host older than this field still
+                // answers the verb, but this screen has not been told which of
+                // the three journals exist here, and three buttons where one
+                // is dead is the thing the field was added to prevent.
+                Text("This host has not said which logs it can read.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        } header: {
+            sectionHead("Logs")
+        } footer: {
+            Text("The last forty lines of a service's journal. A session's own output is under the session, as Output.")
+        }
+        .listRowBackground(Design.Palette.card)
+    }
+
+    /// What a journal is called on a button. The host's own words for each,
+    /// from LOG_SOURCES in logs.js, so a person who has read the CLI's answer
+    /// recognises the same service here.
+    private func logName(_ source: String) -> String {
+        switch source {
+        case "hub": return "The session manager"
+        case "coordinator": return "The fleet coordinator"
+        case "sidecar": return "This box as a fleet host"
+        default: return source
+        }
     }
 
     private func addLabel() {
@@ -554,6 +613,7 @@ struct HostView: View {
         if let now = mine.health?.sandbox { sandbox = now }
         if let now = mine.health?.labels { labels = now }
         if let now = mine.health?.setLabels { setLabels = now }
+        if let now = mine.health?.logs { logs = now }
     }
 
     private func sectionHead(_ text: String) -> some View {

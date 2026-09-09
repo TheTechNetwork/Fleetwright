@@ -1005,6 +1005,16 @@ struct Fleet {
         /// them. Rendering the flat list would put a Remove on every chip and
         /// let somebody discover by tapping which ones do nothing.
         let setLabels: [String]?
+        /// Which service journals this box can read: some of `hub`,
+        /// `coordinator`, `sidecar`, in the host's order. A button is drawn
+        /// for exactly these — a box that never ran a coordinator would
+        /// otherwise offer one that answers "no log entries", which reads as a
+        /// broken service rather than an absent one.
+        ///
+        /// NIL IS CANNOT TELL: a host older than this field. The verb works
+        /// there too, but the app has not been told which of the three will
+        /// say anything, so it says that instead of guessing.
+        let logs: [String]?
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -1059,7 +1069,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
             )
         }
 
@@ -1068,7 +1078,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
             )
         }
 
@@ -1081,7 +1091,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
             )
         }
 
@@ -1096,7 +1106,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: all, setLabels: set,
+                sandbox: sandbox, labels: all, setLabels: set, logs: logs,
             )
         }
     }
