@@ -206,6 +206,11 @@ struct FleetView: View {
                                stop: { await act { try await fleet.stop(session.name) } },
                                resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
                                forget: { await act { try await fleet.forget(session.name) } },
+                               output: {
+                                   await act {
+                                       try await fleet.logs(host: session.hostId, session: session.name)
+                                   }
+                               },
                                answer: { option in
                                    await act {
                                        try await fleet.answer(session.name, option: option,
@@ -442,6 +447,10 @@ private struct SessionRow: View {
     let stop: () async -> Void
     let resume: () async -> Void
     let forget: () async -> Void
+    /// What the session SAID, as against what it looks like now: the
+    /// container's output, which outlives the pane. The reason a session
+    /// died is here and nowhere else once its window is gone.
+    let output: () async -> Void
     let answer: (Int) async -> Void
     @State private var confirmingForget = false
 
@@ -580,6 +589,12 @@ private struct SessionRow: View {
                     FilesView(session: session.name, host: session.hostId, fleet: fleet)
                 }
                 .disabled(busy)
+                // ITS OUTPUT, on running and stopped sessions alike, and for
+                // the same reason as Files: the container's stderr outlives
+                // the pane, and "why did it stop" is a question asked after
+                // it has. The answer goes in the box at the top of the list,
+                // where every other reply on this screen lands.
+                Button("Output") { Task { await output() } }.disabled(busy)
 
                 if !session.isRunning {
                     // Forget deletes the conversation and the workspace, which
