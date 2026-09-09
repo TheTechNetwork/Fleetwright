@@ -191,3 +191,11 @@ No dependency injection, no networking library, no architecture. The API is a
 handful of endpoints returning flat JSON — §7 designed it that way so a Shortcut
 could call it — and every layer added here is one carried for the life of the
 app to save about thirty lines.
+
+No `strings.xml` either, and that is the same decision. Every user-facing
+sentence is a literal beside the code that decides to show it, because the
+sentence and the condition are one thing here — a string that says "cannot
+tell" is only right next to the `null` that means it. Resource ids would put
+the words a file away from their reasons. The cost is that the app is
+English only, which is true of the coordinator's replies it renders too; the
+day that changes, both move together.

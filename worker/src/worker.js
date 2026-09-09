@@ -1422,6 +1422,102 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/invites": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Who has been invited",
+        "description": "The allow list an admin grew by hand, as opposed to the one in the deployment\u2019s configuration. An invitation grants nothing by itself: it names WHICH ADDRESS may sign in.",
+        "responses": {
+          "200": {
+            "description": "`invites` \u2014 one row per address"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Invite an address",
+        "description": "Adds the address to the allow list and, when the deployment can send mail, emails them the two store links. The reply says whether the email went, because \u201cinvited\u201d and \u201ctold\u201d are different facts.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "a line for the email, in the inviter\u2019s words"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "invited \u2014 `text` says whether an email was sent"
+          },
+          "400": {
+            "description": "not an address"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          }
+        }
+      }
+    },
+    "/api/invites/{email}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Withdraw an invitation",
+        "description": "Removes the address from the allow list. A credential they already hold is a separate row and is revoked from /api/clients/{id}.",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "withdrawn \u2014 `invites` is the list after"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          },
+          "404": {
+            "description": "was not invited"
+          }
+        }
+      }
+    },
     "/api/events": {
       "get": {
         "tags": [

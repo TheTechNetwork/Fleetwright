@@ -125,7 +125,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
 
                 connections.catalogue.forEach { provider ->
                     val linked = connections.linked(provider.provider)
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                         Text(provider.label, style = MaterialTheme.typography.titleSmall)
                         Text(
                             if (linked == null) "not connected"
@@ -281,7 +281,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                 }
 
                 pending?.let { p ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         // NUMBERED, because this flow leaves the app and comes
                         // back, and "tap the link, then paste" was two controls
                         // with no order between them. The person is in a browser

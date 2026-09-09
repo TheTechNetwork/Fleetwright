@@ -16,7 +16,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 /**
@@ -52,7 +51,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(Design.Space.inside),
             ) {
                 if (items.isEmpty()) {
                     // Says what the feature IS, to somebody who has never used
@@ -68,7 +67,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                 }
 
                 items.forEach { (hostId, item) ->
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                         Text(item.title ?: item.name, style = MaterialTheme.typography.titleSmall)
                         Text(
                             listOfNotNull(item.title?.let { item.name }, "on $hostId", item.remaining)
@@ -100,7 +99,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                 }
 
                 purgeTarget?.let { target ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                         Text("Delete $target for good?", style = MaterialTheme.typography.titleSmall)
                         Text(
                             "The conversation and the workspace go with it. This is the only step here that "

@@ -112,7 +112,8 @@ object SignIn {
                 // turns the next report into an answer.
                 "Build ${BuildConfig.VERSION_CODE} has no Google sign-in configured — it was built " +
                     "without a google-services.json carrying a web OAuth client (client_type 3). " +
-                    "Sign in with Apple instead.",
+                    "A build from Google Play carries one. If you built this yourself, add that file " +
+                    "and rebuild — apps/android/README.md, \"Google sign-in needs a web OAuth client\".",
             )
 
         val request = GetCredentialRequest.Builder()

@@ -1014,6 +1014,55 @@ class Fleet(
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * Somebody allowed to sign in, by address. Permission to attempt a sign-in,
+     * not a credential: there is nothing here to replay or steal into an
+     * account. Matches the iOS `Fleet.Invite` field for field.
+     */
+    data class Invite(
+        val email: String,
+        val invitedBy: String?,
+        val at: Long?,
+        val note: String?,
+    )
+
+    /**
+     * Who has been invited. Admin only, in every direction including reading —
+     * a list of who has been invited is a list of colleagues — and the refusal
+     * is thrown rather than turned into an empty list, because an empty list
+     * is a lie a member would believe.
+     */
+    suspend fun invites(): List<Invite> = withContext(Dispatchers.IO) {
+        val json = get("/api/invites")
+        if (!json.optBoolean("ok", true)) throw java.io.IOException(json.optString("text").ifBlank { "refused" })
+        val arr = json.optJSONArray("invites") ?: return@withContext emptyList<Invite>()
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            Invite(
+                email = o.optString("email"),
+                invitedBy = o.optString("invitedBy").takeIf { it.isNotBlank() && it != "null" },
+                at = o.takeIf { it.has("at") && !it.isNull("at") }?.optLong("at"),
+                note = o.optString("note").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    suspend fun invite(email: String, note: String?): Reply = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("email", email)
+        if (!note.isNullOrBlank()) body.put("note", note)
+        runCatching {
+            val json = post("/api/invites", body)
+            Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
+        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+    }
+
+    suspend fun uninvite(email: String): Reply = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = send("DELETE", "/api/invites/" + java.net.URLEncoder.encode(email, "UTF-8"), null)
+            Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
+        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+    }
+
     suspend fun revokeClient(id: String): Reply = withContext(Dispatchers.IO) {
         runCatching {
             val json = send("DELETE", "/api/clients/" + id, null)

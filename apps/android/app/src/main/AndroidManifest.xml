@@ -7,9 +7,17 @@
        cannot notify you is missing the point of carrying it. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+  <!-- NO BACKUP. The credential is sealed with a Keystore key that never
+       leaves this device, so a restored copy would be bytes nothing can open —
+       but "would fail to decrypt" is an argument, and the manifest was leaving
+       it at the default, which is yes. Said here, like every other refusal in
+       this file: the coordinator address and the signed-in email are the two
+       things a backup would carry in the clear, and a fresh install asks for
+       both in under a minute. -->
   <application
       android:label="Fleetwright"
       android:icon="@mipmap/ic_launcher"
+      android:allowBackup="false"
       android:supportsRtl="true"
       android:networkSecurityConfig="@xml/network_security_config"
       android:theme="@style/Theme.Fleetwright">
