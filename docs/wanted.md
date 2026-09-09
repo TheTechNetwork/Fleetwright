@@ -132,8 +132,11 @@ Three things this repository already has that the package should not reinvent:
   interesting half of Inkbox is that a person is the SAME actor whether they
   text, mail or call, and that is a question about the identity model rather
   than about Telnyx.
-- **An allowlist.** `AGENT_HUB_TELEGRAM_ALLOWED_USERS` and
-  `AGENT_FLEET_AUTH_ALLOW` are the existing answers to "who gets through".
+- **An allowlist.** `AGENT_FLEET_AUTH_ALLOW` and the invitations beside it are
+  the existing answer to "who gets through".
+  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` was the other one and is archived, which
+  is worth knowing here: the surface it guarded is the closest thing this
+  project has built to the one below, and it was retired rather than kept.
 
 **The security shape is different from every surface here today, and worse.**
 Telegram is allowlisted user ids; the apps sign in and hold a per-device
