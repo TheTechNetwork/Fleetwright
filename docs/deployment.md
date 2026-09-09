@@ -7,7 +7,7 @@ standable-up yet.
 
 | | status |
 |---|---|
-| **Session manager** (`agent-hub`) — sessions from Telegram, web UI, CLI | ✅ installer, systemd unit, hook |
+| **Session manager** (`agent-hub`) — sessions from the app, web UI, CLI | ✅ installer, systemd unit, hook |
 | **Sidecar** — validates intents, drives the session manager | ✅ websocket + stdio, systemd unit, `doctor` |
 | **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ as a Node process **or** a Cloudflare Worker |
 | **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
@@ -240,10 +240,8 @@ order:
 
 | it asks | what to have ready | blank means |
 |---|---|---|
-| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` | no Telegram; web UI and CLI still work |
-| Telegram user ids | leave blank if you do not know yours | nobody allowlisted yet — see below |
 | Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
-| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `agent-fleet-sidecar enrol <pin>` or send `/enroll <pin>` later |
+| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `agent-fleet-sidecar enrol <pin>` later |
 | Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
@@ -291,8 +289,8 @@ can be revoked without disturbing any other device. Sign-in needs
 
 On a box **joining a coordinator that already exists** — the Worker, or another
 machine — the enrolment pin is *asked for*, because it has to come from that
-coordinator: minted with the admin token, handed out by the app (Fleet → Add
-a host), or sent as `/enroll <pin>` in Telegram.
+coordinator: minted with the admin token, or handed out by the app (Fleet → Add
+a host).
 
 **With the admin token, that is one curl** — written down here because a beta
 tester with no app and no Telegram had to find it by reading `openapi.json`,
@@ -362,7 +360,8 @@ agent-fleet-sidecar enrol 123456     # a pin from the app
 agent-fleet-sidecar doctor           # says whether the coordinator accepts it
 ```
 
-or, without an SSH session, send `/enroll 123456` to this box's bot.
+The pin comes from the app — Fleet → Add a host — or from the curl above;
+the box is the only place it can be spent.
 
 **Where the coordinator runs is a real choice**, and both are supported:
 

@@ -105,14 +105,15 @@ credential-broker: served github to sunlit-harbor
 credential-broker: refused github for quiet-anchor — not_connected
 ```
 
-## Refusals, and why there are four
+## Refusals, and why there are five
 
 | error | means |
 |---|---|
 | `unknown_provider` | a typo, or a provider this host does not know — named back, so nobody concludes the fleet has no GitHub |
 | `no_row` | the session's owner could not be identified. **Not** the same as having nothing connected |
 | `not_connected` | that person has connected nothing for this provider. Fixable from the app, and the message says so — *nothing needs restarting* |
-| `404 not found` | no broker on this host at all: an older sidecar, or a session not in a sandbox |
+| `expired` | the token is there and is dead, with nothing to renew it — refused rather than served, because a credential that fails at the provider is a worse answer than one that says why here |
+| `404 not found` | not one of the broker's answers at all: the socket has no broker route, which means an older sidecar or a session outside a sandbox (`hook-socket.js`) |
 
 `no_row` and `not_connected` are deliberately different. `null` is *cannot tell*;
 empty is *nothing there*. The case that used to collapse them resolved a

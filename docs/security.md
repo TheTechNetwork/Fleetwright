@@ -268,6 +268,19 @@ for `ts.net` names.
 *Falsify:* `Fleet.isLocal` / `isLocal` in `Fleet.kt`; grep for
 `NSAllowsArbitraryLoads` and `usesCleartextTraffic`, which must not appear.
 
+**SEC-NET-2** — A credential presented as `?token=` MUST be understood as one
+that has been written down. Both coordinators accept it (`credential.js`), and
+so does agent-hub's own HTTP adapter, deliberately: a Shortcut's "Get Contents
+of URL" cannot set a header, and §7 wanted a Shortcut to work. But a URL is
+copied into shell history, proxy and CDN access logs, and a browser's history,
+none of which a `Bearer` header touches — and it is the SAME credential, not a
+weaker one. Neither phone builds such a URL; the exposure is the operator's
+curl and the Shortcut. So: the header is the form to reach for, `?token=` is
+for the one client that cannot, and a credential that has travelled in a URL
+is one to revoke when the Shortcut is retired rather than one to keep.
+*Falsify:* grep the two apps for `queryItems` and `?token` — they must build
+none; `credentialFrom` in `credential.js` is the only reader.
+
 ### 4.9 Malicious contributor / compromised dependency
 
 **Bound:** high, and mostly out of band. A malicious change to `intents.js`,
