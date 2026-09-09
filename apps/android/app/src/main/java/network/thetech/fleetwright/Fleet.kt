@@ -1083,6 +1083,50 @@ class Fleet(
     }
 
     /**
+     * The runner tokens that are yours — every one for an admin.
+     *
+     * The same row as a device credential, because it is one: the coordinator
+     * keeps them in a second registry with a different prefix so that one can
+     * never authenticate a request. `email` is who a run using it is
+     * attributed to. Throws on a refusal, so the screen shows the reason
+     * rather than an empty list.
+     */
+    suspend fun runnerTokens(): List<Client> = withContext(Dispatchers.IO) {
+        val json = get("/api/runner-tokens")
+        if (!json.optBoolean("ok", true)) throw java.io.IOException(json.optString("text").ifBlank { "refused" })
+        val arr = json.optJSONArray("tokens") ?: return@withContext emptyList<Client>()
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            Client(
+                id = o.optString("id"),
+                name = o.optString("name").takeIf { it.isNotBlank() && it != "null" },
+                email = o.optString("email").takeIf { it.isNotBlank() && it != "null" },
+                createdAt = o.optLong("createdAt", 0L).takeIf { it > 0L },
+                lastSeenAt = o.takeIf { it.has("lastSeenAt") && !it.isNull("lastSeenAt") }?.optLong("lastSeenAt"),
+            )
+        }
+    }
+
+    /**
+     * Mint one for a repository. THE TOKEN IS RETURNED ONCE and the
+     * coordinator keeps a hash, like every other secret it issues. Returns
+     * id to token; throws with the coordinator's own sentence on a refusal.
+     */
+    suspend fun mintRunnerToken(name: String): Pair<String, String> = withContext(Dispatchers.IO) {
+        val json = post("/api/runner-tokens", JSONObject().put("name", name))
+        val token = json.optString("token")
+        if (token.isBlank()) throw java.io.IOException(json.optString("text").ifBlank { "could not mint a runner token" })
+        json.optString("id") to token
+    }
+
+    suspend fun revokeRunnerToken(id: String): Reply = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = send("DELETE", "/api/runner-tokens/" + id, null)
+            Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
+        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+    }
+
+    /**
      * What happened while you were asleep.
      *
      * Push wakes a phone; this is what it missed. Half of that pair shipped —

@@ -1478,6 +1478,13 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                 )
             }
 
+            // AND THE THIRD WAY A MACHINE ARRIVES: a repository's own
+            // workflow, started by hand, joining a runner as you. Minted with
+            // curl since it shipped; a screen now.
+            var showRunnerTokens by remember { mutableStateOf(false) }
+            OutlinedButton(onClick = { showRunnerTokens = true }, enabled = !busy) { Text("Runner tokens") }
+            if (showRunnerTokens) RunnerTokensSheet(settings = settings, onDismiss = { showRunnerTokens = false })
+
             for (host in hosts) {
                 // The design's card, not Material's: the one place in the app
                 // that still drew a bare Card, on the screen that lists the
