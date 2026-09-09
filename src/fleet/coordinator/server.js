@@ -28,7 +28,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { attachWebSocketServer } from '../ws.js';
-import { CoordinatorCore } from './core.js';
+import { CoordinatorCore, deviceStatus, deviceText } from './core.js';
 import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
@@ -1071,19 +1071,21 @@ export class Coordinator {
       return json(res, r.ok ? 200 : 400, r);
     }
 
+    // Both routes carry `client`, because a device is somebody's phone. The
+    // destructive-route guard above names hosts and clients and not devices,
+    // so without it any member could unregister any phone by its token, or
+    // send a test to every phone in the fleet (#351). The ownership rule is
+    // core.deviceReachableBy, shared with the Worker.
     if (p === '/api/devices' && req.method === 'DELETE') {
       const body = await readJson(req);
-      const { ok: gone } = this.core.unregisterDevice(String(body?.token || ''));
-      if (gone) this.saveState();
-      return json(res, gone ? 200 : 404, {
-        ok: gone,
-        text: gone ? 'This device will not be notified again.' : 'That device was not registered.',
-      });
+      const r = this.core.unregisterDevice(String(body?.token || ''), client);
+      if (r.ok) this.saveState();
+      return json(res, deviceStatus(r), { ...r, text: deviceText(r) });
     }
 
     if (p === '/api/devices/test' && req.method === 'POST') {
       const body = await readJson(req);
-      const r = await this.core.testPush(body?.token ? String(body.token) : undefined);
+      const r = await this.core.testPush(body?.token ? String(body.token) : undefined, client);
       return json(res, r.ok ? 200 : 400, r);
     }
 

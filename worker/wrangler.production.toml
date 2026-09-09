@@ -115,7 +115,6 @@ AGENT_FLEET_PUSH = "1"
 # absent is honest. The CLIENT SECRET is a `wrangler secret`.
 AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
 AGENT_FLEET_GITHUB_APP_ID = "4758006"
-AGENT_FLEET_GITHUB_APP_SLUG = "fleetwright-agents"
 
 # THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow. An
 # identifier like the GitHub App's — it is in the query string of every

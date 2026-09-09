@@ -141,67 +141,77 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
       // One request per device: FCM v1 has no multicast in the REST API, and a
       // fleet has tens of devices, not thousands.
       for (const device of devices) {
-        const wire = await envelopeFor(device, message);
-        // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
-        // block is rendered by the system before the app is consulted, so an
-        // encrypted body would be displayed as base64. A data message is
-        // handed to onMessageReceived, which decrypts and posts the real
-        // notification itself.
-        //
-        // The cost is honest: a data message needs the app to run, so it is
-        // not delivered to a force-stopped app and Doze can delay it. HIGH
-        // priority is what buys a wake in Doze, and it is set either way.
-        const payload = {
-          message: {
-            token: device.token,
-            ...(wire.encrypted ? {} : { notification: { title: wire.title, body: wire.body } }),
-            // Data rides alongside so the app can deep-link to the session
-            // rather than just opening. When encrypted it carries the whole
-            // notification instead.
-            data: wire.data,
-            android: { priority: 'HIGH' },
-            apns: {
-              // The alert is STILL SENT on the APNs side of the bridge, because
-              // iOS needs something to show if the extension fails — and
-              // mutable-content is what runs the extension at all.
-              payload: wire.encrypted
-                ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1 } }
-                : { aps: { sound: 'default' } },
+        // ONE DEVICE, ONE FAILURE. Anything thrown here — a sealTo on a key
+        // that stopped importing, a transport that reset — used to leave the
+        // loop, and every device after it was never tried. A fleet whose
+        // notifications all stop because one phone has a bad row is the wrong
+        // failure mode for the thing the trust argument rests on (#351).
+        try {
+          const wire = await envelopeFor(device, message);
+          // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
+          // block is rendered by the system before the app is consulted, so an
+          // encrypted body would be displayed as base64. A data message is
+          // handed to onMessageReceived, which decrypts and posts the real
+          // notification itself.
+          //
+          // The cost is honest: a data message needs the app to run, so it is
+          // not delivered to a force-stopped app and Doze can delay it. HIGH
+          // priority is what buys a wake in Doze, and it is set either way.
+          const payload = {
+            message: {
+              token: device.token,
+              ...(wire.encrypted ? {} : { notification: { title: wire.title, body: wire.body } }),
+              // Data rides alongside so the app can deep-link to the session
+              // rather than just opening. When encrypted it carries the whole
+              // notification instead.
+              data: wire.data,
+              android: { priority: 'HIGH' },
+              apns: {
+                // The alert is STILL SENT on the APNs side of the bridge, because
+                // iOS needs something to show if the extension fails — and
+                // mutable-content is what runs the extension at all.
+                payload: wire.encrypted
+                  ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1 } }
+                  : { aps: { sound: 'default' } },
+              },
             },
-          },
-        };
-        const res = await doFetch(url, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          sent++;
-          continue;
-        }
-        const text = (await res.text()).slice(0, 300);
-        // UNREGISTERED means the app was uninstalled or the token was replaced:
-        // broken forever, so it is reported back for removal rather than
-        // retried on every event.
-        if (res.status === 404 || /UNREGISTERED/i.test(text)) {
-          dead.push(device.token);
-          log.warn(`push: dropping dead token (${res.status})`);
-        } else if (/INVALID_ARGUMENT/i.test(text)) {
-          // NOT dead — misconfigured, and the distinction matters more than it
-          // looks. FCM says INVALID_ARGUMENT for a token that is not an FCM
-          // registration token at all, which is exactly what an iOS app that
-          // registered with APNs directly posts. Treating that as dead deleted
-          // the registration, so the phone silently unregistered ITSELF and
-          // the only trace was one line saying a dead token had been dropped.
-          // The next send had nobody to send to, and nothing anywhere said
-          // why.
-          log.warn(
-            `push: FCM rejected the ${device.platform} token as INVALID_ARGUMENT — keeping the registration.\n` +
-              '  This is what an APNs device token looks like to FCM. An iOS app has to post the token from\n' +
-              '  the Firebase SDK (Messaging.messaging().token), not the raw APNs one — see docs/push.md.',
-          );
-        } else {
-          log.warn(`push: FCM ${res.status} ${text}`);
+          };
+          const res = await doFetch(url, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            sent++;
+            continue;
+          }
+          const text = (await res.text()).slice(0, 300);
+          // UNREGISTERED means the app was uninstalled or the token was replaced:
+          // broken forever, so it is reported back for removal rather than
+          // retried on every event.
+          if (res.status === 404 || /UNREGISTERED/i.test(text)) {
+            dead.push(device.token);
+            log.warn(`push: dropping dead token (${res.status})`);
+          } else if (/INVALID_ARGUMENT/i.test(text)) {
+            // NOT dead — misconfigured, and the distinction matters more than it
+            // looks. FCM says INVALID_ARGUMENT for a token that is not an FCM
+            // registration token at all, which is exactly what an iOS app that
+            // registered with APNs directly posts. Treating that as dead deleted
+            // the registration, so the phone silently unregistered ITSELF and
+            // the only trace was one line saying a dead token had been dropped.
+            // The next send had nobody to send to, and nothing anywhere said
+            // why.
+            log.warn(
+              `push: FCM rejected the ${device.platform} token as INVALID_ARGUMENT — keeping the registration.\n` +
+                '  This is what an APNs device token looks like to FCM. An iOS app has to post the token from\n' +
+                '  the Firebase SDK (Messaging.messaging().token), not the raw APNs one — see docs/push.md.',
+            );
+          } else {
+            log.warn(`push: FCM ${res.status} ${text}`);
+          }
+
+        } catch (err) {
+          log.warn(`push: a ${device.platform} device was skipped — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       return { sent, dead };
@@ -260,43 +270,53 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
       const dead = [];
 
       for (const device of devices) {
-        const wire = await envelopeFor(device, message);
-        // `mutable-content: 1` IS WHAT RUNS THE EXTENSION. Without it iOS
-        // renders the alert below and the ciphertext is never opened — the
-        // person sees the fallback line and nothing else, forever, with
-        // delivery reporting success. Set only when there is something to
-        // decrypt, so an unencrypted notification does not pay for an
-        // extension launch that has no work to do.
-        const payload = JSON.stringify({
-          aps: {
-            alert: { title: wire.title, body: wire.body },
-            sound: 'default',
-            ...(wire.encrypted ? { 'mutable-content': 1 } : {}),
-          },
-          ...wire.data,
-        });
-        const res = await send(device.token, payload, {
-          authorization,
-          'apns-topic': config.bundleId,
-          'apns-push-type': 'alert',
-          // 10 is "deliver now". The whole point is a session waiting on a
-          // person, so there is nothing to gain by letting Apple batch it.
-          'apns-priority': '10',
-        });
+        // ONE DEVICE, ONE FAILURE. Anything thrown here — a sealTo on a key
+        // that stopped importing, a transport that reset — used to leave the
+        // loop, and every device after it was never tried. A fleet whose
+        // notifications all stop because one phone has a bad row is the wrong
+        // failure mode for the thing the trust argument rests on (#351).
+        try {
+          const wire = await envelopeFor(device, message);
+          // `mutable-content: 1` IS WHAT RUNS THE EXTENSION. Without it iOS
+          // renders the alert below and the ciphertext is never opened — the
+          // person sees the fallback line and nothing else, forever, with
+          // delivery reporting success. Set only when there is something to
+          // decrypt, so an unencrypted notification does not pay for an
+          // extension launch that has no work to do.
+          const payload = JSON.stringify({
+            aps: {
+              alert: { title: wire.title, body: wire.body },
+              sound: 'default',
+              ...(wire.encrypted ? { 'mutable-content': 1 } : {}),
+            },
+            ...wire.data,
+          });
+          const res = await send(device.token, payload, {
+            authorization,
+            'apns-topic': config.bundleId,
+            'apns-push-type': 'alert',
+            // 10 is "deliver now". The whole point is a session waiting on a
+            // person, so there is nothing to gain by letting Apple batch it.
+            'apns-priority': '10',
+          });
 
-        if (res.status === 200) {
-          sent++;
-          continue;
-        }
-        // 410 is Apple saying the app is gone. 400 BadDeviceToken means the
-        // token was never valid for this environment — most often a sandbox
-        // token sent to production, which is worth saying out loud because the
-        // fix is a build setting rather than anything at runtime.
-        if (res.status === 410 || /BadDeviceToken|Unregistered/i.test(res.body)) {
-          dead.push(device.token);
-          log.warn(`push: dropping dead APNs token (${res.status} ${res.body.slice(0, 80)})`);
-        } else {
-          log.warn(`push: APNs ${res.status} ${res.body.slice(0, 200)}`);
+          if (res.status === 200) {
+            sent++;
+            continue;
+          }
+          // 410 is Apple saying the app is gone. 400 BadDeviceToken means the
+          // token was never valid for this environment — most often a sandbox
+          // token sent to production, which is worth saying out loud because the
+          // fix is a build setting rather than anything at runtime.
+          if (res.status === 410 || /BadDeviceToken|Unregistered/i.test(res.body)) {
+            dead.push(device.token);
+            log.warn(`push: dropping dead APNs token (${res.status} ${res.body.slice(0, 80)})`);
+          } else {
+            log.warn(`push: APNs ${res.status} ${res.body.slice(0, 200)}`);
+          }
+
+        } catch (err) {
+          log.warn(`push: a ${device.platform} device was skipped — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       return { sent, dead };
@@ -346,10 +366,11 @@ export async function signJwtES256(claim, pem, keyId) {
  * token means nothing to FCM and an FCM token means nothing to APNs. Routing
  * by platform is the only thing that makes "the push sender" a single idea.
  *
- * @param {{ ios?: Pusher, other?: Pusher }} senders
+ * @param {{ ios?: Pusher, other?: Pusher, logger?: { warn: Function } }} senders
  * @returns {Pusher}
  */
-export function routingPusher({ ios, other }) {
+export function routingPusher({ ios, other, logger }) {
+  const log = logger || { warn() {} };
   return {
     async send(devices, message) {
       const groups = [
@@ -361,9 +382,15 @@ export function routingPusher({ ios, other }) {
       const dead = [];
       for (const group of groups) {
         if (!group.pusher || !group.devices.length) continue;
-        const r = await group.pusher.send(group.devices, message);
-        sent += r.sent;
-        dead.push(...r.dead);
+        // The same rule one level up: an iOS sender that throws must not stop
+        // the Android group from being tried, or the other way round.
+        try {
+          const r = await group.pusher.send(group.devices, message);
+          sent += r.sent;
+          dead.push(...r.dead);
+        } catch (err) {
+          log.warn(`push: the ${group.devices[0]?.platform} sender failed — ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       return { sent, dead };
     },
@@ -408,14 +435,14 @@ export function pusherFromEnv(env, logger, opts = {}) {
 
   if (apns && fcm) {
     logger.info('push: APNs for iOS, FCM for everything else');
-    return routingPusher({ ios: apns, other: fcm });
+    return routingPusher({ ios: apns, other: fcm, logger });
   }
   // One configured is still useful — a fleet with only Android phones needs no
   // Apple key, and an iOS-only one needs no Firebase project. What must not
   // happen is an iOS token going to FCM, which is what happened before this
   // function knew the difference.
-  if (apns) return routingPusher({ ios: apns, other: logPusher(logger) });
-  if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm });
+  if (apns) return routingPusher({ ios: apns, other: logPusher(logger), logger });
+  if (fcm) return routingPusher({ ios: logPusher(logger), other: fcm, logger });
 
   // SWITCHED ON AND UNABLE TO SEND, which is the one combination that used to
   // reach this line saying nothing at all.

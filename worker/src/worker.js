@@ -395,7 +395,14 @@ curl -fsSL '${target}' | sh
       url.pathname === '/host/connect' ||
       url.pathname === '/api/host/challenge' ||
       url.pathname === '/api/host/verify' ||
-      url.pathname === '/api/enroll/host'
+      url.pathname === '/api/enroll/host' ||
+      // A GitHub Actions job has no fleet credential; its OIDC token IS the
+      // credential, and the Durable Object verifies it against GitHub's keys
+      // before minting anything. The Node coordinator has served this route
+      // open since it existed; this front door refused it with 401 before
+      // the object ever saw the request, and openapi.json did not list the
+      // route, so the parity test could not tell.
+      (request.method === 'POST' && url.pathname === '/api/enroll/actions')
     ) {
       return callFleet(env, request);
     }
@@ -1802,6 +1809,130 @@ const OPENAPI = JSON.stringify({
           }
         },
         "security": []
+      }
+    },
+    "/api/runner-tokens": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Runner tokens that are yours",
+        "description": "Every token for an admin; only their own for a member. A runner token is how a repository\u2019s workflow enrols an ephemeral host as the person who minted it \u2014 see docs/ephemeral-hosts.md.",
+        "responses": {
+          "200": {
+            "description": "`tokens`, never the secret half"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Mint a runner token",
+        "description": "Belongs to the signed-in person, so runs it enrols are attributed to them. The admin token cannot mint one: a runner has to be somebody\u2019s.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "what it is for, usually the repository"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`id`, `token` (shown once) and `email`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      }
+    },
+    "/api/runner-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Revoke a runner token",
+        "description": "Runs still using it are refused at enrolment from then on. A member can revoke their own; an admin any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "revoked"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no such token, or not yours \u2014 the two are not distinguished on purpose"
+          }
+        }
+      }
+    },
+    "/api/enroll/actions": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "security": [],
+        "summary": "Admit a GitHub Actions job as an ephemeral host",
+        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "the job\u2019s ACTIONS_ID_TOKEN"
+                  },
+                  "ticket": {
+                    "type": "string",
+                    "description": "a single-use ticket from a `provision` dispatch, which attributes the run to the person who asked for it"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "a pin, host-bound and short-lived"
+          },
+          "403": {
+            "description": "the token did not verify, or names a repository this fleet does not admit \u2014 `error.code` is `bad_token`"
+          },
+          "503": {
+            "description": "AGENT_FLEET_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
+          }
+        }
       }
     }
   }

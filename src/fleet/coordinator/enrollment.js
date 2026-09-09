@@ -45,6 +45,8 @@ const CODE_TTL_MS = 10 * 60_000;
 // correct ones. It has to: knowing whether a code is right is exactly what the
 // delay is paying for, and waiting only on failures would time-leak the answer.
 const MAX_FAILURES = 10;
+// How many unspent pins may wait at once. See mint() for why there is a bound.
+const MAX_PENDING = 200;
 const FAILURE_WINDOW_MS = 60_000;
 /** How long each failure past the budget adds. */
 const PENALTY_STEP_MS = 500;
@@ -130,6 +132,16 @@ export class Enrollment {
       expiresAt: this.now() + this.ttlMs,
     };
     this.pending.set(code, entry);
+    // Bounded like every other transient store here — codes, tickets, the
+    // event ring. Minting needs a credential, so this is not anonymous
+    // growth; it is the one place a careless or captured member credential
+    // could grow a map for as long as it liked. Oldest goes first: a pin that
+    // has waited longest is the one least likely to still be wanted.
+    while (this.pending.size > MAX_PENDING) {
+      const oldest = this.pending.keys().next().value;
+      if (oldest === undefined) break;
+      this.pending.delete(oldest);
+    }
     return { code, expiresAt: entry.expiresAt, purpose, hostId: entry.hostId, readmit: entry.readmit };
   }
 

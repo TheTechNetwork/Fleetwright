@@ -18,7 +18,7 @@
 // cache with provenance, never the authority" happen to be the same rule, which
 // is a good sign the rule was right.
 
-import { CoordinatorCore } from '../../src/fleet/coordinator/core.js';
+import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
@@ -80,7 +80,6 @@ export class Fleet {
       githubApp: {
         clientId: env.AGENT_FLEET_GITHUB_CLIENT_ID,
         clientSecret: env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
-        slug: env.AGENT_FLEET_GITHUB_APP_SLUG,
       },
       // The Cloudflare OAuth client, same rule: absent means the paste route.
       // `scopes` is the client's registered scope list (dot-form names, plus
@@ -840,18 +839,21 @@ export class Fleet {
 
     // A notification a person asked for, so they can find out whether push
     // works before they need it to.
+    // `client` rides along on both: a device is somebody's phone, and the
+    // destructive-route guard above never named devices (#351). The ownership
+    // rule is core.deviceReachableBy, the same one the Node coordinator asks.
     if (url.pathname === '/api/devices/test' && request.method === 'POST') {
       const body = await readJson(request);
-      const r = await this.core.testPush(body?.token ? String(body.token) : undefined);
+      const r = await this.core.testPush(body?.token ? String(body.token) : undefined, client);
       if (!r.ok && r.error?.code === 'not_delivered') await this.#saveDevices();
       return json(r, r.ok ? 200 : 400);
     }
 
     if (url.pathname === '/api/devices' && request.method === 'DELETE') {
       const body = await readJson(request);
-      const r = this.core.unregisterDevice(String(body?.token || ''));
-      await this.#saveDevices();
-      return json(r);
+      const r = this.core.unregisterDevice(String(body?.token || ''), client);
+      if (r.ok) await this.#saveDevices();
+      return json({ ...r, text: deviceText(r) }, deviceStatus(r));
     }
 
     if (url.pathname === '/api/intent' && request.method === 'POST') {

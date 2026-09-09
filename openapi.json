@@ -1232,6 +1232,130 @@
         },
         "security": []
       }
+    },
+    "/api/runner-tokens": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Runner tokens that are yours",
+        "description": "Every token for an admin; only their own for a member. A runner token is how a repository’s workflow enrols an ephemeral host as the person who minted it — see docs/ephemeral-hosts.md.",
+        "responses": {
+          "200": {
+            "description": "`tokens`, never the secret half"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Mint a runner token",
+        "description": "Belongs to the signed-in person, so runs it enrols are attributed to them. The admin token cannot mint one: a runner has to be somebody’s.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "what it is for, usually the repository"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`id`, `token` (shown once) and `email`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      }
+    },
+    "/api/runner-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Revoke a runner token",
+        "description": "Runs still using it are refused at enrolment from then on. A member can revoke their own; an admin any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "revoked"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no such token, or not yours — the two are not distinguished on purpose"
+          }
+        }
+      }
+    },
+    "/api/enroll/actions": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "security": [],
+        "summary": "Admit a GitHub Actions job as an ephemeral host",
+        "description": "Reachable without a credential BECAUSE the job’s OIDC token is the credential: verified against GitHub’s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host — see docs/ephemeral-hosts.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "the job’s ACTIONS_ID_TOKEN"
+                  },
+                  "ticket": {
+                    "type": "string",
+                    "description": "a single-use ticket from a `provision` dispatch, which attributes the run to the person who asked for it"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "a pin, host-bound and short-lived"
+          },
+          "403": {
+            "description": "the token did not verify, or names a repository this fleet does not admit — `error.code` is `bad_token`"
+          },
+          "503": {
+            "description": "AGENT_FLEET_ACTIONS_REPOS is unset — this coordinator admits no runners"
+          }
+        }
+      }
     }
   }
 }
