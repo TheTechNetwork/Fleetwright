@@ -52,12 +52,41 @@ const code = (s) =>
     .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
     .join('\n');
 
+/**
+ * The installer and the example configuration, which are not .js and were not
+ * scanned. That hole held five remedies for a year: install.sh told a fresh
+ * box to "send /login in Telegram" and the example env file called Telegram
+ * "the recommended control surface" while config.js said nothing read it.
+ * Shell comments are stripped like JS ones; the env example is all comments,
+ * so there every line counts and only a line that says "archived" is allowed
+ * to name it.
+ */
+function installerSources() {
+  const root = fileURLToPath(new URL('../install/', import.meta.url));
+  /** @type {Array<{ file: string, body: string }>} */
+  const out = [];
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const file = path.join(root, e.name);
+    const text = readFileSync(file, 'utf8');
+    if (e.name.endsWith('.sh')) {
+      out.push({ file, body: text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n') });
+    } else if (e.name.endsWith('.env.example')) {
+      out.push({ file, body: text });
+    }
+  }
+  return out;
+}
+
 test('no remedy points at a surface that was archived', () => {
   const root = fileURLToPath(new URL('../src/', import.meta.url));
   /** @type {string[]} */
   const offenders = [];
-  for (const file of sources(root)) {
-    const body = code(readFileSync(file, 'utf8'));
+  const scanned = [
+    ...sources(root).map((file) => ({ file, body: code(readFileSync(file, 'utf8')) })),
+    ...installerSources(),
+  ];
+  for (const { file, body } of scanned) {
     for (const { name } of ARCHIVED) {
       for (const line of body.split('\n')) {
         if (!line.includes(name)) continue;
@@ -66,7 +95,7 @@ test('no remedy points at a surface that was archived', () => {
         // which is the opposite of the bug — it tells somebody their
         // configuration is now inert, which they need to know.
         if (/archived/i.test(line)) continue;
-        offenders.push(`${path.relative(root, file)}: ${line.trim().slice(0, 90)}`);
+        offenders.push(`${path.relative(path.dirname(root), file)}: ${line.trim().slice(0, 90)}`);
       }
     }
   }

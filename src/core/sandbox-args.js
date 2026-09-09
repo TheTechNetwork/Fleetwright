@@ -50,8 +50,8 @@ const UNSAFE = [
     'removes the kernel-level confinement the container runtime applies by default',
   ],
   [
-    (a, next) => /^(-v|--volume|--mount)(=|$)/.test(a) && mountsHostRoot(val(a, next) || ''),
-    'bind-mounts the host filesystem root into the session, which hands it every credential on the box',
+    (a, next) => /^(-v|--volume|--mount)(=|$)/.test(a) && mountsSensitiveHostPath(val(a, next) || ''),
+    'bind-mounts a host path that hands the session the box itself — the root, the container socket, /etc, a credential directory',
   ],
 ];
 
@@ -62,24 +62,81 @@ function val(arg, next) {
 }
 
 /**
- * A mount whose HOST side is `/`.
+ * Host paths a session must never be handed, however the mount is spelled.
  *
- * Deliberately narrow. Mounting a project directory is the ordinary use of this
- * variable and must keep working; mounting `/` is the one that cannot be a
- * considered decision. `/etc` and `~` are not listed because a deployment with
- * a reason for them exists and the line has to be drawn where it is unarguable.
+ * The first version refused exactly one host side, `/`, and drew the line
+ * there because it was the unarguable one. It was also the one nobody types:
+ * the mount that actually defeats the sandbox is the container runtime's own
+ * socket — `-v /run/podman/podman.sock:/run/podman.sock` is a forum snippet
+ * for "let the agent build images", and inside a root-capable container it
+ * is the whole host. The others below are the same shape: a directory whose
+ * presence inside the session means the session has the box's keys, its
+ * accounts, or its process table, and the escape hatch this guards is pitched
+ * for "an extra mount" in so many words.
+ *
+ * STILL A LIST OF NAMES, and still deliberately short. A mount under /srv or
+ * /home/agent/shared is what the hatch is for, and refusing the operator's
+ * own choice of directory is how a check gets deleted. What is here is what
+ * cannot be a deliberate choice for a contained session.
+ */
+const NEVER_MOUNT = [
+  // The whole box.
+  '/',
+  // The container runtime's socket: root on the host, one API call away.
+  '/run/podman',
+  '/var/run/podman',
+  '/run/docker.sock',
+  '/var/run/docker.sock',
+  // Every credential the box holds, and the sudoers rules that make it root.
+  '/etc',
+  '/root',
+  // The process table, the kernel, the devices — the namespaces exist to hide
+  // exactly these.
+  '/proc',
+  '/sys',
+  '/dev',
+  // Runtime state: sockets for every service on the box, including this one.
+  '/run',
+  '/var/run',
+];
+
+/** Dot-directories that are a credential store wherever they live. */
+const NEVER_MOUNT_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.claude', '.config', '.kube', '.docker']);
+
+/**
+ * The host side of a mount spec, in either spelling.
+ *
+ *   -v /host/path:/in/container[:opts]
+ *   --mount type=bind,source=/host/path,target=/in/container
  *
  * @param {string} spec
  */
-function mountsHostRoot(spec) {
-  if (!spec) return false;
-  // --mount type=bind,source=/,target=...
-  if (spec.includes('=')) {
-    const source = /(?:^|,)(?:source|src)=([^,]*)/.exec(spec)?.[1];
-    return source === '/';
+function hostSideOf(spec) {
+  if (!spec) return '';
+  if (spec.includes('=')) return /(?:^|,)(?:source|src)=([^,]*)/.exec(spec)?.[1] || '';
+  return spec.split(':')[0];
+}
+
+/**
+ * Does this mount hand the session a path it must never have?
+ *
+ * Matched by path segment, so `/etc` refuses `/etc/ssh` and does not refuse
+ * `/etcetera`. `~` and `$HOME` are left alone: podman does not expand them
+ * either, so a spec that uses them fails at podman with its own message.
+ *
+ * @param {string} spec
+ */
+function mountsSensitiveHostPath(spec) {
+  const host = hostSideOf(spec).replace(/\/+$/, '') || (spec ? '/' : '');
+  if (!host) return false;
+  if (host === '/') return true;
+  const segments = host.split('/').filter(Boolean);
+  for (const never of NEVER_MOUNT) {
+    if (never === '/') continue;
+    const want = never.split('/').filter(Boolean);
+    if (want.every((seg, i) => segments[i] === seg)) return true;
   }
-  // -v /:/host or -v /:/host:ro
-  return spec.split(':')[0] === '/';
+  return segments.some((seg) => NEVER_MOUNT_DIRS.has(seg));
 }
 
 /**
@@ -120,4 +177,52 @@ export function unsafeSandboxMessage(found) {
     '  AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS=1',
     'It stays in the log on every start, so nobody inherits it by accident.',
   ].join('\n');
+}
+
+/**
+ * Split AGENT_HUB_SANDBOX_ARGS the way a shell would, minus the shell.
+ *
+ * It was `split(/\s+/)`, which is right until a mount path has a space in it
+ * or somebody writes `--label="my session"`. The naive split handed podman
+ * two arguments where the operator meant one, and the unsafe-args check saw
+ * the same two, so what was checked and what was meant quietly disagreed.
+ * Quotes group, a backslash escapes the next character, and nothing else is
+ * interpreted — no variables, no globs, no subshells, because this is an
+ * argument list and not a script.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function splitArgs(text) {
+  /** @type {string[]} */
+  const out = [];
+  let current = '';
+  let inWord = false;
+  /** @type {'"' | "'" | null} */
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) current += text[++i];
+      else current += c;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      inWord = true;
+    } else if (c === '\\' && i + 1 < text.length) {
+      current += text[++i];
+      inWord = true;
+    } else if (/\s/.test(c)) {
+      if (inWord) out.push(current);
+      current = '';
+      inWord = false;
+    } else {
+      current += c;
+      inWord = true;
+    }
+  }
+  if (inWord) out.push(current);
+  return out;
 }

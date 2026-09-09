@@ -948,7 +948,7 @@ if [ -n "$CLAUDE_BIN" ]; then
   if as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     ok "claude is logged in"
   else
-    warn "claude is NOT logged in — once the service is up, run 'agent-hub login' or send /login in Telegram"
+    warn "claude is NOT logged in — once the service is up, run 'agent-hub login', or connect an account from the app"
   fi
   # Put it on the login-shell PATH too, so an operator who SSHes in and types
   # `claude` gets the same binary agent-hub uses.
@@ -981,7 +981,7 @@ else
     done
     if [ -n "$CLAUDE_BIN" ]; then
       ok "installed claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
-      warn "claude is NOT logged in yet — run 'agent-hub login' or send /login in Telegram"
+      warn "claude is NOT logged in yet — run 'agent-hub login', or connect an account from the app"
     else
       warn "the claude installer finished but no binary was found — see /tmp/claude-install.log"
     fi
@@ -2680,7 +2680,7 @@ if [ "$WIZARD" = yes ]; then
   if [ -n "$ENROL_URL" ] && [ "${STARTED:-0}" != 1 ]; then
     printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
     printf '      sudo -u %s %s/bin/agent-fleet-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
-    printf '  or send /enroll <pin> to your bot. Until then the sidecar is refused on every try.\n'
+    printf '  Until then the sidecar is refused on every try.\n'
   fi
 
   # As the service user: root's ~/.claude is not where the credentials live, so
@@ -2688,7 +2688,7 @@ if [ "$WIZARD" = yes ]; then
   if [ -n "$CLAUDE_BIN" ] && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     printf '\n  claude is not logged in yet:\n'
     printf '      agent-hub login          (then: agent-hub code <value>)\n'
-    printf '      or send /login to your bot\n'
+    printf '      or connect an account from the app, once this box has joined a fleet\n'
   fi
 
   # The API token is what a phone or a Shortcut presents, and it was generated
@@ -2770,21 +2770,15 @@ else
 
 Next:
 
-  1. Create a Telegram bot — message @BotFather, /newbot — and put the token in:
-       $ENV_FILE
-
-  2. Start the session manager:
+  1. Start the session manager:
        systemctl enable --now agent-hub
        journalctl -u agent-hub -f
 
-  3. Message your bot /whoami, put the id it replies with into
-     AGENT_HUB_TELEGRAM_ALLOWED_USERS in $ENV_FILE, then:
-       systemctl restart agent-hub
-
-  4. Check the box is ready:
+  2. Check the box is ready:
        agent-hub doctor
 
-  If claude is not logged in yet, send your bot /login and follow the link.
+  If claude is not logged in yet, run `agent-hub login` and follow the link,
+  or connect an account from the app once this box has joined a fleet.
 
   For the fleet: put an AGENT_FLEET_API_TOKEN in $COORD_ENV (break-glass
      admin; phones sign in and get their own), then:
