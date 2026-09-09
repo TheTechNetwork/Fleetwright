@@ -117,7 +117,7 @@ test('what goes on the wire carries no detail, and still fits', async () => {
     body: 'Waiting: overwrite src/index.js, or write to a copy?',
     data: { name: 'cc-brave-otter', promptId: 'p-01J8', options: 'overwrite,copy,cancel' },
   };
-  const wire = await envelopeFor({ pushKey: alice.pushKey }, message);
+  const wire = await envelopeFor({ pushKey: alice.pushKey }, message, { now: () => 1_700_000_000_000 });
 
   assert.equal(wire.encrypted, true);
   // NOT the session name, not the question. Everything real is in `e`.
@@ -134,10 +134,12 @@ test('what goes on the wire carries no detail, and still fits', async () => {
   // it. A realistic notification must leave room to spare.
   assert.ok(JSON.stringify(wire).length < 2048, `wire payload is ${JSON.stringify(wire).length} bytes`);
 
+  // WHEN IT WAS SENT is sealed with the rest, so a captured envelope replayed
+  // later carries its own age and the app can refuse it (#351).
   assert.deepEqual(await openWith(alice.privateKey, alice.pushKey, wire.data.e), {
     title: message.title,
     body: message.body,
-    data: message.data,
+    data: { ...message.data, sentAt: '1700000000000' },
   });
 });
 
@@ -145,10 +147,11 @@ test('a phone that predates encryption still gets its notification', async () =>
   // There are installed apps with no key, and refusing to send to them would be
   // choosing "no notification" over "a notification Apple can read" — the wrong
   // trade for somebody waiting on a session.
-  const wire = await envelopeFor({}, { title: 'cc-quiet-heron', body: 'stopped', data: { name: 'cc-quiet-heron' } });
+  const wire = await envelopeFor({}, { title: 'cc-quiet-heron', body: 'stopped', data: { name: 'cc-quiet-heron' } }, { now: () => 1_700_000_000_000 });
   assert.equal(wire.encrypted, false);
   assert.equal(wire.title, 'cc-quiet-heron');
-  assert.deepEqual(wire.data, { name: 'cc-quiet-heron' });
+  // sentAt rides in the clear too, as a string, because FCM data values are.
+  assert.deepEqual(wire.data, { name: 'cc-quiet-heron', sentAt: '1700000000000' });
 });
 
 test('a reinstall does not inherit the old key', async () => {

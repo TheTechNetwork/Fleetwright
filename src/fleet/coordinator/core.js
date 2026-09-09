@@ -625,17 +625,29 @@ export class CoordinatorCore {
       if (!checked.ok) return { ok: false, error: checked.error };
     }
     const existing = this.devices.get(token);
+    // A TOKEN BELONGS TO THE CREDENTIAL THAT REGISTERED IT. Rows are keyed by
+    // push token, so any member who learned another phone's token could
+    // re-register it under their own credential: the victim's row is
+    // replaced, revoking the victim no longer removes it, and revoking the
+    // attacker silently kills the victim's push (#351). Refused by name. The
+    // admin token has no credential and may re-register anything — and when
+    // it does, the row keeps the credential it had, so it stays revocable
+    // rather than becoming the unrevocable admin row the same issue names.
+    if (existing?.clientId && clientId && existing.clientId !== clientId) {
+      return { ok: false, error: 'that push token is registered to another device', code: 'not_yours' };
+    }
+    const owner = clientId ?? existing?.clientId;
     const device = {
       id: existing?.id ?? this.newId(),
       platform: /** @type {any} */ (platform),
       token,
-      ...(actor ? { actor } : {}),
+      ...(actor ? { actor } : !clientId && existing?.actor ? { actor: existing.actor } : {}),
       // WHICH CREDENTIAL THIS BELONGS TO, so revoking a phone can stop the
       // fleet talking to it. Without this a revoked device kept receiving
       // session names — and since prompts started carrying the question, the
       // questions themselves. Revoking a lost phone removed its ability to ASK
       // and left its ability to be TOLD, which is the wrong half.
-      ...(clientId ? { clientId } : {}),
+      ...(owner ? { clientId: owner } : {}),
       // KEPT ONLY WHEN SUPPLIED THIS TIME, never inherited from `existing`.
       //
       // A phone that reinstalls loses its private key — it was in the Keychain
@@ -663,9 +675,9 @@ export class CoordinatorCore {
     // missing the rows are left alone — an unauthenticated registration cannot
     // tell "the same phone" from "a different one", and guessing deletes
     // somebody else's.
-    if (clientId) {
+    if (owner) {
       for (const [key, other] of this.devices) {
-        if (key !== token && other.clientId === clientId) {
+        if (key !== token && other.clientId === owner) {
           this.devices.delete(key);
           this.log.info(`coordinator: dropped superseded ${other.platform} device ${other.id}`);
         }

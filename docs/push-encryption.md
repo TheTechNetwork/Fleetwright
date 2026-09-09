@@ -100,6 +100,19 @@ a sentence rather than a placeholder:
 "New notification" in that moment is the contentless wake this design
 [rejected](./relay-terms.md).
 
+## When it was sent is inside the envelope
+
+AES-GCM proves the bytes are ours; nothing proved they are *current*. A
+captured `session.awaiting-input` replayed a day later invites somebody to
+answer a question the host stopped asking — the `promptId` refuses the answer,
+but the person still read it. So `sentAt` (milliseconds, as a string, because
+FCM data values are strings) is sealed with the title, body and data, and rides
+in the clear on a plaintext notification too. An app that decrypts can refuse
+one older than it likes. The providers' own expiry — an hour, `apns-expiration`
+and FCM `ttl` — stops a late one being delivered at all, and the collapse id is
+the session name, so a newer word about a session replaces the older one rather
+than stacking under it.
+
 ## The key belongs to the install, not the phone
 
 `registerDevice` keeps `pushKey` **only when it is supplied on that

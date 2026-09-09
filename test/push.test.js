@@ -756,3 +756,85 @@ test('unspent pins are bounded, like every other transient store', async () => {
   assert.ok(e.pending.size <= 200, `${e.pending.size} pins waiting`);
   assert.equal(e.pending.has(first), false, 'the oldest is the one that goes');
 });
+
+// --- a token belongs to the credential that registered it --------------------
+
+test('a member cannot re-register somebody else’s push token', async () => {
+  // Rows are keyed by push token, so any member who learned another phone's
+  // token could re-register it under their own credential: the victim's row
+  // replaced, revoking the victim no longer removing it, revoking the attacker
+  // silently killing the victim's push (#351).
+  const c = core();
+  await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'victim', actor: 'fleet:v@x.com' });
+  const r = await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'attacker', actor: 'fleet:a@x.com' });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'not_yours');
+  const row = c.devices.get('v'.repeat(64));
+  assert.equal(row?.clientId, 'victim', 'the row is untouched');
+  assert.equal(row?.actor, 'fleet:v@x.com');
+  // The victim's own re-registration still updates it.
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'v'.repeat(64), clientId: 'victim' })).ok, true);
+});
+
+test('an admin-token re-registration keeps the row revocable', async () => {
+  // A registration made with the admin token carries no clientId. If it
+  // replaced a phone's row wholesale, revokeClient could never remove that
+  // phone again — the unrevocable admin row the same issue names. The row
+  // keeps the credential it had.
+  const c = core();
+  await c.registerDevice({ platform: 'android', token: 'p'.repeat(40), clientId: 'phone-1', actor: 'fleet:p@x.com' });
+  const r = await c.registerDevice({ platform: 'android', token: 'p'.repeat(40) });
+  assert.equal(r.ok, true);
+  assert.equal(c.devices.get('p'.repeat(40))?.clientId, 'phone-1');
+  assert.equal(c.devices.get('p'.repeat(40))?.actor, 'fleet:p@x.com');
+  assert.equal(c.revokeClient('phone-1').devices, 1, 'and revoking the phone still removes it');
+});
+
+// --- nothing is delivered late, and a newer word replaces an older one ---------
+
+test('an APNs push expires, collapses per session, and says when it was sent', async () => {
+  const { pem } = await apnsKey();
+  /** @type {any[]} */
+  const calls = [];
+  const pusher = apnsPusher(
+    { keyId: 'K', teamId: 'T', bundleId: 'network.thetech.fleetwright', privateKey: pem },
+    {
+      logger: { info() {}, warn() {} },
+      now: () => 1_700_000_000_000,
+      deliver: async (token, payload, headers) => {
+        calls.push({ token, payload: JSON.parse(payload), headers });
+        return { status: 200, body: '' };
+      },
+    },
+  );
+  await pusher.send([{ token: 'alive', platform: 'ios' }], { title: 't', body: 'b', data: { name: 'cc-brave-otter', event: 'session.awaiting-input' } });
+  const { headers, payload } = calls[0];
+  // An hour, in Apple's units: seconds since the epoch.
+  assert.equal(headers['apns-expiration'], String(1_700_000_000 + 3600));
+  assert.equal(headers['apns-collapse-id'], 'cc-brave-otter');
+  assert.equal(payload.sentAt, '1700000000000');
+});
+
+test('an FCM push carries a ttl, a collapse key, and when it was sent', async () => {
+  /** @type {any[]} */
+  const bodies = [];
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn() {} },
+    now: () => 1_700_000_000_000,
+    fetchImpl: async (/** @type {string} */ url, /** @type {any} */ init) => {
+      if (String(url).includes('oauth2')) {
+        return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 });
+      }
+      bodies.push(JSON.parse(init.body).message);
+      return new Response('{}', { status: 200 });
+    },
+  });
+  await pusher.send([{ platform: 'android', token: 'a'.repeat(40) }], { title: 't', body: 'b', data: { name: 'cc-brave-otter', event: 'session.awaiting-input' } });
+  const m = bodies[0];
+  assert.equal(m.android.ttl, '3600s');
+  assert.equal(m.android.collapse_key, 'cc-brave-otter');
+  assert.equal(m.data.sentAt, '1700000000000');
+  // A test notification names no session and collapses with nothing.
+  await pusher.send([{ platform: 'android', token: 'a'.repeat(40) }], { title: 't', body: 'b', data: { event: 'test', name: '', hostId: '', url: '' } });
+  assert.equal(bodies[1].android.collapse_key, undefined);
+});
