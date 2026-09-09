@@ -117,6 +117,28 @@ exist is a service that briefly cannot start.
 A checkout install still runs where it sits. A checkout is a thing somebody
 edits, and moving it under them would be its own kind of rude.
 
+## Root's half follows the release
+
+Everything above is unprivileged, and that is the design. But an update also
+has a root half — the units, the Claude hook, the sudoers rules and the migrate
+helper are what the **installer** writes, and a symlink swap does not touch
+them. Until it did, a box on the newest release could be running units from
+three releases ago, and the only cure was somebody with a shell running
+`install.sh --repair`.
+
+So `/update --apply` on a packaged box ends by calling the one root grant it
+has, `fleetwright-migrate`, which on a box already on the manifest's version
+downloads that release again, checks its sha256 against the manifest, unpacks
+it somewhere only root can reach, and runs **that copy's** `install.sh --repair`
+with `current` as the payload. Root runs only what the operator's manifest
+vouched for — never `current`, which the service user swaps, and never the
+checkout, which the service user owns. The installer restarts the services on
+its way out; the hub replies to the phone first and starts the heal after the
+reply has left, which is why the message says "in a moment".
+
+A checkout gets no heal, deliberately: there is no verified copy of its
+installer for root to run. The update says so and names the command.
+
 `releasesToPrune` keeps the live release **and the one before it**. A rollback
 target that was tidied away is not a rollback target.
 

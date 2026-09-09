@@ -153,3 +153,60 @@ export function migrationReply(cfg, status, release, { apply = false, check = fa
   }
   return null;
 }
+
+/**
+ * After a release has been applied unprivileged, have root refresh its half.
+ *
+ * applyRelease fetches, verifies, unpacks and swaps `current` as the service
+ * user, and that is everything an update needs — except what root owns: the
+ * units, the Claude hook, the sudoers rules and the migrate helper itself. Those
+ * stayed as the last installer left them, so a box could be on the newest
+ * release and running units from three releases ago, and the only cure was a
+ * shell. The helper heals that now: on a box already on the manifest's version
+ * it unpacks a verified copy and runs that release's installer with --repair.
+ *
+ * DEFERRED, NOT AWAITED, and the reason is the reply. The installer restarts
+ * agent-hub — this process — so a verb that waited for it would never answer
+ * the phone that asked. The reply goes out first; the heal starts after the
+ * same delay a restart waits for the reply to leave. If the heal cannot run,
+ * the process still restarts itself so the new code applies either way: the
+ * heal is the better restart, never a reason to skip one.
+ *
+ * @param {{ run?: typeof spawnSync, exists?: (p: string) => boolean,
+ *   after?: (fn: () => void) => void, restart?: () => void, logger?: { warn: Function, info: Function } }} [opts]
+ * @returns {{ scheduled: boolean, text: string }}
+ */
+export function healAfterRelease({
+  run = spawnSync,
+  exists = existsSync,
+  after = (fn) => setTimeout(fn, 1500),
+  restart = () => process.exit(0),
+  logger = console,
+} = {}) {
+  if (!exists(MIGRATE_BIN)) {
+    return {
+      scheduled: false,
+      text:
+        `${MIGRATE_BIN} is not installed, so the units, hook and sudoers rules this release's installer ` +
+        'writes were not refreshed. Re-run the installer once with --upgrade and every update after it will.',
+    };
+  }
+  after(() => {
+    const r = run('sudo', ['-n', MIGRATE_BIN], { encoding: 'utf8', timeout: 20 * 60_000 });
+    if (r.status === 0) {
+      // The installer restarted the services on its way out, this one
+      // included — reaching here means it did not, so do it ourselves.
+      logger.info('update: the release\u2019s installer ran with --repair; restarting to apply new code');
+    } else {
+      const out = `${r.stdout || ''}${r.stderr || ''}`.trim().split('\n').slice(-6).join('\n');
+      logger.warn(`update: could not refresh what the installer generates (sudo exited ${r.status}) — restarting anyway\n${out}`);
+    }
+    restart();
+  });
+  return {
+    scheduled: true,
+    text:
+      'In a moment the release\u2019s own installer runs with --repair, so the units, the hook and the ' +
+      'sudoers rules follow the release, and the services restart on the new code. Sessions are left running.',
+  };
+}

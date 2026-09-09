@@ -183,17 +183,28 @@ done
 # Read from the release's own package.json rather than from anything this script
 # remembers: what a box runs is what is on disk under the symlink, and every
 # other source for that has been wrong at least once.
+HEAL=no
 if [ "$CONVERTED" = yes ]; then
   INSTALLED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$BASE/current/package.json" 2>/dev/null | head -1)"
   if [ -n "$INSTALLED" ] && [ "$INSTALLED" = "$VERSION" ]; then
-    say "already on the packaged layout, running $VERSION — nothing to do"
-    exit 0
-  fi
+    # ALREADY ON IT IS NOT NOTHING TO DO, and this used to exit here.
+    #
+    # /update lays a release out unprivileged — fetch, verify, unpack, swap the
+    # symlink — and restarts. Everything root owns stays as the LAST installer
+    # left it: the units, the Claude hook, the sudoers rules, this helper. So a
+    # box could be on the newest release and running an installer's output
+    # from three releases ago, and the only remedy was a person with a shell
+    # running --repair by hand. This is the one root step an update has, and
+    # it is the step that makes installer changes ride the release.
+    say "already on the packaged layout, running $VERSION — refreshing what the installer generates"
+    HEAL=yes
+  else
   # UNREADABLE IS NOT UP TO DATE. A `current` pointing at a directory with no
   # package.json is a box mid-way through something, and re-laying the release
   # is exactly the repair for it — so an empty INSTALLED falls through rather
   # than being compared to nothing and matching.
   say "on the packaged layout running ${INSTALLED:-a version that cannot be read}; ${CHANNEL:-stable} now has $VERSION"
+  fi
 fi
 
 TARBALL_URL="$(printf '%s' "$MANIFEST_URL" | sed 's|/[^/]*$||')/$FILE"
@@ -205,6 +216,37 @@ curl -fsSL "$TARBALL_URL" -o "$WORK/$FILE" || die "could not download the releas
 GOT="$(sha256sum "$WORK/$FILE" | cut -d' ' -f1)"
 [ "$GOT" = "$SHA" ] || die "the release does not match its manifest: expected $SHA, got $GOT"
 say "sha256 ok"
+
+# THE HEAL. The box is already on this version; what is stale is root's half.
+#
+# FROM THE VERIFIED COPY, NOT FROM `current` AND NOT FROM THE CHECKOUT. Both of
+# those are writable by the service user — applyRelease swaps `current` as that
+# user, and install.sh chowns the checkout so /update can pull — and a root
+# shell running a script the service user can rewrite is root with extra
+# steps. The tree unpacked here is root-owned, in a temp directory only root
+# can reach, from a tarball whose sha256 the operator's own manifest vouched
+# for. That is what root may run. The bring-forward path below keeps preferring
+# the checkout's installer for the reason its comment gives; this path has no
+# checkout to prefer and no reason to want one.
+#
+# --repair rather than --upgrade: --upgrade rewrites the units, the hook and
+# the directories; --repair also re-applies the sudoers rules from the answers
+# already in the env file, which is the drift a shell used to be the only cure
+# for. Neither asks a question. The installer restarts the services itself,
+# agent-hub included, and KillMode=process is what lets this helper outlive the
+# process that called it.
+if [ "$HEAL" = yes ]; then
+  mkdir -p "$WORK/release"
+  tar -xzf "$WORK/$FILE" -C "$WORK/release" --strip-components=1
+  if ! bash "$WORK/release/install/install.sh" --help >/dev/null 2>"$WORK/smoke.err"; then
+    say "the installer inside $VERSION does not run:"
+    sed 's/^/    /' "$WORK/smoke.err" >&2
+    die "refusing to refresh from a release whose installer cannot start. Nothing was changed."
+  fi
+  say "running the installer from the verified release, with --repair"
+  AGENT_FLEET_PAYLOAD="$BASE/current" bash "$WORK/release/install/install.sh" --repair
+  exit $?
+fi
 
 mkdir -p "$BASE/releases"
 rm -rf "$BASE/releases/.incoming-$VERSION"

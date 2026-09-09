@@ -585,7 +585,10 @@ sudo chown -R "$(stat -c %U /opt/agent-fleet/bin/agent-hub)" /opt/agent-fleet
 
 Re-running the installer is worth doing after a pull rather than just
 restarting: new steps get asked about (push was added this way), anything
-already set is left alone, and it repairs exactly this.
+already set is left alone, and it repairs exactly this. On a box that installs
+packaged releases, `/update` does it for you — the release's own installer runs
+with `--repair` after the release is laid out (docs/packaging.md, "Root's half
+follows the release").
 
 Restarting is safe: the unit's `KillMode=process` leaves the tmux server alone,
 sessions survive, and the next reconcile re-adopts them. Restarting the sidecar
