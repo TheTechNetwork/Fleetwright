@@ -1,4 +1,12 @@
-// Every setting the host reads is written down in the file an operator edits.
+// Every setting a box reads is written down in the file an operator edits.
+//
+// TWO PROCESSES, TWO FILES, ONE RULE. agent-hub reads `/etc/agent-hub.env` and
+// the sidecar reads `/etc/agent-fleet-sidecar.env`, and the split is deliberate
+// — different privileges, different secrets. Both halves are checked here
+// because the failure is the same in both and it is not a documentation
+// failure: a setting nobody wrote down is a setting nobody sets, including the
+// four that decide what a notification may quote and when a session is
+// restarted underneath somebody.
 //
 // THE WORKER HAS HAD THIS TEST SINCE #353 AND THE HOST HAS NOT, which is the
 // wrong way round: `wrangler.toml` is edited by whoever forks the coordinator,
@@ -26,8 +34,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const CONFIG = readFileSync(new URL('../src/config.js', import.meta.url), 'utf8');
-const EXAMPLE = readFileSync(new URL('../install/agent-hub.env.example', import.meta.url), 'utf8');
+const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+const CONFIG = read('src/config.js');
+const EXAMPLE = read('install/agent-hub.env.example');
+
+// THE SIDECAR'S SETTINGS COME FROM TWO PLACES, which is why this is a
+// concatenation rather than one file: `config.js` holds everything the running
+// process reads, and `bin/agent-fleet-sidecar` holds the two that are read
+// before it exists — the path to the env file itself, and the flag that quiets
+// enrolment.
+//
+// COMMENTS ARE STRIPPED FIRST. `config.js` explains at length that
+// AGENT_FLEET_HOST_TOKEN was replaced by a keypair, and a scan of the raw text
+// reads that paragraph as a setting the file must document — which would have
+// this test demand an example line for a variable whose whole point is that it
+// no longer exists.
+const SIDECAR = [read('src/fleet/host/config.js'), read('bin/agent-fleet-sidecar')]
+  .map((src) => src.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''))
+  .join('\n');
+const SIDECAR_EXAMPLE = read('install/agent-fleet-sidecar.env.example');
 
 /**
  * Every AGENT_HUB_* name config.js reads.
@@ -90,4 +116,63 @@ test('the three that decide what a session is allowed to do are explained, not j
       `${name} is listed with no explanation of what setting it does`,
     );
   }
+});
+
+// --- the sidecar, same rule ------------------------------------------------
+
+/**
+ * Every AGENT_FLEET_* name the sidecar reads.
+ *
+ * Two accessor shapes rather than one: `str(env, 'AGENT_FLEET_X', …)` inside
+ * config.js and a bare `process.env.AGENT_FLEET_X` in the bin script, which
+ * runs before a config object exists.
+ */
+function sidecarReadsFromEnv() {
+  const found = [...SIDECAR.matchAll(/(?:'|process\.env\.)(AGENT_FLEET_[A-Z0-9_]+)/g)].map((m) => m[1]);
+  return [...new Set(found)].sort();
+}
+
+/** @param {string} text */
+const namesIn = (text) => new Set([...text.matchAll(/(AGENT_FLEET_[A-Z0-9_]+)/g)].map((m) => m[1]));
+
+test('every setting the sidecar reads is named in its example env file', () => {
+  // Four were not, and they are not obscure: what a notification may quote of
+  // a session, how long a quiet pane waits before the sidecar restarts it, and
+  // the two the process reads before this file is loaded at all. The first is a
+  // decision about whose lock screen a path may appear on and it was reachable
+  // only by reading config.js.
+  const have = namesIn(SIDECAR_EXAMPLE);
+  const missing = sidecarReadsFromEnv().filter((name) => !have.has(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `read by the sidecar and absent from install/agent-fleet-sidecar.env.example:\n  ${missing.join('\n  ')}`,
+  );
+});
+
+test('the sidecar file names nothing the sidecar stopped reading', () => {
+  // The other direction, and there is no exception here — the sidecar has no
+  // archived surface the way agent-hub has Telegram. A name in this file that
+  // nothing reads is a setting somebody will set and then wonder about.
+  const reads = new Set(sidecarReadsFromEnv());
+  const stale = [...namesIn(SIDECAR_EXAMPLE)].filter((name) => !reads.has(name)).sort();
+  assert.deepEqual(stale, [], `named in the sidecar example and read nowhere:\n  ${stale.join('\n  ')}`);
+});
+
+test('the setting that decides what leaves this box is explained, not just listed', () => {
+  // AGENT_FLEET_PROMPT_TEXT is the sidecar's equivalent of the three above: it
+  // decides whether a path or a command line travels to a lock screen through
+  // somebody else's servers, on a fleet that may not belong to the person
+  // holding the phone. A bare `#AGENT_FLEET_PROMPT_TEXT=0` in a list of
+  // defaults is not something anybody makes that decision from.
+  const at = SIDECAR_EXAMPLE.indexOf('#AGENT_FLEET_PROMPT_TEXT=');
+  assert.ok(at > 0, 'AGENT_FLEET_PROMPT_TEXT is not offered as a settable line');
+  const before = SIDECAR_EXAMPLE.slice(0, at).split('\n').slice(0, -1).reverse();
+  const prose = [];
+  for (const line of before) {
+    if (!line.startsWith('#')) break;
+    if (/^# ---/.test(line)) break;
+    prose.push(line.replace(/^#\s?/, ''));
+  }
+  assert.ok(prose.join(' ').trim().length > 40, 'it is listed with no explanation of what setting it does');
 });
