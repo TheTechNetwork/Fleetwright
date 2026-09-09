@@ -222,8 +222,9 @@ export function loadConfig(env = process.env) {
     // belonged to.
     sandboxCredentialsFile: str('AGENT_HUB_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
 
-    // Whose account local surfaces use — the Telegram bot, the web UI, and
-    // `agent-hub new` typed on the box. Needed only when more than one person
+    // Whose account local surfaces use — the web console, and `agent-hub new`
+    // typed on the box. (It named the Telegram bot first, which has been
+    // archived since docs/telegram.md; the comment outlived the surface.) Needed only when more than one person
     // has linked an account here; with exactly one, that one is the answer.
     // See operatorAccount().
     operator: str('AGENT_HUB_OPERATOR'),
