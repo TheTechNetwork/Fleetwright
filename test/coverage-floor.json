@@ -59,6 +59,7 @@
   "src/fleet/coordinator/scheduler.js": 100,
   "src/fleet/coordinator/server.js": 89,
   "src/fleet/coordinator/spec.js": 100,
+  "src/fleet/coordinator/spent-tokens.js": 100,
   "src/fleet/crypto.js": 98,
   "src/fleet/host/auto-labels.js": 100,
   "src/fleet/host/config.js": 65,
