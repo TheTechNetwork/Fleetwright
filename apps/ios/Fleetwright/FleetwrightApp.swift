@@ -7,6 +7,9 @@ extension Notification.Name {
     /// credentials reloads; nobody trusts the payload, because a custom scheme
     /// can be claimed by anything.
     static let credentialsChanged = Notification.Name("network.thetech.fleetwright.credentialsChanged")
+    /// Somebody tapped a notification. `userInfo["name"]` is the session it
+    /// was about, when the payload said.
+    static let notificationOpened = Notification.Name("network.thetech.fleetwright.notificationOpened")
 }
 
 @main
@@ -78,8 +81,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ///   list, the pane and the credentials sheet are all on screen, and a
     ///   screenshot of any of them is exactly what this app is careful about.
     /// - Network breadcrumbs stay OFF. This app's requests are intents to the
-    ///   coordinator, and a credential may travel in the query string —
-    ///   deliberately, because a Shortcut cannot set headers.
+    ///   coordinator, and every one carries the fleet credential. This app
+    ///   sends it as a header, never in the URL; the coordinator also accepts
+    ///   `?token=` so a Shortcut's "Get Contents of URL" can reach it, which is
+    ///   why `beforeSend` below strips query strings anyway — the backstop is
+    ///   for a URL this app did not build.
     /// - `sendDefaultPii` stays OFF, so no IP address and no identifiers.
     /// - Tracing is off entirely: the spans would be those same requests.
     ///
@@ -188,5 +194,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .sound]
+    }
+
+    /// Somebody tapped one. Until this existed a tap opened the app to
+    /// whichever tab was last showing — Settings, as often as not — and the
+    /// session that had just asked for them was two taps further on. The
+    /// notification exists so a decision can be made from a lock screen; the
+    /// least it can do is land on the list that decision is on.
+    ///
+    /// The payload is not trusted with anything beyond a name to look for:
+    /// the session list is refreshed from the coordinator, and a name that is
+    /// no longer there is simply not there.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let info = response.notification.request.content.userInfo
+        let name = info["name"] as? String
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .notificationOpened,
+                object: nil,
+                userInfo: name.map { ["name": $0] } ?? [:]
+            )
+        }
     }
 }

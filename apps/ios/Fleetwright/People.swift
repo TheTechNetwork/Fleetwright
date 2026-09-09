@@ -71,7 +71,7 @@ struct PeopleView: View {
                             .buttonStyle(.borderless)
                             .disabled(busy)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, Design.Space.hair / 2)
                 }
             } header: {
                 Text("Invited")
