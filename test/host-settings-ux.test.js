@@ -14,11 +14,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
-const kotlin = () =>
-  ['Fleet.kt', 'HostSheet.kt', 'MainActivity.kt']
-    .map((f) => readFileSync(new URL(`../apps/android/app/src/main/java/network/thetech/fleetwright/${f}`, import.meta.url), 'utf8'))
-    .join('\n');
+// THE WHOLE APP. This named three files, and the settings panel it was
+// reaching for has since moved into a fourth — the failure ios-sources.js was
+// written about, arriving on the other phone.
+const kotlin = () => androidSources();
 
 /** Code with the comments taken out — line comments and block comments alike. */
 const code = (s) =>

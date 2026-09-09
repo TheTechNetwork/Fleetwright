@@ -19,6 +19,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { androidSources } from './helpers/android-sources.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 /** Comments stripped. Five tripwires in this repo have matched the prose. */
@@ -105,7 +106,7 @@ test('both apps show how long a session has been quiet, and neither shouts about
     [
       'Android',
       read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt'),
-      read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'),
+      androidSources(),
     ],
   ];
   for (const [name, model, view] of models) {

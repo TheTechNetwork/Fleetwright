@@ -25,6 +25,7 @@ import { startStubHub } from './helpers/stub-hub.js';
 import { VERBS, isMutating } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 /** A box laid out the way a release install leaves one. */
 function packagedBox(installed = 'v0.2.2') {
@@ -363,8 +364,7 @@ test('neither app claims a box is current when nobody could find out', () => {
   assert.match(ios, /updates\?\.appUpdatePending == true \{\s+Button\("Apply update"\)/);
   assert.doesNotMatch(ios, /updates\?\.appPending == true \{\s+Button/);
 
-  const act = readFileSync(
-    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  const act = androidSources();
   assert.match(act, /!host\.appStatusKnown -> parts\.add\("update status unknown"\)/);
   // A migratable checkout counts no commits and names no release version, so
   // both of the old signals were silent on it and it rendered as current
@@ -388,8 +388,7 @@ test('both apps apply the check the host just ran', () => {
   // updates that instead, which is the same rule with one fewer indirection.
   assert.match(ios, /if let w = reply\.waiting \{ health = health\?\.withUpdates\(w\) \}/);
 
-  const act = readFileSync(
-    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  const act = androidSources();
   assert.match(act, /r\.waiting\?\.let \{ w ->/);
   // AFTER the refresh, not before it — the refresh is what would otherwise
   // overwrite it.

@@ -17,26 +17,37 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 /** Sentinel: read every Swift file rather than one named screen. */
 const IOS_ALL = Symbol('ios');
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+const ANDROID_ALL = Symbol('the Android app');
+
+/**
+ * A view from the APPS table as source text.
+ *
+ * The two sentinels stand for a whole app rather than a file, because these
+ * tests assert what the app DOES and neither app keeps that in one screen any
+ * more — iOS since the host page, Android since the settings panel.
+ */
+const sourceOf = (/** @type {string|symbol} */ view) =>
+  view === IOS_ALL ? iosSources() : view === ANDROID_ALL ? androidSources() : read(/** @type {string} */ (view));
+
 const APPS = [
   // The whole app, not one screen: a host's controls live on HostView now,
   // and a test that names a file asserts where code LIVES while claiming to
   // assert what it DOES.
   ['iOS', IOS_ALL, 'apps/ios/Fleetwright/Fleet.swift'],
-  [
-    'Android',
-    'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt',
-    'apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt',
-  ],
+  // And the whole Android app, for the same reason: its settings panel is
+  // SettingsPanel.kt now.
+  ['Android', ANDROID_ALL, 'apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt'],
 ];
 
 test('both apps offer a check that applies nothing, and asks about both subjects', () => {
   for (const [name, view] of APPS) {
-    const src = view === IOS_ALL ? iosSources() : read(view);
+    const src = sourceOf(view);
     // THE WORD, NOT THE EXACT LABEL. iOS says "Check for updates" on the
     // machine's own page, which is better than the bare "Check" this asserted:
     // a button labelled with a verb and no object is the ambiguity the
@@ -73,7 +84,7 @@ test('apply is offered only when something is waiting', () => {
   // A button that is always offered teaches people to press it without
   // reading, which is the opposite of what a maintenance screen is for.
   for (const [name, view] of APPS) {
-    const src = view === IOS_ALL ? iosSources() : read(view);
+    const src = sourceOf(view);
     // `appUpdatePending` on iOS, `appPending` on Android — one name each, and
     // both now READ THE HOST'S ANSWER rather than re-deriving it from a commit
     // count that is null on every packaged box.
@@ -101,7 +112,7 @@ test('what the OS has waiting is actually displayed', () => {
   // visible by tapping a button that also did something.
   assert.match(iosSources(), /updates\?\.system/, 'iOS does not show the system updates it receives');
   assert.match(read(APPS[1][2]), /systemUpdates/, 'Android does not parse the system updates it receives');
-  assert.match(read(APPS[1][1]), /systemUpdates/, 'Android does not show the system updates it receives');
+  assert.match(sourceOf(APPS[1][1]), /systemUpdates/, 'Android does not show the system updates it receives');
 });
 
 test('host output is rendered as output, not as a caption', () => {
@@ -111,7 +122,7 @@ test('host output is rendered as output, not as a caption', () => {
   const ios = iosSources();
   assert.match(ios, /design: \.monospaced/, 'iOS still renders host output in the body font');
   assert.match(ios, /textSelection\(\.enabled\)/, 'iOS host output cannot be copied');
-  const android = read(APPS[1][1]);
+  const android = sourceOf(APPS[1][1]);
   assert.match(android, /FontFamily\.Monospace/, 'Android still renders host output in the body font');
   assert.match(android, /verticalScroll/, 'Android host output cannot scroll');
 });

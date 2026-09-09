@@ -26,13 +26,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
 const IOS_CLIENT = read('apps/ios/Fleetwright/Fleet.swift');
 const IOS_VIEW = iosSources();
 const DROID_CLIENT = read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt');
-const DROID_VIEW = read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+const DROID_VIEW = androidSources();
 
 test('minting a pin needs no admin credential, which is why this is only a screen', () => {
   // Asserted rather than assumed, because if an admin gate is ever added to

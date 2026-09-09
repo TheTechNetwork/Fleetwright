@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { readCredentialState, describeCredential } from '../src/core/claude-credential.js';
+import { androidSources } from './helpers/android-sources.js';
 
 /** @param {import('node:test').TestContext} t @param {unknown} contents */
 function credentialFile(t, contents) {
@@ -151,7 +152,7 @@ test('both apps read the credential and neither treats absent as broken', () => 
     read('apps/ios/Fleetwright/Fleet.swift') + read('apps/ios/Fleetwright/FleetView.swift');
   const android =
     read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt') +
-    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+    androidSources();
 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
     assert.match(src, /credential/i, `${name} does not read the credential at all`);

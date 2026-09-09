@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { androidSources } from './helpers/android-sources.js';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -26,7 +27,7 @@ const DROID = {
   fleet: read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt'),
   sheet: read('apps/android/app/src/main/java/network/thetech/fleetwright/StartSheet.kt'),
   kind: read('apps/android/app/src/main/java/network/thetech/fleetwright/SessionKind.kt'),
-  view: read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'),
+  view: androidSources(),
 };
 
 test('both apps can ask what tasks the fleet has', () => {

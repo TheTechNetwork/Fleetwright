@@ -20,6 +20,7 @@ import {
   callbackPage,
 } from '../src/fleet/coordinator/oauth.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { androidSources } from './helpers/android-sources.js';
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 const APP = { clientId: 'Iv23liTEST', clientSecret: 'shh', slug: 'fleetwright-agents' };
@@ -443,7 +444,7 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   const android =
     read('apps/android/app/src/main/java/network/thetech/fleetwright/WebAuth.kt') +
     read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt') +
-    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+    androidSources();
 
   // THE BROWSER IS A REAL BROWSER on both, and that matters more than the tap.
   // ASWebAuthenticationSession and a Custom Tab both show the real address bar

@@ -12,6 +12,7 @@ import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { readFileSync } from 'node:fs';
+import { androidSources } from './helpers/android-sources.js';
 
 const quiet = { info() {}, warn() {}, error() {} };
 const intent = (verb, params) => ({
@@ -142,7 +143,7 @@ test('both apps carry the bin, and neither renders it for an old host', () => {
     read('apps/ios/Fleetwright/RecycleBin.swift');
   const android =
     read('apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt') +
-    read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt') +
+    androidSources() +
     read('apps/android/app/src/main/java/network/thetech/fleetwright/RecycleBinSheet.kt');
 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {

@@ -18,6 +18,7 @@ import { dispatch } from '../src/adapters/commands.js';
 import { VERBS } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 /** @param {object} [extra] */
 function fixture(extra = {}) {
@@ -333,7 +334,6 @@ test('both apps apply the channel the host just confirmed', () => {
   assert.match(kt, /channel = json\.optString\("channel"\)/);
   assert.match(kt, /channelPinned = json\.optBoolean\("channelPinned"\)/);
 
-  const act = readFileSync(
-    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  const act = androidSources();
   assert.match(act, /it\.copy\(channel = now, channelPinned = r\.channelPinned\)/);
 });

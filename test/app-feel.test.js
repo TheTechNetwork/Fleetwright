@@ -16,11 +16,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { androidSources } from './helpers/android-sources.js';
+
 const VIEW = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-const MAIN = readFileSync(
-  new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url),
-  'utf8',
-);
+// THE WHOLE APP, not one file. This read MainActivity.kt, and the settings
+// panel it slices into has since moved to SettingsPanel.kt — the same move that
+// broke six iOS tests and produced helpers/ios-sources.js.
+const MAIN = androidSources();
 /** Source with its commentary gone, so a note about a pattern is not read as one. */
 const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
