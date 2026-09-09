@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -788,6 +789,12 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var pinBoundTo by rememberSaveable { mutableStateOf("") }
     var ephemeralPin by rememberSaveable { mutableStateOf(false) }
     var hosts by remember { mutableStateOf(listOf<Fleet.Host>()) }
+    // Where a temporary machine would come from, or null when this fleet
+    // cannot start one. The control below is drawn from this and only this.
+    var runnerRepo by remember { mutableStateOf<String?>(null) }
+    var runnerPlatform by rememberSaveable { mutableStateOf("linux") }
+    var runnerMinutes by rememberSaveable { mutableStateOf("60") }
+    var runnerResult by rememberSaveable { mutableStateOf("") }
     var confirming by rememberSaveable { mutableStateOf<String?>(null) }
 
     confirming?.let { hostId ->
@@ -815,7 +822,18 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         )
     }
 
-    LaunchedEffect(signedIn) { hosts = enrolledHosts(settings) }
+    LaunchedEffect(signedIn) {
+        // TWO ANSWERS, ONE WAIT, like the devices section below: they do not
+        // depend on each other.
+        coroutineScope {
+            val members = async { enrolledHosts(settings) }
+            val runners = async { if (settings.credential.isNotBlank()) Fleet(settings).runners() else null }
+            hosts = members.await()
+            // A NULL INSIDE A SUCCESS IS THE ANSWER "no runner repository"; a
+            // failed request keeps what was there.
+            runners.await()?.onSuccess { runnerRepo = it }
+        }
+    }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Design.Space.inside)) {
         // WHICH BUILD THIS IS, WHERE A PERSON CAN READ IT.
@@ -1476,6 +1494,72 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                 )
+            }
+
+            // A MACHINE THAT DOES NOT EXIST YET, beside the pin for one that
+            // does. `provision` has been on this phone since runner central
+            // shipped and nothing offered it, because nothing could tell
+            // whether the button would do anything: the coordinator refuses a
+            // fleet with no runner repository with a sentence naming an
+            // environment variable, which is right for an agent that asked and
+            // a dead control on every fleet that has not set one. The snapshot
+            // says now, and this is drawn from that and only that.
+            runnerRepo?.let { repo ->
+                Text("Temporary machine", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                ) {
+                    listOf("linux" to "Linux", "macos" to "macOS", "windows" to "Windows", "android" to "Android emulator")
+                        .forEach { (value, label) ->
+                            FilterChip(
+                                selected = runnerPlatform == value,
+                                enabled = !busy,
+                                onClick = { runnerPlatform = value },
+                                label = { Text(label) },
+                            )
+                        }
+                }
+                OutlinedTextField(
+                    value = runnerMinutes,
+                    onValueChange = { runnerMinutes = it.filter { c -> c.isDigit() }.take(3) },
+                    label = { Text("Minutes, 5 to 350") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                OutlinedButton(
+                    // THE PROTOCOL'S OWN BOUNDS, checked here so the refusal
+                    // for 4 and for 351 is not written twice. Outside them the
+                    // button is not offered, which is what the field's label
+                    // is for.
+                    enabled = !busy && (runnerMinutes.toIntOrNull() ?: 0) in 5..350,
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            runnerResult = runCatching {
+                                Fleet(settings).provision(runnerPlatform, minutes = runnerMinutes.toInt()).text
+                            }.getOrElse { it.message ?: "that did not work" }
+                            busy = false
+                        }
+                    },
+                ) { Text("Ask for a temporary machine") }
+                // IT DOES NOT RETURN A HOST, and the reply says so too, because
+                // a person who reads "started" as "ready" goes looking for a
+                // machine that is still being built.
+                Text(
+                    "From $repo. It takes a few minutes to boot and then appears in the fleet as a host " +
+                        "of yours, for the time you asked. Sessions on it are lost when it goes, and it " +
+                        "spends Actions minutes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (runnerResult.isNotBlank()) {
+                    Text(
+                        runnerResult,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
 
             // AND THE THIRD WAY A MACHINE ARRIVES: a repository's own

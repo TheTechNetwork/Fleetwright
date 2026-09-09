@@ -899,6 +899,22 @@ class Fleet(
         token to (Regex("\\(([^)]*@[^)]*)\\)").find(label)?.groupValues?.get(1) ?: "")
     }
 
+    /**
+     * Whether this fleet can start a temporary machine, and where from.
+     *
+     * The `runners` field of /api/hosts: the repository holding the runner
+     * workflows, or null. NULL IS AN ANSWER — the coordinator knows it has no
+     * runner repository — and an older coordinator that omits the field means
+     * the same. A failed request is neither, which is why this is a [Result]
+     * rather than a null that would quietly hide the control after one blink
+     * of the network.
+     */
+    suspend fun runners(): Result<String?> = withContext(Dispatchers.IO) {
+        runCatching {
+            get("/api/hosts").optJSONObject("runners")?.optString("repo")?.takeIf { it.isNotBlank() && it != "null" }
+        }
+    }
+
     /** The machines in this fleet, with their key fingerprints. */
     suspend fun enrolledHosts(): List<Host> = withContext(Dispatchers.IO) {
         runCatching {
