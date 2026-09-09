@@ -121,7 +121,7 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
       // testing the check.
       ? '#!/bin/bash\nexit 3\n'
       : '#!/bin/bash\n# The release\'s installer, stubbed. See rewriteReleaseInstaller.\n' +
-        `printf 'HANDOFF-FROM-RELEASE args=%s\\n' "$*" > ${JSON.stringify(path.join(work, 'handoff-release'))}\n`,
+        `printf 'HANDOFF-FROM-RELEASE payload=%s args=%s\\n' "$AGENT_FLEET_PAYLOAD" "$*" > ${JSON.stringify(path.join(work, 'handoff-release'))}\n`,
   );
 
   // The box: a checkout, an env file, and a state directory.
@@ -203,10 +203,10 @@ test('a box converts: fetched, verified, laid out, handed off', (t) => {
       readFileSync(path.join(f.base, 'current', 'package.json'), 'utf8').includes('v9.9.9'), true,
       'current does not resolve to the release');
 
-    // AND THE HANDOFF WENT TO THE BOX'S OWN INSTALLER, with the release as
-    // payload. This is the property that stopped a broken release installer
-    // from being able to strand a machine.
-    const handoff = readFileSync(path.join(f.work, 'handoff'), 'utf8');
+    // AND THE HANDOFF WENT TO THE VERIFIED RELEASE'S INSTALLER, with `current`
+    // as payload — never the checkout's, which the service user owns.
+    assert.equal(existsSync(path.join(f.work, 'handoff')), false, 'the checkout\u2019s installer ran as root');
+    const handoff = readFileSync(path.join(f.work, 'handoff-release'), 'utf8');
     assert.match(handoff, new RegExp(`payload=${f.base}/current`), handoff);
     assert.match(handoff, /args=--upgrade/, handoff);
   } finally {
@@ -237,15 +237,17 @@ test('a release whose installer cannot start is refused, and nothing moves', (t)
   }
 });
 
-test('a box with no local installer falls back, and says why', (t) => {
+test('a box with no local installer converts exactly like one with', (t) => {
+  // The checkout's installer is not consulted on either route now, so its
+  // absence changes nothing — which is the property a box installed from a
+  // tarball by hand needs.
   const f = fixture({ localInstaller: false });
   if (!f) return t.skip('the release could not be built here');
   try {
-    const out = `${(migrate(f)).stdout}${(migrate(f)).stderr}`;
-    // Whatever happens next, it must have SAID which of the three reasons sent
-    // it down the fallback — that silence is what made a merged fix look like
-    // it had not landed.
-    assert.match(out, /no checkout to use|not executable|predates the payload option/, out.slice(0, 400));
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 0, out.slice(0, 400));
+    assert.match(readFileSync(path.join(f.work, 'handoff-release'), 'utf8'), /args=--upgrade/);
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }
@@ -302,7 +304,7 @@ test('a half-finished migration resumes instead of reporting success', (t) => {
 
     // And it must have actually converted: the handoff happened, and the
     // half-unpacked directory was replaced by a real release.
-    assert.equal(existsSync(path.join(f.work, 'handoff')), true, 'the migration never handed off');
+    assert.equal(existsSync(path.join(f.work, 'handoff-release')), true, 'the migration never handed off');
     assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'agent-hub.mjs')), true,
       'the release from the failed attempt was left in place');
   } finally {
@@ -378,7 +380,7 @@ test('a converted box on an older release is brought forward, not refused', (t) 
       true,
       'current still points at the release the box was stuck on',
     );
-    assert.equal(existsSync(path.join(f.work, 'handoff')), true, 'the installer was never re-run');
+    assert.equal(existsSync(path.join(f.work, 'handoff-release')), true, 'the installer was never re-run');
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }
@@ -492,7 +494,9 @@ test('a converted box needs no checkout to be brought forward', (t) => {
       'the release\'s own installer was never reached');
     assert.match(out, /laid out .*releases\/v9\.9\.9/, out.slice(0, 500));
     assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true);
-    assert.match(out, /this box has no checkout to use/, out.slice(0, 800));
+    // No fallback message, because there is no fallback any more: the verified
+    // release's installer is the only one either route runs.
+    assert.match(out, /running the installer from the verified release/, out.slice(0, 800));
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }

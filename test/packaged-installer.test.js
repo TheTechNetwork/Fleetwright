@@ -254,21 +254,22 @@ test('a migration uses the installer the box already has', () => {
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 
   assert.match(sh, /DIR="\$\{AGENT_FLEET_PAYLOAD:-/, 'install.sh cannot be pointed at a payload');
-  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" exec bash "\$LOCAL_INSTALLER"/);
+  // FROM THE VERIFIED COPY, ON BOTH ROUTES. The box's own installer was
+  // preferred for a while — refreshed by the one-liner, so an installer fix
+  // needed no release — and the cost went unnamed: install.sh chowns the
+  // checkout to the service user so /update can pull, so root was executing a
+  // script the service user could rewrite. Root now runs only what the
+  // manifest's sha256 vouched for, unpacked where only root can reach.
+  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" exec bash "\$WORK\/release\/install\/install\.sh" --upgrade/);
+  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" bash "\$WORK\/release\/install\/install\.sh" --repair/);
+  assert.doesNotMatch(mig, /LOCAL_INSTALLER/, 'the checkout\u2019s installer must not run as root');
+  assert.doesNotMatch(mig, /exec bash "\$BASE\/current\/install\/install\.sh"/, 'nor the one under a symlink the service user swaps');
 
-  // THE LOCAL ONE IS TRIED FIRST. A fallback that runs first is not a fallback.
-  const local = mig.indexOf('LOCAL_INSTALLER="$INSTALL_DIR/install/install.sh"');
-  const fallback = mig.indexOf('running the installer from the release');
-  assert.ok(local > 0 && local < fallback, 'the release installer is still preferred');
-
-  // And it is only used when it UNDERSTANDS the payload option — an older
-  // box's installer would ignore it and cheerfully reinstall the checkout,
-  // which is the one outcome worse than using the release's.
-  assert.match(mig, /grep -q 'AGENT_FLEET_PAYLOAD' "\$LOCAL_INSTALLER"/);
-
-  // The fallback stays, because a box installed from a tarball by hand has no
-  // local installer at all.
-  assert.match(mig, /the release has no install\/install\.sh in it/);
+  // The smoke check still runs before `current` moves, because a release whose
+  // installer cannot start is now one that cannot be adopted OR healed.
+  const smoke = mig.indexOf('install.sh" --help');
+  const swap = mig.indexOf('mv -Tf "$BASE/.current.new" "$BASE/current"');
+  assert.ok(smoke > 0 && smoke < swap, 'the smoke check comes after the symlink moves');
 });
 
 test('a release whose own installer is broken can still be migrated to', () => {
@@ -324,15 +325,19 @@ test('the installer runs the helper from its own tree, not the installed copy', 
   assert.match(block, /HELPER=\/usr\/local\/sbin\/fleetwright-migrate/);
 });
 
-test('a fallback to the release installer says which of three reasons it was', () => {
-  // Falling back silently is how somebody reads "running the installer from the
-  // release", knows a fix landed that should have prevented it, and cannot tell
-  // which of three things went wrong. Each has a different answer and only one
-  // of them is "wait for a release".
+test('the helper never runs an installer the service user can write', () => {
+  // The three-reasons fallback this test used to pin is gone with the checkout
+  // preference it explained. What is worth pinning now is the property that
+  // replaced it: every `bash …install.sh` the helper runs as root is under
+  // $WORK, the root-only temp directory holding the verified unpack — never
+  // under $INSTALL_DIR (the checkout, chowned to the service user) and never
+  // under $BASE/current (a symlink the service user swaps).
   const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
-  assert.match(mig, /this box has no checkout to use/);
-  assert.match(mig, /is not executable, so it cannot be used/);
-  assert.match(mig, /predates the payload option — re-run the one-liner to update it/);
+  const runs = [...mig.matchAll(/(?:exec )?bash "([^"]+)\/install\/install\.sh"/g)].map((m) => m[1]);
+  assert.ok(runs.length >= 2, `expected the upgrade and the repair, found ${runs.length}`);
+  for (const dir of runs) {
+    assert.equal(dir, '$WORK/release', `root runs an installer from ${dir}`);
+  }
 });
 
 test('the entry points a unit names run under node, not just as scripts', async (t) => {

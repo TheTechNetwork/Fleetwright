@@ -217,6 +217,37 @@ GOT="$(sha256sum "$WORK/$FILE" | cut -d' ' -f1)"
 [ "$GOT" = "$SHA" ] || die "the release does not match its manifest: expected $SHA, got $GOT"
 say "sha256 ok"
 
+# UNPACKED ONCE, WHERE ONLY ROOT CAN REACH, and every installer this helper
+# runs as root runs from here. $BASE/releases is writable by the service user
+# — applyRelease unpacks there — so an installer under it is a script the
+# service user could have rewritten between the unpack and the exec, and the
+# same goes for anything under `current`. $WORK is root's own temp directory.
+mkdir -p "$WORK/release"
+tar -xzf "$WORK/$FILE" -C "$WORK/release" --strip-components=1
+
+# DOES THE THING WE ARE ABOUT TO RUN ACTUALLY START?
+#
+# The sha256 above proves the tarball is the one the manifest names. It says
+# nothing about whether what is inside it runs, and both routes below end by
+# running the installer out of this release — so a release carrying a broken
+# installer strands the box, and cannot be fixed by fixing main. That is not
+# hypothetical: v0.2.2 shipped an install.sh that died on `CHECK_ONLY: unbound
+# variable`, and two attempts on a real machine got as far as moving `current`
+# before finding out.
+#
+# `--help` is the cheap whole-file answer: it needs no node, no tmux and no
+# root, and it is parsed inside the argument loop — so anything that runs before
+# that loop and dies takes it with it. Printing usage proves the script starts.
+# BEFORE `current` MOVES, so a release that cannot start is one this box never
+# points at, and the failure is a sentence instead of a half-converted machine.
+[ -x "$WORK/release/install/install.sh" ] || die "the release has no install/install.sh in it"
+if ! bash "$WORK/release/install/install.sh" --help >/dev/null 2>"$WORK/smoke.err"; then
+  say "the installer inside $VERSION does not run:"
+  sed 's/^/    /' "$WORK/smoke.err" >&2
+  die "refusing to use a release whose installer cannot start. Nothing was changed.
+       A newer release will carry the fix; until then this box is fine as it is."
+fi
+
 # THE HEAL. The box is already on this version; what is stale is root's half.
 #
 # FROM THE VERIFIED COPY, NOT FROM `current` AND NOT FROM THE CHECKOUT. Both of
@@ -236,13 +267,6 @@ say "sha256 ok"
 # agent-hub included, and KillMode=process is what lets this helper outlive the
 # process that called it.
 if [ "$HEAL" = yes ]; then
-  mkdir -p "$WORK/release"
-  tar -xzf "$WORK/$FILE" -C "$WORK/release" --strip-components=1
-  if ! bash "$WORK/release/install/install.sh" --help >/dev/null 2>"$WORK/smoke.err"; then
-    say "the installer inside $VERSION does not run:"
-    sed 's/^/    /' "$WORK/smoke.err" >&2
-    die "refusing to refresh from a release whose installer cannot start. Nothing was changed."
-  fi
   say "running the installer from the verified release, with --repair"
   AGENT_FLEET_PAYLOAD="$BASE/current" bash "$WORK/release/install/install.sh" --repair
   exit $?
@@ -252,31 +276,6 @@ mkdir -p "$BASE/releases"
 rm -rf "$BASE/releases/.incoming-$VERSION"
 mkdir -p "$BASE/releases/.incoming-$VERSION"
 tar -xzf "$WORK/$FILE" -C "$BASE/releases/.incoming-$VERSION" --strip-components=1
-# DOES THE THING WE ARE ABOUT TO SWITCH TO ACTUALLY START?
-#
-# The sha256 above proves the tarball is the one the manifest names. It says
-# nothing about whether what is inside it runs, and this migration's last act is
-# to run the installer OUT OF the release — so a release carrying a broken
-# installer strands the box, and cannot be fixed by fixing main. That is not
-# hypothetical: v0.2.2 shipped an install.sh that died on `CHECK_ONLY: unbound
-# variable`, and two attempts on a real machine got as far as moving `current`
-# before finding out.
-#
-# `--help` is the cheap whole-file answer: it needs no node, no tmux and no
-# root, and it is parsed inside the argument loop — so anything that runs before
-# that loop and dies takes it with it. Printing usage proves the script starts.
-#
-# BEFORE `current` MOVES, which is the entire point of putting it here. A
-# release that cannot start is one this box never points at, and the failure is
-# a sentence instead of a half-converted machine.
-if ! bash "$BASE/releases/.incoming-$VERSION/install/install.sh" --help >/dev/null 2>"$WORK/smoke.err"; then
-  say "the installer inside $VERSION does not run:"
-  sed 's/^/    /' "$WORK/smoke.err" >&2
-  rm -rf "$BASE/releases/.incoming-$VERSION"
-  die "refusing to switch to a release that cannot install itself. Nothing was changed.
-       A newer release will carry the fix; until then this box is fine as it is."
-fi
-
 rm -rf "$BASE/releases/$VERSION"
 mv "$BASE/releases/.incoming-$VERSION" "$BASE/releases/$VERSION"
 
@@ -291,38 +290,28 @@ say "laid out $BASE/releases/$VERSION"
 # --upgrade is exactly "an already-configured box, brought onto new code, with
 # no questions". Reimplementing any of that here would be a second installer
 # that is subtly different on the day it matters.
-# THE INSTALLER THIS BOX ALREADY HAS, pointed at the release as payload.
 #
-# This used to run the installer out of the release, and that made a release's
-# installer load-bearing for its own adoption: a broken one could not be
-# migrated to, and could only be superseded by another release. That is how one
-# afternoon produced three of them, each fixing a bug the last had hidden.
+# FROM THE VERIFIED COPY, and the history of this line is worth keeping.
 #
-# The box's own installer is updated by `curl … | sudo sh`, which costs nothing
-# and needs no release. So an installer fix now reaches a machine as soon as
-# somebody re-runs the one-liner, and a release only has to be a correct
-# PAYLOAD rather than a correct installer.
-LOCAL_INSTALLER="$INSTALL_DIR/install/install.sh"
-if [ -x "$LOCAL_INSTALLER" ] && grep -q 'AGENT_FLEET_PAYLOAD' "$LOCAL_INSTALLER"; then
-  say "running this box's installer against the release"
-  AGENT_FLEET_PAYLOAD="$BASE/current" exec bash "$LOCAL_INSTALLER" --upgrade
-fi
-
-# WHY IT DID NOT, when it did not. Falling back silently is how somebody reads
-# "running the installer from the release", knows a fix landed that should have
-# prevented that, and cannot tell which of three things went wrong. Each of
-# these has a different answer and only one of them is "wait for a release".
-if [ ! -e "$LOCAL_INSTALLER" ]; then
-  say "no installer at $LOCAL_INSTALLER — this box has no checkout to use"
-elif [ ! -x "$LOCAL_INSTALLER" ]; then
-  say "$LOCAL_INSTALLER is not executable, so it cannot be used"
-else
-  say "$LOCAL_INSTALLER predates the payload option — re-run the one-liner to update it"
-fi
-
-# FALLBACK, for a box whose own installer predates the payload option — or that
-# has none, because it was installed from a tarball by hand. The smoke check
-# above has already established that this one at least starts.
-[ -x "$BASE/current/install/install.sh" ] || die "the release has no install/install.sh in it"
-say "running the installer from the release"
-exec bash "$BASE/current/install/install.sh" --upgrade
+# It first ran the installer out of the release under `current`, which made a
+# release's installer load-bearing for its own adoption: three releases in one
+# afternoon, each fixing a bug the last had hidden. It then ran THE BOX'S OWN
+# installer — the checkout, refreshed by `curl … | sudo sh` — pointed at the
+# release as payload, so an installer fix reached a machine without a release.
+#
+# That second shape had a cost the comment did not name. install.sh chowns the
+# checkout to the service user so /update can pull, which means the script
+# this line executed as root was one the service user could rewrite — the
+# exact grant the header of this file says it refuses. The heal path below
+# solved that for a box already on its version by unpacking the verified
+# tarball somewhere only root can reach and running THAT installer; this path
+# now does the same, so root runs only what the operator's manifest vouched
+# for, on both routes through this file.
+#
+# What it gives back: a broken release installer can again strand its own
+# adoption. What guards that: the --help smoke check above refuses the release
+# before `current` moves, and #471 made the release's installer the thing that
+# heals a box anyway — a release has to carry a correct installer now, and CI
+# runs it (test/packaged-installer.test.js) so one that does not never ships.
+say "running the installer from the verified release"
+AGENT_FLEET_PAYLOAD="$BASE/current" exec bash "$WORK/release/install/install.sh" --upgrade
