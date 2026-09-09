@@ -662,6 +662,12 @@ private struct SettingsView: View {
     @State private var ephemeralPin = false
     @State private var hosts: [Fleet.Host] = []
     @State private var fleetHosts: [Fleet.FleetHost] = []
+    /// Where a temporary machine would come from, or nil when this fleet
+    /// cannot start one. The control below is drawn from this and only this.
+    @State private var runnerRepo: String?
+    @State private var runnerPlatform = "linux"
+    @State private var runnerMinutes = 60
+    @State private var runnerResult = ""
     @State private var confirmingRevoke: String?
     @State private var hostActionResult = ""
     /// WHICH host that answer is about.
@@ -822,6 +828,57 @@ private struct SettingsView: View {
         await loadHosts()
     }
 
+    /// A MACHINE THAT DOES NOT EXIST YET, beside the pin for one that does.
+    ///
+    /// `provision` has been on both phones since runner central shipped and
+    /// nothing offered it, because nothing could tell whether the button would
+    /// do anything: the coordinator refuses a fleet with no runner repository
+    /// with a sentence naming an environment variable, which is right for an
+    /// agent that asked and a dead control on every fleet that has not set
+    /// one. The snapshot says now, and this is drawn from that and only that.
+    ///
+    /// Split out of the section above because that body is already at the
+    /// size where the Swift type checker gives up on a line nobody edited.
+    @ViewBuilder private var temporaryMachine: some View {
+        if let repo = runnerRepo {
+            Picker("Temporary machine", selection: $runnerPlatform) {
+                Text("Linux").tag("linux")
+                Text("macOS").tag("macos")
+                Text("Windows").tag("windows")
+                Text("Android emulator").tag("android")
+            }
+            // FIVE-MINUTE STEPS between the protocol's own bounds. A free
+            // field would need the refusal for 4 and for 351 written twice,
+            // once here and once on the host; a stepper cannot ask for either.
+            Stepper("For \(runnerMinutes) minutes", value: $runnerMinutes, in: 5...350, step: 5)
+            Button("Ask for a temporary machine") { Task { await provision() } }
+            // IT DOES NOT RETURN A HOST, and the reply says so too, because a
+            // person who reads "started" as "ready" goes looking for a
+            // machine that is still being built.
+            Text("From \(repo). It takes a few minutes to boot and then appears in the fleet as a host of yours, "
+                 + "for the time you asked. Sessions on it are lost when it goes, and it spends Actions minutes.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            if !runnerResult.isEmpty {
+                Text(runnerResult)
+                    .fleetType(.labelMono)
+                    .foregroundStyle(Design.Palette.ink)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    @MainActor
+    private func provision() async {
+        runnerResult = ""
+        do {
+            runnerResult = try await Fleet(settings: settings)
+                .provision(platform: runnerPlatform, minutes: runnerMinutes).text ?? ""
+        } catch {
+            runnerResult = error.localizedDescription
+        }
+    }
+
     @MainActor
     private func loadHosts() async {
         guard !settings.credential.isEmpty else { return }
@@ -839,6 +896,7 @@ private struct SettingsView: View {
         async let enrolled = fleet.enrolledHosts()
         async let devices = fleet.clients()
         async let happened = fleet.events()
+        async let runners = fleet.runners()
 
         // AND A FAILED REQUEST IS NOT AN EMPTY FLEET.
         //
@@ -865,6 +923,9 @@ private struct SettingsView: View {
         // does not offer that" — not a failed screen.
         if let got = try? await devices { clients = got }
         if let got = try? await happened { events = got }
+        // A NIL INSIDE A SUCCESS IS THE ANSWER "no runner repository"; a failed
+        // request keeps what was there, like the four above.
+        if let got = try? await runners { runnerRepo = got }
         // AFTER the four, not before: "loaded" means an answer arrived, and
         // setting it first would put the empty states back one line earlier.
         loaded = true
@@ -1214,6 +1275,7 @@ private struct SettingsView: View {
                                     .foregroundStyle(Design.Palette.inkDim)
                             }
                         }
+                        temporaryMachine
                         // AND THE THIRD WAY A MACHINE ARRIVES: a repository's
                         // own workflow, started by hand, joining a runner as
                         // you. Minted with curl since it shipped; a screen now.
