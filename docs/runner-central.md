@@ -110,8 +110,10 @@ pressing Run workflow needs neither. The enrolment route asks the prefix which
 store to consult, so one can never be accepted in place of the other.
 
 A runner token belongs to a person, so it is minted with a device credential
-rather than the admin token — the MCP server's, or a phone's — and neither
-phone has a screen for it yet, so today it is one curl:
+rather than the admin token — the MCP server's, or a phone's. Both phones have
+a screen for it, Runner tokens beside the pin for a permanent host: mint one
+for a repository, read it once, see whose each is and whether it has ever been
+used, revoke. From a terminal it is one curl:
 
 ```sh
 curl -sX POST https://your-coordinator/api/runner-tokens \
