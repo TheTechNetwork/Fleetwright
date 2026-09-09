@@ -86,7 +86,7 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Member provider token** (GitHub/CF access token) | `<row>.env` on each reachable host | host service user; a session only **per request, via the broker socket** — nothing is seeded into the volume (`credential-broker.md`) | GitHub App: 8h auto-renew; CF/PAT: manual | `unlink` (local); provider revoke (real) | `verify` verb |
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`; provider revoke | renewal-failure log |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry | `outstanding()` (masked) |
-| **Telegram bot token** | host env (`AGENT_HUB_TELEGRAM_TOKEN`) | host service user | manual | manual | — |
+| **Telegram bot token** (archived) | host env (`AGENT_HUB_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `agent-hub doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
 
 **SEC-CRED-1** — The coordinator MUST NOT hold, at rest or in flight, any secret

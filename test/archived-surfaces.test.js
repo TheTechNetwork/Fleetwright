@@ -102,6 +102,50 @@ test('no remedy points at a surface that was archived', () => {
   assert.deepEqual(offenders, [], `these name an archived surface:\n${offenders.join('\n')}`);
 });
 
+/**
+ * The documentation, where the settings of an archived surface outlived it by
+ * longer than anywhere else.
+ *
+ * The installer stopped telling a fresh box to configure Telegram; the prose
+ * that tells an OPERATOR to did not. `deployment.md` still listed a Telegram id
+ * as one of two things "worth planning for before you start", still explained
+ * how to put one in `AGENT_HUB_TELEGRAM_ALLOWED_USERS`, still said
+ * `/etc/agent-hub.env` holds a Telegram token, and still filed "Telegram on the
+ * Worker" under not-done with the words "Telegram works against a box today".
+ * `security.md` carried the bot token as a live row in the credential
+ * inventory, which is the one table where a dead secret is worst.
+ *
+ * SO THE RULE IS ABOUT THE VARIABLES, not the word. A document may discuss
+ * Telegram all it likes — telegram.md IS the archive record, and beta-findings
+ * and agent-hub.md describe corrections that have to name what was corrected.
+ * What it may not do is put `AGENT_HUB_TELEGRAM_*` in front of a reader
+ * without saying it is archived, because that is the form the reader acts on.
+ */
+function docs() {
+  const root = fileURLToPath(new URL('../docs/', import.meta.url));
+  return readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.md'))
+    .map((e) => ({ file: path.join(root, e.name), body: readFileSync(path.join(root, e.name), 'utf8') }));
+}
+
+test('no document names an archived surface\'s settings without saying so', () => {
+  /** @type {string[]} */
+  const offenders = [];
+  for (const { file, body } of docs()) {
+    if (!/AGENT_HUB_TELEGRAM/.test(body)) continue;
+    // Said ANYWHERE in the file, not on the line: these are paragraphs, and the
+    // sentence that marks the surface dead is usually the one before or after
+    // rather than the one carrying the variable.
+    if (/archived/i.test(body)) continue;
+    offenders.push(path.basename(file));
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these name AGENT_HUB_TELEGRAM_* and never say it is archived:\n${offenders.join('\n')}`,
+  );
+});
+
 test('the account remedy still names two live ways to do it', () => {
   // DELETING THE DEAD ROUTE IS HALF THE JOB. A remedy trimmed to nothing is the
   // "reason without a remedy" this message was rewritten to stop being, so the

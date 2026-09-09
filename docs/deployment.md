@@ -249,13 +249,8 @@ order:
 Then it offers to log Claude in, which is the one step that genuinely needs a
 person.
 
-Two of those are worth planning for before you start:
+One of those is worth planning for before you start:
 
-- **Your Telegram id.** You do not need it up front. Leave it blank, and once
-  the bot is up message it **`/whoami`** — it answers with your id even though
-  you are not on the allowlist yet. Put that in
-  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` in `/etc/agent-hub.env` and
-  `systemctl restart agent-hub`.
 - **The Firebase JSON.** `scp` it to the box first, because the installer wants
   a path, not a pasted value. Firebase console → Project settings → Service
   accounts → Generate new private key. It reads the file and base64-encodes it
@@ -597,10 +592,13 @@ anything on shutdown.
 
 ## Security notes worth reading once
 
-**A Telegram allowlist entry is a root allowlist entry.** Every id in
-`AGENT_HUB_TELEGRAM_ALLOWED_USERS` can start sessions, which are unsupervised
-shell access on this box, and can point the box at a Claude account. There is
-deliberately no "open to everyone" mode.
+**Anyone who can start a session has unsupervised shell on this box.** That is
+what a session is, and it is why every way in is an allowlist: a fleet member
+is an address on `AGENT_FLEET_AUTH_ALLOW` or an invitation, and a device is a
+credential the coordinator issued to one phone. There is deliberately no "open
+to everyone" mode. (This paragraph used to say the same thing about
+`AGENT_HUB_TELEGRAM_ALLOWED_USERS`, which is archived and read by nothing —
+see [`telegram.md`](./telegram.md). The property outlived the surface.)
 
 **The HTTP port is loopback by default and needs no token there** — reaching it
 already implies shell access. Bind it wider and `AGENT_HUB_TOKEN` becomes
@@ -616,8 +614,9 @@ charset-checked values and never received from the wire. See
 [`sidecar.md`](./sidecar.md).
 
 **Two env files, two modes `0600`, on purpose.** `/etc/agent-hub.env` holds the
-Telegram token and the hub token; `/etc/agent-fleet-sidecar.env` holds the hub
-token and which coordinator this box belongs to. Merging them would put the
+hub token and everything about how sessions run on this box;
+`/etc/agent-fleet-sidecar.env` holds the hub token and which coordinator this
+box belongs to. Merging them would put the
 fleet's configuration in the session manager's environment for no reason.
 
 **The host key is in neither of them.** It lives in `/var/lib/agent-fleet`,
@@ -646,8 +645,9 @@ Not "undocumented" — not built, or built and never proven:
   notification acted on minutes late, and Android's Doze.
 - **Wake-on-LAN.** §3's second meaning of "wake". A sleeping box cannot be a
   host, and nothing sends the packet.
-- **Telegram on the Worker.** Telegram works against a box today; the webhook
-  path §5 describes does not exist.
+- **Telegram anywhere.** The adapter is archived — see
+  [`telegram.md`](./telegram.md). The webhook path §5 describes was never
+  built, and the box-side adapter it would have fronted is gone.
 
 `design.md` §§2–7 describes all of it; §10 records what has been validated on
 hardware.
