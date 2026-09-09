@@ -39,14 +39,23 @@ set -euo pipefail
 # an installer bug was to supersede it. Three releases in one day went that way,
 # each fixing a bug the previous one revealed, on code that had never run.
 #
-# With this, the migration runs the installer THE BOX ALREADY HAS — updated by
-# `curl … | sudo sh`, which is free — and points it at the release as payload.
-# An installer fix now reaches a machine the moment somebody re-runs the
-# one-liner, and a release only has to be a correct PAYLOAD rather than a
-# correct installer.
+# For a while the migration ran the installer THE BOX ALREADY HAD — the
+# checkout, refreshed by `curl … | sudo sh` — pointed at the release as
+# payload, so an installer fix needed no release. That had a cost this comment
+# did not name: the checkout is chowned to the service user so /update can
+# pull, so root was executing a script the service user could rewrite. The
+# migration and the heal both run the installer out of a VERIFIED copy of the
+# release now — unpacked by root where only root can reach, from a tarball
+# whose sha256 the manifest vouched for — and point it at `current` as the
+# payload. The payload option is what makes that work: the templates come
+# from the installer that is running, the tree it lays out is the one under
+# the symlink.
 #
-# The release still carries install/ and it is still what a person unpacking a
-# tarball by hand runs. This changes which one a MIGRATION uses.
+# So a release has to carry a correct installer again, and CI runs it before
+# one ships (test/packaged-installer.test.js); the --help smoke check in the
+# helper refuses a release whose installer cannot start before `current`
+# moves. The one-liner still updates a checkout's installer, for the person
+# unpacking or re-running by hand.
 # WHERE THIS SCRIPT ITSELF LIVES, which is not always where the payload is.
 #
 # THE TEMPLATES COME FROM HERE, AND THAT IS THE WHOLE POINT. install_unit read

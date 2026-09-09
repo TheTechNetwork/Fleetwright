@@ -139,6 +139,14 @@ reply has left, which is why the message says "in a moment".
 A checkout gets no heal, deliberately: there is no verified copy of its
 installer for root to run. The update says so and names the command.
 
+The same rule holds for the other route through the helper — bringing a
+converted box forward to a newer release. That path used to prefer the
+checkout's own installer, so that an installer fix could reach a machine
+without a release; it also meant root executing a script the service user
+owns, which is the grant the helper's own header refuses. Both routes now run
+the installer out of the verified copy. The cost is that a release has to carry
+a working installer, which CI checks before one ships.
+
 `releasesToPrune` keeps the live release **and the one before it**. A rollback
 target that was tidied away is not a rollback target.
 
