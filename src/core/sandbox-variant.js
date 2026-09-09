@@ -6,7 +6,9 @@
 // file and restarting the service — which is to say it was not a choice anybody
 // with a phone could make, which is the same shape src/core/channel.js exists
 // to fix. This file is that file's sibling, deliberately: same storage, same
-// env-wins rule, same refuse-rather-than-lie behaviour.
+// refuse-rather-than-lie behaviour. NOT the same env rule, and pinnedByEnv
+// below says why: the installer writes this variable and never writes the
+// channel's, so "the environment wins" meant "nobody can choose" here.
 //
 // WHY A VARIANT AND NOT AN IMAGE NAME. The obvious API is "set the image", and
 // it is the wrong one. A verb that takes an arbitrary image reference lets a
@@ -108,12 +110,37 @@ export function variantOf(ref) {
 }
 
 /**
- * Whether the environment is naming the image outright, and so overriding this.
+ * Can this image be switched between the two variants by swapping its tag?
+ *
+ * One of our tags on a registry: yes, that is what the tags are for. A
+ * `localhost/` build: no — the other tag was never built, and pulling it would
+ * fail into a local build with the wrong layers. A digest or a tag we never
+ * published: no, said out loud as "custom" rather than rounded.
+ *
+ * @param {string} ref
+ */
+export function switchable(ref) {
+  const s = String(ref || '');
+  return variantOf(s) !== null && !s.startsWith('localhost/');
+}
+
+/**
+ * Whether the environment has named an image this verb cannot express.
+ *
+ * NOT "whether the environment names an image". That was the rule, and it
+ * made the picker dead on every installed box: install.sh wrote
+ * AGENT_HUB_SANDBOX_IMAGE into /etc/agent-hub.env on every install, set to the
+ * same default the code derives on its own, and the first person to tap the
+ * picker was told to edit a root-owned file that the installer had written for
+ * them. An env value naming one of OUR tags is a starting point — the variant a
+ * box is on until somebody chooses — and the stored word wins once one exists.
+ * An env value naming something else is a pin, because there is nothing here
+ * to switch it to.
  *
  * @param {import('../config.js').Config} cfg
  */
 export function pinnedByEnv(cfg) {
-  return Boolean(cfg.sandboxImagePinned);
+  return Boolean(cfg.sandboxImagePinned) && !switchable(cfg.sandboxImage);
 }
 
 /**
@@ -183,9 +210,10 @@ export function writeVariant(cfg, value) {
     return {
       ok: false,
       message:
-        `AGENT_HUB_SANDBOX_IMAGE is set to "${cfg.sandboxImage}" in this box's environment, ` +
-        'which wins over anything set here.\n' +
-        'Remove it from /etc/agent-hub.env and restart if you want to choose the variant from the app.',
+        `AGENT_HUB_SANDBOX_IMAGE names "${cfg.sandboxImage}" outright, and that is not one of the two ` +
+        'published variants, so there is nothing here to switch between.\n' +
+        'Point it at a fleetwright-session image on a registry, or remove the line, in /etc/agent-hub.env ' +
+        'and restart — then choose here.',
     };
   }
   const image = imageFor(cfg, wanted);

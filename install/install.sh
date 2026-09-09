@@ -1678,7 +1678,19 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
     : # a localhost/ image can only be built, so fall through to the build below
   elif as_user "podman pull '$IMAGE'" >/tmp/agent-session-pull.log 2>&1; then
     ok "pulled $IMAGE"
-    set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
+    # WRITTEN ONLY IF A PERSON SAID IT. This line used to write the image on
+    # every install, and it was writing the default — the same value the hub
+    # derives when the variable is absent. The hub reads a named image as a
+    # decision, so every box installed this way told the app "set on the box,
+    # cannot be changed here" about a choice nobody had made. The full name
+    # is kept when it was given; an owner is kept as the owner, so the hub
+    # derives the same image and can still swap the tag; the default is left
+    # to the code that already knows it.
+    if [ -n "${AGENT_HUB_SANDBOX_IMAGE:-}" ]; then
+      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
+    elif [ -n "${AGENT_HUB_SANDBOX_IMAGE_OWNER:-}" ]; then
+      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE_OWNER "$IMAGE_OWNER"
+    fi
     IMAGE=""
   else
     warn "could not pull $IMAGE — falling back to building it here."

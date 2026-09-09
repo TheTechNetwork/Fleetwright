@@ -721,7 +721,7 @@ export const COMMANDS = {
                 // and telling somebody it is would be a screen reporting a state
                 // it does not know.
                 : 'That is not one of the two published variants, so this box is on an image somebody chose.') +
-            (now.pinned ? '\n\nNamed by AGENT_HUB_SANDBOX_IMAGE in this box\'s environment, so it cannot be changed from here.' : ''),
+            (now.pinned ? '\n\nAGENT_HUB_SANDBOX_IMAGE names it outright and it is not one of the published variants, so there is nothing to switch between from here.' : ''),
           sandbox: now,
         };
       }

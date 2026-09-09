@@ -91,9 +91,12 @@ deliberate one-line change. Point Renovate at them.
 `ghcr.io/<owner>/fleetwright-session:web` is the same image with Chromium in it.
 
 ```sh
-# on the box
+# on the box, as the variant it starts on — the app can still switch it
 AGENT_HUB_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:web
 ```
+
+Or, without a shell: `sandbox browser` from either phone or the MCP server puts
+a box on it, and `sandbox minimal` puts it back.
 
 **Why it is a second tag and not the default.** The Containerfile argues that
 this is not a place to put a toolchain — a session has real root and can install
