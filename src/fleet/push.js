@@ -31,6 +31,14 @@ import { sealTo } from './push-crypto.js';
  */
 
 /**
+ * How long a provider may hold a notification before dropping it, in seconds.
+ * An hour: long enough for a phone in a pocket on a train, short enough that a
+ * question answered from a lock screen next morning is not one the host asked
+ * yesterday.
+ */
+export const PUSH_TTL_S = 3600;
+
+/**
  * What actually goes on the wire for one device.
  *
  * THE FALLBACK IS THE INTERESTING HALF. A device that registered a public key
@@ -51,8 +59,14 @@ import { sealTo } from './push-crypto.js';
  * @param {{ title: string, body: string, data?: Record<string, string> }} message
  * @returns {Promise<{ encrypted: boolean, title: string, body: string, data: Record<string, string> }>}
  */
-export async function envelopeFor(device, message) {
-  const data = { ...(message.data || {}) };
+export async function envelopeFor(device, message, { now = () => Date.now() } = {}) {
+  // WHEN IT WAS SENT, inside the envelope. AES-GCM proves the bytes are ours;
+  // nothing proved they are current, and a captured `session.awaiting-input`
+  // replayed a day later invites somebody to answer a question that is no
+  // longer live (#351). The app can refuse an old one; the providers' own
+  // expiry below stops a late one being delivered at all. A string, because
+  // FCM data values must be.
+  const data = { ...(message.data || {}), sentAt: String(now()) };
   if (!device.pushKey) return { encrypted: false, title: message.title, body: message.body, data };
   const sealed = await sealTo(device.pushKey, { title: message.title, body: message.body, data });
   return {
@@ -147,7 +161,7 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
         // notifications all stop because one phone has a bad row is the wrong
         // failure mode for the thing the trust argument rests on (#351).
         try {
-          const wire = await envelopeFor(device, message);
+          const wire = await envelopeFor(device, message, { now });
           // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
           // block is rendered by the system before the app is consulted, so an
           // encrypted body would be displayed as base64. A data message is
@@ -165,7 +179,17 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
               // rather than just opening. When encrypted it carries the whole
               // notification instead.
               data: wire.data,
-              android: { priority: 'HIGH' },
+              // AN HOUR, THEN NOTHING. A notification held by FCM while a
+              // phone is off and delivered next morning asks a question the
+              // host stopped asking; the promptId refuses the answer, but the
+              // person still read it. Past the TTL the provider drops it.
+              // The collapse key makes a newer word about the same session
+              // replace the older one rather than stack under it.
+              android: {
+                priority: 'HIGH',
+                ttl: `${PUSH_TTL_S}s`,
+                ...(wire.data.name ? { collapse_key: String(wire.data.name) } : {}),
+              },
               apns: {
                 // The alert is STILL SENT on the APNs side of the bridge, because
                 // iOS needs something to show if the extension fails — and
@@ -276,7 +300,7 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
         // notifications all stop because one phone has a bad row is the wrong
         // failure mode for the thing the trust argument rests on (#351).
         try {
-          const wire = await envelopeFor(device, message);
+          const wire = await envelopeFor(device, message, { now });
           // `mutable-content: 1` IS WHAT RUNS THE EXTENSION. Without it iOS
           // renders the alert below and the ciphertext is never opened — the
           // person sees the fallback line and nothing else, forever, with
@@ -298,6 +322,12 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
             // 10 is "deliver now". The whole point is a session waiting on a
             // person, so there is nothing to gain by letting Apple batch it.
             'apns-priority': '10',
+            // Seconds since the epoch, after which Apple drops it rather than
+            // delivering a question the host stopped asking — the FCM ttl,
+            // in Apple's units. The collapse id is the session name, so a
+            // newer word about the same session replaces the older one.
+            'apns-expiration': String(Math.floor(now() / 1000) + PUSH_TTL_S),
+            ...(wire.data.name ? { 'apns-collapse-id': String(wire.data.name).slice(0, 64) } : {}),
           });
 
           if (res.status === 200) {

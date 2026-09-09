@@ -1068,7 +1068,7 @@ export class Coordinator {
         pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) this.saveState();
-      return json(res, r.ok ? 200 : 400, r);
+      return json(res, r.ok ? 200 : r.code === 'not_yours' ? 403 : 400, r);
     }
 
     // Both routes carry `client`, because a device is somebody's phone. The

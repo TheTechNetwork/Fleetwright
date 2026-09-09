@@ -67,6 +67,15 @@ the same one. Without a `clientId` nothing is dropped: an unauthenticated
 registration cannot tell *the same phone with a new address* from *a different
 phone*, and guessing deletes somebody else's.
 
+**A token belongs to the credential that registered it.** A member who learned
+another phone's token used to be able to re-register it under their own
+credential — the victim's row replaced, revoking the victim no longer removing
+it, revoking the attacker silently killing the victim's push (#351). That is
+refused now, 403 `not_yours`. The admin token may re-register anything, and the
+row keeps the credential it had, so it stays revocable. Unregistering and the
+test notification follow the same ownership rule, so a member reaches only
+their own phones.
+
 ## Android: the token is becoming an installation ID
 
 firebase-messaging **25.1.0** (16 June 2026) deprecated `getToken`,
