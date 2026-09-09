@@ -88,7 +88,7 @@ Every refusal here names its reason. The three you are most likely to meet:
 
 ```sh
 npm install
-npm install --prefix worker    # the tests import the Worker; skipping this fails three files
+npm install --prefix worker    # the tests import the Worker; skipping this fails four files
 npm test
 ```
 

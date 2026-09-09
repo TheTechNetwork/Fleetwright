@@ -210,7 +210,7 @@ any id. The bot name is likewise payload data, not a signal.
   never leaves disk.
 - **App:** per-user *and* per-device, independently revocable, refresh-token shaped.
   **Never bake a credential into the app binary** — it's public the moment someone pulls the IPA.
-  Mint per device at enrollment; store in iOS Keychain / Android Keystore. A lost phone is then one
+  Mint per device at enrolment; store in iOS Keychain / Android Keystore. A lost phone is then one
   revocation, not a fleet-wide rotation.
 
 ### Enrollment — Telegram is already your identity provider
@@ -219,7 +219,7 @@ You're authenticated there, so reuse it and skip building an account system:
 
 - **Phone:** `/enroll` in Telegram returns a one-time code or deep link; the app exchanges it once
   for a device credential.
-- **Host:** a one-time enrollment token pasted into `/etc/agent-fleet.env`, exchanged at first
+- **Host:** a one-time enrolment token pasted into `/etc/agent-fleet.env`, exchanged at first
   check-in for a long-lived per-host key. This is agent-hub's `/whoami` bootstrap, generalized.
 
 ### The principle to enforce from day one

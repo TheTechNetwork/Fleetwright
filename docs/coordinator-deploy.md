@@ -344,6 +344,14 @@ either: `connect github` and `connect cloudflare` with a pasted token need no
 callback and work on any coordinator anywhere. Both coordinators read the same
 variables — the Node one from its environment, the Worker from its config.
 
+**Two more both coordinators read, with safe defaults, and this document did
+not mention.** `AGENT_FLEET_NAME` is the fleet's own name in invitation emails;
+unset, they say "this Fleetwright fleet".
+`AGENT_FLEET_ACTIONS_AUDIENCE` is the `aud` a GitHub Actions job's OIDC token
+must carry to enrol as an ephemeral host (see runner-central.md); unset, the
+default audience `verifyActionsToken` expects is used, and a job minted with
+`audience:` set to anything else is refused by name.
+
 ### What a fork must change, and what happens if it does not
 
 `wrangler.toml` in this repository used to be **our** deployment's config.

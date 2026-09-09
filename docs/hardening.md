@@ -90,7 +90,18 @@ it, while every document here goes on describing a session as contained.
 Refused by name at startup: `--privileged`, `--userns=host`, `--network=host`,
 `--pid=host`, `--ipc=host`, `--uts=host`, `--cap-add=ALL|SYS_ADMIN|…`,
 `--security-opt seccomp=unconfined|apparmor=unconfined|label=disable`, and any
-bind mount whose host side is `/`.
+bind mount whose host side is the root, the podman or docker socket, `/etc`,
+`/root`, `/proc`, `/sys`, `/dev`, `/run`, or a `.ssh`, `.gnupg`, `.aws`,
+`.claude`, `.config`, `.kube` or `.docker` directory wherever it lives.
+
+The first version refused only `/`, which is the mount nobody types. The one
+that actually gets pasted is the container socket — "let the agent build
+images" — and inside a root-capable container that is the whole box, with no
+warning. The list is matched by path segment, so `/etcetera` is still yours;
+and it is a list of names, so a mount that hands over the box some other way
+is refused by nothing here. `AGENT_HUB_SANDBOX_ARGS` is split like a command
+line — quotes group, a backslash escapes — so a path with a space reaches
+podman as one argument and the check sees the argument the operator meant.
 
 The refusal is escapable, deliberately:
 

@@ -109,6 +109,22 @@ first-class: dispatching needs a permanent host with GitHub connected, and
 pressing Run workflow needs neither. The enrolment route asks the prefix which
 store to consult, so one can never be accepted in place of the other.
 
+A runner token belongs to a person, so it is minted with a device credential
+rather than the admin token — the MCP server's, or a phone's — and neither
+phone has a screen for it yet, so today it is one curl:
+
+```sh
+curl -sX POST https://your-coordinator/api/runner-tokens \
+  -H "authorization: Bearer $CREDENTIAL" \
+  -H 'content-type: application/json' -d '{"name":"owner/repo"}'
+# → { ok, id, token, email }  — the token is shown once; it becomes the
+#   repository's FLEETWRIGHT_RUNNER_TOKEN secret
+curl -s https://your-coordinator/api/runner-tokens -H "authorization: Bearer $CREDENTIAL"
+curl -sX DELETE https://your-coordinator/api/runner-tokens/<id> -H "authorization: Bearer $CREDENTIAL"
+```
+
+A member sees and revokes their own; an admin, everybody's.
+
 ### Why not match the run afterwards instead
 
 The obvious alternative is to dispatch and then find the run. GitHub's dispatch
