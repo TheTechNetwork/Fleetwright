@@ -171,6 +171,76 @@ test('an unreachable release host is not an exception', async () => {
   }
 });
 
+// --- did the check itself get an answer -------------------------------------
+
+/** A release unpacked somewhere by hand: no `current` symlink to swap. */
+function handUnpackedBox() {
+  const base = mkdtempSync(path.join(tmpdir(), 'relcheck-hand-'));
+  const dir = path.join(base, 'fleetwright');
+  mkdirSync(path.join(dir, 'lib'), { recursive: true });
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: 'v0.2.3' }));
+  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  return { base, installDir: dir };
+}
+
+test('asked-and-current and could-not-ask are told apart by a field', async () => {
+  // BOTH ARE `available: null`, and for a long time only the WORDING separated
+  // them: the caller tested the message against /could not check/. Every
+  // refusal phrased another way — and applyRelease phrases most of them another
+  // way — came out as "nothing waiting" on a box that had not checked at all.
+  const current = packagedBox('v0.2.3');
+  const hand = handUnpackedBox();
+  const offline = packagedBox();
+  try {
+    const asked = await checkRelease(
+      /** @type {any} */ ({ installDir: current.installDir, releaseManifest: MANIFEST, stateDir: current.base, hostname: 'h' }),
+      { fetch: /** @type {any} */ (serving({ version: 'v0.2.3', file: 'f.tar.gz', sha256: 'a'.repeat(64), protocol: PROTOCOL_VERSION }).doFetch) },
+    );
+    assert.equal(asked.available, null);
+    assert.equal(asked.ok, true, 'a box told it is current did get an answer');
+
+    // The layout refusal, which is the one a beta host on v0.2.3 hit: the box
+    // is fine, it just has no symlink to move, and `applyRelease` says so
+    // before it fetches anything.
+    const cannot = await checkRelease(
+      /** @type {any} */ ({ installDir: hand.installDir, releaseManifest: MANIFEST, stateDir: hand.base, hostname: 'h' }),
+    );
+    assert.equal(cannot.available, null);
+    assert.equal(cannot.ok, false, 'a box with no symlink to swap reported a usable answer');
+    assert.match(cannot.message, /not a release layout/);
+
+    // And the ordinary offline box, whose message says "could not reach" and
+    // never matched the pattern that was standing in for this field.
+    const unreachable = await checkRelease(
+      /** @type {any} */ ({ installDir: offline.installDir, releaseManifest: MANIFEST, stateDir: offline.base, hostname: 'h' }),
+      { fetch: /** @type {any} */ (async () => { throw new Error('getaddrinfo ENOTFOUND'); }) },
+    );
+    assert.equal(unreachable.ok, false, 'a box that never reached GitHub reported a usable answer');
+  } finally {
+    for (const b of [current.base, hand.base, offline.base]) rmSync(b, { recursive: true, force: true });
+  }
+});
+
+test('a release waiting is an answer too', async () => {
+  const box = packagedBox('v0.2.2');
+  const { doFetch } = serving({
+    version: 'v0.2.4',
+    file: 'fleetwright-host-v0.2.4.tar.gz',
+    sha256: 'a'.repeat(64),
+    protocol: PROTOCOL_VERSION,
+  });
+  try {
+    const r = await checkRelease(
+      /** @type {any} */ ({ installDir: box.installDir, releaseManifest: MANIFEST, stateDir: box.base, hostname: 'h' }),
+      { fetch: /** @type {any} */ (doFetch) },
+    );
+    assert.equal(r.available, 'v0.2.4');
+    assert.equal(r.ok, true);
+  } finally {
+    rmSync(box.base, { recursive: true, force: true });
+  }
+});
+
 // --- and the installer that makes any of it possible ------------------------
 
 test('the installer records where releases come from', () => {

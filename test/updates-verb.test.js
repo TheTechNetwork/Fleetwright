@@ -201,6 +201,48 @@ test('a release carries whether the box knows where to look', async () => {
   }
 });
 
+test('a box that cannot swap a release is not told nothing is waiting', async () => {
+  // REPORTED FROM A BETA HOST, after changing channels from the app. The box
+  // ran v0.2.3, whose layout check refused the very directory it was installed
+  // in, and the screen said both of these at once:
+  //
+  //   Fleetwright: /opt/fleetwright/releases/v0.2.3 is not a release layout,
+  //                so there is no symlink to swap.
+  //   Operating system: No system packages are waiting.
+  //
+  // The refusal was rendered, and the row beside it was fed `pending: false` —
+  // "nothing waiting" — because the only thing separating "asked, nothing
+  // there" from "could not ask" was whether the message happened to read
+  // "could not check". This one does not. Neither does an unreachable
+  // manifest's, which is every offline box.
+  const base = mkdtempSync(path.join(tmpdir(), 'updates-hand-'));
+  const dir = path.join(base, 'fleetwright');
+  mkdirSync(path.join(dir, 'lib'), { recursive: true });
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: 'v0.2.3' }));
+  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  try {
+    const r = await dispatch(
+      /** @type {any} */ ({
+        cfg: {
+          installDir: dir,
+          stateDir: base,
+          hostname: 'h',
+          releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json',
+        },
+      }),
+      '/updates',
+    );
+    assert.equal(r.waiting.app.kind, 'release');
+    // NULL IS CANNOT TELL. `false` here is the app rendering "up to date" over
+    // the top of a refusal explaining that it could not look.
+    assert.equal(r.waiting.app.pending, null, 'a box that could not check was reported as up to date');
+    assert.equal(r.waiting.app.ok, false);
+    assert.match(r.text, /not a release layout/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 /** A sidecar in front of a stub hub that answers /updates with a given block. */
 async function sidecarAnswering(t, waiting) {
   const stub = await startStubHub({
@@ -297,8 +339,16 @@ test('the host answers "is there something waiting" itself, in three states', ()
   // NULL IS A VALUE HERE and means CANNOT TELL: the box does not know where its
   // releases come from, or could not reach them. A boolean cannot say that, and
   // `false` says the reassuring half of it.
-  assert.match(release, /r\.configured !== true\s*\n?\s*\? null/);
-  assert.match(release, /could not check\/i\.test\(r\.message \|\| ''\) \? null : false/);
+  //
+  // READ FROM A FIELD. This used to assert the opposite of what it asserts now
+  // — that the state was decided by matching the message against
+  // /could not check/i — and that mechanism was the defect rather than the
+  // guard. applyRelease phrases most of its refusals otherwise ("is not a
+  // release layout", "could not reach the release manifest"), so each of them
+  // came back as `false`, and a beta host was told nothing was waiting
+  // directly beneath the sentence explaining that it could not look.
+  assert.match(release, /r\.ok !== true \? null : Boolean\(r\.available\)/);
+  assert.doesNotMatch(release, /r\.message/, 'the state is being read out of the prose again');
 
   // And the sidecar no longer has an opinion of its own to disagree with.
   const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');

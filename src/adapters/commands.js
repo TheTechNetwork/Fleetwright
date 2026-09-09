@@ -1644,15 +1644,25 @@ export const COMMANDS = {
           // sidecar started reading its health from this reply instead of
           // computing its own.
           //
+          // READ FROM A FIELD, NOT FROM THE WORDING. This asked whether the
+          // message matched /could not check/, which is the same mistake as
+          // parsing a directory listing out of rendered prose: it made the
+          // answer depend on a sentence somebody could reword. It did not
+          // match the layout refusal — "…is not a release layout, so there is
+          // no symlink to swap" — so a box that CANNOT update reported that
+          // nothing was waiting, over the top of the refusal saying why. A
+          // beta host on v0.2.3 showed exactly that pair.
+          //
           // `configured: false` is a box that does not know where its releases
-          // come from. A message about not being able to check is a box that
-          // could not reach GitHub. Neither of those is up to date.
-          pending: r.configured !== true
-            ? null
-            : r.available
-              ? true
-              : (/could not check/i.test(r.message || '') ? null : false),
+          // come from; `ok: false` is one that asked and got no usable answer.
+          // Neither of those is up to date.
+          pending: r.ok !== true ? null : Boolean(r.available),
           available: r.available,
+          // Travels for the same reason `configured` does: the health frame's
+          // release block is the app's only account of this check, and a block
+          // that cannot say whether the check worked cannot be rendered
+          // honestly.
+          ok: r.ok,
           // CARRIED, BECAUSE `available: null` IS TWO DIFFERENT ANSWERS.
           // checkRelease answers null both for "nothing waiting" and for
           // "could not reach GitHub", and only `configured` and `message`
