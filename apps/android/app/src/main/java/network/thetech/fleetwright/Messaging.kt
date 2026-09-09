@@ -112,42 +112,71 @@ class Messaging : FirebaseMessagingService() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setAutoCancel(true)
-                .setContentIntent(button(context, null, data, id))
-                .addAction(0, words.a, button(context, NotificationAnswers.slotA, data, id))
-                .addAction(0, words.b, button(context, NotificationAnswers.slotB, data, id))
+                .setContentIntent(openIntent(context, data, id))
+                .addAction(0, words.a, answerIntent(context, NotificationAnswers.slotA, data, id))
+                .addAction(0, words.b, answerIntent(context, NotificationAnswers.slotB, data, id))
                 .build()
             NotificationManagerCompat.from(context).notify(id, notification)
         }
 
+        // --- what a press starts -------------------------------------------
+        //
+        // Every PendingIntent below names the class it starts, in the
+        // constructor, and holds it in a local that nothing reassigns.
+        //
+        // THE SHAPE IS THE POINT, and it is worth a paragraph because the
+        // previous version was correct and did not look it. One function took
+        // `action: String?` with null meaning "the body rather than a button",
+        // branched to build the intent, chained `.setAction(...).apply { }`
+        // onto the constructor, and branched again to choose getActivity or
+        // getBroadcast. The component was set the whole time — the constructor
+        // does it — but it was set on the first link of a fluent chain and read
+        // off the last, which is the shape CodeQL's implicit-PendingIntent
+        // query cannot follow. It reported a High on the `notify` call above.
+        //
+        // An implicit PendingIntent is a real thing to be afraid of: it is a
+        // blank cheque handed to whichever app resolves the intent. This was
+        // never one. But "the scanner is wrong" is a claim every person who
+        // meets the alert has to re-derive, and a suppression comment is a
+        // thing nobody re-examines — so the code says what it does plainly
+        // instead: one function per destination, no chain for the component to
+        // get lost in, and nothing left to be unsure about.
+
         /**
-         * One button, or the body of the notification when `action` is null.
+         * `FLAG_IMMUTABLE` is the mitigation that was always here, and it is
+         * the one that would matter if any of this were implicit: the extras
+         * are a session name, a prompt id and the digit to type, which together
+         * are an answer, and a mutable PendingIntent would let whatever holds
+         * it fill those in.
          *
-         * `FLAG_IMMUTABLE`, and it is not a formality: a mutable PendingIntent
-         * hands any app that can reach it the ability to fill in the extras —
-         * which here are the session name, the prompt id and the digit. That is
-         * the whole of an answer, filled in by somebody else.
-         *
-         * The request code is the notification's id combined with the action,
-         * so two live questions do not share one PendingIntent and answer each
-         * other's.
+         * `val` rather than `const val`: these are Java `static final` ints, so
+         * `or` on them is constant-folded anyway, and `const` would be a
+         * promise about compile-time evaluation this does not need to make.
          */
-        fun button(context: Context, action: String?, data: Map<String, String>, id: Int): PendingIntent {
-            val intent = if (action == null) {
-                Intent(context, MainActivity::class.java)
-                    .apply { data["name"]?.let { putExtra("name", it) } }
-            } else {
-                Intent(context, AnswerReceiver::class.java).setAction(action).apply {
-                    for (key in AnswerReceiver.KEYS) data[key]?.let { putExtra(key, it) }
-                    putExtra(AnswerReceiver.EXTRA_NOTIFICATION_ID, id)
-                }
-            }
-            val code = id * 31 + (action?.hashCode() ?: 0)
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            return if (action == null) {
-                PendingIntent.getActivity(context, code, intent, flags)
-            } else {
-                PendingIntent.getBroadcast(context, code, intent, flags)
-            }
+        private val FLAGS = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
+        /** Tapping the notification itself: open the app on that session. */
+        fun openIntent(context: Context, data: Map<String, String>, id: Int): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java)
+            data["name"]?.let { intent.putExtra("name", it) }
+            return PendingIntent.getActivity(context, id * 31, intent, FLAGS)
+        }
+
+        /**
+         * One button.
+         *
+         * The request code carries the action as well as the notification's id,
+         * because `FLAG_UPDATE_CURRENT` matches on request code and action and
+         * NOT on extras — two buttons that differed only in what they carry
+         * would be one PendingIntent, and the second would quietly become the
+         * first.
+         */
+        fun answerIntent(context: Context, action: String, data: Map<String, String>, id: Int): PendingIntent {
+            val intent = Intent(context, AnswerReceiver::class.java)
+            intent.action = action
+            for (key in AnswerReceiver.KEYS) data[key]?.let { intent.putExtra(key, it) }
+            intent.putExtra(AnswerReceiver.EXTRA_NOTIFICATION_ID, id)
+            return PendingIntent.getBroadcast(context, id * 31 + action.hashCode(), intent, FLAGS)
         }
     }
 }
