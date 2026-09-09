@@ -142,6 +142,27 @@ function checkShell(doc, file) {
   }
 }
 
+/**
+ * Every `vars.NAME` and `secrets.NAME` in one document, so the loop below can
+ * ask whether any name is read from both.
+ *
+ * Serialised and scanned rather than walked, because these appear inside
+ * arbitrary scalars — an `env:` value, a `with:` input, an `if:` condition —
+ * and there is no key to look under.
+ *
+ * @param {any} doc @param {Map<string, Set<string>>} into @param {string} file
+ */
+function collectContexts(doc, into, file) {
+  for (const m of JSON.stringify(doc ?? null).matchAll(/\b(vars|secrets)\.([A-Z_][A-Z0-9_]*)/g)) {
+    const key = `${m[1]}:${file}`;
+    if (!into.has(m[2])) into.set(m[2], new Set());
+    /** @type {Set<string>} */ (into.get(m[2])).add(key);
+  }
+}
+
+/** @type {Map<string, Set<string>>} */
+const contexts = new Map();
+
 for (const name of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
   const file = path.join(DIR, name);
   let doc;
@@ -154,6 +175,36 @@ for (const name of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
   }
   checkNoExpressions(doc, file);
   checkShell(doc, file);
+  collectContexts(doc, contexts, file);
+}
+
+// ONE NAME, ONE NAMESPACE.
+//
+// GitHub keeps `vars` and `secrets` apart, so a name in both is not the clobber
+// Cloudflare's single namespace produces — it is worse, because it is quiet:
+// two slots for one value, one of them empty, and nothing anywhere says which
+// one an operator filled.
+//
+// It had already happened. `APPLE_TEAM_ID` is documented in docs/ci.md as "a
+// variable, not a secret — it is public", ios.yml read `vars.APPLE_TEAM_ID`,
+// and worker.yml read `secrets.APPLE_TEAM_ID` — so following the documentation
+// deployed a Worker whose APNs team id was empty. `apnsFromEnv` then refuses
+// two thirds of a credential set, warns once at boot, and every iOS
+// notification goes to the log instead of to Apple, on a fleet where Android
+// still works and everything else looks configured.
+//
+// Nothing could have caught it: the YAML is valid, the shell is valid, and both
+// halves are individually reasonable. It is exactly the shape this file exists
+// for — a bug in the KEYS around a workflow rather than in one.
+for (const [name, where] of [...contexts].sort()) {
+  const kinds = new Set([...where].map((w) => w.split(':')[0]));
+  if (kinds.size < 2) continue;
+  fail(
+    `${[...where].map((w) => w.split(':').slice(1).join(':')).sort().join(', ')} · ${name}`,
+    `read as BOTH \`vars.${name}\` and \`secrets.${name}\` — GitHub keeps those in separate ` +
+      'namespaces, so this is two slots for one value and whichever an operator filled, the other ' +
+      'is empty. Pick one and say which in docs/ci.md',
+  );
 }
 
 if (failures) {

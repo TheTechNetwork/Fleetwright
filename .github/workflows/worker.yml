@@ -309,7 +309,21 @@ jobs:
           # Reused rather than duplicated: the APNs team id is the same team id
           # the iOS build signs with, and two copies of one value is two chances
           # for them to disagree.
-          AGENT_FLEET_APNS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          #
+          # `vars`, NOT `secrets`, and this line read the wrong one. GitHub keeps
+          # the two in separate namespaces, so a name in both is not a clobber
+          # like Cloudflare's — it is two slots, one of them empty, and nothing
+          # says which. docs/ci.md has said "a variable, not a secret — it is
+          # public" since the iOS workflow was written, and ios.yml reads
+          # `vars.APPLE_TEAM_ID`; only this line disagreed, so an operator who
+          # followed the documentation deployed a Worker with an empty team id.
+          #
+          # What that costs is precise and quiet: `apnsFromEnv` refuses two
+          # thirds of a credential set, warns once at boot, and every iOS
+          # notification goes to the log instead of to Apple — on a fleet where
+          # Android keeps working and everything else looks configured. The very
+          # failure src/fleet/push.js spends a page making loud.
+          AGENT_FLEET_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           # The GitHub App's client secret, for the OAuth code exchange. The
           # App's PRIVATE KEY is deliberately not here and not anywhere — it
           # mints installation tokens for every installation of the App, so it

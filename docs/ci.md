@@ -510,7 +510,7 @@ organisation secrets on `TheTechNetwork` (visibility: *selected*, granted to
 
 | org variable | where it comes from |
 |---|---|
-| `APPLE_TEAM_ID` | Membership details, a 10-character string (`2BPX4R682U`). A **variable**, not a secret — it is public — so the workflow reads `${{ vars.APPLE_TEAM_ID }}` |
+| `APPLE_TEAM_ID` | Membership details, a 10-character string (`2BPX4R682U`). A **variable**, not a secret — it is public — so the workflow reads `${{ vars.APPLE_TEAM_ID }}`. Unset, the iOS release **skips** with a warning naming it, rather than building for twenty minutes and failing at `xcodebuild archive` with a signing error. Setting a *secret* of this name sets the wrong slot and changes nothing |
 
 The provisioning profile is the **one Apple credential that stays repo-level**:
 
