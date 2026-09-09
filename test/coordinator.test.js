@@ -517,9 +517,12 @@ test('both coordinators answer /api/hosts in the same shape', async (t) => {
   const body = await (await fetch(`http://127.0.0.1:${port}/api/hosts`)).json();
   assert.deepEqual(
     Object.keys(body).sort(),
-    ['devices', 'events', 'hosts', 'ok', 'protocol'],
+    ['devices', 'events', 'hosts', 'ok', 'protocol', 'runners'],
     'same keys the Worker sends',
   );
+  // Present and null, not absent: this coordinator KNOWS it has nowhere to
+  // start a machine, and a phone reads the two the same way on purpose.
+  assert.equal(body.runners, null);
   // From the constant, not a literal. A hardcoded 1 here means the day the
   // protocol is bumped this test fails for a reason that has nothing to do
   // with what it is checking — that BOTH coordinators say the same thing.
