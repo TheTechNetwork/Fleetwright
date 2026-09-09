@@ -256,8 +256,25 @@ struct StopSessionIntent: AppIntent {
         // "stop bigjob" misheard as the wrong session costs somebody the
         // half-hour it was into. A stopped session keeps its conversation and
         // can be resumed, which is why this is a question and not a refusal.
+        //
+        // THE DIALOG-ONLY FORM, not the one that wraps a result. The old
+        // `requestConfirmation(result:confirmationActionName:showPrompt:)` is
+        // deprecated and warned on every build — three times, once per
+        // compilation pass — which is the kind of noise that trains people to
+        // stop reading build output. It also asked for a `.result(dialog:)`
+        // this intent never returns: the confirmation happens BEFORE the stop,
+        // so the result being described did not exist yet.
+        //
+        // `conditions: []` is passed rather than left to a default because
+        // there is nothing conditional about this one — it asks every time,
+        // which is the whole point on a verb that ends work somebody is in the
+        // middle of.
+        //
+        // The sentence is unchanged.
         try await requestConfirmation(
-            result: .result(dialog: IntentDialog(stringLiteral: "Stop \(session.label)? It can be resumed later."))
+            conditions: [],
+            actionName: .go,
+            dialog: IntentDialog(stringLiteral: "Stop \(session.label)? It can be resumed later.")
         )
         let settings = Settings()
         let reply = try await Fleet(settings: settings).stop(session.name)
