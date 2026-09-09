@@ -121,26 +121,36 @@ class Messaging : FirebaseMessagingService() {
 
         // --- what a press starts -------------------------------------------
         //
-        // Every PendingIntent below names the class it starts, in the
-        // constructor, and holds it in a local that nothing reassigns.
+        // Every PendingIntent below names the class it starts, and holds it in
+        // a local that nothing reassigns.
         //
-        // THE SHAPE IS THE POINT, and it is worth a paragraph because the
-        // previous version was correct and did not look it. One function took
-        // `action: String?` with null meaning "the body rather than a button",
-        // branched to build the intent, chained `.setAction(...).apply { }`
-        // onto the constructor, and branched again to choose getActivity or
-        // getBroadcast. The component was set the whole time — the constructor
-        // does it — but it was set on the first link of a fluent chain and read
-        // off the last, which is the shape CodeQL's implicit-PendingIntent
-        // query cannot follow. It reported a High on the `notify` call above.
+        // WHY THE COMPONENT IS NAMED IN A CALL AND NOT IN THE CONSTRUCTOR.
+        // `Intent(context, AnswerReceiver::class.java)` is the idiomatic Kotlin
+        // and it is what was here first. It produced a High from CodeQL's
+        // `java/android/implicit-pendingintents` on the `notify` above, twice,
+        // once per intent — and the alert was wrong about the danger and right
+        // that the code could not prove otherwise.
         //
-        // An implicit PendingIntent is a real thing to be afraid of: it is a
-        // blank cheque handed to whichever app resolves the intent. This was
-        // never one. But "the scanner is wrong" is a claim every person who
-        // meets the alert has to re-derive, and a suppression comment is a
-        // thing nobody re-examines — so the code says what it does plainly
-        // instead: one function per destination, no chain for the component to
-        // get lost in, and nothing left to be unsure about.
+        // That query cuts a flow when it sees an `ExplicitIntent`, which is one
+        // of exactly two things: a call to `setPackage`, `setClass`,
+        // `setClassName` or `setComponent` whose qualifier is the intent, OR a
+        // construction whose argument's type is `java.lang.Class`. Kotlin's
+        // `X::class.java` does not present as that type to the extractor, so
+        // the constructor form is invisible to it and only the call form is
+        // reachable from this language. Hence two lines rather than one.
+        //
+        // AND IT CANNOT SEE `FLAG_IMMUTABLE` EITHER, which is the other half
+        // and is worth knowing before adding the next PendingIntent here. The
+        // query decides mutability by looking for a bitwise expression joining
+        // the flag to the argument; Kotlin's `or` is a function call, not a
+        // bitwise operator, so no Kotlin PendingIntent will ever read as
+        // immutable to it. The flag is still doing its job at runtime — it is
+        // the reason an intercepted PendingIntent could not be filled in — but
+        // it will never be what clears an alert.
+        //
+        // Written out rather than suppressed: "the scanner is wrong here" is a
+        // claim every person who meets the alert has to re-derive, and a
+        // suppression comment is a thing nobody looks at twice.
 
         /**
          * `FLAG_IMMUTABLE` is the mitigation that was always here, and it is
@@ -157,7 +167,8 @@ class Messaging : FirebaseMessagingService() {
 
         /** Tapping the notification itself: open the app on that session. */
         fun openIntent(context: Context, data: Map<String, String>, id: Int): PendingIntent {
-            val intent = Intent(context, MainActivity::class.java)
+            val intent = Intent()
+            intent.setClass(context, MainActivity::class.java)
             data["name"]?.let { intent.putExtra("name", it) }
             return PendingIntent.getActivity(context, id * 31, intent, FLAGS)
         }
@@ -172,7 +183,8 @@ class Messaging : FirebaseMessagingService() {
          * first.
          */
         fun answerIntent(context: Context, action: String, data: Map<String, String>, id: Int): PendingIntent {
-            val intent = Intent(context, AnswerReceiver::class.java)
+            val intent = Intent()
+            intent.setClass(context, AnswerReceiver::class.java)
             intent.action = action
             for (key in AnswerReceiver.KEYS) data[key]?.let { intent.putExtra(key, it) }
             intent.putExtra(AnswerReceiver.EXTRA_NOTIFICATION_ID, id)
