@@ -1294,6 +1294,26 @@ const OPENAPI = JSON.stringify({
                       "items": {
                         "$ref": "#/components/schemas/Event"
                       }
+                    },
+                    "runners": {
+                      "description": "Whether this fleet can start a temporary machine. Null when no runner repository is configured, so a client offers `provision` only where it does something. Absent from an older coordinator, which means the same.",
+                      "oneOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "repo"
+                          ],
+                          "properties": {
+                            "repo": {
+                              "type": "string",
+                              "description": "owner/repo holding the runner workflows"
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 }

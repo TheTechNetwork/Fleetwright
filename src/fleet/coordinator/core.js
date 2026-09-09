@@ -1436,6 +1436,19 @@ export class CoordinatorCore {
       hosts: this.registry.list().map((h) => visibleHost(h, requester)),
       devices: this.devices.size,
       events: visibleEvents(this.events.slice(-20), requester),
+      // WHETHER THIS FLEET CAN START A MACHINE, so a phone offers the button
+      // on exactly the fleets where it does something. `provision` refuses
+      // with a sentence when no runner repository is configured, and that
+      // sentence is right for an agent that just asked — but a button that
+      // answers "an operator sets AGENT_FLEET_RUNNER_REPO" is a dead control
+      // on every fleet that has not, which is most of them. The repository
+      // name is not a secret: it is where the runner workflows live, and the
+      // host it dispatches from names it in every refusal already.
+      //
+      // NULL IS AN ANSWER HERE, not cannot-tell: this coordinator knows it has
+      // nowhere to start a machine. A coordinator too old to send the field
+      // omits it, which decodes to the same nothing and is right as well.
+      runners: this.runnerRepo ? { repo: this.runnerRepo } : null,
     };
   }
 }

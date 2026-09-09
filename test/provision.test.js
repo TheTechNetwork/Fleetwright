@@ -231,6 +231,16 @@ function coreWith({ runnerRepo = 'me/runners' } = {}) {
   return core;
 }
 
+test('the fleet snapshot says whether a machine can be started here', () => {
+  // A phone draws the "ask for a temporary machine" control from this, and
+  // only from this: the refusal `provision` gives a fleet with no runner
+  // repository is the right sentence for an agent that asked, and a dead
+  // button on every fleet that has not configured one.
+  assert.deepEqual(coreWith().snapshot().runners, { repo: 'me/runners' });
+  // NULL IS AN ANSWER: this coordinator knows it has nowhere to start one.
+  assert.equal(coreWith({ runnerRepo: null }).snapshot().runners, null);
+});
+
 test('an unattributed caller cannot ask for a runner', async () => {
   // A runner exists because one person asked for it and costs them money while
   // it lives. The break-glass token arrives with no requester at all — it is
