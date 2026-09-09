@@ -97,7 +97,13 @@ export async function startStubHub({
       commands.push(line);
       bodies.push(body);
       // agent-hub answers 200 even for a failed command; ok lives in the body.
-      return json(200, onCommand ? onCommand(line) : { ok: true, text: `ran ${line}` });
+      //
+      // AWAITED, so a test can hold a command open. The watcher's restart is a
+      // stop and then a resume with tens of seconds between them on a real box,
+      // and the only way to ask what a tick landing in that gap does is to make
+      // the gap happen. `await` on a plain object is a no-op, so every existing
+      // synchronous onCommand is unaffected.
+      return json(200, onCommand ? await onCommand(line) : { ok: true, text: `ran ${line}` });
     }
 
     if (p === '/api/peek' && req.method === 'GET') {
