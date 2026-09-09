@@ -304,6 +304,10 @@ async function provider({ issuer: iss = 'https://accounts.example.com', audience
       sub: 'u1',
       email_verified: true,
       exp: Math.floor(Date.now() / 1000) + 600,
+      // Every real token is distinct — providers stamp `iat`, `jti` and an
+      // `auth_time` — and the coordinator now spends each one, so two tokens
+      // minted in the same second must not be byte-identical here either.
+      jti: crypto.randomUUID(),
       ...claims,
     });
     const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, new TextEncoder().encode(`${h}.${c}`));
@@ -357,6 +361,58 @@ test('signing in mints a credential for that device alone', async (t) => {
   assert.equal(phone.status, 200);
   const tablet = await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${second.body.token}` } });
   assert.equal(tablet.status, 401);
+});
+
+test('a sign-in token buys one credential, and stays spent across a restart', async (t) => {
+  // The one hole the audit named in sign-in: a token lives ten minutes at
+  // Apple and an hour at Google, and inside that window one captured anywhere
+  // along the way could mint a SECOND credential for the same person — a
+  // phone the admin did not know about, in the device list under a name the
+  // attacker chose.
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'fleet-state-')), 'state.json');
+  const p = await provider();
+  t.after(p.restore);
+  const before = { ...process.env };
+  process.env.AGENT_FLEET_AUTH_ISSUERS = p.issuer;
+  process.env.AGENT_FLEET_AUTH_AUDIENCES = p.audience;
+  process.env.AGENT_FLEET_AUTH_ALLOW = '@thetech.network';
+  t.after(() => {
+    process.env.AGENT_FLEET_AUTH_ISSUERS = before.AGENT_FLEET_AUTH_ISSUERS;
+    process.env.AGENT_FLEET_AUTH_AUDIENCES = before.AGENT_FLEET_AUTH_AUDIENCES;
+    process.env.AGENT_FLEET_AUTH_ALLOW = before.AGENT_FLEET_AUTH_ALLOW;
+  });
+  const first = new Coordinator({ stateFile: file });
+  const port = await first.listen(0, '127.0.0.1');
+  const origin = `http://127.0.0.1:${port}`;
+
+  const token = await p.token({ email: 'eli@thetech.network' });
+  const once = await session(origin, { idToken: token, deviceName: 'a phone' });
+  assert.equal(once.status, 200);
+
+  const again = await session(origin, { idToken: token, deviceName: 'an attacker' });
+  assert.equal(again.status, 401);
+  assert.equal(again.body.error.code, 'token_reused');
+  assert.match(again.body.text, /already been used/);
+  assert.equal(first.core.clients.list().length, 1, 'a second credential was minted');
+  await first.close();
+
+  // ACROSS A RESTART. A single-use thing that becomes reusable whenever the
+  // service bounces is not single-use, and a restart is the ordinary way to
+  // deploy this.
+  const second = new Coordinator({ stateFile: file });
+  second.loadState();
+  const port2 = await second.listen(0, '127.0.0.1');
+  t.after(() => second.close());
+  const after = await session(`http://127.0.0.1:${port2}`, { idToken: token, deviceName: 'an attacker' });
+  assert.equal(after.status, 401);
+  assert.equal(after.body.error.code, 'token_reused');
+
+  // A refused token is NOT burned: somebody added to the list a moment after
+  // being refused signs in with the token they already have.
+  const outsider = await p.token({ email: 'outsider@example.com' });
+  assert.equal((await session(`http://127.0.0.1:${port2}`, { idToken: outsider })).status, 403);
+  second.core.invites.add('outsider@example.com', { invitedBy: 'eli@thetech.network' });
+  assert.equal((await session(`http://127.0.0.1:${port2}`, { idToken: outsider })).status, 200);
 });
 
 test('an address that is not on the list is refused, and told so', async (t) => {

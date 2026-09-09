@@ -1009,7 +1009,7 @@ const OPENAPI = JSON.stringify({
             }
           },
           "401": {
-            "description": "The token did not verify, and the reason says which check failed."
+            "description": "The token did not verify, and the reason says which check failed. `token_reused` means it already bought a credential: a token is exchanged once."
           },
           "403": {
             "description": "Verified, and not allowed in. `private_relay` means Hide My Email, which can never match a domain."

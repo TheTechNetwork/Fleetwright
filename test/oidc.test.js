@@ -67,6 +67,8 @@ test('a good token yields the identity in it', async (t) => {
   assert.equal(who.email, 'eli@thetech.network');
   assert.equal(who.sub, 'u1');
   assert.equal(who.name, 'Eli');
+  // WHEN IT DIES, in milliseconds, for the spent-token table.
+  assert.equal(who.expiresAt, base.exp * 1000);
 });
 
 test('an unconfigured issuer is refused BEFORE any key is fetched', async (t) => {

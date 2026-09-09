@@ -24,9 +24,13 @@ import { verifyIdToken, isAllowed, isPrivateRelay } from './oidc.js';
  * @param {string[]} against.audiences AGENT_FLEET_AUTH_AUDIENCES
  * @param {string[]} against.allow     AGENT_FLEET_AUTH_ALLOW
  * @param {{ has: (email: string) => boolean }} against.invites
+ * @param {{ spend: (token: string, expiresAt: number) => Promise<boolean> }|null} [against.spent]
+ *   where a token that has bought a credential is remembered, so it cannot buy
+ *   a second one. Optional only so the function stays callable from a test
+ *   that is about the other four checks.
  * @returns {Promise<Identified|Refused>}
  */
-export async function identify(idToken, { issuers, audiences, allow, invites }) {
+export async function identify(idToken, { issuers, audiences, allow, invites, spent = null }) {
   if (!issuers.length || !audiences.length) {
     return { ok: false, status: 503, code: 'not_configured', text: 'This coordinator has no sign-in configured.' };
   }
@@ -57,6 +61,20 @@ export async function identify(idToken, { issuers, audiences, allow, invites }) 
   // needs no deploy. See invites.js for why they stay separate.
   if (!isAllowed(who.email, allow) && !invites.has(who.email)) {
     return { ok: false, status: 403, code: 'not_allowed', text: `${who.email} is not on this fleet's list.` };
+  }
+
+  // SPENT LAST, once every other check has passed. A token refused above was
+  // never going to buy anything, and burning it would only turn "you are not
+  // on the list" into "already used" for the person who tries again after
+  // being added. A token that gets here is about to become a credential, and
+  // this is what stops it becoming two.
+  if (spent && !(await spent.spend(idToken, who.expiresAt))) {
+    return {
+      ok: false,
+      status: 401,
+      code: 'token_reused',
+      text: 'That sign-in token has already been used. Sign in again.',
+    };
   }
 
   return { ok: true, email: who.email, name: who.name };

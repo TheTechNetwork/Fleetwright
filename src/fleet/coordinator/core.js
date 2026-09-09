@@ -24,6 +24,7 @@ import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { RunnerTickets } from './runner-tickets.js';
+import { SpentTokens } from './spent-tokens.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
@@ -128,6 +129,10 @@ export class CoordinatorCore {
     this.registry.onRetired = (hostId, reason) => this.ephemeralHostRetired(hostId, reason);
     // Credentials issued to devices, one per phone, each revocable alone.
     this.clients = new ClientRegistry({ now });
+    // The ID tokens that have already bought one of those. A token is
+    // exchanged once; see spent-tokens.js for what a second exchange would
+    // have been.
+    this.spentTokens = new SpentTokens({ now });
     // REUSABLE, AND DELIBERATELY POWERLESS. A claim has to live in a repository
     // secret and be spent on every run, so a single-use code cannot be it —
     // and a device credential must not be, because that one authenticates API
