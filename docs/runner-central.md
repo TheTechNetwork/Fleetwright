@@ -135,6 +135,16 @@ polling `GET /actions/runs` and guessing which one is yours from timestamps. A
 correlation value passed through the workflow is what every project doing this
 ends up with; the ticket is that value doing a second job.
 
+## From a phone
+
+Both apps offer it beside the pin for a permanent host — a platform, the
+minutes, one button — and only when `/api/hosts` says `runners` is set. A
+fleet with no runner repository refuses `provision` with a sentence naming
+`AGENT_FLEET_RUNNER_REPO`, which is the right answer for an agent that asked
+and a dead button on every fleet that has not configured one; so the snapshot
+carries the repository and the control is drawn from that. The reply lands on
+the same screen, and it says what this page says: a dispatch is not a machine.
+
 ## What `provision` may express, and what it may not
 
 ```

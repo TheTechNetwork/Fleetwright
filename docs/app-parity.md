@@ -216,6 +216,7 @@ says on health which journals a box has so the buttons are only ever live.)
 | **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
 | **which image sessions run in** (`sandbox`) | segmented picker on the host page | chips in the host sheet | `/sandbox` |
 | **what work aimed at a tag finds** (`labels`) | chips on the host page, Remove on the removable ones | chips in the host sheet, ✕ on the removable ones | `/labels` |
+| **ask for a temporary machine** (`provision`) | picker, stepper and button under Add a machine, only when `/api/hosts` names a runner repository | chips, minutes and button under Hosts, same gate | `/provision` |
 | **runner tokens** (`/api/runner-tokens`) | Runner tokens under Add a machine: mint, shown once, list, revoke | Runner tokens under Hosts, the same | curl |
 
 **A gap this table caught, in the round that added the profile row.** Android's
