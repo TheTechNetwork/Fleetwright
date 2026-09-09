@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
-import { unsafeSandboxArgs, unsafeSandboxMessage } from './core/sandbox-args.js';
+import { unsafeSandboxArgs, unsafeSandboxMessage, splitArgs } from './core/sandbox-args.js';
 import { INSTALL_ROOT } from './core/resources.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
@@ -182,7 +182,7 @@ export function loadConfig(env = process.env) {
     // Anything else to hand podman, space separated. An escape hatch for the
     // deployment-specific (extra mounts, --network, --userns) that does not
     // belong hard-coded here.
-    sandboxExtraArgs: str('AGENT_HUB_SANDBOX_ARGS').split(/\s+/).filter(Boolean),
+    sandboxExtraArgs: splitArgs(str('AGENT_HUB_SANDBOX_ARGS')),
     // Typed on purpose, and logged on every start. See core/sandbox-args.js:
     // the refusal has to be escapable or it gets escaped by deleting the check.
     sandboxAllowUnsafeArgs: bool('AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS', false),

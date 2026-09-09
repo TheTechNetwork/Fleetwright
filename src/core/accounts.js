@@ -15,7 +15,8 @@
 // charset guarantee lives in a different file and distance is how guarantees
 // rot.
 
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, existsSync, statSync, chmodSync } from 'node:fs';
+import { log } from '../log.js';
 import path from 'node:path';
 
 /**
@@ -290,9 +291,37 @@ export class Accounts {
     }
   }
 
-  /** @param {string} email */
+  /**
+   * @param {string} email
+   * @returns {string|null}
+   */
   read(email) {
     const file = this.credentialPathFor(email);
-    return file ? readFileSync(file, 'utf8') : null;
+    if (!file) return null;
+    // The same guard connectors.js grew for GitHub and Cloudflare tokens, and
+    // did not have here — on the one file that is an account rather than a
+    // token to it. Written 0600 and never looked at again, so a backup
+    // restore, an `rsync -a` under a different umask or a stray chmod left a
+    // live Claude credential readable by every account on the box with
+    // nothing anywhere saying so. Tightened rather than refused, for the
+    // reason given there: a session that cannot read its credential is a
+    // worse outcome than one reading a file we just corrected, and the
+    // warning is the product.
+    let mode = 0;
+    try {
+      mode = statSync(file).mode & 0o777;
+    } catch {
+      return null;
+    }
+    if (mode & 0o077) {
+      log.warn(
+        `accounts: ${file} was mode ${mode.toString(8)} — tightening to 600. Something widened it, and the `
+          + 'credential in it should be treated as having been readable by every account on this box.',
+      );
+      try {
+        chmodSync(file, 0o600);
+      } catch { /* not ours to fix; the warning is what matters */ }
+    }
+    return readFileSync(file, 'utf8');
   }
 }

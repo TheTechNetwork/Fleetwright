@@ -127,7 +127,15 @@ export class HttpAdapter {
       /** @type {Record<string,string>} */
       const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
       if (token) {
-        headers['set-cookie'] = `agent_hub_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`;
+        // `Secure` when the browser reached us over TLS — which behind the
+        // Cloudflare Tunnel the comment at the top of this file recommends is
+        // every time, and which the tunnel says so with x-forwarded-proto.
+        // Not unconditionally: on the loopback default this is plain http,
+        // and a Secure cookie there is one the browser never sends back, so
+        // "?token= once" would silently stop working on the box itself.
+        const tls = req.socket && /** @type {any} */ (req.socket).encrypted
+          || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+        headers['set-cookie'] = `agent_hub_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${tls ? '; Secure' : ''}`;
       }
       res.writeHead(200, headers);
       return res.end(this.html);
@@ -442,11 +450,16 @@ function json(res, status, body) {
 function readJson(req) {
   return new Promise((resolve) => {
     let body = '';
+    let bytes = 0;
     req.on('data', (c) => {
       body += c;
       // A request body here is a command line or a uuid. Anything approaching a
-      // megabyte is either a bug or an attempt to exhaust memory.
-      if (body.length > 1_000_000) req.destroy();
+      // megabyte is either a bug or an attempt to exhaust memory. Counted in
+      // BYTES off the chunk, not characters off the string: `body.length` is
+      // UTF-16 units, so a body of four-byte characters was a quarter the size
+      // it looked before the cap fired.
+      bytes += c.length;
+      if (bytes > 1_000_000) req.destroy();
     });
     req.on('end', () => {
       try {

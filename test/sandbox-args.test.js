@@ -23,6 +23,20 @@ test('the options that end containment are refused', () => {
     ['-v', '/:/host'],
     ['--volume=/:/host:ro'],
     ['--mount', 'type=bind,source=/,target=/host'],
+    // The mount that actually gets typed: the container runtime's socket,
+    // which is root on the host one API call away. The first version of this
+    // check refused only `/` and let every one of these through.
+    ['-v', '/run/podman/podman.sock:/run/podman.sock'],
+    ['-v', '/var/run/docker.sock:/var/run/docker.sock'],
+    ['--mount', 'type=bind,src=/run/podman/podman.sock,dst=/run/podman.sock'],
+    ['-v', '/etc:/host-etc:ro'],
+    ['-v', '/etc/ssh:/keys'],
+    ['-v', '/root:/root'],
+    ['--volume=/home/agent/.ssh:/root/.ssh'],
+    ['-v', '/home/agent/.claude:/root/.claude'],
+    ['-v', '/proc:/host-proc'],
+    ['-v', '/dev:/dev'],
+    ['-v', '/run:/run'],
   ];
   for (const argv of cases) {
     assert.equal(unsafeSandboxArgs(argv).length, 1, `should refuse ${argv.join(' ')}`);
@@ -42,6 +56,10 @@ test('the ordinary uses of the escape hatch still work', () => {
     ['--security-opt', 'no-new-privileges'],
     ['--mount', 'type=bind,source=/srv,target=/srv'],
     ['--dns=1.1.1.1'],
+    // A name that merely starts like a refused one is not it.
+    ['-v', '/etcetera/data:/data'],
+    ['-v', '/home/agent/projects:/projects'],
+    ['-v', '/devices/firmware:/fw:ro'],
   ];
   for (const argv of fine) {
     assert.deepEqual(unsafeSandboxArgs(argv), [], `should allow ${argv.join(' ')}`);
@@ -207,4 +225,18 @@ test('the Containerfile is checked by something before a builder sees it', () =>
   const verify = readFileSync(new URL('../scripts/verify.sh', import.meta.url), 'utf8');
   assert.match(verify, /check-containerfile\.mjs sandbox\/Containerfile/);
   assert.match(verify, /^printf 'container  \.\.\. '$/m);
+});
+
+test('the extra arguments are split like a command line, not on every space', async () => {
+  const { splitArgs } = await import('../src/core/sandbox-args.js');
+  assert.deepEqual(splitArgs(''), []);
+  assert.deepEqual(splitArgs('  --dns=1.1.1.1   --network=slirp4netns '), ['--dns=1.1.1.1', '--network=slirp4netns']);
+  // The two cases the naive split got wrong: a quoted value, and a path with a
+  // space in it. Both reached podman as two arguments, and the unsafe-args
+  // check saw the same two, so what was checked and what was meant disagreed.
+  assert.deepEqual(splitArgs('--label="my session" -v "/srv/my code:/work"'), ['--label=my session', '-v', '/srv/my code:/work']);
+  assert.deepEqual(splitArgs("-v '/srv/it''s:/work'"), ['-v', "/srv/its:/work"]);
+  assert.deepEqual(splitArgs('-v /srv/my\\ code:/work'), ['-v', '/srv/my code:/work']);
+  // And the refusal still sees the argument the operator meant.
+  assert.equal(unsafeSandboxArgs(splitArgs('-v "/run/podman/podman.sock:/run/podman.sock"')).length, 1);
 });

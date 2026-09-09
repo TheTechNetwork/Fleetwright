@@ -401,10 +401,15 @@ function json(res, status, body) {
 function readJson(req) {
   return new Promise((resolve) => {
     let body = '';
+    let bytes = 0;
     let over = false;
     req.on('data', (c) => {
       body += c;
-      if (body.length > MAX_BODY_BYTES && !over) {
+      // Bytes off the chunk, not `body.length`: that is UTF-16 units, and a
+      // body of four-byte characters was a quarter the size it looked before
+      // the cap fired. The constant says BYTES; now it counts them.
+      bytes += c.length;
+      if (bytes > MAX_BODY_BYTES && !over) {
         over = true;
         req.destroy();
         resolve(null);

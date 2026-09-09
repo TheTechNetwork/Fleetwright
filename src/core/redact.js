@@ -33,9 +33,11 @@
 const SECRET_FROM = new Map([
   ['code', 0], // /code <authorization-code>
   ['link', 1], // /link <provider> <token>
-  // /renew <provider> <refresh-token> <client-secret> — TWO secrets, and the
-  // second is the App's own, shared by every host in the fleet. The provider
-  // name is still worth keeping for the same reason it is on `link`.
+  // /renew <provider> <client-id> <refresh-token> — that is the order
+  // sidecar.js sends and commands.js reads. The client id is public and the
+  // refresh token is not; masking from index 1 hides both, which is cheaper
+  // than being right about which is which. The provider name is still worth
+  // keeping for the same reason it is on `link`.
   ['renew', 1],
 ]);
 
