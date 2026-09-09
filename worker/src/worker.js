@@ -1738,6 +1738,12 @@ const OPENAPI = JSON.stringify({
           },
           "401": {
             "description": "no credential"
+          },
+          "403": {
+            "description": "that push token is registered to another device"
+          },
+          "507": {
+            "description": "this fleet is holding as many push registrations as it can store"
           }
         }
       },

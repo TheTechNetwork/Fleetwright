@@ -29,11 +29,40 @@ import { SpentTokens } from './spent-tokens.js';
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
 
 /**
+ * The longest push token this fleet will store, and the most rows it will hold.
+ *
+ * BOTH NUMBERS EXIST FOR ONE REASON: every device row is serialised into a
+ * SINGLE Durable Object value, and DO storage refuses a value over 128KiB. Past
+ * that, `#saveDevices` throws, and it keeps throwing — the same failure the
+ * event ring already had a post-mortem for, in the third key that never got the
+ * same treatment (#351).
+ *
+ * The token bound was 4096. Real ones are nowhere near it: an APNs token is 64
+ * hex characters, an FCM registration token about 180, and a Firebase
+ * installation ID shorter than either — so 4096 was room for roughly thirty
+ * rows to break every save, from a caller who only needed a credential and a
+ * long string. 512 is generous against every token any provider this fleet
+ * talks to actually issues, and there are only two.
+ *
+ * 150 rows at 512 bytes of token plus its metadata stays comfortably inside the
+ * limit; `test/push.test.js` pins that arithmetic rather than this sentence.
+ * A fleet with 150 phones on it is a large fleet.
+ */
+const MAX_PUSH_TOKEN = 512;
+const MAX_DEVICES = 150;
+
+/**
  * @typedef {object} Device
  * @property {string} id            opaque, minted at enrollment
  * @property {'ios'|'android'|'web'} platform
  * @property {string} token         APNs/FCM token
  * @property {string} [actor]       who this device belongs to
+ * @property {string} [pushKey]     the phone's public key, when it sent one, so
+ *                                  its notifications are sealed to it. Absent
+ *                                  is not "no encryption configured" — it is
+ *                                  this device falling back to plaintext, and
+ *                                  `device.plaintext` is recorded when a row
+ *                                  that had one comes back without it.
  * @property {string} [clientId]    the credential this registration belongs to,
  *                                  so revoking a phone stops the fleet talking
  *                                  to it. Optional only for registrations made
@@ -622,7 +651,7 @@ export class CoordinatorCore {
     if (!['ios', 'android', 'web'].includes(platform)) {
       return { ok: false, error: `unknown platform ${JSON.stringify(platform)}` };
     }
-    if (typeof token !== 'string' || token.length < 8 || token.length > 4096) {
+    if (typeof token !== 'string' || token.length < 8 || token.length > MAX_PUSH_TOKEN) {
       return { ok: false, error: 'a push token is required' };
     }
     if (pushKey !== undefined && pushKey !== null && pushKey !== '') {
@@ -642,6 +671,57 @@ export class CoordinatorCore {
       return { ok: false, error: 'that push token is registered to another device', code: 'not_yours' };
     }
     const owner = clientId ?? existing?.clientId;
+
+    // A CEILING THAT REFUSES RATHER THAN FORGETS, which is the whole difference
+    // between this key and the one above it.
+    //
+    // `mcpClients` is bounded by evicting the oldest row, and that is safe
+    // there: a dropped OAuth client gets `invalid_client` and registers again,
+    // within the same second, without anybody noticing. Evicting a DEVICE row
+    // silently stops somebody's notifications, and this product's entire
+    // argument rests on the phone being woken. So the store fills and says so.
+    //
+    // Only a registration that would actually GROW it is refused. A phone
+    // re-registering on the token it already holds replaces a row; a phone
+    // whose address changed frees its old row in the sweep below; both are net
+    // zero and neither can be locked out by a full fleet. What is refused is a
+    // genuinely new phone on a fleet that has run out of room, which is a thing
+    // an operator has to be told rather than a thing to absorb.
+    const grows = !existing && !(owner && [...this.devices.values()].some((d) => d.clientId === owner));
+    if (grows && this.devices.size >= MAX_DEVICES) {
+      this.record({
+        event: 'devices.full',
+        text:
+          `a ${platform} device could not register: this fleet is holding ${MAX_DEVICES} push ` +
+          'registrations, which is the most it can store in one record. Remove the phones that ' +
+          'have gone before adding another.',
+      });
+      return {
+        ok: false,
+        code: 'devices_full',
+        error:
+          `This fleet is already holding ${MAX_DEVICES} push registrations, which is as many as it can ` +
+          'store. An admin can remove the ones that belong to phones that have gone.',
+      };
+    }
+
+    // A DEVICE THAT HAD A KEY AND CAME BACK WITHOUT ONE is not inherited from —
+    // see below, the reason is a reinstall — but it was also not RECORDED, and
+    // that is the half #351 named. The row quietly reverts to plaintext
+    // notifications and nothing anywhere says so, which is the one shape a
+    // security property must never fail in. Whether it is a reinstall (right)
+    // or a key that failed to generate this launch (wrong) cannot be told apart
+    // from here, so this says what happened and not what it means.
+    if (existing?.pushKey && !pushKey) {
+      this.record({
+        event: 'device.plaintext',
+        text:
+          `a ${platform} device re-registered without an encryption key, so its notifications are ` +
+          'no longer sealed to it. A reinstall does this and is expected; the same phone doing it ' +
+          'twice is not.',
+      });
+    }
+
     const device = {
       id: existing?.id ?? this.newId(),
       platform: /** @type {any} */ (platform),
