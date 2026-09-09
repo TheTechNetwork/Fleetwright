@@ -52,6 +52,75 @@ test('a device registers and is remembered by its push token', async () => {
   assert.equal(c.devices.size, 1);
 });
 
+test('a push token longer than any provider issues is refused', async () => {
+  // 4096 before this. An APNs token is 64 hex characters and an FCM one about
+  // 180, so the old bound was room for roughly thirty rows to push the single
+  // Durable Object value holding all of them past 128KiB — after which every
+  // save throws, for ever (#351).
+  const c = core();
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'a'.repeat(512) })).ok, true);
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'b'.repeat(513) })).ok, false);
+  // And the bounds that were already right are still right.
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'c'.repeat(7) })).ok, false);
+});
+
+test('a full device store serialises to less than a Durable Object value holds', async () => {
+  // THE ARITHMETIC, not the sentence beside the constants. Both numbers exist
+  // to keep one `storage.put` under Cloudflare's 128KiB, and a later change to
+  // either that quietly crosses it would produce a fleet whose sign-in and push
+  // both break, weeks after the change, on a box where nothing happened.
+  const c = core({ newId: () => Math.random().toString(36).slice(2) });
+  for (let i = 0; i < 150; i++) {
+    const r = await c.registerDevice({ platform: 'ios', token: `${i}`.padStart(512, 'x'), actor: `p${i}@example.com` });
+    assert.equal(r.ok, true, `row ${i} should fit`);
+  }
+  assert.equal(c.devices.size, 150);
+  const bytes = new TextEncoder().encode(JSON.stringify([...c.devices.values()])).length;
+  assert.ok(bytes < 128 * 1024, `a full store is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full store refuses a new phone rather than forgetting an old one', async () => {
+  // THE DIFFERENCE FROM `mcpClients`, which bounds itself by evicting. A
+  // dropped OAuth client re-registers within the second and nobody notices; a
+  // dropped device row silently stops somebody's notifications, and this
+  // product's whole argument is that the phone gets woken.
+  const c = core({ newId: () => Math.random().toString(36).slice(2) });
+  for (let i = 0; i < 150; i++) await c.registerDevice({ platform: 'ios', token: `tok-${i}-`.padEnd(20, 'x'), clientId: `c${i}` });
+
+  const r = await c.registerDevice({ platform: 'ios', token: 'one-too-many-00000', clientId: 'c-new' });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'devices_full');
+  assert.equal(c.devices.size, 150, 'nothing was evicted to make room');
+  assert.ok(c.events.some((e) => e.event === 'devices.full'), 'an operator can see that it filled');
+
+  // AND A PHONE ALREADY HERE IS NEVER LOCKED OUT. Re-registering on the token
+  // it holds replaces a row; registering a changed address frees its old row in
+  // the sweep. Neither grows the store, so neither may be refused by a ceiling
+  // that exists to bound growth.
+  assert.equal((await c.registerDevice({ platform: 'ios', token: 'tok-7-'.padEnd(20, 'x'), clientId: 'c7' })).ok, true);
+  const moved = await c.registerDevice({ platform: 'ios', token: 'c7-new-address-0000', clientId: 'c7' });
+  assert.equal(moved.ok, true, 'a phone whose address changed is not a new phone');
+  assert.equal(c.devices.size, 150);
+});
+
+test('losing an encryption key is recorded, since it cannot be prevented', async () => {
+  // The key is deliberately never inherited — a reinstall loses the private
+  // half, and carrying the public half forward would encrypt every future
+  // notification to a key nobody holds. What was missing is that the row
+  // reverts to plaintext with nothing anywhere saying so (#351), which is the
+  // one shape a security property must not fail in.
+  const c = core();
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+  const key = Buffer.from(raw).toString('base64url');
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1', pushKey: key });
+  assert.equal(c.events.some((e) => e.event === 'device.plaintext'), false, 'nothing to say yet');
+
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40), clientId: 'phone-1' });
+  assert.equal(c.devices.get('a'.repeat(40)).pushKey, undefined, 'the stale key was inherited');
+  assert.ok(c.events.some((e) => e.event === 'device.plaintext'), 'and the downgrade is visible');
+});
+
 test('re-registering the same token updates rather than duplicating', async () => {
   // A reinstall hands back the same token. Two registrations would mean two
   // notifications for one phone.

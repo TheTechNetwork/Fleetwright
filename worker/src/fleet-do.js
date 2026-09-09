@@ -839,7 +839,8 @@ export class Fleet {
         pushKey: body?.pushKey ? String(body.pushKey) : undefined,
       });
       if (r.ok) await this.#saveDevices();
-      return json(r, r.ok ? 200 : r.code === 'not_yours' ? 403 : 400);
+      // 507 for a full store, not 400 — see the Node coordinator's copy.
+      return json(r, r.ok ? 200 : r.code === 'not_yours' ? 403 : r.code === 'devices_full' ? 507 : 400);
     }
 
     // A notification a person asked for, so they can find out whether push
