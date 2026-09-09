@@ -56,6 +56,7 @@ import { emailFromActor } from '../../core/accounts.js';
 import { readChannel, pinnedByEnv } from '../../core/channel.js';
 import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
 import { readLabels } from '../../core/labels.js';
+import { LOG_SOURCES, unitInstalled } from '../../core/logs.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -198,6 +199,11 @@ export class Sidecar {
     // the process holding the secret write the result where the sessions will
     // read it.
     this.hubConfig = hubConfig;
+    /**
+     * Which service logs this box can read, once asked. See #logSources.
+     * @type {string[]|null}
+     */
+    this.logSources = null;
     // Watching is what turns "a session needs you" into a notification on a
     // phone. Off in tests, which drive tick() directly.
     this.watcher = watch
@@ -675,6 +681,19 @@ export class Sidecar {
       // Sent rather than asked for, like the channel and the variant beside it:
       // a list of machines must not become a round trip per row.
       setLabels: this.hubConfig ? readLabels(this.hubConfig) : [],
+      // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
+      // exactly those. The chat surface already checks — logButtons in
+      // commands.js filters on unitInstalled, because "no log entries for
+      // agent-fleet-coordinator" on a box that never ran one looks like a
+      // broken service rather than an absent one — and a phone has no way to
+      // ask that question per row. Carried in `base` rather than beside
+      // `channel` below on purpose: the logs are most wanted when the hub is
+      // unreachable, which is exactly when the block below is not sent.
+      //
+      // Null on a host too old to send it, which is CANNOT TELL: the verb
+      // still works there, the frame just does not say which of the three
+      // will answer with something.
+      logs: this.#logSources(),
       loadavg: [load1, load5, load15],
       freeMemBytes: os.freemem(),
       totalMemBytes: os.totalmem(),
@@ -905,6 +924,23 @@ export class Sidecar {
       this.log.warn(`sidecar: config frame carried "${key}", which this host does not recognise — dropped`);
     }
     return { kind: 'none' };
+  }
+
+  /**
+   * The log sources whose unit exists on this box, in LOG_SOURCES order.
+   *
+   * ASKED ONCE. A unit appears or disappears with an install, which restarts
+   * this process, so three `systemctl cat` spawns four times a minute would be
+   * spending a fork on a fact that cannot change under it — unlike the labels
+   * above, which a phone can change and which are read on every frame.
+   * @returns {string[]|null}
+   */
+  #logSources() {
+    if (!this.hubConfig?.systemctlBin) return null;
+    this.logSources ??= Object.entries(LOG_SOURCES)
+      .filter(([, { unit }]) => unitInstalled(this.hubConfig, unit))
+      .map(([key]) => key);
+    return this.logSources;
   }
 
   #updates() {
