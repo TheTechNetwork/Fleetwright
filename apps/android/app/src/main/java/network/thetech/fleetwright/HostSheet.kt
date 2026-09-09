@@ -205,6 +205,46 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
                     style = MaterialTheme.typography.bodySmall,
                 )
 
+                // THE JOURNAL, FROM THE PHONE. The half of "sign-in status and
+                // logs on the app" that stayed unbuilt while the roadmap said
+                // done: Fleet.kt had the call and no screen made it.
+                //
+                // One button per journal THIS box can read, which the host says
+                // in its health frame. A box that is a host and not a
+                // coordinator gets two, not three with one that answers "no log
+                // entries" — the chat surface has filtered the same way since
+                // the verb shipped.
+                Text("Logs", style = MaterialTheme.typography.titleSmall)
+                val logs = host.logs
+                when {
+                    logs == null ->
+                        // NULL IS CANNOT TELL. A host older than this field
+                        // still answers the verb, but this sheet has not been
+                        // told which of the three journals exist here.
+                        Text(
+                            "This host has not said which logs it can read.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    logs.isEmpty() ->
+                        Text(
+                            "None of the services this app knows are installed here.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    else -> Column {
+                        logs.forEach { source ->
+                            TextButton(
+                                onClick = { run { it.logs(host.hostId, service = source) } },
+                                enabled = !busy,
+                            ) { Text(logName(source)) }
+                        }
+                    }
+                }
+                Text(
+                    "The last forty lines of a service's journal. A session's own output is under "
+                        + "the session, as Output.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
                 if (result.isNotBlank()) {
                     // THE BOX'S OWN WORDS, on an inner surface: quoted from
                     // somewhere else, and it should not look like something this
@@ -227,4 +267,16 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
     )
+}
+
+/**
+ * What a journal is called on a button. The host's own words for each, from
+ * LOG_SOURCES in logs.js, so a person who has read the CLI's answer recognises
+ * the same service here.
+ */
+private fun logName(source: String): String = when (source) {
+    "hub" -> "The session manager"
+    "coordinator" -> "The fleet coordinator"
+    "sidecar" -> "This box as a fleet host"
+    else -> source
 }

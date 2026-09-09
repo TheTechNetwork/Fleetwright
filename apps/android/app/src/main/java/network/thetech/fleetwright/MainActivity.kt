@@ -517,6 +517,16 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                             }
                         },
                         onFiles = { browsing = session },
+                        // Like Peek, and for the same reason: the output IS
+                        // the answer, and a refresh a moment later would wipe
+                        // it off the screen.
+                        onOutput = {
+                            scope.launch {
+                                busy = true
+                                status = fleet.logs(session.hostId, session = session.name).text
+                                busy = false
+                            }
+                        },
                         onResume = {
                             scope.launch {
                                 busy = true
@@ -545,6 +555,12 @@ private fun SessionCard(
     onAnswer: (Int) -> Unit,
     onPeek: () -> Unit,
     onFiles: () -> Unit,
+    /**
+     * What the session SAID, as against what it looks like now: the
+     * container's output, which outlives the pane. The reason a session died
+     * is here and nowhere else once its window is gone.
+     */
+    onOutput: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     var confirmingForget by remember { mutableStateOf(false) }
@@ -718,6 +734,10 @@ private fun SessionCard(
             // resumable — so "collect what it produced" is a thing to do
             // AFTER the work has finished, which is most of the time.
             TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
+            // ITS OUTPUT, on running and stopped sessions alike, and for the
+            // same reason as Files: "why did it stop" is a question asked
+            // after it has.
+            TextButton(onClick = onOutput, enabled = !busy) { Text("Output") }
             if (session.status == "running") {
                 TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
                 session.rcUrl?.let { url ->

@@ -270,6 +270,18 @@ class Fleet(
          */
         val setLabels: List<String> = emptyList(),
         /**
+         * Which service journals this box can read: some of `hub`,
+         * `coordinator`, `sidecar`, in the host's order. A button is drawn for
+         * exactly these — a box that never ran a coordinator would otherwise
+         * offer one that answers "no log entries", which reads as a broken
+         * service rather than an absent one.
+         *
+         * NULL IS CANNOT TELL: a host older than this field. The verb works
+         * there too, but this app has not been told which of the three will
+         * say anything, so it says that instead of guessing.
+         */
+        val logs: List<String>? = null,
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -1319,6 +1331,11 @@ class Fleet(
                             account = c.optString("account").takeIf { it.isNotBlank() && it != "null" },
                             summary = c.optString("summary").takeIf { it.isNotBlank() && it != "null" },
                         )
+                    },
+                    // ABSENT STAYS NULL, and present-and-empty is a real
+                    // answer: a box with none of the three units installed.
+                    logs = health?.optJSONArray("logs")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     },
                 )
             }
