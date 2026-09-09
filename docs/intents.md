@@ -434,6 +434,47 @@ so the fleet is visibly down either way rather than subtly wrong. The window is
 loud, which is the property to preserve; `agent-fleet update --restart` from
 the app is how a host crosses it without a shell.
 
+### The rescue envelope
+
+The version check runs **before the verb is read**, which for a long time meant
+a host on the wrong number refused the command that would have fixed it. That
+was [#323](https://github.com/TheTechNetwork/Fleetwright/issues/323): a box that
+was up, connected, reporting health, and repairable only by somebody walking to
+it.
+
+One verb is exempt, and only one. `update` has taken exactly one parameter —
+`restart` — since it shipped, and its meaning cannot change without ceasing to
+be the verb that repairs a box. An envelope whose shape is identical at every
+version has nothing to disagree about, so its `v` is not consulted:
+
+```json
+{ "v": 2, "kind": "intent", "id": "01J8ZK3QH4", "verb": "update",
+  "params": { "restart": "yes" }, "issuedAt": 1755000000000 }
+```
+
+Accepted by a v3 host. Everything else about it is still checked — a bad id, a
+`restart` value that is not `yes` or `no`, an actor with a space in it are all
+refused for their own reasons. It is an exemption from the number and from
+nothing else.
+
+The parameter list is **frozen separately from the verb**. `update` may gain a
+parameter one day; a rescue `update` may not, because the guarantee is that a
+host built at any version understands it. An envelope carrying anything beyond
+`restart` is not the rescue shape and goes back through the ordinary version
+check.
+
+The coordinator does the other half. A host already in the field runs code from
+before this paragraph and checks the number regardless, so `buildIntent` stamps
+a rescue `update` with the version *that host reports* — after validating the
+envelope at the current one, and only when the host is behind. A host that is
+**ahead** is not sent a downgrade: it does not need pulling, the coordinator is
+the thing that is behind, and the remedy is to finish the deploy.
+
+What this does not fix is a box pinned to a channel that has no newer release.
+It pulls, finds nothing, and comes back on the same version — the one case that
+still needs somebody on the machine, and the drift message says so rather than
+promising the update will work.
+
 **The content never travels.** A profile is a file on the host —
 `/var/lib/agent-hub/profiles/<name>.md` — and the intent carries its name. That
 is [`wanted.md`](./wanted.md)'s rule kept rather than bent: *the coordinator may

@@ -73,10 +73,18 @@ behind stays **connected and green** in `fleet_list` and `fleet_health`, and
 every command against it is refused with `unsupported_version`. The fleet looks
 up and nothing works.
 
-`update` is an intent. So the first thing a mismatched fleet loses is its own
-repair path, and the boxes need a shell. That is
-[#323](https://github.com/TheTechNetwork/Fleetwright/issues/323) in its worst
-form and there is no way around it this time.
+`update` is an intent, so the first thing a mismatched fleet used to lose was
+its own repair path and the boxes needed a shell — [#323](https://github.com/TheTechNetwork/Fleetwright/issues/323)
+in its worst form. It no longer is: `update` travels in a frozen envelope whose
+version is not checked, and the coordinator labels it with the version a drifted
+host reports, so **a host that is behind can be updated from the app across the
+window**. Do that first and keep the shell for what it is still needed for.
+
+Two caveats, and they are the reason this section still exists. A host that is
+**ahead** of the coordinator cannot be fixed this way, because it is not the
+half that is wrong — and that is the direction merging to main produces. And a
+box whose channel has no newer release pulls, finds nothing, and stays where it
+is.
 
 The advice in `intents.md` — *upgrade hosts before the coordinator* — cannot be
 followed here, because merging to main deploys the Worker automatically. It is
