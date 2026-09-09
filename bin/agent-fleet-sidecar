@@ -294,7 +294,14 @@ const sidecar = new Sidecar({
         : (lastUpdates?.rebootRequired ?? false),
       release:
         app.kind === 'release'
-          ? { available: app.available ?? null, configured: app.configured ?? true, message: app.text ?? null }
+          ? {
+              available: app.available ?? null,
+              configured: app.configured ?? true,
+              // Whether the check itself got an answer. Absent from an older
+              // hub, which is CANNOT TELL rather than a claim either way.
+              ok: typeof app.ok === 'boolean' ? app.ok : null,
+              message: app.text ?? null,
+            }
           : null,
       // A MIGRATABLE CHECKOUT HAS SOMETHING WAITING TOO — it is offered the move
       // onto packaged releases. It counts no commits and has no release

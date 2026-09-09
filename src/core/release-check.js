@@ -27,6 +27,16 @@ import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
  * @property {string|null} available the version waiting, or null for none
  * @property {string} message        the host's own sentence about it
  * @property {boolean} configured    whether this box knows where to look
+ * @property {boolean} ok            whether the CHECK ITSELF got an answer
+ *
+ * `ok` is the field that separates "asked, and nothing is waiting" from
+ * "could not ask". Both of those are `available: null`, and until this existed
+ * the only thing telling them apart was the wording of `message` — so the
+ * caller that had to know sniffed it for the words "could not check", and a
+ * refusal phrased any other way was read as "up to date". `applyRelease`
+ * already draws the line (`ok: false` for a layout it cannot swap, a manifest
+ * that answered 404, a protocol it does not speak); this carries that answer
+ * out instead of throwing it away and guessing it back.
  */
 
 /**
@@ -48,6 +58,8 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch } = {}) {
     return {
       available: null,
       configured: false,
+      // Not an answer about releases, so not `ok`. Nothing was asked.
+      ok: false,
       message:
         'This box does not know where its releases come from, so it cannot check for updates.\n' +
         'Set AGENT_HUB_RELEASE_MANIFEST in /etc/agent-hub.env, or re-run the installer with --upgrade.',
@@ -70,11 +82,18 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch } = {}) {
     });
     // `changed` is always false on a dry run, so the version field is what says
     // whether there is one — and it is only set when the decision was to act.
-    return { available: r.version ?? null, configured: true, message: r.message };
+    // `r.ok` IS THE HALF THAT USED TO BE DROPPED. applyRelease answers false
+    // for every state where it could not even decide — a box unpacked by hand
+    // with no `current` symlink to swap, a manifest that answered 404, a
+    // release built for a protocol this box does not speak — and true both for
+    // "here is one" and for "you are current". Keeping only `version` collapsed
+    // the first group into the second.
+    return { available: r.version ?? null, configured: true, ok: r.ok, message: r.message };
   } catch (e) {
     return {
       available: null,
       configured: true,
+      ok: false,
       message: `could not check for a release: ${/** @type {Error} */ (e).message}`,
     };
   }
