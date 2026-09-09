@@ -101,6 +101,27 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         WebAuth.deliver(intent)
+        notifiedSession.value = sessionNamedBy(intent)
+    }
+
+    /**
+     * The session a tapped notification was about, or null.
+     *
+     * FCM delivers a tray notification's `data` keys as extras on the launcher
+     * intent when the tap opens the app, so this needs no PendingIntent of its
+     * own: the coordinator sends `event`, `name` and `hostId` beside every
+     * notification for exactly this. Until this existed a tap opened the app
+     * to whatever was on screen last — the settings, as often as not — and
+     * the session that had just asked was two taps further on.
+     *
+     * A value, not a fact: the list is refreshed from the coordinator, and a
+     * name that is no longer there is simply not there.
+     */
+    private val notifiedSession = mutableStateOf<String?>(null)
+
+    private fun sessionNamedBy(intent: Intent?): String? {
+        if (intent?.hasExtra("event") != true) return null
+        return intent.getStringExtra("name")?.takeIf { it.isNotBlank() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -110,6 +131,7 @@ class MainActivity : ComponentActivity() {
         // redirected, so the callback is the launch Intent rather than a new
         // one. Same delivery, and the flow filters anything that is not ours.
         WebAuth.deliver(intent)
+        notifiedSession.value = sessionNamedBy(intent)
 
         // Android 13+ will not show a notification until this is granted, and a
         // fleet app that cannot tell you a session is waiting has lost its main
@@ -139,6 +161,7 @@ class MainActivity : ComponentActivity() {
                     // Read once, from the intent that started this activity. A
                     // shortcut tap is the only thing that sets it.
                     launchKindId = intent?.getStringExtra(SessionKinds.EXTRA_KIND_ID),
+                    notifiedSession = notifiedSession.value,
                 )
             }
         }
@@ -147,7 +170,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
+fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notifiedSession: String? = null) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val outbox = remember { Outbox(context) }
@@ -275,6 +298,16 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null) {
         if (launchKindId != null) {
             pendingKindId = launchKindId
             showStart = true
+        }
+    }
+
+    // A tapped notification lands on the sessions, whatever was showing when
+    // the phone was put down, and the list is the fleet now rather than the
+    // fleet when it went in a pocket.
+    LaunchedEffect(notifiedSession) {
+        if (notifiedSession != null) {
+            showSettings = false
+            refresh()
         }
     }
 
@@ -853,7 +886,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         if (fleetHosts.isNotEmpty()) {
             Text("Fleet", style = Design.Style.section, color = Design.Palette.ink.now)
             fleetHosts.forEach { host ->
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(host.hostId, fontFamily = FontFamily.Monospace)
                         // Colour reinforces the word; it never carries the
@@ -861,7 +894,10 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         Text(
                             host.state ?: "unknown",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (host.state == "healthy") MaterialTheme.colorScheme.primary
+                            // A status, so a status colour. It was the accent,
+                            // which Design.kt spends on things you can tap —
+                            // and a healthy host is not a button.
+                            color = if (host.state == "healthy") Design.Palette.ok.now
                             else MaterialTheme.colorScheme.error,
                         )
                     }
@@ -1148,7 +1184,7 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             // could reboot the fleet. The button stays disabled until the typed
             // name matches, which is the only guard that survives being remote.
             rebootTarget?.let { target ->
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     Text("Reboot $target", style = MaterialTheme.typography.titleSmall)
                     Text(
                         "Every session on this box dies — a reboot takes the tmux server with it.",
@@ -1222,6 +1258,20 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         )
         OutlinedButton(onClick = { showKinds = true }) { Text("Session kinds") }
         if (showKinds) KindsSheet(settings = settings, onDismiss = { showKinds = false })
+
+        HorizontalDivider(Modifier.padding(vertical = Design.Space.inside))
+
+        // Who may sign in. The iOS app has had this screen since invitations
+        // shipped; this one rendered the same fleet with no way to let anybody
+        // into it, and the roadmap said both phones had it.
+        var showPeople by remember { mutableStateOf(false) }
+        Text("People", style = Design.Style.section, color = Design.Palette.ink.now)
+        Text(
+            "Invite somebody by address. They sign in as themselves and see only the sessions they start.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedButton(onClick = { showPeople = true }) { Text("People") }
+        if (showPeople) PeopleSheet(settings = settings, onDismiss = { showPeople = false })
 
         HorizontalDivider(Modifier.padding(vertical = Design.Space.inside))
 
@@ -1402,14 +1452,17 @@ private fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     )
                 }
                 Text(
-                    "On that box:  agent-fleet-sidecar enrol $pin\nGood for ten minutes, once.",
+                    "On that box: agent-fleet-sidecar enrol $pin\nGood for ten minutes, once.",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                 )
             }
 
             for (host in hosts) {
-                Card(Modifier.fillMaxWidth()) {
+                // The design's card, not Material's: the one place in the app
+                // that still drew a bare Card, on the screen that lists the
+                // machines the rest of the app is careful to render alike.
+                Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall)) {
                     Column(Modifier.padding(Design.Space.inside)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(host.hostId, style = MaterialTheme.typography.titleSmall)
@@ -1647,7 +1700,7 @@ private fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
  * what is it running, is that current, and what will it take next.
  */
 /**
- * "elibrody2@gmail.com · never used", or as much as is known.
+ * "someone@example.com · never used", or as much as is known.
  *
  * NEVER USED AND USED LONG AGO MUST LOOK DIFFERENT. `lastSeenAt` is null for a
  * credential that has never been spent, and rendering that as an epoch date is

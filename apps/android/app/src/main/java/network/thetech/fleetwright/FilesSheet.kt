@@ -34,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 /**
@@ -168,7 +167,7 @@ fun FilesSheet(
                         // to follow it out of the workspace, and somebody who
                         // can see it is a link is not surprised by that.
                         Text(if (entry.isDirectory) "📁" else if (entry.kind == "link") "🔗" else "📄")
-                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Spacer(Modifier.padding(horizontal = Design.Space.hair))
                         Text(entry.name, Modifier.weight(1f))
                         if (!entry.isDirectory) {
                             Text(
