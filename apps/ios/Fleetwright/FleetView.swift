@@ -62,6 +62,11 @@ struct FleetApp: View {
                 NavigationStack { SettingsView(settings: settings, focus: .you) }
             }
         }
+        // A tapped notification lands on the sessions, whatever tab was
+        // showing when the phone was put down.
+        .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { _ in
+            tab = .sessions
+        }
         // The content is the point; the chrome is not. On the way down the
         // tab bar shrinks to a pill and gives the list its height back.
         .tabBarMinimizeBehavior(.onScrollDown)
@@ -261,6 +266,11 @@ struct FleetView: View {
                 StartSheet(settings: settings, onStart: startInBackground)
             }
             .task { await refresh() }
+            // The list a notification tap lands on should be the list as it is
+            // now, not as it was when the phone went in a pocket.
+            .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { _ in
+                Task { await refresh() }
+            }
         }
     }
 
@@ -1184,7 +1194,7 @@ private struct SettingsView: View {
                                         .fleetType(.micro)
                                         .foregroundStyle(Design.Palette.attention)
                                 }
-                                Text("On that box:  agent-fleet-sidecar enrol \(pin)")
+                                Text("On that box: agent-fleet-sidecar enrol \(pin)")
                                     .fleetType(.microMono)
                                     .foregroundStyle(Design.Palette.inkDim)
                             }
@@ -1754,7 +1764,7 @@ struct SessionKindsView: View {
                         // that implies a feature is broken.
                         if !profiles.isEmpty {
                             Picker("Task", selection: $kind.profile) {
-                                Text("Nothing — start idle").tag("")
+                                Text("Nothing — I will drive it").tag("")
                                 ForEach(uniqueProfiles, id: \.self) { name in Text(name).tag(name) }
                             }
                             .fleetType(.label)

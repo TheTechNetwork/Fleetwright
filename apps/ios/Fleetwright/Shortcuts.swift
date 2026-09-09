@@ -252,6 +252,13 @@ struct StopSessionIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        // Asked first. Siri fires from a lock screen and from automations, and
+        // "stop bigjob" misheard as the wrong session costs somebody the
+        // half-hour it was into. A stopped session keeps its conversation and
+        // can be resumed, which is why this is a question and not a refusal.
+        try await requestConfirmation(
+            result: .result(dialog: IntentDialog(stringLiteral: "Stop \(session.label)? It can be resumed later."))
+        )
         let settings = Settings()
         let reply = try await Fleet(settings: settings).stop(session.name)
         return .result(dialog: IntentDialog(stringLiteral: reply.text ?? "Stopped \(session.label)"))

@@ -345,7 +345,7 @@ struct CredentialsView: View {
                 .fleetType(.micro)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, Design.Space.hair / 2)
     }
 
     /// Step one.
