@@ -26,9 +26,10 @@ const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').rep
 
 test('independent requests are asked for at the same time', () => {
   const load = VIEW.slice(VIEW.indexOf('private func loadHosts() async'), VIEW.indexOf('/// "elibrody2@gmail.com'));
-  // Four answers, one wait. `async let` starts them all and waits once, so the
-  // cost is the slowest rather than the sum.
-  assert.equal((load.match(/async let /g) || []).length, 4, 'loadHosts went back to waiting on each in turn');
+  // Five answers, one wait. `async let` starts them all and waits once, so the
+  // cost is the slowest rather than the sum. (Four, until the runner
+  // repository joined them.)
+  assert.equal((load.match(/async let /g) || []).length, 5, 'loadHosts went back to waiting on each in turn');
   assert.doesNotMatch(bare(load), /await Fleet\(settings: settings\)\.\w+\(\)/,
     'a request is still being awaited inline, one at a time');
 
@@ -48,7 +49,7 @@ test('a request that failed does not empty the screen', () => {
   // that went away.
   const load = bare(VIEW.slice(VIEW.indexOf('private func loadHosts() async'), VIEW.indexOf('/// "elibrody2@gmail.com')));
   assert.doesNotMatch(load, /\?\? \[\]/, 'a failed fetch is assigned an empty array again');
-  for (const field of ['fleetHosts', 'hosts', 'clients', 'events']) {
+  for (const field of ['fleetHosts', 'hosts', 'clients', 'events', 'runnerRepo']) {
     assert.ok(
       load.includes(`{ ${field} = got }`),
       `${field} is not guarded against a failed request`,

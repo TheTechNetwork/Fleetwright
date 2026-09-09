@@ -788,6 +788,20 @@ struct Fleet {
         return try JSONDecoder().decode(Reply.self, from: data).clients ?? []
     }
 
+    /// Whether this fleet can start a temporary machine, and where from.
+    ///
+    /// The `runners` field of /api/hosts: the repository holding the runner
+    /// workflows, or nil. NIL IS AN ANSWER — the coordinator knows it has no
+    /// runner repository — and an older coordinator that omits the field
+    /// means the same thing. Either way there is nowhere to start one and the
+    /// control is not drawn, rather than drawn and refused on tap.
+    func runners() async throws -> String? {
+        let data = try await get("/api/hosts")
+        struct Runners: Codable { let repo: String? }
+        struct Reply: Codable { let runners: Runners? }
+        return try JSONDecoder().decode(Reply.self, from: data).runners?.repo
+    }
+
     func revokeClient(_ id: String) async throws -> Reply {
         let path = "/api/clients/\(id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)"
         return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
