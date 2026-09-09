@@ -208,8 +208,18 @@ jobs:
           KEY: ${{ secrets.ASC_KEY_P8 }}
           P12: ${{ secrets.APPLE_DIST_P12 }}
           PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          # THE FOURTH VALUE, and it was not checked because it is not a secret.
+          #
+          # Every step below signs with it, and the gate listed only the three
+          # names that live in `secrets` — so a fleet holding all three and no
+          # APPLE_TEAM_ID variable passed this check, installed a certificate,
+          # installed a profile, and failed at `xcodebuild archive` with a
+          # signing error, after paying for a macOS runner to get there. That is
+          # the failure the paragraph below is about, arriving through the one
+          # door it was not watching.
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
-          # ALL THREE, or skip. This used to check only the API key, and the
+          # ALL FOUR, or skip. This used to check only the API key, and the
           # other two were treated as optional with a fallback to automatic
           # signing — which is what burned a certificate per run until the
           # account hit its cap. Skipping costs a release; minting costs the
@@ -219,6 +229,10 @@ jobs:
           [ -z "$KEY" ] && missing="$missing ASC_KEY_P8"
           [ -z "$P12" ] && missing="$missing APPLE_DIST_P12"
           [ -z "$PROFILE" ] && missing="$missing APPLE_PROVISIONING_PROFILE"
+          # `vars`, not `secrets` — the warning says so, because somebody who
+          # reads it and sets a secret of this name has set the wrong slot and
+          # will see the same message again.
+          [ -z "$TEAM_ID" ] && missing="$missing APPLE_TEAM_ID(a variable, not a secret)"
           if [ -n "$missing" ]; then
             echo "::warning::Not set:$missing — skipping TestFlight rather than signing automatically. See docs/ci.md."
             echo "have=false" >> "$GITHUB_OUTPUT"
