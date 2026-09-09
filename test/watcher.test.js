@@ -222,6 +222,75 @@ test('a session frozen past the threshold is stopped and resumed', async (t) => 
   assert.match(said[0].text, /conversation was kept/);
 });
 
+test('a tick landing mid-restart does not start a second one', { timeout: 15_000 }, async (t) => {
+  // THE INVARIANT THE CODE CLAIMS AND NOTHING CHECKED. #maybeRestartIdle sets
+  // the idle clock and counts the attempt BEFORE it stops anything, and says
+  // why: "stopping and resuming takes tens of seconds, and a tick landing in
+  // the middle of it would read the same frozen pane and start a second
+  // restart of the same session."
+  //
+  // Every other test here awaits its ticks one after another, so the gap that
+  // sentence is about never existed. The health timer is fifteen seconds and a
+  // restart is longer than that, so on a real box the gap is the normal case
+  // rather than a race worth shrugging at — and getting it wrong is a session
+  // stopped twice, the second time in the middle of its own resume.
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((r) => { release = r; });
+  let stops = 0;
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    {
+      sessions: [sessionRecord('wedged', { status: 'running' })],
+      panes: { wedged: 'nothing has happened for hours' },
+      // ONLY THE FIRST STOP IS HELD, deliberately. Holding every one would
+      // deadlock a regression instead of failing it — the second tick would
+      // wait on a promise this test only releases after that tick returns —
+      // and a test that hangs when the invariant breaks teaches nothing and
+      // costs a CI slot. Held once, a duplicate restart sails through and is
+      // caught by the assertions below.
+      onCommand: async (/** @type {string} */ line) => {
+        if (line.startsWith('/stop') && ++stops === 1) await held;
+        return { ok: true, text: `ran ${line}` };
+      },
+    },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'wedged', 90 * 60_000);
+
+  // One tick, suspended inside its own /stop.
+  const restarting = watcher.tick();
+  const deadline = Date.now() + 2000;
+  while (!stub.commands.includes('/stop wedged') && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.ok(stub.commands.includes('/stop wedged'), 'the restart never reached its stop');
+
+  // And the next one, arriving while that is still in flight. The pane it
+  // reads is the same frozen pane: nothing has moved, because the session is
+  // mid-stop.
+  await watcher.tick();
+
+  release();
+  await restarting;
+
+  assert.deepEqual(
+    stub.commands,
+    ['/stop wedged', '/resume wedged summary'],
+    'the second tick stopped a session that was already being restarted',
+  );
+  assert.equal(
+    events.filter((e) => e.event === 'session.restarted').length,
+    1,
+    'one restart, one notification',
+  );
+  // AND THE BUDGET MOVED ONCE. Counting twice would spend the cap on a session
+  // that had been restarted a single time, and the cap is what stops a genuinely
+  // broken session looping for ever.
+  assert.equal(watcher.restarts.get('wedged')?.count, 1);
+});
+
 test('a session waiting at a prompt is never restarted, however long it waits', async (t) => {
   // THE ONE THAT WOULD HURT. A pane waiting for an answer is perfectly still
   // and is the most active thing in the fleet — somebody has to answer it.
