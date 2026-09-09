@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { migrationState, migrationReply, migrate, MIGRATE_BIN } from '../src/core/migrate.js';
+import { migrationState, migrationReply, migrate, healAfterRelease, MIGRATE_BIN } from '../src/core/migrate.js';
 
 const cfg = /** @type {any} */ ({ releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json' });
 const READY = { available: 'v0.2.3', configured: true };
@@ -179,4 +179,50 @@ test('/update on a checkout consults the migration before it consults git', asyn
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('after a release applies, root refreshes its half — after the reply has left', () => {
+  /** @type {string[]} */
+  const calls = [];
+  /** @type {(() => void)[]} */
+  const deferred = [];
+  let restarted = 0;
+  const heal = healAfterRelease({
+    exists: () => true,
+    after: (fn) => { deferred.push(fn); },
+    run: (cmd, args) => { calls.push(`${cmd} ${args.join(' ')}`); return { status: 0, stdout: 'ok', stderr: '' }; },
+    restart: () => { restarted++; },
+    logger: { info() {}, warn() {} },
+  });
+  assert.equal(heal.scheduled, true);
+  assert.match(heal.text, /--repair/);
+  assert.deepEqual(calls, [], 'nothing runs before the reply has gone out');
+  assert.equal(deferred.length, 1);
+  deferred[0]();
+  assert.deepEqual(calls, [`sudo -n ${MIGRATE_BIN}`], 'sudo never prompts, and the helper takes no arguments');
+  assert.equal(restarted, 1, 'restarts if the installer did not');
+});
+
+test('a heal that cannot run still restarts, and says so in the log', () => {
+  /** @type {string[]} */
+  const warned = [];
+  let restarted = 0;
+  const heal = healAfterRelease({
+    exists: () => true,
+    after: (fn) => fn(),
+    run: () => ({ status: 1, stdout: '', stderr: 'sudo: a password is required' }),
+    restart: () => { restarted++; },
+    logger: { info() {}, warn: (/** @type {string} */ m) => warned.push(m) },
+  });
+  assert.equal(heal.scheduled, true);
+  assert.equal(restarted, 1, 'the new code applies either way');
+  assert.match(warned.join('\n'), /could not refresh/);
+  assert.match(warned.join('\n'), /a password is required/);
+});
+
+test('with no helper installed the update says what was not refreshed, and how to get it', () => {
+  const heal = healAfterRelease({ exists: () => false, after: () => { throw new Error('must not schedule'); } });
+  assert.equal(heal.scheduled, false);
+  assert.match(heal.text, /--upgrade/);
+  assert.match(heal.text, /not refreshed/);
 });

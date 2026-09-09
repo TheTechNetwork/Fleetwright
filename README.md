@@ -110,6 +110,13 @@ writes one, so a box that said no to system upgrades keeps its no. It is for a
 machine whose configuration has drifted, or whose rules were written before a
 change — where the only remedy used to be a full reinstall.
 
+On a box that installs packaged releases, `/update` from the app does that
+repair itself: after the release is laid out, the release's own installer runs
+with `--repair` as root, so the units, the hook, the sudoers rules and the
+migrate helper follow the release rather than waiting for a shell. A checkout
+cannot do that soundly — root would be running a script the service user can
+rewrite — so there the update says so and names the command.
+
 The one-liner fetches the repository to `/opt/agent-fleet` and runs the
 installer from there, so the clone is still what ends up on the box and
 `git -C /opt/agent-fleet log` still answers "what is this running". To do those

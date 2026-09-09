@@ -384,25 +384,55 @@ test('a converted box on an older release is brought forward, not refused', (t) 
   }
 });
 
-test('a converted box already on the newest release does nothing', (t) => {
-  // The other half, and the reason this is safe to run on every installer
-  // rerun: it must be a cheap no-op, or "self-heal every time" becomes
-  // "re-download and restart every time".
+test('a converted box already on the newest release is healed by that release\u2019s own installer', (t) => {
+  // THIS USED TO BE A NO-OP, and the no-op was the bug. /update lays a release
+  // out unprivileged and restarts; everything root owns — units, hook,
+  // sudoers, this helper — stayed as the last installer left it, so a box on
+  // the newest release could be running an installer's output from three
+  // releases ago with a shell as the only cure. Already on it now means: unpack
+  // a verified copy, and run ITS installer with --repair.
   const f = fixture();
   if (!f) return t.skip('the release could not be built here');
   try {
     assert.equal(migrate(f).status, 0);
     declareConverted(f);
-    // The first run handed off, which is what converting does. Clear the marker
-    // so the second run's silence is its own.
     rmSync(path.join(f.work, 'handoff'), { force: true });
+    rmSync(path.join(f.work, 'handoff-release'), { force: true });
 
     const r = migrate(f);
     const out = `${r.stdout}${r.stderr}`;
     assert.equal(r.status, 0, out.slice(0, 500));
-    assert.match(out, /already on the packaged layout, running v9\.9\.9 — nothing to do/, out.slice(0, 500));
-    // Nothing was handed off, so nothing restarted.
-    assert.equal(existsSync(path.join(f.work, 'handoff')), false, 'a no-op re-ran the installer');
+    assert.match(out, /already on the packaged layout, running v9\.9\.9 — refreshing what the installer generates/, out.slice(0, 500));
+    assert.match(out, /sha256 ok/, 'verified before anything of it ran');
+    // THE RELEASE'S INSTALLER, NOT THE CHECKOUT'S. The checkout is writable by
+    // the service user, and root must not run a script the service user can
+    // rewrite; the verified copy is root's own.
+    assert.equal(existsSync(path.join(f.work, 'handoff')), false, 'the checkout\u2019s installer was not run');
+    const handoff = readFileSync(path.join(f.work, 'handoff-release'), 'utf8');
+    assert.match(handoff, /args=--repair/, handoff);
+  } finally {
+    rmSync(f.work, { recursive: true, force: true });
+  }
+});
+
+test('a heal from a release whose installer cannot start changes nothing', (t) => {
+  const f = fixture({ brokenReleaseInstaller: true });
+  if (!f) return t.skip('the release could not be built here');
+  try {
+    // Lay the box out by hand as converted and on the version, so the only
+    // path taken is the heal.
+    const dir = path.join(f.base, 'releases', 'v9.9.9');
+    mkdirSync(path.join(dir, 'lib'), { recursive: true });
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'agent-fleet', version: 'v9.9.9' }));
+    symlinkSync(dir, path.join(f.base, 'current'));
+    declareConverted(f);
+
+    const r = migrate(f);
+    const out = `${r.stdout}${r.stderr}`;
+    assert.notEqual(r.status, 0, out.slice(0, 500));
+    assert.match(out, /installer inside v9\.9\.9 does not run/, out.slice(0, 500));
+    assert.match(out, /Nothing was changed/, out.slice(0, 500));
+    assert.equal(existsSync(path.join(f.work, 'handoff-release')), false, 'nothing of it ran past --help');
   } finally {
     rmSync(f.work, { recursive: true, force: true });
   }

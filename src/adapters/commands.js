@@ -88,7 +88,8 @@ import { readLabels, addLabel, removeLabel, describeLabels } from '../core/label
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
-import { migrationReply, migrationState } from '../core/migrate.js';
+import { migrationReply, migrationState, healAfterRelease } from '../core/migrate.js';
+import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
 import { reboot } from '../core/reboot.js';
@@ -1542,8 +1543,14 @@ export const COMMANDS = {
         // it downloaded would apply itself while sessions were mid-answer.
         const applied = r.ok && r.changed && (flags.has('restart') || flags.has('apply'));
         if (applied) {
+          // Root's half of the update — units, hook, sudoers, the helper —
+          // rides the release from here: the helper runs the release's own
+          // installer with --repair and restarts the services itself. Only
+          // when it cannot does this process restart on its own.
+          const heal = healAfterRelease({ logger: log });
+          if (heal.scheduled) return { ok: true, text: `${r.message}\n\n${heal.text}` };
           const restarted = restartSelf();
-          return { ok: restarted.ok, text: `${r.message}\n\n${restarted.message}` };
+          return { ok: restarted.ok, text: `${r.message}\n\n${heal.text}\n\n${restarted.message}` };
         }
         return {
           ok: r.ok,
@@ -1596,7 +1603,17 @@ export const COMMANDS = {
           ? [{ label: 'Restart to apply', command: '/update --restart' }]
           : undefined;
 
-      return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}`, buttons };
+      // SAID ONCE, WHEN IT MATTERS. On a packaged box an update refreshes what
+      // the installer generates; on a checkout it cannot, soundly — root would
+      // be running a script the service user can rewrite — so a pull that
+      // brought installer changes leaves them for a person with a shell.
+      const checkoutNote =
+        r.ok && r.changed
+          ? '\n\nThis box is a checkout, so what the installer generates — units, hook, sudoers — is not refreshed by an update. ' +
+            `sudo ${status.dir}/install/install.sh --repair does that; a box on packaged releases has it done on every update.`
+          : '';
+
+      return { ok: r.ok, text: `${status.dir} (${status.branch})\n\n${r.message}${checkoutNote}`, buttons };
     },
   },
 
