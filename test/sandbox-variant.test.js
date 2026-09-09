@@ -60,17 +60,59 @@ test('a digest is left exactly alone', () => {
   assert.equal(sessionImage(cfg), cfg.sandboxImage);
 });
 
-test('an image named in the environment refuses rather than being overridden', () => {
-  // The channel's rule, for the same reason: writing a file the next read
-  // ignores would show one image in the app while the box ran another, and
-  // nothing anywhere would say so.
+test('an image in the environment that is not one of ours refuses rather than being overridden', () => {
+  // Writing a file the next read ignores would show one image in the app while
+  // the box ran another, and nothing anywhere would say so.
   const cfg = box({ sandboxImage: 'localhost/mine:latest', sandboxImagePinned: true });
   assert.equal(pinnedByEnv(cfg), true);
   const r = writeVariant(cfg, 'browser');
   assert.equal(r.ok, false);
-  assert.match(r.message, /AGENT_HUB_SANDBOX_IMAGE is set/);
+  assert.match(r.message, /AGENT_HUB_SANDBOX_IMAGE names/);
   assert.match(r.message, /\/etc\/agent-hub\.env/);
   assert.equal(sessionImage(cfg), 'localhost/mine:latest');
+});
+
+test('an image in the environment that IS one of ours is a starting point, not a pin', () => {
+  // THE BUG A PERSON HIT. install.sh wrote AGENT_HUB_SANDBOX_IMAGE on every
+  // install, set to the default, and the old rule read any named image as a
+  // decision — so the picker on both phones answered "set on the box, remove
+  // it from /etc/agent-hub.env" on every box the installer had ever made. A
+  // named image that is one of our tags is the variant the box starts on;
+  // the stored word wins once somebody chooses.
+  const cfg = box({ sandboxImage: GHCR, sandboxImagePinned: true });
+  assert.equal(pinnedByEnv(cfg), false);
+  assert.equal(readVariant(cfg), 'minimal', 'the env tag is the answer until somebody chooses');
+  const r = writeVariant(cfg, 'browser');
+  assert.equal(r.ok, true, r.message);
+  assert.equal(readVariant(cfg), 'browser');
+  assert.equal(sessionImage(cfg), GHCR.replace(/:latest$/, ':web'));
+
+  // Starting on the browser tag works the same way round.
+  const web = box({ sandboxImage: GHCR.replace(/:latest$/, ':web'), sandboxImagePinned: true });
+  assert.equal(readVariant(web), 'browser');
+  assert.equal(writeVariant(web, 'minimal').ok, true);
+  assert.equal(sessionImage(web), GHCR);
+
+  // A localhost build off our Containerfile is minimal, and still not
+  // switchable: the other tag was never built.
+  const local = box({ sandboxImage: 'localhost/agent-session:latest', sandboxImagePinned: true });
+  assert.equal(readVariant(local), 'minimal');
+  assert.equal(pinnedByEnv(local), true);
+  assert.equal(writeVariant(local, 'browser').ok, false);
+});
+
+test('the installer does not write the default image into the env file', () => {
+  // The other half of the bug above. A default the code already derives has
+  // no business in a root-owned file, because the moment it is there it reads
+  // as something somebody chose.
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const pulled = sh.slice(sh.indexOf('ok "pulled $IMAGE"'), sh.indexOf('IMAGE=""', sh.indexOf('ok "pulled $IMAGE"')));
+  assert.match(pulled, /if \[ -n "\$\{AGENT_HUB_SANDBOX_IMAGE:-\}" \]; then\s+set_env "\$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE/, 'a named image is kept');
+  assert.match(pulled, /AGENT_HUB_SANDBOX_IMAGE_OWNER "\$IMAGE_OWNER"/, 'an owner is kept as the owner');
+  const lines = pulled.split('\n');
+  const writes = lines.map((l, i) => [l, i]).filter(([l]) => /set_env "\$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "\$IMAGE"/.test(String(l)));
+  assert.equal(writes.length, 1, 'one write of the full image, and only one');
+  assert.match(String(lines[Number(writes[0][1]) - 1]), /if \[ -n "\$\{AGENT_HUB_SANDBOX_IMAGE:-\}" \]/, 'and it is guarded by whether a person named one');
 });
 
 test('an image that is neither variant is reported as neither', () => {

@@ -273,8 +273,29 @@ a list of machines would otherwise be a round trip per row. `null` there is
 **`sandbox` is `channel`'s sibling, deliberately.** It decides which of the two
 published images new sessions run in: `minimal` has no browser and is the
 default, `browser` is the same image with Chromium. Same storage, same
-env-wins-and-refuses rule, same "travels with health so a list of machines is
-not a round trip per row", same `null` meaning *cannot tell*.
+"travels with health so a list of machines is not a round trip per row", same
+`null` meaning *cannot tell*.
+
+**Not the same environment rule, and the difference was a bug somebody hit.**
+The installer writes `AGENT_HUB_SANDBOX_IMAGE` into `/etc/agent-hub.env` and
+never writes the channel's variable — and until it stopped, it wrote the
+default, the same value the hub derives when the variable is absent. Under
+"the environment wins" that made the picker dead on every installed box: the
+first tap answered "set on the box, remove it from /etc/agent-hub.env" about a
+choice nobody had made. So for `sandbox` the rule is: an environment value
+naming one of our tags is the variant the box **starts on**, and the stored
+word wins once somebody chooses; an environment value naming anything else — a
+`localhost/` build, a digest, a tag we never published — is a pin, reported
+as `custom`, because there is nothing here to switch it to.
+
+**The rule for any setting a phone can change, written down once.** The
+installer writes into `/etc` only what a person answered or what identifies
+the deployment, never a default the code already knows. A setting with a verb
+reads its environment variable as the starting value when that value is one
+the verb could have chosen, and as a pin when it is not — and reports which,
+so an app shows an answer without offering a change it cannot make. A default
+that needs to reach every box should arrive on the config frame, not be
+written into every box's file.
 
 **A bounded enum, never an image reference.** A verb that took an image name
 would let a coordinator point a box at any registry on the internet and run
