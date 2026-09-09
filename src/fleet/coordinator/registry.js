@@ -172,11 +172,31 @@ export class HostRegistry {
     // check, not a truthiness one.
     if (Number.isInteger(health.protocol) && health.protocol !== PROTOCOL_VERSION) {
       host.state = 'degraded';
+      // BEHIND AND AHEAD ARE NOT THE SAME FAULT, and this said the same thing
+      // about both — that the fleet cannot fix it and the installer must be
+      // re-run on the machine. Neither half was right for a box that is ahead,
+      // and the first half stopped being right for a box that is behind the day
+      // `update` gained a rescue envelope (see RESCUE_VERB): the coordinator now
+      // speaks a drifted host's own version for that one command, so the repair
+      // does arrive. Finding D2 — "a drifted host cannot be fixed from the
+      // product" — is this line, and it is why it was true.
+      //
+      // Ahead is the ordinary upgrade window rather than a broken box: the
+      // documented order is hosts first, then the coordinator, so this is what
+      // half a deploy looks like and the remedy is to finish it. Sending
+      // somebody to the machine with the installer would have them re-install
+      // the half that is already correct.
       host.reason =
-        `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
-        'sent here is refused before it is read. This is the one fault the fleet cannot fix for you: ' +
-        'the verb that would update this box is refused for the same reason as everything else. ' +
-        'It needs the installer re-run on the machine.';
+        health.protocol < PROTOCOL_VERSION
+          ? `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
+            'sent here is refused before it is read — except Apply update, which the fleet now says in this ' +
+            "box's own version so that a drifted machine can still be repaired from here. Try that first. " +
+            'If it comes back on the same version, this box is pinned to a channel that has no newer release ' +
+            'and it needs the installer re-run on the machine.'
+          : `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
+            'sent here is refused before it is read. This host is AHEAD, which is what half a deploy looks ' +
+            'like — hosts upgrade first and the coordinator follows. The fleet cannot fix this one from ' +
+            'inside itself: it is waiting for its own coordinator to be deployed.';
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;
