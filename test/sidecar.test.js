@@ -614,6 +614,45 @@ test('only the labels verb carries them, so nothing else grows a field', async (
   assert.equal(stub.bodies.at(-1).hostLabels, undefined);
 });
 
+test('health says which service logs this box can read, and asks the box once', async (t) => {
+  // A phone draws a list of machines and cannot run `systemctl cat` per row.
+  // Without this it would offer three log buttons on every box, and on most of
+  // them the coordinator one answers "no log entries" — which reads as a broken
+  // service rather than an absent one. The chat surface already filters on
+  // unitInstalled; this is the same answer, carried with health.
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-logs-'));
+  const calls = nodePath.join(dir, 'calls');
+  const systemctl = nodePath.join(dir, 'systemctl');
+  // `cat` succeeds for the two units this box has and fails for the one it
+  // does not — which is what a box that is a host and not a coordinator says.
+  writeFileSync(
+    systemctl,
+    `#!/bin/sh\necho "$2" >> ${calls}\ncase "$2" in agent-fleet-coordinator) exit 1;; esac\nexit 0\n`,
+  );
+  chmodSync(systemctl, 0o755);
+  const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir: dir, systemctlBin: systemctl }) });
+
+  const first = await sidecar.handle(intent({ verb: 'health', id: 'idem-logs-0001' }));
+  assert.deepEqual(first.health.logs, ['hub', 'sidecar']);
+
+  // ASKED ONCE. A unit comes and goes with an install, which restarts this
+  // process; three spawns every fifteen seconds would be paying for a fact that
+  // cannot change underneath it.
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-logs-0002' }));
+  assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 3, 'systemctl was asked again');
+});
+
+test('a host with no hub config does not guess which logs it has', async (t) => {
+  // NULL IS CANNOT TELL. The verb still answers on such a box; the frame just
+  // does not claim to know which of the three will say something.
+  const { sidecar } = await setup(t);
+  const r = await sidecar.handle(intent({ verb: 'health' }));
+  assert.equal(r.health.logs, null);
+});
+
 test('a label added from an app reaches the scheduler without a restart', async (t) => {
   // Health goes out every fifteen seconds and the coordinator filters and ranks
   // on the last frame it received. A list frozen at construction would mean a

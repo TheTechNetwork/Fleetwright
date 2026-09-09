@@ -220,6 +220,14 @@ exactly when it is hardest to get at, because a session that died has no pane
 left to peek and the reason it died is in the container's output. A name beats a
 service when both arrive, since naming a session is the more specific request.
 
+**Health says which of the three a box can answer for.** `logs` on the health
+frame is the subset of `hub`, `coordinator` and `sidecar` whose unit is
+installed on that box, so a screen offers a button for exactly those rather
+than three where one says "no log entries" about a service that was never
+there. The chat surface has always filtered this way; a phone drawing a list
+of machines cannot ask per row, so the answer travels with health. `null` is
+*cannot tell* — a host older than this field — and the verb still works there.
+
 **`reboot` keeps all three of the chat flow's confirmations, unchanged.** Sending
 it bare is step one: the host says what will be lost — every running session, by
 name — and issues a six-digit pin. Sending it again with the pin *and* the
