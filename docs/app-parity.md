@@ -198,15 +198,16 @@ docs — every layer committed before any PR is opened. A verb that reaches one
 phone and not the other is the state this document was written to describe, and
 it is very easy to re-enter one merge at a time.
 
-**What each surface got:** (the `logs` row is honest now. It read three ticks
-for a week while neither phone had a screen for it — the client method
-existed on both, which is what a grep sees and a person does not.)
+**What each surface got:** (the `logs` row read three ticks for a week while
+neither phone had a screen for it — the client method existed on both, which
+is what a grep sees and a person does not. The screens exist now, and the host
+says on health which journals a box has so the buttons are only ever live.)
 
 | | iOS | Android | Telegram |
 |---|---|---|---|
 | answer a waiting prompt | buttons from the host's options | buttons from the host's options | `/answer` |
 | session and fleet status | ✅ | ✅ | ✅ |
-| journals and session output | client only — `Fleet.swift` has `logs`, no screen calls it | client only — `Fleet.kt` has `logs`, no screen calls it | ✅ |
+| journals and session output | Logs on the host page, Output on each session | Logs on the host sheet, Output on each session | ✅ |
 | update / upgrade a box | one tap | one tap | ✅ |
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
