@@ -191,6 +191,10 @@ export class Coordinator {
     // MCP clients that registered themselves. Codes are not persisted and
     // registrations are — see Authorizations.serialise() for why.
     this.core.mcpAuthorizations.restore(state.mcpClients || []);
+    // Tokens already exchanged for a credential. Kept across a restart for the
+    // same reason runner tickets are: a single-use thing that becomes reusable
+    // whenever the service bounces is not single-use.
+    this.core.spentTokens.restore(state.spentTokens || []);
     // Push registrations too. The Worker has always kept these in Durable
     // Object storage; the Node coordinator held them in a Map and lost them on
     // every restart, so push worked until the service bounced and then stopped
@@ -282,6 +286,7 @@ export class Coordinator {
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         mcpClients: this.core.mcpAuthorizations.serialise(),
+        spentTokens: this.core.spentTokens.serialise(),
         devices: [...this.core.devices.values()],
       },
       null,
@@ -452,6 +457,7 @@ export class Coordinator {
       audiences: splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES),
       allow: splitList(process.env.AGENT_FLEET_AUTH_ALLOW),
       invites: this.core.invites,
+      spent: this.core.spentTokens,
     });
   }
 

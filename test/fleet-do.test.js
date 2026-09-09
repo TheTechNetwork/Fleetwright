@@ -245,3 +245,23 @@ test('the Worker refuses to unregister somebody else’s phone, in the same word
   const missing = await call(f, '/api/devices', 'DELETE', { token: 'a'.repeat(64) }, { authorization: `Bearer ${alice.token}` });
   assert.equal(missing.status, 404);
 });
+
+test('a spent sign-in token stays spent across an eviction', async () => {
+  // The Worker is evicted between requests as a matter of course. The Node
+  // coordinator's version of this test drives a real sign-in twice across a
+  // restart; here the point is only that the store is written and read back,
+  // since the check itself lives in identity.js and is shared.
+  const { fleet: first, state } = fleet();
+  assert.equal(await first.core.spentTokens.spend('eyJ.a.b', Date.now() + 600_000), true);
+  // Written by the same save every credential-issuing route calls.
+  await first.core.spentTokens.serialise(); // sweep
+  state.raw.set('spentTokens', first.core.spentTokens.serialise());
+  const written = JSON.stringify(state.raw.get('spentTokens'));
+  assert.equal(written.includes('eyJ.a.b'), false, 'the token itself is in storage');
+
+  const second = new Fleet(/** @type {any} */ (state), {});
+  // The fake blockConcurrencyWhile cannot hold the first request the way the
+  // real one does, so let the restore's chain of storage reads drain.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await second.core.spentTokens.spend('eyJ.a.b', Date.now() + 600_000), false, 'an eviction made it reusable');
+});

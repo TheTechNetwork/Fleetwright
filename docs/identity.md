@@ -32,10 +32,12 @@ So: federated sign-in, and the coordinator checks the email it gets.
    │  every later request uses the DEVICE credential, not the ID token
 ```
 
-The ID token is used **once**, to obtain a credential. Everything after that is
-the per-device token from `clients.js` — which means revoking one phone stays a
-local act, and an intent can still say who sent it without re-verifying a third
-party on every request.
+The ID token is used **once**, to obtain a credential, and the coordinator
+holds it to that: each token's hash is kept until the token would have expired
+anyway, and a second presentation is refused as `token_reused`
+(`spent-tokens.js`). Everything after that is the per-device token from
+`clients.js` — which means revoking one phone stays a local act, and an intent
+can still say who sent it without re-verifying a third party on every request.
 
 ## Provider-agnostic on purpose
 
@@ -206,19 +208,24 @@ settings screen. See [`coordinator-deploy.md`](./coordinator-deploy.md).
 
 **The ID token carries no nonce.** Both providers support one — you generate a
 value, pass it with the request, and it comes back as a claim — and it binds a
-token to the sign-in attempt that asked for it, so a captured token cannot be
-exchanged a second time somewhere else.
+token to the sign-in attempt that asked for it, so a token captured on its way
+here cannot be exchanged even once by somebody else.
 
-It is not here, and the reason is proportion rather than principle. A token is
-only reachable over TLS to this coordinator, is only issued for this app's
-audience, and lives ten minutes to an hour. The two providers also disagree
-about the convention — Apple wants the SHA-256 of the value in the request and
-compares the digest; Google wants the value itself — which is a bug waiting in
-a flow that cannot be exercised without two real phones.
+What is here instead is the half that needs no client: a token is **spent** on
+exchange, on both coordinators and across a restart, so one that has already
+bought a credential cannot buy a second. That closes the case the audit named —
+a captured token minting an extra device for the same allowed person inside
+its validity window — for every token that reached the coordinator at all. It
+leaves the case of a token intercepted *before* the phone's own request, which
+is the case only a nonce closes, and which TLS to this one origin already
+makes the harder of the two.
 
-Worth doing. Worth doing *after* the flow has been driven end to end once,
-because an extra required round trip in an untested sign-in is a way to have
-neither.
+The nonce is not here for proportion rather than principle. The two providers
+disagree about the convention — Apple wants the SHA-256 of the value in the
+request and compares the digest; Google wants the value itself — which is a
+bug waiting in a flow that cannot be exercised without two real phones, and an
+extra required round trip in an untested sign-in is a way to have neither.
+Worth doing, *after* the flow has been driven end to end once.
 
 ## What is left
 

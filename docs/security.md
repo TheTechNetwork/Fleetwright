@@ -303,7 +303,7 @@ trust.
 
 | Hop | Verifies or carries | Mechanism |
 |---|---|---|
-| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist |
+| phone → coordinator (enrolment) | **verifies** | OIDC ID token: `jose`, issuer checked *before* key fetch, `aud`/`exp`/`email_verified`, allowlist; spent on exchange |
 | phone → coordinator (per request) | **verifies** | device token, SHA-256 hash compared timing-safe |
 | host → coordinator | **verifies** | P-256 signature over a coordinator-issued nonce |
 | coordinator → host (the `actor`) | **carries** | the host trusts `fleet:<email>` because it arrived |
@@ -339,6 +339,16 @@ prefix and MUST fail to *no* row (not to the shared box row) when it cannot.
 null-fails; `sidecar.js` prepends `fleet:` from `intent.actor`. A length or
 parsing bug that degrades a verified member into the box row is the failure
 `http.js` guards at limit 134 — keep that test.
+
+**SEC-ID-7** — An ID token MUST buy at most one credential. Its hash is kept
+until the token would have expired, on both coordinators and across a restart
+or an eviction, and a second presentation is refused as `token_reused`. The
+token is spent only after every other check has passed, so a refusal does not
+burn it. This is not the OIDC nonce — it does not stop a token intercepted
+before its first presentation — and `identity.md` records why the nonce waits.
+*Falsify:* `spent-tokens.js` is consulted last in `identity.js:identify`; the
+Node state file and the Durable Object both persist `spentTokens`;
+`test/identity.test.js` drives the same token twice across a restart.
 
 ---
 
@@ -674,6 +684,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-ID-4 | One lost device is one revocation |
 | SEC-ID-5 | Nothing replayable crosses the wire in host auth |
 | SEC-ID-6 | `fleet:` prefix required to resolve an actor to a credential row |
+| SEC-ID-7 | An ID token buys at most one credential, across a restart |
 | SEC-PROTO-1 | The command line is built from literals, never received |
 | SEC-PROTO-2 | The verb allowlist is the defence, re-validated host-side |
 | SEC-PROTO-3 | The five conditions that make a verb safe to add |

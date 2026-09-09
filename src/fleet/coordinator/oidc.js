@@ -152,7 +152,7 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
  *
  * @param {string} token
  * @param {{ issuers: string[], audiences: string[] }} opts
- * @returns {Promise<{ email: string, sub: string, name: string|null, issuer: string }>}
+ * @returns {Promise<{ email: string, sub: string, name: string|null, issuer: string, expiresAt: number }>}
  */
 export async function verifyIdToken(token, { issuers, audiences }) {
   const raw = String(token || '');
@@ -195,7 +195,16 @@ export async function verifyIdToken(token, { issuers, audiences }) {
     throw new Error(`${email} is not verified with ${issuer}`);
   }
 
-  return { email, sub: String(payload.sub || ''), name: payload.name ? String(payload.name) : null, issuer };
+  return {
+    email,
+    sub: String(payload.sub || ''),
+    name: payload.name ? String(payload.name) : null,
+    issuer,
+    // WHEN THE TOKEN ITSELF DIES, so the spent-token table knows how long a
+    // hash is worth keeping. jose has already required `exp` to be present
+    // and in the future; this is the same number, in milliseconds.
+    expiresAt: Number(payload.exp) * 1000,
+  };
 }
 
 /**

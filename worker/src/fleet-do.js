@@ -151,6 +151,10 @@ export class Fleet {
       // in memory is one that expires whenever traffic goes quiet — and the
       // client finds out after a person has already signed in.
       this.core.mcpAuthorizations.restore(/** @type {any[]} */ ((await this.state.storage.get('mcpClients')) || []));
+      // Tokens already exchanged for a credential. An eviction is routine
+      // here, and a single-use thing that becomes reusable after one is not
+      // single-use.
+      this.core.spentTokens.restore(/** @type {any[]} */ ((await this.state.storage.get('spentTokens')) || []));
       // The event ring, under its OWN key. Hibernation is by design here, so a
       // RAM-only ring meant "what happened while you were asleep" was answered
       // by whatever had accumulated since the last eviction — usually nothing.
@@ -193,6 +197,7 @@ export class Fleet {
       audiences: split(this.env.AGENT_FLEET_AUTH_AUDIENCES),
       allow: split(this.env.AGENT_FLEET_AUTH_ALLOW),
       invites: this.core.invites,
+      spent: this.core.spentTokens,
     });
   }
 
@@ -1095,6 +1100,7 @@ export class Fleet {
     // use across an eviction as well as within one.
     await this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise());
     await this.state.storage.put('mcpClients', this.core.mcpAuthorizations.serialise());
+    await this.state.storage.put('spentTokens', this.core.spentTokens.serialise());
   }
 
   /**
