@@ -21,6 +21,8 @@
  * @property {string} title
  * @property {string} body
  * @property {Record<string, string>} [data]
+ * @property {string} [category]  this notification can be answered, and this
+ *   names which two answers. See the category comment in the APNs payload.
  */
 
 import { sealTo } from './push-crypto.js';
@@ -56,7 +58,7 @@ export const PUSH_TTL_S = 3600;
  * fleet needs a person, open the app.
  *
  * @param {{ pushKey?: string }} device
- * @param {{ title: string, body: string, data?: Record<string, string> }} message
+ * @param {{ title: string, body: string, data?: Record<string, string>, category?: string }} message
  * @returns {Promise<{ encrypted: boolean, title: string, body: string, data: Record<string, string> }>}
  */
 export async function envelopeFor(device, message, { now = () => Date.now() } = {}) {
@@ -162,6 +164,22 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
         // failure mode for the thing the trust argument rests on (#351).
         try {
           const wire = await envelopeFor(device, message, { now });
+          const category = message.category ? { category: message.category } : {};
+          // THE WORDS HAVE TO TRAVEL SOMEHOW. Dropping the `notification` block
+          // below is what lets the app draw the buttons, and it is also what
+          // takes the title and body away from it — the tray was the only thing
+          // reading them. So they move into `data`, where onMessageReceived
+          // gets them, alongside the category it reads to know which two words
+          // the buttons say.
+          //
+          // Not on the encrypted branch, where they are inside the envelope
+          // already and putting them here in the clear would undo the point of
+          // sealing them. The category is in the clear either way, because iOS
+          // reads it before anything could be decrypted — said at length in
+          // promptForPush().
+          const forTheApp = message.category && !wire.encrypted
+            ? { title: message.title, body: message.body }
+            : {};
           // DATA-ONLY WHEN ENCRYPTED, and this is not a detail. A `notification`
           // block is rendered by the system before the app is consulted, so an
           // encrypted body would be displayed as base64. A data message is
@@ -174,11 +192,27 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
           const payload = {
             message: {
               token: device.token,
-              ...(wire.encrypted ? {} : { notification: { title: wire.title, body: wire.body } }),
+              // NO `notification` BLOCK WHEN THERE ARE BUTTONS, and this is the
+              // one place Android costs something iOS does not.
+              //
+              // A `notification` block is drawn by the system tray before the
+              // app is consulted, which is why it is the default here: it
+              // arrives even for an app that has been force-stopped. It also
+              // cannot carry actions. Android builds those in
+              // onMessageReceived, and onMessageReceived does not run for a
+              // backgrounded app when the tray has already drawn the message.
+              //
+              // So an answerable notification is data-only, and pays exactly
+              // what the encrypted path beside it already pays: not delivered
+              // to a force-stopped app, and delayable by Doze. HIGH priority is
+              // what buys the wake and is set either way. Everything with
+              // nothing to answer keeps the tray's own delivery.
+              ...(wire.encrypted || message.category ? {} : { notification: { title: wire.title, body: wire.body } }),
               // Data rides alongside so the app can deep-link to the session
               // rather than just opening. When encrypted it carries the whole
-              // notification instead.
-              data: wire.data,
+              // notification instead, and when it is answerable it carries the
+              // title and body the tray is no longer drawing.
+              data: { ...wire.data, ...category, ...forTheApp },
               // AN HOUR, THEN NOTHING. A notification held by FCM while a
               // phone is off and delivered next morning asks a question the
               // host stopped asking; the promptId refuses the answer, but the
@@ -194,9 +228,14 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
                 // The alert is STILL SENT on the APNs side of the bridge, because
                 // iOS needs something to show if the extension fails — and
                 // mutable-content is what runs the extension at all.
+                //
+                // The category rides on both branches: it is what makes iOS
+                // draw the answer buttons, and a notification that arrives
+                // through the bridge is no less answerable than one that came
+                // straight from Apple.
                 payload: wire.encrypted
-                  ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1 } }
-                  : { aps: { sound: 'default' } },
+                  ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1, ...category } }
+                  : { aps: { sound: 'default', ...category } },
               },
             },
           };
@@ -312,6 +351,17 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
               alert: { title: wire.title, body: wire.body },
               sound: 'default',
               ...(wire.encrypted ? { 'mutable-content': 1 } : {}),
+              // THE CATEGORY IS THE BUTTONS. iOS draws actions under an alert
+              // only when the payload names a category the app registered at
+              // launch, and draws none at all when it does not — so this is the
+              // difference between a notification you can answer and one you
+              // can only open. Named by the kind of question, because the words
+              // on the buttons differ by kind and a category is where iOS keeps
+              // them.
+              //
+              // Only when there is something to answer: a category with no
+              // answers behind it is two buttons that would do nothing.
+              ...(message.category ? { category: message.category } : {}),
             },
             ...wire.data,
           });

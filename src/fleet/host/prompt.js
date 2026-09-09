@@ -38,6 +38,10 @@ const KINDS = [
     // so folding the body in would churn the id while somebody reads it —
     // which is the property the original design was protecting.
     discriminate: false,
+    answers: [
+      { slot: 'a', title: 'From a summary', test: /summary/i },
+      { slot: 'b', title: 'In full', test: /full/i },
+    ],
   },
   {
     kind: 'trust',
@@ -63,6 +67,10 @@ const KINDS = [
     // Two trust asks for two directories are the same shape and different
     // questions. The body is a path, which does not redraw.
     discriminate: true,
+    answers: [
+      { slot: 'a', title: 'Trust this folder', test: /^yes\b|proceed|trust/i },
+      { slot: 'b', title: 'Do not trust it', test: /^no\b|exit/i },
+    ],
   },
   {
     kind: 'permission',
@@ -77,6 +85,15 @@ const KINDS = [
     // replaced question passes exactly when the replacement is another
     // permission ask.
     discriminate: true,
+    // ONE OPTION IS NOT OFFERED HERE EITHER, for the reason readPrompt already
+    // drops it: "Yes, and don't ask again" flips a preference for every future
+    // session. `^yes$` rather than `^yes\b` is what keeps it out of slot a —
+    // this is the one label where a prefix match would hand a lock screen the
+    // permanent form of the answer.
+    answers: [
+      { slot: 'a', title: 'Allow this once', test: /^yes$/i },
+      { slot: 'b', title: 'Do not allow', test: /^no\b/i },
+    ],
   },
 ];
 
@@ -226,6 +243,69 @@ export function promptId(name, prompt) {
   }
   return h.toString(16).padStart(8, '0');
 }
+
+/**
+ * Which of the fleet's own answers this dialog is currently offering, and which
+ * number each one is.
+ *
+ * THE PROBLEM THIS SOLVES IS A PLATFORM ONE, and it is worth writing down
+ * because the shape of everything above it follows from it. A notification
+ * action's title is fixed when the app REGISTERS its categories, not when a
+ * notification arrives: iOS has no way to put a per-notification word on a
+ * button without a content extension. So the words on the two buttons cannot be
+ * the labels the CLI drew, and this file is where the fleet's own words live.
+ *
+ * Which leaves the mapping. `1. Yes` and `3. No, and tell Claude…` are the
+ * permission dialog's numbering TODAY; a CLI release that inserts an option
+ * renumbers them, and an app holding "a means 1" would then answer a different
+ * question than the one on its own button. So the app holds only the words, and
+ * the number is resolved HERE, against the labels this pane actually rendered.
+ *
+ * IT DOES NOT DEPEND ON AGENT_FLEET_PROMPT_TEXT, which is the property that
+ * makes this worth having at all. The labels are matched on the box and never
+ * leave it; what travels is a slot and a digit. A fleet that has decided its
+ * notifications may not quote a session still gets answerable ones, because the
+ * words on the buttons were ours before the pane was ever read.
+ *
+ * A slot whose label is not there produces no action, rather than a guess:
+ * a button that cannot be shown to mean what it says is a button that should
+ * not be on a lock screen.
+ *
+ * @param {{ kind: string, options: {index: number, label: string}[] }} prompt
+ * @returns {{ slot: string, index: number }[]}
+ */
+export function answerActions(prompt) {
+  const matched = KINDS.find((k) => k.kind === prompt.kind);
+  if (!matched?.answers) return [];
+  /** @type {{ slot: string, index: number }[]} */
+  const out = [];
+  for (const answer of matched.answers) {
+    // FIRST MATCH, and the options are already sorted by index, so "the first
+    // option that reads like yes" is the topmost one — which is the one the
+    // dialog itself puts under the cursor.
+    const option = prompt.options.find((o) => answer.test.test(o.label.trim()));
+    // Never the same option twice: two buttons that do the same thing is worse
+    // than one button, because it reads as a choice.
+    if (!option || out.some((a) => a.index === option.index)) continue;
+    out.push({ slot: answer.slot, index: option.index });
+  }
+  // One button is not a decision. If only one side of the question survived the
+  // match, the notification is worth opening rather than answering — the app
+  // falls back to a tap, which is what it did before any of this existed.
+  return out.length < 2 ? [] : out;
+}
+
+/**
+ * The words the fleet put on those buttons, for the two apps to hold and for a
+ * test to hold them to.
+ *
+ * Exported because the titles are declared here and RENDERED there, which is
+ * the arrangement docs/design-system.md already has for every colour: one
+ * table, several readers, and a test that fails when they stop agreeing.
+ */
+export const ANSWER_TITLES = Object.fromEntries(
+  KINDS.filter((k) => k.answers).map((k) => [k.kind, Object.fromEntries(k.answers.map((a) => [a.slot, a.title]))]),
+);
 
 /**
  * What a notification is allowed to say about this prompt.

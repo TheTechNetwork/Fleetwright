@@ -338,6 +338,20 @@ export class CoordinatorCore {
       url: msg.url ? String(msg.url).slice(0, 500) : null,
       at: this.now(),
     };
+    // WHICH QUESTION, carried alongside rather than into the event.
+    //
+    // The host has always sent this and this method has always dropped it,
+    // which is why a notification could say what a session was asking and not
+    // which asking it was. An answer needs the id — the host refuses one aimed
+    // at a question that has since been replaced — and the two buttons need to
+    // know which digit each of them types.
+    //
+    // NOT ON `event`, deliberately. That object goes into the ring, which is
+    // served by /api/events and read back by every phone the scoping rules let
+    // through; push is filtered to the session's owner a few lines into
+    // #notify, and this is the narrower of the two audiences. Putting it on the
+    // event would widen who can see it for no reader that wants it there.
+    const prompt = promptForPush(msg.prompt);
     // Bounded: a coordinator is not a log server, and an unbounded array in a
     // Durable Object is a memory leak with a long fuse.
     this.events.push(event);
@@ -348,7 +362,7 @@ export class CoordinatorCore {
     this.onEvents?.();
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
-    if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event);
+    if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event, prompt);
   }
 
   /**
@@ -454,8 +468,12 @@ export class CoordinatorCore {
     return event;
   }
 
-  /** @param {Record<string, any>} event */
-  async #notify(event) {
+  /**
+   * @param {Record<string, any>} event
+   * @param {{ id: string, kind: string, answers: string, category: string }|null} [prompt]
+   *   what the session is asking, when it is asking something answerable
+   */
+  async #notify(event, prompt = null) {
     // WHOSE SESSION THIS IS, resolved from the registry rather than carried on
     // the event, because the host does not send it. A session the fleet has not
     // heard of yet, or one nobody is recorded as having started, is
@@ -500,7 +518,20 @@ export class CoordinatorCore {
         // from a lock screen within minutes of host events shipping.
         title: event.name && event.name !== event.hostId ? `${event.name} on ${event.hostId}` : event.hostId,
         body,
-        data: { event: event.event, name: event.name ?? '', hostId: event.hostId, url: event.url ?? '' },
+        // Which two buttons, or none. The senders draw nothing without it.
+        ...(prompt ? { category: prompt.category } : {}),
+        data: {
+          event: event.event,
+          name: event.name ?? '',
+          hostId: event.hostId,
+          url: event.url ?? '',
+          // ONLY WHEN THERE IS SOMETHING TO ANSWER. An empty promptId on every
+          // host event is four bytes of nothing in a payload both providers cap
+          // at 4 KB, and it is also a lie an app would have to test for: a key
+          // that is present and empty reads as "answerable, badly" rather than
+          // "not that kind of notification".
+          ...(prompt ? { promptId: prompt.id, promptKind: prompt.kind, answers: prompt.answers } : {}),
+        },
       });
     } catch (e) {
       // A push provider being down must never take the coordinator with it.
@@ -1810,6 +1841,71 @@ const NOTIFIABLE = new Set([
   'session.restarted',
   'session.stuck',
 ]);
+
+/**
+ * The prefix both apps register their answer categories under. The kind is
+ * appended, because the words on the buttons differ by kind and a category is
+ * where iOS keeps them.
+ */
+export const PROMPT_CATEGORY = 'fleet.prompt';
+
+/**
+ * The answerable part of a host's prompt, narrowed to what a notification may
+ * carry, or null if there is nothing to answer.
+ *
+ * NARROWED RATHER THAN FORWARDED, and the reason is which way the trust runs.
+ * A host is a machine somebody else enrolled; everything it sends crosses into
+ * a payload the coordinator signs its own name to and pushes at a phone. The
+ * fields below are the whole of what an answer needs — which question, what
+ * kind, and which digit each button types — so anything else the host put on
+ * `prompt` stops here rather than being passed along because it happened to be
+ * in the object.
+ *
+ * The shapes are checked, not assumed. `id` is what promptId() produces, the
+ * slots are what prompt.js declares, and an index outside 1-9 is not a thing
+ * the answer verb accepts (see src/fleet/protocol/intents.js). A host that
+ * sends something else gets a notification with no actions on it, which is the
+ * behaviour every host had before this existed.
+ *
+ * @param {any} prompt
+ * @returns {{ id: string, kind: string, answers: string, category: string }|null}
+ */
+export function promptForPush(prompt) {
+  if (!prompt || typeof prompt !== 'object') return null;
+  const id = String(prompt.id ?? '');
+  const kind = String(prompt.kind ?? '');
+  if (!/^[0-9a-f]{8}$/.test(id) || !/^[a-z]{1,16}$/.test(kind)) return null;
+
+  const actions = Array.isArray(prompt.actions) ? prompt.actions : [];
+  /** @type {string[]} */
+  const answers = [];
+  for (const action of actions) {
+    const slot = String(action?.slot ?? '');
+    const index = Number(action?.index);
+    if (!/^[a-z]$/.test(slot) || !Number.isInteger(index) || index < 1 || index > 9) continue;
+    if (answers.some((a) => a.startsWith(`${slot}:`))) continue;
+    answers.push(`${slot}:${index}`);
+  }
+  // ONE BUTTON IS NOT A DECISION — the same bar answerActions() applies on the
+  // host, restated here because this side cannot assume that ran.
+  if (answers.length < 2) return null;
+
+  // A STRING, because FCM data values are. Two pairs, so the comma form costs
+  // seven bytes against a JSON array's twenty-five, on a payload capped at 4 KB
+  // that is mostly ciphertext once a device registers a key.
+  //
+  // THE CATEGORY IS NOT IN THE ENVELOPE, and cannot be. iOS reads it to decide
+  // which buttons to draw, which happens before the app is consulted and
+  // therefore before anything could be decrypted — so on a device that has
+  // registered a push key this is the one field Apple or Google can read.
+  //
+  // It names the KIND of question and never the question: "a session on this
+  // fleet is at a permission prompt". That is strictly less than the same
+  // request already discloses — `apns-collapse-id` has carried the session NAME
+  // in the clear since notifications learned to replace each other — and it is
+  // the price of the buttons existing at all.
+  return { id, kind, answers: answers.join(','), category: `${PROMPT_CATEGORY}.${kind}` };
+}
 
 /** @param {Record<string, any>} event */
 export function describeEvent(event) {
