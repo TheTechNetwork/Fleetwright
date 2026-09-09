@@ -84,6 +84,12 @@ const NOT_A_CLIENT_ROUTE = {
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
+  '/api/enroll/actions':
+    'a RUNNER spends its job\u2019s OIDC token here, through `agent-fleet-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
+  '/api/runner-tokens':
+    'minted with curl by whoever sets up a repository that starts runs by hand \u2014 docs/runner-central.md shows the call. Neither phone has a screen for it, and that is a gap rather than a decision.',
+  '/api/runner-tokens/{id}':
+    'revoked the same way it was minted, with curl. The same gap as the route above.',
 };
 
 test('every route in the spec is reachable by a primary client, or says why not', () => {

@@ -698,3 +698,61 @@ test('our deployment switches it on, and the switch is a var rather than a secre
     'AGENT_FLEET_PUSH fell out of [vars] — a table header above it moved it out of scope',
   );
 });
+
+// --- one device, one failure --------------------------------------------------
+
+test('a device whose envelope cannot be sealed does not stop the others being sent', async () => {
+  // envelopeFor runs INSIDE the per-device loop, and it is the one step that
+  // can throw on a stored value rather than on the network: a pushKey that
+  // imported at registration and does not now. Before the loop was guarded,
+  // that throw left the loop, every later device was never tried, and the
+  // only trace was one warning — a fleet-wide silence caused by one row (#351).
+  /** @type {string[]} */
+  const delivered = [];
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn() {} },
+    fetchImpl: async (/** @type {string} */ url, /** @type {any} */ init) => {
+      if (String(url).includes('oauth2')) {
+        return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 });
+      }
+      delivered.push(JSON.parse(init.body).message.token);
+      return new Response('{}', { status: 200 });
+    },
+  });
+  const r = await pusher.send(
+    [
+      { platform: 'android', token: 'first-fine-token' },
+      // A key that is not a key: sealTo throws on it.
+      { platform: 'android', token: 'bad-key-token', pushKey: 'not-a-public-key' },
+      { platform: 'android', token: 'third-fine-token' },
+    ],
+    { title: 'Fleetwright', body: 'x', data: { event: 'test', name: '', hostId: '', url: '' } },
+  );
+  assert.deepEqual(delivered, ['first-fine-token', 'third-fine-token'], 'the bad row is skipped, not fatal');
+  assert.equal(r.sent, 2);
+});
+
+test('a sender for one platform blowing up does not stop the other platform', async () => {
+  /** @type {string[]} */
+  const seen = [];
+  const pusher = routingPusher({
+    ios: { async send() { throw new Error('APNs is having a day'); } },
+    other: { async send(devices) { seen.push(...devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } },
+    logger: { warn() {} },
+  });
+  const r = await pusher.send(
+    [{ platform: 'ios', token: 'i'.repeat(64) }, { platform: 'android', token: 'a'.repeat(40) }],
+    { title: 't', body: 'b', data: { event: 'test', name: '', hostId: '', url: '' } },
+  );
+  assert.deepEqual(seen, ['a'.repeat(40)]);
+  assert.equal(r.sent, 1);
+});
+
+test('unspent pins are bounded, like every other transient store', async () => {
+  const { Enrollment } = await import('../src/fleet/coordinator/enrollment.js');
+  const e = new Enrollment({ now: () => 1_000 });
+  const first = e.mint({ purpose: 'host' }).code;
+  for (let i = 0; i < 205; i++) e.mint({ purpose: 'host' });
+  assert.ok(e.pending.size <= 200, `${e.pending.size} pins waiting`);
+  assert.equal(e.pending.has(first), false, 'the oldest is the one that goes');
+});

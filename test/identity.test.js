@@ -981,3 +981,97 @@ test('a mail-forwarding change is acknowledged and ignored', async (t) => {
   assert.equal(res.status, 200);
   assert.equal((await fetch(`${origin}/api/hosts`, { headers: { authorization: `Bearer ${phone.body.token}` } })).status, 200, 'still signed in');
 });
+
+test('a member can unregister their own phone and nobody else’s', async (t) => {
+  // The destructive-route guard names /api/hosts/ and /api/clients/ and never
+  // named devices, so any member could unregister any phone by its token and
+  // send a test notification to every phone in the fleet (#351). A device is
+  // somebody's: the credential that registered it, the person it names, or the
+  // admin.
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  const alice = await c.core.clients.issue('alice phone');
+  alice.client.email = 'alice@example.com';
+  const bob = await c.core.clients.issue('bob phone');
+  bob.client.email = 'bob@example.com';
+  const as = (/** @type {string} */ token) => ({ 'content-type': 'application/json', authorization: `Bearer ${token}` });
+
+  const reg = await fetch(`${origin}/api/devices`, {
+    method: 'POST',
+    headers: as(alice.token),
+    body: JSON.stringify({ platform: 'ios', token: 'a'.repeat(64) }),
+  });
+  assert.equal(reg.status, 200);
+
+  const bobTries = await fetch(`${origin}/api/devices`, {
+    method: 'DELETE',
+    headers: as(bob.token),
+    body: JSON.stringify({ token: 'a'.repeat(64) }),
+  });
+  assert.equal(bobTries.status, 403);
+  assert.equal(/** @type {any} */ (await bobTries.json()).error?.code, 'not_yours');
+  assert.ok(c.core.devices.has('a'.repeat(64)), 'still registered');
+
+  const aliceDoes = await fetch(`${origin}/api/devices`, {
+    method: 'DELETE',
+    headers: as(alice.token),
+    body: JSON.stringify({ token: 'a'.repeat(64) }),
+  });
+  assert.equal(aliceDoes.status, 200);
+  assert.ok(!c.core.devices.has('a'.repeat(64)));
+
+  // A second phone on the same account counts as hers.
+  await c.core.registerDevice({ platform: 'android', token: 'b'.repeat(64), actor: 'alice@example.com' });
+  const other = await fetch(`${origin}/api/devices`, {
+    method: 'DELETE',
+    headers: as(alice.token),
+    body: JSON.stringify({ token: 'b'.repeat(64) }),
+  });
+  assert.equal(other.status, 200);
+
+  // Not registered at all stays 404, for anybody.
+  const missing = await fetch(`${origin}/api/devices`, {
+    method: 'DELETE',
+    headers: as(bob.token),
+    body: JSON.stringify({ token: 'c'.repeat(64) }),
+  });
+  assert.equal(missing.status, 404);
+});
+
+test('a test notification from a member reaches only their own phones', async (t) => {
+  const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
+  /** @type {string[][]} */
+  const seen = [];
+  c.core.push = { async send(devices) { seen.push(devices.map((d) => d.token)); return { sent: devices.length, dead: [] }; } };
+  const alice = await c.core.clients.issue('alice phone');
+  alice.client.email = 'alice@example.com';
+  const bob = await c.core.clients.issue('bob phone');
+  bob.client.email = 'bob@example.com';
+  await c.core.registerDevice({ platform: 'ios', token: 'alice-token-01', clientId: alice.client.id, actor: 'alice@example.com' });
+  await c.core.registerDevice({ platform: 'ios', token: 'bob-token-0001', clientId: bob.client.id, actor: 'bob@example.com' });
+
+  const mine = await fetch(`${origin}/api/devices/test`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+    body: JSON.stringify({}),
+  });
+  assert.equal(mine.status, 200);
+  assert.deepEqual(seen, [['bob-token-0001']], 'the whole fleet is not woken by one person pressing a test button');
+
+  const hers = await fetch(`${origin}/api/devices/test`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+    body: JSON.stringify({ token: 'alice-token-01' }),
+  });
+  assert.equal(hers.status, 400);
+  assert.equal(/** @type {any} */ (await hers.json()).error?.code, 'no_devices', 'somebody else’s phone is not distinguishable from an unregistered one');
+
+  // The admin token reaches everything, which is what it is for.
+  seen.length = 0;
+  const all = await fetch(`${origin}/api/devices/test`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer a-token-at-least-16ch' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(all.status, 200);
+  assert.deepEqual(seen[0].sort(), ['alice-token-01', 'bob-token-0001']);
+});

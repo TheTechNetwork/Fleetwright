@@ -52,7 +52,11 @@ function bodyFor(path) {
 
 /** A path with its parameters filled in, so it can actually be requested. */
 function concrete(path, ids = {}) {
-  return path.replace('{hostId}', ids.hostId || 'some-host').replace('{id}', ids.clientId || 'some-id');
+  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : ids.clientId;
+  return path
+    .replace('{hostId}', ids.hostId || 'some-host')
+    .replace('{id}', id || 'some-id')
+    .replace('{email}', ids.email || 'nobody@example.com');
 }
 
 /**
@@ -68,7 +72,9 @@ async function seed(core) {
   await core.hostIds.enrol({ hostId: 'seeded-host', publicJwk: (await generateKeyPair()).publicJwk });
   const { client } = await core.clients.issue('a phone (someone@example.com)');
   await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
-  return { hostId: 'seeded-host', clientId: client.id };
+  core.invites.add('invited@example.com', { invitedBy: 'admin', note: null });
+  const { client: runner } = await core.runnerTokens.issue('a repository', {});
+  return { hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id };
 }
 
 /** The Worker, wired to a real Durable Object rather than a stub. */

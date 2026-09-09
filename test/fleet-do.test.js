@@ -224,3 +224,24 @@ test('a colleague cannot revoke machines on the Worker either', async () => {
   const allowed = await call(f, '/api/hosts/build-server', 'DELETE', null, { authorization: `Bearer ${admin.token}` });
   assert.equal(allowed.status, 200);
 });
+
+test('the Worker refuses to unregister somebody else’s phone, in the same words as the Node coordinator', async () => {
+  const { fleet: f } = fleet({ AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' });
+  const alice = await f.core.clients.issue('alice phone');
+  alice.client.email = 'alice@example.com';
+  const bob = await f.core.clients.issue('bob phone');
+  bob.client.email = 'bob@example.com';
+
+  const reg = await call(f, '/api/devices', 'POST', { platform: 'ios', token: 'a'.repeat(64) }, { authorization: `Bearer ${alice.token}` });
+  assert.equal(reg.status, 200);
+
+  const bobTries = await call(f, '/api/devices', 'DELETE', { token: 'a'.repeat(64) }, { authorization: `Bearer ${bob.token}` });
+  assert.equal(bobTries.status, 403);
+  assert.equal(/** @type {any} */ (await bobTries.json()).error?.code, 'not_yours');
+
+  const aliceDoes = await call(f, '/api/devices', 'DELETE', { token: 'a'.repeat(64) }, { authorization: `Bearer ${alice.token}` });
+  assert.equal(aliceDoes.status, 200);
+
+  const missing = await call(f, '/api/devices', 'DELETE', { token: 'a'.repeat(64) }, { authorization: `Bearer ${alice.token}` });
+  assert.equal(missing.status, 404);
+});

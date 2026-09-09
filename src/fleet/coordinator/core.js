@@ -485,11 +485,13 @@ export class CoordinatorCore {
    * that answers "did that arrive?" turns a silent failure into a question
    * with an answer.
    *
-   * @param {string} [token] one device, or every registered device if omitted
+   * @param {string} [token] one device, or every device the requester may
+   *   reach if omitted — their own for a member, the whole fleet for an admin
+   * @param {{ id?: string, email?: string, admin?: boolean } | null} [requester]
    * @returns {Promise<{ ok: boolean, sent?: number, dead?: number, error?: object, text: string }>}
    */
-  async testPush(token) {
-    const all = [...this.devices.values()];
+  async testPush(token, requester = null) {
+    const all = [...this.devices.values()].filter((d) => this.deviceReachableBy(d, requester));
     const devices = token ? all.filter((d) => d.token === token) : all;
 
     if (!devices.length) {
@@ -673,9 +675,45 @@ export class CoordinatorCore {
     return { ok: true, deviceId: device.id };
   }
 
-  /** @param {string} token */
-  unregisterDevice(token) {
-    return { ok: this.devices.delete(token) };
+  /**
+   * May this requester act on this device?
+   *
+   * A device belongs to the credential that registered it and to the person
+   * that credential names, so a second phone on the same account counts. One
+   * registered with the admin token has no credential and belongs to whoever
+   * holds that token. An admin reaches everything — removing other people's
+   * devices is what the admin seat is for.
+   *
+   * THIS USED TO BE NOBODY'S QUESTION. The destructive-route guard covers
+   * `/api/hosts/` and `/api/clients/` and never mentioned devices, so any
+   * member could unregister any phone by its token, or send a test to every
+   * phone in the fleet. Filed as #351; the check lives here so both
+   * coordinators ask it the same way.
+   *
+   * `null` is the break-glass admin token, which the route layer never wraps
+   * in a client row.
+   *
+   * @param {{ clientId?: string, actor?: string }} device
+   * @param {{ id?: string, email?: string, admin?: boolean } | null} [requester]
+   */
+  deviceReachableBy(device, requester = null) {
+    if (!requester || requester.admin) return true;
+    if (device.clientId && device.clientId === requester.id) return true;
+    const email = String(device.actor || '').replace(/^fleet:/, '').toLowerCase();
+    return Boolean(email && requester.email && email === requester.email.toLowerCase());
+  }
+
+  /**
+   * @param {string} token
+   * @param {{ id?: string, email?: string, admin?: boolean } | null} [requester]
+   * @returns {{ ok: true } | { ok: false, error: { code: 'not_registered' | 'not_yours' } }}
+   */
+  unregisterDevice(token, requester = null) {
+    const device = this.devices.get(token);
+    if (!device) return { ok: false, error: { code: 'not_registered' } };
+    if (!this.deviceReachableBy(device, requester)) return { ok: false, error: { code: 'not_yours' } };
+    this.devices.delete(token);
+    return { ok: true };
   }
 
   /**
@@ -1650,4 +1688,24 @@ export function describeEvent(event) {
     default:
       return event.event;
   }
+}
+
+/**
+ * The status and the sentence for a device removal, shared by both
+ * coordinators so they refuse in the same words. Here rather than in server.js
+ * because the Worker imports this file and must never import node:http.
+ *
+ * @param {{ ok: boolean, error?: { code: string } }} r
+ */
+export function deviceStatus(r) {
+  if (r.ok) return 200;
+  return r.error?.code === 'not_yours' ? 403 : 404;
+}
+
+/** @param {{ ok: boolean, error?: { code: string } }} r */
+export function deviceText(r) {
+  if (r.ok) return 'This device will not be notified again.';
+  return r.error?.code === 'not_yours'
+    ? 'That device is somebody else\u2019s. Removing other people\u2019s devices needs an admin credential on this fleet.'
+    : 'That device was not registered.';
 }
