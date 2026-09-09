@@ -81,6 +81,57 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 // coordinator, and the window is loud.
 export const PROTOCOL_VERSION = 3;
 
+// THE ONE ENVELOPE A DRIFTED BOX STILL ACCEPTS, and the reason it is exactly
+// one.
+//
+// The version check above runs before the verb is read, so a host on the wrong
+// number refuses everything — INCLUDING the command that would fix it. That is
+// finding D2 (#323): the fault the fleet could explain and not repair, on a box
+// that is otherwise up, connected, and reporting health. Somebody has to walk
+// to the machine.
+//
+// The way out is not a second door into the protocol. It is noticing that for
+// ONE verb the version field carries no information: `update` has taken exactly
+// one parameter, `restart`, since it shipped, and its meaning — pull this box's
+// code, optionally restart it — cannot change without ceasing to be the verb
+// that repairs a box. An envelope whose shape is identical at every version has
+// nothing to disagree about, so the number is not consulted.
+//
+// FROZEN, and this is the load-bearing half. `update` may gain a parameter
+// later; a RESCUE `update` may not, because the whole guarantee is that an
+// envelope built today is understood by a host built at any version. So the
+// rescue path validates against this list and not against VERBS.update — a
+// parameter added later is refused on this path, loudly, rather than silently
+// meaning something else on a box five versions behind.
+//
+// What this does NOT do is make every fleet self-healing retroactively. A host
+// running code from before this paragraph still checks the number, so the
+// coordinator also speaks that host's version at it (see `buildIntent`); that
+// half fixes the boxes already out there and this half fixes the next window,
+// including the one the upgrade order above deliberately opens.
+export const RESCUE_VERB = 'update';
+
+/** The parameters a rescue `update` may carry. Frozen — see above. */
+export const RESCUE_PARAMS = Object.freeze(['restart']);
+
+/**
+ * Is this envelope the frozen rescue shape, whatever version it claims?
+ *
+ * Deliberately strict about the params: a rescue envelope carrying anything
+ * beyond `restart` is NOT the frozen shape, so it goes back through the
+ * ordinary version check and is refused there. Being generous here would make
+ * the freeze a comment rather than a rule.
+ *
+ * @param {Record<string, unknown>} env
+ */
+function isRescue(env) {
+  if (env.verb !== RESCUE_VERB) return false;
+  if (!Number.isInteger(env.v)) return false;
+  const params = env.params === undefined ? {} : env.params;
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return false;
+  return Object.keys(params).every((k) => RESCUE_PARAMS.includes(k));
+}
+
 /**
  * Session names, matching agent-hub's charset (`src/core/names.js`).
  *
@@ -901,7 +952,11 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   }
   const env = /** @type {Record<string, unknown>} */ (raw);
 
-  if (env.v !== PROTOCOL_VERSION) {
+  // `isRescue` is the ONE exemption, and it is an exemption from the number
+  // rather than from validation: everything below still runs, so a rescue
+  // envelope with a bad id or a bad `restart` value is refused exactly as any
+  // other envelope would be. See RESCUE_VERB.
+  if (env.v !== PROTOCOL_VERSION && !isRescue(env)) {
     return bad('unsupported_version', `unsupported protocol version ${JSON.stringify(env.v)}, this host speaks ${PROTOCOL_VERSION}`);
   }
   if (env.kind !== 'intent') {
@@ -1038,10 +1093,24 @@ function checkParam(verb, key, ps, value) {
  * point is that the RETRY of a `start` carries the key the first attempt did,
  * so the host can recognise it. Whoever owns the retry owns the key.
  *
- * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number }} opts
+ * `speaks` is the protocol the RECIPIENT reports, and it is honoured for one
+ * envelope only: a rescue `update` aimed at a host that is behind. That host is
+ * running code from before RESCUE_VERB existed, so it will check the number no
+ * matter what this file says — the only way its own repair reaches it is for
+ * the coordinator to say the number it is waiting for. The envelope is built
+ * and validated at PROTOCOL_VERSION first and only then re-stamped, so what
+ * goes out is a well-formed intent by today's rules that happens to be labelled
+ * with yesterday's version. That is true, because for this shape the two are
+ * the same envelope.
+ *
+ * NOT honoured when the host is AHEAD. A box on a newer protocol than the fleet
+ * does not need pulling — the coordinator is the thing that is behind, and
+ * telling the box to update would be the fleet prescribing its own symptom.
+ *
+ * @param {{ id: string, verb: string, params?: Record<string, string|number>, actor?: string, issuedAt?: number, speaks?: unknown }} opts
  * @returns {Intent}
  */
-export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now() }) {
+export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null }) {
   const intent = {
     v: PROTOCOL_VERSION,
     kind: /** @type {'intent'} */ ('intent'),
@@ -1053,5 +1122,8 @@ export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(
   };
   const checked = validateIntent(intent);
   if (checked.ok === false) throw new Error(`refusing to send a malformed intent: ${checked.error}`);
+  if (Number.isInteger(speaks) && Number(speaks) < PROTOCOL_VERSION && isRescue(checked.intent)) {
+    return { ...checked.intent, v: /** @type {number} */ (speaks) };
+  }
   return checked.intent;
 }

@@ -813,6 +813,20 @@ export class CoordinatorCore {
       verb: spec.verb,
       params: spec.params || {},
       ...(spec.actor ? { actor: spec.actor } : {}),
+      // WHAT THIS BOX SAYS IT SPEAKS, which matters for exactly one envelope.
+      //
+      // A host behind the fleet refuses every intent before reading the verb,
+      // and the verb that would fix it is one of them — the D2 deadlock. It is
+      // running code from before the protocol had an escape hatch, so the
+      // escape hatch has to be on this side: `buildIntent` stamps a rescue
+      // `update` with the number that host is waiting for and leaves every
+      // other intent alone. It ignores this field unless the shape is frozen
+      // and the host is behind, so passing it always is safe and passing it
+      // conditionally would only move the rule somewhere it is harder to read.
+      //
+      // Health is not version-gated, which is what makes this possible: a
+      // drifted box still reports, so the fleet still knows the number.
+      speaks: host?.health?.protocol,
     });
 
     // A waiter already holds this id: refuse loudly rather than clobber it.
@@ -1473,22 +1487,43 @@ export class CoordinatorCore {
  * Finding D2 says the drift error "names `agent-hub update --restart`". It does
  * not: that is the OTHER error, and this one named nothing at all.
  *
+ * WHAT CHANGED SINCE THAT PARAGRAPH WAS WRITTEN is the sentence in capitals it
+ * used to end on. `update` now travels in a frozen envelope the coordinator
+ * labels with the host's own version (RESCUE_VERB), so on a box that is BEHIND
+ * it is the one command that still arrives — and telling somebody the fleet
+ * cannot help would now be sending them to a machine they do not need to visit.
+ * On a box that is AHEAD nothing changed and nothing should: pulling code on a
+ * host that is already newer than the fleet is the fleet prescribing its own
+ * symptom.
+ *
  * @param {any} reply
  * @param {{ hostId: string, health?: any }|undefined} host
  */
 function explainUnsupportedVersion(reply, host) {
   if (reply?.error?.code !== 'unsupported_version' || !host) return reply;
   const theirs = host.health?.protocol;
+  const behind = Number.isInteger(theirs) && theirs < PROTOCOL_VERSION;
+  const preamble =
+    `${host.hostId} speaks protocol ${theirs ?? 'an older version'} and this fleet speaks ` +
+    `${PROTOCOL_VERSION}, so it refuses every command before reading it — not just this one.\n`;
   return {
     ...reply,
-    text:
-      `${host.hostId} speaks protocol ${theirs ?? 'an older version'} and this fleet speaks ` +
-      `${PROTOCOL_VERSION}, so it refuses every command before reading it — not just this one.\n` +
-      'THE FLEET CANNOT FIX THIS ONE. `update` is refused for exactly the same reason, so no command\n' +
-      'reaches this box while it is on the wrong version. It needs somebody on the machine:\n' +
-      '  curl -fsSL <your coordinator>/install | sudo sh\n' +
-      'Nothing else in the fleet is affected, and this host is already marked degraded so no new work ' +
-      'is being sent to it.',
+    text: behind
+      ? preamble +
+        'ONE COMMAND STILL GETS THROUGH. Apply update is sent in this box\u2019s own version precisely so a\n' +
+        'drifted machine can be repaired from here, and it is the thing to try first:\n' +
+        `  Apply update, on ${host.hostId}, from the app or \`fleet_update\`\n` +
+        'If it comes back still on the old version, the pull found nothing newer — this box is pinned to a\n' +
+        'channel that has no release for it, and that is the case that needs somebody on the machine:\n' +
+        '  curl -fsSL <your coordinator>/install | sudo sh\n' +
+        'Nothing else in the fleet is affected, and this host is already marked degraded so no new work ' +
+        'is being sent to it.'
+      : preamble +
+        'THIS HOST IS AHEAD OF THE FLEET, which is what half a deploy looks like — hosts upgrade first and\n' +
+        'the coordinator follows. THE FLEET CANNOT FIX THIS ONE from inside itself, and `update` is the\n' +
+        'wrong direction: the box is already newer than the thing refusing it. What it is waiting for is\n' +
+        'this coordinator to be deployed. Nothing else in the fleet is affected, and this host is already ' +
+        'marked degraded so no new work is being sent to it.',
   };
 }
 

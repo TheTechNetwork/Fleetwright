@@ -259,6 +259,102 @@ test('a different protocol version is refused, not guessed at', () => {
   }
 });
 
+// --- the rescue envelope ----------------------------------------------------
+//
+// Finding D2 (#323): a host on the wrong protocol refuses every command before
+// reading the verb, INCLUDING the one that repairs it, so a drifted box could
+// only be fixed by somebody walking to it. These pin the way out and, more
+// importantly, pin how narrow it is — an escape hatch that widens is a second
+// protocol.
+
+test('a rescue update is accepted whatever version it claims', () => {
+  // The point of the whole exercise. `update` has taken one parameter since it
+  // shipped and means the same thing at every version, so the number on the
+  // envelope has nothing to disagree about and is not consulted.
+  for (const v of [1, 2, PROTOCOL_VERSION, PROTOCOL_VERSION + 1, 99]) {
+    const r = validateIntent(intent({ v, verb: 'update', params: { restart: 'yes' } }));
+    assert.equal(r.ok, true, `v=${v} should have been rescued`);
+  }
+  // And with no params at all, which is the pull-without-restart shape.
+  assert.equal(validateIntent(intent({ v: 1, verb: 'update', params: {} })).ok, true);
+  assert.equal(validateIntent(intent({ v: 1, verb: 'update', params: undefined })).ok, true);
+});
+
+test('the rescue is an exemption from the version and from nothing else', () => {
+  // Everything after the version check still runs. A rescue envelope is not a
+  // way to smuggle a malformed intent past a validator — it is one field being
+  // ignored, on one shape, for one reason.
+  const bad = [
+    { v: 1, verb: 'update', params: { restart: 'maybe' } },
+    { v: 1, verb: 'update', params: { restart: 'yes' }, id: 'short' },
+    { v: 1, verb: 'update', params: { restart: 'yes' }, issuedAt: 'now' },
+    { v: 1, verb: 'update', params: { restart: 'yes' }, kind: 'reply' },
+    { v: 1, verb: 'update', params: { restart: 'yes' }, actor: 'no spaces allowed' },
+  ];
+  for (const patch of bad) {
+    const r = validateIntent(intent(patch));
+    assert.equal(r.ok, false, `${JSON.stringify(patch)} should still be refused`);
+    assert.notEqual(r.code, 'unsupported_version', 'refused for the real reason, not the version');
+  }
+});
+
+test('no other verb gets the exemption', () => {
+  // `update` is the escape hatch because it is the verb that ENDS the drift.
+  // Every other verb aimed at a box on the wrong version is a command whose
+  // meaning the two sides have not agreed on, which is what the version check
+  // is for.
+  for (const verb of ['upgrade', 'reboot', 'start', 'stop', 'list', 'connect']) {
+    const r = validateIntent(intent({ v: PROTOCOL_VERSION - 1, verb, params: {} }));
+    assert.equal(r.ok, false, `${verb} should not be rescued`);
+    assert.equal(r.code, 'unsupported_version', verb);
+  }
+});
+
+test('a parameter outside the frozen list is not a rescue envelope', () => {
+  // THE FREEZE IS A RULE, NOT A COMMENT. `update` may gain a parameter one day;
+  // a rescue `update` may not, because the guarantee is that this envelope is
+  // understood by a host built at any version, and a host built five versions
+  // ago has never heard of the new one. So an unknown param drops the envelope
+  // back through the version check rather than travelling on a number the
+  // recipient cannot interpret.
+  const r = validateIntent(intent({ v: PROTOCOL_VERSION - 1, verb: 'update', params: { restart: 'yes', force: 'yes' } }));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'unsupported_version');
+  // At the current version the same envelope is refused too, by the ordinary
+  // rule — which is what makes the pair above a narrowing and not a hole.
+  const now = validateIntent(intent({ v: PROTOCOL_VERSION, verb: 'update', params: { restart: 'yes', force: 'yes' } }));
+  assert.equal(now.ok, false);
+  assert.equal(now.code, 'bad_params');
+});
+
+test('the coordinator speaks a drifted host its own version, for that one verb', () => {
+  // The other half, and the half that fixes boxes ALREADY in the field: they
+  // run code from before any of this, so they check the number no matter what
+  // this file says. The only way their repair reaches them is to say the number
+  // they are waiting for.
+  const rescue = buildIntent({ id: 'idem-0000001', verb: 'update', params: { restart: 'yes' }, speaks: PROTOCOL_VERSION - 1 });
+  assert.equal(rescue.v, PROTOCOL_VERSION - 1);
+  assert.equal(rescue.verb, 'update');
+});
+
+test('nothing else is ever sent in another version', () => {
+  // A host that is AHEAD does not need pulling — the coordinator is the thing
+  // that is behind, and telling the box to update is the fleet prescribing its
+  // own symptom. And no verb but `update` may travel on a number this
+  // coordinator cannot vouch for.
+  const ahead = buildIntent({ id: 'idem-0000001', verb: 'update', params: {}, speaks: PROTOCOL_VERSION + 1 });
+  assert.equal(ahead.v, PROTOCOL_VERSION, 'a host that is ahead is not sent a downgrade');
+
+  for (const verb of ['upgrade', 'reboot', 'list']) {
+    const built = buildIntent({ id: 'idem-0000001', verb, params: {}, speaks: PROTOCOL_VERSION - 1 });
+    assert.equal(built.v, PROTOCOL_VERSION, `${verb} must go out in this fleet's version`);
+  }
+  for (const speaks of [null, undefined, 'two', 2.5, NaN]) {
+    const built = buildIntent({ id: 'idem-0000001', verb: 'update', params: {}, speaks });
+    assert.equal(built.v, PROTOCOL_VERSION, `speaks=${String(speaks)} is not a version`);
+  }
+});
+
 test('an unknown verb is refused', () => {
   for (const verb of ['exec', 'shell', 'login', 'code', '', 'LIST', '__proto__', 'constructor']) {
     const r = validateIntent(intent({ verb }));
