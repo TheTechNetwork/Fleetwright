@@ -82,7 +82,7 @@ struct SessionView: View {
                     HStack(spacing: Design.Space.hair) {
                         if let host = session.hostId { Text("on \(host)") }
                         if let workspace = session.workspace { Text("· \(workspace)") }
-                        if let age = session.age { Text("· started \(age) ago") }
+                        if let age = session.age { Text("· \(age)") }
                         if let account = session.account, account != "shared" { Text("· \(account)") }
                     }
                     .fleetType(.micro)
