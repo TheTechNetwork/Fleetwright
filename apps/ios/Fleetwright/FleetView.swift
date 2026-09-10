@@ -367,7 +367,8 @@ struct FleetView: View {
                     brief: request.brief,
                     mode: request.mode,
                     host: request.host,
-                    profile: request.profile
+                    profile: request.profile,
+                    secret: request.secret
                 )
                 let text = reply.text ?? "Started."
                 await MainActor.run { status = text }

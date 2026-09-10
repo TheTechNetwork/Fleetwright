@@ -29,6 +29,10 @@ struct StartRequest {
     /// empty prompt and somebody has to drive it — which is what every session
     /// did before protocol v3, and what nothing said out loud.
     let profile: String?
+    /// WHAT IT MAY REACH, by name. nil grants nothing. The value never travels
+    /// with this — the host resolves the name and the session fetches the value
+    /// at runtime. See docs/trust.md.
+    let secret: String?
 }
 
 struct StartSheet: View {
@@ -47,6 +51,12 @@ struct StartSheet: View {
     /// deserve different screens — null is cannot-tell, empty is nothing.
     @State private var profilesAnswered = false
     @State private var profile = ""
+    @State private var secrets: [Fleet.Secret] = []
+    /// The same cannot-tell/nothing distinction as `profilesAnswered`: a fleet
+    /// that holds no secrets has answered, a fleet too old to know the verb has
+    /// not, and only the first should show a picker.
+    @State private var secretsAnswered = false
+    @State private var secret = ""
     @State private var suggesting = false
     @State private var error = ""
 
@@ -139,6 +149,37 @@ struct StartSheet: View {
                     }
                 }
 
+                // WHAT IT MAY REACH, and optional. Shown only once the fleet has
+                // answered and only when a box actually holds a secret — an empty
+                // picker would offer a control for a capability nobody set up.
+                // Names only: the value stays on the host, and this app never
+                // sees it.
+                if secretsAnswered, !secrets.isEmpty {
+                    Section {
+                        Picker("Secret", selection: $secret) {
+                            Text("None").tag("")
+                            ForEach(secrets) { s in
+                                Text(s.name).tag(s.name)
+                            }
+                        }
+                        // Pins the host the same way a profile does: a secret
+                        // lives on one box, and `start --secret` elsewhere is
+                        // refused, so a single-owner name fixes where it runs.
+                        .onChange(of: secret) { _, now in
+                            let owners = Set(secrets.filter { $0.name == now }.compactMap(\.hostId))
+                            if owners.count == 1, let only = owners.first { host = only }
+                        }
+                    } header: {
+                        Text("Secret").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                    } footer: {
+                        Text(secret.isEmpty
+                             ? "Optional. Grant a named secret and the session can fetch its value at runtime."
+                             : "It may fetch this secret's value while it runs. The value stays on the host — this app never sees it.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                }
+
                 if !kinds.isEmpty {
                     Section {
                         Picker("Kind", selection: $kind) {
@@ -201,6 +242,12 @@ struct StartSheet: View {
                 if let found = try? await fleet.profiles() {
                     profiles = found
                     profilesAnswered = true
+                }
+                // Same rule as profiles: a throw is "cannot tell", not "none",
+                // so an old fleet shows no secret picker rather than a wrong one.
+                if let found = try? await fleet.secrets() {
+                    secrets = found
+                    secretsAnswered = true
                 }
             }
             .navigationTitle("New session")
@@ -285,7 +332,8 @@ struct StartSheet: View {
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
             mode: kind?.mode,
             host: host.isEmpty ? nil : host,
-            profile: profile.isEmpty ? nil : profile
+            profile: profile.isEmpty ? nil : profile,
+            secret: secret.isEmpty ? nil : secret
         ))
         dismiss()
     }
