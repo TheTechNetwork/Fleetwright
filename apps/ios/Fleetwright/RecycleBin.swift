@@ -78,7 +78,7 @@ struct RecycleBinView: View {
                 }
             }
 
-            if !result.isEmpty {
+            if !result.isBlank {
                 Section { Text(result).fleetType(.label).foregroundStyle(Design.Palette.inkDim) }
             }
         }

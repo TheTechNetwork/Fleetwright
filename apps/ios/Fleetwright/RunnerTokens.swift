@@ -85,7 +85,7 @@ struct RunnerTokensView: View {
                      + "its job ends.")
             }
 
-            if !result.isEmpty {
+            if !result.isBlank {
                 Section { Text(result).fleetType(.bodySmall) }
             }
         }

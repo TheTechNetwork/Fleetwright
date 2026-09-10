@@ -130,7 +130,7 @@ struct FleetView: View {
                 // the app — which is the loop the anxiety runs in.
                 ReassuranceBanner(summary: Reassurance(sessions: sessions, hosts: fleetHosts))
                     .fleetRow()
-                if !status.isEmpty {
+                if !status.isBlank {
                     // THE COORDINATOR'S OWN WORDS, on an inner surface rather
                     // than a card: this is evidence quoted from somewhere else,
                     // and it should not look like something this screen said.
@@ -207,7 +207,10 @@ struct FleetView: View {
                                resume: { await act { try await fleet.resume(session.name, choice: "summary") } },
                                forget: { await act { try await fleet.forget(session.name) } },
                                output: {
-                                   await act {
+                                   // THE ONE VERB ON THIS SCREEN THAT EXISTS TO
+                                   // RETURN TEXT, so it is the one that has to
+                                   // say something when there is none.
+                                   await act(nothingSaid: "\(session.label) has printed nothing that this machine could read.") {
                                        try await fleet.logs(host: session.hostId, session: session.name)
                                    }
                                },
@@ -425,10 +428,21 @@ struct FleetView: View {
         }
     }
 
-    private func act(_ work: () async throws -> Fleet.Reply) async {
+    /// Run one verb and quote what came back.
+    ///
+    /// `nothingSaid` is for the verbs whose whole job is to bring text back. A
+    /// reply of forty blank lines used to be quoted verbatim — see
+    /// `String.isBlank` — and trimming it alone would leave the opposite
+    /// problem, a button that does nothing visible when it is pressed. Most
+    /// verbs do not need it: their answer is the list refreshing underneath.
+    private func act(nothingSaid: String? = nil, _ work: () async throws -> Fleet.Reply) async {
         busy = true
         do {
-            status = try await work().text ?? ""
+            // TRIMMED, not merely tested. A host that still pads its reply
+            // would otherwise draw its card with a screenful of empty rows
+            // above and below the one line worth reading.
+            let said = (try await work().text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            status = said.isEmpty ? (nothingSaid ?? "") : said
         } catch {
             status = error.localizedDescription
         }
@@ -859,7 +873,7 @@ private struct SettingsView: View {
                  + "for the time you asked. Sessions on it are lost when it goes, and it spends Actions minutes.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
-            if !runnerResult.isEmpty {
+            if !runnerResult.isBlank {
                 Text(runnerResult)
                     .fleetType(.labelMono)
                     .foregroundStyle(Design.Palette.ink)
@@ -1588,7 +1602,7 @@ private struct SettingsView: View {
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                     }
-                    if !clientResult.isEmpty {
+                    if !clientResult.isBlank {
                         Text(clientResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                 } header: {
@@ -1667,7 +1681,7 @@ private struct SettingsView: View {
                         }
                     }
                     .disabled(!settings.configured)
-                    if !pushResult.isEmpty {
+                    if !pushResult.isBlank {
                         Text(pushResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                 } header: {
