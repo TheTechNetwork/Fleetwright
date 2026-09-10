@@ -56,7 +56,7 @@ import { emailFromActor } from '../../core/accounts.js';
 import { readChannel, pinnedByEnv } from '../../core/channel.js';
 import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
 import { readLabels } from '../../core/labels.js';
-import { LOG_SOURCES, unitInstalled } from '../../core/logs.js';
+import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -408,9 +408,18 @@ export class Sidecar {
         const name = String(intent.params.name);
         const text = await this.hub.peek(name, Number(intent.params.lines || 0) || null);
         if (text === null) return reply({ ok: false, text: `"${name}" is not running.` });
+        // A PANE OF EMPTY ROWS IS NOT A PICTURE OF ANYTHING. capture-pane
+        // returns every row of the visible region, so a session that has
+        // printed nothing comes back as forty newlines rather than as the
+        // empty string — and a phone drew that as a card the height of the
+        // screen with nothing on it. See tidyPane for the whole story.
+        //
+        // rcUrl and remoteControl read the ORIGINAL text: they are answered by
+        // matching, and nothing here should change what they match against.
+        const pane = tidyPane(text);
         return reply({
           ok: true,
-          text,
+          text: pane || `${name} is running and has printed nothing yet.`,
           name,
           rcUrl: extractRcUrl(text),
           remoteControl: isRemoteControlOnline(text),

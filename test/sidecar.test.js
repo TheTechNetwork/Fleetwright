@@ -253,6 +253,31 @@ test('a stopped session is not peeked at all', async (t) => {
   assert.equal(r.sessions[0].rcUrlRepaired, undefined);
 });
 
+test('peek on a session that has printed nothing says so, rather than sending blank lines', async (t) => {
+  // The pane a phone was shown for this was forty newlines, because
+  // `capture-pane` returns every row of the visible region and an idle pane's
+  // rows are empty. That string is truthy, so it reached the app as an answer
+  // and the app drew it: a card the height of the screen with nothing on it.
+  const { sidecar } = await setup(t, { panes: { fresh: '\n'.repeat(40) } });
+
+  const r = await sidecar.handle(intent({ verb: 'peek', params: { name: 'fresh' } }));
+
+  assert.equal(r.ok, true, 'the session is running, so this is not a refusal');
+  assert.match(r.text, /printed nothing yet/);
+  assert.equal(r.text.trim(), r.text, 'a reply padded with newlines is the bug, wherever it comes from');
+});
+
+test('peek still finds the Remote Control URL in a padded pane', async (t) => {
+  // Trimming the padding must not cost the thing peek is most often asked for.
+  const { sidecar } = await setup(t, { panes: { live: `\n\n${RC_PANE}\n\n\n\n` } });
+
+  const r = await sidecar.handle(intent({ verb: 'peek', params: { name: 'live' } }));
+
+  assert.equal(r.rcUrl, RC_URL);
+  assert.equal(r.remoteControl, true);
+  assert.equal(r.text, RC_PANE, 'the pane came back wearing its padding');
+});
+
 test('a pane that cannot be read does not fail the command that asked', async (t) => {
   // The session list is still the answer even if one pane is unreadable.
   const { sidecar } = await setup(t, {

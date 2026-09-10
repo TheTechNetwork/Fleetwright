@@ -31,6 +31,34 @@ export const LOG_SOURCES = Object.freeze({
 });
 
 /**
+ * A pane capture with the empty rows taken off.
+ *
+ * `capture-pane -S -60` returns the scrollback AND every row of the visible
+ * region, so a pane whose program has printed nothing is not the empty string
+ * — it is forty newlines. That is truthy, so it travelled the whole way to a
+ * phone as an answer worth showing, and the phone drew it: a card the height
+ * of the screen with nothing on it. The person who reported it guessed the app
+ * had rendered a broken image, which is what a large empty rectangle looks
+ * like when it is the only thing on the screen.
+ *
+ * Interior blank lines stay. They are how output is spaced, and closing them
+ * up would be rewriting what the session printed. What comes off is the top
+ * and the bottom, which is padding rather than output, and the spaces a
+ * terminal leaves at the end of a row it did not fill.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function tidyPane(text) {
+  const lines = String(text ?? '')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/, ''));
+  while (lines.length && !lines[0]) lines.shift();
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines.join('\n');
+}
+
+/**
  * A SESSION's own logs, which are a different question from a service's.
  *
  * `peek` shows the live pane — what the session looks like right now. This is
@@ -70,14 +98,26 @@ export function readSessionLogs(cfg, name, lines = 60) {
     }
   }
 
-  if (hasSession(name)) {
-    return { ok: true, text: `Pane for ${name}:\n${capturePane(name, lines)}` };
-  }
-  // Sandboxed, container alive, nothing printed, and no pane either. Rare, and
-  // worth its own sentence rather than the "nothing left to read" below, which
-  // would be wrong: there is something, it just has not said anything yet.
+  const pane = hasSession(name) ? tidyPane(capturePane(name, lines)) : '';
+  if (pane) return { ok: true, text: `Pane for ${name}:\n${pane}` };
+
+  // A BLANK PANE IS NOT AN ANSWER EITHER, for exactly the reason an empty
+  // container is not. The two branches were written months apart and only the
+  // first one learned it, so `logs` on a session that had printed nothing
+  // returned ok with a body of blank lines — a state the apps could not
+  // describe because it does not say anything to describe.
+  //
+  // Sandboxed, container alive, nothing printed. Worth its own sentence rather
+  // than the "nothing left to read" below, which would be wrong: there is
+  // something, it just has not said anything yet.
   if (cfg.sandbox && podman(cfg, ['container', 'inspect', sandboxNames(name).container]).status === 0) {
     return { ok: true, text: `${name} is running and has printed nothing yet.` };
+  }
+  // Not sandboxed, and the window is open and empty. Same fact, different
+  // evidence for it, and the sentence should not claim the container it does
+  // not have.
+  if (hasSession(name)) {
+    return { ok: true, text: `${name} has a window open and nothing on it — it has printed nothing yet.` };
   }
   return {
     ok: false,
