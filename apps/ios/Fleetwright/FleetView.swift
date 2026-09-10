@@ -276,12 +276,30 @@ struct FleetView: View {
             }
             .task { await refresh() }
             // The list a notification tap lands on should be the list as it is
-            // now, not as it was when the phone went in a pocket.
-            .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { _ in
-                Task { await refresh() }
+            // now, not as it was when the phone went in a pocket — AND THE
+            // SESSION THE NOTIFICATION WAS ABOUT SHOULD BE OPEN. A buzz says
+            // "bigjob is back at its prompt"; landing on a list of twelve and
+            // finding bigjob in it is the search the notification existed to
+            // save. The name rides on the notification; the page is pushed
+            // once the fresh list confirms the session is still there.
+            .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { note in
+                let name = note.userInfo?["name"] as? String
+                Task {
+                    await refresh()
+                    if let name, let session = sessions.first(where: { $0.name == name }) {
+                        opened = session
+                    }
+                }
+            }
+            .navigationDestination(item: $opened) { session in
+                SessionView(fleet: fleet, initial: session, onChange: { await refresh(keepStatus: true) })
             }
         }
     }
+
+    /// The session a notification tap opened, pushed programmatically. Nil
+    /// the rest of the time: the rows push their own pages by link.
+    @State private var opened: Fleet.Session?
 
     /// One queue for the screen, not one per computed Fleet — the whole point
     /// is that it outlives the request that failed.

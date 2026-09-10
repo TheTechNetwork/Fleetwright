@@ -81,3 +81,13 @@ test('the new sentences carry no em dash', () => {
     assert.doesNotMatch(s, /—/);
   }
 });
+
+test('a tapped notification opens the session it was about, on iOS', () => {
+  // The name rides on the notification (FleetwrightApp posts it), and the
+  // page is pushed once the fresh list confirms the session is still there.
+  // A buzz that lands on a list of twelve is the search it existed to save.
+  const list = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  assert.match(list, /note\.userInfo\?\["name"\] as\? String/);
+  assert.match(list, /await refresh\(\)\s*if let name, let session = sessions\.first\(where: \{ \$0\.name == name \}\) \{\s*opened = session/);
+  assert.match(list, /\.navigationDestination\(item: \$opened\) \{ session in\s*SessionView\(fleet: fleet, initial: session/);
+});
