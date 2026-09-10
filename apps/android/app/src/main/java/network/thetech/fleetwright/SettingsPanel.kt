@@ -1130,6 +1130,11 @@ private fun describeRunning(host: Fleet.FleetHost): String {
     host.version?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
     val behind = host.behind ?: 0
     when {
+        // FIRST, because it is the one thing on this line somebody can act on
+        // right now, and because every branch below it is about downloads. A
+        // box can have nothing left to fetch and still be running an old
+        // release: the fleet said "main-88 · up to date" about exactly that.
+        host.restartWaitingFor != null -> parts.add("${host.restartWaitingFor} installed, restart waiting")
         behind > 0 -> parts.add("$behind commit${if (behind == 1) "" else "s"} behind")
         host.release?.available != null -> parts.add("${host.release.available} waiting")
         // A migratable checkout counts no commits and names no release version,

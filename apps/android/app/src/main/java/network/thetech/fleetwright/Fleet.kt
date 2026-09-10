@@ -193,6 +193,17 @@ class Fleet(
         val accountPlan: String?,
         val accountOrg: String?,
         val version: String?,
+        /**
+         * What the box's disk holds, on a packaged box: the release `current`
+         * points at, which is what the service would run after a restart.
+         * Null on a checkout and on a host too old to say.
+         *
+         * When this differs from [version] the box is waiting on a restart and
+         * nothing else. That is its own state; it used to read as "up to date",
+         * because "up to date" was measuring what was left to download, which
+         * was nothing, about a service fourteen releases behind its own disk.
+         */
+        val installed: String? = null,
         val behind: Int?,
         /**
          * What the operating system has waiting, already in prose from the host
@@ -311,6 +322,15 @@ class Fleet(
          * and when the check could not reach GitHub. Two flavours of "we do not
          * know" rendering as "you are current", with the Apply button hidden.
          */
+        /**
+         * The release on disk that this service is not yet running, or null
+         * when there is no gap or no way to know. A difference between two
+         * strings, never a flag from the host: a phone cannot be told "restart
+         * waiting" by a frame that does not also show its work.
+         */
+        val restartWaitingFor: String?
+            get() = installed?.takeIf { it.isNotBlank() && version?.isNotBlank() == true && it != version }
+
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
 
@@ -1371,6 +1391,7 @@ class Fleet(
                     accountPlan = account?.optString("plan")?.takeIf { it.isNotBlank() && it != "null" },
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },
                     version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
+                    installed = health?.optJSONObject("version")?.optString("installed")?.takeIf { it.isNotBlank() },
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
                     // `has` first: optBoolean would turn a missing field into
                     // false, which is the difference between "nothing waiting"
