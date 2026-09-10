@@ -336,8 +336,21 @@ export class CoordinatorCore {
       name: msg.name ? String(msg.name) : null,
       text: msg.text ? String(msg.text).slice(0, 500) : null,
       url: msg.url ? String(msg.url).slice(0, 500) : null,
+      // The NAME of the profile a session was started with, when the host
+      // says. A name, never content — docs/wanted.md's rule for profiles —
+      // and the one fact that says whether "back at its prompt" is a job
+      // handed over coming back finished, or a turn in a conversation.
+      ...(msg.profile ? { profile: String(msg.profile).slice(0, 80) } : {}),
       at: this.now(),
     };
+    // A TEMPORARY MACHINE THAT HAS FINISHED IS COSTING MONEY, and that is the
+    // one sentence its owner needs more than "done". The host cannot know it
+    // is temporary — the registry does, from the provision that made it — so
+    // the text is completed here, where both halves are in hand.
+    const ephemeral = Boolean(this.registry.get(hostId)?.ephemeral);
+    if (event.event === 'session.ready' && ephemeral) {
+      event.text = `${event.text || 'is back at its prompt'}. This is a temporary machine, and it keeps running, and costing, until it is stopped or its time is up.`;
+    }
     // WHICH QUESTION, carried alongside rather than into the event.
     //
     // The host has always sent this and this method has always dropped it,
@@ -362,7 +375,15 @@ export class CoordinatorCore {
     this.onEvents?.();
 
     this.log.info(`coordinator: ${hostId} ${event.event}${event.name ? ` ${event.name}` : ''}`);
-    if (this.push && NOTIFIABLE.has(event.event)) await this.#notify(event, prompt);
+    // BACK AT ITS PROMPT IS NEWS TWICE AND NOISE OTHERWISE. A session that was
+    // handed a job (a profile) coming back is the "done" both beta testers
+    // asked for; a session on a temporary machine coming back is a bill
+    // still running. A turn in a conversation somebody is driving by hand is
+    // neither — they are looking at it — and a buzz per turn is how the one
+    // notification that matters gets switched off with the rest. The ring
+    // keeps all of them; only the phone is selective.
+    const worth = event.event !== 'session.ready' || Boolean(event.profile) || ephemeral;
+    if (this.push && worth && NOTIFIABLE.has(event.event)) await this.#notify(event, prompt);
   }
 
   /**
@@ -1837,6 +1858,9 @@ const NOTIFIABLE = new Set([
   'session.ended',
   'session.error',
   'session.rc-online',
+  // Gated further in #onHostEvent: only a job handed over, or a temporary
+  // machine, is worth a buzz for coming back to its prompt.
+  'session.ready',
   // A BOX THAT CANNOT START SESSIONS, and its recovery. This list was sessions
   // only, so the one fact that stops the whole fleet working reached a journal
   // and nothing else — deb132 spent thirty hours signed out, warning hourly,
@@ -1928,6 +1952,8 @@ export function describeEvent(event) {
       return event.text || 'hit an error';
     case 'session.rc-online':
       return 'is ready to drive';
+    case 'session.ready':
+      return event.text || 'is back at its prompt';
     case 'session.restarted':
       return event.text || 'was restarted after going idle';
     case 'session.stuck':
