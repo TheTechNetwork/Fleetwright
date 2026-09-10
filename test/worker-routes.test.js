@@ -158,7 +158,8 @@ test('a forged Host header cannot reach the root shell', async () => {
 
 test('an unconfigured coordinator publishes no installer at all', async () => {
   // THE ONE INHERITED CONSTANT THAT ENDS UP EXECUTING. This route hardcoded
-  // upstream's raw URL, and bootstrap.sh clones the repository it came from —
+  // upstream's raw URL, and bootstrap.sh installs the code that repository
+  // publishes — a verified release on a fresh box, a clone for --from-source —
   // so a fork's own coordinator, on a fork's own domain, handed a root shell a
   // script that installed SOMEBODY ELSE'S CODE. Silently, with nothing for the
   // person pasting it to notice.
@@ -172,7 +173,7 @@ test('an unconfigured coordinator publishes no installer at all', async () => {
   // NAMES THE VARIABLE and says why it matters, because the person reading this
   // is the one who can set it and "not found" sends them nowhere.
   assert.match(text, /AGENT_FLEET_INSTALL_URL/);
-  assert.match(text, /clones the repository it is served from/);
+  assert.match(text, /installs the releases of the repository it is served from/);
 });
 
 
