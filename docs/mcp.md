@@ -273,38 +273,49 @@ Anything reading a reply here goes through `sessionFrom()` now.
 errored**. It does *not* reliably detect one parked on a prompt — `awaiting` is
 a host-watcher signal that raises an event, and is not a field on a status
 reply. If one arrives the code uses it; nothing promises it, and the tool
-description says ended-or-errored and no more.
+description says back-at-its-prompt, needs-a-person, ended-or-errored, and no more.
 
-## Completion: told, not signalled
+## Completion: reported once, judged by you
 
-Nothing in the fleet reports "done". A finished session looks exactly like an
-idle one — `peek` reads a pane and `status` says what a host believes; neither
-is *"tell me when this is done"*.
+The fleet reports one thing about completion, and it is the thing it can see:
+a session **coming back to its own prompt after working**. The watcher raises
+`session.ready` on that transition, the host records when it last happened for
+the run of the session, and `fleet_await` returns on it. A session that never
+started working never comes back, so a wait on an idle session runs out the
+clock and says so, which is the right answer about a session nobody gave a
+job. This used to be the loop's dead end: a finished session does not *end*,
+so `fleet_await` waited out the clock and said "still running" about a job
+done twenty minutes earlier, and both beta testers named it as what stopped the
+product's own pitch from being achievable through the product.
 
-The first version of this document called that a missing fleet-side signal. It
-is not:
+What it does **not** report is whether the work was done well, or at all.
+"Back at its prompt" means it stopped working, not that it did what you asked.
+The first version of this document called the missing signal a fleet-side
+gap; the maintainer's answer still holds for the half that is a judgement:
 
 > you can have the MCP endpoint and documentation handed to the LLM telling it
 > to kill, telling it has a 15 minute timeout unless or whatever else
 
 **The thing driving the fleet is a model, and it can be told what it owns.** A
 deadline in prose that an agent can act on beats a callback that has to be
-built, and it is honest about who is deciding — because deciding a session is
-finished is a judgement, and the fleet was never going to be the one making it.
+built, and it is honest about who is deciding — the fleet says the session
+came back; whether that is *done* is read off the log, by the caller.
 
 So `initialize` returns `instructions`, which is the field MCP has for exactly
 this:
 
 ```
 WORK YOU START IS WORK YOU OWN.
-Sessions are expected to finish within about 15 minutes. Nothing in the fleet
-reports "done" — a finished session looks exactly like an idle one — so deciding
-it is over is your job, not something you will be told.
+Sessions are expected to finish within about 15 minutes. The fleet reports one
+thing: a session coming BACK TO ITS PROMPT after working. fleet_await returns
+on it. That means it stopped working, not that it did what you asked — deciding
+it is over is still your job, and the log is the evidence.
 
 GIVE A SESSION A PROFILE OR IT COMES UP IDLE. …
 
   1. fleet_start with a `profile`, naming a host or a tag …
-  2. fleet_await — returns when the session ends or errors … Do not poll.
+  2. fleet_await — returns when the session comes back to its prompt after
+     working, needs a person, ends or errors, or the wait runs out. Do not poll.
   3. fleet_read_log to collect what it produced — BEFORE stopping it …
   4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR …
 ```
