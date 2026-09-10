@@ -222,6 +222,17 @@ struct HostView: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.attention)
             }
+            if health?.version?.rootHalfBehind == true {
+                // ROOT'S HALF, in the same colour and for the same reason: a
+                // fact about this box that the fleet could only learn from a
+                // journal. What still works comes first, so it reads as one
+                // command and not a broken box; Check carries the command
+                // itself, with the real path, because the host knows it and
+                // this screen does not.
+                Text("The update helper on this box is older than the release it runs. Updates still land and the services restart, but nothing root owns is refreshed. Check shows the one command that fixes it, once.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
         }
         .padding(.vertical, Design.Space.hair)
     }
