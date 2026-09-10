@@ -289,3 +289,40 @@ test('the Worker sends through Email Sending, not the reply API', () => {
   assert.match(code, /binding\.send\(\{[^}]*\bto:[^}]*\bfrom\b[^}]*\bsubject:[^}]*\btext:/s,
     'not calling send() with the sending shape');
 });
+
+// --- the ceiling ------------------------------------------------------------
+
+test('a full invitation list refuses a new address and says what to do about it', () => {
+  // EVERY ROW LANDS IN ONE DURABLE OBJECT VALUE, and a value has a 128KiB
+  // limit past which `storage.put` throws and keeps throwing (#351). So this
+  // store has a ceiling like the other three, and a ceiling nothing reaches in
+  // a test is a ceiling nobody has checked — which is what the coverage
+  // ratchet caught about this one.
+  const invites = new Invites();
+  for (let i = 0; i < 200; i++) {
+    const r = invites.add(`person${i}@example.com`, { invitedBy: 'owner@example.com' });
+    assert.equal(r.ok, true, `refused at ${i}, which is below the ceiling`);
+  }
+
+  const refused = invites.add('one-too-many@example.com', { invitedBy: 'owner@example.com' });
+
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /200 invitations outstanding/);
+  assert.match(refused.message, /Remove the ones/, 'it states the limit without naming the way out');
+  assert.equal(invites.has('one-too-many@example.com'), false, 'refused and stored anyway');
+});
+
+test('a full list still lets an existing invitation be re-sent', () => {
+  // Re-inviting REPLACES a row rather than adding one, so the ceiling has
+  // nothing to protect against — and refusing there would answer "did that
+  // work?" with a fault about somebody else's row. The guard reads `!existing`
+  // for this reason; without the test it reads like an accident.
+  const invites = new Invites();
+  for (let i = 0; i < 200; i++) invites.add(`person${i}@example.com`, { invitedBy: 'owner@example.com' });
+
+  const again = invites.add('person7@example.com', { invitedBy: 'owner@example.com', note: 'nudged them' });
+
+  assert.equal(again.ok, true);
+  assert.match(again.message, /was already invited/);
+  assert.equal(again.invite?.note, 'nudged them');
+});
