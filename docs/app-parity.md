@@ -68,6 +68,24 @@ at once.
 > the shape of the diagnosis is what made the fix cheap: three problems wearing
 > one coat, priced separately. See "What actually shipped" at the end.
 
+> **Still true, and the numbers have moved, 2026-09-10.** Left as a second note
+> rather than an edit to the one above, because that one is dated: on 28 August
+> the protocol *was* `2` with thirteen verbs, and rewriting it to say otherwise
+> would make a record of that day into a claim that was never true on it.
+>
+> Today `PROTOCOL_VERSION` is **3** and there are **31** verbs. `login`/`code`
+> is no longer an exception: it shipped as `connect`/`link`/`unlink`, three
+> generic verbs over a table of providers, so adding a provider is a row in
+> `src/core/connectors.js` rather than a release. **Row three has moved too** —
+> a host's version and whether it is behind are in the health frame now, which
+> is what `unknown_verb` and `unsupported_version` use to tell you which of the
+> two you are looking at.
+>
+> What is left of the filesystem exception is exactly the apps: the five verbs
+> ship on coordinator, Worker, host and MCP, and neither phone has a screen for
+> them. That and the session detail screen are the two the roadmap still calls
+> **partial**.
+
 That is the design working, not a bug in it. But it means "add all the features
 to the app" is a protocol decision before it is an app decision, and pretending
 otherwise would produce five verbs designed one at a time.
