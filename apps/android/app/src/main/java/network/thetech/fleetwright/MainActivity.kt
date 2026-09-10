@@ -119,6 +119,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // A SCREENSHOT RUN STARTS ON THE DEMO, so the pictures show a fleet
+        // rather than an empty state with a Connect button. Debug builds only —
+        // see Screenshots.kt for why Android has to be stricter here than iOS.
+        //
+        // ONLY HERE, not in onNewIntent, which carries the same two lines
+        // below. Seeding is a launch-time act: doing it per Intent would
+        // rewrite somebody's coordinator and credential every time a
+        // notification opened the app.
+        if (Screenshots.seedIfAsked(intent, Settings(this))) {
+            Log.i("Fleetwright", "screenshots: seeded onto ${Demo.LABEL}")
+        }
+
         // The cold-start case: the app was not running when the browser
         // redirected, so the callback is the launch Intent rather than a new
         // one. Same delivery, and the flow filters anything that is not ours.

@@ -253,3 +253,23 @@ test('the cost travels as data, not as a number in a sentence', () => {
   const sidecar = readFileSync(new URL('../src/fleet/host/sidecar.js', import.meta.url), 'utf8');
   assert.match(sidecar, /\.\.\.\(r\.reboot \? \{ reboot: r\.reboot \} : \{\}\)/);
 });
+
+test('the screenshot seed cannot exist in a release build', () => {
+  // A SECURITY PROPERTY, pinned rather than trusted. Screenshots.kt seeds the
+  // app onto the demo fleet — a coordinator URL and a credential — from an
+  // Intent extra, and an Intent extra is not iOS's launch argument: `adb shell
+  // am start --ez` reaches it on any phone with USB debugging on, and so can
+  // any app permitted to start the activity.
+  //
+  // The gate is what makes that acceptable, so deleting the gate while leaving
+  // the seed must fail here rather than ship a release APK that takes its
+  // credential from whoever started it.
+  const src = androidSources();
+  assert.match(src, /object Screenshots/, 'Screenshots.kt is gone; delete this test with it');
+  const body = src.slice(src.indexOf('object Screenshots'));
+  assert.match(
+    body.slice(0, 1200),
+    /if \(!BuildConfig\.DEBUG\) return false/,
+    'the screenshot seed no longer refuses release builds before reading the Intent',
+  );
+});
