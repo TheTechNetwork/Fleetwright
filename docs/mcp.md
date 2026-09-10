@@ -269,11 +269,13 @@ certifies the bug.
 
 Anything reading a reply here goes through `sessionFrom()` now.
 
-**What `fleet_await` detects, precisely:** a session that has **ended or
-errored**. It does *not* reliably detect one parked on a prompt — `awaiting` is
-a host-watcher signal that raises an event, and is not a field on a status
-reply. If one arrives the code uses it; nothing promises it, and the tool
-description says back-at-its-prompt, needs-a-person, ended-or-errored, and no more.
+**What `fleet_await` detects, precisely:** a session that has **come back to
+its prompt after working** in this run (`readyAt` later than `createdAt`, both
+the host's clock, and `atRest` now), one that has **ended or errored**, and,
+when the reply carries `awaiting`, one that **needs a person**. That last one
+is a host-watcher signal that raises an event and is not promised on a status
+reply; if it arrives the code uses it. A host too old to send `readyAt` is
+waited on the way it always was, by ending or by running out the clock.
 
 ## Completion: reported once, judged by you
 
