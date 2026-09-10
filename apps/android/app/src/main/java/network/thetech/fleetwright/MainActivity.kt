@@ -206,6 +206,9 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
     var busy by remember { mutableStateOf(false) }
     /** The session whose workspace is open, if any. */
     var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
+    // The session whose sheet is open: the state sentence, the pane watched
+    // rather than glanced at, and the same actions with room around them.
+    var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
 
     /**
      * @param keepStatus keep whatever is already on screen if the list call
@@ -336,6 +339,17 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
             // machines with different contents in it.
             host = session.hostId,
             onDismiss = { browsing = null },
+        )
+    }
+
+    inspecting?.let { session ->
+        SessionSheet(
+            fleet = fleet,
+            initial = session,
+            onDismiss = { inspecting = null },
+            // The sheet's own actions reach the list, so a Stop moves the
+            // card as well as the sentence at the top of the sheet.
+            onChanged = { refresh(keepStatus = true) },
         )
     }
 
@@ -527,6 +541,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                             }
                         },
                         onFiles = { browsing = session },
+                        onInspect = { inspecting = session },
                         // Like Peek, and for the same reason: the output IS
                         // the answer, and a refresh a moment later would wipe
                         // it off the screen.
@@ -573,6 +588,8 @@ private fun SessionCard(
      */
     onOutput: () -> Unit,
     onOpen: (String) -> Unit,
+    /** The session's own sheet: the way to LOOK, where the card is the way to act. */
+    onInspect: () -> Unit,
 ) {
     var confirmingForget by remember { mutableStateOf(false) }
     if (confirmingForget) {
@@ -606,14 +623,28 @@ private fun SessionCard(
             // The title is what a person recognises; the name is the
             // identity everything else keys on, so both are shown when they
             // differ rather than hiding one.
-            Text(
-                session.label,
-                style = Design.Style.bodyStrong,
-                color = Design.Palette.ink.now,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.weight(1f))
+            //
+            // THE TITLE IS THE WAY IN. A session is a subject and has a sheet
+            // (SessionSheet): the pane, the state sentence, the same actions
+            // with room around them. The card keeps its controls so the list
+            // stays the place to answer and stop; the sheet is where to look.
+            // 48dp tall whatever the type size, because it is a target.
+            Row(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .clickable(onClick = onInspect),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    session.label,
+                    style = Design.Style.bodyStrong,
+                    color = Design.Palette.ink.now,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(" ›", style = Design.Style.bodyStrong, color = Design.Palette.inkDim.now)
+            }
             // Colour AND the word, never colour alone: the label is what
             // carries the meaning and the tint only reinforces it, which is
             // what "differentiate without colour" asks for and is also just
