@@ -74,21 +74,29 @@ after `-s --`, which is how `sh` is told the rest belongs to the script:
 curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check
 ```
 
-`/install` is a redirect to `install/bootstrap.sh` in this repository, served by
-the coordinator so the URL is short and the script has exactly one home. Read it
-before you run it; it is forty lines and it does three things — get git, clone,
-hand over.
+`/install` serves `install/bootstrap.sh` from this repository, through the
+coordinator so the URL is short and the script has exactly one home. Read it
+before you run it; it does four things — fetch the release manifest, fetch the
+tarball it names, check its sha256 before unpacking anything, hand over to the
+installer inside. A fresh box is packaged from its first minute and never needs
+git. `FLEETWRIGHT_CHANNEL=rolling` takes the tag every merge republishes
+instead of the latest release; `FLEETWRIGHT_MANIFEST=` names a manifest
+outright, for a fork or a mirror.
 
-The same thing by hand, which is all the one-liner does:
+The same thing by hand, from a checkout — which is also what `--from-source`
+asks the one-liner for, on a box somebody edits:
 
 ```sh
 git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
 sudo /opt/agent-fleet/install/install.sh
 
-sudo /opt/agent-fleet/install/uninstall.sh         # take this box out of the fleet
-sudo /opt/agent-fleet/install/uninstall.sh --purge # and remove /opt/agent-fleet
+sudo /opt/fleetwright/current/install/uninstall.sh         # take this box out of the fleet
+sudo /opt/fleetwright/current/install/uninstall.sh --purge # and remove the releases
 ```
+
+On a checkout install the last two live under `/opt/agent-fleet/install/`
+instead.
 
 ### Updating
 
