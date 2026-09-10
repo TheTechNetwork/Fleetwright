@@ -1058,6 +1058,17 @@ struct Fleet {
         /// there too, but the app has not been told which of the three will
         /// say anything, so it says that instead of guessing.
         let logs: [String]?
+        /// How many characters of house rules this box writes into every new
+        /// session as `~/.claude/CLAUDE.md`. A NUMBER, not a flag: rules are
+        /// read on every turn of every session, so the size is the cost and
+        /// the only fact a person deciding about them needs.
+        ///
+        /// Three states. A count is what every new session here gets. Zero is
+        /// a rules file that is on the box and NOT in use, which is a fault
+        /// somebody should see rather than silence. Nil is no file at all,
+        /// which is the normal case and also what a host too old to send this
+        /// looks like; the screen says nothing for it rather than guessing.
+        let houseRules: Int?
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -1112,7 +1123,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -1121,7 +1132,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -1134,7 +1145,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs,
+                sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
             )
         }
 
@@ -1149,7 +1160,7 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, labels: all, setLabels: set, logs: logs,
+                sandbox: sandbox, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
             )
         }
     }

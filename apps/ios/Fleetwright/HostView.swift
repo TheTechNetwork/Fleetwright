@@ -73,6 +73,10 @@ struct HostView: View {
     /// Which service journals this box can read. Nil until a host says, and
     /// rendered as a sentence then rather than as three guesses.
     @State private var logs: [String]?
+    /// What this box writes into every new session, in characters. See
+    /// HostHealth.houseRules for the three states; the screen draws two of
+    /// them and stays quiet for nil.
+    @State private var houseRules: Int?
     /// The label being typed. Cleared when it lands, whether or not it worked —
     /// a field still holding a name that was refused looks like it can be
     /// pressed again.
@@ -141,6 +145,8 @@ struct HostView: View {
             }
             .listRowBackground(Design.Palette.card)
 
+            houseRulesSection
+
             logsSection
 
             dangerSection
@@ -178,6 +184,7 @@ struct HostView: View {
             labels = initialHealth?.labels ?? []
             setLabels = initialHealth?.setLabels ?? []
             logs = initialHealth?.logs
+            houseRules = initialHealth?.houseRules
         }
     }
 
@@ -340,6 +347,40 @@ struct HostView: View {
             Text("Labels are how work is aimed: a session asked for with a tag lands on a host carrying it. The ones the machine works out about itself cannot be removed.")
         }
         .listRowBackground(Design.Palette.card)
+    }
+
+    /// WHAT THIS BOX PUTS INTO EVERY SESSION, and what it costs.
+    ///
+    /// A box can hold a file that becomes `~/.claude/CLAUDE.md` inside every
+    /// new session. Nothing about it crosses the wire and no screen can set
+    /// it (putting the file there needs a shell there), so all this can do is
+    /// report it: the size, because rules are read on every turn and the size
+    /// is the running cost; or that a file is there and not being used, which
+    /// is the one state worth attention.
+    ///
+    /// NIL DRAWS NOTHING. It is the normal case (no file) and also an older
+    /// host, and a line reading "no house rules" on every machine that has
+    /// never heard of them would be a line about a feature nobody is using.
+    /// The screen makes no claim rather than a wrong one.
+    @ViewBuilder private var houseRulesSection: some View {
+        if let houseRules {
+            Section {
+                if houseRules == 0 {
+                    Text("A rules file is on this box and is not being used. The box's /profiles says why.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.attention)
+                } else {
+                    Text("Every new session here starts with \(houseRules) characters of house rules, read on every turn.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+            } header: {
+                sectionHead("House rules")
+            } footer: {
+                Text("One file on the box, written into each new session as its CLAUDE.md. Changing it needs a shell there, and reaches the next session rather than a running one.")
+            }
+            .listRowBackground(Design.Palette.card)
+        }
     }
 
     /// THE JOURNAL, FROM THE PHONE. This is the half of "sign-in status and
@@ -645,6 +686,7 @@ struct HostView: View {
         if let now = mine.health?.labels { labels = now }
         if let now = mine.health?.setLabels { setLabels = now }
         if let now = mine.health?.logs { logs = now }
+        if let now = mine.health?.houseRules { houseRules = now }
     }
 
     private func sectionHead(_ text: String) -> some View {
