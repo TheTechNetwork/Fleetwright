@@ -76,7 +76,10 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
                     labels = (derived + set).distinct().sorted()
                     setLabels = set.sorted()
                 }
-                r.text
+                // Trimmed, because a journal that answers with padding would
+                // otherwise draw its card with a screenful of empty rows above
+                // and below the one line worth reading. See String.said.
+                r.text.said()
             } catch (e: Exception) {
                 e.message ?: "that did not work"
             }

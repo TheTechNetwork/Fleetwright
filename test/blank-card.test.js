@@ -52,15 +52,23 @@ test('the verb whose job is to bring text back says something when there is none
   // Trimming alone would trade an empty card for a button that does nothing
   // visible. Output is the one verb on the sessions screen that exists to
   // return text, so it is the one that needs a sentence for the empty case.
-  //
-  // ANDROID'S HALF OF THIS IS NOT ASSERTED HERE YET. It lands in the Android
-  // pull request, per CONTRIBUTING's one-per-layer rule, and brings the
-  // assertion that the two phones use the same sentence with it. Writing that
-  // assertion here would fail this app's own pull request for something the
-  // other app has not shipped.
   const swift = iosSources();
   assert.match(swift, /nothingSaid/, 'iOS has nowhere to put the sentence');
   assert.match(swift, /has printed nothing that this machine could read/);
+
+  const kotlin = androidSources();
+  assert.match(kotlin, /fun String\.said\(nothing: String = ""\)/, 'Android has nowhere to put the sentence');
+  assert.match(kotlin, /has printed nothing that this machine could read/,
+    'the two phones say the same thing here, or one of them is wrong');
+});
+
+test('Android says something when a peeked pane is blank too', () => {
+  // Android has a Peek button and iOS does not, so this one has no twin. It is
+  // the same rule: the pane IS the answer, and this screen deliberately does
+  // not refresh afterwards — so a blank pane that set nothing would leave
+  // whatever the last command said sitting there as if it were the reply.
+  const kotlin = androidSources();
+  assert.match(kotlin, /Nothing is on \$\{session\.label\}'s screen right now\./);
 });
 
 test('Android keeps the blank test it already had', () => {

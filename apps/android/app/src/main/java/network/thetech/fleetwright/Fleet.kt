@@ -356,6 +356,20 @@ class Fleet(
 
     data class Reply(
         val ok: Boolean,
+        /**
+         * WHAT THE HOST SAID, WHICH MAY BE NOTHING BUT WHITESPACE.
+         *
+         * `tmux capture-pane` returns every row of the visible region, so a
+         * session that has printed nothing answers Output with forty newlines
+         * rather than with the empty string. Screens here have always gated
+         * their cards on `isNotBlank()`, so this app drew nothing rather than
+         * drawing an empty card the height of the screen — which is better and
+         * still not right: a button that reports nothing when it is pressed is
+         * a button somebody presses again.
+         *
+         * Read it through [said], which takes the padding off and offers a
+         * sentence for the case where there was never anything else.
+         */
         val text: String,
         val sessions: List<Session>,
         /**
@@ -1683,3 +1697,16 @@ class Settings(context: Context) {
         const val KEY_ALIAS = "fleetwright.credential"
     }
 }
+
+/**
+ * What the host said, with the terminal's padding off — or [nothing] when it
+ * said nothing at all.
+ *
+ * The host stopped sending a pane of empty rows in its own change. This is
+ * here because a phone in somebody's pocket talks to whatever host that fleet
+ * is running, which is not always the newest one, and because trimming alone
+ * would leave the opposite problem: a button that does nothing visible when it
+ * is pressed. iOS spells the same rule `String.isBlank` and a `nothingSaid`
+ * argument; Kotlin already has `ifEmpty`, so this is the whole of it.
+ */
+fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
