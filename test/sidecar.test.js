@@ -708,11 +708,17 @@ test('the frame carries what a box runs and what its disk holds, side by side', 
   // phone with both can say the box is waiting on a restart, which is the
   // sentence a fleet needed and did not have.
   const { sidecar } = await setup(t, {}, {
-    version: () => ({ head: 'main-88', branch: null, installed: 'main-102' }),
+    version: () => ({ head: 'main-88', branch: null, installed: 'main-102', helper: 'stale' }),
   });
   const r = await sidecar.handle(intent({ verb: 'health' }));
   assert.equal(r.health.version.head, 'main-88');
   assert.equal(r.health.version.installed, 'main-102');
+  // AND WHETHER ROOT'S HALF IS THIS RELEASE'S. The third thing a fleet could
+  // not see from a phone: a box whose update helper the installer never
+  // refreshed takes every update and refreshes nothing root owns, and said so
+  // only in a journal. Carried beside `installed` because it is the same
+  // family of fact — what this box would run, and what root would do about it.
+  assert.equal(r.health.version.helper, 'stale');
 });
 
 test('a host with no hub config cannot say whether it has house rules', async (t) => {

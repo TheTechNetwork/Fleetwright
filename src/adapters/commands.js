@@ -88,7 +88,7 @@ import { readLabels, addLabel, removeLabel, describeLabels } from '../core/label
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
-import { migrationReply, migrationState, healAfterRelease } from '../core/migrate.js';
+import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
@@ -1651,6 +1651,7 @@ export const COMMANDS = {
       let app;
       if (status.packaged) {
         const r = await checkRelease(ctx.cfg);
+        const helper = helperState({ installRoot: ctx.cfg.installDir });
         app = {
           kind: 'release',
           // TRI-STATE, AND NULL IS A REAL VALUE. `Boolean(r.available)` reports
@@ -1685,7 +1686,14 @@ export const COMMANDS = {
           // tell them apart. Dropping this here is what let a box that had
           // never successfully checked render as "up to date".
           configured: r.configured,
-          text: r.message,
+          // ROOT'S HALF, beside the release check it belongs to. A box whose
+          // helper the installer never refreshed takes every update and
+          // refreshes nothing root owns, and a Check that said "up to date"
+          // over that was the same sentence this verb was rewritten to stop
+          // saying. Compared against the tree this hub runs, without root;
+          // null is cannot tell and adds nothing to the text.
+          helper,
+          text: [r.message, describeHelper(helper, ctx.cfg.installDir)].filter(Boolean).join('\n\n'),
         };
       } else if (status.ok && ctx.cfg.releaseManifest && migrationState(ctx.cfg, status, await checkRelease(ctx.cfg)).can) {
         // A CHECKOUT THAT COULD STOP BEING ONE. Counting commits here while

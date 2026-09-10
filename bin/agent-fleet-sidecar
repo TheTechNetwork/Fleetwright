@@ -15,6 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { autoLabels } from '../src/fleet/host/auto-labels.js';
 import { updateStatus } from '../src/core/update.js';
 import { installedVersion, currentVersion } from '../src/core/release-apply.js';
+import { helperState } from '../src/core/migrate.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
@@ -199,7 +200,15 @@ const sidecar = new Sidecar({
         // draw the gap, because "up to date" about a service running an old
         // release out of a box whose disk holds a newer one was the exact
         // sentence a fleet showed for fourteen releases.
-        return v === 'unknown' ? null : { head: v, branch: null, installed: currentVersion(hub.installDir) };
+        // AND WHETHER ROOT'S HALF IS THIS RELEASE'S. The helper is what every
+        // update runs as root and the installer is the only thing that writes
+        // it; a box whose helper the installer never refreshed restarts its
+        // services on every update and refreshes nothing else, and the only
+        // place that said so was the hub's journal. Compared against the
+        // tree this sidecar runs, for the reason helperState gives.
+        return v === 'unknown'
+          ? null
+          : { head: v, branch: null, installed: currentVersion(hub.installDir), helper: helperState({ installRoot: hub.installDir }) };
       }
       return null;
     },

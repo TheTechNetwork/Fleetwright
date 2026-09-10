@@ -18,7 +18,8 @@
 // would then refuse.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { requestRestart } from './restart-watch.js';
 
 export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
@@ -171,6 +172,87 @@ export function migrationReply(cfg, status, release, { apply = false, check = fa
  */
 export function ranInstaller(out) {
   return /running the installer/.test(out);
+}
+
+/**
+ * Whether root's half of this box is the release's, read without root.
+ *
+ * THE FACT A JOURNAL HELD AND A PHONE DID NOT. The helper is what every update
+ * runs as root, and the installer is the only thing that writes it — so a
+ * helper that the installer never refreshed is a box whose updates restart
+ * the services and refresh nothing root owns, and the only place that said
+ * so was a warning in agent-hub's journal, on a box whose owner does not
+ * want to open a shell to read it. This is the same fact as a value the
+ * health frame can carry.
+ *
+ * COMPARED, NOT VERSIONED. The helper carries no version of its own, and
+ * inventing one would be a number to keep in step with a file. The release
+ * ships its copy under install/, the installer writes exactly that copy, and
+ * after a heal that ran the two are the same bytes. Different bytes is a
+ * heal that did not run the installer, on this release or an earlier one.
+ *
+ * Against the tree THIS PROCESS runs, not `current`: between an update's
+ * symlink swap and the heal that follows, `current` is newer than the helper
+ * for a few seconds, and a frame in that window would call a healthy box
+ * stale. The running tree's copy is what the last heal that restarted this
+ * process installed, so a mismatch there is a heal that did not.
+ *
+ * Three answers, and null is CANNOT TELL: no helper on the box, or a tree
+ * with no copy to compare against, which is a checkout or a very old release.
+ * Neither is "stale".
+ *
+ * @param {{ installRoot: string, bin?: string, read?: (p: string) => Buffer }} opts
+ * @returns {'current'|'stale'|null}
+ */
+export function helperState({ installRoot, bin = MIGRATE_BIN, read = (p) => readFileSync(p) }) {
+  let installed;
+  let shipped;
+  try {
+    installed = read(bin);
+  } catch {
+    return null;
+  }
+  try {
+    shipped = read(path.join(installRoot, 'install', 'fleetwright-migrate'));
+  } catch {
+    return null;
+  }
+  return installed.equals(shipped) ? 'current' : 'stale';
+}
+
+/**
+ * The one command, for the one time it is needed.
+ *
+ * Root-owned, 0755, written from the release's own copy: the same call the
+ * installer makes, so the box ends up exactly where a heal would have left
+ * it. Said with the real path rather than `<install dir>`, because the person
+ * reading this is holding a phone and is going to type it once.
+ *
+ * @param {string} installRoot  the tree whose copy of the helper to install
+ */
+export function helperRefreshCommand(installRoot) {
+  return `sudo install -m 0755 -o root -g root ${path.join(installRoot, 'install', 'fleetwright-migrate')} ${MIGRATE_BIN}`;
+}
+
+/**
+ * The sentence a screen shows for a stale helper, or null when there is
+ * nothing to say.
+ *
+ * Says what it costs — updates still land and the services still restart,
+ * because the marker does not depend on the helper — before it says what to
+ * type, so that the reader knows this is one command and not a broken box.
+ *
+ * @param {'current'|'stale'|null|undefined} state
+ * @param {string} installRoot
+ * @returns {string|null}
+ */
+export function describeHelper(state, installRoot) {
+  if (state !== 'stale') return null;
+  return (
+    'The update helper on this box is older than the release it runs, so an update restarts the services ' +
+    'and refreshes nothing root owns: the units, the hook and the sudoers rules stay as an earlier installer ' +
+    `left them. One shell command puts it right, once — every update after it keeps it current:\n${helperRefreshCommand(installRoot)}`
+  );
 }
 
 /**
