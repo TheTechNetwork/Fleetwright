@@ -242,6 +242,18 @@ name. There is no verb that sets them; putting the file on a box needs a shell
 on that box, which is the same bound `profile` has and one fewer thing than
 `profile` needs.
 
+**Health says what a box runs and what its disk holds, as two versions.**
+`version.head` is what the service sending the frame is running — from inside
+a process the install root resolves through `current` to the real directory,
+so a sidecar that was never restarted keeps reporting the release it started
+on. `version.installed` is what `current` points at: what the box would run
+after a restart. A phone draws the difference as `main-102 installed, restart
+waiting`, and draws it *before* anything about downloads, because "up to
+date" used to be decided by what was left to fetch — which was nothing, about
+a service fourteen releases behind its own disk. `installed` is absent on a
+checkout, which has no second answer, and on a host too old to send it; a
+phone with only `head` says what it always said.
+
 **`reboot` keeps all three of the chat flow's confirmations, unchanged.** Sending
 it bare is step one: the host says what will be lost — every running session, by
 name — and issues a six-digit pin. Sending it again with the pin *and* the
