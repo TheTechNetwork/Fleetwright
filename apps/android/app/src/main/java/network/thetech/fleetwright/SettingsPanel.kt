@@ -1148,6 +1148,12 @@ private fun describeRunning(host: Fleet.FleetHost): String {
         !host.appStatusKnown -> parts.add("update status unknown")
         host.version != null -> parts.add("up to date")
     }
+    // BESIDE THE BRANCH ABOVE, NOT INSTEAD OF IT. A box can be up to date on
+    // what it downloads and runs, and still be taking every update with a
+    // helper the installer never refreshed, so nothing root owns follows the
+    // release. Both are true at once and the row says both. Same words as
+    // iOS, held equal by test/root-half-shown.test.js.
+    if (host.rootHalfBehind) parts.add("update helper out of date")
     host.channel?.takeIf { it.isNotBlank() }?.let {
         // Pinned is worth a word, because it is why the picker is missing.
         parts.add(if (host.channelPinned) "$it, set on the box" else it)
