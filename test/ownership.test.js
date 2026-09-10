@@ -62,6 +62,110 @@ test('a member’s fleet snapshot does not carry other people’s sessions', () 
   assert.equal(seen.sessions.some((s) => s.name === 'nobodys'), false);
 });
 
+/**
+ * A fan-out of one host, answering `list` the way a real one does: with the
+ * records AND with the listing a person reads. `send` is the seam — the
+ * registry hands it the intent, and the reply comes back through the same
+ * door a socket would use.
+ *
+ * @param {CoordinatorCore} core
+ */
+function answerList(core, hostId = 'box') {
+  // Exactly what agent-hub's /list renders, glyphs and all — see
+  // src/adapters/commands.js. The point of the test is that this prose never
+  // reaches somebody it is not about.
+  const text = [
+    '2/4 running on box',
+    '',
+    '▶ theirs · the admin’s work',
+    '   started 3m ago · fleet:admin@example.com',
+    '   https://rc.example.com/theirs',
+    '▶ mine · my work',
+    '   started 1m ago · fleet:member@example.com',
+  ].join('\n');
+  core.registry.connect(hostId, (/** @type {any} */ intent) => {
+    queueMicrotask(() =>
+      core.onHostMessage(hostId, {
+        kind: 'reply',
+        id: intent.id,
+        ok: true,
+        text,
+        sessions: [
+          { name: 'theirs', status: 'running', title: 'the admin’s work', createdBy: 'fleet:admin@example.com', rcUrl: 'https://rc.example.com/theirs' },
+          { name: 'mine', status: 'running', title: 'my work', createdBy: 'fleet:member@example.com', rcUrl: 'https://rc.example.com/mine' },
+        ],
+      }),
+    );
+  });
+  core.registry.recordHealth(hostId, { hostId, running: 2, sessions: [] });
+  return text;
+}
+
+test('the listing a member reads is not the one the host wrote', async () => {
+  // The filter on `list` removed other people's sessions from `sessions` and
+  // left them in `text` — the SAME FACTS, rendered by the host for a person.
+  // The apps draw the records, so they were right; the MCP server renders
+  // `text`, because that is what an agent reads, so `fleet_list` handed every
+  // member the whole fleet: names, titles, who started them, and a live
+  // Remote Control URL into anything running.
+  const core = new CoordinatorCore({ log: quiet });
+  const hostWrote = answerList(core);
+
+  const seen = await core.dispatch({ verb: 'list', params: {}, requester: MEMBER });
+  assert.deepEqual((seen.sessions || []).map((/** @type {any} */ s) => s.name), ['mine']);
+  for (const rendered of [String(seen.text), String(seen.hosts[0].text)]) {
+    assert.equal(rendered.includes('theirs'), false, 'somebody else’s session is named');
+    assert.equal(rendered.includes('admin@example.com'), false, 'and attributed');
+    assert.equal(rendered.includes('rc.example.com/theirs'), false, 'with a live link into it');
+    // Their OWN work survives — a filter that renders nothing is a filter
+    // nobody can tell from a broken fleet.
+    assert.match(rendered, /mine/);
+  }
+
+  // And it says whose absence it is describing. "No sessions" would be a claim
+  // about the box; this is a claim about the caller, which is the only one
+  // that is true.
+  const stranger = await core.dispatch({
+    verb: 'list',
+    params: {},
+    requester: { email: 'nobody@example.com', admin: false },
+  });
+  assert.match(String(stranger.text), /nothing of yours/);
+  assert.equal(String(stranger.text).includes('mine'), false);
+
+  // The admin and the break-glass token still read the host's own words.
+  const asAdmin = await core.dispatch({ verb: 'list', params: {}, requester: ADMIN });
+  assert.equal(String(asAdmin.text), `box: ${hostWrote}`);
+  assert.equal(String((await core.dispatch({ verb: 'list', params: {} })).text), `box: ${hostWrote}`);
+});
+
+test('a host that refused keeps its reason, and the other fan-outs keep their words', async () => {
+  // The rewrite is scoped to replies that carried sessions. A refusal has none
+  // — and answering "nothing of yours" to a box that never answered would be
+  // the failure this file exists to stop, pointed the other way: a fleet that
+  // looks empty instead of broken.
+  const core = new CoordinatorCore({ log: quiet });
+  core.registry.connect('box', (/** @type {any} */ intent) => {
+    queueMicrotask(() =>
+      core.onHostMessage('box', {
+        kind: 'reply',
+        id: intent.id,
+        ok: false,
+        error: { code: 'hub_unreachable' },
+        text: 'the session manager is not answering on this box',
+      }),
+    );
+  });
+  core.registry.recordHealth('box', { hostId: 'box', running: 0, sessions: [] });
+
+  const refused = await core.dispatch({ verb: 'list', params: {}, requester: MEMBER });
+  assert.match(String(refused.text), /session manager is not answering/);
+
+  // `profiles` fans out too, and carries no sessions at all.
+  const profiles = await core.dispatch({ verb: 'profiles', params: {}, requester: MEMBER });
+  assert.match(String(profiles.text), /session manager is not answering/);
+});
+
 test('topology is not filtered, because a member needs the host picker', () => {
   const core = fleet();
   const host = core.snapshot(MEMBER).hosts[0];
