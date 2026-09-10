@@ -10,15 +10,26 @@ If a step here stops being true, this page is the bug.
 ## On the box
 
 ```sh
-git clone https://github.com/TheTechNetwork/Fleetwright && cd Fleetwright
-sudo bash install/install.sh --check     # changes nothing; prints what it would do
-sudo sh install/prereq.sh                # only if --check said node is too old
-sudo bash install/install.sh             # installs tmux, podman, the CLI, the services
+curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check   # changes nothing; prints what it would do
+curl -fsSL https://fleet.thetech.network/prereq  | sudo sh                # only if --check said node is too old
+curl -fsSL https://fleet.thetech.network/install | sudo sh                # installs tmux, podman, the CLI, the services
 ```
 
-**Use `bash`, not `sh`, for the installer.** It says so if you get it wrong.
-The prerequisite line is separate on purpose — node is the one thing the
-installer refuses to install for you, and it refuses *before* changing
+The URL is the fleet the box will join; yours goes in its place if you run
+your own coordinator. The one-liner fetches the current release, checks it
+against its manifest, and runs the installer inside it, so a fresh box needs no
+git and is packaged from its first minute. From a checkout instead, for a box
+you mean to edit:
+
+```sh
+git clone https://github.com/TheTechNetwork/Fleetwright && cd Fleetwright
+sudo bash install/install.sh --check
+sudo bash install/install.sh
+```
+
+**Use `bash`, not `sh`, for the installer run by hand.** It says so if you get
+it wrong. The prerequisite line is separate on purpose — node is the one thing
+the installer refuses to install for you, and it refuses *before* changing
 anything, naming this command.
 
 ## Join it to a coordinator
