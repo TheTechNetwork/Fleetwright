@@ -86,6 +86,22 @@
     </activity>
 
     <!--
+      A BUTTON ON A NOTIFICATION, PRESSED, and it must not open the app.
+
+      A receiver rather than an activity is the whole point: answering a session
+      from a lock screen and being dropped into a session list is not answering
+      it from a lock screen, it is opening the app with an extra step in front.
+
+      NOT EXPORTED. The only thing that starts it is a PendingIntent this app
+      built, and the extras it carries are a session name, a prompt id and the
+      digit to type — which together are an answer. An exported receiver would
+      let any app on the phone send one.
+    -->
+    <receiver
+        android:name=".AnswerReceiver"
+        android:exported="false" />
+
+    <!--
       Registered so FCM can hand over a rotated token. Without it the app finds
       out about a new token only on the next launch, and until then the
       coordinator is sending to a token nothing will deliver.
