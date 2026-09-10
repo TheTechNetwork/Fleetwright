@@ -1947,7 +1947,13 @@ private func describeRunning(_ host: Fleet.FleetHost) -> String {
     var parts: [String] = []
     if let head = host.health?.version?.head, !head.isEmpty { parts.append(head) }
     let behind = host.health?.updates?.appBehind ?? 0
-    if behind > 0 {
+    if let waiting = host.health?.version?.restartWaitingFor {
+        // FIRST, because it is the one thing on this line somebody can act on
+        // right now, and because every branch below it is about downloads.
+        // A box can have nothing left to fetch and still be running an old
+        // release: the fleet said "main-88 · up to date" about exactly that.
+        parts.append("\(waiting) installed, restart waiting")
+    } else if behind > 0 {
         parts.append("\(behind) commit\(behind == 1 ? "" : "s") behind")
     } else if let waiting = host.health?.updates?.release?.available {
         parts.append("\(waiting) waiting")

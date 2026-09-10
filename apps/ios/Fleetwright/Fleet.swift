@@ -915,8 +915,26 @@ struct Fleet {
             let org: String?
         }
         struct Version: Codable, Hashable {
+            /// What the service sending this frame is RUNNING.
             let head: String?
             let branch: String?
+            /// What the box's disk holds, on a packaged box: the release
+            /// `current` points at, which is what the service would run after
+            /// a restart. Nil on a checkout and on a host too old to say.
+            ///
+            /// When this differs from `head` the box is waiting on a restart
+            /// and nothing else, and that is a state of its own. It used to
+            /// read as "up to date", because "up to date" was measuring what
+            /// was left to download, which was nothing, about a service
+            /// fourteen releases behind its own disk.
+            let installed: String?
+
+            /// The release on disk that this service is not yet running, or
+            /// nil when there is no gap or no way to know.
+            var restartWaitingFor: String? {
+                guard let installed, !installed.isEmpty, let head, !head.isEmpty, installed != head else { return nil }
+                return installed
+            }
         }
         struct Updates: Codable, Hashable {
             let appBehind: Int?
