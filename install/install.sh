@@ -1254,11 +1254,26 @@ fi
 
 # THE MIGRATION HELPER, and the grant that lets the app use it.
 #
-# Only on a checkout: a box that is already packaged has nothing to migrate to,
-# and a rule nobody needs is a rule nobody reviews. `install -o root -g root`
+# ON A PACKAGED BOX TOO. This said "only on a checkout: a box that is already
+# packaged has nothing to migrate to", and that was true while converting a
+# checkout was the helper's only job. Since root's half of an update started
+# following the release, the helper is the ONE root step every update has —
+# and a copy that is only ever written on a checkout is a copy that stays
+# whatever it was the day the box converted.
+#
+# A box found out. Its helper predated the heal: on a box already at the
+# manifest's version it said "nothing to do" and exited 0, so the hub logged
+# that the installer had run with --repair, restarted itself, and left the
+# sidecar on the tree it started from. Nothing could refresh that helper,
+# because refreshing it is a thing THIS script does and the stale helper was
+# the one thing on the box that would not run this script.
+#
+# Not on --check, which promises to change nothing. `install -o root -g root`
 # rather than a copy, because the mode and the owner are the security property
-# — see write_migrate_sudoers.
-if [ "$PACKAGED" = 0 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
+# — see write_migrate_sudoers. And GNU install unlinks before it writes, so a
+# helper that is running this installer keeps reading the file it started
+# from rather than the one that replaces it.
+if [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
   install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
   ok "installed /usr/local/sbin/fleetwright-migrate"
   if write_migrate_sudoers; then

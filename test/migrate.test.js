@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { migrationState, migrationReply, migrate, healAfterRelease, MIGRATE_BIN } from '../src/core/migrate.js';
+import { migrationState, migrationReply, migrate, healAfterRelease, ranInstaller, MIGRATE_BIN } from '../src/core/migrate.js';
 
 const cfg = /** @type {any} */ ({ releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json' });
 const READY = { available: 'v0.2.3', configured: true };
@@ -190,7 +190,7 @@ test('after a release applies, root refreshes its half — after the reply has l
   const heal = healAfterRelease({
     exists: () => true,
     after: (fn) => { deferred.push(fn); },
-    run: (cmd, args) => { calls.push(`${cmd} ${args.join(' ')}`); return { status: 0, stdout: 'ok', stderr: '' }; },
+    run: (cmd, args) => { calls.push(`${cmd} ${args.join(' ')}`); return { status: 0, stdout: 'running the installer from the verified release, with --repair', stderr: '' }; },
     restart: () => { restarted++; },
     mark: () => true,
     logger: { info() {}, warn() {} },
@@ -256,7 +256,7 @@ test('a successful heal also leaves the marker, written before the installer res
     exists: () => true,
     after: (fn) => fn(),
     mark: () => { order.push('mark'); return true; },
-    run: () => { order.push('helper'); return { status: 0, stdout: 'ok', stderr: '' }; },
+    run: () => { order.push('helper'); return { status: 0, stdout: 'running the installer from the verified release, with --repair', stderr: '' }; },
     restart: () => { order.push('exit'); },
     logger: { info() {}, warn() {} },
   });
@@ -268,4 +268,51 @@ test('with no helper installed the update says what was not refreshed, and how t
   assert.equal(heal.scheduled, false);
   assert.match(heal.text, /--upgrade/);
   assert.match(heal.text, /not refreshed/);
+});
+
+test('a helper that exits 0 without running the installer is not called a success', () => {
+  // THE BOX THIS PINS ran main-103 under `current`, with a hub that had
+  // restarted at 04:14 and a sidecar that had not, and the journal said
+  //
+  //   update: the release’s installer ran with --repair; restarting to apply new code
+  //
+  // on every heal since the day before. Run by hand, the helper printed
+  // "already on the packaged layout, running main-103 — nothing to do" and
+  // exited 0: it was the helper from before the heal existed, which exits
+  // there, and the hub took its exit code as the installer having run.
+  /** @type {string[]} */
+  const warned = [];
+  /** @type {string[]} */
+  const told = [];
+  /** @type {string[]} */
+  const order = [];
+  healAfterRelease({
+    exists: () => true,
+    after: (fn) => fn(),
+    mark: () => { order.push('mark'); return true; },
+    run: () => {
+      order.push('helper');
+      return { status: 0, stdout: 'fetching https://example/rolling/manifest.json\nalready on the packaged layout, running main-103 — nothing to do\n', stderr: '' };
+    },
+    restart: () => { order.push('exit'); },
+    logger: { info: (/** @type {string} */ m) => told.push(m), warn: (/** @type {string} */ m) => warned.push(m) },
+  });
+
+  assert.deepEqual(told, [], 'exit 0 was reported as the installer having run');
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /without running the release.s installer/);
+  // WHAT TO DO, because the helper cannot refresh itself and nothing else on
+  // the box will: the one command, naming the release's own copy.
+  assert.match(warned[0], /sudo install -m 0755 -o root -g root .*install\/fleetwright-migrate \/usr\/local\/sbin\/fleetwright-migrate/);
+  assert.match(warned[0], /nothing to do/, 'the helper’s own last words are in the log');
+  // And the box still moves: the marker went down first, so the sidecar
+  // restarts on its own, and the hub restarts itself as it always did.
+  assert.deepEqual(order, ['mark', 'helper', 'exit']);
+});
+
+test('the installer having run is read from the helper’s own words, on both of its routes', () => {
+  assert.equal(ranInstaller('sha256 ok\nrunning the installer from the verified release, with --repair\n'), true);
+  assert.equal(ranInstaller('sha256 ok\nrunning the installer from the verified release\n'), true, 'the bring-forward route');
+  assert.equal(ranInstaller('already on the packaged layout, running main-103 — nothing to do\n'), false);
+  assert.equal(ranInstaller(''), false, 'silence is not evidence');
 });

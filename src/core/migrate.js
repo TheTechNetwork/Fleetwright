@@ -156,6 +156,24 @@ export function migrationReply(cfg, status, release, { apply = false, check = fa
 }
 
 /**
+ * Whether the helper's output says an installer ran, which is the only thing
+ * that makes exit 0 mean what the heal claims it means.
+ *
+ * Both of the helper's routes announce the installer before they run it —
+ * "running the installer from the verified release, with --repair" on a box
+ * already at the manifest's version, and "running the installer from the
+ * verified release" on one being brought forward — and the words are the
+ * helper's own, from install/fleetwright-migrate. A helper that says neither
+ * and exits 0 is one from before those words existed, and it did nothing.
+ *
+ * @param {string} out  the helper's stdout and stderr, together
+ * @returns {boolean}
+ */
+export function ranInstaller(out) {
+  return /running the installer/.test(out);
+}
+
+/**
  * After a release has been applied unprivileged, have root refresh its half.
  *
  * applyRelease fetches, verifies, unpacks and swaps `current` as the service
@@ -221,13 +239,30 @@ export function healAfterRelease({
     // a newer tree than the one it started from.
     mark({ head: head ?? undefined, actor: actor ?? undefined, stateDir: stateDir ?? undefined });
     const r = run('sudo', ['-n', MIGRATE_BIN], { encoding: 'utf8', timeout: 20 * 60_000 });
-    if (r.status === 0) {
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    const tail = out.trim().split('\n').slice(-6).join('\n');
+    if (r.status === 0 && ranInstaller(out)) {
       // The installer restarted the services on its way out, this one
       // included — reaching here means it did not, so do it ourselves.
       logger.info('update: the release\u2019s installer ran with --repair; restarting to apply new code');
+    } else if (r.status === 0) {
+      // EXIT 0 IS NOT THE INSTALLER HAVING RUN, and this used to be the branch
+      // above. A box's helper printed "already on the packaged layout, running
+      // main-103 — nothing to do" and exited 0, because it was the helper from
+      // before the heal existed. This logged that the installer had run with
+      // --repair, restarted the hub, and left the sidecar on the tree it
+      // started from, saying so on every frame. Nothing refreshes that helper
+      // except the installer, and the stale helper is the one thing on the box
+      // that will not run the installer — so it is named here, with the one
+      // command that ends it. The marker above still restarts the services.
+      logger.warn(
+        `update: ${MIGRATE_BIN} exited 0 without running the release\u2019s installer, so nothing root owns ` +
+          'was refreshed. The helper on this box is older than the release. Refresh it once, from the release: ' +
+          `sudo install -m 0755 -o root -g root <install dir>/current/install/fleetwright-migrate ${MIGRATE_BIN} ` +
+          `\u2014 the services still restart from the marker.\n${tail}`,
+      );
     } else {
-      const out = `${r.stdout || ''}${r.stderr || ''}`.trim().split('\n').slice(-6).join('\n');
-      logger.warn(`update: could not refresh what the installer generates (sudo exited ${r.status}) — restarting anyway\n${out}`);
+      logger.warn(`update: could not refresh what the installer generates (sudo exited ${r.status}) — restarting anyway\n${tail}`);
     }
     restart();
   });
