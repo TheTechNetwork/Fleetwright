@@ -8,28 +8,172 @@
 #
 #   curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check
 #
-# ALL THIS DOES IS FETCH. It gets git if the box has none, puts the repository
-# somewhere permanent, and hands over to install/install.sh, which is the real
-# installer and has not changed. Keeping the two apart is the point: this file
-# is what an unknown shell executes sight-unseen, so it stays small enough to
-# read in one screen and boring enough to be sure about.
+# ALL THIS DOES IS FETCH. It gets a release — the manifest, then the tarball
+# the manifest names, checked against the sha256 the manifest carries — unpacks
+# it somewhere temporary, and hands over to the install/install.sh inside it,
+# which is the real installer and lays the release out under /opt/fleetwright
+# exactly as it does for a migration. Keeping the two apart is the point: this
+# file is what an unknown shell executes sight-unseen, so it stays small enough
+# to read in one screen and boring enough to be sure about.
+#
+# A CHECKOUT IS NO LONGER WHAT A FRESH BOX GETS. It used to be: this cloned the
+# repository — it had to, because install.sh lived in it — so every install by
+# the documented command produced a git working tree, and the installer's last
+# act was to offer to convert it into the packaged layout it could have started
+# in. That cost every box git, a clone of the whole monorepo, and a tree the
+# service user could write and therefore drift. A release is a tarball with a
+# checksum, and a fresh box can start from one. Three things still get the
+# checkout: `--from-source`, which is for a box somebody EDITS; a box that
+# already has one at $DIR, which is kept the shape it was; and a repository
+# that is not on GitHub, where there is no release address to derive and a
+# guess would be a 404 blamed on the installer.
 #
 # POSIX sh, deliberately. `curl | sh` runs under whatever /bin/sh is — dash on
 # Debian — and the real installer is bash: it uses `set -o pipefail`, `local`
 # and `printf -v`, none of which dash has. Written as bash and piped to sh, it
 # fails on line 16 with "Bad substitution" and no clue as to why. So the piece
-# that gets piped is sh, and it `exec`s the other under bash.
+# that gets piped is sh, and it runs the other under bash.
 set -eu
 
 REPO="${FLEETWRIGHT_REPO:-https://github.com/TheTechNetwork/Fleetwright}"
 REF="${FLEETWRIGHT_REF:-main}"
 DIR="${FLEETWRIGHT_DIR:-/opt/agent-fleet}"
+# Where a release goes. The same default install.sh has, so the two agree
+# without either reading the other.
+BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+# WHICH RELEASE. `stable` is the latest GitHub release; `rolling` is the tag
+# that every merge to main republishes. The manifest is the only address a box
+# ever has to know — src/core/release.js derives everything else from it — so
+# it can also be given outright, for a mirror or a fork on another host.
+CHANNEL="${FLEETWRIGHT_CHANNEL:-stable}"
+MANIFEST="${FLEETWRIGHT_MANIFEST:-}"
 
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
 say "Fleetwright"
+
+# --- which way in -------------------------------------------------------------
+#
+# Decided before anything is touched, because the two routes check different
+# things and refuse in different words.
+SOURCE=0
+for arg in "$@"; do [ "$arg" = "--from-source" ] && SOURCE=1; done
+# A box that has a checkout keeps it. Laying a release beside a checkout that
+# is still what the units point at would be two installs arguing about one
+# box; the installer's own conversion offer is the way from one to the other.
+[ -d "$DIR/.git" ] && SOURCE=1
+
+if [ "$SOURCE" = 0 ] && [ -z "$MANIFEST" ]; then
+  case "$REPO" in
+    https://github.com/*)
+      slug="${REPO#https://github.com/}"
+      slug="${slug%.git}"
+      slug="${slug%/}"
+      case "$CHANNEL" in
+        rolling) MANIFEST="https://github.com/$slug/releases/download/rolling/manifest.json" ;;
+        *)       MANIFEST="https://github.com/$slug/releases/latest/download/manifest.json" ;;
+      esac ;;
+    *)
+      # Not guessed at. A release path invented inside somebody else's server
+      # is a 404 on the first fetch, blamed on the installer.
+      say "No release address for $REPO — fetching the repository instead"
+      SOURCE=1 ;;
+  esac
+fi
+
+# --- a release ----------------------------------------------------------------
+if [ "$SOURCE" = 0 ]; then
+  # Being ROOT is not the requirement; being able to write BASE is. The real
+  # installer asks for root when it wants root — it writes /etc and systemd
+  # units — and says so in its own words.
+  TARGET="$BASE"
+  [ -e "$TARGET" ] || TARGET="$(dirname "$BASE")"
+  [ -w "$TARGET" ] || die "cannot write $TARGET.
+       For the default location that means:
+           curl -fsSL https://fleet.thetech.network/install | sudo sh
+       Or keep a checkout somewhere you own instead:
+           curl -fsSL https://fleet.thetech.network/install | FLEETWRIGHT_DIR=~/fleetwright sh -s -- --from-source"
+
+  for tool in curl tar; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed, and a release cannot be fetched without it."
+  done
+  # One of three, because a box has whichever its OS ships: coreutils on Linux,
+  # perl's shasum on macOS, and openssl nearly everywhere as the fallback.
+  sha256_of() {
+    if   command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum    >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+    elif command -v openssl   >/dev/null 2>&1; then openssl dgst -sha256 -r "$1" | cut -d' ' -f1
+    else return 1
+    fi
+  }
+
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleetwright-install.XXXXXX")"
+  # Removed however this ends — a refusal above leaves nothing behind either.
+  trap 'rm -rf "$WORK"' EXIT
+  say "Fetching the release"
+  printf '  from %s\n' "$MANIFEST"
+  curl -fsSL "$MANIFEST" -o "$WORK/manifest.json" \
+    || die "could not fetch the manifest at $MANIFEST.
+       A fork or a mirror can say where its releases are:
+           curl -fsSL ... | FLEETWRIGHT_MANIFEST=https://host/path/manifest.json sudo sh"
+
+  # sed, because this is sh with no jq. The manifest is ours, one key per
+  # line, written by tools/build-host-package.mjs; the same three expressions
+  # install/fleetwright-migrate uses.
+  field() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$WORK/manifest.json" | head -1; }
+  VERSION="$(field version)"
+  FILE="$(field file)"
+  SHA="$(field sha256)"
+  [ -n "$VERSION" ] && [ -n "$FILE" ] && [ -n "$SHA" ] \
+    || die "the manifest at $MANIFEST does not name a version, a file and a sha256."
+  # A BARE FILE NAME, beside the manifest. A `file` carrying a path would be
+  # the manifest choosing where on this box to write, which is not its to
+  # choose.
+  case "$FILE" in
+    */*|.*) die "the manifest names \"$FILE\", which is not a file beside it." ;;
+  esac
+
+  TARBALL="${MANIFEST%/*}/$FILE"
+  curl -fsSL "$TARBALL" -o "$WORK/$FILE" || die "could not download $TARBALL"
+
+  # VERIFIED BEFORE IT IS UNPACKED, not after. A tarball that is unpacked and
+  # then checked has already written whatever it contained.
+  GOT="$(sha256_of "$WORK/$FILE")" \
+    || die "no sha256sum, shasum or openssl on this box, so the release cannot be checked."
+  [ "$GOT" = "$SHA" ] \
+    || die "the release does not match its manifest: expected $SHA, got $GOT.
+       Nothing was installed. A download cut short does this; so does a manifest
+       edited after its tarball was published. Run this again, and if it
+       repeats, the release is wrong rather than the box."
+  ok "$VERSION, sha256 ok"
+
+  mkdir "$WORK/release"
+  tar -xzf "$WORK/$FILE" -C "$WORK/release" --strip-components=1
+  [ -x "$WORK/release/install/install.sh" ] \
+    || die "the release has no install/install.sh in it, so it cannot install itself."
+
+  # Hand over, with stdin BACK ON THE TERMINAL — see the checkout route below
+  # for why. Not `exec`, because the unpacked copy is this script's to remove
+  # once the installer has laid the release out where it lives.
+  #
+  # THE MANIFEST GOES WITH IT. The installer records where a box's releases
+  # come from, and on a checkout it reads that off the git remote. There is no
+  # remote here, so it is told outright: this is what `/update` will read from
+  # then on, and it is the address this release was just verified against.
+  AGENT_HUB_RELEASE_MANIFEST="$MANIFEST"
+  export AGENT_HUB_RELEASE_MANIFEST
+  say "Running the installer"
+  if (exec < /dev/tty) 2>/dev/null; then
+    bash "$WORK/release/install/install.sh" "$@" < /dev/tty && RC=0 || RC=$?
+  else
+    bash "$WORK/release/install/install.sh" "$@" && RC=0 || RC=$?
+  fi
+  exit "$RC"
+fi
+
+# --- a checkout ---------------------------------------------------------------
 
 # Being ROOT is not the requirement; being able to write DIR is. Somebody
 # installing into their own home does not need sudo, and a script that demands a
