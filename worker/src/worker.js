@@ -194,10 +194,12 @@ const handler = {
 
     // WHOSE INSTALLER, and it is not a constant any more.
     //
-    // This hardcoded upstream's raw URL, and `bootstrap.sh` then clones the
-    // repository that URL came from. So a fork's own coordinator, on a fork's
-    // own domain, handed a root shell a script that installs SOMEBODY ELSE'S
-    // CODE — silently, and with no way for the person pasting it to notice.
+    // This hardcoded upstream's raw URL, and `bootstrap.sh` then installs
+    // the code that URL's repository publishes — a verified release of it on
+    // a fresh box, a clone of it for `--from-source`. So a fork's own
+    // coordinator, on a fork's own domain, handed a root shell a script that
+    // installs SOMEBODY ELSE'S CODE — silently, and with no way for the
+    // person pasting it to notice.
     // Of everything a fork inherits from this repository's committed config,
     // that is the one that ends up executing.
     //
@@ -211,8 +213,8 @@ const handler = {
         return new Response(
           'This coordinator does not publish an installer.\n\n' +
             'Set AGENT_FLEET_INSTALL_URL in wrangler.toml to the raw URL of YOUR install/bootstrap.sh —\n' +
-            'the script clones the repository it is served from, so pointing it at somebody else\n' +
-            "else's would install their code on your machines.\n",
+            'the script installs the releases of the repository it is served from, so pointing it at\n' +
+            "somebody else's would install their code on your machines.\n",
           { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
         );
       }
