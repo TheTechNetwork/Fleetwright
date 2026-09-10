@@ -39,6 +39,49 @@ and nowhere else, including here.
 notification, not 180. A phone that cries wolf gets its notifications turned
 off, which costs you the one that mattered.
 
+### The two buttons on an `awaiting-input`
+
+A session asking one of the three questions `src/fleet/host/prompt.js`
+recognises arrives with the answers on it, and pressing one answers without the
+app coming forward.
+
+**The words are the fleet's, not the CLI's.** An iOS action title is fixed when
+the app registers its categories, not when a notification arrives, so the
+buttons cannot say what the dialog says. `ANSWER_TITLES` in `prompt.js` is where
+they are written — beside the questions the fleet already writes, for the same
+reason — and `test/notification-answers.test.js` fails the day the Swift, the
+Kotlin and that table stop agreeing.
+
+**The digit is the pane's.** `1. Yes` and `3. No, and tell Claude…` is today's
+permission dialog, and a CLI release that inserts an option renumbers it. So the
+apps hold only the words; `answerActions()` resolves each to a live option index
+on the box, and `answers` carries the pairing as `a:1,b:3`.
+
+Which is also why it survives `AGENT_FLEET_PROMPT_TEXT=0`: the labels are
+matched on the host and never travel. A fleet careful enough to have turned the
+quoting off still gets notifications it can answer.
+
+**An answer expires with the notification.** `sentAt` has been sealed into every
+envelope since #351 and nothing read it until now — harmless while a tap only
+navigated, because the session list is refreshed from the coordinator. A button
+is not harmless. Past `PUSH_TTL_S`, the same hour a provider would have stopped
+delivering it, a press opens the session with a notice rather than answering.
+The host's `promptId` check is still the real guard; this is the half that can
+happen before the network, so somebody gets a sentence instead of silence.
+
+**Android trades its tray delivery for the buttons.** A `notification` block is
+drawn by the system before the app is consulted, which is why it is the default
+here — it arrives even for a force-stopped app — and it cannot carry actions. So
+an answerable notification is sent data-only and the app builds it, paying what
+the encrypted path already pays: nothing for a force-stopped app, and Doze may
+delay it. Everything with nothing to answer keeps the tray.
+
+**The category is the one field in the clear.** iOS reads it to decide which
+buttons to draw, which happens before anything could be decrypted. It names the
+*kind* of question and never the question, and `apns-collapse-id` has carried the
+session *name* in the clear for longer, so it discloses strictly less than the
+same request already did.
+
 The first poll after a sidecar starts is deliberately **quiet**: on a restart
 every session looks new, and announcing all of them would be a notification
 storm every time the service restarts.
