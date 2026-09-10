@@ -23,6 +23,33 @@ import { randomInt } from './random.js';
  *  short of anything worth replaying. */
 const CHALLENGE_TTL_MS = 120_000;
 
+/**
+ * How long a revoked host's row is kept, and how many live ones fit.
+ *
+ * THIS IS THE STORE THAT GROWS ON ITS OWN. `revoke` marks rather than removes,
+ * and `ephemeralHostRetired` revokes every temporary machine as it goes — so a
+ * fleet using the runner work leaves one permanent row per machine it has ever
+ * borrowed, without anybody doing anything. Every row is serialised into a
+ * single Durable Object value, and DO storage refuses one over 128KiB; past
+ * that, `storage.put` throws and keeps throwing (#351).
+ *
+ * A row is not small either: `publicJwk` is a P-256 key, so this is hundreds of
+ * bytes per machine rather than tens.
+ *
+ * Dropping a revoked host's row removes no access — the key it holds is already
+ * refused — and `list()` filters revoked rows out, so nothing on a screen loses
+ * an entry. What it removes is the record that the machine was ever here, which
+ * the event ring keeps.
+ *
+ * READMISSION IS THE ONE THING THIS MUST NOT BREAK. A swept host is no longer
+ * "revoked", it is unknown, so re-enrolling it becomes an ordinary enrolment
+ * with an unbound pin rather than a readmission needing a pin minted for that
+ * name. Thirty days is chosen so that a machine somebody deliberately removed
+ * stays deliberately removed for far longer than anyone would take to notice.
+ */
+const REVOKED_RETENTION_MS = 30 * 24 * 3_600_000;
+const MAX_LIVE_HOSTS = 200;
+
 // NONCES ARE NOT STORED. They are minted, and the coordinator recognises its own.
 //
 // They were stored, in a ring of eight per host, and that was wrong in a way
@@ -106,6 +133,12 @@ export class HostIdentities {
     // it would turn the coordinator into the thing it must never be.
     if (publicJwk.d) return { ok: false, error: 'that is a private key — send only the public half' };
 
+    // Swept where the store grows, which is here and on restore. Sweeping
+    // before the ceiling is checked matters: a fleet whose old machines have
+    // aged out should be able to add one, not be told it is full by rows that
+    // no longer needed keeping.
+    this.#sweepRevoked();
+
     const previous = this.hosts.get(id);
     // REVOKED MEANS REVOKED. This wrote a fresh record with revokedAt: null
     // over the top, so any pin undid any revocation — and reported it as a
@@ -137,6 +170,22 @@ export class HostIdentities {
         error:
           `${id} was revoked. Readmitting it takes a pin minted for that, ` +
           'so that bringing a removed machine back is a decision somebody makes rather than a side effect.',
+      };
+    }
+
+    // THE CEILING, and only where the store actually grows. Replacing the key
+    // of a machine that already has a row, or readmitting a revoked one,
+    // reuses that row — so neither can be locked out by a full fleet. What is
+    // refused is a genuinely new machine on a fleet with no room, which is a
+    // thing an operator has to be told rather than a thing to absorb.
+    if (!previous && this.#liveHosts() >= MAX_LIVE_HOSTS) {
+      return {
+        ok: false,
+        code: 'hosts_full',
+        error:
+          `This fleet is holding ${MAX_LIVE_HOSTS} machines, which is as many as it can store in one ` +
+          'record. Remove the ones that have gone; a revoked machine\u2019s row is cleared automatically ' +
+          'thirty days later.',
       };
     }
 
@@ -350,10 +399,35 @@ export class HostIdentities {
   /** @param {EnrolledHost[]} hosts */
   restore(hosts) {
     for (const h of hosts || []) if (h?.hostId) this.hosts.set(h.hostId, h);
+    // A coordinator already holding an oversized value trims on the way in,
+    // so the first save after this shipped is the one that fits rather than
+    // the one that throws exactly as its predecessors did.
+    this.#sweepRevoked();
   }
 
   serialise() {
     return [...this.hosts.values()];
+  }
+
+  /** Live hosts — the ones whose key still proves anything. */
+  #liveHosts() {
+    let n = 0;
+    for (const h of this.hosts.values()) if (!h.revokedAt) n++;
+    return n;
+  }
+
+  /**
+   * Drop revoked hosts past the retention window.
+   *
+   * Named apart from `#sweep` deliberately: that one forgets spent NONCES, and
+   * a reader who conflated the two would think revoked machines were being
+   * cleared every two minutes.
+   */
+  #sweepRevoked() {
+    const cutoff = this.now() - REVOKED_RETENTION_MS;
+    for (const [id, h] of this.hosts) {
+      if (h.revokedAt && h.revokedAt < cutoff) this.hosts.delete(id);
+    }
   }
 
   #sweep() {

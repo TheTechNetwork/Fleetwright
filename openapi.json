@@ -4,7 +4,7 @@
     "title": "Fleetwright coordinator",
     "version": "1.0.0",
     "summary": "Long-running Claude Code sessions on machines you own, driven from a phone.",
-    "description": "There are TWO implementations of this API — a Cloudflare Worker with a Durable Object, and a Node process — and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge — they did once, and `?token=fwk_` was full access.",
+    "description": "There are TWO implementations of this API \u2014 a Cloudflare Worker with a Durable Object, and a Node process \u2014 and they are required to behave identically. This document is the contract between them, and `test/openapi.test.js` walks it and asserts both.\n\nThat is the reason it exists. It is not primarily documentation: five separate parity bugs reached this branch before it was written, the last of which (`GET /api/events` existing on one coordinator and not the other) was found in about ten seconds by listing both route tables side by side.\n\nCONVENTIONS THAT ARE NOT OBVIOUS:\n\n- Every response carries `ok`. A 200 with `ok: false` is normal and means the fleet answered and the answer was no.\n- Errors carry `error.code` for a machine and `text` for a person. The text is written to be shown as-is; several of them are the only guidance an operator gets.\n- A credential may arrive as `Authorization: Bearer <token>` OR as `?token=<token>`. The query form is deliberate: a Shortcut calls this through \"Get Contents of URL\" and cannot set headers. Both are read by one function so the two forms can never diverge \u2014 they did once, and `?token=fwk_` was full access.",
     "license": {
       "name": "See repository"
     }
@@ -162,7 +162,7 @@
               "unknown",
               "offline"
             ],
-            "description": "Four values, not three. `offline` is what a host becomes when its socket drops — a fact we know, distinct from `unknown`, which is what we say when we have not heard recently enough to be sure. A client that collapses them reports a box we KNOW is gone as a box we cannot see, which is the more alarming of the two and the less accurate."
+            "description": "Four values, not three. `offline` is what a host becomes when its socket drops \u2014 a fact we know, distinct from `unknown`, which is what we say when we have not heard recently enough to be sure. A client that collapses them reports a box we KNOW is gone as a box we cannot see, which is the more alarming of the two and the less accurate."
           },
           "reason": {
             "type": [
@@ -281,7 +281,7 @@
       },
       "Prompt": {
         "type": "object",
-        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text — see src/fleet/host/prompt.js.",
+        "description": "What a session is asking, when the host recognised the shape of it. Never raw pane text \u2014 see src/fleet/host/prompt.js.",
         "required": [
           "id",
           "kind",
@@ -441,6 +441,9 @@
           },
           "503": {
             "description": "This coordinator has no sign-in configured."
+          },
+          "507": {
+            "description": "this fleet cannot store another credential"
           }
         }
       }
@@ -451,7 +454,7 @@
           "identity"
         ],
         "summary": "Mint a six-digit pin",
-        "description": "An invitation, not a way in — it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
+        "description": "An invitation, not a way in \u2014 it requires a credential. A pin is short-lived, single-use and purpose-bound. Bind it to a host id to allow replacing that machine's key; an unbound pin may only ADD a machine.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -479,7 +482,7 @@
                   },
                   "ephemeral": {
                     "type": "boolean",
-                    "description": "Admit a host that is expected to vanish: a disconnect retires the entry and revokes its key, and the scheduler will not place ordinary work on it. Decided here rather than claimed by the host — see docs/ephemeral-hosts.md."
+                    "description": "Admit a host that is expected to vanish: a disconnect retires the entry and revokes its key, and the scheduler will not place ordinary work on it. Decided here rather than claimed by the host \u2014 see docs/ephemeral-hosts.md."
                   }
                 }
               }
@@ -574,13 +577,16 @@
         },
         "responses": {
           "200": {
-            "description": "enrolled, re-enrolled or readmitted — `text` says which"
+            "description": "enrolled, re-enrolled or readmitted \u2014 `text` says which"
           },
           "400": {
             "description": "the key or the host id was not acceptable"
           },
           "403": {
             "description": "the pin was wrong, spent, expired, or minted for another host"
+          },
+          "507": {
+            "description": "this fleet is holding as many machines as it can store"
           }
         }
       }
@@ -592,7 +598,7 @@
         ],
         "security": [],
         "summary": "A nonce to sign",
-        "description": "Unauthenticated by necessity — asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
+        "description": "Unauthenticated by necessity \u2014 asking for a nonce is what an unauthenticated party does in order to become authenticated. Nothing is stored: the nonce carries its own proof that this coordinator issued it, so a flood costs the coordinator nothing and cannot evict anybody else's.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -823,7 +829,7 @@
           "identity"
         ],
         "summary": "Which devices can reach this fleet",
-        "description": "Without secrets — the coordinator stores a hash, not a token.",
+        "description": "Without secrets \u2014 the coordinator stores a hash, not a token.",
         "responses": {
           "200": {
             "description": "devices"
@@ -870,16 +876,16 @@
           "identity"
         ],
         "summary": "Who has been invited",
-        "description": "The allow list an admin grew by hand, as opposed to the one in the deployment’s configuration. An invitation grants nothing by itself: it names WHICH ADDRESS may sign in.",
+        "description": "The allow list an admin grew by hand, as opposed to the one in the deployment\u2019s configuration. An invitation grants nothing by itself: it names WHICH ADDRESS may sign in.",
         "responses": {
           "200": {
-            "description": "`invites` — one row per address"
+            "description": "`invites` \u2014 one row per address"
           },
           "401": {
             "description": "no credential"
           },
           "403": {
-            "description": "not an admin — inviting is the admin seat’s"
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
           }
         }
       },
@@ -888,7 +894,7 @@
           "identity"
         ],
         "summary": "Invite an address",
-        "description": "Adds the address to the allow list and, when the deployment can send mail, emails them the two store links. The reply says whether the email went, because “invited” and “told” are different facts.",
+        "description": "Adds the address to the allow list and, when the deployment can send mail, emails them the two store links. The reply says whether the email went, because \u201cinvited\u201d and \u201ctold\u201d are different facts.",
         "requestBody": {
           "required": true,
           "content": {
@@ -904,7 +910,7 @@
                   },
                   "note": {
                     "type": "string",
-                    "description": "a line for the email, in the inviter’s words"
+                    "description": "a line for the email, in the inviter\u2019s words"
                   }
                 }
               }
@@ -913,7 +919,7 @@
         },
         "responses": {
           "200": {
-            "description": "invited — `text` says whether an email was sent"
+            "description": "invited \u2014 `text` says whether an email was sent"
           },
           "400": {
             "description": "not an address"
@@ -922,7 +928,10 @@
             "description": "no credential"
           },
           "403": {
-            "description": "not an admin — inviting is the admin seat’s"
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          },
+          "507": {
+            "description": "this fleet has as many invitations outstanding as it can store"
           }
         }
       }
@@ -946,13 +955,13 @@
         ],
         "responses": {
           "200": {
-            "description": "withdrawn — `invites` is the list after"
+            "description": "withdrawn \u2014 `invites` is the list after"
           },
           "401": {
             "description": "no credential"
           },
           "403": {
-            "description": "not an admin — inviting is the admin seat’s"
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
           },
           "404": {
             "description": "was not invited"
@@ -1065,7 +1074,7 @@
                   },
                   "host": {
                     "type": "string",
-                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter — a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
+                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
                   }
                 }
               }
@@ -1123,7 +1132,7 @@
           "devices"
         ],
         "summary": "Register for push",
-        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target — and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
+        "description": "Keyed by the push token rather than an id we mint, because the token is what identifies a delivery target \u2014 and a reinstall gives the same phone a new one, which should not accumulate as a second registration that fails forever.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1228,7 +1237,7 @@
         ],
         "security": [],
         "summary": "Apple's server-to-server notification",
-        "description": "Apple POSTs a signed JWT here when a user changes mail forwarding, REVOKES this app from their Apple ID settings, or deletes their Apple Account. The last two mean a person has withdrawn consent, and every credential issued to that address is revoked — along with the push registrations that went with them.\n\nPublic by necessity: Apple holds no credential of ours, so the signature on the JWT is the entire authentication. Anyone may POST here; only a message signed by Apple, for this app's audience, does anything.\n\nAnswers 200 to anything it can verify, including notifications it deliberately ignores, because Apple retries on failure and there is nothing to gain from making it retry a message we understood.",
+        "description": "Apple POSTs a signed JWT here when a user changes mail forwarding, REVOKES this app from their Apple ID settings, or deletes their Apple Account. The last two mean a person has withdrawn consent, and every credential issued to that address is revoked \u2014 along with the push registrations that went with them.\n\nPublic by necessity: Apple holds no credential of ours, so the signature on the JWT is the entire authentication. Anyone may POST here; only a message signed by Apple, for this app's audience, does anything.\n\nAnswers 200 to anything it can verify, including notifications it deliberately ignores, because Apple retries on failure and there is nothing to gain from making it retry a message we understood.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1250,7 +1259,7 @@
         },
         "responses": {
           "200": {
-            "description": "verified — acted on, or deliberately ignored"
+            "description": "verified \u2014 acted on, or deliberately ignored"
           },
           "401": {
             "description": "the notification did not verify"
@@ -1264,7 +1273,7 @@
     "/oauth/github/callback": {
       "get": {
         "summary": "Finish a GitHub App authorization",
-        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity — a browser carries no fleet credential — and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
+        "description": "Where GitHub redirects a browser after somebody authorizes the App. Unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 and secured by `state`: unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured App, every request here is refused.",
         "parameters": [
           {
             "name": "code",
@@ -1295,7 +1304,7 @@
             }
           },
           "400": {
-            "description": "Refused — unknown, expired or already-used state, or GitHub declined.",
+            "description": "Refused \u2014 unknown, expired or already-used state, or GitHub declined.",
             "content": {
               "text/html": {
                 "schema": {
@@ -1311,7 +1320,7 @@
     "/oauth/cloudflare/callback": {
       "get": {
         "summary": "Finish a Cloudflare OAuth authorization",
-        "description": "Where Cloudflare redirects a browser after somebody authorizes this fleet's OAuth client. The same shape as the GitHub callback and secured the same way: unauthenticated by necessity — a browser carries no fleet credential — with a `state` that is unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured client, every request here is refused.",
+        "description": "Where Cloudflare redirects a browser after somebody authorizes this fleet's OAuth client. The same shape as the GitHub callback and secured the same way: unauthenticated by necessity \u2014 a browser carries no fleet credential \u2014 with a `state` that is unguessable, single-use, minutes-long, and bound to the host and person who started the flow. Returns HTML, because the thing reading it is a browser. Absent a configured client, every request here is refused.",
         "parameters": [
           {
             "name": "code",
@@ -1342,7 +1351,7 @@
             }
           },
           "400": {
-            "description": "Refused — unknown, expired or already-used state, or Cloudflare declined.",
+            "description": "Refused \u2014 unknown, expired or already-used state, or Cloudflare declined.",
             "content": {
               "text/html": {
                 "schema": {
@@ -1361,7 +1370,7 @@
           "identity"
         ],
         "summary": "Runner tokens that are yours",
-        "description": "Every token for an admin; only their own for a member. A runner token is how a repository’s workflow enrols an ephemeral host as the person who minted it — see docs/ephemeral-hosts.md.",
+        "description": "Every token for an admin; only their own for a member. A runner token is how a repository\u2019s workflow enrols an ephemeral host as the person who minted it \u2014 see docs/ephemeral-hosts.md.",
         "responses": {
           "200": {
             "description": "`tokens`, never the secret half"
@@ -1376,7 +1385,7 @@
           "identity"
         ],
         "summary": "Mint a runner token",
-        "description": "Belongs to the signed-in person, so runs it enrols are attributed to them. The admin token cannot mint one: a runner has to be somebody’s.",
+        "description": "Belongs to the signed-in person, so runs it enrols are attributed to them. The admin token cannot mint one: a runner has to be somebody\u2019s.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1401,6 +1410,9 @@
           },
           "403": {
             "description": "not signed in as a person"
+          },
+          "507": {
+            "description": "this fleet cannot store another runner token"
           }
         }
       }
@@ -1430,7 +1442,7 @@
             "description": "no credential"
           },
           "404": {
-            "description": "no such token, or not yours — the two are not distinguished on purpose"
+            "description": "no such token, or not yours \u2014 the two are not distinguished on purpose"
           }
         }
       }
@@ -1442,7 +1454,7 @@
         ],
         "security": [],
         "summary": "Admit a GitHub Actions job as an ephemeral host",
-        "description": "Reachable without a credential BECAUSE the job’s OIDC token is the credential: verified against GitHub’s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host — see docs/ephemeral-hosts.md.",
+        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1455,7 +1467,7 @@
                 "properties": {
                   "token": {
                     "type": "string",
-                    "description": "the job’s ACTIONS_ID_TOKEN"
+                    "description": "the job\u2019s ACTIONS_ID_TOKEN"
                   },
                   "ticket": {
                     "type": "string",
@@ -1471,10 +1483,10 @@
             "description": "a pin, host-bound and short-lived"
           },
           "403": {
-            "description": "the token did not verify, or names a repository this fleet does not admit — `error.code` is `bad_token`"
+            "description": "the token did not verify, or names a repository this fleet does not admit \u2014 `error.code` is `bad_token`"
           },
           "503": {
-            "description": "AGENT_FLEET_ACTIONS_REPOS is unset — this coordinator admits no runners"
+            "description": "AGENT_FLEET_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
           }
         }
       }

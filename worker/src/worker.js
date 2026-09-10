@@ -1019,6 +1019,9 @@ const OPENAPI = JSON.stringify({
           },
           "503": {
             "description": "This coordinator has no sign-in configured."
+          },
+          "507": {
+            "description": "this fleet cannot store another credential"
           }
         }
       }
@@ -1159,6 +1162,9 @@ const OPENAPI = JSON.stringify({
           },
           "403": {
             "description": "the pin was wrong, spent, expired, or minted for another host"
+          },
+          "507": {
+            "description": "this fleet is holding as many machines as it can store"
           }
         }
       }
@@ -1501,6 +1507,9 @@ const OPENAPI = JSON.stringify({
           },
           "403": {
             "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          },
+          "507": {
+            "description": "this fleet has as many invitations outstanding as it can store"
           }
         }
       }
@@ -1979,6 +1988,9 @@ const OPENAPI = JSON.stringify({
           },
           "403": {
             "description": "not signed in as a person"
+          },
+          "507": {
+            "description": "this fleet cannot store another runner token"
           }
         }
       }

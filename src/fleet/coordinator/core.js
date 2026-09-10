@@ -640,7 +640,17 @@ export class CoordinatorCore {
     // Checking live admins reopened it — revoke the owner's lost phone and the
     // next person to sign in, whoever they were, inherited the fleet.
     const admin = !this.clients.everHadAdmin() || this.clients.emailHasAdmin(who.email);
-    const { client, token } = await this.clients.issue(`${label} (${who.email})`, { admin });
+    const issued = await this.clients.issue(`${label} (${who.email})`, { admin });
+    // A FULL STORE REFUSES THE SIGN-IN RATHER THAN HALF-COMPLETING IT. The
+    // caller already spent their ID token to get here, so this is the one
+    // place the refusal has to be legible: minting a credential the save
+    // cannot persist is precisely the fleet-wide sign-in failure the ceiling
+    // exists to prevent (#351).
+    if (issued.ok === false) {
+      this.record({ event: 'clients.full', actor: who.email, text: `${who.email} could not sign in: this fleet is holding as many credentials as it can store` });
+      return issued;
+    }
+    const { client, token } = issued;
     // Recorded on the client so an intent can say who sent it without another
     // lookup, and so a revocation list reads as people rather than ids.
     client.email = who.email;

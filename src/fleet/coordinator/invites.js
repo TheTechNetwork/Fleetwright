@@ -32,6 +32,21 @@
 const MAX_EMAIL = 320;
 
 /**
+ * How many invitations may be outstanding.
+ *
+ * The weakest of the four bounds because this store is the only one that grows
+ * at human pace — somebody types an address — and `remove` genuinely removes,
+ * so it does not accumulate the way the credential stores do. It is here for
+ * the same reason the others are: every row lands in ONE Durable Object value,
+ * and a key with no ceiling is a key that eventually refuses every save (#351).
+ *
+ * Two hundred matches the other pending stores in this directory rather than
+ * being reasoned about separately, because a fleet with two hundred people
+ * waiting to sign in has a different problem than this number.
+ */
+const MAX_INVITES = 200;
+
+/**
  * The people an admin has invited.
  *
  * Deliberately NOT a general key/value store on the coordinator: it holds
@@ -60,6 +75,16 @@ export class Invites {
     // ALREADY INVITED IS NOT AN ERROR. Somebody re-inviting a person is
     // answering "did that work?", and a refusal there reads as a fault.
     const existing = this.byEmail.get(address);
+    // Re-inviting somebody already on the list replaces their row, so it is
+    // never refused by a full store — only a genuinely new address is.
+    if (!existing && this.byEmail.size >= MAX_INVITES) {
+      return {
+        ok: false,
+        message:
+          `This fleet already has ${MAX_INVITES} invitations outstanding, which is as many as it can ` +
+          'store. Remove the ones that have been taken up or are no longer wanted.',
+      };
+    }
     const invite = {
       email: address,
       invitedBy,

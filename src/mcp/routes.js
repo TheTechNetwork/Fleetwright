@@ -72,7 +72,7 @@ function bearer(header) {
  * @property {import('./oauth.js').Authorizations} authorizations
  * @property {(token: string) => Promise<{ email?: string, admin?: boolean }|null>} verifyCredential
  * @property {(idToken: string) => Promise<{ ok: true, email: string, name: string|null } | { ok: false, status: number, text: string }>} verifyIdentity
- * @property {(who: { email: string, name?: string|null }, deviceName: string) => Promise<{ token: string }>} issueCredential
+ * @property {(who: { email: string, name?: string|null }, deviceName: string) => Promise<{ token: string } | { ok: false, code?: string, error?: string }>} issueCredential
  * @property {() => void} save
  * @property {{ google?: string|null, apple?: string|null }} signIn  client ids for the page
  * @property {string} selfOrigin  where to send intents — see below
@@ -195,10 +195,27 @@ export async function mcpRoutes(req, deps) {
 
     // THE ACCESS TOKEN IS A DEVICE CREDENTIAL. Named so a person looking at
     // their device list can tell what it is and revoke it without guessing.
-    const { token } = await deps.issueCredential(
+    const issued = await deps.issueCredential(
       { email: spent.email, name: spent.name ?? null },
       'an MCP client',
     );
+    // A FULL CREDENTIAL STORE REFUSES THE EXCHANGE. The ID token has already
+    // been spent by this point, so the only honest thing left is to say why
+    // rather than hand back a token that was never persisted — which is the
+    // fleet-wide sign-in failure the ceiling exists to prevent (#351).
+    //
+    // `server_error` rather than `invalid_grant`: RFC 6749 reserves the latter
+    // for a grant that was bad, and this one was fine. A client that retries an
+    // invalid_grant by re-authenticating would spend another token to reach the
+    // same full store.
+    if ('ok' in issued && issued.ok === false) {
+      return {
+        status: 507,
+        headers: { 'cache-control': 'no-store' },
+        json: { error: 'server_error', error_description: issued.error || 'this fleet cannot store another credential' },
+      };
+    }
+    const { token } = /** @type {{ token: string }} */ (issued);
     deps.save();
     return {
       status: 200,

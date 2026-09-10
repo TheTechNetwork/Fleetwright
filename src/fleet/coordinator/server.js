@@ -638,7 +638,12 @@ export class Coordinator {
       });
       this.saveState();
       if (!result.ok || !result.host) {
-        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+        // A FULL FLEET IS NOT A BAD REQUEST. Collapsing every enrolment refusal
+        // to `bad_request` would tell somebody their pin or their key was
+        // malformed when what actually happened is that this fleet has no room
+        // left, sending them to debug the one thing that was fine.
+        const full = 'code' in result && result.code === 'hosts_full';
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
       }
       this.core.record({
         event: 'host.enrolled',
@@ -676,7 +681,12 @@ export class Coordinator {
       // restart is a second host nobody minted.
       this.saveState();
       if (!result.ok || !result.host) {
-        return json(res, 400, { ok: false, error: { code: 'bad_request' }, text: result.error });
+        // A FULL FLEET IS NOT A BAD REQUEST. Collapsing every enrolment refusal
+        // to `bad_request` would tell somebody their pin or their key was
+        // malformed when what actually happened is that this fleet has no room
+        // left, sending them to debug the one thing that was fine.
+        const full = 'code' in result && result.code === 'hosts_full';
+        return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
       }
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
 
@@ -710,6 +720,11 @@ export class Coordinator {
       if (!who.ok) return json(res, who.status, { ok: false, error: { code: who.code }, text: who.text });
 
       const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
+      // 507 BEFORE THE SPREAD, because `{ ok: true, ...issued }` would send a
+      // refusal out as an HTTP 200 whose `ok` happens to be false and whose
+      // `token` is missing — and a phone that reads the status rather than the
+      // body would store `undefined` as its credential.
+      if ('ok' in issued && issued.ok === false) return json(res, 507, issued);
       this.saveState();
       return json(res, 200, { ok: true, ...issued });
     }
@@ -999,10 +1014,14 @@ export class Coordinator {
         return json(res, 403, { ok: false, text: 'Sign in first — a runner token belongs to a person.' });
       }
       const body = await readJson(req);
-      const { client: issued, token } = await this.core.runnerTokens.issue(
+      const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
         {},
       );
+      // 507 rather than 400: the request is well formed and the fleet is out
+      // of room, the same distinction the device store draws.
+      if (minted.ok === false) return json(res, 507, minted);
+      const { client: issued, token } = minted;
       // The email is the whole payload: it is what a runner is attributed to.
       issued.email = client.email.toLowerCase();
       this.saveState();
