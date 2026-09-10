@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Take this box back out of a fleet.
 #
-#   sudo /opt/agent-fleet/install/uninstall.sh            services, config, identity
-#   sudo /opt/agent-fleet/install/uninstall.sh --purge     the above plus /opt/agent-fleet
-#   sudo /opt/agent-fleet/install/uninstall.sh --yes       do not ask
+#   sudo /opt/fleetwright/current/install/uninstall.sh          services, config, identity
+#   sudo /opt/fleetwright/current/install/uninstall.sh --purge  the above plus the code
+#   sudo /opt/fleetwright/current/install/uninstall.sh --yes    do not ask
+#
+# (On a checkout install the script lives under /opt/agent-fleet/install/ and
+# --purge removes that checkout instead.)
 #
 # WHY THIS EXISTS, beyond tidiness.
 #
@@ -33,7 +36,7 @@ while [ $# -gt 0 ]; do
     --yes|-y) ASSUME_YES=1 ;;
     -h|--help)
       printf 'usage: uninstall.sh [--purge] [--yes]\n\n'
-      printf '  --purge  also remove /opt/agent-fleet\n'
+      printf '  --purge  also remove the code: every release under /opt/fleetwright, or the checkout\n'
       printf '  --yes    do not ask for confirmation\n\n'
       printf 'Leaves ~/agent-runs, running tmux sessions, and node/tmux/podman/claude alone.\n'
       exit 0 ;;
@@ -56,6 +59,21 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# WHAT --purge REMOVES depends on which shape this box is, and "the directory
+# this script is in" was the wrong answer for one of them. On a packaged box
+# this script lives at /opt/fleetwright/current/install/, so $DIR is the
+# `current` symlink — and `rm -rf` on a symlink removes the link, leaving every
+# release under /opt/fleetwright exactly where it was. A purge that removed a
+# pointer and called the code gone.
+#
+# A release tree is told apart the way install.sh tells it: lib/agent-hub.mjs
+# exists in a release and not in a checkout. The base is the one install.sh
+# uses, so the two agree without either reading the other.
+FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+PACKAGED=0
+if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
+if [ "$PACKAGED" = 1 ]; then PURGE_DIR="$FLEET_BASE"; else PURGE_DIR="$DIR"; fi
 RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-root}}"
 SERVICES=(agent-hub agent-fleet-sidecar agent-fleet-coordinator)
 
@@ -77,7 +95,7 @@ fi
 for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
   [ -f "$f" ] && printf '  config   %s\n' "$f"
 done
-[ "$PURGE" = 1 ] && printf '  source   %s (--purge)\n' "$DIR"
+[ "$PURGE" = 1 ] && printf '  code     %s (--purge)\n' "$PURGE_DIR"
 printf '\n  Left alone: ~%s/agent-runs, running tmux sessions, node/tmux/podman/claude.\n' "$RUN_USER"
 
 if [ "$ASSUME_YES" != 1 ]; then
@@ -118,9 +136,18 @@ say "Removing configuration"
 for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
-for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot; do
+for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-migrate; do
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
+# THE ROOT HELPER GOES WITH ITS RULE. It is the one thing the installer puts
+# outside the tree on purpose — root-owned, in /usr/local/sbin, so the service
+# user cannot rewrite what it is allowed to run as root — which is exactly why
+# purging the tree never reached it. Left behind, a box that is out of the
+# fleet still carries a root-capable script named by a rule that is gone.
+if [ -f /usr/local/sbin/fleetwright-migrate ]; then
+  rm -f /usr/local/sbin/fleetwright-migrate
+  ok "/usr/local/sbin/fleetwright-migrate"
+fi
 
 say "Removing the CLIs"
 for c in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
@@ -158,12 +185,13 @@ else
 fi
 
 if [ "$PURGE" = 1 ]; then
-  say "Removing the source"
+  say "Removing the code"
   # cd out first: removing the directory this script is being read from works on
-  # Linux but leaves the shell somewhere that no longer exists.
+  # Linux but leaves the shell somewhere that no longer exists. bash has the
+  # script open, so the file going away under it does not stop it finishing.
   cd /
-  rm -rf "${DIR:?}"
-  ok "$DIR"
+  rm -rf "${PURGE_DIR:?}"
+  ok "$PURGE_DIR"
 fi
 
 say "Removed."
@@ -171,4 +199,4 @@ printf '  This box is out of the fleet. If it was enrolled, the coordinator stil
 printf '  lists it — remove it there too:\n\n'
 printf '      curl -sX DELETE -H "Authorization: Bearer $TOKEN" \\\n'
 printf '           https://YOUR-COORDINATOR/api/hosts/%s\n\n' "$(hostname 2>/dev/null || echo HOSTID)"
-[ "$PURGE" != 1 ] && printf '  The checkout at %s was kept. Re-run install.sh to set this box up again.\n\n' "$DIR"
+[ "$PURGE" != 1 ] && printf '  The code at %s was kept. Re-run install.sh to set this box up again.\n\n' "$PURGE_DIR"

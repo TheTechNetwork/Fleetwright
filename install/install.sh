@@ -13,8 +13,10 @@ fi
 #
 #   curl -fsSL https://fleet.thetech.network/install | sudo sh
 #
-# ...which is install/bootstrap.sh fetching the repository and then running
-# this. By hand, which is the same thing:
+# ...which is install/bootstrap.sh fetching a verified release and running the
+# copy of this inside it, so a fresh box is packaged from its first minute and
+# never needs git. By hand, from a checkout, which is what a box somebody edits
+# gets (`--from-source` asks the one-liner for the same):
 #
 #   git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
 #   sudo /opt/agent-fleet/install/install.sh
@@ -1240,7 +1242,16 @@ release_manifest_url() { # release_manifest_url REMOTE
 
 if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
   ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
-  if MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
+  # TOLD, BEFORE IT IS GUESSED. A fresh box installed from a release has no
+  # remote to read: bootstrap.sh fetched the manifest, verified the tarball
+  # against it, and hands the address down in the environment — the one
+  # address this release was just checked against is the one `/update` should
+  # read from. The remote is the answer for a checkout, where it is the only
+  # thing that knows which repository this is.
+  if [ -n "${AGENT_HUB_RELEASE_MANIFEST:-}" ]; then
+    set_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "$AGENT_HUB_RELEASE_MANIFEST"
+    ok "releases come from $AGENT_HUB_RELEASE_MANIFEST"
+  elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
     set_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "$MANIFEST_URL"
     ok "releases come from $MANIFEST_URL"
   else
@@ -2833,12 +2844,17 @@ fi
 # THE THING THAT WAS MISSING, and it is why a box re-run through the one-liner
 # stayed commit-based no matter which menu option somebody chose.
 #
-# bootstrap.sh clones the repository — it has to, because install.sh lives in
-# it — so this script always runs from a checkout, PACKAGED is always 0, and
-# every install the documented way produced a git working tree. "Clean" wiped
-# the box and rebuilt exactly the same shape. #376 installed the migration
-# helper and nothing ever called it, so the capability existed and no path
-# reached it: true where it was written, quietly false one layer up.
+# bootstrap.sh USED TO clone the repository — it had to, because install.sh
+# lived in it — so this script always ran from a checkout, PACKAGED was always
+# 0, and every install the documented way produced a git working tree. "Clean"
+# wiped the box and rebuilt exactly the same shape. #376 installed the
+# migration helper and nothing ever called it, so the capability existed and no
+# path reached it: true where it was written, quietly false one layer up.
+#
+# A fresh box now arrives here from a verified release, PACKAGED is 1, and this
+# block is skipped: there is nothing to convert. It still runs for a checkout —
+# `--from-source`, a box that already had one, a repository off GitHub — which
+# is exactly the box that has a conversion to be offered.
 #
 # A CHECKOUT IS THE WRONG DEFAULT NOW. It needs the tree writable by the service
 # user so `/update` can pull, it drifts (which is how a real box met
