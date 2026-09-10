@@ -13,9 +13,15 @@
 export const SESSION_STATES = {
   waiting: { word: 'Waiting for you', glyph: '!', tone: 'attention', rank: 0 },
   working: { word: 'Working', glyph: '>', tone: 'active', rank: 1 },
-  stopped: { word: 'Stopped', glyph: '=', tone: 'idle', rank: 2 },
-  finished: { word: 'Finished', glyph: 'o', tone: 'idle', rank: 3 },
-  broken: { word: 'Broken', glyph: 'x', tone: 'bad', rank: 4 },
+  // AT ITS OWN PROMPT: finished, or between things, and needing nothing. Not
+  // "finished", because a session between two steps looks exactly the same,
+  // and not "working", which is what every running session was called here
+  // while the phones had learned to tell the two apart. The same words the
+  // phones' stateSentence uses, so the console and the apps agree.
+  ready: { word: 'At its prompt', glyph: '.', tone: 'idle', rank: 2 },
+  stopped: { word: 'Stopped', glyph: '=', tone: 'idle', rank: 3 },
+  finished: { word: 'Finished', glyph: 'o', tone: 'idle', rank: 4 },
+  broken: { word: 'Broken', glyph: 'x', tone: 'bad', rank: 5 },
 };
 
 /**
@@ -66,13 +72,16 @@ export function scrub(s) {
 /**
  * A session's state, derived once.
  *
- * @param {{ status?: string, prompt?: unknown }} session
+ * @param {{ status?: string, prompt?: unknown, atRest?: boolean }} session
  */
 export function sessionState(session) {
   if (session?.prompt) return 'waiting';
   switch (session?.status) {
     case 'running':
-      return 'working';
+      // `atRest` is the watcher's reading of the pane: the CLI's own prompt
+      // is showing. A host too old to send it answers nothing here and the
+      // session reads as working, which is what it always read as.
+      return session?.atRest === true ? 'ready' : 'working';
     case 'error':
       return 'broken';
     case 'stopped':
