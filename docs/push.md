@@ -33,6 +33,7 @@ and nowhere else, including here.
 | `session.error` | ✅ | it stopped and it was not supposed to |
 | `session.ended` | ✅ | the work finished |
 | `session.rc-online` | ✅ | it is now drivable from the phone that just buzzed |
+| `session.ready` | ✅ for a job handed over (a session started from a profile), and for any session on a temporary machine; ❌ otherwise | back at its own prompt after working. For a profile it is the "done" both beta testers asked for; on a temporary machine it is a bill still running, and the text says so. A turn in a conversation somebody is driving by hand is recorded on the ring and not pushed, because a buzz per turn is how the one that matters gets switched off |
 | `session.started` | ❌ | you started it |
 
 **Transitions, never states.** A session parked at a prompt for an hour is one

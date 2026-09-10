@@ -219,7 +219,8 @@ struct FleetView: View {
                                        try await fleet.answer(session.name, option: option,
                                                               promptId: session.prompt?.id)
                                    }
-                               })
+                               },
+                               changed: { await refresh(keepStatus: true) })
                         .fleetRow()
                 }
             }
@@ -275,12 +276,30 @@ struct FleetView: View {
             }
             .task { await refresh() }
             // The list a notification tap lands on should be the list as it is
-            // now, not as it was when the phone went in a pocket.
-            .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { _ in
-                Task { await refresh() }
+            // now, not as it was when the phone went in a pocket — AND THE
+            // SESSION THE NOTIFICATION WAS ABOUT SHOULD BE OPEN. A buzz says
+            // "bigjob is back at its prompt"; landing on a list of twelve and
+            // finding bigjob in it is the search the notification existed to
+            // save. The name rides on the notification; the page is pushed
+            // once the fresh list confirms the session is still there.
+            .onReceive(NotificationCenter.default.publisher(for: .notificationOpened)) { note in
+                let name = note.userInfo?["name"] as? String
+                Task {
+                    await refresh()
+                    if let name, let session = sessions.first(where: { $0.name == name }) {
+                        opened = session
+                    }
+                }
+            }
+            .navigationDestination(item: $opened) { session in
+                SessionView(fleet: fleet, initial: session, onChange: { await refresh(keepStatus: true) })
             }
         }
     }
+
+    /// The session a notification tap opened, pushed programmatically. Nil
+    /// the rest of the time: the rows push their own pages by link.
+    @State private var opened: Fleet.Session?
 
     /// One queue for the screen, not one per computed Fleet — the whole point
     /// is that it outlives the request that failed.
@@ -466,6 +485,9 @@ private struct SessionRow: View {
     /// died is here and nowhere else once its window is gone.
     let output: () async -> Void
     let answer: (Int) async -> Void
+    /// Called when the session's own page changed something the list should
+    /// know about — a stop, an answer — so the row moves with it.
+    let changed: () async -> Void
     @State private var confirmingForget = false
 
     /// A session that is asking something wears the attention ring, and it is
@@ -476,13 +498,27 @@ private struct SessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
-            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
-                Text(session.label)
-                    .fleetType(.bodyStrong)
-                    .foregroundStyle(Design.Palette.ink)
-                Spacer(minLength: 0)
-                StatusBadge(status: session.status)
+            // THE TITLE IS THE WAY IN. A session is a subject and has a page
+            // (SessionView) — the pane, the state sentence, the same actions
+            // with room around them. The row keeps its controls so the list
+            // stays the place to answer and stop; the page is where to look.
+            NavigationLink {
+                SessionView(fleet: fleet, initial: session, onChange: changed)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                    Text(session.label)
+                        .fleetType(.bodyStrong)
+                        .foregroundStyle(Design.Palette.ink)
+                    Image(systemName: "chevron.right")
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                    StatusBadge(status: session.status)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             // Both are shown when they differ: the title is what a person
             // recognises, the name is what everything else keys on.
             if session.label != session.name {

@@ -413,3 +413,15 @@ test('the migrate helper is refreshed on a packaged box, and never by --check', 
   // write is root with extra steps.
   assert.match(SH, /install -m 0755 -o root -g root "\$DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
 });
+
+test('the installer records the manifest the one-liner verified against, before it guesses from git', () => {
+  // A fresh box installed from a release has no remote to read. bootstrap.sh
+  // hands the address down in the environment, and the installer writes that
+  // one — the address the tarball was just checked against — ahead of the one
+  // it would derive from a checkout's origin.
+  const block = SH.slice(SH.indexOf('if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then'));
+  const told = block.indexOf('if [ -n "${AGENT_HUB_RELEASE_MANIFEST:-}" ]; then');
+  const guessed = block.indexOf('elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then');
+  assert.ok(told > 0 && guessed > told, 'the environment is consulted before the git remote');
+  assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "\$AGENT_HUB_RELEASE_MANIFEST"/);
+});

@@ -88,12 +88,16 @@ once `npm ci` was involved.
 4. **Switch the installer** to fetch a release rather than clone, keeping
    `--from-source` for development boxes. **Done** — `install.sh` detects
    which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
-   skips npm entirely when packaged, and removes the install it replaced. What
-   is not done is the FIRST install: a box still gets its first release
-   unpacked by hand, and updates itself by manifest from then on. The
+   skips npm entirely when packaged, and removes the install it replaced. The
    **layout** is done — a release is copied to `releases/<version>` and
    `current` is moved onto it atomically, with the units pointing at `current`.
-5. **Drop the git path** once no box reports using it.
+   And the FIRST install is done: `bootstrap.sh` fetches the manifest, checks
+   the tarball's sha256 before unpacking it, and hands over to the `install.sh`
+   inside, so a fresh box is packaged from its first minute and never needs
+   git. See "A fresh box starts from a release" below.
+5. **Drop the git path** once no box reports using it. Not yet, and not soon:
+   it is what `--from-source` gives a box somebody edits, and what a
+   repository off GitHub gets because there is no release address to derive.
 
 Steps 2 and 3 are where the value is: after those, a docs change publishes
 nothing, and a host update is a download and a symlink.
@@ -355,18 +359,30 @@ The release still ships `install/`, and that is what somebody unpacking a
 tarball by hand runs, what the helper runs, and since the heal, where the box's
 own copy of the helper is refreshed from.
 
-**An install ends up packaged now, and that was the missing half.** `bootstrap.sh`
-clones the repository — it has to, because `install.sh` lives in it — so the
-installer always ran from a checkout, `PACKAGED` was always 0, and *every*
-install by the documented one-liner produced a git working tree. Re-running it
-and choosing either menu option rebuilt the same shape. The migration helper
-shipped and nothing called it.
+**A fresh box starts from a release.** `bootstrap.sh` used to clone the
+repository — it had to, because `install.sh` lived in it — so the installer
+always ran from a checkout, `PACKAGED` was always 0, and *every* install by the
+documented one-liner produced a git working tree that the installer's last act
+was to offer to convert into the layout it could have started in. Now the
+one-liner fetches `manifest.json` (the latest GitHub release; `FLEETWRIGHT_CHANNEL=rolling`
+takes the tag every merge republishes; `FLEETWRIGHT_MANIFEST=` names one
+outright for a fork or a mirror), fetches the tarball it names, checks the
+sha256 **before anything is unpacked**, unpacks it somewhere temporary and
+hands over to the `install.sh` inside — which lays the release out under
+`/opt/fleetwright` exactly as it does for a migration, and is told the manifest
+address so `/update` reads from the same place the tarball was verified
+against. The temporary copy goes on every exit, refusals included. No git, no
+clone of the monorepo, no writable tree to drift.
 
-The last section of `install.sh` now offers the conversion, and the default
-depends on what it found: a **fresh** box has nothing to disturb and defaults to
-yes; a box that was **already running** defaults to no, because moving where its
-code lives and restarting its services is not something to discover having
-happened. With no terminal it never converts and names the command.
+Three boxes still get a checkout, on purpose. `--from-source`, for a box
+somebody **edits**. A box that already has one at `/opt/agent-fleet`, which is
+kept the shape it was — laying a release beside a checkout the units still
+point at would be two installs arguing over one box, and the installer's own
+conversion offer remains the way across: a **fresh** checkout defaults to yes,
+a box that was **already running** defaults to no, and with no terminal it
+never converts and names the command. And a repository that is not on GitHub,
+where there is no release address to derive and a guess would be a 404 blamed
+on the installer; it says so and clones.
 
 **Development boxes still want the checkout.** `--from-source` keeps that, and
 the fallback in step 3 means the two can coexist indefinitely rather than

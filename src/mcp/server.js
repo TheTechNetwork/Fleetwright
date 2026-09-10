@@ -103,6 +103,25 @@ function describeFailure(e) {
 }
 
 /**
+ * Has this session come back to its own prompt after working, in this run?
+ *
+ * Both timestamps are the host's, so comparing them is sound; a host too old
+ * to send `readyAt` answers null and this is false, which is the behaviour
+ * before it existed. `atRest` is required as well: readyAt says it came back,
+ * atRest says it is still there now, and a session that has since been given
+ * more to do is not done.
+ *
+ * @param {any} session
+ */
+export function backAtPrompt(session) {
+  if (!session || session.atRest !== true) return false;
+  const readyAt = Number(session.readyAt);
+  if (!Number.isFinite(readyAt) || readyAt <= 0) return false;
+  const started = Number(session.createdAt ?? session.startedAt ?? 0);
+  return readyAt > started;
+}
+
+/**
  * The session record out of a `status` reply.
  *
  * THE REPLY HAS NEVER HAD A `session` KEY. Both callers read
@@ -468,6 +487,30 @@ export class McpServer {
           status === 'error',
         );
       }
+      // BACK AT ITS PROMPT, AFTER WORKING, SINCE IT STARTED. This is the "done"
+      // the fleet can see, and the loop this server teaches — start with a
+      // profile, await, read the log — used to dead-end here: a finished
+      // session does not end, so an await on one ran out the clock and said
+      // "still running" about a job that was done twenty minutes ago.
+      //
+      // Two facts, both from the host's own clock. `readyAt` is the tick the
+      // watcher saw the session return to the CLI's prompt after being away
+      // from it, and it is cleared on a restart; `createdAt` is when this run
+      // began. A fresh session sitting at its prompt before anybody types has
+      // no readyAt and keeps waiting; a session that finished before the first
+      // poll has one and returns at once. A host too old to send readyAt
+      // answers as it always did, by ending or by running out the clock.
+      //
+      // "DONE" IS STILL A JUDGEMENT, and the reply says so: back at its prompt
+      // means it stopped working, not that it did what was asked. The log is
+      // the evidence.
+      if (backAtPrompt(session)) {
+        return this.#text(
+          `${name} is back at its prompt after working. That is as much "done" as the fleet can see: it ` +
+            'stopped working, not that it did what you asked. Read what it produced with fleet_read_log — ' +
+            'before stopping it, because stopping discards the container output — and judge for yourself.',
+        );
+      }
       if (this.now() >= deadline) {
         // NOT AN ERROR. Still running after the time asked for is an answer,
         // and calling it a failure would push an agent into stopping work that
@@ -499,9 +542,10 @@ export class McpServer {
       "person's visibility — you see and can do exactly what they can.",
       '',
       'WORK YOU START IS WORK YOU OWN.',
-      `Sessions are expected to finish within about ${this.budgetMinutes} minutes. Nothing in the fleet`,
-      'reports "done" — a finished session looks exactly like an idle one — so deciding it is over is',
-      'your job, not something you will be told.',
+      `Sessions are expected to finish within about ${this.budgetMinutes} minutes. The fleet reports one`,
+      'thing: a session coming BACK TO ITS PROMPT after working. fleet_await returns on it. That means it',
+      'stopped working, not that it did what you asked — deciding it is over is still your job, and the',
+      'log is the evidence.',
       '',
       'GIVE A SESSION A PROFILE OR IT COMES UP IDLE.',
       'This is the first thing to know, because the failure is silent. `fleet_start` with no `profile`',
@@ -520,9 +564,9 @@ export class McpServer {
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `profile`, naming a host or a tag for a particular kind of machine',
-      '  2. fleet_await — returns when the session ends or errors, or the wait runs out. Do not poll.',
-      '     It cannot tell you a session is merely waiting at a prompt; fleet_status reports how long',
-      '     the pane has been still, which is evidence rather than an answer.',
+      '  2. fleet_await — returns when the session comes back to its prompt after working, needs a',
+      '     person, ends or errors, or the wait runs out. Do not poll. A session that never started',
+      '     working never comes back, so a wait on an idle session runs out the clock and says so.',
       '  3. fleet_read_log to collect what it produced — BEFORE stopping it, because stopping discards',
       '     the container output. A resumed session brings its transcript back; a stopped one does not.',
       '  4. fleet_stop WHEN YOU HAVE WHAT YOU CAME FOR, or when the time above has passed',

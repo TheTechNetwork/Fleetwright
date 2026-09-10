@@ -655,7 +655,12 @@ list is worse than a re-read.
   ownership should live.
 
 Host → coordinator **events** are no longer in this list: the watcher raises
-`session.awaiting-input`, `session.ended` and `session.error`, the sidecar
-sends them as `kind: "event"` over the socket it already holds, and the
-coordinator pushes the ones in `NOTIFIABLE` to registered devices
-(`src/fleet/host/watcher.js`, `src/fleet/coordinator/core.js`).
+`session.awaiting-input`, `session.ended`, `session.error`, `session.rc-online`
+and `session.ready`, the sidecar sends them as `kind: "event"` over the socket
+it already holds, and the coordinator pushes the ones in `NOTIFIABLE` to
+registered devices (`src/fleet/host/watcher.js`,
+`src/fleet/coordinator/core.js`). `session.ready` is the transition back to
+the CLI's own prompt after the session was seen working, once per return; it
+carries the NAME of the profile the session was started with, never its
+content, and the coordinator pushes it only for a profile session or a
+session on a temporary machine (`docs/push.md`).

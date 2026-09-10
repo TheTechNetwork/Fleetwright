@@ -201,6 +201,14 @@ fleet decide - publish the **watcher's observation**, "pane unchanged for 9m,
 at an empty prompt", as a field. *"Judgement stays mine; today even the
 evidence is manual."*
 
+**SHIPPED, in two halves.** The observation travels on every frame as
+`idleSince` and `atRest`, and both phones say it in one sentence owned on the
+model: *At its prompt · idle 9m*, never "finished", because a session between
+two steps looks the same. And the transition is an event: `session.ready`,
+raised once when a session comes back to its prompt after working, pushed to a
+phone for a session started from a profile and for any session on a temporary
+machine (`docs/push.md`).
+
 ## K. What to protect
 
 Recorded because the next change is as likely to break these as to fix

@@ -90,18 +90,54 @@ struct Fleet {
         /// field. This is meant to answer "has it been stuck for an hour",
         /// which is the anxiety in docs/psychology.md, not "is it typing".
         var quietFor: String? {
-            guard isRunning, prompt == nil, let idleSince, idleSince > 0 else { return nil }
-            let seconds = Date().timeIntervalSince1970 - idleSince / 1000
-            guard seconds >= 300 else { return nil }
-            let howLong = seconds < 3600 ? "\(Int(seconds / 60))m"
-                : seconds < 86_400 ? "\(Int(seconds / 3600))h"
-                : "\(Int(seconds / 86_400))d"
+            guard let howLong = idleFor else { return nil }
             // TWO SENTENCES, BECAUSE THEY ARE TWO SITUATIONS. A session at its
             // own prompt finished, or is between things, and needs nothing —
             // saying "quiet" about it invites a person to worry at the most
             // common state in the fleet. A pane stopped mid-work with no
             // prompt on it is the one worth a second look.
             return atRest == true ? "ready · idle \(howLong)" : "quiet for \(howLong)"
+        }
+
+        /// How long the pane has been still, as "9m" / "3h" / "2d", or nil
+        /// under five minutes and whenever the question does not apply — a
+        /// stopped session, or one showing a prompt, whose pane is still
+        /// because somebody has to answer it.
+        var idleFor: String? {
+            guard isRunning, prompt == nil, let idleSince, idleSince > 0 else { return nil }
+            let seconds = Date().timeIntervalSince1970 - idleSince / 1000
+            guard seconds >= 300 else { return nil }
+            return seconds < 3600 ? "\(Int(seconds / 60))m"
+                : seconds < 86_400 ? "\(Int(seconds / 3600))h"
+                : "\(Int(seconds / 86_400))d"
+        }
+
+        /// The one sentence about what this session is doing, owned here and
+        /// nowhere else.
+        ///
+        /// THE STATE VOCABULARY, IN EXACTLY ONE PLACE. The registry has three
+        /// storage states, the watcher has a timestamp and a flag, and a
+        /// badge, a row, a notification and a page each rendering their own
+        /// reading of those would drift apart on the first change. This is
+        /// the reading; the session page sets it in the title size, and any
+        /// other surface that wants the words takes them from here.
+        ///
+        /// Every sentence is a fact the frame carries, and nothing here is
+        /// promoted to a claim the frame does not make: a pane at its own
+        /// prompt is "at its prompt", not "finished", because a session
+        /// between two steps looks exactly the same; a quiet pane with no
+        /// prompt is "quiet", not "stuck", for the same reason. `ended` is
+        /// the one word the host itself uses for a session that concluded.
+        var stateSentence: String {
+            if prompt != nil || status == "awaiting-input" { return "Waiting for you" }
+            if isRunning {
+                if atRest == true { return idleFor.map { "At its prompt · idle \($0)" } ?? "At its prompt" }
+                if let idle = idleFor { return "Quiet for \(idle)" }
+                return "Working"
+            }
+            if status == "ended" { return "Finished" }
+            if status == "stopped" { return isResumable ? "Stopped · can be resumed" : "Stopped" }
+            return status
         }
 
         /// Worth counting as "a session somebody might want to look at". A

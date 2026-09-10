@@ -907,3 +907,53 @@ test('an FCM push carries a ttl, a collapse key, and when it was sent', async ()
   await pusher.send([{ platform: 'android', token: 'a'.repeat(40) }], { title: 't', body: 'b', data: { event: 'test', name: '', hostId: '', url: '' } });
   assert.equal(bodies[1].android.collapse_key, undefined);
 });
+
+// --- back at its prompt --------------------------------------------------------
+//
+// The host says `session.ready` on every return to the CLI's own prompt. The
+// ring keeps all of them; the phone is told about two kinds and no others.
+
+test('a session started from a profile coming back to its prompt is the "done" the phone gets', async () => {
+  const push = fakePusher();
+  const c = core({ push });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+
+  await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'nightly-1', text: 'is back at its prompt', profile: 'nightly' });
+
+  assert.equal(push.sends.length, 1);
+  assert.match(push.sends[0].message.title, /nightly-1 on deb132/);
+  assert.equal(push.sends[0].message.body, 'is back at its prompt');
+  assert.equal(push.sends[0].message.data.event, 'session.ready');
+  // The name travels on the ring; the content never left the box.
+  assert.equal(c.events[0].profile, 'nightly');
+});
+
+test('a turn in a conversation somebody is driving by hand is recorded and not pushed', async () => {
+  const push = fakePusher();
+  const c = core({ push });
+  await c.registerDevice({ platform: 'ios', token: 'a'.repeat(40) });
+
+  await c.onHostMessage('deb132', { kind: 'event', event: 'session.ready', name: 'chat', text: 'is back at its prompt' });
+
+  assert.equal(push.sends.length, 0, 'a buzz per turn is how the one that matters gets switched off');
+  assert.equal(c.events.length, 1, 'still on the ring, for fleet_events and the console');
+  assert.equal(c.events[0].profile, undefined);
+});
+
+test('on a temporary machine, coming back to the prompt is a bill still running, and says so', async () => {
+  const push = fakePusher();
+  const c = core({ push });
+  await c.registerDevice({ platform: 'android', token: 'a'.repeat(40) });
+  c.registry.connect('runner-7', () => {}, { ephemeral: true });
+
+  await c.onHostMessage('runner-7', { kind: 'event', event: 'session.ready', name: 'build', text: 'is back at its prompt' });
+
+  assert.equal(push.sends.length, 1, 'no profile, but the machine is paid for by the minute');
+  assert.match(push.sends[0].message.body, /^is back at its prompt\. This is a temporary machine, and it keeps running, and costing, until it is stopped or its time is up\.$/);
+  assert.match(String(c.events[0].text), /temporary machine/, 'the ring says it too');
+});
+
+test('back at its prompt reads as a sentence', () => {
+  assert.equal(describeEvent({ event: 'session.ready' }), 'is back at its prompt');
+  assert.equal(describeEvent({ event: 'session.ready', text: 'is back at its prompt. This is a temporary machine' }), 'is back at its prompt. This is a temporary machine');
+});

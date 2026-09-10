@@ -28,6 +28,7 @@ import { log } from '../log.js';
  * @property {string|null} title          what the session is about, for people; the name is the identity
  * @property {boolean} [titlePinned]      set by hand, so nothing derived overwrites it
  * @property {string|null} [brief]         a sentence of context, written by a person at start
+ * @property {string|null} [profile]       the NAME of the profile it was started with, never its content — the watcher reads it to say whose "back at its prompt" is news
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"
  * @property {string|null} detail         last human-readable outcome
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
@@ -148,6 +149,7 @@ export class Registry {
           skipPermissions: patch.skipPermissions ?? null,
           title: patch.title ?? null,
           brief: patch.brief ?? null,
+          profile: patch.profile ?? null,
           account: patch.account ?? null,
           detail: patch.detail ?? null,
           rcUrl: patch.rcUrl ?? null,

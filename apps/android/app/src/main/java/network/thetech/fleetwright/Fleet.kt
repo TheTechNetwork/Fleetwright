@@ -99,21 +99,55 @@ class Fleet(
          * anxiety in docs/psychology.md, not "is it typing".
          */
         val quietFor: String? get() {
-            if (!isRunning || prompt != null) return null
-            val since = idleSince?.takeIf { it > 0 } ?: return null
-            val seconds = (System.currentTimeMillis() - since) / 1000
-            if (seconds < 300) return null
-            val howLong = when {
-                seconds < 3600 -> "${seconds / 60}m"
-                seconds < 86_400 -> "${seconds / 3600}h"
-                else -> "${seconds / 86_400}d"
-            }
+            val howLong = idleFor ?: return null
             // TWO SENTENCES, BECAUSE THEY ARE TWO SITUATIONS. A session at its
             // own prompt finished, or is between things, and needs nothing —
             // saying "quiet" about it invites a person to worry at the most
             // common state in the fleet. A pane stopped mid-work with no
             // prompt on it is the one worth a second look.
             return if (atRest) "ready · idle $howLong" else "quiet for $howLong"
+        }
+
+        /**
+         * How long the pane has been still, as "9m" / "3h" / "2d", or null
+         * under five minutes and whenever the question does not apply: a
+         * stopped session, or one showing a prompt, whose pane is still
+         * because somebody has to answer it.
+         */
+        val idleFor: String? get() {
+            if (!isRunning || prompt != null) return null
+            val since = idleSince?.takeIf { it > 0 } ?: return null
+            val seconds = (System.currentTimeMillis() - since) / 1000
+            if (seconds < 300) return null
+            return when {
+                seconds < 3600 -> "${seconds / 60}m"
+                seconds < 86_400 -> "${seconds / 3600}h"
+                else -> "${seconds / 86_400}d"
+            }
+        }
+
+        /**
+         * The one sentence about what this session is doing, owned here and
+         * nowhere else. Same words as iOS, held equal by
+         * test/session-screen.test.js.
+         *
+         * Every sentence is a fact the frame carries, and nothing is promoted
+         * to a claim the frame does not make: a pane at its own prompt is "at
+         * its prompt", not "finished", because a session between two steps
+         * looks exactly the same; a quiet pane with no prompt is "quiet", not
+         * "stuck", for the same reason. `ended` is the one word the host
+         * itself uses for a session that concluded.
+         */
+        val stateSentence: String get() {
+            if (prompt != null || status == "awaiting-input") return "Waiting for you"
+            if (isRunning) {
+                if (atRest) return idleFor?.let { "At its prompt · idle $it" } ?: "At its prompt"
+                idleFor?.let { return "Quiet for $it" }
+                return "Working"
+            }
+            if (status == "ended") return "Finished"
+            if (status == "stopped") return if (resumable) "Stopped · can be resumed" else "Stopped"
+            return status
         }
 
         /**

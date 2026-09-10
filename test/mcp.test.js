@@ -358,7 +358,7 @@ test('initialize hands the agent the contract, not just the capabilities', async
 
   assert.match(text, /15 minutes/);
   assert.match(text, /Work you start is work you own/i);
-  assert.match(text, /finished session looks exactly like an idle one/);
+  assert.match(text, /stopped working, not that it did what you asked/);
   // The cost, because an agent that knows the verbs and not the consequences
   // leaves a Mac idling until a timer nobody mentioned kills it.
   assert.match(text, /cost money while they live/i);
@@ -770,4 +770,55 @@ test('an agent may pick a box\'s image and may not relabel the fleet', () => {
 
   // An operator who wants it says so, like the three destructive file verbs.
   assert.ok(toolsFor({ allow: ['labels'] }).map((t) => t.name).includes('fleet_labels'));
+});
+
+test('waiting returns when the session comes back to its prompt after working, and says what that means', async () => {
+  // THE LOOP THIS SERVER TEACHES used to dead-end here. Start with a profile,
+  // await, read the log: a finished session does not END, so the wait ran out
+  // the clock and said "still running" about a job done twenty minutes ago.
+  const { server, written, calls } = awaitServer([
+    { ok: true, session: { status: 'running', awaiting: false, atRest: false, readyAt: null, createdAt: 1000 } },
+    { ok: true, session: { status: 'running', awaiting: false, atRest: true, readyAt: 5000, createdAt: 1000 } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
+  const text = written[0].result.content[0].text;
+  assert.match(text, /back at its prompt after working/);
+  // "Done" is a judgement and the reply says so: stopped working, not did
+  // what was asked. The log is the evidence, and stopping discards it.
+  assert.match(text, /not that it did what you asked/);
+  assert.match(text, /fleet_read_log/);
+  assert.match(text, /before stopping it/);
+  assert.equal(written[0].result.isError, undefined);
+  assert.equal(calls(), 2);
+});
+
+test('a session sitting at its prompt that never worked is not done, and neither is one from a previous life', async () => {
+  const { backAtPrompt } = await import('../src/mcp/server.js');
+  // Fresh, idle, nobody typed: at its prompt and no return on record.
+  assert.equal(backAtPrompt({ status: 'running', atRest: true, readyAt: null, createdAt: 1000 }), false);
+  // A return recorded BEFORE this run began — the host clears it on restart,
+  // and this is the belt to that brace.
+  assert.equal(backAtPrompt({ status: 'running', atRest: true, readyAt: 900, createdAt: 1000 }), false);
+  // Came back, then was given more to do: not at rest now, so not done.
+  assert.equal(backAtPrompt({ status: 'running', atRest: false, readyAt: 5000, createdAt: 1000 }), false);
+  // A host too old to send readyAt answers as it always did.
+  assert.equal(backAtPrompt({ status: 'running', atRest: true, createdAt: 1000 }), false);
+  assert.equal(backAtPrompt({ status: 'running', atRest: true, readyAt: 5000, createdAt: 1000 }), true);
+  // Finished before the first poll: readyAt after createdAt, and it returns at once.
+  const { server, written, calls } = awaitServer([
+    { ok: true, session: { status: 'running', awaiting: false, atRest: true, readyAt: 5000, createdAt: 1000 } },
+  ]);
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_await', arguments: { name: 'mine', seconds: 300 } }));
+  assert.match(written[0].result.content[0].text, /back at its prompt/);
+  assert.equal(calls(), 1);
+});
+
+test('the instructions no longer say nothing reports done, and say what "done" means', async () => {
+  const { server, written } = awaitServer([]);
+  await server.handleLine(rpc(1, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } }));
+  const instructions = String(written[0].result.instructions);
+  assert.doesNotMatch(instructions, /Nothing in the fleet\s+reports "done"/);
+  assert.match(instructions, /BACK TO ITS PROMPT after working/);
+  assert.match(instructions, /stopped working, not that it did what you asked/);
+  assert.match(instructions, /fleet_await — returns when the session comes back to its prompt after working/);
 });
