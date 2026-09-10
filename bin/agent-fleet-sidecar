@@ -14,7 +14,7 @@ import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
 import { autoLabels } from '../src/fleet/host/auto-labels.js';
 import { updateStatus } from '../src/core/update.js';
-import { installedVersion } from '../src/core/release-apply.js';
+import { installedVersion, currentVersion } from '../src/core/release-apply.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
@@ -192,7 +192,14 @@ const sidecar = new Sidecar({
       // would be a word the app might one day try to use.
       if (st.packaged) {
         const v = installedVersion(hub.installDir);
-        return v === 'unknown' ? null : { head: v, branch: null };
+        // AND WHAT `current` POINTS AT, which is a different question once an
+        // update has landed and this process has not restarted. `head` is
+        // what this sidecar is running, read from its own directory;
+        // `installed` is what the box would run after a restart. The apps
+        // draw the gap, because "up to date" about a service running an old
+        // release out of a box whose disk holds a newer one was the exact
+        // sentence a fleet showed for fourteen releases.
+        return v === 'unknown' ? null : { head: v, branch: null, installed: currentVersion(hub.installDir) };
       }
       return null;
     },

@@ -91,7 +91,17 @@ export function releaseLayout(installDir) {
 }
 
 /**
- * The version running now, from the package.json the release ships.
+ * The version of the tree at `installDir`, from the package.json the release
+ * ships.
+ *
+ * WHICH TREE THAT IS depends on who asks. A running process resolves its own
+ * install root through the symlink to the real directory (config.js derives it
+ * from where the code is), so from inside a service this is the version THAT
+ * SERVICE IS RUNNING — even after `current` has moved on. That is the honest
+ * answer to "what is this process", and it is exactly why a service that was
+ * never restarted keeps reporting the release it started on. See
+ * currentVersion for the other question.
+ *
  * @param {string} installDir
  */
 export function installedVersion(installDir) {
@@ -100,6 +110,31 @@ export function installedVersion(installDir) {
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * The version `current` points at — what a service WOULD run if it restarted.
+ *
+ * The other half of the question installedVersion answers from inside a
+ * process. A fleet showed a box as `main-88 · up to date` while the same box
+ * answered "already on main-102": the sidecar reporting health was still
+ * running main-88 out of releases/main-88, the hub had moved `current` to
+ * main-102 and restarted, and nothing anywhere compared the two. "Up to date"
+ * was measuring what was left to download, which was nothing, about a service
+ * fourteen releases behind its own disk.
+ *
+ * Null on a box that is not a release layout — a checkout has no `current`
+ * and no second answer to give — and null when the link cannot be read. Never
+ * 'unknown': a caller that sees a string here should be able to compare it.
+ *
+ * @param {string} installDir  either shape releaseLayout accepts
+ * @returns {string|null}
+ */
+export function currentVersion(installDir) {
+  const layout = releaseLayout(installDir);
+  if (!layout.ok) return null;
+  const v = installedVersion(releasePaths(layout.base, '').link);
+  return v === 'unknown' ? null : v;
 }
 
 /**

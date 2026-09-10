@@ -703,6 +703,18 @@ test('the health frame says how much a box puts into every session, in three sta
   assert.equal(refused.health.houseRules, 0, 'a file that is present and unusable is 0, not null');
 });
 
+test('the frame carries what a box runs and what its disk holds, side by side', async (t) => {
+  // Two numbers or none. A phone with only `head` can say what a box runs; a
+  // phone with both can say the box is waiting on a restart, which is the
+  // sentence a fleet needed and did not have.
+  const { sidecar } = await setup(t, {}, {
+    version: () => ({ head: 'main-88', branch: null, installed: 'main-102' }),
+  });
+  const r = await sidecar.handle(intent({ verb: 'health' }));
+  assert.equal(r.health.version.head, 'main-88');
+  assert.equal(r.health.version.installed, 'main-102');
+});
+
 test('a host with no hub config cannot say whether it has house rules', async (t) => {
   const { sidecar } = await setup(t);
   const r = await sidecar.handle(intent({ verb: 'health' }));
