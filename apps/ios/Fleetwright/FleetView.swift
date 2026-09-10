@@ -682,25 +682,24 @@ private struct SettingsView: View {
     @State private var runnerPlatform = "linux"
     @State private var runnerMinutes = 60
     @State private var runnerResult = ""
-    @State private var confirmingRevoke: String?
-    @State private var hostActionResult = ""
-    /// WHICH host that answer is about.
-    ///
-    /// It used to be one string rendered in the enrolment section — above the
-    /// "Fleet" header, detached from every row — so an answer about one machine
-    /// appeared above a list of four. A reply has to be shown where the thing
-    /// it is replying about is.
-    @State private var resultHost: String?
-    @State private var busyHost: String?
-    /// Deleting for good is the one action here with no undo left, so it asks
-    /// once — a confirmation nobody can tap through by accident on a phone in
-    /// a pocket. `forget` deliberately does not ask, because it is reversible.
-    @State private var purgeTarget: String?
-    /// The one host whose controls are showing, if any.
-    ///
-    /// ONE AT A TIME. Several open at once is the wall this replaced, arrived at
-    /// by tapping instead of by default.
-    @State private var expandedHost: String?
+    // REVOKING A MACHINE AND EMPTYING THE BIN WERE HERE, and both moved: a
+    // host's revocation is on that host's page and the bin is its own screen,
+    // for the reason the comment on the "Add a machine" section gives — two
+    // lists of one thing is the fault.
+    //
+    // What stayed behind was five `@State` properties, a `binAction`, a
+    // confirmation footer and an alert, none of which anything could reach:
+    // nothing assigned `purgeTarget` or `confirmingRevoke`, so neither control
+    // could appear, and `hostActionResult` was written by both and rendered by
+    // nothing. The comment on one of them described showing a reply beside the
+    // row it is about — behaviour this screen had already stopped having.
+    //
+    // Deleted rather than rewired. The live copies work and are tested; a
+    // second set nobody could open was somewhere for the next person to hook a
+    // button up to and lose the answer again.
+    // `expandedHost` went the same way and for the same reason: it named the
+    // one host whose controls were showing, on a screen that no longer shows
+    // any. A machine's page is a page now.
     /// HAS THE FIRST ANSWER ARRIVED? Distinct from "the answer was nothing",
     /// which is the same distinction this project argues for everywhere else
     /// and did not make on its own opening screen.
@@ -740,9 +739,12 @@ private struct SettingsView: View {
     /// type-check this expression in reasonable time", on somebody else's line.
     /// It only happens on CI, because only CI builds for a device.
     ///
-    /// A method rather than a separate View: these read `busyHost` and call
-    /// `maintain`, and threading that through a struct's initialiser would be
-    /// paying in bindings for something the type checker wanted in expressions.
+    /// A method rather than a separate View: it reads this screen's own state,
+    /// and threading that through a struct's initialiser would be paying in
+    /// bindings for something the type checker wanted in expressions.
+    ///
+    /// It named `busyHost` and `maintain` until both were deleted with the
+    /// per-host controls, which is how a comment outlives what it describes.
     @ViewBuilder
     private func healthLines(for host: Fleet.FleetHost) -> some View {
             // WHO CAN START A SESSION HERE, and as whom. These were two lines
@@ -825,22 +827,9 @@ private struct SettingsView: View {
     // the control panel and had nowhere else to put the answer. HostView keeps
     // its own health and re-reads itself, so there is nothing to patch.
 
-    /// Restore or purge, in one place so the busy flag and the result text
-    /// cannot drift apart — the same reason `maintain` exists.
-    @MainActor
-    private func binAction(_ name: String, restore: Bool) async {
-        busyHost = name
-        defer { busyHost = nil }
-        do {
-            let fleet = Fleet(settings: settings)
-            let reply = restore ? try await fleet.restore(name) : try await fleet.purge(name)
-            hostActionResult = reply.text ?? ""
-        } catch {
-            hostActionResult = error.localizedDescription
-        }
-        purgeTarget = nil
-        await loadHosts()
-    }
+    // `binAction` WAS HERE, and the bin it acted on is RecycleBinView. Nothing
+    // could call this one: the only caller was a confirmation footer that no
+    // code path ever made appear. See the note where its state used to be.
 
     /// A MACHINE THAT DOES NOT EXIST YET, beside the pin for one that does.
     ///
@@ -1315,20 +1304,12 @@ private struct SettingsView: View {
                             .foregroundStyle(Design.Palette.ink)
                             .textCase(nil)
                     } footer: {
-                        if let target = purgeTarget {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Delete \(target) for good?").fleetType(.bodySmall)
-                                Text("The conversation and the workspace go with it. This is the only step here that cannot be undone — forgetting was reversible, this is not.")
-                                    .fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
-                                HStack(spacing: 12) {
-                                    Button("Delete", role: .destructive) { Task { await binAction(target, restore: false) } }
-                                    Button("Cancel") { purgeTarget = nil }
-                                }
-                                .fleetType(.micro)
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
+                        // The delete-for-good confirmation that stood above
+                        // this line could not appear: nothing set the state it
+                        // was drawn from. Deleting for good is on the bin's own
+                        // screen, which asks the same question and can be
+                        // reached.
+                        Text("A pin is good for ten minutes, once. Revoking a host disconnects it as well.")
                     }
                     }
                 }
@@ -1717,8 +1698,10 @@ private struct SettingsView: View {
                     confirmingClientRevoke = nil
                     Task {
                         // The refusal reaches the screen, for the reason the
-                        // host revocation below it learned the hard way: a
-                        // discarded error reads as "it came back".
+                        // host revocation learned the hard way: a discarded
+                        // error reads as "it came back". That one lives in
+                        // HostView.swift now, and this stays where it is
+                        // because a device is not a machine.
                         do {
                             clientResult = try await Fleet(settings: settings).revokeClient(c.id).text ?? ""
                         } catch {
@@ -1731,34 +1714,13 @@ private struct SettingsView: View {
                 Text("That device stops being able to reach this fleet, and its push notifications "
                      + "stop. Every other device keeps working. Signing in again on it mints a new one.")
             }
-            .alert(
-                "Revoke \(confirmingRevoke ?? "")?",
-                isPresented: Binding(get: { confirmingRevoke != nil }, set: { if !$0 { confirmingRevoke = nil } })
-            ) {
-                Button("Cancel", role: .cancel) { confirmingRevoke = nil }
-                Button("Revoke", role: .destructive) {
-                    guard let hostId = confirmingRevoke else { return }
-                    confirmingRevoke = nil
-                    Task {
-                        // The refusal reaches the screen. This was `_ = try?`,
-                        // which discarded the error AND the reply — so a 403
-                        // ("removing machines needs an admin credential")
-                        // closed the sheet and showed nothing, and the symptom
-                        // was reported as "the host comes right back". A
-                        // refusal the user never sees costs a night; a
-                        // sentence costs a sentence.
-                        do {
-                            hostActionResult = try await Fleet(settings: settings).revokeHost(hostId).text ?? ""
-                        } catch {
-                            hostActionResult = error.localizedDescription
-                        }
-                        await loadHosts()
-                    }
-                }
-            } message: {
-                Text("It is disconnected immediately, and its sessions keep running without it. "
-                     + "Getting it back means a new pin, typed on that box.")
-            }
+            // A SECOND "Revoke <host>?" ALERT WAS HERE, unreachable — nothing
+            // ever set the state it was presented from. It carried the lesson
+            // that a refusal the user never sees costs a night, and the lesson
+            // was worth more than the code: the live revoke, on the host's own
+            // page, was setting its answer and then dismissing the page it had
+            // just set it on. That is fixed in HostView.swift, where the whole
+            // story is now written down beside the code it is about.
             .toolbar {
                 // ONLY AS A SHEET. In a tab there is nothing to dismiss, and
                 // Done sat in the corner of a screen nobody had opened.

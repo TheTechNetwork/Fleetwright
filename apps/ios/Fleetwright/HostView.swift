@@ -491,10 +491,36 @@ struct HostView: View {
                     defer { busy = false }
                     // The refusal reaches the screen. Discarding it is how a 403
                     // reads as "the host came back".
-                    do { result = try await fleet.revokeHost(hostId).text ?? "" }
-                    catch { result = error.localizedDescription }
-                    await onChange()
-                    dismiss()
+                    //
+                    // AND THE SCREEN HAS TO STILL BE THERE TO REACH. This set
+                    // `result` and then dismissed unconditionally, which is the
+                    // same bug wearing its own fix. A 403 does not throw —
+                    // Fleet.send special-cases 401 and nothing else — so
+                    //
+                    //     Removing machines and other people's devices needs an
+                    //     admin credential on this fleet.
+                    //
+                    // decoded perfectly, landed in `result`, and went away with
+                    // the page half a frame later. What a person saw was the
+                    // sheet closing and the machine still in the list, which is
+                    // word for word the report the comment above is about.
+                    //
+                    // Closing is right when it WORKED: the machine is gone and
+                    // its page should go with it. Nothing else is, and `ok`
+                    // missing altogether is not a yes — the page stays, and the
+                    // answer stays with it.
+                    //
+                    // Android never had this: its revoke leaves you on the
+                    // panel and prints the same text below the button.
+                    do {
+                        let reply = try await fleet.revokeHost(hostId)
+                        result = reply.text ?? ""
+                        await onChange()
+                        if reply.ok == true { dismiss() }
+                    } catch {
+                        result = error.localizedDescription
+                        await onChange()
+                    }
                 }
             }
         } message: {
