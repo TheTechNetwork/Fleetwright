@@ -254,6 +254,25 @@ a service fourteen releases behind its own disk. `installed` is absent on a
 checkout, which has no second answer, and on a host too old to send it; a
 phone with only `head` says what it always said.
 
+**Health says whether root's half of a box is the release's.** `version.helper`
+is `"current"`, `"stale"`, or `null`. The update helper is what every update
+runs as root, and the installer is the only thing that writes it; a box whose
+helper the installer never refreshed takes every update, restarts its services
+from the marker, and refreshes nothing root owns — the units, the hook and the
+sudoers rules stay as an earlier installer left them. One box did exactly that
+for two days, and the only place that said so was a warning in the hub's
+journal. The host establishes the fact without root: the release ships its copy
+of the helper under `install/`, the installer writes exactly that copy, so the
+same bytes is a heal that ran and different bytes is one that did not. Compared
+against the tree the sidecar runs rather than `current`, because `current` is
+newer than the helper for a few seconds between an update's symlink swap and
+its heal. A phone adds `update helper out of date` to the row *beside* what the
+box runs, not instead of it — a box can be up to date on downloads and still be
+in this state — and the host page says what still works before what to do. The
+one command, with the real path, comes from the host in the `updates` reply;
+neither phone carries a shell command of its own. `null` is cannot tell: a
+checkout, a box with no helper, or a host too old to say.
+
 **`reboot` keeps all three of the chat flow's confirmations, unchanged.** Sending
 it bare is step one: the host says what will be lost — every running session, by
 name — and issues a six-digit pin. Sending it again with the pin *and* the
