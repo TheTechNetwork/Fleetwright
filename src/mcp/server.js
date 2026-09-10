@@ -103,6 +103,25 @@ function describeFailure(e) {
 }
 
 /**
+ * Has this session come back to its own prompt after working, in this run?
+ *
+ * Both timestamps are the host's, so comparing them is sound; a host too old
+ * to send `readyAt` answers null and this is false, which is the behaviour
+ * before it existed. `atRest` is required as well: readyAt says it came back,
+ * atRest says it is still there now, and a session that has since been given
+ * more to do is not done.
+ *
+ * @param {any} session
+ */
+export function backAtPrompt(session) {
+  if (!session || session.atRest !== true) return false;
+  const readyAt = Number(session.readyAt);
+  if (!Number.isFinite(readyAt) || readyAt <= 0) return false;
+  const started = Number(session.createdAt ?? session.startedAt ?? 0);
+  return readyAt > started;
+}
+
+/**
  * The session record out of a `status` reply.
  *
  * THE REPLY HAS NEVER HAD A `session` KEY. Both callers read
@@ -126,25 +145,6 @@ function describeFailure(e) {
  * @param {any} reply
  * @param {string} [name]
  */
-/**
- * Has this session come back to its own prompt after working, in this run?
- *
- * Both timestamps are the host's, so comparing them is sound; a host too old
- * to send `readyAt` answers null and this is false, which is the behaviour
- * before it existed. `atRest` is required as well: readyAt says it came back,
- * atRest says it is still there now, and a session that has since been given
- * more to do is not done.
- *
- * @param {any} session
- */
-export function backAtPrompt(session) {
-  if (!session || session.atRest !== true) return false;
-  const readyAt = Number(session.readyAt);
-  if (!Number.isFinite(readyAt) || readyAt <= 0) return false;
-  const started = Number(session.createdAt ?? session.startedAt ?? 0);
-  return readyAt > started;
-}
-
 function sessionFrom(reply, name = '') {
   const many = Array.isArray(reply?.sessions) ? reply.sessions : null;
   if (many) {
