@@ -17,7 +17,7 @@ import { render } from 'preact-render-to-string';
 // compiles the components with preact left external and the tests render THOSE.
 // `npm test` builds first — see the pretest script.
 import { Console, Confidence, HostCard, Ask, Wall } from '../build/console/components.js';
-import { sessionState, byUrgency, standingClaims, headline, scrub, HOST_STATES } from '../build/console/state.js';
+import { sessionState, byUrgency, standingClaims, headline, scrub, HOST_STATES, SESSION_STATES } from '../build/console/state.js';
 
 // A connected healthy host HAS reported recently — the first version of this
 // fixture omitted healthAt, and the freshness claim correctly refused to vouch
@@ -178,6 +178,11 @@ test('a carriage return cannot make a pane show text the session never printed',
 
 test('a session state is derived in one place and covers every stored status', () => {
   assert.equal(sessionState({ status: 'running' }), 'working');
+  // At its own prompt is its own state, in the phones' words. A question
+  // outranks it: a pane showing a dialog is still, and that is not rest.
+  assert.equal(sessionState({ status: 'running', atRest: true }), 'ready');
+  assert.equal(SESSION_STATES.ready.word, 'At its prompt');
+  assert.equal(sessionState({ status: 'running', atRest: true, prompt: {} }), 'waiting');
   assert.equal(sessionState({ status: 'running', prompt: {} }), 'waiting');
   assert.equal(sessionState({ status: 'stopped' }), 'stopped');
   assert.equal(sessionState({ status: 'error' }), 'broken');
