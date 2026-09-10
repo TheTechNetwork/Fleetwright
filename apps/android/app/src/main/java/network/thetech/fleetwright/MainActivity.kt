@@ -222,7 +222,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
             // A failure is shown, never swallowed: "nothing here" and "I could
             // not reach the coordinator" look identical otherwise, and they are
             // completely different problems.
-            status = if (!reply.ok) reply.text else if (keepStatus) status else ""
+            status = if (!reply.ok) reply.text.said() else if (keepStatus) status else ""
             // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is
             // not a session, it is a session that stopped being one. Kept in a
             // separate assignment that falls back to what we already had — a
@@ -359,7 +359,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                 // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
                 // session is gone", "you cannot stop that" — and holding a
                 // command the fleet has already judged would retry it forever.
-                if (!reply.ok) status = reply.text
+                if (!reply.ok) status = reply.text.said()
             }
         }
         pending = outbox.held.size
@@ -489,7 +489,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                         onStop = {
                             scope.launch {
                                 busy = true
-                                status = fleet.stop(session.name).text
+                                status = fleet.stop(session.name).text.said()
                                 busy = false
                                 refresh(keepStatus = true)
                             }
@@ -497,7 +497,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                         onForget = {
                             scope.launch {
                                 busy = true
-                                status = fleet.forget(session.name).text
+                                status = fleet.forget(session.name).text.said()
                                 busy = false
                                 refresh(keepStatus = true)
                             }
@@ -505,7 +505,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                         onAnswer = { option ->
                             scope.launch {
                                 busy = true
-                                status = fleet.answer(session.name, option, session.prompt?.id).text
+                                status = fleet.answer(session.name, option, session.prompt?.id).text.said()
                                 busy = false
                                 refresh(keepStatus = true)
                             }
@@ -516,7 +516,13 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                         onPeek = {
                             scope.launch {
                                 busy = true
+                                // A PANE OF EMPTY ROWS IS NOT A PICTURE OF
+                                // ANYTHING, and this is the button whose whole
+                                // answer is the pane — so it has to say
+                                // something when the pane is blank rather than
+                                // leave the screen as it was. See String.said.
                                 status = fleet.peek(session.name).text
+                                    .said("Nothing is on ${session.label}'s screen right now.")
                                 busy = false
                             }
                         },
@@ -528,13 +534,14 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                             scope.launch {
                                 busy = true
                                 status = fleet.logs(session.hostId, session = session.name).text
+                                    .said("${session.label} has printed nothing that this machine could read.")
                                 busy = false
                             }
                         },
                         onResume = {
                             scope.launch {
                                 busy = true
-                                status = fleet.resume(session.name, "summary").text
+                                status = fleet.resume(session.name, "summary").text.said()
                                 busy = false
                                 refresh(keepStatus = true)
                             }
