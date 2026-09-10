@@ -135,7 +135,7 @@ export class Sidecar {
    *   watch?: boolean,
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null })|null,
    *   adoptUpdates?: ((waiting: any) => void)|null,
-   *   version?: (() => { head: string|null, branch: string|null, installed?: string|null }|null)|null,
+   *   version?: (() => { head: string|null, branch: string|null, installed?: string|null, helper?: 'current'|'stale'|null }|null)|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,

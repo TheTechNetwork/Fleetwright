@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { migrationState, migrationReply, migrate, healAfterRelease, ranInstaller, MIGRATE_BIN } from '../src/core/migrate.js';
+import { migrationState, migrationReply, migrate, healAfterRelease, ranInstaller, helperState, describeHelper, helperRefreshCommand, MIGRATE_BIN } from '../src/core/migrate.js';
 
 const cfg = /** @type {any} */ ({ releaseManifest: 'https://github.com/o/r/releases/latest/download/manifest.json' });
 const READY = { available: 'v0.2.3', configured: true };
@@ -315,4 +315,63 @@ test('the installer having run is read from the helper’s own words, on both of
   assert.equal(ranInstaller('sha256 ok\nrunning the installer from the verified release\n'), true, 'the bring-forward route');
   assert.equal(ranInstaller('already on the packaged layout, running main-103 — nothing to do\n'), false);
   assert.equal(ranInstaller(''), false, 'silence is not evidence');
+});
+
+// --- root's half, read without root -----------------------------------------
+
+test('a helper that is the release’s own copy is current, and a different one is stale', async () => {
+  // COMPARED, NOT VERSIONED. The helper carries no version and the installer
+  // writes the release's copy byte for byte, so "the same bytes" is the whole
+  // test — and it is one a process without root can run, which is what turns
+  // a warning in a journal into a value on a health frame.
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'helper-state-'));
+  try {
+    const root = nodePath.join(dir, 'releases', 'main-104');
+    mkdirSync(nodePath.join(root, 'install'), { recursive: true });
+    writeFileSync(nodePath.join(root, 'install', 'fleetwright-migrate'), '#!/bin/sh\necho new\n');
+    const bin = nodePath.join(dir, 'fleetwright-migrate');
+
+    writeFileSync(bin, '#!/bin/sh\necho new\n');
+    assert.equal(helperState({ installRoot: root, bin }), 'current');
+
+    writeFileSync(bin, '#!/bin/sh\necho "already on the packaged layout — nothing to do"\n');
+    assert.equal(helperState({ installRoot: root, bin }), 'stale');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('no helper, or no copy to compare against, is cannot tell and not stale', () => {
+  // A checkout has no release copy and a box installed by hand from a tarball
+  // may have no helper. Neither is a box whose heal did not run, and calling
+  // either "stale" would send somebody to type a command that fixes nothing.
+  const files = /** @type {Record<string, string>} */ ({ '/usr/local/sbin/fleetwright-migrate': 'x' });
+  const read = (/** @type {string} */ p) => {
+    if (!(p in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    return Buffer.from(files[p]);
+  };
+  assert.equal(helperState({ installRoot: '/opt/agent-fleet', read }), null, 'a tree with no copy');
+  assert.equal(helperState({ installRoot: '/opt/x', bin: '/nowhere', read }), null, 'no helper at all');
+});
+
+test('the stale sentence says what it costs, then the one command with the real path', () => {
+  const text = describeHelper('stale', '/opt/fleetwright/releases/main-104');
+  assert.ok(text);
+  // What still works comes first, so the reader knows this is one command and
+  // not a broken box: updates land and the services restart from the marker.
+  assert.match(text, /restarts the services/);
+  assert.match(text, /refreshes nothing root owns/);
+  assert.match(text, /once/);
+  // The real path, because the person reading it is going to type it.
+  assert.match(text, /sudo install -m 0755 -o root -g root \/opt\/fleetwright\/releases\/main-104\/install\/fleetwright-migrate \/usr\/local\/sbin\/fleetwright-migrate$/);
+  assert.equal(helperRefreshCommand('/opt/a'), `sudo install -m 0755 -o root -g root /opt/a/install/fleetwright-migrate ${MIGRATE_BIN}`);
+
+  // And nothing at all for a current helper or an unknown one: a line about
+  // root's half being fine is a line about a feature nobody is thinking about.
+  assert.equal(describeHelper('current', '/opt/a'), null);
+  assert.equal(describeHelper(null, '/opt/a'), null);
+  assert.equal(describeHelper(undefined, '/opt/a'), null);
 });
