@@ -240,11 +240,15 @@ key's custody question in [github-app.md](./github-app.md), and one seam: that
 socket is served only for sandboxed sessions (`cfg.sandbox && cfg.sandboxHookSocket`),
 and a runner deliberately runs unsandboxed.
 
-**Nothing reports completion.** A runner session that has finished looks exactly
-like an idle one — the ambiguity the watcher already cannot resolve on a
-permanent host, and it matters more here because the machine is being paid for
-by the minute. `fleet_await` waits for a session to end; it cannot tell you the
-work is done.
+**Completion is reported, as the return to the prompt.** A runner session that
+has finished used to look exactly like an idle one, and it mattered more here
+because the machine is being paid for by the minute. The watcher now raises
+`session.ready` when a session comes back to the CLI's own prompt after it was
+seen working, and the coordinator pushes it for every session on a temporary
+machine with the sentence that matters: *it keeps running, and costing, until
+it is stopped or its time is up*. `fleet_await` still waits for a session to
+end; the phone is told the work is done, and `fleet_events` carries the same
+event for an agent watching.
 
 **A dispatch is not a machine.** The reply comes back long before the runner
 does: GitHub has to find hardware, boot it, and install tmux and the CLI. The
