@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
+import { readHouseRules } from './rules.js';
 import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
@@ -353,6 +354,9 @@ export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorde
     const seeded = seedCredentials(cfg, claude, pickCredentialSource(cfg, actor), actor);
     if (!seeded.ok) return seeded;
     account = seeded.account ?? 'shared';
+    // AFTER the credential and never instead of it: this one cannot refuse a
+    // start, so it must not run before the thing that can.
+    seedHouseRules(cfg, claude);
     fresh = true;
   }
   // A RESUME REFRESHES THE CREDENTIAL IT ALREADY HAS. This used to be the one
@@ -501,6 +505,55 @@ export function volumeAccount(cfg, volume) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Give a fresh conversation volume this box's house rules, if it has any.
+ *
+ * NEVER FAILS A START. Credentials are load-bearing — a session without one
+ * comes up at a login prompt nobody is there to answer, so seedCredentials
+ * refuses. Rules are not: a session without them does the same work slightly
+ * differently. So everything here warns and carries on, and the warning is the
+ * point, because "you wrote rules and they are being ignored" is the failure
+ * mode worth catching.
+ *
+ * THE CONTENT GOES ON STDIN, not into the argument list and not through a
+ * mount. Not through the argument list for the reason this whole file is
+ * careful about: text a person wrote must never be parsed as shell. Not
+ * through a mount because the size was checked in this process a moment ago,
+ * and a mount would copy whatever the file says NOW — a gap that only matters
+ * on a box where somebody is editing the file as sessions start, which is
+ * exactly the box where somebody is editing the file.
+ *
+ * ON CREATION ONLY, like the credential and for a firmer reason: a session's
+ * standing instructions must not change under it. Edit the file and the next
+ * session gets it; the one already running keeps what it began with, which is
+ * the property that makes a running session something you can reason about.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} volume
+ * @returns {{ seeded: boolean, chars: number }}
+ */
+function seedHouseRules(cfg, volume) {
+  const rules = readHouseRules(cfg);
+  if (!rules) return { seeded: false, chars: 0 };
+  if (!rules.ok || !rules.text) {
+    log.warn(`sandbox: no house rules for ${volume} — ${rules.why}`);
+    return { seeded: false, chars: rules.chars };
+  }
+
+  const r = podman(
+    cfg,
+    ['run', '--rm', '-i', '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg),
+      'sh', '-c', 'cat > /dest/CLAUDE.md && chmod 644 /dest/CLAUDE.md'],
+    { input: rules.text },
+  );
+  if (r.status !== 0) {
+    log.warn(`sandbox: could not write house rules into ${volume}: ${r.stderr.trim().slice(0, 200)}`);
+    return { seeded: false, chars: rules.chars };
+  }
+  log.info(`sandbox: gave ${volume} ${rules.chars} characters of house rules`);
+  return { seeded: true, chars: rules.chars };
 }
 
 /**

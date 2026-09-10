@@ -57,6 +57,7 @@ import { readChannel, pinnedByEnv } from '../../core/channel.js';
 import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
 import { readLabels } from '../../core/labels.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
+import { readHouseRules } from '../../core/rules.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -703,6 +704,22 @@ export class Sidecar {
       // still works there, the frame just does not say which of the three
       // will answer with something.
       logs: this.#logSources(),
+      // WHAT THIS BOX PUTS INTO EVERY SESSION, as a number rather than a flag.
+      //
+      // House rules are read on every turn of every session, so their size IS
+      // the fact worth reporting — docs/wanted.md puts it plainly, "a
+      // 2,000-token house style is a 2,000-token tax on a one-line question".
+      // A boolean would say a box has rules and leave the only decidable
+      // question unanswered.
+      //
+      // Three states, and they are the ones this project keeps insisting on:
+      // a number is "this many characters, on every turn"; 0 is "there is a
+      // rules file and it is NOT being used", which is a fault somebody should
+      // see rather than silence; null is no rules file at all, which is the
+      // normal case and also what a host too old to send this reads as. The
+      // last two collapsing would be the C-5 failure — cannot-tell rendered as
+      // nothing.
+      houseRules: this.#houseRules(),
       loadavg: [load1, load5, load15],
       freeMemBytes: os.freemem(),
       totalMemBytes: os.totalmem(),
@@ -933,6 +950,29 @@ export class Sidecar {
       this.log.warn(`sidecar: config frame carried "${key}", which this host does not recognise — dropped`);
     }
     return { kind: 'none' };
+  }
+
+  /**
+   * How many characters of house rules this box gives a new session, 0 if it
+   * has a rules file it cannot use, and null if it has none at all.
+   *
+   * READ EVERY TIME rather than cached at start, like the labels and the
+   * channel beside it: somebody edits the file and the next health frame says
+   * so, without a restart. It is one stat and one read of a small file, on a
+   * frame that already shells out for load average.
+   *
+   * @returns {number|null}
+   */
+  #houseRules() {
+    if (!this.hubConfig) return null;
+    try {
+      const rules = readHouseRules(this.hubConfig);
+      if (!rules) return null;
+      return rules.ok ? rules.chars : 0;
+    } catch {
+      // A frame is not the place to fail over a nicety. Cannot tell.
+      return null;
+    }
   }
 
   /**

@@ -95,6 +95,7 @@ import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade }
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
+import { readHouseRules, describeHouseRules } from '../core/rules.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
 import { dispatchRunner, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
 
@@ -625,15 +626,28 @@ export const COMMANDS = {
     help:
       'List the task profiles on this host. Each is a file — start a session on one with ' +
       '/new --profile=<name>, and the session comes up with that file as its first message ' +
-      'instead of idle. Adding one means putting a file on this box, which needs a shell here.',
+      'instead of idle. Adding one means putting a file on this box, which needs a shell here. ' +
+      'This also reports the house rules a box gives every session, when it has any.',
     run: (ctx) => {
       const have = ctx.sessions.profiles.list();
+      // THE OTHER HALF OF THE SAME QUESTION. "What does this box put into a
+      // session" has two answers — the first message, and the standing rules —
+      // and a person asking one is asking both. Reported here rather than in a
+      // verb of its own because there is nothing to choose: house rules either
+      // exist on the box or do not.
+      //
+      // Null when there is no rules file at all, and then nothing is said. A
+      // line reading "no house rules" on every box that has never heard of
+      // them is a line about a feature nobody is using.
+      const rules = describeHouseRules(readHouseRules(ctx.cfg));
+      const also = rules ? `\n\n${rules}` : '';
       if (!have.length) {
         return {
           ok: true,
           text:
             'No task profiles on this box, so every session here starts idle.\n' +
-            `Add one as ${ctx.cfg.profileDir}/<name>.md — its content becomes the session's first message.`,
+            `Add one as ${ctx.cfg.profileDir}/<name>.md — its content becomes the session's first message.` +
+            also,
           // EMPTY, NOT ABSENT. "This host has none" and "this host does not
           // know the verb" are different answers and a picker has to tell them
           // apart — null is cannot-tell, [] is nothing.
@@ -645,7 +659,7 @@ export const COMMANDS = {
       const lines = have.map((p) => `${p.name.padEnd(width)}  ${p.summary}`);
       return {
         ok: true,
-        text: `${have.length} profile${have.length === 1 ? '' : 's'} on this box:\n${lines.join('\n')}`,
+        text: `${have.length} profile${have.length === 1 ? '' : 's'} on this box:\n${lines.join('\n')}${also}`,
         // AS DATA TOO. An app rendering a picker from the text above would be
         // parsing column padding, and the padding is there for a terminal.
         profiles: have,

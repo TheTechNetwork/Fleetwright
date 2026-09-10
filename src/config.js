@@ -82,6 +82,27 @@ export function loadConfig(env = process.env) {
     // starts idle sessions, which is what every host did before this existed.
     profileDir: str('AGENT_HUB_PROFILE_DIR', path.join(stateDir, 'profiles')),
 
+    // HOUSE RULES, which are a different thing from a profile and sit here
+    // because they are governed by the same sentence.
+    //
+    // A profile is what a session is ASKED TO DO, once, as its first message.
+    // This is how work is done on this box, on every turn of every session —
+    // Claude Code reads ~/.claude/CLAUDE.md, and a sandboxed session's
+    // ~/.claude is a fresh volume that has never had one. So a box could have
+    // house rules for its own shell and its sessions would not get them.
+    //
+    // A FILE ON THE HOST, and nothing about it crosses the wire — not even a
+    // name, which is one fewer thing than a profile needs. There is no verb
+    // that sets it and no field that carries it, so a compromised coordinator
+    // cannot write the standing instructions of an agent with root in a
+    // container. Putting a file here needs a shell here.
+    //
+    // Beside profiles/ on purpose: `git -C /var/lib/agent-hub diff` then
+    // answers "what are these boxes being told" for both halves at once.
+    //
+    // Missing is the normal case and not an error.
+    rulesFile: str('AGENT_HUB_RULES_FILE', path.join(stateDir, 'CLAUDE.md')),
+
     // --- how sessions are launched ----------------------------------------
     // Sessions start here. It MUST be a trusted folder in ~/.claude.json or
     // claude blocks on the interactive "trust this folder?" prompt forever;
