@@ -150,7 +150,7 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                     listOfNotNull(
                         session.hostId?.let { "on $it" },
                         session.workspace?.let { "· $it" },
-                        session.age?.let { "· started $it ago" },
+                        session.age?.let { "· $it" },
                         session.account?.takeIf { it != "shared" }?.let { "· $it" },
                     ).joinToString(" "),
                     style = Design.Style.micro,
