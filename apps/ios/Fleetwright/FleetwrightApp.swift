@@ -67,6 +67,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         startErrorReporting()
         UNUserNotificationCenter.current().delegate = self
+        // AT LAUNCH, BECAUSE THERE IS NO LATER. iOS resolves a notification's
+        // category against what the app registered the last time it ran, so a
+        // category learned when the notification arrives is a category that
+        // arrives after it. This is also cheap and unconditional: it registers
+        // words, not permission, and asking for permission is still a separate
+        // thing that happens once the app is configured.
+        UNUserNotificationCenter.current().setNotificationCategories(NotificationAnswers.categories())
         return true
     }
 
@@ -202,21 +209,88 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// notification exists so a decision can be made from a lock screen; the
     /// least it can do is land on the list that decision is on.
     ///
-    /// The payload is not trusted with anything beyond a name to look for:
-    /// the session list is refreshed from the coordinator, and a name that is
-    /// no longer there is simply not there.
+    /// It can now do more than the least: a session asking something the fleet
+    /// has words for arrives with those two words on it, and this is where one
+    /// of them becomes an answer. What is NOT trusted is unchanged — the
+    /// payload is read for a name, an id and a digit, and every one of those is
+    /// checked by `NotificationAnswers.decide` before anything is sent. The
+    /// session list is still refreshed from the coordinator, and a name that is
+    /// no longer there is still simply not there.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
-        let name = info["name"] as? String
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .notificationOpened,
-                object: nil,
-                userInfo: name.map { ["name": $0] } ?? [:]
-            )
+
+        switch NotificationAnswers.decide(actionIdentifier: response.actionIdentifier, userInfo: info) {
+        case let .answer(name, option, promptId):
+            await send(answer: option, to: name, promptId: promptId)
+        case let .stale(name):
+            // SAID, NOT SWALLOWED. A button that quietly does nothing is worse
+            // than no button: somebody taps it, the phone locks, and they
+            // believe they have answered. docs/psychology.md §6 — the message
+            // says what is wrong AND what to do, and the app opens the session
+            // so the second half is one tap away rather than a search.
+            await MainActor.run {
+                LocalNotice.post(
+                    title: name,
+                    body: "That question is more than an hour old, so it was not answered from here. Open the session to see what it is asking now."
+                )
+                open(name)
+            }
+        case let .open(name):
+            await MainActor.run { open(name) }
         }
+    }
+
+    /// Send it, and say so either way.
+    ///
+    /// NOT THROUGH THE OUTBOX, which is the one place this path deliberately
+    /// differs from the same answer given inside the app. `Outbox` holds a
+    /// command for twelve hours so a lift or a tunnel does not lose it — right
+    /// for `start` and `stop`, wrong for this: an answer queued from a lock
+    /// screen and delivered hours later is the exact thing the hour above
+    /// exists to prevent, and it would arrive with nobody watching.
+    ///
+    /// So it is sent now or not at all, and a failure is a sentence rather than
+    /// a queue entry. The session opens either way, because whatever happened
+    /// the next thing anybody wants is to see the question.
+    @MainActor
+    private func send(answer option: Int, to name: String, promptId: String) async {
+        // `self.settings` is set when the UI registers for push, and a lock
+        // screen can reach this before any UI has run — a cold launch straight
+        // into an action. Settings reads from UserDefaults, so building one
+        // here is the same object rather than a second source of truth, and
+        // without this the button silently did nothing on exactly the launch it
+        // was designed for.
+        let settings = self.settings ?? Settings()
+        guard settings.configured else { return open(name) }
+        do {
+            let reply = try await Fleet(settings: settings).answer(name, option: option, promptId: promptId)
+            // THE HOST GETS THE LAST WORD. `promptId` is checked against the
+            // live pane there, so a refusal here is a question that moved on in
+            // the seconds this took — which is exactly the case the id exists
+            // for, and exactly the case somebody must be told about rather than
+            // left to assume.
+            if reply.ok == false {
+                LocalNotice.post(title: name, body: reply.text ?? "That answer was not accepted.")
+                open(name)
+            }
+        } catch {
+            LocalNotice.post(
+                title: name,
+                body: "The fleet could not be reached, so that answer was not sent. Open the session to try again."
+            )
+            open(name)
+        }
+    }
+
+    @MainActor
+    private func open(_ name: String?) {
+        NotificationCenter.default.post(
+            name: .notificationOpened,
+            object: nil,
+            userInfo: name.map { ["name": $0] } ?? [:]
+        )
     }
 }
