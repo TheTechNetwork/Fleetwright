@@ -1973,6 +1973,13 @@ private func describeRunning(_ host: Fleet.FleetHost) -> String {
     } else if host.health?.version?.head != nil {
         parts.append("up to date")
     }
+    if host.health?.version?.rootHalfBehind == true {
+        // BESIDE THE BRANCH ABOVE, NOT INSTEAD OF IT. A box can be up to date
+        // on what it downloads and runs, and still be taking every update
+        // with a helper the installer never refreshed, so nothing root owns
+        // follows the release. Both are true at once and the row says both.
+        parts.append("update helper out of date")
+    }
     if let channel = host.health?.channel, !channel.isEmpty {
         // Pinned is worth a word, because it is why the picker is missing.
         parts.append(host.health?.channelPinned == true ? "\(channel), set on the box" : channel)

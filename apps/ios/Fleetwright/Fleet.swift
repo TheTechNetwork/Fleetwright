@@ -928,6 +928,17 @@ struct Fleet {
             /// was left to download, which was nothing, about a service
             /// fourteen releases behind its own disk.
             let installed: String?
+            /// Whether root's half of the box is this release's: `"current"`,
+            /// `"stale"`, or nil for cannot tell (a checkout, a box with no
+            /// helper, or a host too old to say).
+            ///
+            /// The update helper is what every update runs as root, and the
+            /// installer is the only thing that writes it. A box whose helper
+            /// the installer never refreshed takes every update, restarts its
+            /// services, and refreshes nothing root owns: the units, the hook
+            /// and the sudoers rules stay as an earlier installer left them.
+            /// The host compares the two copies without root and says which.
+            let helper: String?
 
             /// The release on disk that this service is not yet running, or
             /// nil when there is no gap or no way to know.
@@ -935,6 +946,11 @@ struct Fleet {
                 guard let installed, !installed.isEmpty, let head, !head.isEmpty, installed != head else { return nil }
                 return installed
             }
+
+            /// True only when the host said so. Nil and "current" both read as
+            /// nothing to say: a line about root's half being fine is a line
+            /// about a thing nobody is thinking about.
+            var rootHalfBehind: Bool { helper == "stale" }
         }
         struct Updates: Codable, Hashable {
             let appBehind: Int?
