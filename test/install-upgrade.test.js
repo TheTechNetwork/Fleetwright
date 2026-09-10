@@ -267,9 +267,12 @@ test('the migration rule names a path the service user cannot write', () => {
   const rule = SH.slice(SH.indexOf('write_migrate_sudoers() {'), SH.indexOf('write_reboot_sudoers() {'));
   assert.doesNotMatch(rule, /fleetwright-migrate [^\\n]/, 'the rule permits arguments');
 
-  // And only on a checkout: a packaged box has nothing to migrate to, and a
-  // rule nobody needs is a rule nobody reviews.
-  assert.match(SH, /if \[ "\$PACKAGED" = 0 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/);
+  // On every box that carries the helper, checkout or release. This used to say
+  // "only on a checkout: a packaged box has nothing to migrate to" — true until
+  // the helper became the root half of every update, at which point a box that
+  // never refreshed it was a box whose updates never refreshed anything. The
+  // grant is the same either way: the path the rule names is the one written.
+  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/);
 });
 
 test('the migration helper verifies before it unpacks, and refuses a path', () => {
@@ -393,4 +396,20 @@ test('an upgraded box is told what changed, not how to set itself up', () => {
   // next thing you do is check whether it worked.
   assert.match(upgraded, /This box now takes packaged releases/);
   assert.match(upgraded, /readlink "\$FLEET_BASE\/current"/);
+});
+
+test('the migrate helper is refreshed on a packaged box, and never by --check', () => {
+  // The helper is the one root step every update has, and the installer is the
+  // only thing that writes it. Written only on a checkout, a packaged box kept
+  // the helper it converted with forever — one box's was from before the heal
+  // existed, so it exited 0 saying "nothing to do", the hub called that the
+  // installer having run, and the sidecar stayed on the old tree. The stale
+  // helper could not fix itself: refreshing it is the installer's job, and
+  // the stale helper is the one thing that would not run the installer.
+  assert.match(SH, /if \[ "\$CHECK_ONLY" != 1 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]; then/);
+  assert.doesNotMatch(SH, /\[ "\$PACKAGED" = 0 \] && \[ -f "\$DIR\/install\/fleetwright-migrate" \]/, 'gated on being a checkout again');
+  // Still root-owned and 0755, still outside the tree the service user owns:
+  // the sudoers rule names this path, and a rule naming a path that user can
+  // write is root with extra steps.
+  assert.match(SH, /install -m 0755 -o root -g root "\$DIR\/install\/fleetwright-migrate" \/usr\/local\/sbin\/fleetwright-migrate/);
 });
