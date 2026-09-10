@@ -642,6 +642,11 @@ export class Sidecar {
         // for 3h". Additive — an older client ignores it and shows what it
         // showed before.
         atRest: this.watcher?.atRest?.(s.name) ?? false,
+        // WHEN IT LAST CAME BACK TO ITS PROMPT after working, in this run of
+        // the session, or null. `atRest` says where the pane is now; this
+        // says it got there by finishing something since it started, which
+        // is what fleet_await waits for. Additive, like the two above.
+        readyAt: this.watcher?.readyAt?.(s.name) ?? null,
       };
     });
   }

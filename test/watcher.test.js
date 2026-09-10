@@ -589,3 +589,27 @@ test('a question is not a return to the prompt', async (t) => {
   assert.equal(events.filter((e) => e.event === 'session.ready').length, 0);
   assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 1);
 });
+
+test('when it came back to its prompt is remembered for this run, and forgotten on a restart', async (t) => {
+  const { stub, watcher } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running' })],
+    panes: { job: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  assert.equal(watcher.readyAt('job'), null, 'not yet');
+  stub.panes.job = AT_PROMPT;
+  await watcher.tick();
+  const at = watcher.readyAt('job');
+  assert.equal(typeof at, 'number', 'the tick that fired recorded when');
+  await watcher.tick();
+  assert.equal(watcher.readyAt('job'), at, 'carried forward, not re-stamped every tick');
+
+  // Stopped and resumed: a "back at its prompt" from the previous life must
+  // not answer a wait on the next.
+  stub.sessions[0].status = 'stopped';
+  await watcher.tick();
+  stub.sessions[0].status = 'running';
+  stub.panes.job = AT_PROMPT;
+  await watcher.tick();
+  assert.equal(watcher.readyAt('job'), null, 'a resumed session starts with no return on record');
+});

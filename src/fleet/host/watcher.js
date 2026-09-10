@@ -197,7 +197,7 @@ export class SessionWatcher {
      * two together are what makes "back at its prompt" a transition rather
      * than a state: a session parked at the prompt is one event when it
      * arrives there, not one every tick until somebody looks.
-     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean }>}
+     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null }>}
      */
     this.seen = new Map();
     /** @type {any} */
@@ -291,6 +291,11 @@ export class SessionWatcher {
         }
       }
 
+      // WHEN IT LAST CAME BACK TO ITS PROMPT, kept so a status reply can say
+      // so and fleet_await can return on it. Carried forward tick to tick,
+      // and cleared when the session (re)starts: a "back at its prompt" from
+      // a session's previous life would otherwise answer a wait on its next.
+      let readyAt = before && before.status === 'running' && running ? (before.readyAt ?? null) : null;
       if (!before) {
         // New to us. On a restart everything is new, which is why the first
         // pass is quiet.
@@ -337,6 +342,7 @@ export class SessionWatcher {
             text: 'is back at its prompt',
             ...(session.profile ? { profile: String(session.profile) } : {}),
           });
+          readyAt = Date.now();
         }
       }
 
@@ -353,7 +359,7 @@ export class SessionWatcher {
       // its prompt and not waiting on a person, and cleared by the tick that
       // finds it back — which is the tick that fires.
       const worked = running && !ready && !awaiting ? true : ready ? false : (before?.worked ?? false);
-      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked });
+      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked, readyAt });
     }
 
     // A session the hub has forgotten is gone; keeping it would mean it fires
@@ -518,6 +524,21 @@ export class SessionWatcher {
    */
   atRest(name) {
     return this.idle.get(name)?.atRest ?? false;
+  }
+
+  /**
+   * When this session last came back to its prompt after working, as epoch
+   * milliseconds, or null if it has not in this run of the session.
+   *
+   * THE FACT fleet_await NEEDS. "At its prompt" alone cannot say whether a
+   * session finished a job or never started one; "at its prompt, and it came
+   * back there after this start" can. Both clocks are this box's, so the
+   * comparison against the record's createdAt is sound.
+   *
+   * @param {string} name
+   */
+  readyAt(name) {
+    return this.seen.get(name)?.readyAt ?? null;
   }
 
   /** @param {boolean} quiet @param {Record<string, any>} event */
