@@ -200,7 +200,7 @@ struct CredentialsView: View {
                 }
             }
 
-            if !result.isEmpty {
+            if !result.isBlank {
                 Section { Text(result).fleetType(.bodySmall) }
             }
         }

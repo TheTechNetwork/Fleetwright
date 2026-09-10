@@ -84,7 +84,7 @@ struct PeopleView: View {
                      + "working until you revoke it under Devices.")
             }
 
-            if !result.isEmpty {
+            if !result.isBlank {
                 Section { Text(result).fleetType(.bodySmall) }
             }
         }

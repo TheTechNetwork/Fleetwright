@@ -137,6 +137,9 @@ struct Fleet {
 
     struct Reply: Codable {
         let ok: Bool?
+        /// WHAT THE HOST SAID, WHICH MAY BE WHITESPACE — see `String.isBlank`.
+        /// Every screen that quotes this asks whether there is anything here,
+        /// and `isEmpty` is not that question.
         let text: String?
         let sessions: [Session]?
         var check: Check?
@@ -1493,4 +1496,26 @@ enum Keychain {
         else { return nil }
         return string
     }
+}
+
+extension String {
+    /// Nothing here but whitespace.
+    ///
+    /// NOT THE SAME QUESTION AS `isEmpty`, and the difference was a whole
+    /// screen. `tmux capture-pane` returns every row of the visible region, so
+    /// a session that has printed nothing answers Output with forty newlines
+    /// rather than with nothing at all. That string is not empty, so every
+    /// gate on this side let it through, and the app drew it exactly as asked:
+    /// a card the height of the phone with nothing on it. The person who found
+    /// it reasonably guessed a broken image.
+    ///
+    /// The host no longer sends that (see src/core/logs.js), and this is here
+    /// because a phone in somebody's pocket talks to whatever host that fleet
+    /// is running, which is not always the newest one. A screen should be able
+    /// to tell "said nothing" from "said something" without depending on the
+    /// other end to have been fixed.
+    ///
+    /// Android has always spelled this `isNotBlank`, from the Kotlin standard
+    /// library, and drew no card at all on the reply that broke this one.
+    var isBlank: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }

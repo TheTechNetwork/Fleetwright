@@ -145,11 +145,16 @@ struct HostView: View {
 
             dangerSection
 
-            if !result.isEmpty {
+            if !result.isBlank {
                 Section {
                     // THE BOX'S OWN WORDS, on an inner surface: this is quoted
                     // from somewhere else and should not look like something
                     // this screen said.
+                    //
+                    // `isBlank`, not `isEmpty`: a journal that answers with
+                    // whitespace is a box saying nothing, and a card drawn
+                    // around nothing is the empty rectangle this app shipped
+                    // once already. See String.isBlank.
                     Text(result)
                         .fleetType(.labelMono)
                         .foregroundStyle(Design.Palette.ink)
