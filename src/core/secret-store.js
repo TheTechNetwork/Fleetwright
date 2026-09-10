@@ -18,9 +18,42 @@
 // granted, and a `readNamedSecret` that touches disk. The socket wires them
 // together in src/index.js.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { isValidName } from './names.js';
+
+/**
+ * The names of the secrets this box holds, sorted, for the `secrets` verb and
+ * its picker. NAMES ONLY — nothing here reads a value, and there is nowhere on
+ * the result to put one.
+ *
+ * A file counts only if its own name is a valid reference name: that excludes a
+ * `README` left as a note (well, a dotted `README.md` — `isValidName` forbids
+ * the dot), a dotfile, and anything with a path-shaped character. Directories
+ * are skipped. A missing store is not an error — it is the ordinary state of a
+ * box that holds no secrets, and answers with [].
+ *
+ * @param {string} dir the store directory (cfg.secretsDir)
+ * @returns {string[]}
+ */
+export function listSecretNames(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((name) => {
+      if (!isValidName(name)) return false;
+      try {
+        return statSync(path.join(dir, name)).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
 
 /**
  * Read a named secret from the store, or null if it is not there.

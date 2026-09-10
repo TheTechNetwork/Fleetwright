@@ -73,6 +73,8 @@
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
  *   the task profiles on this box, as data. A picker rendered from the rendered
  *   text would be a picker built by parsing column padding
+ * @property {Array<{ name: string }>} [secrets]
+ *   the named secrets on this box, by name only — never a value
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
@@ -86,6 +88,7 @@ import { pickCredentialSource } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
 import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
+import { listSecretNames } from '../core/secret-store.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
 import { readLabels, addLabel, removeLabel, describeLabels } from '../core/labels.js';
@@ -677,6 +680,40 @@ export const COMMANDS = {
         // Tappable, because the whole point is that choosing one is easier than
         // typing a task — and a list you have to retype is a list.
         buttons: have.slice(0, 8).map((p) => ({ label: p.name, command: `/new --profile=${p.name}` })),
+      };
+    },
+  },
+
+  secrets: {
+    aliases: ['secret'],
+    usage: '/secrets',
+    short: 'Named secrets this box can grant a session',
+    help:
+      'List the named secrets on this host, by NAME only — never their values. Grant one to a session ' +
+      'with /new --secret=<name>, and it can fetch that value at runtime (fleet-secret <name>) without the ' +
+      'value ever entering its environment. Adding one means putting a file on this box, which needs a ' +
+      'shell here — which is what stops a coordinator from choosing what a session may read.',
+    run: (ctx) => {
+      const names = listSecretNames(ctx.cfg.secretsDir);
+      if (!names.length) {
+        return {
+          ok: true,
+          text:
+            'No named secrets on this box.\n' +
+            `Add one as ${ctx.cfg.secretsDir}/<name> — its contents become the value a session granted ` +
+            '`--secret=<name>` can fetch. Keep it out of version control, or seal it with systemd-creds.',
+          // EMPTY, NOT ABSENT — the same distinction profiles draws: [] is
+          // "this box holds none", a missing key is "too old to know the verb".
+          secrets: [],
+        };
+      }
+      return {
+        ok: true,
+        text: `${names.length} named secret${names.length === 1 ? '' : 's'} on this box:\n${names.join('\n')}`,
+        // AS DATA, names only. The coordinator tags each with its hostId so a
+        // picker knows which box holds which — the value is never here.
+        secrets: names.map((name) => ({ name })),
+        buttons: names.slice(0, 8).map((name) => ({ label: name, command: `/new --secret=${name}` })),
       };
     },
   },

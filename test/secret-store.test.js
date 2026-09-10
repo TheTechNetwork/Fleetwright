@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readNamedSecret, answerSecretRequest } from '../src/core/secret-store.js';
+import { readNamedSecret, answerSecretRequest, listSecretNames } from '../src/core/secret-store.js';
 
 function store() {
   const dir = mkdtempSync(path.join(tmpdir(), 'secrets-'));
@@ -89,4 +89,20 @@ test('answerSecretRequest accepts a grant of several names, for later', () => {
   const read = (n) => ({ a: '1', b: '2' })[n] ?? null;
   assert.deepEqual(answerSecretRequest({ requested: 'b', granted: ['a', 'b'], read }), { ok: true, name: 'b', value: '2' });
   assert.deepEqual(answerSecretRequest({ requested: 'c', granted: ['a', 'b'], read }), { ok: false, error: 'not_granted' });
+});
+
+test('listSecretNames returns names only, sorted, files only', (t) => {
+  const s = store();
+  t.after(s.cleanup);
+  writeFileSync(path.join(s.dir, 'npm-publish'), 'v1');
+  writeFileSync(path.join(s.dir, 'github-deploy'), 'v2');
+  writeFileSync(path.join(s.dir, 'README.md'), 'a note'); // dotted → not a name
+  writeFileSync(path.join(s.dir, '.hidden'), 'x'); // dotfile → not a name
+  mkdirSync(path.join(s.dir, 'adir')); // a directory is not a secret
+
+  assert.deepEqual(listSecretNames(s.dir), ['github-deploy', 'npm-publish']);
+});
+
+test('listSecretNames on a box with no store is empty, not an error', () => {
+  assert.deepEqual(listSecretNames('/does/not/exist/anywhere'), []);
 });

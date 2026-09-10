@@ -543,6 +543,9 @@ export class Sidecar {
         // the rendered text is padded for a terminal, and a picker built by
         // parsing padding is a picker that breaks on a long name.
         ...(Array.isArray(r.profiles) ? { profiles: r.profiles } : {}),
+        // The named secrets this box holds, as data and by name only — the same
+        // reasoning as profiles, and the value is never among these fields.
+        ...(Array.isArray(r.secrets) ? { secrets: r.secrets } : {}),
         // Which releases this box takes, as data — a picker rendered by parsing
         // the sentence above would break the first time the wording changed.
         ...(r.channel ? { channel: r.channel, channelPinned: Boolean(r.channelPinned) } : {}),
@@ -1083,6 +1086,8 @@ export function toCommandLine({ verb, params, actor }) {
         .join(' ');
     case 'profiles':
       return '/profiles';
+    case 'secrets':
+      return '/secrets';
     // A bounded enum, so it is a single token that cannot become a second flag.
     case 'updates':
       return '/updates';

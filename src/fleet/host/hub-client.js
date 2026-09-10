@@ -61,6 +61,8 @@ export class HubError extends Error {
  * @property {{ ok: boolean, account?: string, granted?: string[]|null, wants?: string[]|null, missing?: string[]|null, message: string }} [check]
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
  *   the task profiles that host has, as data
+ * @property {Array<{ name: string }>} [secrets]
+ *   the named secrets that host holds, by name only — never a value
  * @property {string} [channel] which releases that box installs
  * @property {boolean} [channelPinned] its environment is forcing the channel,
  *   so an app must show the answer and not offer to change it
