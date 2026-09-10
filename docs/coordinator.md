@@ -25,7 +25,11 @@ running somewhere you can put a breakpoint in: `registry.js`, `scheduler.js`
 and the intent plumbing carry all the decisions and touch nothing
 runtime-specific, so the two are a transport swap rather than two
 implementations — held to one contract by `openapi.json` and
-`test/openapi.test.js`.
+`test/openapi.test.js` for the phone leg, and by `worker/test/parity.test.js`
+for the host socket leg. That second one drives a single host client — the
+`identity.js` and `ws.js` a real sidecar ships — through the Worker in workerd
+and the Node coordinator in process, and asserts the same answer on each: one
+sidecar able to drive both is the transport swap made executable.
 
 The WebSocket is hand-rolled (`src/fleet/ws.js`) because this project has zero
 runtime dependencies, and a dependency on the one code path every host holds
