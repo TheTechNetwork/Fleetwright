@@ -149,6 +149,27 @@ installer failed to restart started *before* it and picks it up within a
 minute. Written after the installer returned instead, every sibling it had
 just restarted would restart a second time for nothing.
 
+**Exit 0 from the helper is not the installer having run.** A box on main-103
+had a hub that restarted and a sidecar that did not, and its journal said "the
+release's installer ran with --repair" on every heal. Run by hand, its helper
+printed `already on the packaged layout, running main-103 — nothing to do` and
+exited 0: it was the helper from before the heal existed, which exits there,
+and the hub had taken its exit code for the installer. Two fixes. The heal now
+reads the helper's own words (`running the installer from the verified
+release`, printed on both of its routes) before it claims anything, and
+otherwise logs which helper it found and the one command that refreshes it.
+And the installer now writes `/usr/local/sbin/fleetwright-migrate` from the
+release's own copy on a packaged box, not only on a checkout — the old gate
+dated from when converting a checkout was the helper's only job, and left a
+packaged box with the helper it converted with, forever. A stale helper could
+not fix itself: refreshing it is the installer's job, and the stale helper was
+the one thing on the box that would not run the installer. A box on a release
+from before this change refreshes it once by hand:
+
+    sudo install -m 0755 -o root -g root \
+      /opt/fleetwright/current/install/fleetwright-migrate \
+      /usr/local/sbin/fleetwright-migrate
+
 A checkout gets no heal, deliberately: there is no verified copy of its
 installer for root to run. The update says so and names the command.
 
@@ -313,21 +334,26 @@ digest, refreshed by `/update` and by a session start, and `minSandboxImage`
 is how a host release says which one it needs. Merging them would mean
 shipping a container layer to update a JavaScript file.
 
-**A release does not have to carry a working installer.** It did, and that was
-the worst property this pipeline had: a migration ran the installer *inside* the
-release, so a broken one could not be migrated to and could only be
-**superseded**. One afternoon produced three releases that way, each fixing a
-bug the previous one had hidden, in code that had never executed.
+**A release has to carry a working installer, and CI checks that it does.**
+This went back and forth, and the reason is worth keeping. A migration first
+ran the installer *inside* the release, so a broken one could not be migrated
+to and could only be **superseded**: one afternoon produced three releases that
+way, each fixing a bug the previous one had hidden, in code that had never
+executed. `AGENT_FLEET_PAYLOAD` was the answer for a while — the helper ran
+the installer **the box already had**, refreshed by `curl … | sudo sh`, and
+pointed it at the release as payload. That also meant root executing a script
+out of a checkout the service user owns, which is the grant the helper's own
+header refuses. So both routes through the helper run the installer out of a
+**verified copy of the release**, unpacked where only root can reach, and the
+payload option is what lets that copy's templates point at `current`. The cost
+is the one this paragraph started with, paid differently: a release's
+installer must start, `test/packaged-installer.test.js` runs it before one
+ships, and the helper's `--help` smoke check refuses a release whose installer
+cannot start before `current` moves.
 
-`AGENT_FLEET_PAYLOAD` breaks it. `fleetwright-migrate` runs the installer **the
-box already has** — refreshed by `curl … | sudo sh`, which costs nothing and
-needs no release — and points it at the release as payload. An installer fix
-now reaches a machine as soon as somebody re-runs the one-liner, and a release
-only has to be a correct *payload*.
-
-The release still ships `install/`, and that is still what somebody unpacking a
-tarball by hand runs. It is also the fallback for a box whose own installer
-predates the option. What changed is which installer a **migration** uses.
+The release still ships `install/`, and that is what somebody unpacking a
+tarball by hand runs, what the helper runs, and since the heal, where the box's
+own copy of the helper is refreshed from.
 
 **An install ends up packaged now, and that was the missing half.** `bootstrap.sh`
 clones the repository — it has to, because `install.sh` lives in it — so the
