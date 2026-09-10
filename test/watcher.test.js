@@ -514,3 +514,78 @@ test('hitting the cap is one notification, not two', async (t) => {
   assert.equal(said[1].event, 'session.stuck');
   assert.match(said[1].text, /Not trying again/);
 });
+
+// --- back at its prompt --------------------------------------------------------
+//
+// THE "DONE" BOTH BETA TESTERS RANKED DAILY. A session handed a job finishes it
+// and looked exactly like one that had never started: `fleet_await` waits for
+// an ending, and a finished session does not end. So the watcher announces the
+// TRANSITION back to the CLI's own prompt — after the session was seen working,
+// once per return, and never on the first pass.
+
+const AT_PROMPT = '> \n  ? for shortcuts · shift+tab to cycle modes';
+const WORKING = 'Reading files…\n  esc to interrupt';
+
+test('a session that comes back to its prompt after working is announced once', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running', profile: 'nightly' })],
+    panes: { job: AT_PROMPT },
+  });
+  // First pass: at its prompt already, and quiet. Nothing has been done yet,
+  // so "back at its prompt" would announce the completion of nothing.
+  await watcher.tick({ quiet: true });
+  await watcher.tick();
+  assert.equal(events.filter((e) => e.event === 'session.ready').length, 0, 'sitting at the prompt is not news');
+
+  stub.panes.job = WORKING;
+  await watcher.tick();
+  await watcher.tick();
+  stub.panes.job = AT_PROMPT;
+  await watcher.tick();
+  await watcher.tick();
+  await watcher.tick();
+
+  const ready = events.filter((e) => e.event === 'session.ready');
+  assert.equal(ready.length, 1, 'the transition is the event, not the state');
+  assert.equal(ready[0].name, 'job');
+  assert.equal(ready[0].text, 'is back at its prompt');
+  // The profile's NAME rides along, so the coordinator can tell a job that
+  // was handed over from a conversation somebody is driving by hand. Never
+  // its content.
+  assert.equal(ready[0].profile, 'nightly');
+  assert.equal('prompt' in ready[0] && typeof ready[0].prompt === 'string', false);
+});
+
+test('every return to the prompt is one event, and a session without a profile carries none', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('chat', { status: 'running' })],
+    panes: { chat: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes.chat = AT_PROMPT;
+  await watcher.tick();
+  stub.panes.chat = WORKING;
+  await watcher.tick();
+  stub.panes.chat = AT_PROMPT;
+  await watcher.tick();
+
+  const ready = events.filter((e) => e.event === 'session.ready');
+  assert.equal(ready.length, 2, 'two returns, two events');
+  assert.equal(ready[0].profile, undefined, 'no profile, no field');
+});
+
+test('a question is not a return to the prompt', async (t) => {
+  // A dialog blocks the pane and a person must answer it; that is
+  // awaiting-input, already announced, and announcing "back at its prompt"
+  // over the top of it would be two notifications about one pane.
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('ask', { status: 'running' })],
+    panes: { ask: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes.ask = `${RESUME_DIALOG}\n  shift+tab to cycle`;
+  await watcher.tick();
+  await watcher.tick();
+  assert.equal(events.filter((e) => e.event === 'session.ready').length, 0);
+  assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 1);
+});

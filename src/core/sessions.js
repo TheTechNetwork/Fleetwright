@@ -302,6 +302,13 @@ export class SessionManager {
       // could not do anything useful with one, and a second lookup is a second
       // place for "no such profile" to be handled differently.
       prompt,
+      // THE NAME IS KEPT ON THE RECORD, the content is not. A session that was
+      // handed a job is the one whose "back at its prompt" is news — the
+      // person who handed it over is waiting for exactly that — and the
+      // watcher can only say so if the record says which sessions those are.
+      // A name is what the coordinator may see (docs/wanted.md: it may NAME
+      // a profile, never CARRY one); the content stays on the box.
+      profile,
     });
   }
 
@@ -382,10 +389,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -462,6 +469,7 @@ export class SessionManager {
         // and the field looks like it silently did not save.
         ...(title ? { title, titlePinned: true } : existing?.title ? {} : { title: titleFromCwd(cwd) }),
         ...(brief ? { brief } : {}),
+        ...(profile ? { profile } : {}),
         // Whose Claude account this session runs on. Only set when this start
         // created the volumes — a resume keeps the account it began with, and
         // null on the record means "whatever was there already".

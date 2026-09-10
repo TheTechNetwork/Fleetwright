@@ -192,7 +192,12 @@ export class SessionWatcher {
     /**
      * What each session looked like last time. The whole point of the watcher
      * is the difference between this and now.
-     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null }>}
+     * `ready` is whether the pane showed the CLI's own prompt; `worked` is
+     * whether it has been seen doing anything else since it last did. The
+     * two together are what makes "back at its prompt" a transition rather
+     * than a state: a session parked at the prompt is one event when it
+     * arrives there, not one every tick until somebody looks.
+     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean }>}
      */
     this.seen = new Map();
     /** @type {any} */
@@ -312,6 +317,27 @@ export class SessionWatcher {
         if (!before.awaiting && awaiting) {
           this.#fire(quiet, this.#awaiting(name, session, prompt));
         }
+        // BACK AT ITS PROMPT, after having been away from it. This is the
+        // "done" both beta testers ranked daily: a session handed a job
+        // finishes it and, until now, looked exactly like one that had
+        // never started — `fleet_await` can wait for an ending, and a
+        // finished session does not end. Only after it was seen WORKING,
+        // so a fresh session sitting at its prompt before anybody types is
+        // not announced as having finished nothing, and only once per
+        // return: the flag below is cleared the moment it fires.
+        //
+        // `profile` rides along by name, never by content, so the
+        // coordinator can decide whose "done" is worth a phone buzzing —
+        // a job somebody handed over is; a turn in a conversation they are
+        // driving by hand is not.
+        if (running && ready && !awaiting && before.worked && !before.ready) {
+          this.#fire(quiet, {
+            event: 'session.ready',
+            name,
+            text: 'is back at its prompt',
+            ...(session.profile ? { profile: String(session.profile) } : {}),
+          });
+        }
       }
 
       // AUTO-RESTART, last, and only for a session that is running, not
@@ -323,7 +349,11 @@ export class SessionWatcher {
       // good reason for it to be still, and there usually is.
       if (running && !awaiting && !atRest) await this.#maybeRestartIdle(name, quiet);
 
-      this.seen.set(name, { status: session.status, awaiting, rcUrl });
+      // `worked` is set by any tick that finds a running session away from
+      // its prompt and not waiting on a person, and cleared by the tick that
+      // finds it back — which is the tick that fires.
+      const worked = running && !ready && !awaiting ? true : ready ? false : (before?.worked ?? false);
+      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked });
     }
 
     // A session the hub has forgotten is gone; keeping it would mean it fires
