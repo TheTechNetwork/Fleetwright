@@ -25,6 +25,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
 import { connectWebSocket } from '../../src/fleet/ws.js';
@@ -37,18 +40,27 @@ const ADMIN = 'parity-test-admin-token-0123456789';
 
 /** @type {{ name: string, origin: string, stop: () => Promise<void> }[]} */
 let coordinators = [];
+/** The isolated on-disk state for this file's workerd, removed on teardown. */
+let persistTo = '';
 
 before(async () => {
-  // The Worker, in the runtime it ships to. Same boot as live.test.js: a fresh
-  // DO state so a host enrolled by a previous run is not still enrolled.
-  const { rm } = await import('node:fs/promises');
-  await rm(new URL('../.wrangler/state', import.meta.url), { recursive: true, force: true });
+  // ITS OWN DURABLE-OBJECT STORAGE, and this is load-bearing rather than tidy.
+  // `node --test test/` runs the test FILES concurrently, so this file's
+  // workerd and live.test.js's boot at the same time. Both persist DO storage
+  // under worker/.wrangler/state by default — one SQLite file, two processes —
+  // and the collision surfaced as `database is locked: SQLITE_BUSY` thrown out
+  // of a host-accept write, failing whichever test happened to be mid-write.
+  // A unique persist dir gives this file its own database; a fresh mkdtemp is
+  // also the "clean state every run" that deleting the shared dir used to buy,
+  // without deleting a directory the other file's workerd is actively using.
+  persistTo = await mkdtemp(path.join(os.tmpdir(), 'parity-wrangler-'));
 
   const { unstable_dev } = await import(requireWorker.resolve('wrangler'));
   const worker = await unstable_dev(new URL('../src/worker.js', import.meta.url).pathname, {
     config: new URL('../wrangler.toml', import.meta.url).pathname,
     local: true,
     logLevel: 'error',
+    persistTo,
     vars: { AGENT_FLEET_API_TOKEN: ADMIN },
     experimental: { disableExperimentalWarning: true },
   });
@@ -66,6 +78,7 @@ before(async () => {
 
 after(async () => {
   for (const c of coordinators) await c.stop().catch(() => {});
+  if (persistTo) await rm(persistTo, { recursive: true, force: true }).catch(() => {});
 });
 
 /** Admin headers for the HTTP leg. `/healthz` is the one route that needs none. */
