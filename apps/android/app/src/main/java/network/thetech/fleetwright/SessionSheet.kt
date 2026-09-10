@@ -158,6 +158,10 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                 )
 
                 val prompt = session.prompt
+                // Read once into a local: `session` is delegated state, so the
+                // compiler cannot smart-cast its members and the null check
+                // above would not carry into the click.
+                val rcUrl = session.rcUrl?.takeIf { it.isNotBlank() }
                 if (prompt != null && prompt.options.isNotEmpty()) {
                     Text("It is asking", style = Design.Style.section, color = Design.Palette.ink.now)
                     prompt.question?.let { Text(it, style = Design.Style.bodyStrong, color = Design.Palette.ink.now) }
@@ -179,13 +183,13 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                         style = Design.Style.bodySmall,
                         color = Design.Palette.inkDim.now,
                     )
-                } else if (session.isRunning && !session.rcUrl.isNullOrBlank()) {
+                } else if (session.isRunning && rcUrl != null) {
                     // FRONT AND CENTRE WHEN THERE IS NO PROMPT. Demoting this
                     // to a footer would be wrong: it is the only way to say
                     // anything to a session the option list cannot express,
                     // which is every session not asking a yes-or-no question.
                     OutlinedButton(
-                        onClick = { uriHandler.openUri(session.rcUrl) },
+                        onClick = { uriHandler.openUri(rcUrl) },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Continue in Remote Control") }
                     Text(
