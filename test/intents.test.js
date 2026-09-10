@@ -83,6 +83,11 @@ test('the verb set is exactly what is documented', () => {
     // same reason: `start { variant }` would have been a flag day, and a new
     // verb costs an old host nothing but an `unknown_verb`.
     'sandbox',
+    // What named secrets a box holds — `profiles`' sibling, and a new VERB for
+    // the same reason `profiles` was: a reference (`start { secret }`) you can
+    // only use by guessing is one nobody uses, and a new verb costs an old host
+    // nothing but an `unknown_verb`. Names only; the value never crosses.
+    'secrets',
     'start',
     'status',
     'stop',
@@ -441,6 +446,15 @@ test('start --secret is a NAME, not a value, and refuses a name it could not res
     const r = validateIntent(intent({ verb: 'start', params: { secret: bad } }));
     assert.equal(r.ok, false, `start.secret ${JSON.stringify(bad)} should be refused`);
   }
+});
+
+test('the secrets verb lists by name, takes no params, and changes nothing', () => {
+  // The sibling of `profiles`, and the argument for it is identical: a reference
+  // you can only use by guessing is one nobody uses. It is a READ — a picker
+  // asking what a box holds — so it must never be mutating.
+  assert.ok(VERBS.secrets, 'secrets verb exists');
+  assert.deepEqual(VERBS.secrets.params, {}, 'secrets takes no parameters');
+  assert.equal(isMutating('secrets'), false, 'listing what exists changes nothing');
 });
 
 test('a session name can never become a shell fragment', () => {

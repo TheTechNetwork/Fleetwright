@@ -29,8 +29,12 @@ const PINNED = new Set(['resume', 'stop', 'forget', 'peek', 'status', 'restore',
 // have and hides the one a person is looking for. It also decides where work
 // can go — `start { profile: 'x' }` is refused by a host without it — so a
 // picker built from one host's answer sends people at the wrong machine.
+//
+// `secrets` fans out for exactly those reasons: a named secret is a file on one
+// box, `start { secret: 'x' }` is refused by a host without it, and the picker
+// has to know which machine holds which name.
 /** Verbs answered by asking every host and merging. */
-const FANOUT = new Set(['list', 'profiles']);
+const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
 /**
  * @typedef {object} Placement
