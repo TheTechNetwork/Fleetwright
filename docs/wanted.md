@@ -224,6 +224,16 @@ second half: measure interruptions per session with and without a profile, and
 let that decide what goes in one. The argument about which rules help is not
 settled by argument.
 
+**The `CLAUDE.md` half of the seed now exists too**, on the same terms. A box
+with a file at `AGENT_HUB_RULES_FILE` writes it into every new session's
+`~/.claude/CLAUDE.md`, and the health frame reports its size (`houseRules`)
+because the size is the cost. Nothing about it crosses the wire — no verb, no
+field, not even a name — so it needs even less of the argument above than a
+profile does. What it does **not** do is settle whether always-on rules are
+worth their tax: nobody has measured that, and the measurement is exactly the
+second half still wanted here. The capability exists so that the measurement
+can be made on a real fleet rather than argued about.
+
 ### Serving secrets into a session without the session holding them
 
 Designed in [`trust.md`](./trust.md). Not a GitHub feature and not a per-service

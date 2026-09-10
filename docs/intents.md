@@ -228,6 +228,20 @@ there. The chat surface has always filtered this way; a phone drawing a list
 of machines cannot ask per row, so the answer travels with health. `null` is
 *cannot tell* — a host older than this field — and the verb still works there.
 
+**Health says what a box puts into every session, as a number.** `houseRules`
+on the health frame is the size in characters of the file a box writes into a
+new session as `~/.claude/CLAUDE.md`. A number rather than a flag because the
+size *is* the fact worth knowing: rules are read on every turn of every session,
+so a 2,000-token house style is a 2,000-token tax on a one-line question, and a
+boolean would leave the one decidable question unanswered. Three states: a
+count; `0` for a file that is present and **not in use** (over the cap, empty,
+unreadable — a fault somebody should see rather than silence); `null` for no
+file at all, which is the normal case and also what a host too old to send this
+reads as. Nothing about the rules crosses the wire — not the content, not even a
+name. There is no verb that sets them; putting the file on a box needs a shell
+on that box, which is the same bound `profile` has and one fewer thing than
+`profile` needs.
+
 **`reboot` keeps all three of the chat flow's confirmations, unchanged.** Sending
 it bare is step one: the host says what will be lost — every running session, by
 name — and issues a six-digit pin. Sending it again with the pin *and* the
