@@ -19,7 +19,7 @@
 // that mattered.
 
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
-import { readPrompt, promptId, describePrompt } from './prompt.js';
+import { readPrompt, promptId, describePrompt, answerActions } from './prompt.js';
 
 const DEFAULT_INTERVAL_MS = 20_000;
 
@@ -532,6 +532,11 @@ export class SessionWatcher {
         kind: prompt.kind,
         question: shown.question,
         options: shown.options,
+        // WHICH OF OUR OWN ANSWERS THIS PANE IS OFFERING, resolved here rather
+        // than downstream. `shown.options` may be empty — that is what
+        // AGENT_FLEET_PROMPT_TEXT decides — and these are resolved from the
+        // REAL labels, which never leave the box. A slot and a digit do.
+        actions: answerActions(prompt),
       },
     };
   }
