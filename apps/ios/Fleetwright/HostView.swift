@@ -215,6 +215,13 @@ struct HostView: View {
             if let version = health?.version?.head, !version.isEmpty {
                 Text(version).fleetType(.labelMono).foregroundStyle(Design.Palette.inkDim)
             }
+            if let waiting = health?.version?.restartWaitingFor {
+                // The gap, in the attention colour: this is the one line on the
+                // page that says the box is not running what it holds.
+                Text("\(waiting) is on this box and not yet running. A restart applies it.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
         }
         .padding(.vertical, Design.Space.hair)
     }
