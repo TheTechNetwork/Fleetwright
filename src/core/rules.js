@@ -125,15 +125,11 @@ export function readHouseRules(cfg) {
   if (!text.trim()) {
     return { ok: false, text: null, chars: text.length, why: `${file} is empty` };
   }
-  if (text.length > RULES_MAX) {
-    return {
-      ok: false,
-      text: null,
-      chars: text.length,
-      why: `${file} is ${text.length} characters and the limit is ${RULES_MAX}. It is not being used.`,
-    };
-  }
 
+  // No second length check here, on purpose. A UTF-8 file has at least as many
+  // bytes as characters, so a file whose bytes passed the cap above cannot
+  // have more characters than it. The branch was written and the coverage
+  // ratchet found it unreachable, which is the right way round for it to go.
   return { ok: true, text, chars: text.length, why: null };
 }
 
