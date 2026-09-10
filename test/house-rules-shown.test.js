@@ -16,6 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 
 test('iOS decodes house rules as a number that may be absent', () => {
   const swift = iosSources();
@@ -34,4 +35,27 @@ test('iOS draws the two states that mean something and nothing for the third', (
   assert.match(swift, /characters of house rules, read on every turn/, 'the count says what it costs');
   assert.match(swift, /Design\.Palette\.attention[\s\S]{0,400}characters of house rules/s,
     'the attention colour is on the fault, not on the count');
+});
+
+test('Android decodes house rules without reading a missing key as zero', () => {
+  // optInt("houseRules") on an absent key returns 0, which is the one collapse
+  // this field exists to prevent: "no file" drawn as "a file not in use".
+  const kotlin = androidSources();
+  assert.match(kotlin, /val houseRules: Int\? = null/);
+  assert.match(kotlin, /has\("houseRules"\) && !it\.isNull\("houseRules"\)/, 'absent and JSON-null must both stay null');
+});
+
+test('both phones say the same thing about house rules, in the same two states', () => {
+  const swift = iosSources();
+  const kotlin = androidSources();
+  for (const sentence of [
+    'A rules file is on this box and is not being used.',
+    'characters of house rules, read on every turn.',
+    'One file on the box, written into each new session as its CLAUDE.md.',
+  ]) {
+    assert.ok(swift.includes(sentence), `iOS lost: ${sentence}`);
+    assert.ok(kotlin.includes(sentence), `Android lost: ${sentence}`);
+  }
+  assert.match(kotlin, /host\.houseRules\?\.let/, 'null draws nothing on Android too');
+  assert.match(kotlin, /houseRules == 0/, 'zero is its own state on Android too');
 });
