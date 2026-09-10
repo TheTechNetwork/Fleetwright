@@ -106,6 +106,16 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Design.Space.inside),
             ) {
+                // THE GAP, FIRST AND IN THE ERROR COLOUR: the one line on this
+                // sheet that says the box is not running what it holds. Same
+                // sentence as iOS, held equal by test/restart-waiting.test.js.
+                host.restartWaitingFor?.let { waiting ->
+                    Text(
+                        "$waiting is on this box and not yet running. A restart applies it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text("Sessions", style = MaterialTheme.typography.titleSmall)
                 when {
                     variant == null ->
