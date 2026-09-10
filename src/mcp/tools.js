@@ -130,9 +130,10 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     name: 'fleet_await',
     verb: 'status',
     description:
-      'Wait for a session to finish. Returns as soon as it has ended, has errored, or the wait runs out — ' +
-      'whichever comes first. Use this after fleet_start rather than calling fleet_peek in a loop. On a ' +
-      'connection that caps a single wait it says so and asks you to call again, which is not a failure.',
+      'Wait for a session to finish. Returns as soon as it has come back to its prompt after working, ' +
+      'needs a person, has ended, has errored, or the wait runs out — whichever comes first. Use this after ' +
+      'fleet_start rather than calling fleet_peek in a loop. On a connection that caps a single wait it ' +
+      'says so and asks you to call again, which is not a failure.',
     // Not a protocol verb. `status` is what it asks the fleet, repeatedly, and
     // the waiting happens in this server — see McpServer#await. The parameters
     // are its own.
