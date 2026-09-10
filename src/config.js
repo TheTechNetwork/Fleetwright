@@ -82,6 +82,19 @@ export function loadConfig(env = process.env) {
     // starts idle sessions, which is what every host did before this existed.
     profileDir: str('AGENT_HUB_PROFILE_DIR', path.join(stateDir, 'profiles')),
 
+    // NAMED SECRETS, one file per name, resolved when a session that was
+    // started with `--secret <name>` asks for it over the hook socket. The
+    // NAME crosses the wire; the value lives only here. Like a profile, a file
+    // here is placed by somebody with a shell — which is what stops a
+    // coordinator from choosing what a session may read. See
+    // src/core/secret-store.js and docs/trust.md.
+    //
+    // NOT beside profiles under version control: a profile is meant to be
+    // git-diffable ("what are these boxes told"); a secret is the opposite, so
+    // it gets its own directory and the operator keeps it out of any repo — or
+    // seals it with systemd-creds, which docs/trust.md describes.
+    secretsDir: str('AGENT_HUB_SECRETS_DIR', path.join(stateDir, 'secrets')),
+
     // HOUSE RULES, which are a different thing from a profile and sit here
     // because they are governed by the same sentence.
     //

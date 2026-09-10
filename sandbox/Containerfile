@@ -110,7 +110,8 @@ RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs\n' > /usr
 COPY credential.mjs /usr/local/lib/agent-credential.mjs
 RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-credential.mjs "$@"\n' > /usr/local/bin/fleet-cred \
     && printf '#!/bin/sh\nexec node /usr/local/lib/agent-credential.mjs "$@"\n' > /usr/local/bin/git-credential-fleet \
-    && chmod +x /usr/local/bin/fleet-cred /usr/local/bin/git-credential-fleet
+    && printf '#!/bin/sh\nexec node /usr/local/lib/agent-credential.mjs secret-value "$@"\n' > /usr/local/bin/fleet-secret \
+    && chmod +x /usr/local/bin/fleet-cred /usr/local/bin/git-credential-fleet /usr/local/bin/fleet-secret
 
 # `gh` and `wrangler` read their token from the environment and speak no
 # credential-helper protocol, so they get a PATH shim instead: fetch, export for

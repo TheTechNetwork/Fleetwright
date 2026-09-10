@@ -158,6 +158,12 @@ test('each verb produces the command line agent-hub actually receives', async (t
 test('the command-line mapping is pinned', () => {
   assert.equal(toCommandLine({ verb: 'start', params: {} }), '/new');
   assert.equal(toCommandLine({ verb: 'start', params: { mode: 'dangerous' } }), '/new --dangerous');
+  // A secret rides as a NAME on a --secret flag, like --profile, and never as a
+  // value — the value stays on the box. Both flags are single tokens.
+  assert.equal(
+    toCommandLine({ verb: 'start', params: { name: 'api', profile: 'reviewer', secret: 'github-deploy' } }),
+    '/new api --profile=reviewer --secret=github-deploy',
+  );
   assert.equal(toCommandLine({ verb: 'resume', params: { name: 'x' } }), '/resume x');
   assert.throws(() => toCommandLine({ verb: 'peek', params: { name: 'x' } }), /no command mapping/);
   assert.throws(() => toCommandLine({ verb: 'health', params: {} }), /no command mapping/);

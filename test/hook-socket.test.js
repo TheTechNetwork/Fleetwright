@@ -20,6 +20,7 @@ import {
   postSessionStart,
   isValidSessionName,
   HOOK_PATH,
+  SECRET_PATH,
   CONTAINER_SOCKET_PATH,
 } from '../src/core/hook-socket.js';
 
@@ -246,6 +247,68 @@ test('a rejected report from the hub is passed back, not swallowed', async (t) =
   assert.equal(r.ok, false);
   assert.equal(r.status, 400);
   assert.equal(r.body?.message, 'no such session');
+});
+
+// --- the named-secret route -------------------------------------------------
+
+test('the secret route serves a granted secret and scopes by the socket', async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hook-sock-'));
+  const served = [];
+  // The resolver the host wires: the grant is keyed by the session NAME the
+  // socket supplied, so a request cannot reach across sessions.
+  const grants = { bigjob: 'github-deploy' };
+  const store = { 'github-deploy': 'the-value' };
+  const server = new HookSocketServer({
+    dir,
+    onSessionStart: () => ({ ok: true }),
+    namedSecretFor: (name, requested) => {
+      served.push([name, requested]);
+      const granted = grants[name] ?? null;
+      if (requested !== granted) return { ok: false, error: 'not_granted' };
+      const value = store[requested];
+      return value === undefined ? { ok: false, error: 'no_secret' } : { ok: true, name: requested, value };
+    },
+    logger: { info: () => {}, warn: () => {} },
+  });
+  t.after(async () => {
+    await server.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const sock = await server.open('bigjob');
+
+  const ok = await rawPost(sock, JSON.stringify({ name: 'github-deploy' }), { path: SECRET_PATH });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(JSON.parse(ok.text), { ok: true, name: 'github-deploy', value: 'the-value' });
+
+  // A name it was not granted is refused, and the refusal is not the value.
+  const no = await rawPost(sock, JSON.stringify({ name: 'npm-publish' }), { path: SECRET_PATH });
+  assert.equal(no.status, 404);
+  assert.equal(JSON.parse(no.text).error, 'not_granted');
+
+  // The resolver only ever saw requests keyed to THIS socket's session.
+  assert.ok(served.every(([name]) => name === 'bigjob'));
+});
+
+test('the secret route is 404 when the host wires no resolver, and 405 for GET', async (t) => {
+  const { server } = harness(t); // harness wires no namedSecretFor
+  const sock = await server.open('bigjob');
+
+  // An older or non-sandboxed host: the route simply is not there.
+  assert.equal((await rawPost(sock, JSON.stringify({ name: 'x' }), { path: SECRET_PATH })).status, 404);
+
+  // With a resolver present, the method still has to be POST.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hook-sock-'));
+  const withResolver = new HookSocketServer({
+    dir,
+    onSessionStart: () => ({ ok: true }),
+    namedSecretFor: () => ({ ok: true, name: 'x', value: 'v' }),
+  });
+  t.after(async () => {
+    await withResolver.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const s2 = await withResolver.open('bigjob');
+  assert.equal((await rawPost(s2, '{}', { method: 'GET', path: SECRET_PATH })).status, 405);
 });
 
 // --- lifecycle --------------------------------------------------------------

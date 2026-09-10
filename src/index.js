@@ -17,6 +17,7 @@ import { pickSecretsFile } from './core/podman.js';
 import { Connections } from './core/connectors.js';
 import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
+import { answerSecretRequest, readNamedSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
 
 export async function main() {
@@ -80,6 +81,17 @@ export async function main() {
             // pickSecretsFile does one line above.
             return new Connections(cfg.stateDir).renewalDueAt(rowForActor(who), provider);
           },
+          // The named-secret resolver. The GRANT is on the record — the name
+          // `start --secret` put there — and the VALUE is read from the store
+          // now, so a rotation on the box reaches a running session. The scoping
+          // is answerSecretRequest's: a session gets the name it was granted and
+          // no other, and can never probe which secrets exist by asking.
+          namedSecretFor: (name, requested) =>
+            answerSecretRequest({
+              requested,
+              granted: registry.get(name)?.secret ?? null,
+              read: (n) => readNamedSecret(cfg.secretsDir, n),
+            }),
           logger: log,
         })
       : null;
