@@ -282,6 +282,19 @@ class Fleet(
          */
         val logs: List<String>? = null,
         /**
+         * How many characters of house rules this box writes into every new
+         * session as ~/.claude/CLAUDE.md. A NUMBER, not a flag: rules are read
+         * on every turn of every session, so the size is the cost and the only
+         * fact a person deciding about them needs.
+         *
+         * Three states. A count is what every new session here gets. Zero is a
+         * rules file that is on the box and NOT in use, a fault somebody should
+         * see rather than silence. Null is no file at all, the normal case and
+         * also what a host too old to send this looks like; the sheet says
+         * nothing for it rather than guessing.
+         */
+        val houseRules: Int? = null,
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -1411,6 +1424,11 @@ class Fleet(
                     logs = health?.optJSONArray("logs")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     },
+                    // ABSENT AND JSON-NULL BOTH STAY NULL, and 0 is kept as 0:
+                    // optInt would read a missing key as 0, which is the one
+                    // collapse this field exists to prevent — "no file" drawn
+                    // as "a file that is not in use".
+                    houseRules = health?.takeIf { it.has("houseRules") && !it.isNull("houseRules") }?.optInt("houseRules"),
                 )
             }
         }.getOrDefault(emptyList())

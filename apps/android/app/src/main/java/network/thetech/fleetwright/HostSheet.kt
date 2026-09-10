@@ -208,6 +208,41 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
                     style = MaterialTheme.typography.bodySmall,
                 )
 
+                // WHAT THIS BOX PUTS INTO EVERY SESSION, and what it costs.
+                //
+                // A box can hold a file that becomes ~/.claude/CLAUDE.md inside
+                // every new session. Nothing about it crosses the wire and no
+                // screen can set it, so all this can do is report it: the size,
+                // because rules are read on every turn and the size is the
+                // running cost; or that a file is there and not being used,
+                // which is the one state worth attention.
+                //
+                // NULL DRAWS NOTHING. It is the normal case (no file) and also
+                // an older host, and a line reading "no house rules" on every
+                // machine that has never heard of them would be a line about a
+                // feature nobody is using. Same words as iOS, held equal by
+                // test/house-rules-shown.test.js.
+                host.houseRules?.let { houseRules ->
+                    Text("House rules", style = MaterialTheme.typography.titleSmall)
+                    if (houseRules == 0) {
+                        Text(
+                            "A rules file is on this box and is not being used. The box's /profiles says why.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        Text(
+                            "Every new session here starts with $houseRules characters of house rules, read on every turn.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Text(
+                        "One file on the box, written into each new session as its CLAUDE.md. Changing it needs "
+                            + "a shell there, and reaches the next session rather than a running one.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
                 // THE JOURNAL, FROM THE PHONE. The half of "sign-in status and
                 // logs on the app" that stayed unbuilt while the roadmap said
                 // done: Fleet.kt had the call and no screen made it.
