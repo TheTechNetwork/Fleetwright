@@ -91,3 +91,74 @@ test('a tapped notification opens the session it was about, on iOS', () => {
   assert.match(list, /await refresh\(\)\s*if let name, let session = sessions\.first\(where: \{ \$0\.name == name \}\) \{\s*opened = session/);
   assert.match(list, /\.navigationDestination\(item: \$opened\) \{ session in\s*SessionView\(fleet: fleet, initial: session/);
 });
+
+// --- Android ------------------------------------------------------------------
+
+import { androidSources } from './helpers/android-sources.js';
+
+const SHEET = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/SessionSheet.kt', import.meta.url), 'utf8');
+
+test('Android owns the same vocabulary on its model, in the same words', () => {
+  const kotlin = androidSources();
+  assert.match(kotlin, /val stateSentence: String get\(\) \{/);
+  assert.equal((kotlin.match(/val stateSentence: String/g) || []).length, 1, 'defined once');
+  const swift = iosSources();
+  for (const words of ['Waiting for you', 'At its prompt · idle', 'At its prompt', 'Quiet for', 'Working', 'Finished', 'Stopped · can be resumed', 'Stopped']) {
+    assert.ok(swift.includes(`"${words}`), `iOS lost: ${words}`);
+    assert.ok(kotlin.includes(`"${words}`), `Android lost: ${words}`);
+  }
+  assert.match(SHEET, /session\.stateSentence/);
+});
+
+test('the sheet watches the pane on the same schedule, unwrapped, and stops', () => {
+  assert.match(SHEET, /fleet\.peek\(session\.name\)/);
+  assert.match(SHEET, /QUICK_LOOKS = 10/);
+  assert.match(SHEET, /QUICK_INTERVAL_MS = 3_000L/);
+  assert.match(SHEET, /SLOW_LOOKS = 9/);
+  assert.match(SHEET, /SLOW_INTERVAL_MS = 10_000L/);
+  assert.match(SHEET, /watchEnded = true/);
+  assert.match(SHEET, /Text\("Look again"\)/);
+  // softWrap = false is the whole of the never-reflow rule on Android.
+  assert.match(SHEET, /fontFamily = FontFamily\.Monospace,\s*softWrap = false/);
+  assert.match(SHEET, /horizontalScroll\(rememberScrollState\(\)\)/);
+  // Dismissing cancels: the schedule is an effect keyed on the generation.
+  assert.match(SHEET, /LaunchedEffect\(watchGeneration, session\.isRunning\)/);
+});
+
+test('both phones put the same things in the same order, and say the same sentences', () => {
+  const sentence = SHEET.indexOf('session.stateSentence');
+  const asking = SHEET.indexOf('Text("It is asking"');
+  const rc = SHEET.indexOf('Continue in Remote Control');
+  const pane = SHEET.indexOf('Text("On its screen"');
+  const actions = SHEET.indexOf('Text("Actions"');
+  assert.ok(sentence > 0 && sentence < asking && asking < rc && rc < pane && pane < actions, 'the sheet is out of order');
+  for (const s of [
+    'Continue in Remote Control',
+    'Your shell on this session, in the browser. Anything typed there goes to the session as if you were at the box.',
+    'Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back.',
+    'Reading the screen…',
+    'No longer watching.',
+    'Look again',
+    "'s screen right now.",
+  ]) {
+    assert.ok(SCREEN.includes(s), `iOS lost: ${s}`);
+    assert.ok(SHEET.includes(s), `Android lost: ${s}`);
+  }
+});
+
+test('the card title is the way in on Android too, and the sheet tells the list', () => {
+  const main = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  assert.match(main, /\.heightIn\(min = 48\.dp\)\s*\.clickable\(onClick = onInspect\)/, 'a 48dp target');
+  assert.match(main, /onInspect = \{ inspecting = session \}/);
+  assert.match(main, /SessionSheet\([\s\S]{0,300}onChanged = \{ refresh\(keepStatus = true\) \}/);
+  assert.match(SHEET, /reload\(\)\s*onChanged\(\)/);
+});
+
+test('a tapped notification opens the session it was about, on Android too', () => {
+  const main = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  // Keyed on the list as well as the name, because refresh() is asynchronous
+  // and the sheet opens from the fresh list; once per tap, so a later refresh
+  // does not reopen a sheet somebody closed.
+  assert.match(main, /LaunchedEffect\(notifiedSession, sessions\) \{\s*if \(notifiedSession != null && notifiedSession != openedFor\)/);
+  assert.match(main, /sessions\.firstOrNull \{ it\.name == notifiedSession \}\?\.let \{\s*inspecting = it\s*openedFor = notifiedSession/);
+});
