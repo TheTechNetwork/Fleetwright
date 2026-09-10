@@ -1211,10 +1211,41 @@ export class CoordinatorCore {
       //
       // The hosts array is NOT filtered: which machines exist is fleet
       // topology, and a member starting a session needs the picker to work.
-      if (spec.requester && !spec.requester.admin) {
-        const mine = `fleet:${String(spec.requester.email || '').toLowerCase()}`;
+      const filtering = Boolean(spec.requester && !spec.requester.admin);
+      if (filtering) {
+        const mine = `fleet:${String(spec.requester?.email || '').toLowerCase()}`;
         sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine);
       }
+
+      // AND THE PROSE WITH IT, which is where this filter was leaking everything
+      // it removed.
+      //
+      // A host answers `list` with two renderings of the same fact: `sessions`,
+      // as records, and `text`, as the listing a person reads. Only the records
+      // were filtered — so the app, which draws the records, was correct, and
+      // the MCP server, which renders `text` because that is what an agent
+      // reads, handed every member the whole fleet: every session's name, its
+      // title, who started it, and the REMOTE CONTROL URL of anything running.
+      // A live link into somebody else's session, in the reply to the one verb
+      // an invited guest is most likely to call first.
+      //
+      // Rendered here from the filtered records rather than cut out of the
+      // host's prose. Parsing a listing to remove lines from it is a filter
+      // that fails open the first time the listing improves — and this file
+      // already says the host is the party with the least information about
+      // who is asking, so it cannot render this either.
+      //
+      // Only for replies that carried sessions, so the other fan-out verbs —
+      // `profiles`, `connect`, `link` — keep the host's own words, and a host
+      // that refused keeps its reason.
+      const rendered = new Map(
+        results.map((r) => [
+          r.hostId,
+          filtering && Array.isArray(r.sessions)
+            ? describeOwnSessions(sessions.filter((s) => s.hostId === r.hostId))
+            : (r.text ?? ''),
+        ]),
+      );
 
       // COVERAGE, when the question was "what am I connected to". A fan-out
       // returns one reply per host, and for `connect` the interesting part is
@@ -1244,8 +1275,8 @@ export class CoordinatorCore {
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
         sessions,
-        hosts: results.map(({ hostId, ok, text, error }) => ({ hostId, ok, text, error })),
-        text: results.map((r) => `${r.hostId}: ${r.text ?? ''}`).join('\n'),
+        hosts: results.map(({ hostId, ok, error }) => ({ hostId, ok, text: rendered.get(hostId) ?? '', error })),
+        text: results.map((r) => `${r.hostId}: ${rendered.get(r.hostId) ?? ''}`).join('\n'),
       };
     }
 
@@ -1775,6 +1806,49 @@ function ownedBy(owner, requester) {
   if (!mine) return false;
   const theirs = String(owner || '').toLowerCase();
   return theirs === `fleet:${mine}` || theirs === mine;
+}
+
+/**
+ * One host's listing, written from the records the caller may see.
+ *
+ * The host's own rendering cannot be reused: it describes every session on the
+ * box, and the box does not know who is asking. So this is the same listing
+ * said again over the filtered records — glyphs and shape borrowed from
+ * `/list` in src/adapters/commands.js so the two read as one product, and
+ * deliberately a separate few lines rather than an import, because that file
+ * is host code with a filesystem behind it and this one runs in a Worker.
+ *
+ * "nothing of yours" and never "no sessions": the box may be holding a dozen,
+ * and a screen may not report a state it does not know (C-5).
+ *
+ * @param {any[]} sessions  already filtered to the requester
+ */
+function describeOwnSessions(sessions) {
+  if (!sessions.length) return 'nothing of yours';
+  const running = sessions.filter((s) => String(s?.status || '') === 'running');
+  const rest = sessions.filter((s) => String(s?.status || '') !== 'running');
+  const lines = [`${running.length} of your sessions running, ${rest.length} resumable`, ''];
+  // The Remote Control URL rides along on a running session, the way the
+  // host's listing carries it: it is the caller's own session, and it is the
+  // link they would otherwise ask for next.
+  for (const s of running) lines.push(`▶ ${sessionLabel(s)}${s?.rcUrl ? `\n   ${s.rcUrl}` : ''}`);
+  if (rest.length) {
+    lines.push('', 'Resumable:');
+    for (const s of rest) lines.push(`◼ ${sessionLabel(s)}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * A session on one line. A title is a label, not a transcript — somebody
+ * pasted a whole task in as one, and the listing rendered its first paragraph.
+ *
+ * @param {any} s
+ */
+function sessionLabel(s) {
+  const title = s?.title ? String(s.title).split('\n')[0].trim() : '';
+  const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
+  return short ? `${s.name} · ${short}` : String(s?.name ?? '');
 }
 
 /**
