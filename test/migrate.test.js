@@ -192,6 +192,7 @@ test('after a release applies, root refreshes its half — after the reply has l
     after: (fn) => { deferred.push(fn); },
     run: (cmd, args) => { calls.push(`${cmd} ${args.join(' ')}`); return { status: 0, stdout: 'ok', stderr: '' }; },
     restart: () => { restarted++; },
+    mark: () => true,
     logger: { info() {}, warn() {} },
   });
   assert.equal(heal.scheduled, true);
@@ -212,12 +213,54 @@ test('a heal that cannot run still restarts, and says so in the log', () => {
     after: (fn) => fn(),
     run: () => ({ status: 1, stdout: '', stderr: 'sudo: a password is required' }),
     restart: () => { restarted++; },
+    mark: () => true,
     logger: { info() {}, warn: (/** @type {string} */ m) => warned.push(m) },
   });
   assert.equal(heal.scheduled, true);
   assert.equal(restarted, 1, 'the new code applies either way');
   assert.match(warned.join('\n'), /could not refresh/);
   assert.match(warned.join('\n'), /a password is required/);
+});
+
+test('the siblings are told before the helper runs, and told even when it fails', () => {
+  // THE BUG THIS PINS. A fleet showed `main-88 · up to date` for a box that
+  // answered "already on main-102": the heal failed, the hub restarted itself
+  // with a bare exit, and the restart marker — the one thing the sidecar
+  // watches — was never written, because only restartSelf wrote it and the
+  // scheduled heal skips restartSelf. The sidecar stayed on main-88 and said so
+  // on every frame, and nothing compared that to the disk.
+  /** @type {string[]} */
+  const order = [];
+  const heal = healAfterRelease({
+    exists: () => true,
+    after: (fn) => fn(),
+    mark: (o) => { order.push(`mark ${o.head} by ${o.actor} in ${o.stateDir}`); return true; },
+    run: () => { order.push('helper'); return { status: 1, stdout: '', stderr: 'sudo: a password is required' }; },
+    restart: () => { order.push('exit'); },
+    head: 'main-102',
+    actor: 'fleet:eli@example.com',
+    stateDir: '/var/lib/agent-hub',
+    logger: { info() {}, warn() {} },
+  });
+  assert.equal(heal.scheduled, true);
+  assert.deepEqual(order, ['mark main-102 by fleet:eli@example.com in /var/lib/agent-hub', 'helper', 'exit'],
+    'the marker goes down first — a sibling the installer restarts starts after it and ignores it; one it fails to restart picks it up');
+});
+
+test('a successful heal also leaves the marker, written before the installer restarted anybody', () => {
+  // Written after, every sibling the installer had just restarted would read a
+  // marker newer than its own start and restart a second time for nothing.
+  /** @type {string[]} */
+  const order = [];
+  healAfterRelease({
+    exists: () => true,
+    after: (fn) => fn(),
+    mark: () => { order.push('mark'); return true; },
+    run: () => { order.push('helper'); return { status: 0, stdout: 'ok', stderr: '' }; },
+    restart: () => { order.push('exit'); },
+    logger: { info() {}, warn() {} },
+  });
+  assert.deepEqual(order, ['mark', 'helper', 'exit']);
 });
 
 test('with no helper installed the update says what was not refreshed, and how to get it', () => {

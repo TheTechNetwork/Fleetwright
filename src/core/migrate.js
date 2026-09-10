@@ -19,6 +19,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { requestRestart } from './restart-watch.js';
 
 export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
 
@@ -172,8 +173,27 @@ export function migrationReply(cfg, status, release, { apply = false, check = fa
  * the process still restarts itself so the new code applies either way: the
  * heal is the better restart, never a reason to skip one.
  *
+ * THE MARKER IS WRITTEN FIRST, before the helper runs, and this is the fix for
+ * a fleet that showed a box as `main-88 · up to date` while the box itself
+ * said "already on main-102". This path used to restart with a bare exit: when
+ * the heal failed, the hub came back on the new release and NOBODY TOLD THE
+ * SIDECAR — the restart marker that restart-watch.js exists to provide was
+ * only ever written by restartSelf, which the scheduled heal skips. The
+ * sidecar stayed on the old release, reporting the old version, and the
+ * fleet read that as current.
+ *
+ * Before, not after, and the order is load-bearing. The marker means "a
+ * complete new tree is on disk", which is already true here — applyRelease
+ * has swapped `current`. Written now, a sibling the installer restarts starts
+ * AFTER the marker and ignores it; a sibling the installer failed to restart
+ * started before it and picks it up within a minute. Written after the
+ * installer returned, every sibling it had just restarted would restart a
+ * second time for nothing.
+ *
  * @param {{ run?: typeof spawnSync, exists?: (p: string) => boolean,
- *   after?: (fn: () => void) => void, restart?: () => void, logger?: { warn: Function, info: Function } }} [opts]
+ *   after?: (fn: () => void) => void, restart?: () => void,
+ *   mark?: typeof requestRestart, head?: string|null, actor?: string|null, stateDir?: string|null,
+ *   logger?: { warn: Function, info: Function } }} [opts]
  * @returns {{ scheduled: boolean, text: string }}
  */
 export function healAfterRelease({
@@ -181,6 +201,10 @@ export function healAfterRelease({
   exists = existsSync,
   after = (fn) => setTimeout(fn, 1500),
   restart = () => process.exit(0),
+  mark = requestRestart,
+  head = null,
+  actor = null,
+  stateDir = null,
   logger = console,
 } = {}) {
   if (!exists(MIGRATE_BIN)) {
@@ -192,6 +216,10 @@ export function healAfterRelease({
     };
   }
   after(() => {
+    // Told BEFORE anything else happens. Whatever the helper does next — runs,
+    // fails, is refused by sudo — every service on this box now knows there is
+    // a newer tree than the one it started from.
+    mark({ head: head ?? undefined, actor: actor ?? undefined, stateDir: stateDir ?? undefined });
     const r = run('sudo', ['-n', MIGRATE_BIN], { encoding: 'utf8', timeout: 20 * 60_000 });
     if (r.status === 0) {
       // The installer restarted the services on its way out, this one

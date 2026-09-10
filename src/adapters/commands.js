@@ -1561,7 +1561,9 @@ export const COMMANDS = {
           // rides the release from here: the helper runs the release's own
           // installer with --repair and restarts the services itself. Only
           // when it cannot does this process restart on its own.
-          const heal = healAfterRelease({ logger: log });
+          // With what the marker needs: the version that just landed, who
+          // asked, and where the siblings look for it.
+          const heal = healAfterRelease({ logger: log, head: r.version ?? null, actor: ctx.actor ?? null, stateDir: ctx.cfg.stateDir ?? null });
           if (heal.scheduled) return { ok: true, text: `${r.message}\n\n${heal.text}` };
           const restarted = restartSelf();
           return { ok: restarted.ok, text: `${r.message}\n\n${heal.text}\n\n${restarted.message}` };
