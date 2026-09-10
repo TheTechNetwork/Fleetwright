@@ -89,10 +89,21 @@ Two arrangements satisfy it.
 
 **Reference, not value.** Secrets live on the host, in whatever the operator
 already uses — a file, a systemd credential, a vault agent. An intent names one:
-`start --secret github-deploy`. The host resolves the name locally and seeds it
-into the sandbox the way credentials are seeded today. The coordinator learns
-that a secret named `github-deploy` was requested and nothing else. This needs
-no cryptography, and it is where I would start.
+`start --secret github-deploy`. The host resolves the name locally and the
+session fetches the value at runtime over the credential broker. The
+coordinator learns that a secret named `github-deploy` was requested and
+nothing else. This needs no cryptography, and it is where I started.
+
+**Built, protocol v4.** The store is `AGENT_HUB_SECRETS_DIR` (one file per
+name); `start --secret <name>` records the grant on the session; the session
+reads the value with `fleet-secret <name>` over the per-session socket, scoped
+to what it was granted, logged by name and never by value. `secrets` lists the
+names for a picker. The one correction the build made to the paragraph above:
+it does NOT "seed it into the sandbox the way credentials are seeded today" —
+that would freeze the value at start and put it in the container. Serving it
+from the broker instead is the version that keeps the value out of the
+environment and lets a rotation reach a running session. See
+`docs/credential-broker.md`.
 
 **Envelope, when the value must travel.** If a secret genuinely has to come from
 a phone — pasted once, never stored on a host — then it is encrypted to the
@@ -913,9 +924,17 @@ rest of this document buildable rather than aspirational.
 1. ~~**Host keypairs.**~~ **Done.** Everything else is a special case of a fleet
    whose members have identities; this closed the oldest gap and unlocked
    custody.
-2. **Secret references.** No cryptography, immediate value, and it establishes
-   that the coordinator names secrets rather than holding them — the habit
-   matters more than the mechanism.
+2. ~~**Secret references.**~~ **Done** (protocol v4). `start --secret <name>`
+   names a secret the host holds; the coordinator learns the name and nothing
+   else, the host resolves it from its own store (`AGENT_HUB_SECRETS_DIR`), and
+   the session fetches the value at runtime over the credential broker — the
+   version this document argued for, materially more than "seed it the way
+   credentials are seeded now", because the value never enters the container's
+   environment and a rotation reaches a running session. A `secrets` verb lists
+   the names so the phones offer a picker rather than blind entry, the way
+   `profiles` lists profiles. What it does NOT do is bound what the session then
+   does with the value once it has it — that is the proxy and the scoping below,
+   still to build. See `docs/credential-broker.md`.
 3. **Passkeys for people**, replacing the bearer credential inside the existing
    client registry, once there is more than one person and a phone is the thing
    being trusted.

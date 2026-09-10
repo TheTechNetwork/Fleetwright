@@ -74,6 +74,38 @@ a `gh` that does not exist, and somebody spends an afternoon looking for a bug i
 A missing *credential*, by contrast, is not fatal: plenty of `gh` commands need
 no token, and the ones that do will complain in their own words.
 
+## Named secrets, granted at start
+
+The broker began as connected-provider tokens (`github`, `cloudflare`). It also
+serves **named secrets** — arbitrary values the operator placed on the box —
+under the same socket and the same authority.
+
+```
+container                         host
+─────────                         ────
+fleet-secret github-deploy ─▶ /run/hub.sock ─▶ /internal/secret
+                                  (this session's socket)     │
+                                                              ▼
+                                          AGENT_HUB_SECRETS_DIR/github-deploy
+                                                    read now, if GRANTED
+```
+
+The difference from a provider token is where the permission comes from. A
+provider token is scoped to whoever owns the session. A named secret is scoped
+to what `start --secret <name>` **granted** that session, recorded on its
+record: the grant decides, not the ask, so a session cannot name a secret it
+was not given and cannot probe which secrets exist by asking — a name it was not
+granted never touches the store. The value is read at the moment of the request,
+logged by name, and never enters the container's environment or filesystem.
+
+`secrets` (the verb) lists the names a box holds, so the phones and the CLI
+offer a picker instead of blind entry — the value is never in that listing. See
+`docs/trust.md`.
+
+Its refusals mirror the five above: `not_granted` (this session was not given
+that name), `no_secret` (granted, but this box does not hold it — an operator
+gap on this host), and `no_name` (nothing asked for).
+
 ## What this is not
 
 **It is not the credential-terminating proxy** in [trust.md](./trust.md). The
