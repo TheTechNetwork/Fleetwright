@@ -219,7 +219,8 @@ struct FleetView: View {
                                        try await fleet.answer(session.name, option: option,
                                                               promptId: session.prompt?.id)
                                    }
-                               })
+                               },
+                               changed: { await refresh(keepStatus: true) })
                         .fleetRow()
                 }
             }
@@ -466,6 +467,9 @@ private struct SessionRow: View {
     /// died is here and nowhere else once its window is gone.
     let output: () async -> Void
     let answer: (Int) async -> Void
+    /// Called when the session's own page changed something the list should
+    /// know about — a stop, an answer — so the row moves with it.
+    let changed: () async -> Void
     @State private var confirmingForget = false
 
     /// A session that is asking something wears the attention ring, and it is
@@ -476,13 +480,27 @@ private struct SessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
-            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
-                Text(session.label)
-                    .fleetType(.bodyStrong)
-                    .foregroundStyle(Design.Palette.ink)
-                Spacer(minLength: 0)
-                StatusBadge(status: session.status)
+            // THE TITLE IS THE WAY IN. A session is a subject and has a page
+            // (SessionView) — the pane, the state sentence, the same actions
+            // with room around them. The row keeps its controls so the list
+            // stays the place to answer and stop; the page is where to look.
+            NavigationLink {
+                SessionView(fleet: fleet, initial: session, onChange: changed)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                    Text(session.label)
+                        .fleetType(.bodyStrong)
+                        .foregroundStyle(Design.Palette.ink)
+                    Image(systemName: "chevron.right")
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                    StatusBadge(status: session.status)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             // Both are shown when they differ: the title is what a person
             // recognises, the name is what everything else keys on.
             if session.label != session.name {
