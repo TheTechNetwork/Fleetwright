@@ -83,8 +83,10 @@ at once.
 >
 > What is left of the filesystem exception is exactly the apps: the five verbs
 > ship on coordinator, Worker, host and MCP, and neither phone has a screen for
-> them. That and the session detail screen are the two the roadmap still calls
-> **partial**.
+> them beyond the Files browser. The session detail screen, the other row the
+> roadmap called **partial**, is built on both phones now: the state sentence,
+> the pane watched through `peek`, and Remote Control front and centre when
+> nothing is being asked.
 
 That is the design working, not a bug in it. But it means "add all the features
 to the app" is a protocol decision before it is an app decision, and pretending
