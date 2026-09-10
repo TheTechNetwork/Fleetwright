@@ -136,6 +136,19 @@ checkout, which the service user owns. The installer restarts the services on
 its way out; the hub replies to the phone first and starts the heal after the
 reply has left, which is why the message says "in a moment".
 
+**The restart marker is written before the helper runs, not after**, and the
+order is load-bearing. A fleet showed a box as `main-88 · up to date` while the
+box itself said "already on main-102": the heal had failed, the hub had
+restarted itself with a bare exit, and the marker the sidecar polls for
+(`restart-watch.js`) was never written, because only `restartSelf` wrote it and
+a scheduled heal skips `restartSelf`. The sidecar stayed on main-88 and said
+so on every frame. Now the hub writes the marker the moment the heal is
+scheduled — a complete new tree is already on disk by then — so a sibling the
+installer restarts starts *after* the marker and ignores it, and one the
+installer failed to restart started *before* it and picks it up within a
+minute. Written after the installer returned instead, every sibling it had
+just restarted would restart a second time for nothing.
+
 A checkout gets no heal, deliberately: there is no verified copy of its
 installer for root to run. The update says so and names the command.
 
