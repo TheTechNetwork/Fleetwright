@@ -926,7 +926,21 @@ export const COMMANDS = {
           ok: true,
           text: [
             `agent-hub on ${ctx.cfg.hostname}`,
-            `${running}/${ctx.cfg.maxSessions} sessions running, ${all.length} known`,
+            // CAPACITY, AND NOT A HEADCOUNT. This said "N known" beside the
+            // running figure, and the two are not the same kind of fact: how
+            // full a box is belongs to the box, and how many sessions exist on
+            // it is a count of PEOPLE'S WORK. This box does not know who is
+            // asking — that is deliberate, and it is why the visibility filter
+            // lives at the coordinator — so a number it cannot scope to a
+            // person must not be one it publishes.
+            //
+            // It leaked through the coordinator to any member: `/list` is
+            // filtered to your own sessions and this line said how many more
+            // there were. Nothing could act on the difference; it only said
+            // that other people were here.
+            //
+            // `/list` answers "what is there" for whoever may see it.
+            `${running}/${ctx.cfg.maxSessions} sessions running`,
             `workdir: ${ctx.cfg.workdir}`,
             // NOT `loggedIn`. The box having no Claude account of its own is
             // the ORDINARY state under one-account-per-person; reporting it as
