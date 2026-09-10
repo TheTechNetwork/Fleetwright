@@ -66,9 +66,10 @@ works and sessions run directly on the box.
 curl -fsSL https://fleet.thetech.network/install | sudo sh
 ```
 
-That fetches the repository to `/opt/agent-fleet` — the repo is Fleetwright,
-the install path is not — and runs `install/install.sh` from it. Arguments go
-after `-s --`, which is how `sh` is told the rest belongs to the script:
+That fetches the current release, checks it against its manifest, and runs the
+`install/install.sh` inside it, which lays the release out under
+`/opt/fleetwright`. Arguments go after `-s --`, which is how `sh` is told the
+rest belongs to the script:
 
 ```sh
 curl -fsSL https://fleet.thetech.network/install | sudo sh -s -- --check
