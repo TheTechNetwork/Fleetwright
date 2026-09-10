@@ -442,7 +442,12 @@ export class Fleet {
       // value that could attribute a second machine.
       if (ticket) await this.#saveClients();
       if (!result.ok || !result.host) {
-        return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
+        // A FULL FLEET IS NOT A BAD REQUEST. Collapsing every enrolment refusal
+        // to `bad_request` would tell somebody their pin or their key was
+        // malformed when what actually happened is that this fleet has no room
+        // left, sending them to debug the one thing that was fine.
+        const full = 'code' in result && result.code === 'hosts_full';
+        return json({ ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error }, full ? 507 : 400);
       }
       this.core.record({
         event: 'host.enrolled',
@@ -472,7 +477,11 @@ export class Fleet {
         readmit: spent.entry.readmit,
         boundToThisHost: Boolean(spent.entry.hostId),
       });
-      if (!result.ok) return json({ ok: false, error: { code: 'bad_request' }, text: result.error }, 400);
+      if (!result.ok) {
+        // A full fleet is not a bad request — see the copy above.
+        const full = 'code' in result && result.code === 'hosts_full';
+        return json({ ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error }, full ? 507 : 400);
+      }
       await this.#saveHosts();
 
       this.core.record({ event: 'host.enrolled', hostId: result.host.hostId, fingerprint: result.host.fingerprint });
@@ -667,6 +676,8 @@ export class Fleet {
       if (!who.ok) return json({ ok: false, error: { code: who.code }, text: who.text }, who.status);
 
       const issued = await this.core.issueClient(who, body?.deviceName ? String(body.deviceName) : undefined);
+      // 507 before the spread — see the Node coordinator's copy.
+      if ('ok' in issued && issued.ok === false) return json(issued, 507);
       await this.#saveClients();
       return json({ ok: true, ...issued });
     }
@@ -688,10 +699,13 @@ export class Fleet {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);
       }
       const body = await readJson(request);
-      const { client: issued, token } = await this.core.runnerTokens.issue(
+      const minted = await this.core.runnerTokens.issue(
         body?.name ? String(body.name) : 'a repository',
         {},
       );
+      // 507 rather than 400 — see the Node coordinator's copy.
+      if (minted.ok === false) return json(minted, 507);
+      const { client: issued, token } = minted;
       issued.email = client.email.toLowerCase();
       await this.#saveClients();
       // Shown once, like every other secret this coordinator issues.

@@ -38,6 +38,35 @@ export const RUNNER_PREFIX = 'fwr';
 const ID_BYTES = 6;
 const SECRET_BYTES = 24;
 
+/**
+ * How long a revoked credential's row is kept, and how many live ones fit.
+ *
+ * EVERY ROW EVER ISSUED WAS KEPT FOREVER, because `revoke` marks rather than
+ * removes — and this whole registry is serialised into ONE Durable Object
+ * value, which DO storage refuses over 128KiB. Past that, `storage.put` throws
+ * and keeps throwing, which takes sign-in down fleet-wide: `issueClient` mints
+ * a credential and then the save that would persist it fails, so the caller
+ * gets a 500 and never receives their token (#351).
+ *
+ * THE SWEEP IS THE PART THAT MATTERS, and it is safe here in a way evicting a
+ * live row would not be: a revoked credential authenticates nothing, so
+ * dropping its row removes no access. What it removes is history, and the
+ * event ring already records who revoked what and when — which is where an
+ * audit looks anyway, because it survives the row.
+ *
+ * Thirty days is long enough to investigate an incident with the rows still
+ * in front of you and short enough that a fleet churning credentials does not
+ * accumulate them indefinitely.
+ *
+ * The ceiling is a BACKSTOP, not the mechanism. It bounds the case the sweep
+ * cannot: live credentials, which are only created deliberately and can only
+ * be removed deliberately. It refuses rather than evicting, for the same
+ * reason the device store does — silently dropping somebody's live credential
+ * locks them out with nothing anywhere saying why.
+ */
+const REVOKED_RETENTION_MS = 30 * 24 * 3_600_000;
+const MAX_LIVE = 150;
+
 /** @param {Uint8Array} bytes */
 function hex(bytes) {
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -99,9 +128,23 @@ export class ClientRegistry {
    *
    * @param {string} name
    * @param {{ admin?: boolean }} [opts]
-   * @returns {Promise<{ client: Client, token: string }>}
+   * @returns {Promise<{ ok: true, client: Client, token: string }
+   *   | { ok: false, code: string, error: string }>}
    */
   async issue(name, { admin = false } = {}) {
+    // Swept on the way in, which is the only moment this store grows. A timer
+    // would be a second thing to get wrong on two coordinators.
+    this.#sweep();
+    if (this.#live() >= MAX_LIVE) {
+      return {
+        ok: false,
+        code: 'clients_full',
+        error:
+          `This fleet is holding ${MAX_LIVE} live credentials, which is as many as it can store in ` +
+          'one record. An admin can revoke the ones belonging to devices that have gone; revoked ' +
+          'credentials are cleared automatically thirty days later.',
+      };
+    }
     const id = randomHex(ID_BYTES);
     const secret = randomHex(SECRET_BYTES);
     /** @type {Client} */
@@ -115,7 +158,28 @@ export class ClientRegistry {
       admin,
     };
     this.clients.set(id, client);
-    return { client, token: `${this.prefix}_${id}_${secret}` };
+    return { ok: true, client, token: `${this.prefix}_${id}_${secret}` };
+  }
+
+  /** Credentials that still authenticate something. */
+  #live() {
+    let n = 0;
+    for (const c of this.clients.values()) if (!c.revokedAt) n++;
+    return n;
+  }
+
+  /**
+   * Drop revoked rows past the retention window.
+   *
+   * Deliberately not a general "trim to size": a store over the ceiling because
+   * of LIVE rows is a fleet that needs somebody to revoke something, and
+   * quietly dropping one to make room is the failure this refuses to have.
+   */
+  #sweep() {
+    const cutoff = this.now() - REVOKED_RETENTION_MS;
+    for (const [id, c] of this.clients) {
+      if (c.revokedAt && c.revokedAt < cutoff) this.clients.delete(id);
+    }
   }
 
   /**
@@ -197,7 +261,14 @@ export class ClientRegistry {
 
   /** @param {Client[]} clients */
   restore(clients) {
+    // A COORDINATOR ALREADY HOLDING TOO MUCH trims on the way in rather than on
+    // its next save, which is the ordering the events ring learned: a value
+    // that is already over the limit must shrink before anything tries to
+    // write it back, or the first save after the fix throws exactly as the
+    // saves before it did.
+
     for (const c of clients || []) if (c?.id) this.clients.set(c.id, c);
+    this.#sweep();
   }
 
   /** For persistence. Includes the hashes, which is what makes them worth hashing. */
