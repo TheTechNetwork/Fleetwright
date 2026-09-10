@@ -116,6 +116,20 @@ fun HostSheet(settings: Settings, host: Fleet.FleetHost, onDismiss: () -> Unit, 
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                // ROOT'S HALF, in the same colour and for the same reason: a
+                // fact about this box that the fleet could only learn from a
+                // journal. What still works comes first, so it reads as one
+                // command and not a broken box; Check carries the command
+                // itself, with the real path, because the host knows it and
+                // this sheet does not. Same sentence as iOS.
+                if (host.rootHalfBehind) {
+                    Text(
+                        "The update helper on this box is older than the release it runs. Updates still land and the services restart, " +
+                            "but nothing root owns is refreshed. Check shows the one command that fixes it, once.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text("Sessions", style = MaterialTheme.typography.titleSmall)
                 when {
                     variant == null ->

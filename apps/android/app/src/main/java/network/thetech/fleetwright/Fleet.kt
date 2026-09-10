@@ -204,6 +204,19 @@ class Fleet(
          * was nothing, about a service fourteen releases behind its own disk.
          */
         val installed: String? = null,
+        /**
+         * Whether root's half of the box is this release's: "current",
+         * "stale", or null for cannot tell (a checkout, a box with no helper,
+         * or a host too old to say).
+         *
+         * The update helper is what every update runs as root, and the
+         * installer is the only thing that writes it. A box whose helper the
+         * installer never refreshed takes every update, restarts its services,
+         * and refreshes nothing root owns: the units, the hook and the sudoers
+         * rules stay as an earlier installer left them. The host compares the
+         * two copies without root and says which.
+         */
+        val helper: String? = null,
         val behind: Int?,
         /**
          * What the operating system has waiting, already in prose from the host
@@ -330,6 +343,14 @@ class Fleet(
          */
         val restartWaitingFor: String?
             get() = installed?.takeIf { it.isNotBlank() && version?.isNotBlank() == true && it != version }
+
+        /**
+         * True only when the host said so. Null and "current" both read as
+         * nothing to say: a line about root's half being fine is a line about
+         * a thing nobody is thinking about.
+         */
+        val rootHalfBehind: Boolean
+            get() = helper == "stale"
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -1392,6 +1413,11 @@ class Fleet(
                     accountOrg = account?.optString("org")?.takeIf { it.isNotBlank() && it != "null" },
                     version = health?.optJSONObject("version")?.optString("head")?.takeIf { it.isNotBlank() },
                     installed = health?.optJSONObject("version")?.optString("installed")?.takeIf { it.isNotBlank() },
+                    // Only the two words the host uses; anything else, and a
+                    // missing field, is null. "null" as a string is what
+                    // optString makes of a JSON null, and it must not become
+                    // a third state.
+                    helper = health?.optJSONObject("version")?.optString("helper")?.takeIf { it == "current" || it == "stale" },
                     behind = updates?.optInt("appBehind", -1)?.takeIf { it >= 0 },
                     // `has` first: optBoolean would turn a missing field into
                     // false, which is the difference between "nothing waiting"
