@@ -317,6 +317,22 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
             refresh()
         }
     }
+    // AND THE SESSION THE NOTIFICATION WAS ABOUT IS OPENED. A buzz says
+    // "bigjob is back at its prompt"; landing on a list of twelve and finding
+    // bigjob in it is the search the notification existed to save. Keyed on
+    // the list as well as the name, because refresh() is asynchronous and the
+    // session is opened from the fresh list, once it has arrived and still
+    // holds the name. Once per tap: a later refresh must not reopen a sheet
+    // somebody closed.
+    var openedFor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notifiedSession, sessions) {
+        if (notifiedSession != null && notifiedSession != openedFor) {
+            sessions.firstOrNull { it.name == notifiedSession }?.let {
+                inspecting = it
+                openedFor = notifiedSession
+            }
+        }
+    }
 
     if (showStart) {
         StartSheet(

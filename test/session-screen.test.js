@@ -153,3 +153,12 @@ test('the card title is the way in on Android too, and the sheet tells the list'
   assert.match(main, /SessionSheet\([\s\S]{0,300}onChanged = \{ refresh\(keepStatus = true\) \}/);
   assert.match(SHEET, /reload\(\)\s*onChanged\(\)/);
 });
+
+test('a tapped notification opens the session it was about, on Android too', () => {
+  const main = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
+  // Keyed on the list as well as the name, because refresh() is asynchronous
+  // and the sheet opens from the fresh list; once per tap, so a later refresh
+  // does not reopen a sheet somebody closed.
+  assert.match(main, /LaunchedEffect\(notifiedSession, sessions\) \{\s*if \(notifiedSession != null && notifiedSession != openedFor\)/);
+  assert.match(main, /sessions\.firstOrNull \{ it\.name == notifiedSession \}\?\.let \{\s*inspecting = it\s*openedFor = notifiedSession/);
+});
