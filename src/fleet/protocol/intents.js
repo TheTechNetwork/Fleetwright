@@ -453,6 +453,24 @@ export const VERBS = Object.freeze({
       '`start { profile }`. The CONTENT never crosses this protocol — it is a file on that box, and adding ' +
       'one needs a shell on it, which is what stops a coordinator from writing a session\'s instructions.',
   },
+  // FREE TO ADD, and it ships beside `start`'s new `secret` for the same reason
+  // `profiles` ships beside `profile`: a reference you can only use by guessing
+  // is a reference nobody uses. A new verb, so an old host answers
+  // `unknown_verb` and strands nothing.
+  //
+  // NAMES ONLY, NEVER VALUES — the whole point restated as a verb. A secret name
+  // is a smaller disclosure than a profile's first line (which this already
+  // returns), and it buys an honest picker instead of a phone field where you
+  // type a name blind. What it lists is which secrets a box HOLDS; the value
+  // stays behind the broker, released only to a session `start --secret` granted.
+  secrets: {
+    params: {},
+    mutating: false,
+    summary:
+      'The named secrets this host holds, by name only — never their values. Feed one to `start { secret }` ' +
+      'to let that session fetch its value at runtime. The value never crosses this protocol; a name is ' +
+      'placed on the box by somebody with a shell, which is what keeps a coordinator from choosing it.',
+  },
   resume: {
     params: {
       name: { type: 'name', required: true },
