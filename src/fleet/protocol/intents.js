@@ -79,7 +79,18 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 // a v2 coordinator and a v2 host answers it to a v3 one, so the fleet is
 // visibly down either way rather than subtly wrong — hosts first, then the
 // coordinator, and the window is loud.
-export const PROTOCOL_VERSION = 3;
+//
+// v4, 10 Sep 2026: `start` gained `secret`, the third bump and the first step
+// of trust.md's custody work. A secret is named, never carried: the coordinator
+// learns that `github-deploy` was requested and nothing more, the host resolves
+// the name from its own store, and the session fetches the value at runtime
+// over the credential broker. It is a parameter on an existing verb, so it is a
+// flag day for the same reason `profile` was — an old host reads `bad_params`
+// off a request it thought it understood. Same rollout: hosts first, then the
+// coordinator, and the window is loud. The apps do not carry this number (the
+// coordinator builds the envelope), so they ride in whenever their secret field
+// ships and are not part of the freeze window.
+export const PROTOCOL_VERSION = 4;
 
 // THE ONE ENVELOPE A DRIFTED BOX STILL ACCEPTS, and the reason it is exactly
 // one.
@@ -304,6 +315,29 @@ export const VERBS = Object.freeze({
           'session comes up working instead of idle. Ask `profiles` for the list. Without one the session ' +
           'starts idle and a person has to drive it.',
       },
+      // A SECRET BY REFERENCE, WHICH IS THE WHOLE POINT: A NAME, NEVER A VALUE.
+      //
+      // trust.md's step 2. The coordinator NAMES a secret the host already holds
+      // — `--secret github-deploy` — and learns nothing but that name. The host
+      // resolves it locally from its own store, and the session fetches the
+      // value at runtime over the hook socket (the credential broker), so the
+      // value is never seeded into the container, never in an environment
+      // variable, and a rotation reaches a session that is already running. See
+      // docs/trust.md and docs/credential-broker.md.
+      //
+      // `name` and not `secret`, and the type is the argument: what crosses this
+      // protocol is the reference, and a value-typed param would invite carrying
+      // the value, which is the one thing this must never do — the same reason
+      // `profile` is a name. The HOST refuses a name it does not hold and lists
+      // what it has, the shape the profile and tag refusals already use.
+      secret: {
+        type: 'name',
+        required: false,
+        describe:
+          'A secret ON THAT HOST, by name — the session may fetch its value at runtime from the credential ' +
+          'broker, and the value never crosses this protocol nor enters the container\'s environment. The ' +
+          'host refuses a name it does not hold.',
+      },
     },
     mutating: true,
     // SELF-CONTAINED, because this string is now read out of context. The MCP
@@ -316,7 +350,8 @@ export const VERBS = Object.freeze({
       'the session sits at an empty prompt and a person has to drive it — nothing else here can hand it ' +
       'work, because no verb sends text to a session (`answer` picks a numbered option and nothing else). ' +
       'There is no path parameter: a session works in a fixed directory, so where it runs is a property of ' +
-      'the host rather than something to ask for.',
+      'the host rather than something to ask for. Name a `secret` the host holds and the session can fetch ' +
+      'its value at runtime; the value never crosses this protocol.',
   },
   // FREE TO ADD, unlike the parameter above: an old host answers `unknown_verb`
   // and the caller learns something true. It ships in the same version anyway
