@@ -678,6 +678,37 @@ test('a host with no hub config does not guess which logs it has', async (t) => 
   assert.equal(r.health.logs, null);
 });
 
+test('the health frame says how much a box puts into every session, in three states', async (t) => {
+  // A NUMBER, NOT A FLAG. House rules cost their size on every turn of every
+  // session, so the size is the only fact a person deciding about them needs.
+  // And three states, because two of them look alike and are not: "no rules
+  // file" and "a rules file that is being ignored" both mean a session gets
+  // nothing, and only one of them is a fault somebody should see.
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = await import('node:path');
+  const stateDir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-rules-'));
+  const rulesFile = nodePath.join(stateDir, 'CLAUDE.md');
+  const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir, rulesFile }) });
+
+  const none = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0001' }));
+  assert.equal(none.health.houseRules, null, 'no file at all is the normal case, and null');
+
+  writeFileSync(rulesFile, '# Here\n\nSmall commits.\n');
+  const some = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0002' }));
+  assert.equal(some.health.houseRules, '# Here\n\nSmall commits.\n'.length, 'edited, and the next frame says so');
+
+  writeFileSync(rulesFile, 'x'.repeat(20_000));
+  const refused = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0003' }));
+  assert.equal(refused.health.houseRules, 0, 'a file that is present and unusable is 0, not null');
+});
+
+test('a host with no hub config cannot say whether it has house rules', async (t) => {
+  const { sidecar } = await setup(t);
+  const r = await sidecar.handle(intent({ verb: 'health' }));
+  assert.equal(r.health.houseRules, null);
+});
+
 test('a label added from an app reaches the scheduler without a restart', async (t) => {
   // Health goes out every fifteen seconds and the coordinator filters and ranks
   // on the last frame it received. A list frozen at construction would mean a
