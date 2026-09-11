@@ -53,7 +53,6 @@ UMask=0077
 ProtectClock=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
-ProtectProc=invisible
 # `no`, AND THIS IS THE THIRD ATTEMPT, SO THE REASONING IS WRITTEN OUT IN FULL.
 #
 # This service's ONE privileged operation is `sudo -n apt-get -y upgrade`,
@@ -129,6 +128,15 @@ RuntimeDirectoryMode=0700
 #   ProtectKernelTunables podman run fails.
 #   ProtectControlGroups  podman run fails; it writes its own cgroup.
 #   ProtectHostname       podman run fails.
+#   ProtectProc=invisible the service's /proc is mounted hidepid, and crun then
+#                         cannot mount a fresh /proc for the container — every
+#                         session dies at start with `crun: mount \`proc\` to
+#                         \`proc\`: Operation not permitted`. It was added here
+#                         before it survived the `podman run --rm alpine true`
+#                         test on the hosts' kernel, and reached every box at
+#                         once when the release-first update began re-applying
+#                         this unit. The sidecar keeps it — it spawns nothing;
+#                         this service forks podman, so it cannot.
 #   PrivateDevices        podman run fails, and it implies NoNewPrivileges.
 #   RestrictNamespaces    a container IS namespaces.
 #   SystemCallFilter      deliberately not attempted: the filter applies to

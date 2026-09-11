@@ -91,6 +91,7 @@ equivalent yet.
 | `ProtectKernelTunables` | podman run fails |
 | `ProtectControlGroups` | podman run fails; it writes its own cgroup |
 | `ProtectHostname` | podman run fails |
+| `ProtectProc=invisible` | the service's `/proc` is mounted hidepid, and crun cannot then mount a fresh `/proc` for the container: every session dies at start with ``crun: mount `proc` to `proc`: Operation not permitted``. Added once without surviving this test on the hosts' kernel; it broke every box at once when the release-first update began re-applying the unit. The **sidecar keeps it** — it spawns nothing |
 | `PrivateDevices` | podman run fails, and it implies `NoNewPrivileges` |
 | `RestrictNamespaces` | a container *is* namespaces |
 | `SystemCallFilter` | not attempted: the filter applies to every child, and here that includes crun and whatever a session installs and runs |
