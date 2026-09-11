@@ -150,6 +150,14 @@ Worth reading Inkbox's own docs before designing: agent-to-agent and the
 cross-channel thread are the parts that are actually hard, and they may have
 already made the decisions worth copying.
 
+**One channel of this has since been designed, and it is the one whose identity
+story works.** WhatsApp's third-party agents have the person mint the key
+themselves, which means a bridge never has to authenticate the sender — it
+holds one device credential and is simply another MCP client. See
+[whatsapp.md](./whatsapp.md). It does not answer the paragraph above, which is
+about a *phone number*; it sidesteps it, and the distinction is the whole
+design.
+
 ### Session configuration from the app and Telegram
 
 Today a session is started with a name, a path and a permission flag, and
