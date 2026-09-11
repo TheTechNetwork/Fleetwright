@@ -90,6 +90,75 @@ export function podmanAvailable(cfg) {
 }
 
 /**
+ * Recreate a rootless "pause" namespace poisoned by systemd `ProtectProc`, so a
+ * session can mount /proc again.
+ *
+ * THE FAULT THIS UNDOES, because it took a fleet-wide outage to find and the
+ * error names the wrong thing. Rootless podman keeps ONE pause process per user,
+ * and every rootless container joins ITS namespaces. If the process that first
+ * created that pause ran under `ProtectProc=invisible`, the pause namespace's
+ * /proc is mounted `hidepid` — and a hidepid /proc is not "fully visible", so
+ * the kernel refuses an unprivileged container a fresh proc mount and EVERY
+ * session dies at start with `crun: mount \`proc\` to \`proc\`: Operation not
+ * permitted`. The error blames crun; the cause is the unit. install/agent-hub.service
+ * no longer sets ProtectProc, so a NEW pause comes up clean — but the already
+ * poisoned one SURVIVES A SERVICE RESTART (KillMode=process leaves the user's
+ * pause alone), so removing the directive and restarting is not enough on a box
+ * that is already broken: the update would rewrite the unit and still not fix it.
+ * Recreating the pause here, on the way up under the now-clean unit, is what
+ * makes an in-app update actually recover the box.
+ *
+ * SAFE, AND ONLY WHEN NEEDED. A poisoned pause cannot have running containers —
+ * they could not have started — so recreating it disturbs nothing. When /proc is
+ * already clean this does nothing at all and never touches a live session.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ healed: boolean, why?: string }}
+ */
+export function healRootlessSandbox(cfg) {
+  if (!podmanAvailable(cfg)) return { healed: false, why: 'podman is not available' };
+  // Read the pause namespace's OWN mount table — `podman unshare` runs in the
+  // rootless user+mount namespace every container inherits, so this is the /proc
+  // a session would get, not the one this shell sees.
+  const seen = podman(cfg, ['unshare', 'cat', '/proc/self/mountinfo']);
+  if (seen.status !== 0) return { healed: false, why: 'could not read the rootless namespace' };
+  if (!procIsHidepid(seen.stdout)) return { healed: false };
+  log.warn(
+    'sandbox: the rootless namespace has a hidepid /proc — a ProtectProc unit poisoned it, and every ' +
+      'session would die at `mount proc`. Recreating the namespace so sessions can start.',
+  );
+  const migrated = podman(cfg, ['system', 'migrate']);
+  if (migrated.status !== 0) {
+    const why = migrated.stderr.trim().slice(0, 200);
+    log.warn(`sandbox: could not recreate the rootless namespace: ${why}`);
+    return { healed: false, why };
+  }
+  log.info('sandbox: recreated the rootless namespace with a clean /proc — sessions can start again');
+  return { healed: true };
+}
+
+/**
+ * Is the root /proc in this mount table hidden with `hidepid`?
+ *
+ * The flag lives in the SUPERBLOCK options, after the ` - ` separator, never in
+ * the per-mount options before it — and `hidepid=0`/`off` is the visible
+ * default, which is not poisoning. See mountinfo(5) for the field layout.
+ *
+ * @param {string} mountinfo
+ */
+function procIsHidepid(mountinfo) {
+  for (const line of mountinfo.split('\n')) {
+    const [left, right] = line.split(' - ');
+    if (!right) continue;
+    // Field 5 (index 4) of the pre-separator half is the mount point.
+    if (left.split(' ')[4] !== '/proc') continue;
+    const m = right.match(/\bhidepid=(\S+?)(?:,|$)/);
+    if (m && m[1] !== '0' && m[1] !== 'off') return true;
+  }
+  return false;
+}
+
+/**
  * The two volumes and the container name for a session. Derived rather than
  * stored, so nothing can drift out of step with the session's name.
  * @param {string} name

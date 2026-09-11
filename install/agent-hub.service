@@ -53,7 +53,6 @@ UMask=0077
 ProtectClock=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
-ProtectProc=invisible
 # `no`, AND THIS IS THE THIRD ATTEMPT, SO THE REASONING IS WRITTEN OUT IN FULL.
 #
 # This service's ONE privileged operation is `sudo -n apt-get -y upgrade`,
@@ -129,6 +128,25 @@ RuntimeDirectoryMode=0700
 #   ProtectKernelTunables podman run fails.
 #   ProtectControlGroups  podman run fails; it writes its own cgroup.
 #   ProtectHostname       podman run fails.
+#   ProtectProc=invisible mounts this service's /proc hidepid — and rootless
+#                         podman keeps ONE pause process per user whose
+#                         namespaces every container joins, so the hidepid /proc
+#                         gets baked into that shared pause namespace. A hidepid
+#                         /proc is not "fully visible", so the kernel refuses an
+#                         unprivileged container a fresh proc mount: every
+#                         session dies at start with `crun: mount \`proc\` to
+#                         \`proc\`: Operation not permitted` — an error that
+#                         blames crun and points at the wrong thing entirely.
+#                         It cost a fleet-wide outage: added before it survived
+#                         the `podman run --rm alpine true` test, dormant until
+#                         the release-first update re-applied this unit and each
+#                         box's next session-start created a poisoned pause.
+#                         REMOVING IT IS NOT ENOUGH ON A BROKEN BOX: the poisoned
+#                         pause outlives a restart (KillMode=process leaves the
+#                         user's pause alone), so agent-hub recreates it on the
+#                         way up — see healRootlessSandbox — which is what makes
+#                         an in-app update recover the box. The sidecar keeps
+#                         this directive: it spawns nothing, so it has no pause.
 #   PrivateDevices        podman run fails, and it implies NoNewPrivileges.
 #   RestrictNamespaces    a container IS namespaces.
 #   SystemCallFilter      deliberately not attempted: the filter applies to
