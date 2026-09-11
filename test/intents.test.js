@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VERBS, PROTOCOL_VERSION, validateIntent, buildIntent, isMutating, checkParams } from '../src/fleet/protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, validateIntent, buildIntent, isMutating, checkParams } from '../src/fleet/protocol/intents.js';
 import { isValidName } from '../src/core/names.js';
 
 /** @param {object} patch */
@@ -246,16 +246,27 @@ test('a well-formed intent validates and is returned normalised', () => {
   assert.equal(r.intent.actor, 'telegram:12345');
 });
 
-test('a different protocol version is refused, not guessed at', () => {
-  // Every value here must be something that is NOT PROTOCOL_VERSION, and the
-  // list used to hardcode the neighbours of 1. Bumping to 2 quietly turned one
-  // of them into the version we speak, so the test asserted that the current
-  // version is rejected — and passed, because it was written when it wasn't.
-  // Derived from the constant now, so the next bump cannot do the same.
-  for (const v of [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1, String(PROTOCOL_VERSION), null, undefined]) {
+test('a version outside the accepted range is refused, not guessed at', () => {
+  // Every value here must be OUTSIDE [PROTOCOL_MIN, PROTOCOL_VERSION] — negotiation
+  // widened the check from a point to a range, so a version one back is now
+  // ACCEPTED (see the negotiation test below) and only a version below the floor
+  // or above the ceiling is refused. Derived from the constants so a bump to
+  // either end cannot quietly turn a rejected value into an accepted one.
+  for (const v of [PROTOCOL_MIN - 1, PROTOCOL_VERSION + 1, String(PROTOCOL_VERSION), null, undefined]) {
     const r = validateIntent(intent({ v }));
     assert.equal(r.ok, false);
     assert.equal(r.code, 'unsupported_version');
+  }
+});
+
+test('a version inside the accepted range is honoured, and kept', () => {
+  // The negotiation itself: an envelope one version back is understood, because a
+  // bump only ever adds (see PROTOCOL_MIN), and it is returned STAMPED WITH THE
+  // VERSION IT ARRIVED IN rather than relabelled to today's number.
+  for (let v = PROTOCOL_MIN; v <= PROTOCOL_VERSION; v++) {
+    const r = validateIntent(intent({ v, verb: 'list', params: {} }));
+    assert.equal(r.ok, true, `v${v} is inside the range and must be accepted`);
+    assert.equal(r.intent.v, v, `v${v} is preserved, not relabelled`);
   }
 });
 
@@ -303,8 +314,11 @@ test('no other verb gets the exemption', () => {
   // Every other verb aimed at a box on the wrong version is a command whose
   // meaning the two sides have not agreed on, which is what the version check
   // is for.
+  // BELOW THE FLOOR, so the version is genuinely out of range (one version back
+  // is now negotiated, not refused). Only the frozen rescue `update` is exempt
+  // there; every other verb is refused on the number, as the check intends.
   for (const verb of ['upgrade', 'reboot', 'start', 'stop', 'list', 'connect']) {
-    const r = validateIntent(intent({ v: PROTOCOL_VERSION - 1, verb, params: {} }));
+    const r = validateIntent(intent({ v: PROTOCOL_MIN - 1, verb, params: {} }));
     assert.equal(r.ok, false, `${verb} should not be rescued`);
     assert.equal(r.code, 'unsupported_version', verb);
   }
@@ -317,7 +331,11 @@ test('a parameter outside the frozen list is not a rescue envelope', () => {
   // ago has never heard of the new one. So an unknown param drops the envelope
   // back through the version check rather than travelling on a number the
   // recipient cannot interpret.
-  const r = validateIntent(intent({ v: PROTOCOL_VERSION - 1, verb: 'update', params: { restart: 'yes', force: 'yes' } }));
+  // BELOW THE FLOOR, where the exemption is the only way through: an `update`
+  // carrying anything beyond `restart` is not the frozen shape, so it drops back
+  // through the version check and is refused there rather than travelling on a
+  // number the recipient cannot interpret.
+  const r = validateIntent(intent({ v: PROTOCOL_MIN - 1, verb: 'update', params: { restart: 'yes', force: 'yes' } }));
   assert.equal(r.ok, false);
   assert.equal(r.code, 'unsupported_version');
   // At the current version the same envelope is refused too, by the ordinary
@@ -327,32 +345,57 @@ test('a parameter outside the frozen list is not a rescue envelope', () => {
   assert.equal(now.code, 'bad_params');
 });
 
-test('the coordinator speaks a drifted host its own version, for that one verb', () => {
-  // The other half, and the half that fixes boxes ALREADY in the field: they
-  // run code from before any of this, so they check the number no matter what
-  // this file says. The only way their repair reaches them is to say the number
-  // they are waiting for.
-  const rescue = buildIntent({ id: 'idem-0000001', verb: 'update', params: { restart: 'yes' }, speaks: PROTOCOL_VERSION - 1 });
-  assert.equal(rescue.v, PROTOCOL_VERSION - 1);
-  assert.equal(rescue.verb, 'update');
+test('the coordinator speaks each in-range host its own version, for EVERY verb', () => {
+  // The heart of negotiation, and what makes a bump strand no host: a box one
+  // version back is not drifted — it is spoken its own version for everything,
+  // the way a new VERB already lit up per host, now a whole version does. This is
+  // the line that used to say "for that ONE verb": under negotiation it is all of
+  // them, and the degraded window is gone.
+  for (const verb of ['upgrade', 'reboot', 'list', 'update', 'stop']) {
+    const built = buildIntent({
+      id: 'idem-0000001',
+      verb,
+      params: verb === 'stop' ? { name: 'x' } : {},
+      speaks: PROTOCOL_VERSION - 1,
+    });
+    assert.equal(built.v, PROTOCOL_VERSION - 1, `${verb} goes out in the host's own version`);
+  }
 });
 
-test('nothing else is ever sent in another version', () => {
-  // A host that is AHEAD does not need pulling — the coordinator is the thing
-  // that is behind, and telling the box to update is the fleet prescribing its
-  // own symptom. And no verb but `update` may travel on a number this
-  // coordinator cannot vouch for.
-  const ahead = buildIntent({ id: 'idem-0000001', verb: 'update', params: {}, speaks: PROTOCOL_VERSION + 1 });
-  assert.equal(ahead.v, PROTOCOL_VERSION, 'a host that is ahead is not sent a downgrade');
+test('ahead gets the max; below the floor only the rescue update, in its own version', () => {
+  // AHEAD does not need pulling — the coordinator is the thing that is behind, so
+  // speak our own max and never a downgrade.
+  const ahead = buildIntent({ id: 'idem-0000001', verb: 'list', params: {}, speaks: PROTOCOL_VERSION + 1 });
+  assert.equal(ahead.v, PROTOCOL_VERSION, 'a host ahead is spoken the coordinator max, not downgraded');
 
-  for (const verb of ['upgrade', 'reboot', 'list']) {
-    const built = buildIntent({ id: 'idem-0000001', verb, params: {}, speaks: PROTOCOL_VERSION - 1 });
-    assert.equal(built.v, PROTOCOL_VERSION, `${verb} must go out in this fleet's version`);
-  }
+  // BELOW THE FLOOR is the one place the old rule still holds: only the frozen
+  // rescue `update` may travel on a number this coordinator cannot otherwise
+  // vouch for, and it goes in that box's own version so the repair reaches a box
+  // running code from before any of this. Every other verb is built at the floor
+  // — which that box will refuse until it updates — rather than counterfeited
+  // into its version.
+  const rescue = buildIntent({ id: 'idem-0000001', verb: 'update', params: { restart: 'yes' }, speaks: PROTOCOL_MIN - 1 });
+  assert.equal(rescue.v, PROTOCOL_MIN - 1, 'the rescue update reaches a below-floor box in its own version');
+  assert.equal(rescue.verb, 'update');
+  const other = buildIntent({ id: 'idem-0000001', verb: 'list', params: {}, speaks: PROTOCOL_MIN - 1 });
+  assert.equal(other.v, PROTOCOL_MIN, 'no other verb is counterfeited below the floor');
+
+  // A non-integer `speaks` is unknown; assume the max rather than a downgrade.
   for (const speaks of [null, undefined, 'two', 2.5, NaN]) {
     const built = buildIntent({ id: 'idem-0000001', verb: 'update', params: {}, speaks });
     assert.equal(built.v, PROTOCOL_VERSION, `speaks=${String(speaks)} is not a version`);
   }
+});
+
+test('a param newer than the version spoken is omitted, keeping the verb', () => {
+  // `profile` arrived in v3 (since: 3). Speaking v2 to an older host, the
+  // coordinator drops it and the host still runs `start` — without the new
+  // capability, not refused wholesale. Speaking v3, it is carried.
+  const old = buildIntent({ id: 'idem-0000001', verb: 'start', params: { profile: 'ci' }, speaks: 2 });
+  assert.equal(old.v, 2);
+  assert.equal(old.params.profile, undefined, 'a v3 param is not sent to a v2 host');
+  const now = buildIntent({ id: 'idem-0000001', verb: 'start', params: { profile: 'ci' }, speaks: PROTOCOL_VERSION });
+  assert.equal(now.params.profile, 'ci', 'and it is carried to a host that speaks its version');
 });
 
 test('an unknown verb is refused', () => {

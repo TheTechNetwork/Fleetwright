@@ -19,12 +19,15 @@
 // quietly skips a host; one that sees `free: null, state: 'unknown'` can say
 // why it skipped it.
 
-import { PROTOCOL_VERSION } from '../protocol/intents.js';
+import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 
 /**
  * @typedef {object} HostHealth
  * @property {string} hostId
  * @property {number} protocol
+ * @property {number} [protocolMin]  the oldest protocol this host still reads;
+ *   absent from a host built before version negotiation, read as equal to
+ *   `protocol` (exact match, as before). See PROTOCOL_MIN in intents.js.
  * @property {string[]} labels
  * @property {number|null} maxSessions
  * @property {number|null} running
@@ -170,33 +173,50 @@ export class HostRegistry {
     // field at all reads as null here, and degrading on that would take out
     // exactly the boxes least able to recover — so the guard is an integer
     // check, not a truthiness one.
-    if (Number.isInteger(health.protocol) && health.protocol !== PROTOCOL_VERSION) {
+    // A RANGE, NOT A POINT — a host is degraded on version only when its range
+    // and the fleet's do not OVERLAP. A host reports `protocol` (its max) and,
+    // since version negotiation, `protocolMin` (its floor); a host from before
+    // that sends only `protocol`, read as a range of one (exact match, as
+    // before). If the two ranges touch anywhere, `buildIntent` speaks this box
+    // the highest version both understand for EVERY command and omits any param
+    // newer than it, so the box keeps working and simply lacks the newest
+    // capability until it updates — that is not degraded. See
+    // docs/protocol-negotiation.md and PROTOCOL_MIN.
+    //
+    // A MISSING PROTOCOL IS NOT A MISMATCHED ONE. A host too old to send the
+    // field at all reads as null here, and degrading on that would take out
+    // exactly the boxes least able to recover — so the guard is an integer
+    // check, not a truthiness one.
+    const hostMax = Number.isInteger(health.protocol) ? Number(health.protocol) : null;
+    // A host from before negotiation sends only `protocol`, read as a range of
+    // one; so hostMin is a number whenever hostMax is.
+    const hostMin = hostMax === null ? null : Number.isInteger(health.protocolMin) ? Number(health.protocolMin) : hostMax;
+    if (hostMax !== null && hostMin !== null && (hostMin > PROTOCOL_VERSION || hostMax < PROTOCOL_MIN)) {
       host.state = 'degraded';
-      // BEHIND AND AHEAD ARE NOT THE SAME FAULT, and this said the same thing
-      // about both — that the fleet cannot fix it and the installer must be
-      // re-run on the machine. Neither half was right for a box that is ahead,
-      // and the first half stopped being right for a box that is behind the day
-      // `update` gained a rescue envelope (see RESCUE_VERB): the coordinator now
-      // speaks a drifted host's own version for that one command, so the repair
-      // does arrive. Finding D2 — "a drifted host cannot be fixed from the
-      // product" — is this line, and it is why it was true.
+      // BEHIND AND AHEAD ARE NOT THE SAME FAULT. Behind now means below the
+      // fleet's FLOOR (PROTOCOL_MIN), not merely below its max — a box within
+      // the range is negotiated with, not degraded. Below the floor the rescue
+      // `update` still reaches it (the coordinator speaks the box's own version
+      // for that one command; see RESCUE_VERB), so the repair arrives. Finding
+      // D2 — "a drifted host cannot be fixed from the product" — is this line.
       //
       // Ahead is the ordinary upgrade window rather than a broken box: the
       // documented order is hosts first, then the coordinator, so this is what
       // half a deploy looks like and the remedy is to finish it. Sending
       // somebody to the machine with the installer would have them re-install
       // the half that is already correct.
+      const fleet = PROTOCOL_MIN === PROTOCOL_VERSION ? `${PROTOCOL_VERSION}` : `${PROTOCOL_MIN}..${PROTOCOL_VERSION}`;
       host.reason =
-        health.protocol < PROTOCOL_VERSION
-          ? `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
-            'sent here is refused before it is read — except Apply update, which the fleet now says in this ' +
-            "box's own version so that a drifted machine can still be repaired from here. Try that first. " +
-            'If it comes back on the same version, this box is pinned to a channel that has no newer release ' +
-            'and it needs the installer re-run on the machine.'
-          : `speaks protocol ${health.protocol} and this fleet speaks ${PROTOCOL_VERSION}, so every command ` +
-            'sent here is refused before it is read. This host is AHEAD, which is what half a deploy looks ' +
-            'like — hosts upgrade first and the coordinator follows. The fleet cannot fix this one from ' +
-            'inside itself: it is waiting for its own coordinator to be deployed.';
+        hostMax < PROTOCOL_MIN
+          ? `speaks protocol up to ${hostMax} and this fleet speaks ${fleet}, so this box is below the ` +
+            'fleet floor and every command sent here is refused before it is read — except Apply update, ' +
+            "which the fleet says in this box's own version so a drifted machine can still be repaired from " +
+            'here. Try that first. If it comes back on the same version, this box is pinned to a channel with ' +
+            'no newer release and it needs the installer re-run on the machine.'
+          : `speaks protocol from ${hostMin} and this fleet speaks ${fleet}, so this box is AHEAD of the ` +
+            'whole fleet range. That is what half a deploy looks like — hosts upgrade first and the ' +
+            'coordinator follows. The fleet cannot fix this one from inside itself: it is waiting for its ' +
+            'own coordinator to be deployed.';
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
       host.reason = `session manager unreachable: ${health.hub.reason || 'no reason given'}`;

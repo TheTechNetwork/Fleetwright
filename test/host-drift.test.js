@@ -26,7 +26,12 @@ import assert from 'node:assert/strict';
 
 import { HostRegistry } from '../src/fleet/coordinator/registry.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../src/fleet/protocol/intents.js';
+
+// Below the fleet floor — genuinely out of range, so still degraded. One version
+// back is now NEGOTIATED, not drifted (see the in-range test), so the drift cases
+// use this instead.
+const BELOW_FLOOR = PROTOCOL_MIN - 1;
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
@@ -55,10 +60,19 @@ function fleet(patch) {
 test('a drifted host is degraded, so no new work is sent to it', () => {
   // It reported `healthy` before this: the scheduler ranked it, chose it, and
   // the session start came back refused. Every one of them.
-  const h = fleet({ protocol: PROTOCOL_VERSION - 1 });
+  const h = fleet({ protocol: BELOW_FLOOR });
   assert.equal(h.state, 'degraded');
-  assert.match(h.reason, new RegExp(`speaks protocol ${PROTOCOL_VERSION - 1}`));
-  assert.match(h.reason, new RegExp(`fleet speaks ${PROTOCOL_VERSION}`));
+  assert.match(h.reason, new RegExp(`protocol up to ${BELOW_FLOOR}`));
+  assert.match(h.reason, new RegExp(`fleet speaks ${PROTOCOL_MIN}\\.\\.${PROTOCOL_VERSION}`));
+});
+
+test('a host one version back is NEGOTIATED, not degraded — the whole point', () => {
+  // The reliability change stated as a test: a box a version behind the fleet
+  // keeps working. It reports a `protocol` inside the fleet range, so it is
+  // spoken its own version for every command and is healthy — no degraded
+  // window, no walk to the machine, no waiting on an update.
+  const h = fleet({ protocol: PROTOCOL_VERSION - 1, protocolMin: PROTOCOL_MIN });
+  assert.equal(h.state, 'healthy', 'a host inside the range is not drifted');
 });
 
 test('a host that is AHEAD says so, and names the deploy rather than the installer', () => {
@@ -81,7 +95,7 @@ test('a host that is BEHIND is offered the one command that still reaches it', (
   // FINDING D2, INVERTED. The reason a screen shows must not say the fleet is
   // helpless when a rescue `update` is sent in this box's own version and does
   // arrive — that would send somebody to a machine they need not visit.
-  const h = fleet({ protocol: PROTOCOL_VERSION - 1 });
+  const h = fleet({ protocol: BELOW_FLOOR });
   assert.match(h.reason, /Apply update/);
   assert.doesNotMatch(h.reason, /cannot fix/i);
   // And it still names the case the update cannot answer: a box pinned to a
@@ -107,7 +121,7 @@ test('drift is checked before the rungs whose remedies it would block', () => {
   // is reachable. Reporting "link an account from the app" would name a fix
   // that cannot be delivered — the link verb is refused for the same reason as
   // everything else.
-  const h = fleet({ protocol: PROTOCOL_VERSION - 1, claudeAccounts: 0, hub: { reachable: false, reason: 'down' } });
+  const h = fleet({ protocol: BELOW_FLOOR, claudeAccounts: 0, hub: { reachable: false, reason: 'down' } });
   assert.match(h.reason, /speaks protocol/);
   assert.doesNotMatch(h.reason, /Link one from the app/);
 });
@@ -135,11 +149,11 @@ test('unsupported_version explains itself, and names the command that still land
   // the more serious of the two failures was the one that reached a phone as a
   // single word. Finding D2 says the drift error "names `agent-hub update
   // --restart`"; that is the other error, and this one named nothing.
-  const reply = await drifted(PROTOCOL_VERSION - 1).dispatch({ verb: 'upgrade', params: {}, preferHost: 'old' });
+  const reply = await drifted(BELOW_FLOOR).dispatch({ verb: 'upgrade', params: {}, preferHost: 'old' });
   assert.equal(reply.ok, false);
   assert.equal(reply.error.code, 'unsupported_version', 'the code stays machine-readable');
-  assert.match(reply.text, new RegExp(`speaks protocol ${PROTOCOL_VERSION - 1}`), 'it says which version the host is on');
-  assert.match(reply.text, new RegExp(`fleet speaks ${PROTOCOL_VERSION}`));
+  assert.match(reply.text, new RegExp(`speaks protocol ${BELOW_FLOOR}`), 'it says which version the host is on');
+  assert.match(reply.text, new RegExp(`fleet speaks ${PROTOCOL_MIN}\\.\\.${PROTOCOL_VERSION}`));
   // AND IT OFFERS THE UPDATE, which is the sentence that reversed. It used to
   // say the fleet could not help, because it could not: `update` was refused
   // by the same check as everything else. It is now the one envelope that
@@ -170,7 +184,7 @@ test('a rescue update aimed at a drifted host goes out in the version that box w
   // number the box is waiting for. A host in the field runs code from before
   // any of this and checks that number, so getting it wrong here makes every
   // sentence above a promise the product does not keep.
-  const core = drifted(PROTOCOL_VERSION - 1);
+  const core = drifted(BELOW_FLOOR);
   /** @type {any[]} */
   const sent = [];
   // THE REAL `send`, not the stub the other tests use — the thing under test is
@@ -185,13 +199,15 @@ test('a rescue update aimed at a drifted host goes out in the version that box w
   const reply = await core.dispatch({ verb: 'update', params: { restart: 'yes' }, preferHost: 'old' });
   assert.equal(reply.ok, true);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].v, PROTOCOL_VERSION - 1, 'the drifted box is spoken to in its own version');
+  assert.equal(sent[0].v, BELOW_FLOOR, 'the drifted box is spoken to in its own version');
   assert.equal(sent[0].verb, 'update');
   assert.deepEqual(sent[0].params, { restart: 'yes' });
 
-  // And nothing else is: `upgrade` at the same box still goes out in ours and
-  // is still refused, which is what keeps this an escape hatch rather than a
-  // second protocol.
+  // And nothing else is: `upgrade` at the same below-floor box goes out at the
+  // fleet FLOOR (the lowest the coordinator will vouch for) and is still refused
+  // there, which is what keeps the rescue an escape hatch rather than a second
+  // protocol. Only the frozen `update` is counterfeited down into the box's own
+  // version.
   await core.dispatch({ verb: 'upgrade', params: {}, preferHost: 'old' });
-  assert.equal(sent[1].v, PROTOCOL_VERSION);
+  assert.equal(sent[1].v, PROTOCOL_MIN);
 });

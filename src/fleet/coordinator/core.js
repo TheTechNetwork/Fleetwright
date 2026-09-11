@@ -18,7 +18,7 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
@@ -1674,11 +1674,14 @@ export class CoordinatorCore {
  */
 function explainUnsupportedVersion(reply, host) {
   if (reply?.error?.code !== 'unsupported_version' || !host) return reply;
+  // Below the fleet FLOOR now, not merely below its max — a host inside the
+  // range is negotiated with and never reaches here. See PROTOCOL_MIN.
   const theirs = host.health?.protocol;
-  const behind = Number.isInteger(theirs) && theirs < PROTOCOL_VERSION;
+  const behind = Number.isInteger(theirs) && theirs < PROTOCOL_MIN;
+  const fleet = PROTOCOL_MIN === PROTOCOL_VERSION ? `${PROTOCOL_VERSION}` : `${PROTOCOL_MIN}..${PROTOCOL_VERSION}`;
   const preamble =
     `${host.hostId} speaks protocol ${theirs ?? 'an older version'} and this fleet speaks ` +
-    `${PROTOCOL_VERSION}, so it refuses every command before reading it — not just this one.\n`;
+    `${fleet}, so it refuses every command before reading it — not just this one.\n`;
   return {
     ...reply,
     text: behind
