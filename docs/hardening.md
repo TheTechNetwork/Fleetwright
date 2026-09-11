@@ -91,6 +91,7 @@ equivalent yet.
 | `ProtectKernelTunables` | podman run fails |
 | `ProtectControlGroups` | podman run fails; it writes its own cgroup |
 | `ProtectHostname` | podman run fails |
+| `ProtectProc=invisible` | mounts the service's `/proc` hidepid — and rootless podman keeps one **pause namespace** per user that every container joins, so the hidepid `/proc` gets baked into it. A hidepid `/proc` is not "fully visible", so the kernel refuses a container a fresh proc mount: every session dies at start with ``crun: mount `proc` to `proc`: Operation not permitted`` — an error that blames crun. Added once without surviving this test; dormant until the release-first update re-applied the unit and each box's next start poisoned its pause, a fleet-wide outage. **Removing it is not enough on a broken box** — the poisoned pause outlives a restart — so agent-hub recreates it on startup (`healRootlessSandbox`), which is what makes an in-app update recover the box. The **sidecar keeps it** — it spawns nothing, so it has no pause |
 | `PrivateDevices` | podman run fails, and it implies `NoNewPrivileges` |
 | `RestrictNamespaces` | a container *is* namespaces |
 | `SystemCallFilter` | not attempted: the filter applies to every child, and here that includes crun and whatever a session installs and runs |

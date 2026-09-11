@@ -13,7 +13,7 @@ import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
 import { adoptBoxAccount } from './core/accounts.js';
-import { pickSecretsFile } from './core/podman.js';
+import { pickSecretsFile, healRootlessSandbox } from './core/podman.js';
 import { Connections } from './core/connectors.js';
 import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
@@ -39,6 +39,19 @@ export async function main() {
 
   mkdirSync(cfg.stateDir, { recursive: true });
   ensureWorkdirTrusted(cfg);
+
+  // Undo a rootless pause namespace poisoned by a previous `ProtectProc` unit
+  // BEFORE anything tries to start a container. Without this, an in-app update
+  // rewrites the unit but the box stays broken — the poisoned namespace outlives
+  // the restart. See healRootlessSandbox for the whole fault. Only acts when the
+  // namespace is actually poisoned, so a healthy box pays nothing.
+  if (cfg.sandbox) {
+    try {
+      healRootlessSandbox(cfg);
+    } catch (e) {
+      log.warn(`sandbox: proc self-heal failed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
 
   const registry = new Registry(cfg);
 

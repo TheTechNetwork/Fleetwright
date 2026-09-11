@@ -13,14 +13,24 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync
 import os from 'node:os';
 import path from 'node:path';
 
-import { ensureSandboxImage, ensureSandboxVolumes, sandboxNames, removeSandboxVolumes } from '../src/core/podman.js';
+import {
+  ensureSandboxImage,
+  ensureSandboxVolumes,
+  sandboxNames,
+  removeSandboxVolumes,
+  healRootlessSandbox,
+} from '../src/core/podman.js';
 
 /**
  * A podman that answers however the test wants and logs every invocation.
  * @param {import('node:test').TestContext} t
- * @param {{ has?: string[], failBuild?: boolean, failPull?: boolean }} [opts]
+ * @param {{ has?: string[], failBuild?: boolean, failPull?: boolean,
+ *   poisoned?: boolean, failUnshare?: boolean, failMigrate?: boolean }} [opts]
  */
-function stubPodman(t, { has = [], failBuild = false, failPull = false } = {}) {
+function stubPodman(
+  t,
+  { has = [], failBuild = false, failPull = false, poisoned = false, failUnshare = false, failMigrate = false } = {},
+) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'podman-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -42,6 +52,16 @@ case "$1 $2" in
     exit 1 ;;
   "volume inspect") exit 1 ;;
   "container inspect") exit 1 ;;
+  # The rootless pause namespace's mount table, as \`podman unshare\` would show
+  # it: a poisoned box carries hidepid on /proc, a healthy one does not.
+  "unshare cat")
+    ${failUnshare ? 'exit 1' : ''}
+    printf '%s\\n' '23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw'
+    ${poisoned
+      ? `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw,hidepid=invisible'`
+      : `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw'`}
+    exit 0 ;;
+  "system migrate") ${failMigrate ? 'echo "Error: migrate failed" >&2; exit 1' : 'exit 0'} ;;
 esac
 case "$1" in
   build) ${failBuild ? 'echo "Error: apt-get update failed" >&2; exit 1' : 'exit 0'} ;;
@@ -202,6 +222,61 @@ test('podman missing entirely is its own message', (t) => {
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /is not installed, but AGENT_HUB_SANDBOX is on/);
+});
+
+// --- the ProtectProc self-heal ----------------------------------------------
+//
+// A rootless pause namespace poisoned by a `ProtectProc=invisible` unit gives
+// every session a hidepid /proc, which the kernel will not let a container
+// mount a fresh proc over. Removing the directive is not enough on a box that
+// is already broken — the poisoned namespace outlives the restart — so startup
+// recreates it. These pin that it fires exactly when the namespace is poisoned
+// and never otherwise, because migrating a healthy box would disturb live work.
+
+test('a poisoned rootless namespace is recreated so sessions can mount /proc again', (t) => {
+  const s = stubPodman(t, { poisoned: true });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, true);
+  assert.ok(s.calls().some((c) => c === 'system migrate'), 'it recreates the pause namespace');
+});
+
+test('a healthy rootless namespace is left alone — a live session is never disturbed', (t) => {
+  const s = stubPodman(t, { poisoned: false });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, false);
+  assert.ok(!s.calls().some((c) => c === 'system migrate'), 'a clean box is never migrated');
+});
+
+test('the self-heal without podman is a no-op with a reason, not a crash', (t) => {
+  const s = stubPodman(t);
+
+  const r = healRootlessSandbox(s.cfg({ podmanBin: '/nonexistent/podman' }));
+
+  assert.equal(r.healed, false);
+  assert.match(String(r.why), /podman/);
+});
+
+test('a rootless namespace that cannot be read is a no-op, not a false heal', (t) => {
+  const s = stubPodman(t, { failUnshare: true });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, false);
+  assert.match(String(r.why), /rootless namespace/);
+  assert.ok(!s.calls().some((c) => c === 'system migrate'));
+});
+
+test('a failed namespace recreate is reported, not hidden behind a healed=true', (t) => {
+  const s = stubPodman(t, { poisoned: true, failMigrate: true });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, false);
+  assert.match(String(r.why), /migrate failed/);
 });
 
 // --- names and teardown -----------------------------------------------------
