@@ -178,6 +178,46 @@ test('a deployment with no app link says so rather than sending a dead end', asy
   assert.match(mail.text, /has not published a link/);
 });
 
+test('an invitation names the route that needs no phone', async () => {
+  // THE HALF OF THE INVITATION THAT WAS A DEAD END. It named two app stores
+  // and nothing else, so a person with a laptop and no iPhone had no next
+  // step — and the thing they most need to do, connect a Claude account
+  // without which every session they start is refused, has no other surface:
+  // `connect` and `link` are withheld from agents by default, so even the MCP
+  // endpoint cannot do it for them.
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({
+    email: 'g@example.com',
+    fleet: 'a fleet',
+    apps: { android: 'https://play.google.com/store/apps/details?id=x' },
+    origin: 'https://fleet.example/',
+  });
+  assert.match(mail.text, /Or from a browser, with no app at all/);
+  // One trailing slash is the difference between /me and //me.
+  assert.match(mail.text, /https:\/\/fleet\.example\/me$/m);
+  // Still no token, no code, no redeem link: a page anybody may open, which
+  // asks them to sign in as themselves.
+  assert.equal(/token|code=|invite=|redeem/i.test(mail.text), false);
+});
+
+test('a coordinator that does not know its own address stays quiet about it', async () => {
+  // A sign-in link pointing at the wrong hostname is worse than no link: it
+  // fails in a way that reads as the fleet refusing them.
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({ email: 'g@example.com', fleet: 'a fleet', apps: { android: 'https://play.google.com/x' } });
+  assert.equal(/browser/i.test(mail.text), false);
+});
+
+test('no app published is not a dead end when a browser will do', async () => {
+  // "Ask whoever invited you for the app" sent somebody to a person for
+  // something they could have done in the next thirty seconds.
+  const { composeInvite } = await import('../src/fleet/coordinator/invite-email.js');
+  const mail = composeInvite({ email: 'g@example.com', fleet: 'a fleet', origin: 'https://fleet.example' });
+  assert.equal(/Ask whoever invited you/.test(mail.text), false);
+  assert.match(mail.text, /has not published an app, so use the browser page below/);
+  assert.match(mail.text, /From a browser, with no app at all/);
+});
+
 test('a deployment that ships one phone does not imply the other', async () => {
   // Listing "Android — " with nothing after it, or naming a store this fleet
   // has not published to, sends somebody looking for an app that is not there.

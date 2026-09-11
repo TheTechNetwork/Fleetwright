@@ -304,6 +304,19 @@ is also the only form a voice assistant can offer reliably.
 
 ### A browser control surface, and a PWA
 
+> **The credentials half is built**, and it was not a nice-to-have in the end.
+> `/me` signs a member in and adds their Claude, GitHub and Cloudflare
+> accounts, as an installable page served by both coordinators
+> (`src/fleet/coordinator/member-page.js`). It exists because the invitation
+> was a dead end for anybody without a phone: `connect` and `link` are withheld
+> from agents by default, so the MCP endpoint could not link an account either,
+> and a session whose actor has no Claude account is refused. Signed in, with a
+> real credential, and unable to do the one thing that makes a session start.
+>
+> What is below is still wanted and is the OTHER half: driving sessions from a
+> browser. `/me` deliberately does not, and the paragraph after next is why the
+> credential question was the harder part.
+
 Same capability as the apps, from a PC. **Explicitly after identity lands**,
 which is what makes it possible to build honestly.
 
