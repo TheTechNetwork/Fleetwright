@@ -51,7 +51,6 @@ TimeoutStopSec=15
 # the window between create and chmod rather than replacing the chmod.
 UMask=0077
 ProtectClock=yes
-ProtectKernelLogs=yes
 ProtectKernelModules=yes
 # `no`, AND THIS IS THE THIRD ATTEMPT, SO THE REASONING IS WRITTEN OUT IN FULL.
 #
@@ -147,6 +146,19 @@ RuntimeDirectoryMode=0700
 #                         way up — see healRootlessSandbox — which is what makes
 #                         an in-app update recover the box. The sidecar keeps
 #                         this directive: it spawns nothing, so it has no pause.
+#   ProtectKernelLogs=yes THE SAME FAILURE, one directive over, and it is why
+#                         dropping ProtectProc alone did not fix the fleet. It
+#                         overmounts /proc/kmsg onto systemd's inaccessible
+#                         marker — which ALSO makes /proc not "fully visible", so
+#                         the container's fresh proc mount is refused with the
+#                         identical `mount \`proc\` to \`proc\`: Operation not
+#                         permitted`. The mask rides into the shared pause
+#                         namespace exactly like hidepid did. Measured: a pause
+#                         created without this directive mounts proc; one created
+#                         with it does not, same box, same kernel. Kernel-version
+#                         sensitive like ProtectProc — it was tolerated on older
+#                         kernels and is not on the fleet's. The sidecar keeps it
+#                         — it spawns nothing, so it has no pause.
 #   PrivateDevices        podman run fails, and it implies NoNewPrivileges.
 #   RestrictNamespaces    a container IS namespaces.
 #   SystemCallFilter      deliberately not attempted: the filter applies to

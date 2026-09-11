@@ -25,11 +25,25 @@ import {
  * A podman that answers however the test wants and logs every invocation.
  * @param {import('node:test').TestContext} t
  * @param {{ has?: string[], failBuild?: boolean, failPull?: boolean,
- *   poisoned?: boolean, failUnshare?: boolean, failMigrate?: boolean }} [opts]
+ *   poisoned?: boolean, maskKind?: 'hidepid'|'kmsg', stillMasked?: boolean,
+ *   failUnshare?: boolean, failMigrate?: boolean }} [opts]  `poisoned` makes the
+ *   rootless /proc not fully visible — via `hidepid` (ProtectProc) or a
+ *   /proc/kmsg overmount (ProtectKernelLogs), per `maskKind`. `stillMasked`
+ *   keeps it poisoned even after `system migrate`, standing in for a box where
+ *   agent-hub itself still masks /proc.
  */
 function stubPodman(
   t,
-  { has = [], failBuild = false, failPull = false, poisoned = false, failUnshare = false, failMigrate = false } = {},
+  {
+    has = [],
+    failBuild = false,
+    failPull = false,
+    poisoned = false,
+    maskKind = 'hidepid',
+    stillMasked = false,
+    failUnshare = false,
+    failMigrate = false,
+  } = {},
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'podman-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -53,13 +67,26 @@ case "$1 $2" in
   "volume inspect") exit 1 ;;
   "container inspect") exit 1 ;;
   # The rootless pause namespace's mount table, as \`podman unshare\` would show
-  # it: a poisoned box carries hidepid on /proc, a healthy one does not.
+  # it. A healthy box carries a fully-visible /proc (binfmt_misc is a functional
+  # submount, NOT poisoning); a poisoned one masks /proc via hidepid or a
+  # /proc/kmsg overmount. \`system migrate\` recreates it clean — unless the box
+  # is stillMasked, standing in for agent-hub itself masking /proc.
   "unshare cat")
     ${failUnshare ? 'exit 1' : ''}
     printf '%s\\n' '23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw'
-    ${poisoned
-      ? `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw,hidepid=invisible'`
-      : `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw'`}
+    printf '%s\\n' '30 29 0:31 / /proc/sys/fs/binfmt_misc rw,relatime shared:14 - autofs systemd-1 rw'
+    if grep -q 'system migrate' ${log} 2>/dev/null ${stillMasked ? '&& false' : ''}; then
+      printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw'
+    else
+      ${
+        poisoned
+          ? maskKind === 'kmsg'
+            ? `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw'
+    printf '%s\\n' '31 29 0:24 /systemd/inaccessible/reg /proc/kmsg ro,nosuid,nodev,noexec,relatime shared:15 - tmpfs tmpfs rw'`
+            : `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw,hidepid=invisible'`
+          : `printf '%s\\n' '29 33 0:26 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw'`
+      }
+    fi
     exit 0 ;;
   "system migrate") ${failMigrate ? 'echo "Error: migrate failed" >&2; exit 1' : 'exit 0'} ;;
 esac
@@ -224,17 +251,20 @@ test('podman missing entirely is its own message', (t) => {
   assert.match(String(r.message), /is not installed, but AGENT_HUB_SANDBOX is on/);
 });
 
-// --- the ProtectProc self-heal ----------------------------------------------
+// --- the /proc self-heal ----------------------------------------------------
 //
-// A rootless pause namespace poisoned by a `ProtectProc=invisible` unit gives
-// every session a hidepid /proc, which the kernel will not let a container
-// mount a fresh proc over. Removing the directive is not enough on a box that
-// is already broken — the poisoned namespace outlives the restart — so startup
-// recreates it. These pin that it fires exactly when the namespace is poisoned
-// and never otherwise, because migrating a healthy box would disturb live work.
+// A rootless pause namespace whose /proc is not fully visible gives every
+// session a proc mount the kernel refuses. TWO systemd directives cause it —
+// `ProtectProc=invisible` (hidepid) and `ProtectKernelLogs=yes` (a /proc/kmsg
+// overmount) — and dropping only the first is what left the fleet down, so the
+// self-heal must catch either. Removing the directive is not enough on an
+// already-broken box (the poisoned pause outlives the restart), so startup
+// recreates it. These pin that it fires for either mask, verifies the result
+// rather than assuming it, and never migrates a healthy box (which would take
+// its live sessions down) — including not mistaking binfmt_misc for poisoning.
 
-test('a poisoned rootless namespace is recreated so sessions can mount /proc again', (t) => {
-  const s = stubPodman(t, { poisoned: true });
+test('a hidepid-poisoned namespace (ProtectProc) is recreated so sessions can mount /proc again', (t) => {
+  const s = stubPodman(t, { poisoned: true, maskKind: 'hidepid' });
 
   const r = healRootlessSandbox(s.cfg());
 
@@ -242,7 +272,21 @@ test('a poisoned rootless namespace is recreated so sessions can mount /proc aga
   assert.ok(s.calls().some((c) => c === 'system migrate'), 'it recreates the pause namespace');
 });
 
-test('a healthy rootless namespace is left alone — a live session is never disturbed', (t) => {
+test('a /proc/kmsg-poisoned namespace (ProtectKernelLogs) is recreated too', (t) => {
+  // The mask that dropping ProtectProc alone missed — a /proc/kmsg overmount is
+  // just as invisible to a container as hidepid.
+  const s = stubPodman(t, { poisoned: true, maskKind: 'kmsg' });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, true);
+  assert.ok(s.calls().some((c) => c === 'system migrate'));
+});
+
+test('a healthy namespace is left alone — binfmt_misc is not mistaken for poisoning', (t) => {
+  // The stub always carries a /proc/sys/fs/binfmt_misc submount, as a real box
+  // does; it is functional, not a mask, and must never trigger a migrate that
+  // would take a live session down.
   const s = stubPodman(t, { poisoned: false });
 
   const r = healRootlessSandbox(s.cfg());
@@ -277,6 +321,19 @@ test('a failed namespace recreate is reported, not hidden behind a healed=true',
 
   assert.equal(r.healed, false);
   assert.match(String(r.why), /migrate failed/);
+});
+
+test('a migrate that leaves /proc still masked is reported, not falsely called healed', (t) => {
+  // The box where agent-hub ITSELF still masks /proc: migrate runs, but the new
+  // pause comes back just as poisoned. The self-heal must verify, not assume —
+  // this is the failure that made the first version log a reassuring lie.
+  const s = stubPodman(t, { poisoned: true, stillMasked: true });
+
+  const r = healRootlessSandbox(s.cfg());
+
+  assert.equal(r.healed, false);
+  assert.ok(s.calls().some((c) => c === 'system migrate'), 'it tries');
+  assert.match(String(r.why), /still masking/);
 });
 
 // --- names and teardown -----------------------------------------------------
