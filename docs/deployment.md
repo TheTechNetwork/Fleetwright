@@ -570,6 +570,34 @@ sudo /opt/agent-fleet/install/install.sh   # idempotent; never overwrites config
 sudo systemctl restart agent-hub
 ```
 
+### Recovering a fleet stranded by a protocol bump
+
+A host running code from **before** the forward-bump fix (`decideRelease`
+allowing a release at or ahead of it) refuses to cross a protocol bump: its
+`/update` sees the new release's protocol differ from its own and declines,
+saying "update the coordinator first" — which does nothing, because nothing on
+the host consults the coordinator. The fix cannot reach it the ordinary way: the
+button that would apply it runs the very code that refuses.
+
+The one lever a stranded host still obeys is the **manifest it polls** — and its
+gate only fires when the manifest *has* a protocol (`if (typeof m.protocol ===
+'number' && …)`). So a **recovery release built without one** is accepted by
+every host's existing update button, stuck-old or current:
+
+```sh
+# From the fixed code (the release you cut carries decideRelease's forward-bump
+# fix). RELEASE_RECOVERY omits the manifest's protocol field.
+RELEASE_RECOVERY=1 node tools/build-host-package.mjs
+# Publish the resulting manifest.json + tarball to the channel the stuck hosts
+# poll (rolling or latest), exactly as a normal release.
+```
+
+Stuck hosts catch it on their next check, apply it, restart onto the fixed code,
+and rejoin the coordinator by negotiation — no ssh, no per-box work. Once they
+are across, **cut a normal release** (protocol carried again) so the downgrade
+guard the field also provides is back on. This is the last manual step the
+deadlock needs: a host on the fixed code crosses every future bump on its own.
+
 ### Why the pull is not sudo, when everything else is
 
 Creating `/opt/agent-fleet` needs root. Living in it does not: the installer

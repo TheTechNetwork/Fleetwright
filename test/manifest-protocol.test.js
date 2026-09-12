@@ -38,6 +38,15 @@ test('the builder reads the protocol rather than being told it', () => {
     'the protocol is settable from the environment again');
 });
 
+test('the builder has a recovery mode that omits protocol, to unstick stranded hosts', () => {
+  // The one lever on a host already stranded on pre-fix code: a manifest its old
+  // gate does not refuse. That gate only fires when protocol is present, so a
+  // recovery release omits it — accepted by every host's existing update button.
+  const code = BUILDER.replace(/^\s*\/\/.*$/gm, '');
+  assert.match(code, /RELEASE_RECOVERY/, 'no recovery mode to build the unsticking manifest');
+  assert.match(code, /delete manifest\.protocol/, 'recovery must OMIT protocol, not set it');
+});
+
 test('a forward or matching protocol is taken; a downgrade is refused', () => {
   // What the number buys now, and it only works if it is true.
   const base = { version: 'v9.9.9', file: 'x.tar.gz', sha256: 'a'.repeat(64) };

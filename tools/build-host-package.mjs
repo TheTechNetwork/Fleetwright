@@ -196,6 +196,35 @@ const manifest = {
   // function in tools/rollout.mjs rather than being repeated here.
   rollout: rolloutFraction(process.env.RELEASE_ROLLOUT),
 };
+
+// RECOVERY RELEASE — the one that unsticks a fleet already stranded on code
+// that predates the forward-bump fix (see decideRelease in src/core/release.js).
+//
+// The bind: a fix to the update gate cannot reach a host until it updates, and
+// the update is what its old code refuses. A stranded host's ONLY lever is the
+// manifest it polls — the coordinator is not in that path, it fetches the asset
+// from GitHub directly — and its old gate refuses any manifest whose protocol
+// does not EQUAL its own. So no protocol number satisfies a mixed cohort.
+//
+// But that gate only fires when the manifest HAS a protocol: `if (typeof
+// m.protocol === 'number' && m.protocol !== protocol)`. OMIT the field and every
+// host — stuck-old or current — skips the check and takes the release. So a
+// recovery release, built with RELEASE_RECOVERY=1 from code that carries the
+// fix, is accepted by a stranded host's existing update button, lands it on the
+// fixed code, and it rejoins by negotiation. Publish it once to the stuck
+// cohort's channel, let them catch it, then resume normal (protocol-carrying)
+// releases — the downgrade guard the field also provides is off only for that
+// window. It is the LAST manual step this deadlock needs: hosts on the fixed
+// code cross every future bump on their own.
+if (process.env.RELEASE_RECOVERY === '1' || process.env.RELEASE_RECOVERY === 'true') {
+  delete manifest.protocol;
+  console.warn(
+    'RELEASE_RECOVERY: manifest built WITHOUT a protocol field — every host, including ones\n' +
+      '  stranded on pre-fix code, will accept it. Publish it to unstick them, then cut a normal\n' +
+      '  release so the downgrade guard is back.',
+  );
+}
+
 writeFileSync(path.join(OUT, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
 console.log(`${path.relative(ROOT, tarball)}  ${(bytes.length / 1048576).toFixed(1)} MB`);
