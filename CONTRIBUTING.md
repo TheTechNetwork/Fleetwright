@@ -33,9 +33,16 @@ Why this shape, learned the expensive way:
   on — and a coordinator fix must not be hostage to an Xcode error.
 
 Skip layers a round does not touch. A docs-only change is one PR. A protocol
-version bump is the exception: everything it strands ships in ONE coordinated
-round, because `PROTOCOL_VERSION` is exact-match and the flag day is paid once
-(see `docs/plan.md`).
+version bump USED TO BE the exception — everything it stranded shipped in one
+coordinated round, because the version check was exact-match and the flag day
+was paid once. Version negotiation removed that: `validateIntent` accepts a
+RANGE `[PROTOCOL_MIN, PROTOCOL_VERSION]`, the coordinator speaks each host its
+own highest understood version and omits any param newer than it, so a routine
+feature bump (raising `PROTOCOL_VERSION`, leaving `PROTOCOL_MIN`) strands no
+host and needs no coordinated round — hosts and the coordinator can land in
+either order. The one remaining flag day is RAISING `PROTOCOL_MIN` to drop an
+old version, which is rare and deliberate. See
+`docs/protocol-negotiation.md` and `docs/plan.md`.
 
 ## The gates
 

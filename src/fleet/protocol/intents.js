@@ -84,13 +84,50 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 // of trust.md's custody work. A secret is named, never carried: the coordinator
 // learns that `github-deploy` was requested and nothing more, the host resolves
 // the name from its own store, and the session fetches the value at runtime
-// over the credential broker. It is a parameter on an existing verb, so it is a
-// flag day for the same reason `profile` was — an old host reads `bad_params`
-// off a request it thought it understood. Same rollout: hosts first, then the
-// coordinator, and the window is loud. The apps do not carry this number (the
-// coordinator builds the envelope), so they ride in whenever their secret field
-// ships and are not part of the freeze window.
+// over the credential broker.
+//
+// AND THE FIRST BUMP THAT RIDES VERSION NEGOTIATION, so the flag-day framing
+// above is now history rather than this bump's cost. `secret` is marked
+// `since: 4`, PROTOCOL_MIN stays 2, and the coordinator speaks each host its own
+// version and omits `secret` from any host that predates v4 (see buildIntent and
+// docs/protocol-negotiation.md). So an old host is not stranded — it runs
+// `start` without the new capability and lights it up when it updates, no
+// coordinated round, no loud window. The apps do not carry this number either.
+/** @type {number} */
 export const PROTOCOL_VERSION = 4;
+
+// THE FLOOR: the oldest protocol this host's code still reads correctly, and the
+// change that stops a routine feature bump stranding a host. See
+// docs/protocol-negotiation.md for the argument in full.
+//
+// `validateIntent` accepts any version in `[PROTOCOL_MIN, PROTOCOL_VERSION]`
+// rather than the single point `PROTOCOL_VERSION`, because a version bump may
+// only ADD a verb or a param and may never remove one or change what an existing
+// one means (the append-only invariant, enforced by test/protocol-appendonly.test.js).
+// So an envelope one or more versions old is a strict SUBSET of a current one,
+// and reading it under this code is sound by construction — the coordinator
+// speaks each host its own highest understood version (see buildIntent) and omits
+// any param newer than it, so an old host keeps working and simply does not get
+// the newest capability until it updates.
+//
+// WHY 2, NOT 3. This protocol has only ever ADDED: v2 added the credential verbs
+// (`link`/`unlink`/`connect`/`renew`), v3 added `start.profile` and the
+// `profiles` verb. So a v2 envelope is a strict SUBSET of a v3 one and reading it
+// under this code is sound — the floor is honestly 2. Setting it there rather
+// than at 3 is what makes negotiation LIVE rather than dormant: a v2 host is
+// spoken v2 and keeps working today, instead of waiting for the next bump to
+// benefit, and it is the difference between machinery that is exercised and
+// machinery that is only asserted. (v1 is left below the floor: the v1→v2 change
+// is further back than this paragraph will vouch for as purely additive, and a
+// v1 box is the rescue `update`'s job.)
+//
+// Routine feature bumps raise PROTOCOL_VERSION and leave this alone — seamless.
+// RAISING this (dropping support for an old version) is still a flag day for
+// anything below it, but it is rare, deliberate, and done to delete
+// compatibility code rather than to ship a feature; a box below the floor is
+// exactly what the rescue `update` below still covers.
+/** @type {number} */
+export const PROTOCOL_MIN = 2;
 
 // THE ONE ENVELOPE A DRIFTED BOX STILL ACCEPTS, and the reason it is exactly
 // one.
@@ -182,6 +219,13 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * @property {string} [describe]  the parameter's own words, carried into the
  *   generated MCP schema. Without it a caller sees a type and a bound and has
  *   to guess the meaning, which is how `brief` came to be read as the task.
+ * @property {number} [since]  the PROTOCOL_VERSION that introduced this param.
+ *   Absent means "from the beginning". `buildIntent` omits a param whose `since`
+ *   is newer than the version it is speaking to a host, so an older host keeps
+ *   working without the new capability. Append-only: once set it may never
+ *   change, and no param may ever be removed — test/protocol-appendonly.test.js
+ *   holds the line, because that invariant is what makes the version RANGE sound
+ *   (an old envelope stays a strict subset of a new one). See PROTOCOL_MIN.
  */
 
 /**
@@ -310,6 +354,7 @@ export const VERBS = Object.freeze({
       profile: {
         type: 'name',
         required: false,
+        since: 3, // added in the v3 bump — omitted when speaking v<3 to a host
         describe:
           'A task profile ON THAT HOST, by name — its content becomes the session\'s first message, so the ' +
           'session comes up working instead of idle. Ask `profiles` for the list. Without one the session ' +
@@ -333,6 +378,7 @@ export const VERBS = Object.freeze({
       secret: {
         type: 'name',
         required: false,
+        since: 4, // added in the v4 bump — omitted when speaking v<4 to a host
         describe:
           'A secret ON THAT HOST, by name — the session may fetch its value at runtime from the credential ' +
           'broker, and the value never crosses this protocol nor enters the container\'s environment. The ' +
@@ -1009,8 +1055,19 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   // rather than from validation: everything below still runs, so a rescue
   // envelope with a bad id or a bad `restart` value is refused exactly as any
   // other envelope would be. See RESCUE_VERB.
-  if (env.v !== PROTOCOL_VERSION && !isRescue(env)) {
-    return bad('unsupported_version', `unsupported protocol version ${JSON.stringify(env.v)}, this host speaks ${PROTOCOL_VERSION}`);
+  // A RANGE, NOT A POINT — but still a real boundary. An envelope inside
+  // [PROTOCOL_MIN, PROTOCOL_VERSION] is understood (an older one is a subset of a
+  // current one; see PROTOCOL_MIN); one outside it is refused as loudly as a
+  // mismatch always was. `isRescue` is still the ONE exemption from the number,
+  // for a box that has drifted BELOW the floor — its own repair must still reach
+  // it. Everything below this line runs on a rescue envelope too, so a bad id or
+  // a bad `restart` is refused exactly as in any other envelope.
+  if (
+    !isRescue(env) &&
+    (typeof env.v !== 'number' || env.v < PROTOCOL_MIN || env.v > PROTOCOL_VERSION)
+  ) {
+    const span = PROTOCOL_MIN === PROTOCOL_VERSION ? `${PROTOCOL_VERSION}` : `${PROTOCOL_MIN}..${PROTOCOL_VERSION}`;
+    return bad('unsupported_version', `unsupported protocol version ${JSON.stringify(env.v)}, this host speaks ${span}`);
   }
   if (env.kind !== 'intent') {
     return bad('bad_envelope', `not an intent: kind=${JSON.stringify(env.kind)}`);
@@ -1049,7 +1106,12 @@ export function validateIntent(raw, { now = Date.now(), maxSkewMs = 0 } = {}) {
   return {
     ok: true,
     intent: {
-      v: PROTOCOL_VERSION,
+      // The version this envelope was ACCEPTED at, preserved rather than
+      // relabelled to PROTOCOL_VERSION — with a range, an envelope validated at
+      // an older version is still that version, and stamping today's number over
+      // it would erase the one fact a reply might carry. `env.v` is an integer
+      // here (in range, or a rescue integer), so this is always well-formed.
+      v: /** @type {number} */ (env.v),
       kind: 'intent',
       id: env.id,
       verb: env.verb,
@@ -1164,18 +1226,53 @@ function checkParam(verb, key, ps, value) {
  * @returns {Intent}
  */
 export function buildIntent({ id, verb, params = {}, actor, issuedAt = Date.now(), speaks = null }) {
+  // The version to SPEAK: the highest both ends understand. No higher than our
+  // own, no higher than the host's reported max, and never below our own floor —
+  // a host under the floor is reachable only by the rescue re-stamp below.
+  // `speaks` absent (no health yet) means assume current; a genuinely old host
+  // then refuses and gets the degraded/rescue treatment, as it did before.
+  const hostMax = Number.isInteger(speaks) ? Number(speaks) : PROTOCOL_VERSION;
+  const target = Math.max(PROTOCOL_MIN, Math.min(PROTOCOL_VERSION, hostMax));
+
+  // Omit any param NEWER than the version we are speaking: an older host must
+  // never be handed a param its code predates. An optional new param (the common
+  // case — `profile`, and later `secret`) just leaves the host running the verb
+  // without the new capability; a REQUIRED one cannot be satisfied by that host,
+  // and that is refused here with a sentence a person can act on rather than sent
+  // and rejected as `bad_params` on the far side.
+  const spec = VERBS[verb];
+  /** @type {Record<string, string|number>} */
+  const spoken = {};
+  for (const [k, v] of Object.entries(params)) {
+    const since = spec?.params?.[k]?.since ?? 0;
+    if (since > target) {
+      if (spec?.params?.[k]?.required) {
+        throw new Error(
+          `this host speaks protocol ${hostMax} and ${verb}.${k} needs ${since} — update the host, then retry`,
+        );
+      }
+      continue; // optional and too new for this host: drop it, keep the verb
+    }
+    spoken[k] = v;
+  }
+
   const intent = {
-    v: PROTOCOL_VERSION,
+    v: target,
     kind: /** @type {'intent'} */ ('intent'),
     id,
     verb,
-    params,
+    params: spoken,
     issuedAt,
     ...(actor ? { actor } : {}),
   };
   const checked = validateIntent(intent);
   if (checked.ok === false) throw new Error(`refusing to send a malformed intent: ${checked.error}`);
-  if (Number.isInteger(speaks) && Number(speaks) < PROTOCOL_VERSION && isRescue(checked.intent)) {
+  // BELOW-FLOOR RESCUE, unchanged in spirit: a host older than our floor will
+  // check the number no matter what, so its own repair reaches it only if we
+  // label the envelope with the version it waits for. Only for the frozen rescue
+  // shape, and only for a host beneath the floor — a host within the range is
+  // already spoken its own version above and needs no re-stamp.
+  if (Number.isInteger(speaks) && Number(speaks) < PROTOCOL_MIN && isRescue(checked.intent)) {
     return { ...checked.intent, v: /** @type {number} */ (speaks) };
   }
   return checked.intent;

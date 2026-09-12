@@ -52,6 +52,7 @@
   "src/fleet/coordinator/identity.js": 100,
   "src/fleet/coordinator/invite-email.js": 99,
   "src/fleet/coordinator/invites.js": 98,
+  "src/fleet/coordinator/member-page.js": 100,
   "src/fleet/coordinator/oauth.js": 96,
   "src/fleet/coordinator/oidc.js": 98,
   "src/fleet/coordinator/random.js": 100,

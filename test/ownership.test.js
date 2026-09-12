@@ -62,6 +62,110 @@ test('a member’s fleet snapshot does not carry other people’s sessions', () 
   assert.equal(seen.sessions.some((s) => s.name === 'nobodys'), false);
 });
 
+/**
+ * A fan-out of one host, answering `list` the way a real one does: with the
+ * records AND with the listing a person reads. `send` is the seam — the
+ * registry hands it the intent, and the reply comes back through the same
+ * door a socket would use.
+ *
+ * @param {CoordinatorCore} core
+ */
+function answerList(core, hostId = 'box') {
+  // Exactly what agent-hub's /list renders, glyphs and all — see
+  // src/adapters/commands.js. The point of the test is that this prose never
+  // reaches somebody it is not about.
+  const text = [
+    '2/4 running on box',
+    '',
+    '▶ theirs · the admin’s work',
+    '   started 3m ago · fleet:admin@example.com',
+    '   https://rc.example.com/theirs',
+    '▶ mine · my work',
+    '   started 1m ago · fleet:member@example.com',
+  ].join('\n');
+  core.registry.connect(hostId, (/** @type {any} */ intent) => {
+    queueMicrotask(() =>
+      core.onHostMessage(hostId, {
+        kind: 'reply',
+        id: intent.id,
+        ok: true,
+        text,
+        sessions: [
+          { name: 'theirs', status: 'running', title: 'the admin’s work', createdBy: 'fleet:admin@example.com', rcUrl: 'https://rc.example.com/theirs' },
+          { name: 'mine', status: 'running', title: 'my work', createdBy: 'fleet:member@example.com', rcUrl: 'https://rc.example.com/mine' },
+        ],
+      }),
+    );
+  });
+  core.registry.recordHealth(hostId, { hostId, running: 2, sessions: [] });
+  return text;
+}
+
+test('the listing a member reads is not the one the host wrote', async () => {
+  // The filter on `list` removed other people's sessions from `sessions` and
+  // left them in `text` — the SAME FACTS, rendered by the host for a person.
+  // The apps draw the records, so they were right; the MCP server renders
+  // `text`, because that is what an agent reads, so `fleet_list` handed every
+  // member the whole fleet: names, titles, who started them, and a live
+  // Remote Control URL into anything running.
+  const core = new CoordinatorCore({ log: quiet });
+  const hostWrote = answerList(core);
+
+  const seen = await core.dispatch({ verb: 'list', params: {}, requester: MEMBER });
+  assert.deepEqual((seen.sessions || []).map((/** @type {any} */ s) => s.name), ['mine']);
+  for (const rendered of [String(seen.text), String(seen.hosts[0].text)]) {
+    assert.equal(rendered.includes('theirs'), false, 'somebody else’s session is named');
+    assert.equal(rendered.includes('admin@example.com'), false, 'and attributed');
+    assert.equal(rendered.includes('rc.example.com/theirs'), false, 'with a live link into it');
+    // Their OWN work survives — a filter that renders nothing is a filter
+    // nobody can tell from a broken fleet.
+    assert.match(rendered, /mine/);
+  }
+
+  // And it says whose absence it is describing. "No sessions" would be a claim
+  // about the box; this is a claim about the caller, which is the only one
+  // that is true.
+  const stranger = await core.dispatch({
+    verb: 'list',
+    params: {},
+    requester: { email: 'nobody@example.com', admin: false },
+  });
+  assert.match(String(stranger.text), /nothing of yours/);
+  assert.equal(String(stranger.text).includes('mine'), false);
+
+  // The admin and the break-glass token still read the host's own words.
+  const asAdmin = await core.dispatch({ verb: 'list', params: {}, requester: ADMIN });
+  assert.equal(String(asAdmin.text), `box: ${hostWrote}`);
+  assert.equal(String((await core.dispatch({ verb: 'list', params: {} })).text), `box: ${hostWrote}`);
+});
+
+test('a host that refused keeps its reason, and the other fan-outs keep their words', async () => {
+  // The rewrite is scoped to replies that carried sessions. A refusal has none
+  // — and answering "nothing of yours" to a box that never answered would be
+  // the failure this file exists to stop, pointed the other way: a fleet that
+  // looks empty instead of broken.
+  const core = new CoordinatorCore({ log: quiet });
+  core.registry.connect('box', (/** @type {any} */ intent) => {
+    queueMicrotask(() =>
+      core.onHostMessage('box', {
+        kind: 'reply',
+        id: intent.id,
+        ok: false,
+        error: { code: 'hub_unreachable' },
+        text: 'the session manager is not answering on this box',
+      }),
+    );
+  });
+  core.registry.recordHealth('box', { hostId: 'box', running: 0, sessions: [] });
+
+  const refused = await core.dispatch({ verb: 'list', params: {}, requester: MEMBER });
+  assert.match(String(refused.text), /session manager is not answering/);
+
+  // `profiles` fans out too, and carries no sessions at all.
+  const profiles = await core.dispatch({ verb: 'profiles', params: {}, requester: MEMBER });
+  assert.match(String(profiles.text), /session manager is not answering/);
+});
+
 test('topology is not filtered, because a member needs the host picker', () => {
   const core = fleet();
   const host = core.snapshot(MEMBER).hosts[0];
@@ -119,6 +223,101 @@ test('logs naming a session is checked like peek, not like a box question', () =
   // A service journal is a question about the BOX, not about a session, and
   // stays available — it is how a member finds out their own host is sick.
   assert.equal(place(core.registry, intent({ service: 'hub' }), { requester: MEMBER }).kind, 'host');
+});
+
+/**
+ * Every verb that names a session and hands back, or changes, something
+ * belonging to it. The workspace five are the ones this list was missing.
+ */
+const SESSION_VERBS = ['peek', 'logs', 'files', 'readfile', 'writefile', 'copyfile', 'deletefile'];
+
+/** Params wide enough for any of them; place() reads only `name`. */
+const withName = (/** @type {string} */ name) => ({ name, path: 'notes.md', to: 'copy.md', content: 'x' });
+
+test('a workspace verb is checked like peek, not routed like new work', () => {
+  // THE FIVE VERBS THAT HAND BACK FILES HAD NO OWNERSHIP CHECK AT ALL.
+  //
+  // `files`, `readfile`, `writefile`, `copyfile` and `deletefile` each take a
+  // session name and act on that session's workspace, and none of them was in
+  // PINNED — so place() fell through to the new-work path, which filters on
+  // free capacity and never consults the requester. `peek` was checked and
+  // `logs <name>` was checked; the verbs that return whole files were not, and
+  // three of them are mutating, so it was somebody else's workspace open for
+  // writing and deleting as well as reading.
+  //
+  // Found by a tester probing their own fleet over MCP: a made-up name
+  // answered "that session has no workspace", a real name belonging to
+  // somebody else got as far as trying to mount the container, and the thing
+  // that stopped the read was a runtime mount error rather than any rule here.
+  const core = fleet();
+  for (const verb of SESSION_VERBS) {
+    const refused = place(core.registry, { verb, params: withName('theirs') }, { requester: MEMBER });
+    assert.equal(refused.kind, 'refused', `${verb} reached another member's session`);
+    assert.equal(refused.code, 'unknown_session', verb);
+  }
+});
+
+test('the workspace refusal is the same one an absent name gets', () => {
+  // Held constant with the name, like the logs case above: a distinct "not
+  // yours" would confirm that a guessed name is real and belongs to somebody
+  // else, which is an existence oracle built out of an access control.
+  const core = fleet();
+  const empty = new CoordinatorCore({ log: quiet });
+  for (const verb of SESSION_VERBS) {
+    const theirs = place(core.registry, { verb, params: withName('theirs') }, { requester: MEMBER });
+    const absent = place(empty.registry, { verb, params: withName('theirs') }, { requester: MEMBER });
+    assert.equal(theirs.code, absent.code, verb);
+    assert.equal(theirs.reason, absent.reason, verb);
+  }
+});
+
+test('your own workspace still opens, on the box actually holding it', () => {
+  // The other half, and the half a fix could quietly break. It also pins:
+  // a workspace is a host-local volume, and the new-work path this used to
+  // fall into ranks by FREE CAPACITY — which sends `files` to the machine
+  // least likely to be holding anybody's session. One host hides that
+  // completely, which is why it survived.
+  const core = fleet();
+  core.registry.hosts.set('spare', {
+    hostId: 'spare',
+    state: 'healthy',
+    connected: true,
+    healthAt: Date.now(),
+    // Emptier than `box`, so a capacity ranking would choose it every time.
+    health: { hostId: 'spare', running: 0, maxSessions: 8, free: 8, sessions: [] },
+  });
+
+  for (const verb of SESSION_VERBS) {
+    const mine = place(core.registry, { verb, params: withName('mine') }, { requester: MEMBER });
+    assert.equal(mine.kind, 'host', `${verb} refused a member their own workspace`);
+    assert.equal(mine.host?.hostId, 'box', `${verb} went to the box that does not hold the session`);
+
+    // And the admin reaches everything, from the same list.
+    const asAdmin = place(core.registry, { verb, params: withName('theirs') }, { requester: ADMIN });
+    assert.equal(asAdmin.kind, 'host', verb);
+    assert.equal(asAdmin.host?.hostId, 'box', verb);
+  }
+});
+
+test('a host does not publish a count of everybody\u2019s sessions', async () => {
+  // The smaller half of the same report: `/status` with no name said
+  // "2/4 sessions running, 7 known", and the second number is a count of other
+  // people's work. A member's `/list` is filtered; this line told them how many
+  // more there were. Nothing can act on the difference — it only says that
+  // other people are here.
+  //
+  // Fixed where the string is written, because the box deliberately does not
+  // know who is asking (that is why the filter lives in the coordinator), so a
+  // number it cannot scope to a person is one it must not publish. Capacity
+  // stays: how full a box is belongs to the box.
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/adapters/commands.js', import.meta.url), 'utf8');
+  assert.equal(
+    /sessions running, \$\{all\.length\} known/.test(src),
+    false,
+    '/status is publishing a count of every session on the box again',
+  );
+  assert.match(src, /\$\{running\}\/\$\{ctx\.cfg\.maxSessions\} sessions running/, 'capacity is still reported');
 });
 
 test('the shorthand route is not a way around any of this', async () => {
