@@ -44,7 +44,7 @@
 // on any pane that is not exactly 80 columns wide.
 
 import os from 'node:os';
-import { validateIntent, isMutating, PROTOCOL_VERSION } from '../protocol/intents.js';
+import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 import { readConfigFrame } from '../protocol/config-frame.js';
 import { renewProviderTokens } from '../../core/keepalive.js';
 import { HubError } from './hub-client.js';
@@ -688,6 +688,12 @@ export class Sidecar {
     const base = {
       hostId: this.hostId,
       protocol: PROTOCOL_VERSION,
+      // The oldest version this host still reads, so the coordinator can speak
+      // this box its own highest understood version instead of refusing it on a
+      // bump. Additive: a host from before this sends only `protocol`, and the
+      // coordinator reads a missing `protocolMin` as equal to `protocol` (exact
+      // match, exactly as before). See docs/protocol-negotiation.md.
+      protocolMin: PROTOCOL_MIN,
       labels: this.labels,
       // WHICH OF THOSE CAN BE TAKEN OFF, so a screen offers Remove on exactly
       // the ones it works for. The flat list above cannot say: `arm64` and

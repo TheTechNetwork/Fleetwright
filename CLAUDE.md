@@ -6,9 +6,23 @@ documentation here and are written to be read.
 
 ## Before touching an interface
 
-Load **antislop** (installed as a skill), plus `antislop-ui` for a screen,
-`antislop-copywriting` for words, `antislop-human` for contrast and keyboards,
-and `antislop-layoutmobile` for anything that reflows.
+Load **antislop**, plus `antislop-ui` for a screen, `antislop-copywriting` for
+words, `antislop-human` for contrast and keyboards, and `antislop-layoutmobile`
+for anything that reflows.
+
+**If they are not installed, install them** rather than working without them.
+They are skills, so a fresh machine or a fresh agent will not have them:
+
+```sh
+npm pack antislop-ai && tar xzf antislop-ai-*.tgz
+cp -r package/skills/* ~/.claude/skills/    # or .claude/skills/ for this repo alone
+```
+
+Do not commit them here: they are somebody else's licensed content, and the
+install is per machine. `antislop-human` ships `contrast-check.py` beside its
+`SKILL.md`, which is the thing to run before claiming a colour pair passes AA.
+Guessing at contrast is the single most reliable way to be wrong about it, and
+this project has one palette precisely so the answer is checkable.
 
 It expects a `DESIGN.md` for direction. Ours is
 [`docs/design-system.md`](docs/design-system.md) — the type scale, the spacing,

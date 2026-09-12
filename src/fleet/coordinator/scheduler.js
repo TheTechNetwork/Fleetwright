@@ -21,7 +21,35 @@
 // conversation and the workspace are host-local volumes, so the only box that
 // can bring a session back is the one still holding them. A restore that
 // landed elsewhere would report success against nothing.
-const PINNED = new Set(['resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge']);
+//
+// THE FIVE WORKSPACE VERBS ARE PINNED TOO, and they were not. `files`,
+// `readfile`, `writefile`, `copyfile` and `deletefile` each take a session
+// `name` and act on that session's workspace, which is a host-local volume
+// (docs/filesystem.md) — so they are session verbs by every test this file
+// applies, and they were falling through to the NEW WORK path at the bottom.
+// That path filters on free capacity, which produced two failures at once:
+//
+//   NOBODY CHECKED WHOSE SESSION IT WAS. The ownership check below is the only
+//   one there is, and a verb that never reaches it is a verb with none. A
+//   member could read another member's workspace by name, and `writefile`,
+//   `copyfile` and `deletefile` are mutating — so it was not only a read.
+//   `peek` and `logs <name>` were checked; the five verbs that hand back whole
+//   FILES were not.
+//
+//   AND IT WENT TO THE WRONG BOX. Ranking by free capacity sends `files` to
+//   whichever machine is least busy, which is the one machine guaranteed not
+//   to be holding a session somebody else is using. On a one-host fleet that
+//   is invisible, which is why this survived.
+//
+// Found by a tester probing their own fleet through MCP: a fabricated session
+// name answered "that session has no workspace", and a REAL name belonging to
+// somebody else got as far as trying to mount its container and failed on an
+// unrelated runtime error. The access control never ran; a mount permission
+// was doing its job.
+const PINNED = new Set([
+  'resume', 'stop', 'forget', 'peek', 'status', 'restore', 'purge',
+  'files', 'readfile', 'writefile', 'copyfile', 'deletefile',
+]);
 
 // PROFILES FANS OUT, and for the same reason `connect` does: the interesting
 // part is where the hosts DISAGREE. A profile is a file on one box, so asking

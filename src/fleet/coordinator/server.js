@@ -41,6 +41,7 @@ import { callbackPage } from './oauth.js';
 import { resource } from '../../core/resources.js';
 import { identify } from './identity.js';
 import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
+import { memberRoutes, isMemberPath, signInClients } from './member-page.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -478,7 +479,7 @@ export class Coordinator {
       verifyIdentity: (idToken) => this.#identify(idToken),
       issueCredential: (who, deviceName) => this.core.issueClient(who, deviceName),
       save: () => this.saveState(),
-      signIn: signInClients(),
+      signIn: signInFromEnv(),
       selfOrigin: this.selfOrigin,
     };
   }
@@ -843,6 +844,28 @@ export class Coordinator {
       }
     }
 
+    // --- the member page ----------------------------------------------------
+    //
+    // ABOVE THE TOKEN GATE, like the MCP routes and for a simpler reason: it is
+    // a form and a stylesheet, with no state, no credential and no fleet lookup
+    // behind it. An anonymous caller gets a sign-in button, which is the point
+    // — a person invited to this fleet with no phone has no other way in.
+    if (isMemberPath(p)) {
+      const answer = memberRoutes({ method: req.method || 'GET', path: p }, {
+        fleet: inviteFleetName(),
+        signIn: signInFromEnv(),
+      });
+      if (answer) {
+        res.writeHead(answer.status, {
+          'content-type': answer.contentType,
+          'cache-control': 'no-store',
+          ...(answer.headers || {}),
+        });
+        res.end(answer.body);
+        return undefined;
+      }
+    }
+
     // Two ways to be allowed past here, and they are not the same thing.
     //
     // A per-device credential is the everyday one: issued at sign-in, named
@@ -916,6 +939,12 @@ export class Coordinator {
           invitedBy: client?.email || 'admin',
           note: r.invite?.note ?? null,
           apps: inviteApps(),
+          // WHERE THIS COORDINATOR ACTUALLY IS, not where the admin's request
+          // reached it. `publicOrigin(req)` is built from a header the caller
+          // chose, and this address goes in an email to somebody who has never
+          // seen this fleet — a spoofed Host would send them to sign in
+          // somewhere else. selfOrigin is configuration.
+          origin: this.selfOrigin || null,
         })
         : { sent: false, why: 'not invited' };
       const text = r.ok
@@ -1383,12 +1412,11 @@ function sendMcp(res, answer) {
  * AGENT_FLEET_AUTH_APPLE_SERVICE to the Services ID once it exists; until then
  * the page shows Google alone rather than an Apple button that cannot work.
  */
-function signInClients() {
-  const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
-  return {
-    google: audiences.find((a) => a.endsWith('.apps.googleusercontent.com')) || null,
-    apple: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
-  };
+function signInFromEnv() {
+  return signInClients({
+    audiences: splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES),
+    appleService: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+  });
 }
 
 /**
