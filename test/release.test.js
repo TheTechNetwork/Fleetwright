@@ -26,6 +26,11 @@ test('a protocol mismatch is refused, and refused BEFORE "up to date"', () => {
   assert.equal(d.act, false);
   assert.equal(d.reason, 'protocol');
   assert.match(d.message, /Update the coordinator first/);
+  // AND IT ANSWERS THE QUESTION, not just the warning. A reader has to be told
+  // whether the host is otherwise current, or the message is a caution with no
+  // verdict — the newest release is one this host cannot take, so it is up to
+  // date to the latest compatible version, and the line says so first.
+  assert.match(d.message, /up to date for the protocol it speaks \(2\)/);
 });
 
 test('a manifest missing a protocol is still usable', () => {

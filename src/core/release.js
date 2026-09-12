@@ -157,8 +157,14 @@ export function decideRelease({ manifest, installed, protocol, channel = 'stable
       act: false,
       reason: 'protocol',
       message:
-        `That release speaks protocol ${m.protocol} and this host speaks ${protocol}.\n` +
-        'Updating would disconnect it from its coordinator, and it could not tell you afterwards.\n' +
+        // ANSWER THE QUESTION FIRST. This used to open with the incompatibility
+        // and never say whether the host was otherwise current, so a reader was
+        // left with a warning and no verdict. It IS a verdict: the channel
+        // serves the latest release, and the latest is one this host cannot
+        // take — so there is nothing newer it could, and it is as up to date as
+        // its protocol allows. Say that, then why the newest is held back.
+        `This host is up to date for the protocol it speaks (${protocol}) — there is no newer release it can safely take.\n` +
+        `The latest release, ${m.version}, speaks protocol ${m.protocol}; taking it would disconnect this host from its coordinator, and it could not tell you afterwards.\n` +
         'Update the coordinator first, then this host.',
     };
   }

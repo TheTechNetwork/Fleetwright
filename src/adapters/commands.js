@@ -1736,7 +1736,15 @@ export const COMMANDS = {
           // `configured: false` is a box that does not know where its releases
           // come from; `ok: false` is one that asked and got no usable answer.
           // Neither of those is up to date.
-          pending: r.ok !== true ? null : Boolean(r.available),
+          //
+          // A PROTOCOL-HELD RELEASE IS NOT PENDING, and not cannot-tell either.
+          // checkRelease answers `ok: false` for it (nothing to install), which
+          // would render as null — the reassuring shape of an unanswered
+          // question. It is answered: the newest release cannot be taken, so
+          // there is nothing newer this host could, and it is up to date to the
+          // latest compatible version. That is `false`, said as data so a row
+          // does not have to read it out of the prose.
+          pending: r.reason === 'protocol' ? false : r.ok !== true ? null : Boolean(r.available),
           available: r.available,
           // Travels for the same reason `configured` does: the health frame's
           // release block is the app's only account of this check, and a block
