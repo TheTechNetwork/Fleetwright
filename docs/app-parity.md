@@ -232,6 +232,8 @@ says on health which journals a box has so the buttons are only ever live.)
 | reboot a box | pin + typed hostname | pin + typed hostname | ✅ |
 | **start a session with a task** (v3 `profile`) | picker on the start sheet, and on a kind | picker on the start sheet, and on a kind | `/new --profile=<name>` |
 | **see what tasks a host has** | fed by `profiles`, fans out | fed by `profiles`, fans out | `/profiles` |
+| **grant a session a secret** (v4 `secret`) | picker on the start sheet | picker on the start sheet | `/new --secret=<name>` |
+| **see what secrets a host holds** | fed by `secrets`, fans out (names only) | fed by `secrets`, fans out (names only) | `/secrets` |
 | **readmit a revoked host / replace a host's key** | swipe the host row | button on the host row | curl |
 | **which releases a box takes** (v3 `channel`) | segmented picker in the host row | chips in the host row | `/channel` |
 | **which image sessions run in** (`sandbox`) | segmented picker on the host page | chips in the host sheet | `/sandbox` |
