@@ -24,7 +24,7 @@ import { readHouseRules } from './rules.js';
 import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAccount } from './accounts.js';
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
-import { sessionImage, variantOf } from './sandbox-variant.js';
+import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -401,6 +401,56 @@ export function refreshSandboxImage(cfg, { timeout } = {}) {
   const changed = Boolean(after) && after !== before;
   if (changed) log.info(`sandbox: image updated (${(before || 'none').slice(0, 19)} → ${(after || '').slice(0, 19)})`);
   return { ok: true, changed };
+}
+
+/**
+ * What image sessions run, and whether it drifts under this box.
+ *
+ * The gap this fills: the app and the OS both report what they have waiting, and
+ * the one component that actually runs a session — its image — reported nothing.
+ * A box on `…/fleetwright-session:latest` re-pulls it on its own every few hours
+ * (refreshSandboxImageIfStale), so the thing sessions run can change with no
+ * release, no changelog, and until now no line anywhere a person looks. That is
+ * the C-5 rule turned on its own updater: "up to date" is a claim, and a moving
+ * tag cannot make it.
+ *
+ * `mutable` is the honest signal: a registry tag we pull on our own drifts; a
+ * digest-pinned ref (`…@sha256:…`) or a `localhost/` image built here does not.
+ * The digest is read LOCALLY — no network, no pull — so this is cheap enough to
+ * compute on every `updates`; whether a newer one exists on the registry is a
+ * separate, heavier question and deliberately not asked here.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ image: string|null, variant: string|null, mutable: boolean, pinned: boolean, digest: string|null }}
+ */
+export function sandboxImageStatus(cfg) {
+  /** @type {string|null} */
+  let image = null;
+  let pinned = false;
+  try {
+    image = sessionImage(cfg);
+    pinned = pinnedByEnv(cfg);
+  } catch {
+    /* an incompletely configured box — falls through to the cannot-tell shape */
+  }
+  if (!image || typeof image !== 'string') {
+    // C-5: null is cannot-tell, never "nothing". A box with no image configured
+    // is not a box running a pinned one.
+    return { image: null, variant: null, mutable: false, pinned, digest: null };
+  }
+  const pinnedToDigest = /@sha256:[0-9a-f]{64}$/i.test(image);
+  const isLocal = image.startsWith('localhost/');
+  // Mutable exactly when refreshSandboxImageIfStale would re-pull it: a remote
+  // ref that is not pinned to a digest. That is the one shape that changes with
+  // no release behind it.
+  const mutable = !pinnedToDigest && !isLocal;
+  let digest = null;
+  const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', image]);
+  if (r.status === 0) {
+    const d = String(r.stdout).trim().replace(/^sha256:/, '');
+    digest = d ? d.slice(0, 12) : null;
+  }
+  return { image, variant: variantOf(image), mutable, pinned, digest };
 }
 
 /**
