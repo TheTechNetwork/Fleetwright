@@ -20,6 +20,7 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 
@@ -45,7 +46,7 @@ async function box({ available = null, unit = null } = {}) {
       version: available,
       file: `fleetwright-host-${available}.tar.gz`,
       sha256: createHash('sha256').update('x').digest('hex'),
-      protocol: 3,
+      protocol: PROTOCOL_VERSION,
     });
     server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });

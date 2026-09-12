@@ -1050,6 +1050,7 @@
                       "restore",
                       "resume",
                       "sandbox",
+                      "secrets",
                       "start",
                       "status",
                       "stop",

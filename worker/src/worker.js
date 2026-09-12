@@ -1657,6 +1657,7 @@ const OPENAPI = JSON.stringify({
                       "restore",
                       "resume",
                       "sandbox",
+                      "secrets",
                       "start",
                       "status",
                       "stop",

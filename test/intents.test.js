@@ -83,6 +83,11 @@ test('the verb set is exactly what is documented', () => {
     // same reason: `start { variant }` would have been a flag day, and a new
     // verb costs an old host nothing but an `unknown_verb`.
     'sandbox',
+    // What named secrets a box holds — `profiles`' sibling, and a new VERB for
+    // the same reason `profiles` was: a reference (`start { secret }`) you can
+    // only use by guessing is one nobody uses, and a new verb costs an old host
+    // nothing but an `unknown_verb`. Names only; the value never crosses.
+    'secrets',
     'start',
     'status',
     'stop',
@@ -466,6 +471,33 @@ test('an optional parameter may be omitted', () => {
   assert.equal(validateIntent(intent({ verb: 'status', params: {} })).ok, true);
   assert.equal(validateIntent(intent({ verb: 'start', params: {} })).ok, true);
   assert.equal(validateIntent(intent({ verb: 'list' })).ok, true, 'params may be absent entirely');
+});
+
+test('start --secret is a NAME, not a value, and refuses a name it could not resolve', () => {
+  // trust.md step 2: the coordinator names a secret the host holds; the value
+  // never crosses this protocol. The type is the guarantee — a `name` cannot
+  // carry a token the way a `secret`-typed param (link/connect) deliberately
+  // does, which is what keeps a value off the wire and out of the audit ring.
+  assert.equal(VERBS.start.params.secret.type, 'name',
+    'start.secret must be a reference (name), never a value (secret) — see docs/trust.md');
+
+  assert.equal(validateIntent(intent({ verb: 'start', params: { secret: 'github-deploy' } })).ok, true);
+
+  // Same charset guard as every other name: no shell shape, no `..`, no leading
+  // dash that a command line would read as a flag.
+  for (const bad of ['../etc/passwd', 'has space', '$(id)', '--dangerous', 'x'.repeat(41), '']) {
+    const r = validateIntent(intent({ verb: 'start', params: { secret: bad } }));
+    assert.equal(r.ok, false, `start.secret ${JSON.stringify(bad)} should be refused`);
+  }
+});
+
+test('the secrets verb lists by name, takes no params, and changes nothing', () => {
+  // The sibling of `profiles`, and the argument for it is identical: a reference
+  // you can only use by guessing is one nobody uses. It is a READ — a picker
+  // asking what a box holds — so it must never be mutating.
+  assert.ok(VERBS.secrets, 'secrets verb exists');
+  assert.deepEqual(VERBS.secrets.params, {}, 'secrets takes no parameters');
+  assert.equal(isMutating('secrets'), false, 'listing what exists changes nothing');
 });
 
 test('a session name can never become a shell fragment', () => {

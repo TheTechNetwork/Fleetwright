@@ -1266,11 +1266,21 @@ export class CoordinatorCore {
         ? results.flatMap((r) => (r.profiles || []).map((/** @type {any} */ p) => ({ ...p, hostId: r.hostId })))
         : undefined;
 
+      // THE SAME MERGE FOR SECRETS, and the hostId matters for the same reason:
+      // a named secret lives on one box, and `start { secret }` on a host that
+      // does not hold it is refused, so a picker that lost which machine each
+      // name came from would send people at the wrong one. Names only — the host
+      // never sends a value, and there is nothing here that could carry one.
+      const secrets = results.some((r) => Array.isArray(r.secrets))
+        ? results.flatMap((r) => (r.secrets || []).map((/** @type {any} */ s) => ({ ...s, hostId: r.hostId })))
+        : undefined;
+
       return {
         ok: results.some((r) => r.ok),
         fanout: true,
         ...(connections ? { connections } : {}),
         ...(profiles ? { profiles } : {}),
+        ...(secrets ? { secrets } : {}),
         // Attribution is not decoration: two hosts can hold sessions with the
         // same name, and a merged list that loses which box each came from
         // cannot be acted on.
