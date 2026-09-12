@@ -59,8 +59,9 @@
  * @property {import('../core/registry.js').SessionRecord[]} [sessions] structured payload for rich surfaces
  * @property {Array<{ name: string, kind: string, size: number }>} [entries] a
  *   directory listing, as data rather than as rendered text
- * @property {{ app: any, system: any }} [waiting] what is waiting for this box,
- *   as data: the app half and the OS half, each naming its own subject
+ * @property {{ app: any, system: any, sandbox?: any }} [waiting] what is waiting for
+ *   this box, as data: the app half, the OS half, and the session-image half,
+ *   each naming its own subject
  * @property {string} [channel]   which releases this box installs
  * @property {string[]} [setLabels] the labels set on this box from an app, as
  *   data, so a screen re-renders from the reply instead of waiting for the next
@@ -84,7 +85,7 @@
 import { describe } from '../core/login.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
-import { pickCredentialSource } from '../core/podman.js';
+import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
 import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
@@ -1805,14 +1806,34 @@ export const COMMANDS = {
           : (summary ?? 'No system packages are waiting.'),
       };
 
+      // THE SESSION IMAGE, the third thing that updates and the one that used to
+      // say nothing. A box on a moving `:latest` re-pulls it on its own, so what
+      // sessions run can change with no release and no changelog — the same
+      // silent self-change that made an outage hard to reason about. Naming it
+      // here is the C-5 rule applied to the updater itself.
+      const img = sandboxImageStatus(ctx.cfg);
+      const sandbox = {
+        image: img.image,
+        mutable: img.mutable,
+        pinned: img.pinned,
+        digest: img.digest,
+        text:
+          img.image === null
+            ? 'Cannot tell which image sessions run here.'
+            : img.mutable
+              ? `Sessions run ${img.image}${img.digest ? ` (currently ${img.digest})` : ''} — a moving tag this ` +
+                'box re-pulls on its own, so it can change with no release behind it. Pin it to a digest to stop that.'
+              : `Sessions run ${img.image}${img.digest ? ` (${img.digest})` : ''}, pinned — it changes only when you do.`,
+      };
+
       return {
         ok: true,
         // EACH LINE NAMES ITS SUBJECT. The bug this verb exists for was two
         // true sentences with no subjects, rendered next to each other.
-        text: `Fleetwright: ${app.text}\nOperating system: ${system.text}`,
+        text: `Fleetwright: ${app.text}\nOperating system: ${system.text}\nSession image: ${sandbox.text}`,
         // And as DATA, so a row can render a state rather than parse a
         // sentence — the same rule as `profiles`, `entries` and `channel`.
-        waiting: { app, system },
+        waiting: { app, system, sandbox },
       };
     },
   },

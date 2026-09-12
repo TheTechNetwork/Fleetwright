@@ -19,6 +19,7 @@ import {
   sandboxNames,
   removeSandboxVolumes,
   healRootlessSandbox,
+  sandboxImageStatus,
 } from '../src/core/podman.js';
 
 /**
@@ -60,6 +61,9 @@ echo "$@" >> ${log}
 # answers the same question by exit status, so this fake answers it too.
 case "$1 $2" in
   "image inspect")
+    # A digest read (image inspect --format {{.Digest}} <ref>) — answer with a
+    # stable fake digest so sandboxImageStatus has something to parse.
+    if [ "$3" = "--format" ]; then echo "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"; exit 0; fi
     for known in ${has.map((h) => `'${h}'`).join(' ') || "''"}; do
       [ "$3" = "$known" ] && exit 0
     done
@@ -192,6 +196,58 @@ test('a missing Containerfile is named, rather than failing inside podman', (t) 
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /\/nowhere\/Containerfile does not exist/);
+});
+
+// --- what image a session runs, and whether it drifts -----------------------
+
+test('a registry tag we pull on our own is reported mutable, with its local digest', (t) => {
+  const s = stubPodman(t);
+  // A remote `:latest` — the shape refreshSandboxImageIfStale re-pulls behind
+  // everyone's back. sessionImage returns it unchanged (it is already the
+  // minimal tag), so this is the honest "drifts, no release behind it" case.
+  const st = sandboxImageStatus(s.cfg({ sandboxImage: 'ghcr.io/thetechnetwork/fleetwright-session:latest' }));
+
+  assert.equal(st.image, 'ghcr.io/thetechnetwork/fleetwright-session:latest');
+  assert.equal(st.variant, 'minimal');
+  assert.equal(st.mutable, true, 'a remote tag we re-pull can change with no release');
+  assert.equal(st.digest, 'abcdef012345', 'the digest is read locally and shown short');
+});
+
+test('a digest-pinned image is not mutable, and says it is pinned', (t) => {
+  const s = stubPodman(t);
+  const ref =
+    'ghcr.io/thetechnetwork/fleetwright-session@sha256:' +
+    'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+  // AGENT_HUB_SANDBOX_IMAGE naming an exact digest is a pin: pinnedByEnv is
+  // true, sessionImage hands it back verbatim, and nothing here re-pulls it.
+  const st = sandboxImageStatus(s.cfg({ sandboxImage: ref, sandboxImagePinned: true }));
+
+  assert.equal(st.image, ref);
+  assert.equal(st.mutable, false, 'a digest names one exact image; it does not drift');
+  assert.equal(st.pinned, true);
+});
+
+test('a localhost image built here does not drift — the other tag was never pushed', (t) => {
+  const s = stubPodman(t);
+  // The default cfg image is a localhost build. It is our own minimal variant,
+  // so variantOf answers, but there is no registry to re-pull from.
+  const st = sandboxImageStatus(s.cfg());
+
+  assert.equal(st.image, 'localhost/agent-session:latest');
+  assert.equal(st.variant, 'minimal');
+  assert.equal(st.mutable, false, 'a local build cannot change under us — nothing pulls it');
+});
+
+test('a box with no image configured cannot tell, and never claims a pinned one', (t) => {
+  const s = stubPodman(t);
+  // C-5: sessionImage yielding nothing is cannot-tell (null), never "up to
+  // date" and never a false pin.
+  const st = sandboxImageStatus(s.cfg({ sandboxImage: '' }));
+
+  assert.equal(st.image, null);
+  assert.equal(st.digest, null);
+  assert.equal(st.variant, null);
+  assert.equal(st.mutable, false);
 });
 
 // --- preparing a session ----------------------------------------------------

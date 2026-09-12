@@ -50,7 +50,7 @@ test('the verb is a read, takes nothing, and is free to add', () => {
   assert.equal(toCommandLine({ verb: 'updates', params: {}, actor: '' }), '/updates');
 });
 
-test('both halves answer, and each says which one it is', async () => {
+test('all three halves answer, and each says which one it is', async () => {
   const box = packagedBox();
   try {
     const r = await dispatch(
@@ -58,11 +58,13 @@ test('both halves answer, and each says which one it is', async () => {
       '/updates',
     );
     assert.equal(r.ok, true);
-    // THE ASSERTION THIS FILE IS FOR. Neither line may be a bare verdict about
-    // "the box": one is this software and one is the operating system, and a
-    // reader has to be able to tell which they are looking at.
+    // THE ASSERTION THIS FILE IS FOR. No line may be a bare verdict about "the
+    // box": one is this software, one is the operating system, and one is the
+    // image sessions run — a reader has to be able to tell which they are
+    // looking at. The session image used to be the one that said nothing.
     assert.match(r.text, /^Fleetwright: /m);
     assert.match(r.text, /^Operating system: /m);
+    assert.match(r.text, /^Session image: /m);
     assert.doesNotMatch(r.text, /The box is up to date/);
   } finally {
     rmSync(box.base, { recursive: true, force: true });
@@ -84,6 +86,11 @@ test('the answer travels as data, not only as prose', async () => {
     // does not, and it says separately when it could not look.
     assert.ok([true, false, null].includes(r.waiting.app.pending));
     assert.equal(typeof r.waiting.system.pending, 'boolean');
+    // The session-image half travels as data too: whether the image is a moving
+    // tag is a field, not a phrase a row has to parse — so a screen can warn
+    // "this drifts" without matching prose.
+    assert.equal(typeof r.waiting.sandbox.mutable, 'boolean');
+    assert.ok('image' in r.waiting.sandbox && 'digest' in r.waiting.sandbox);
     // And it says which KIND of box it measured, because "3 commits behind" and
     // "v0.2.3 is waiting" are answers to different questions and only one of
     // them is available on any given machine.
