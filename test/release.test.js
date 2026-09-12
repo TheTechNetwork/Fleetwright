@@ -17,20 +17,24 @@ test('the same version is not', () => {
   assert.equal(d.reason, 'current');
 });
 
-test('a protocol mismatch is refused, and refused BEFORE "up to date"', () => {
-  // The order matters more than the refusal. A host on the wrong protocol that
-  // is told "already up to date" has been told the opposite of what it needs to
-  // do, and the mismatch would otherwise only surface after the update — when
-  // it can no longer reach the coordinator to say so.
-  const d = decideRelease({ manifest: { ...good, protocol: 3 }, installed: good.version, protocol: 2 });
+test('a forward protocol bump is offered, not deadlocked', () => {
+  // THE DEADLOCK THIS UNDOES. The gate was `m.protocol !== protocol`, which
+  // refused every bump — and taking the release is the only way to cross one,
+  // so a v2 host could never reach v3. Negotiation (PROTOCOL_MIN) makes the
+  // forward move safe: the updated host down-speaks to whatever the coordinator
+  // supports. So a v2 host IS offered the v3 release.
+  const d = decideRelease({ manifest: { ...good, version: 'v9', protocol: 3 }, installed: 'v1', protocol: 2 });
+  assert.equal(d.act, true, 'a v2 host must be able to take the v3 release — it is the only path to v3');
+});
+
+test('a protocol DOWNGRADE is refused', () => {
+  // The one direction negotiation does not cover: moving to an older protocol
+  // can drop a host below the coordinator's floor, and nothing legitimate asks
+  // a host to go backwards.
+  const d = decideRelease({ manifest: { ...good, version: 'v9', protocol: 1 }, installed: 'v1', protocol: 2 });
   assert.equal(d.act, false);
   assert.equal(d.reason, 'protocol');
-  assert.match(d.message, /Update the coordinator first/);
-  // AND IT ANSWERS THE QUESTION, not just the warning. A reader has to be told
-  // whether the host is otherwise current, or the message is a caution with no
-  // verdict — the newest release is one this host cannot take, so it is up to
-  // date to the latest compatible version, and the line says so first.
-  assert.match(d.message, /up to date for the protocol it speaks \(2\)/);
+  assert.match(d.message, /downgrade, not an update/);
 });
 
 test('a manifest missing a protocol is still usable', () => {

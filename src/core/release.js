@@ -149,23 +149,33 @@ export function decideRelease({ manifest, installed, protocol, channel = 'stable
     return { act: false, reason: 'unreadable', message: `the release filename is not a plain name: ${m.file.slice(0, 60)}` };
   }
 
-  // BEFORE the version comparison, deliberately. A host one protocol behind
-  // must be told that, not told it is up to date — those are opposite
-  // instructions to whoever is reading.
-  if (typeof m.protocol === 'number' && m.protocol !== protocol) {
+  // A FORWARD PROTOCOL BUMP IS TAKEABLE — and this used to be a deadlock.
+  //
+  // The check was `m.protocol !== protocol`: refuse any release whose protocol
+  // differs from what this host speaks NOW. But taking the release is the only
+  // way to cross the bump — the v4 release is the sole path to v4, and the gate
+  // required already being v4. So a host on an older protocol could NEVER update
+  // across a bump, and "update the coordinator first" named a second step that
+  // did not exist: nothing here ever consults the coordinator, so updating it
+  // changed nothing. A real fleet sat on v3 with a v4 coordinator and a v4
+  // release it was told, forever, it could not take.
+  //
+  // Version negotiation (PROTOCOL_MIN, see intents.js) is what makes the forward
+  // bump safe: the updated host speaks a RANGE down to the floor, so it
+  // down-speaks to whatever the coordinator supports and cannot be stranded by
+  // moving ahead — which is exactly what the old refusal feared. So a release at
+  // or ahead of this host is offered.
+  //
+  // Only a DOWNGRADE is refused: moving to an OLDER protocol can drop a host
+  // below the coordinator's floor, and nothing legitimate asks a host to go
+  // backwards. That is the one direction negotiation does not cover.
+  if (typeof m.protocol === 'number' && m.protocol < protocol) {
     return {
       act: false,
       reason: 'protocol',
       message:
-        // ANSWER THE QUESTION FIRST. This used to open with the incompatibility
-        // and never say whether the host was otherwise current, so a reader was
-        // left with a warning and no verdict. It IS a verdict: the channel
-        // serves the latest release, and the latest is one this host cannot
-        // take — so there is nothing newer it could, and it is as up to date as
-        // its protocol allows. Say that, then why the newest is held back.
-        `This host is up to date for the protocol it speaks (${protocol}) — there is no newer release it can safely take.\n` +
-        `The latest release, ${m.version}, speaks protocol ${m.protocol}; taking it would disconnect this host from its coordinator, and it could not tell you afterwards.\n` +
-        'Update the coordinator first, then this host.',
+        `This host speaks protocol ${protocol}; ${m.version} speaks the older protocol ${m.protocol}.\n` +
+        'That is a downgrade, not an update — taking it could drop this host below the fleet and is refused.',
     };
   }
 

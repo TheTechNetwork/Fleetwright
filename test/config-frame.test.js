@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { readConfigFrame, buildConfigFrame, CONFIG_KEYS } from '../src/fleet/protocol/config-frame.js';
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../src/fleet/protocol/intents.js';
 
 const SECRET = 'clientsecret000000000000000000000000';
 const frame = (values) => ({ v: PROTOCOL_VERSION, kind: 'config', values });
@@ -68,10 +68,20 @@ test('a refusal never quotes the value back', () => {
   assert.equal(JSON.stringify(r).includes('secret with'), false);
 });
 
-test('a frame from another protocol version is not guessed at', () => {
+test('a frame from a coordinator AHEAD of us is read, not dropped', () => {
+  // The bug this fixes: an updated coordinator's frames were refused by an older
+  // host every fifteen seconds, so the host got no config while looking
+  // connected. Config keys are append-only, so a newer frame is a superset —
+  // read the keys we know, drop the rest.
   const r = readConfigFrame({ v: PROTOCOL_VERSION + 1, kind: 'config', values: { githubClientSecret: SECRET } });
+  assert.equal(r.ok, true);
+  assert.equal(r.values.githubClientSecret, SECRET);
+});
+
+test('a frame from below the floor is still refused — old semantics are not guessed at', () => {
+  const r = readConfigFrame({ v: PROTOCOL_MIN - 1, kind: 'config', values: { githubClientSecret: SECRET } });
   assert.equal(r.ok, false);
-  assert.match(String(r.error), /this host speaks/);
+  assert.match(String(r.error), /below this host's floor/);
 });
 
 test('an intent is not a config frame and vice versa', () => {
