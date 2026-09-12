@@ -220,6 +220,79 @@ export function describeSystemUpdates(s) {
 }
 
 /**
+ * The version transitions in an `apt-get -s upgrade` plan.
+ *
+ * PURE, so the parsing is tested without apt on the box. `apt-get --simulate`
+ * prints one `Inst` line per package it would touch, and each names the version
+ * on the box and the one it would move to:
+ *
+ *   Inst curl [8.5.0-1] (8.6.0-2 Debian:13/stable [amd64])
+ *   Inst libssl3 (3.2.0-1 Debian:13/stable [amd64])   ← a fresh dep has no [old]
+ *
+ * Read straight off the tool that does the work rather than reassembled from
+ * `apt list`, so "which packages, and to what" is the plan itself and not a
+ * guess about it.
+ *
+ * @param {string} stdout
+ * @returns {Array<{ name: string, from: string|null, to: string }>}
+ */
+export function parseUpgradePlan(stdout) {
+  /** @type {Array<{ name: string, from: string|null, to: string }>} */
+  const out = [];
+  for (const line of String(stdout || '').split('\n')) {
+    const m = /^Inst (\S+) (?:\[([^\]]+)\] )?\(([^ )]+)/.exec(line.trim());
+    if (m) out.push({ name: m[1], from: m[2] ?? null, to: m[3] });
+  }
+  return out;
+}
+
+/**
+ * What an upgrade would actually change, without changing anything.
+ *
+ * `-s` / `--simulate` needs no privilege and touches nothing: it is the same
+ * read the check path already does, one level more detailed. Captured BEFORE the
+ * apply so the reply can say which packages moved, not just how many.
+ *
+ * `supported: false` is cannot-tell (no apt, or the simulate failed), never an
+ * empty plan asserted as "nothing" — the C-5 rule, the same one systemUpdates
+ * follows.
+ *
+ * The guard and the exec are injectable so the branches are testable on a box
+ * without apt; production calls it with no arguments and gets the real ones.
+ *
+ * @param {{ hasAptGet?: () => boolean, exec?: (argv: string[]) => { status: number, stdout: string } }} [io]
+ * @returns {{ supported: boolean, packages: Array<{ name: string, from: string|null, to: string }> }}
+ */
+export function plannedUpgrades({ hasAptGet = () => existsSync('/usr/bin/apt-get'), exec = run } = {}) {
+  if (!hasAptGet()) return { supported: false, packages: [] };
+  const r = exec(['apt-get', '-s', 'upgrade']);
+  if (r.status !== 0) return { supported: false, packages: [] };
+  return { supported: true, packages: parseUpgradePlan(r.stdout) };
+}
+
+/**
+ * "Upgraded 3 packages: curl 8.5.0-1 → 8.6.0-2, openssl 3.1 → 3.2, …and 1 more"
+ *
+ * PURE, given the real count applied and the plan captured beforehand. Leads
+ * with the count (the one number that is certainly true) and names as many as a
+ * chat line has room for; a plan we could not read falls back to the bare count
+ * rather than inventing names.
+ *
+ * @param {number} applied
+ * @param {Array<{ name: string, from: string|null, to: string }>} plan
+ */
+export function describeApplied(applied, plan) {
+  const head = `Upgraded ${applied} package${applied === 1 ? '' : 's'}`;
+  if (!plan.length) return `${head}.`;
+  const cap = 12;
+  const shown = plan
+    .slice(0, cap)
+    .map((p) => (p.from ? `${p.name} ${p.from} → ${p.to}` : `${p.name} ${p.to}`));
+  const more = plan.length > cap ? `, …and ${plan.length - cap} more` : '';
+  return `${head}: ${shown.join(', ')}${more}.`;
+}
+
+/**
  * Apply system updates.
  *
  * The installer offers to set this up, and the grant is narrow enough to be
@@ -267,6 +340,10 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   if (before.supported && !before.count) {
     return { ok: true, text: 'Nothing to upgrade.' + (before.rebootRequired ? ' A reboot is still pending.' : '') };
   }
+  // WHICH PACKAGES, captured before the apply changes the answer. A simulate is
+  // unprivileged and touches nothing, so this is a read on the way to the write
+  // — the apply reply then names what moved instead of a bare count.
+  const plan = plannedUpgrades();
 
   log.warn(`upgrade: applying system updates${actor ? ` for ${actor}` : ''}`);
   // -n: never prompt for a password. If the sudoers rule is missing this fails
@@ -316,7 +393,7 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   return {
     ok: true,
     text:
-      `Upgraded ${applied} package${applied === 1 ? '' : 's'}.` +
+      describeApplied(applied, plan.packages) +
       (after.rebootRequired ? '\n\nA REBOOT IS PENDING. Nothing here will do that for you — sessions are running.' : ''),
   };
 }

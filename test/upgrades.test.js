@@ -10,7 +10,14 @@ import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describeSystemUpdates, refreshPackageLists, runUpgrade } from '../src/core/upgrades.js';
+import {
+  describeSystemUpdates,
+  refreshPackageLists,
+  runUpgrade,
+  parseUpgradePlan,
+  describeApplied,
+  plannedUpgrades,
+} from '../src/core/upgrades.js';
 
 test('a box with nothing waiting says nothing at all', () => {
   // Null, not "0 updates available". This goes into a health report that
@@ -35,6 +42,69 @@ test('a summary leads with the count and calls out security and reboots', () => 
     describeSystemUpdates({ supported: true, count: 0, security: 0, rebootRequired: true, packages: [] }),
     'reboot pending',
   );
+});
+
+test('the upgrade plan is read straight off apt-get -s, with version transitions', () => {
+  // Real `apt-get -s upgrade` shape: an [old] for a package already installed,
+  // none for a fresh dependency the upgrade pulls in, and noise lines around
+  // the Inst lines that must be ignored.
+  const stdout = [
+    'Reading package lists...',
+    'Building dependency tree...',
+    'The following packages will be upgraded:',
+    '  curl libssl3',
+    'Inst curl [8.5.0-1] (8.6.0-2 Debian:13/stable [amd64])',
+    'Inst libssl3 (3.2.0-1 Debian:13/stable [amd64])',
+    'Conf curl (8.6.0-2 Debian:13/stable [amd64])',
+  ].join('\n');
+  const plan = parseUpgradePlan(stdout);
+  assert.deepEqual(plan, [
+    { name: 'curl', from: '8.5.0-1', to: '8.6.0-2' },
+    { name: 'libssl3', from: null, to: '3.2.0-1' },
+  ]);
+  // Empty and garbage are the plan being absent, not a crash.
+  assert.deepEqual(parseUpgradePlan(''), []);
+  assert.deepEqual(parseUpgradePlan('nothing here\nInst\nInstant coffee'), []);
+});
+
+test('the apply reply names what moved, and falls back to the count when it cannot', () => {
+  // The thing the box used to withhold: "Upgraded 2 packages" said nothing
+  // about WHICH, and applying an update without saying what it changed is the
+  // C-5 rule broken on the box's own updater.
+  const plan = [
+    { name: 'curl', from: '8.5.0-1', to: '8.6.0-2' },
+    { name: 'libssl3', from: null, to: '3.2.0-1' },
+  ];
+  assert.equal(describeApplied(2, plan), 'Upgraded 2 packages: curl 8.5.0-1 → 8.6.0-2, libssl3 3.2.0-1.');
+  assert.equal(describeApplied(1, [{ name: 'bash', from: '5.2', to: '5.3' }]), 'Upgraded 1 package: bash 5.2 → 5.3.');
+  // No plan (a simulate we could not read) leads with the count rather than
+  // inventing names — cannot-tell, not a false empty.
+  assert.equal(describeApplied(3, []), 'Upgraded 3 packages.');
+});
+
+test('the plan is cannot-tell without apt, and the parsed plan with it', () => {
+  // No apt-get: cannot-tell, never an empty plan dressed up as "nothing".
+  assert.deepEqual(plannedUpgrades({ hasAptGet: () => false }), { supported: false, packages: [] });
+  // A simulate that failed is also cannot-tell — the registry or lists were the
+  // problem, not "nothing to do".
+  assert.deepEqual(
+    plannedUpgrades({ hasAptGet: () => true, exec: () => ({ status: 1, stdout: '' }) }),
+    { supported: false, packages: [] },
+  );
+  // A simulate that ran is the plan itself.
+  const got = plannedUpgrades({
+    hasAptGet: () => true,
+    exec: () => ({ status: 0, stdout: 'Inst curl [8.5.0-1] (8.6.0-2 Debian:13/stable [amd64])' }),
+  });
+  assert.deepEqual(got, { supported: true, packages: [{ name: 'curl', from: '8.5.0-1', to: '8.6.0-2' }] });
+});
+
+test('a long plan is capped so a chat line stays a chat line', () => {
+  const plan = Array.from({ length: 15 }, (_, i) => ({ name: `pkg${i}`, from: '1', to: '2' }));
+  const text = describeApplied(15, plan);
+  assert.match(text, /^Upgraded 15 packages: /);
+  assert.match(text, /…and 3 more\.$/, '12 shown, 3 folded away');
+  assert.ok(!text.includes('pkg12'), 'the thirteenth is past the cap');
 });
 
 test('with upgrades off, the refusal is the instructions', () => {
