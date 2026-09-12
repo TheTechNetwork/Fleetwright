@@ -74,6 +74,45 @@ test('a profile only one host has pins the host', () => {
   assert.match(DROID.sheet, /owners\.size == 1/);
 });
 
+test('both apps can ask what secrets the fleet holds, by name', () => {
+  assert.match(IOS.fleet, /func secrets\(\)/);
+  assert.match(DROID.fleet, /suspend fun secrets\(\)/);
+  // Spelled the way the protocol spells it, or the coordinator refuses it as an
+  // unknown verb and it reads as "the fleet is broken".
+  assert.match(IOS.fleet, /intent\("secrets"/);
+  assert.match(DROID.fleet, /intent\("secrets"/);
+});
+
+test('both apps send the secret by name on start, and neither carries a value', () => {
+  for (const [name, src] of [['iOS', IOS.fleet], ['Android', DROID.fleet]]) {
+    assert.match(src, /params\["secret"\] = secret|put\("secret", secret\)/,
+      `${name} never puts secret on a start intent`);
+  }
+  // THE VALUE MUST NOT HAVE A ROUTE. The apps carry the name; a field that
+  // carried the value would be the durable credential trust.md exists to keep
+  // off the phone. Asserted as an absence, the way the profile content is.
+  for (const [name, src] of [['iOS', IOS.sheet], ['Android', DROID.sheet]]) {
+    assert.equal(/"(secretValue|secret_value|token)"\s*[:,]/.test(src), false,
+      `${name} has a field that could carry a secret's value`);
+  }
+});
+
+test('the secret picker, like the task picker, waits for the fleet to answer', () => {
+  // Same null-is-not-empty rule: an empty picker while the request is in flight
+  // offers "None" as if it were the fleet's answer.
+  assert.match(IOS.sheet, /secretsAnswered/);
+  assert.match(IOS.sheet, /if secretsAnswered, !secrets\.isEmpty/);
+  assert.match(DROID.sheet, /mutableStateOf<List<Fleet\.Secret>\?>\(null\)/);
+  assert.match(DROID.fleet, /val secrets: List<Secret>\? = null/);
+});
+
+test('a secret only one host holds pins the host', () => {
+  // `start --secret` on a box without that file is refused, the same as a
+  // profile — so choosing one fixes where the session runs.
+  assert.match(IOS.sheet, /secrets\.filter \{ \$0\.name == now \}/);
+  assert.match(DROID.sheet, /secretsOffered\.filter \{ it\.name == secret \}/);
+});
+
 test('a kind carries a task on both phones, and Android carries a host at last', () => {
   // A kind is what makes "start an orgi session" mean something spoken, which
   // is the surface with no screen to drive an idle session from afterwards.

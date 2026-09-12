@@ -272,6 +272,7 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                     mode = request.mode,
                     host = request.host,
                     profile = request.profile,
+                    secret = request.secret,
                 )
                 LocalNotice.post(context, "Session ready", reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }

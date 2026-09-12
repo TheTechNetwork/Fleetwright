@@ -41,6 +41,12 @@ data class StartRequest(
      * did before protocol v3, and what nothing said out loud.
      */
     val profile: String? = null,
+    /**
+     * WHAT IT MAY REACH, by name. Null grants nothing. The value never travels
+     * with this — the host resolves the name and the session fetches the value
+     * at runtime over the broker. See docs/trust.md.
+     */
+    val secret: String? = null,
 )
 
 /**
@@ -82,6 +88,11 @@ fun StartSheet(
     // somebody taps Start.
     var profiles by remember { mutableStateOf<List<Fleet.Profile>?>(null) }
     var profile by remember { mutableStateOf("") }
+    // Nullable for the same reason as profiles: null is nobody-answered (a host
+    // too old to know the verb), empty is this fleet holds none — and only the
+    // second should show a picker.
+    var secrets by remember { mutableStateOf<List<Fleet.Secret>?>(null) }
+    var secret by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
@@ -109,6 +120,9 @@ fun StartSheet(
         // nobody could say — an old coordinator, or hosts that refuse the verb
         // by name — and that is not the same as a fleet with no profiles.
         profiles = Fleet(settings).profiles()
+        // Same nullable rule: null is "nobody answered", so an old fleet shows
+        // no secret picker rather than a wrong one.
+        secrets = Fleet(settings).secrets()
     }
 
     AlertDialog(
@@ -189,6 +203,40 @@ fun StartSheet(
                         )
                     }
                 }
+                // WHAT IT MAY REACH, optional. Shown only when a box actually
+                // holds a secret — an empty picker offers a control for a
+                // capability nobody set up. Names only: the value stays on the
+                // host and this app never sees it.
+                val secretsOffered = secrets.orEmpty()
+                if (secretsOffered.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                        Text("Secret", style = MaterialTheme.typography.labelMedium)
+                        AssistChip(
+                            onClick = { secret = "" },
+                            label = { Text(if (secret.isEmpty()) "None ✓" else "None") },
+                        )
+                        secretsOffered.forEach { s ->
+                            AssistChip(
+                                onClick = {
+                                    secret = if (secret == s.name) "" else s.name
+                                    // Pins the host like a profile: a secret is
+                                    // on one box, and `start --secret` elsewhere
+                                    // is refused.
+                                    val owners = secretsOffered.filter { it.name == secret }.mapNotNull { it.hostId }.toSet()
+                                    if (owners.size == 1) host = owners.first()
+                                },
+                                label = { Text(if (secret == s.name) "${s.name} ✓" else s.name) },
+                            )
+                        }
+                        Text(
+                            if (secret.isEmpty())
+                                "Optional. Grant a named secret and the session can fetch its value at runtime."
+                            else
+                                "It may fetch this secret's value while it runs. The value stays on the host — this app never sees it.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 if (kinds.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Kind", style = MaterialTheme.typography.labelMedium)
@@ -257,6 +305,7 @@ fun StartSheet(
                             mode = kind?.mode,
                             host = host.ifBlank { null },
                             profile = profile.ifBlank { null },
+                            secret = secret.ifBlank { null },
                         ),
                     )
                     onDismiss()

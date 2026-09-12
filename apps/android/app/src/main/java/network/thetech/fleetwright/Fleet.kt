@@ -487,6 +487,13 @@ class Fleet(
          */
         val profiles: List<Profile>? = null,
         /**
+         * The named secrets a session could be GRANTED, by name only, with the
+         * host each one lives on. Same NULL-IS-NOT-EMPTY rule as [profiles]:
+         * null is nobody-answered (a host too old to know the verb), empty is
+         * this fleet holds none. The value is never here.
+         */
+        val secrets: List<Secret>? = null,
+        /**
          * Which releases this box takes, when the reply is about that.
          *
          * IT TRAVELS SO THE APP DOES NOT HAVE TO WAIT. The fleet list is
@@ -541,6 +548,21 @@ class Fleet(
         val name: String,
         val summary: String = "",
         val chars: Int = 0,
+        val hostId: String? = null,
+    )
+
+    /**
+     * A named secret a session can be GRANTED at start. The NAME only: the value
+     * stays on the host and reaches the session over the credential broker,
+     * never through this app — see docs/trust.md. A phone that carried the value
+     * would be the durable credential this design exists to withhold.
+     *
+     * @property hostId which machine holds it. Load-bearing like a profile's:
+     *   `start --secret` on a host without it is refused, so a picker that lost
+     *   the attribution aims at the wrong box.
+     */
+    data class Secret(
+        val name: String,
         val hostId: String? = null,
     )
 
@@ -672,6 +694,7 @@ class Fleet(
         mode: String? = null,
         host: String? = null,
         profile: String? = null,
+        secret: String? = null,
     ): Reply = intent(
         "start",
         buildMap {
@@ -687,6 +710,11 @@ class Fleet(
             // is refused by that host, listing what it does have, so a stale
             // picker fails with something a person can act on.
             if (!profile.isNullOrBlank()) put("profile", profile)
+            // WHAT THE SESSION MAY REACH, by name. A NAME, never the value: the
+            // host resolves it and the session fetches the value at runtime over
+            // the broker, so nothing here carries a credential. An unknown name
+            // is refused by the host, like a profile. See docs/trust.md.
+            if (!secret.isNullOrBlank()) put("secret", secret)
         },
         // A placement PREFERENCE, beside the intent and never inside it —
         // `start` declares no host parameter, and a host receiving one would
@@ -729,6 +757,14 @@ class Fleet(
      * empty one.
      */
     suspend fun profiles(): List<Profile>? = runCatching { intent("profiles", emptyMap()).profiles }.getOrNull()
+
+    /**
+     * The named secrets the fleet holds, by name only. Null when nobody
+     * answered — an old coordinator or a host that refuses the verb — which the
+     * caller treats as "no picker" rather than "no secrets". The value is never
+     * among the answer; it stays on the host behind the broker.
+     */
+    suspend fun secrets(): List<Secret>? = runCatching { intent("secrets", emptyMap()).secrets }.getOrNull()
 
     /** One session in detail, or the fleet when no name is given. */
     suspend fun status(name: String? = null): Reply =
@@ -1380,6 +1416,18 @@ class Fleet(
                                     summary = p.optString("summary", ""),
                                     chars = p.optInt("chars", 0),
                                     hostId = p.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                                )
+                            }
+                        }
+                    },
+                    secrets = json.optJSONArray("secrets")?.let { a ->
+                        (0 until a.length()).mapNotNull { i ->
+                            a.optJSONObject(i)?.let { s ->
+                                val n = s.optString("name")
+                                if (n.isBlank()) null
+                                else Secret(
+                                    name = n,
+                                    hostId = s.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
                                 )
                             }
                         }
