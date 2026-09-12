@@ -1477,6 +1477,8 @@ install_unit() { # install_unit NAME
       -e "s|__ENTRY__|$(unit_entry "$1")|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
+      -e "s|__STATE_DIR__|$STATE_DIR|g" \
+      -e "s|__FLEET_BASE__|$FLEET_BASE|g" \
       "$src" > "$dest"
   # root-owned, because launchd REFUSES to load a daemon that is writable by
   # anyone else, and does so with a message about permissions rather than
@@ -1550,6 +1552,26 @@ else
 fi
 
 if [ -n "${UNIT_DIR_SAVED:-}" ]; then DIR="$UNIT_DIR_SAVED"; unset UNIT_DIR_SAVED; fi
+
+# THE COMMIT-CONFIRM WATCHDOG. A standing timer that reverts an update the box
+# cannot prove itself on — see src/core/update-confirm.js and
+# install/fleetwright-confirm. It lives OUTSIDE the app on purpose: a watchdog
+# inside a service cannot catch that service failing to start, and any of the
+# three can be the one an update breaks. Packaged Linux only: a checkout has no
+# `current` symlink to move back and nothing kept to revert to, so there is
+# nothing here to guard.
+if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; then
+  CONFIRM_SRC="$SELF_DIR"
+  [ -f "$CONFIRM_SRC/install/fleetwright-confirm" ] || CONFIRM_SRC="$DIR"
+  if [ -f "$CONFIRM_SRC/install/fleetwright-confirm" ]; then
+    # Owner root, mode 0755 — the watchdog must not be rewritable by the service
+    # user it protects, or the thing being watched could edit its own watcher.
+    install -m 0755 -o root -g root "$CONFIRM_SRC/install/fleetwright-confirm" /usr/local/sbin/fleetwright-confirm
+    install_unit agent-fleet-confirm
+    install -m 0644 -o root -g root "$CONFIRM_SRC/install/agent-fleet-confirm.timer" /etc/systemd/system/agent-fleet-confirm.timer
+    ok "commit-confirm watchdog installed (reverts an update that cannot prove itself)"
+  fi
+fi
 
 # Reading the service journal needs group membership: systemd-journald shows a
 # plain user only their own logs. Without this /logs returns "no entries" for a
@@ -2383,6 +2405,17 @@ if [ "$WIZARD" = yes ]; then
       # the only evidence worth acting on.
       if start_service agent-hub; then SERVICES_STARTED=1; fi
       [ "$FLEET_LOCAL" = 1 ] && { start_service agent-fleet-coordinator || true; }
+
+      # Arm the commit-confirm watchdog. A timer, not a service: `enable --now`
+      # starts its clock, and it is a no-op on a box with nothing on trial.
+      if [ "$PACKAGED" = 1 ] && [ -f /etc/systemd/system/agent-fleet-confirm.timer ]; then
+        systemctl reset-failed agent-fleet-confirm.timer >/dev/null 2>&1 || true
+        if systemctl enable --now agent-fleet-confirm.timer >/dev/null 2>&1; then
+          ok "commit-confirm watchdog armed — a bad update reverts itself"
+        else
+          warn "could not arm agent-fleet-confirm.timer — updates will not auto-revert"
+        fi
+      fi
 
       # Enrol BEFORE starting the sidecar. Not for correctness — the sidecar
       # retries and would pick it up — but because a box that comes up refused

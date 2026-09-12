@@ -1,0 +1,18 @@
+[Unit]
+Description=Fire the Fleetwright commit-confirm watchdog every minute
+
+[Timer]
+# Every minute, from a minute after boot. The watchdog is a no-op unless a
+# release is on trial, so this costs nothing on a settled box; when an update is
+# on trial it is the cadence at which the box is confirmed or reverted. A minute
+# is fine granularity against a window measured in minutes.
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+# The window is uptime-aware in the script itself (it checks /proc/uptime), so a
+# box that was powered off is not reverted the instant it returns — it is given
+# a fresh window to prove the update. Persistent= is deliberately NOT set: a
+# missed tick while off should not fire a catch-up revert on boot.
+
+[Install]
+WantedBy=timers.target

@@ -13,7 +13,8 @@ import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
 import { adoptBoxAccount } from './core/accounts.js';
-import { pickSecretsFile, healRootlessSandbox } from './core/podman.js';
+import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
+import { readConfirmation, noteHealth } from './core/update-confirm.js';
 import { Connections } from './core/connectors.js';
 import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
@@ -51,6 +52,22 @@ export async function main() {
       healRootlessSandbox(cfg);
     } catch (e) {
       log.warn(`sandbox: proc self-heal failed: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  // COMMIT-CONFIRM, THE HUB'S HALF. When a release is on trial, the hub's proof
+  // that the update works is that a session can actually start — the exact thing
+  // the mount-proc outage broke while the box still looked online. Run the real
+  // probe (a throwaway container) and record the evidence; the standing watchdog
+  // reverts the release if this half, or the sidecar's, never arrives. Gated on
+  // a trial existing, so a settled box pays nothing. Never fatal: a probe that
+  // throws simply leaves the evidence unwritten, which is a revert, not a crash.
+  if (cfg.sandbox && readConfirmation(cfg)) {
+    try {
+      if (canStartSession(cfg)) noteHealth(cfg, 'hub');
+      else log.warn('update: a release is on trial and a session did not start here — leaving it unconfirmed');
+    } catch (e) {
+      log.warn(`update: could not run the session probe: ${/** @type {Error} */ (e).message}`);
     }
   }
 

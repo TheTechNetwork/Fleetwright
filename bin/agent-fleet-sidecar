@@ -27,6 +27,7 @@ import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
 import { watchForRestart } from '../src/core/restart-watch.js';
+import { noteHealth } from '../src/core/update-confirm.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
@@ -79,6 +80,19 @@ async function run() {
   // one-shot subcommands finish in under a second and have nothing to pick up.
   watchForRestart({ name: 'sidecar' });
 
+  // COMMIT-CONFIRM, THE SIDECAR'S HALF. When a release is on trial, reaching the
+  // coordinator is this box's proof that the update did not sever it from the
+  // fleet — the exact capability a bad update takes away. The sidecar does NOT
+  // decide anything: it records that half of the evidence, and the standing
+  // watchdog (install/fleetwright-confirm, on a systemd timer) confirms or
+  // reverts. That separation is deliberate — a watchdog inside this process
+  // could not catch this process failing to start.
+  const hubCfg = loadConfig();
+  const onCoordinatorConnect = () => {
+    const r = noteHealth(hubCfg, 'coord');
+    if (r.noted) log.info('update: recorded that this box reached its coordinator');
+  };
+
   const { errors, warnings } = validateSidecarConfig(cfg);
   for (const w of warnings) log.warn(`config: ${w}`);
   if (errors.length) {
@@ -126,6 +140,9 @@ async function run() {
           proof: () =>
             proveIdentity({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk }),
           logger: log,
+          // Reaching the coordinator confirms an update on trial. A no-op when
+          // nothing is on trial, so it costs a connected box nothing.
+          onConnect: onCoordinatorConnect,
         })
       : new StdioTransport({ origin: cfg.coordinatorUrl });
   /**

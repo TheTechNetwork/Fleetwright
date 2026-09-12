@@ -1,0 +1,23 @@
+[Unit]
+Description=Fleetwright commit-confirm watchdog — reverts an update that cannot prove itself
+Documentation=https://github.com/ambersecurityinc/agent-hub
+
+[Service]
+Type=oneshot
+# __USER__ / __STATE_DIR__ / __FLEET_BASE__ are substituted by install.sh. It
+# runs as the SERVICE USER, not root: moving the `current` symlink and writing
+# the restart marker are things that user already owns, so this watchdog needs
+# no privilege the services themselves lack. That is the same reasoning that
+# lets an update restart the services by exiting rather than by `systemctl`.
+User=__USER__
+Environment=AGENT_HUB_STATE_DIR=__STATE_DIR__
+Environment=FLEET_BASE=__FLEET_BASE__
+ExecStart=/usr/local/sbin/fleetwright-confirm
+
+# A watchdog that could take the box down is worse than none. Every failure path
+# in the script already exits 0; this is the backstop for the ones it cannot
+# foresee — a fired watchdog that errors must not leave a failed unit behind.
+SuccessExitStatus=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fleetwright-confirm

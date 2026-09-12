@@ -457,6 +457,33 @@ export function sandboxImageStatus(cfg) {
 }
 
 /**
+ * Can this box actually start a session right now?
+ *
+ * The honest health signal for commit-confirm — and the one the mount-proc
+ * outage would have failed. "The sidecar reached the coordinator" says the box
+ * is online; it says nothing about whether a session can run, and that outage
+ * was exactly a box that was online with every session dead at `mount proc`. So
+ * this runs the smallest real thing: a throwaway container that mounts its own
+ * /proc and exits. If that works, a session can start.
+ *
+ * `--network=none` and `true` keep it to seconds and touch nothing — no image
+ * pull (the image is already here or the box could not run sessions anyway), no
+ * network, no state. A cheap, definitive answer.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ timeout?: number }} [opts]
+ * @returns {boolean}
+ */
+export function canStartSession(cfg, { timeout = 30_000 } = {}) {
+  try {
+    const r = podman(cfg, ['run', '--rm', '--network=none', sessionImage(cfg), 'true'], { timeout });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Make sure a session's volumes exist, and that the conversation volume has
  * credentials in it.
  *
