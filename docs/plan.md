@@ -125,6 +125,8 @@ iOS first because it has no Peek at all while Android has one; the platforms sta
 
 `validateIntent` refuses on `env.v !== PROTOCOL_VERSION` with no negotiation, and the clients will be App Store / Play Store binaries. **A protocol bump is now a release train through two review queues, during which a lagging host rejects *every* intent, not just the new one.** So we bump exactly once and put everything in it:
 
+> **Update — version negotiation shipped, and this pressure is off.** `validateIntent` now accepts a RANGE `[PROTOCOL_MIN, PROTOCOL_VERSION]`, not a point, and the coordinator speaks each host its own highest understood version while omitting any param newer than it (`docs/protocol-negotiation.md`). A lagging host is negotiated with, not stranded, so a feature bump no longer has to carry everything at once or land in lockstep. The "one bump, everything at once" discipline below is preserved as the record of why it was true; it is no longer a constraint. The one remaining flag day is raising `PROTOCOL_MIN`.
+
 1. **`answer { name, prompt, option: int 1..9 }`** — no `text` parameter, now or ever, and that goes into `intents.md`'s "deliberate exclusions" as a third entry.
 2. **`host`** on the pinned verbs, so 0.3's refusal becomes resolvable.
 3. **`labels`** on `start` — `place()` already filters on it and `VERBS.start` has no such param, so today it either refuses correctly or throws inside `send()` and gets reported as `host_timeout`, blaming the host for a coordinator failure.

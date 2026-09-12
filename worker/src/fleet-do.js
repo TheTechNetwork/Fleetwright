@@ -623,6 +623,10 @@ export class Fleet {
             ios: this.env.AGENT_FLEET_APP_IOS || null,
             android: this.env.AGENT_FLEET_APP_ANDROID || null,
           },
+          // Configuration, never the request's Host header: this address is
+          // emailed to somebody who has never seen this fleet, and a spoofed
+          // one would send them to sign in somewhere else.
+          origin: this.env.AGENT_FLEET_PUBLIC_ORIGIN || null,
         })
         : { sent: false, why: 'not invited' };
       const text = r.ok
