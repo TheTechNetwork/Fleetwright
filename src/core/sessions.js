@@ -187,7 +187,7 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null }} opts
    *   skipPermissions overrides AGENT_HUB_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
    *   title is prose a PERSON wrote; supplying it pins the title so nothing
@@ -196,9 +196,12 @@ export class SessionManager {
    *   profile NAMES a file on this host whose content becomes the session's
    *   first message. The name travels; the words never do. See
    *   src/core/profiles.js.
+   *   secret NAMES a secret this host holds, granting the session permission to
+   *   fetch its value at runtime over the hook socket. The name travels; the
+   *   value never does. See src/core/secret-store.js.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null } = {}) {
     this.reconcile();
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
@@ -309,6 +312,11 @@ export class SessionManager {
       // A name is what the coordinator may see (docs/wanted.md: it may NAME
       // a profile, never CARRY one); the content stays on the box.
       profile,
+      // The secret this session was GRANTED, by name. It rides on the record so
+      // the credential broker can scope a `fleet-secret <name>` request to it:
+      // the grant decides, not the ask. A name only, like `profile` — the value
+      // lives in the store and never reaches here. See src/core/secret-store.js.
+      secret,
     });
   }
 
@@ -389,10 +397,10 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null }} opts
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null }) {
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -470,6 +478,10 @@ export class SessionManager {
         ...(title ? { title, titlePinned: true } : existing?.title ? {} : { title: titleFromCwd(cwd) }),
         ...(brief ? { brief } : {}),
         ...(profile ? { profile } : {}),
+        // The granted secret name, kept so the broker can scope a runtime
+        // `fleet-secret` request to what `start --secret` allowed. A name, never
+        // a value — the value stays in the store on this box.
+        ...(secret ? { secret } : {}),
         // Whose Claude account this session runs on. Only set when this start
         // created the volumes — a resume keeps the account it began with, and
         // null on the record means "whatever was there already".

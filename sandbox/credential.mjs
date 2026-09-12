@@ -98,6 +98,53 @@ if (mode === 'get' || mode === 'store' || mode === 'erase') {
   process.exit(0);
 }
 
+if (mode === 'secret-value') {
+  // fleet-secret <name> — prints the raw value of a NAMED secret this session
+  // was granted at start (`start --secret <name>`). One value, so it goes to
+  // stdout unadorned: `TOKEN=$(fleet-secret github-deploy)`. A distinct mode
+  // token rather than a provider name, so a provider could never be called
+  // "secret-value" and collide.
+  const want = process.argv[3] || '';
+  const got = await new Promise((resolve) => {
+    const body = JSON.stringify({ name: want });
+    const req = request(
+      {
+        socketPath: SOCKET,
+        path: '/internal/secret',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        timeout: 10_000,
+      },
+      (res) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => (text += c));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(text));
+          } catch {
+            resolve({ ok: false, error: `the host answered something that is not JSON (${res.statusCode})` });
+          }
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false, error: 'the secret broker did not answer in time' });
+    });
+    req.on('error', (e) => resolve({ ok: false, error: `no secret broker on this session (${e.message})` }));
+    req.end(body);
+  });
+  if (!got.ok || typeof got.value !== 'string') {
+    process.stderr.write(`${got.error || 'no such secret'}\n`);
+    process.exit(1);
+  }
+  // Raw, no trailing newline of our own: `$(...)` strips one anyway, and a
+  // secret is arbitrary bytes we must not reshape.
+  process.stdout.write(got.value);
+  process.exit(0);
+}
+
 // fleet-cred <provider> — for `eval "$(fleet-cred github)"`, and for the shims.
 const provider = mode || 'github';
 const got = await ask(provider);

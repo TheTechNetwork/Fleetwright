@@ -49,6 +49,7 @@
 // the only thing that can.
 
 import { answerCredentialRequest, CREDENTIAL_PATH } from './credential-broker.js';
+import { answerSecretRequest } from './secret-store.js';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
@@ -58,6 +59,12 @@ import path from 'node:path';
 /** The one route a session socket answers. Same path agent-hub's HTTP adapter
  * uses, so the hook payload and the hub's handler are unchanged. */
 export const HOOK_PATH = '/internal/session-start';
+
+/** The named-secret route, sibling of the credential broker's. A session names
+ * a secret `start --secret` granted it; the value is read here and returned,
+ * scoped by the grant and never seeded into the container. See
+ * src/core/secret-store.js and docs/trust.md. */
+export const SECRET_PATH = '/internal/secret';
 
 /** Where the socket appears INSIDE the container. Fixed, because the session
  * does not know (and must not need to know) its own name on the host. */
@@ -104,16 +111,22 @@ export function isValidSessionName(name) {
  *   When this session owner's token for a provider runs out, as far as the
  *   host can tell. Optional: absent means the check is skipped, which is what
  *   a host that cannot answer should do rather than guessing.
+ * @property {((name: string, requested: string) => { ok: true, name: string, value: string } | { ok: false, error: string })} [namedSecretFor]
+ *   The named-secret resolver: given this session (from the socket) and the
+ *   name it asked for, decide whether the grant allows it and return the value
+ *   from the store, read now. Absent means the route answers 404, which is what
+ *   an older or non-sandboxed host does. See src/core/secret-store.js.
  * @property {{ info: (m: string) => void, warn: (m: string) => void }} [logger]
  */
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, logger }) {
+  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, namedSecretFor, logger }) {
     this.dir = dir;
     this.onSessionStart = onSessionStart;
     this.secretsFor = secretsFor || null;
     this.expiryFor = expiryFor || null;
+    this.namedSecretFor = namedSecretFor || null;
     this.log = logger || { info: () => {}, warn: () => {} };
     /** @type {Map<string, import('node:http').Server>} */
     this.servers = new Map();
@@ -209,6 +222,7 @@ export class HookSocketServer {
   async #handle(name, req, res) {
     const route = (req.url || '').split('?')[0];
     if (route === CREDENTIAL_PATH) return this.#credential(name, req, res);
+    if (route === SECRET_PATH) return this.#secret(name, req, res);
     if (route !== HOOK_PATH) {
       return json(res, 404, { ok: false, error: 'not found' });
     }
@@ -288,6 +302,43 @@ export class HookSocketServer {
       this.log.info(`credential-broker: served ${answer.provider} to ${name}`);
     } else {
       this.log.info(`credential-broker: refused ${provider.slice(0, 40) || '(none)'} for ${name} — ${answer.error}`);
+    }
+    return json(res, answer.ok ? 200 : 404, answer);
+  }
+
+  /**
+   * The named-secret route. Same authority as the credential broker: the
+   * session is WHICHEVER SOCKET THIS ARRIVED ON, so the request carries only the
+   * name it wants, and the grant that decides whether it may have it is on the
+   * record the socket already identified. See src/core/secret-store.js.
+   *
+   * @param {string} name
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   */
+  async #secret(name, req, res) {
+    if (!this.namedSecretFor) {
+      return json(res, 404, { ok: false, error: 'not found' });
+    }
+    if (req.method !== 'POST') {
+      return json(res, 405, { ok: false, error: 'POST only' });
+    }
+    const body = await readJson(req);
+    if (body === null) return json(res, 400, { ok: false, error: 'body too large or not JSON' });
+
+    const requested = String(body.name || '');
+    // READ NOW, like the credential broker: the resolver reads the store at the
+    // moment of the request, so a secret rotated on the box reaches a running
+    // session on its next ask.
+    const answer = this.namedSecretFor(name, requested);
+
+    // LOGGED BY NAME, NEVER BY VALUE — the same discipline as the credential
+    // broker, and the same reason: the trace is half of why this beats an
+    // environment variable, and a trace that quoted the secret would undo it.
+    if (answer.ok) {
+      this.log.info(`secret-broker: served ${answer.name} to ${name}`);
+    } else {
+      this.log.info(`secret-broker: refused ${requested.slice(0, 40) || '(none)'} for ${name} — ${answer.error}`);
     }
     return json(res, answer.ok ? 200 : 404, answer);
   }

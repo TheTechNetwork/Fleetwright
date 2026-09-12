@@ -27,6 +27,10 @@
  *   A NAME, never the words: the content is a file on this box, and a caller
  *   that could supply it would be writing the instructions of an agent with
  *   root in a container. See src/core/profiles.js
+ * @property {string} [secret]     which named secret a new session may fetch.
+ *   A NAME, never the value: the value is a file on this box the session reads
+ *   at runtime over the hook socket, and a caller that could supply it would be
+ *   handing a durable credential to that agent. See src/core/secret-store.js
  * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
@@ -69,6 +73,8 @@
  * @property {Array<{ name: string, summary: string, chars: number }>} [profiles]
  *   the task profiles on this box, as data. A picker rendered from the rendered
  *   text would be a picker built by parsing column padding
+ * @property {Array<{ name: string }>} [secrets]
+ *   the named secrets on this box, by name only — never a value
  * @property {Button[]} [buttons]          offered choices — Telegram renders these as tappable
  * @property {boolean} [ok]
  * @property {{ catalogue: any[], connected: any[] }} [connections] what a picker needs, and never a token
@@ -82,6 +88,7 @@ import { pickCredentialSource } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
 import { applyRelease } from '../core/release-apply.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
+import { listSecretNames } from '../core/secret-store.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
 import { readVariant, writeVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../core/sandbox-variant.js';
 import { readLabels, addLabel, removeLabel, describeLabels } from '../core/labels.js';
@@ -573,12 +580,14 @@ export const COMMANDS = {
     // Telegram reserves a bare /start as the bot-intro command, so its adapter
     // maps that one case to /help — see adapters/telegram.js.
     aliases: ['start', 'launch', 'run'],
-    usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>]',
+    usage: '/new [name] [path] [--safe|--dangerous] [--profile=<name>] [--secret=<name>]',
     short: 'Start a new Claude session',
     help:
       'Start a new session. --safe keeps permission prompts on for this one session. ' +
       '--profile=<name> gives it something to do — /profiles lists what this box has. ' +
-      'Without one the session comes up idle, waiting for a person.',
+      'Without one the session comes up idle, waiting for a person. ' +
+      '--secret=<name> lets it fetch that named secret at runtime (fleet-secret <name>); ' +
+      'the value stays on this box.',
     run: async (ctx, args, flags, values) => {
       const [name, cwd] = args;
       const skipPermissions = permissionOverride(flags);
@@ -598,6 +607,11 @@ export const COMMANDS = {
         // caller that could supply the words would be writing the instructions
         // of an agent with root in a container.
         profile: values?.get('profile') ?? ctx.profile ?? null,
+        // Typed as `--secret=x`, or supplied as a field by the fleet. The NAME
+        // only, and grants this session permission to fetch that secret's value
+        // at runtime — the value lives in the store on this box and is read
+        // there. See src/core/secret-store.js.
+        secret: values?.get('secret') ?? ctx.secret ?? null,
       });
       let text = r.message;
       if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
@@ -666,6 +680,40 @@ export const COMMANDS = {
         // Tappable, because the whole point is that choosing one is easier than
         // typing a task — and a list you have to retype is a list.
         buttons: have.slice(0, 8).map((p) => ({ label: p.name, command: `/new --profile=${p.name}` })),
+      };
+    },
+  },
+
+  secrets: {
+    aliases: ['secret'],
+    usage: '/secrets',
+    short: 'Named secrets this box can grant a session',
+    help:
+      'List the named secrets on this host, by NAME only — never their values. Grant one to a session ' +
+      'with /new --secret=<name>, and it can fetch that value at runtime (fleet-secret <name>) without the ' +
+      'value ever entering its environment. Adding one means putting a file on this box, which needs a ' +
+      'shell here — which is what stops a coordinator from choosing what a session may read.',
+    run: (ctx) => {
+      const names = listSecretNames(ctx.cfg.secretsDir);
+      if (!names.length) {
+        return {
+          ok: true,
+          text:
+            'No named secrets on this box.\n' +
+            `Add one as ${ctx.cfg.secretsDir}/<name> — its contents become the value a session granted ` +
+            '`--secret=<name>` can fetch. Keep it out of version control, or seal it with systemd-creds.',
+          // EMPTY, NOT ABSENT — the same distinction profiles draws: [] is
+          // "this box holds none", a missing key is "too old to know the verb".
+          secrets: [],
+        };
+      }
+      return {
+        ok: true,
+        text: `${names.length} named secret${names.length === 1 ? '' : 's'} on this box:\n${names.join('\n')}`,
+        // AS DATA, names only. The coordinator tags each with its hostId so a
+        // picker knows which box holds which — the value is never here.
+        secrets: names.map((name) => ({ name })),
+        buttons: names.slice(0, 8).map((name) => ({ label: name, command: `/new --secret=${name}` })),
       };
     },
   },

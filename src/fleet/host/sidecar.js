@@ -543,6 +543,9 @@ export class Sidecar {
         // the rendered text is padded for a terminal, and a picker built by
         // parsing padding is a picker that breaks on a long name.
         ...(Array.isArray(r.profiles) ? { profiles: r.profiles } : {}),
+        // The named secrets this box holds, as data and by name only — the same
+        // reasoning as profiles, and the value is never among these fields.
+        ...(Array.isArray(r.secrets) ? { secrets: r.secrets } : {}),
         // Which releases this box takes, as data — a picker rendered by parsing
         // the sentence above would break the first time the wording changed.
         ...(r.channel ? { channel: r.channel, channelPinned: Boolean(r.channelPinned) } : {}),
@@ -1073,16 +1076,24 @@ export function toCommandLine({ verb, params, actor }) {
       // flag. The words it selects never travel: agent-hub reads them off a
       // file on this box. A coordinator that could send the content would be
       // writing the instructions of an agent with root in a container.
+      //
+      // `secret` is here for the same reason and with the same guarantee: a
+      // charset-checked NAME, a single token, and what it names — the value —
+      // never crosses this line either. It grants the session permission to
+      // fetch that secret from the store at runtime. See src/core/secret-store.js.
       return [
         '/new',
         p.name,
         p.mode === 'safe' ? '--safe' : p.mode === 'dangerous' ? '--dangerous' : null,
         p.profile ? `--profile=${p.profile}` : null,
+        p.secret ? `--secret=${p.secret}` : null,
       ]
         .filter(Boolean)
         .join(' ');
     case 'profiles':
       return '/profiles';
+    case 'secrets':
+      return '/secrets';
     // A bounded enum, so it is a single token that cannot become a second flag.
     case 'updates':
       return '/updates';
