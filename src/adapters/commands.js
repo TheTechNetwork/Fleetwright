@@ -1807,10 +1807,12 @@ export const COMMANDS = {
       };
 
       // THE SESSION IMAGE, the third thing that updates and the one that used to
-      // say nothing. A box on a moving `:latest` re-pulls it on its own, so what
-      // sessions run can change with no release and no changelog — the same
-      // silent self-change that made an outage hard to reason about. Naming it
-      // here is the C-5 rule applied to the updater itself.
+      // say nothing. It is a moving dependency — the entrypoint, the credential
+      // seeding and the trust flags all live inside it — and on a `:latest` tag
+      // its bytes can change under the same name. It no longer changes on its
+      // OWN (the background re-pull is off by default now); it moves when you
+      // run an update, the same deliberate moment as the app and the OS. Naming
+      // it here is the C-5 rule applied to the updater itself.
       const img = sandboxImageStatus(ctx.cfg);
       const sandbox = {
         image: img.image,
@@ -1821,8 +1823,8 @@ export const COMMANDS = {
           img.image === null
             ? 'Cannot tell which image sessions run here.'
             : img.mutable
-              ? `Sessions run ${img.image}${img.digest ? ` (currently ${img.digest})` : ''} — a moving tag this ` +
-                'box re-pulls on its own, so it can change with no release behind it. Pin it to a digest to stop that.'
+              ? `Sessions run ${img.image}${img.digest ? ` (currently ${img.digest})` : ''} — a moving tag, so an ` +
+                'update can change its bytes under the same name. Pin it to a digest to freeze that too.'
               : `Sessions run ${img.image}${img.digest ? ` (${img.digest})` : ''}, pinned — it changes only when you do.`,
       };
 

@@ -158,12 +158,20 @@ gets, which is when it matters.
 A refresh that fails is reported and does not fail the update: the box has a
 working image and the registry is what went wrong.
 
-**And a session start checks too**, because `/update` only helps people who run
-it — while a stale image is discovered by *using* the product. Four constraints
-keep that off the critical path:
+**A session start can check too, but no longer does by default.** A background
+re-pull kept a box current without anybody running `/update` — and it changed
+what sessions run with no changelog and no line a person looks at, which is the
+silent drift the `updates` verb and `/update` exist to replace. So the default
+is now off: the image moves when you update, the same deliberate moment as the
+app and the OS, and `updates` shows when the tag it is on could still drift
+under one.
 
-- **stamped** — at most once every `AGENT_HUB_SANDBOX_REFRESH_MS` (six hours by
-  default, `0` to disable), read off a file mtime
+A box that genuinely wants its image to track a tag on its own sets
+`AGENT_HUB_SANDBOX_REFRESH_MS` (`21600000` is the old six hours). When it opts
+in, four constraints keep that off the critical path:
+
+- **stamped** — at most once every `AGENT_HUB_SANDBOX_REFRESH_MS`, read off a
+  file mtime
 - **bounded** — a 60s timeout, so a slow registry costs seconds and a hung one
   costs nothing
 - **never fatal** — no network, no podman, a timeout, an unwritable stamp: all

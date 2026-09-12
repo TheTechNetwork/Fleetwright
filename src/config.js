@@ -262,12 +262,23 @@ export function loadConfig(env = process.env) {
     // has linked an account here; with exactly one, that one is the answer.
     // See operatorAccount().
     operator: str('AGENT_HUB_OPERATOR'),
-    // How often a session start may check the registry for a newer sandbox
-    // image. Six hours, matching the package-list refresh: often enough that a
-    // fix ships within a working day without anybody running /update, rare
-    // enough that the registry is never on the critical path of a start.
-    // 0 disables the check entirely — /update still refreshes.
-    sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 6 * 60 * 60 * 1000),
+    // How often a session start may re-pull the registry for a newer sandbox
+    // image. OFF BY DEFAULT, and that default is the deliberate one.
+    //
+    // It used to be six hours, which meant a box on a moving `:latest` tag
+    // changed the thing it runs sessions in — the entrypoint, the credential
+    // seeding, the trust flags — with no release, no changelog, and no line
+    // anywhere a person looks. That silent drift is the same shape that made an
+    // outage hard to reason about (was it the update, or an image that moved
+    // under us?), and it is exactly what the C-5 rule is against: a box that
+    // changes what it runs and says nothing. The image now moves when somebody
+    // runs /update, the same deliberate moment the app and the OS move, and the
+    // `updates` verb shows when the tag it is on could still drift.
+    //
+    // Set this to re-enable the background check (21600000 is the old six
+    // hours). /update refreshes regardless; a `localhost/` build is never
+    // chased whatever this says.
+    sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 0),
 
     // How often to make sure the Claude credentials on this box are still
     // live. 0 turns it off.
