@@ -36,6 +36,20 @@ belongs to somebody who can see three sessions, so does the agent using it.
 
 Revoking that credential in the app stops the MCP server, the same as any phone.
 
+That was half true for as long as this endpoint existed, and the failing half is
+the one an agent reads. A host answers `list` twice over — as records, and as
+the listing a person reads — and the coordinator filtered only the records. The
+apps draw the records and were correct; this server renders the text, because
+text is what a model gets, so `fleet_list` returned **every session in the
+fleet** to any member: names, titles, who started each one, and a live Remote
+Control URL into anything running. An invited guest calling the first verb they
+would ever call read their host's other work.
+
+The coordinator now writes that listing itself, from the records the caller may
+see — `describeOwnSessions` in `coordinator/core.js`, and `test/ownership.test.js`
+holds both renderings of the same fact to the same rule. An admin and the
+break-glass token still get the host's own words.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```
