@@ -101,7 +101,10 @@ test('a release that cannot run is refused before anything points at it', async 
   rmSync(box.base, { recursive: true, force: true });
 });
 
-test('a protocol mismatch never downloads anything', async () => {
+test('a protocol downgrade never downloads anything', async () => {
+  // A forward bump IS taken now (it is the only way to cross a bump); a
+  // downgrade is the one still refused, and it is refused BEFORE the download so
+  // a box moving backward never spends bandwidth to be told no.
   const box = makeBox('old-1');
   let fetched = 0;
   const r = await applyRelease({
@@ -110,11 +113,11 @@ test('a protocol mismatch never downloads anything', async () => {
     protocol: 2,
     fetch: async (url) => {
       fetched++;
-      return { ok: true, status: 200, json: async () => ({ version: 'new-2', file: 'r.tar.gz', sha256: 'a'.repeat(64), protocol: 3 }) };
+      return { ok: true, status: 200, json: async () => ({ version: 'new-0', file: 'r.tar.gz', sha256: 'a'.repeat(64), protocol: 1 }) };
     },
   });
   assert.equal(r.ok, false);
-  assert.match(r.message, /Update the coordinator first/);
+  assert.match(r.message, /downgrade, not an update/);
   assert.equal(fetched, 1, 'only the manifest should have been fetched');
   rmSync(box.base, { recursive: true, force: true });
 });

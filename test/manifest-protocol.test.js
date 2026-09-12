@@ -5,12 +5,15 @@
 // manifest this project ever published — v0.2.1, built from code that speaks v3
 // — advertised `"protocol": 2`.
 //
-// THAT IS THE DANGEROUS DIRECTION. A v2 host reading it sees its own number,
-// concludes the release matches, installs v3 code and strands itself from its
-// coordinator. Which is the exact failure the field exists to prevent, caused by
-// the field — and release.js's own header says so: "A release built for a
-// different protocol version strands this host from its coordinator, and it
-// strands it AFTER the update, when it can no longer say so."
+// The number still has to be TRUE, but the reason has shifted. It once gated
+// updates in both directions (refuse anything but an exact match), on the
+// reasoning that a host installing a newer protocol would strand itself. Version
+// negotiation removed that danger — an updated host down-speaks to whatever the
+// coordinator supports — so a forward bump is now takeable, and refusing it was
+// a deadlock: the release is the only way to cross the bump. What the number
+// still buys is the DOWNGRADE guard (a host must not move backward below the
+// coordinator's floor) and the coordinator's own range logic, and a wrong
+// number breaks both silently.
 //
 // Same shape as the installer's node floor: a number written down in a second
 // place, with a default that made being wrong silent.
@@ -35,25 +38,29 @@ test('the builder reads the protocol rather than being told it', () => {
     'the protocol is settable from the environment again');
 });
 
-test('a manifest from another protocol is refused, in both directions', () => {
-  // This is what the field buys, and it only works if the number is true.
+test('a forward or matching protocol is taken; a downgrade is refused', () => {
+  // What the number buys now, and it only works if it is true.
   const base = { version: 'v9.9.9', file: 'x.tar.gz', sha256: 'a'.repeat(64) };
 
+  // Ahead: taken. Negotiation makes the forward move safe, and it is the only
+  // way to cross the bump — refusing it was the deadlock.
   const ahead = decideRelease({
     manifest: { ...base, protocol: PROTOCOL_VERSION + 1 },
     installed: 'v0.0.1',
     protocol: PROTOCOL_VERSION,
   });
-  assert.equal(ahead.act, false, 'a release for a newer protocol was accepted');
+  assert.equal(ahead.act, true, 'a forward protocol bump must be takeable — it is the only path across');
 
+  // Behind: refused. Moving backward can drop a host below the fleet floor.
   const behind = decideRelease({
     manifest: { ...base, protocol: PROTOCOL_VERSION - 1 },
     installed: 'v0.0.1',
     protocol: PROTOCOL_VERSION,
   });
-  assert.equal(behind.act, false, 'a release for an older protocol was accepted');
+  assert.equal(behind.act, false, 'a downgrade was accepted');
+  assert.equal(behind.reason, 'protocol');
 
-  // And the matching one is acted on, or the guard above is just "never update".
+  // Matching: taken, or the guard above is just "never update".
   const matching = decideRelease({
     manifest: { ...base, protocol: PROTOCOL_VERSION },
     installed: 'v0.0.1',
@@ -62,15 +69,14 @@ test('a manifest from another protocol is refused, in both directions', () => {
   assert.equal(matching.act, true, `a matching release was refused: ${matching.message}`);
 });
 
-test('the refusal says which two numbers disagree', () => {
-  // "cannot update" sends somebody to a document. The two versions are the
-  // whole content of the problem, and the person reading it is the one who can
-  // upgrade the other end.
+test('the downgrade refusal says which two numbers disagree', () => {
+  // "cannot update" sends somebody to a document. The two versions are the whole
+  // content of the problem.
   const decision = decideRelease({
-    manifest: { version: 'v9.9.9', file: 'x.tar.gz', sha256: 'a'.repeat(64), protocol: PROTOCOL_VERSION + 1 },
-    installed: 'v0.0.1',
+    manifest: { version: 'v0.0.1', file: 'x.tar.gz', sha256: 'a'.repeat(64), protocol: PROTOCOL_VERSION - 1 },
+    installed: 'v9.9.9',
     protocol: PROTOCOL_VERSION,
   });
   assert.match(String(decision.message), new RegExp(String(PROTOCOL_VERSION)));
-  assert.match(String(decision.message), new RegExp(String(PROTOCOL_VERSION + 1)));
+  assert.match(String(decision.message), new RegExp(String(PROTOCOL_VERSION - 1)));
 });

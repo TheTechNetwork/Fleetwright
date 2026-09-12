@@ -27,7 +27,7 @@
 // small — a host that cannot reach the coordinator cannot renew, and a host in
 // that state cannot be asked to do anything either.
 
-import { PROTOCOL_VERSION } from './intents.js';
+import { PROTOCOL_VERSION, PROTOCOL_MIN } from './intents.js';
 
 /**
  * The fixed set. Each entry says what a value must look like; anything that
@@ -110,10 +110,23 @@ export function readConfigFrame(msg) {
   if (!frame || typeof frame !== 'object' || frame.kind !== 'config') {
     return { ok: false, values: {}, dropped: [], error: 'not a config frame' };
   }
-  // Exact-match, like every other frame: a version we do not know is a frame we
-  // do not understand, and guessing is how a protocol stops being one.
-  if (frame.v !== PROTOCOL_VERSION) {
-    return { ok: false, values: {}, dropped: [], error: `config frame is v${frame.v}, this host speaks v${PROTOCOL_VERSION}` };
+  // AT OR ABOVE THE FLOOR, not exact — because a config frame is append-only.
+  //
+  // This was `frame.v !== PROTOCOL_VERSION`, and it dropped every frame from a
+  // coordinator even one version ahead: an updated v4 coordinator's frames were
+  // refused by a v3 host every fifteen seconds, so the host got no config — no
+  // renewed client secret, no runner repo — while looking perfectly connected.
+  //
+  // The exactness was never load-bearing here the way it is for a verb. Config
+  // keys are a fixed, append-only set (CONFIG_KEYS): a key means the same thing
+  // at every version, a newer frame only ADDS keys, and an unknown key is
+  // already DROPPED below rather than stored. So a frame from a peer ahead of us
+  // is a superset we can read — take the keys we know, drop the rest — exactly
+  // as version negotiation reads an intent within the range. Below the floor is
+  // the one direction that could carry a meaning this build has retired, so that
+  // stays refused.
+  if (typeof frame.v !== 'number' || frame.v < PROTOCOL_MIN) {
+    return { ok: false, values: {}, dropped: [], error: `config frame is v${frame.v}, below this host's floor v${PROTOCOL_MIN}` };
   }
   const given = frame.values;
   if (!given || typeof given !== 'object' || Array.isArray(given)) {
