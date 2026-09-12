@@ -324,11 +324,14 @@ function volumeExists(cfg, volume) {
 /**
  * Refresh the image on the way into a session — cheaply, and never in the way.
  *
- * A session that starts on a stale image gets stale behaviour, and the fix
- * living only in `/update` means it arrives when somebody remembers to run it.
- * So a start checks too. THE CONSTRAINTS ARE WHAT MAKE THIS SAFE:
+ * OFF BY DEFAULT NOW (`sandboxRefreshMs` is 0 unless set). It stays because a
+ * box that WANTS its image to track a tag on its own should be able to say so,
+ * but the default is the deliberate one: a background re-pull changes what
+ * sessions run with no changelog and no line a person looks at, which is the
+ * silent drift the `updates` verb and the /update path exist to replace. When a
+ * box does opt in, THE CONSTRAINTS ARE WHAT MAKE IT SAFE:
  *
- *  - **Stamped.** At most once per refreshEveryMs (six hours by default), read
+ *  - **Stamped.** At most once per refreshEveryMs (whatever the box set), read
  *    off a file mtime. A pull per start would put a registry between a person
  *    and their session, and this project has already measured what a
  *    fifteen-second start feels like.
@@ -408,14 +411,14 @@ export function refreshSandboxImage(cfg, { timeout } = {}) {
  *
  * The gap this fills: the app and the OS both report what they have waiting, and
  * the one component that actually runs a session — its image — reported nothing.
- * A box on `…/fleetwright-session:latest` re-pulls it on its own every few hours
- * (refreshSandboxImageIfStale), so the thing sessions run can change with no
- * release, no changelog, and until now no line anywhere a person looks. That is
- * the C-5 rule turned on its own updater: "up to date" is a claim, and a moving
- * tag cannot make it.
+ * A box on `…/fleetwright-session:latest` is on a tag whose bytes can change
+ * under the same name, so the thing sessions run can change with no changelog
+ * and, until now, no line anywhere a person looks. That is the C-5 rule turned
+ * on its own updater: "up to date" is a claim, and a moving tag cannot make it.
  *
- * `mutable` is the honest signal: a registry tag we pull on our own drifts; a
- * digest-pinned ref (`…@sha256:…`) or a `localhost/` image built here does not.
+ * `mutable` is the honest signal: a registry tag resolves to different bytes
+ * over its life, so an update following it can change what a session runs; a
+ * digest-pinned ref (`…@sha256:…`) or a `localhost/` image built here cannot.
  * The digest is read LOCALLY — no network, no pull — so this is cheap enough to
  * compute on every `updates`; whether a newer one exists on the registry is a
  * separate, heavier question and deliberately not asked here.
@@ -440,9 +443,9 @@ export function sandboxImageStatus(cfg) {
   }
   const pinnedToDigest = /@sha256:[0-9a-f]{64}$/i.test(image);
   const isLocal = image.startsWith('localhost/');
-  // Mutable exactly when refreshSandboxImageIfStale would re-pull it: a remote
-  // ref that is not pinned to a digest. That is the one shape that changes with
-  // no release behind it.
+  // Mutable exactly when the ref can resolve to different bytes over its life: a
+  // remote tag not pinned to a digest. That is the one shape whose contents an
+  // update can change without the name changing.
   const mutable = !pinnedToDigest && !isLocal;
   let digest = null;
   const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', image]);

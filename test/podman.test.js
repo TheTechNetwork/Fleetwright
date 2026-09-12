@@ -202,14 +202,14 @@ test('a missing Containerfile is named, rather than failing inside podman', (t) 
 
 test('a registry tag we pull on our own is reported mutable, with its local digest', (t) => {
   const s = stubPodman(t);
-  // A remote `:latest` — the shape refreshSandboxImageIfStale re-pulls behind
-  // everyone's back. sessionImage returns it unchanged (it is already the
-  // minimal tag), so this is the honest "drifts, no release behind it" case.
+  // A remote `:latest` — a tag whose bytes can move under the same name, so an
+  // update following it can change what a session runs. sessionImage returns it
+  // unchanged (it is already the minimal tag), so this is the honest mutable case.
   const st = sandboxImageStatus(s.cfg({ sandboxImage: 'ghcr.io/thetechnetwork/fleetwright-session:latest' }));
 
   assert.equal(st.image, 'ghcr.io/thetechnetwork/fleetwright-session:latest');
   assert.equal(st.variant, 'minimal');
-  assert.equal(st.mutable, true, 'a remote tag we re-pull can change with no release');
+  assert.equal(st.mutable, true, 'a remote tag can resolve to different bytes over its life');
   assert.equal(st.digest, 'abcdef012345', 'the digest is read locally and shown short');
 });
 

@@ -1,13 +1,13 @@
-// A session start checks for a newer sandbox image -- cheaply, and never in
-// the way.
+// A session start MAY check for a newer sandbox image -- cheaply, never in the
+// way, and only when a box opts in.
 //
-// /update refreshing the image fixes it for people who run /update. A session
-// that starts on a stale image still gets stale behaviour, and the whole class
-// of bug this chases (a fix shipped in the image reaching nobody) is one
-// somebody discovers by using the product, not by updating it.
-//
-// The constraints are the feature: stamped, bounded, never fatal, and only
-// when a NEW volume is about to be seeded.
+// It is off by default now: a background re-pull changes what sessions run with
+// no changelog and no line a person looks at, and that silent drift is what the
+// `updates` verb and the /update path replace. A box that genuinely wants its
+// image to track a tag on its own sets AGENT_HUB_SANDBOX_REFRESH_MS, and then
+// the constraints below are the feature: stamped, bounded, never fatal, and only
+// when a NEW volume is about to be seeded. These tests pass the interval
+// explicitly, exercising the mechanism as an opted-in box would.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
