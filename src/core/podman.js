@@ -90,6 +90,108 @@ export function podmanAvailable(cfg) {
 }
 
 /**
+ * Recreate a rootless "pause" namespace poisoned by systemd `ProtectProc`, so a
+ * session can mount /proc again.
+ *
+ * THE FAULT THIS UNDOES, because it took a fleet-wide outage to find and the
+ * error names the wrong thing. Rootless podman keeps ONE pause process per user,
+ * and every rootless container joins ITS namespaces. If the process that first
+ * created that pause ran under `ProtectProc=invisible`, the pause namespace's
+ * /proc is mounted `hidepid` — and a hidepid /proc is not "fully visible", so
+ * the kernel refuses an unprivileged container a fresh proc mount and EVERY
+ * session dies at start with `crun: mount \`proc\` to \`proc\`: Operation not
+ * permitted`. The error blames crun; the cause is the unit. install/agent-hub.service
+ * no longer sets ProtectProc, so a NEW pause comes up clean — but the already
+ * poisoned one SURVIVES A SERVICE RESTART (KillMode=process leaves the user's
+ * pause alone), so removing the directive and restarting is not enough on a box
+ * that is already broken: the update would rewrite the unit and still not fix it.
+ * Recreating the pause here, on the way up under the now-clean unit, is what
+ * makes an in-app update actually recover the box.
+ *
+ * SAFE, AND ONLY WHEN NEEDED. A poisoned pause cannot have running containers —
+ * they could not have started — so recreating it disturbs nothing. When /proc is
+ * already clean this does nothing at all and never touches a live session.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {{ healed: boolean, why?: string }}
+ */
+export function healRootlessSandbox(cfg) {
+  if (!podmanAvailable(cfg)) return { healed: false, why: 'podman is not available' };
+  // Read the pause namespace's OWN mount table — `podman unshare` runs in the
+  // rootless user+mount namespace every container inherits, so this is the /proc
+  // a session would get, not the one this shell sees.
+  const before = podman(cfg, ['unshare', 'cat', '/proc/self/mountinfo']);
+  if (before.status !== 0) return { healed: false, why: 'could not read the rootless namespace' };
+  if (!procNotFullyVisible(before.stdout)) return { healed: false };
+  log.warn(
+    'sandbox: the rootless namespace has a /proc that is not fully visible — a ProtectProc or ' +
+      'ProtectKernelLogs unit poisoned it, and every session would die at `mount proc`. Recreating it.',
+  );
+  const migrated = podman(cfg, ['system', 'migrate']);
+  if (migrated.status !== 0) {
+    const why = migrated.stderr.trim().slice(0, 200);
+    log.warn(`sandbox: could not recreate the rootless namespace: ${why}`);
+    return { healed: false, why };
+  }
+  // VERIFY, do not assume. The first version of this logged success straight
+  // after `migrate` and was wrong on a box where agent-hub ITSELF still ran
+  // under a /proc-masking directive: `migrate` recreated the pause from that
+  // same masked namespace, so it came back just as poisoned, and the reassuring
+  // log line sent everyone looking elsewhere. If the pause is still not fully
+  // visible, the fault is agent-hub's own unit, not something migrate can fix.
+  const after = podman(cfg, ['unshare', 'cat', '/proc/self/mountinfo']);
+  if (after.status === 0 && procNotFullyVisible(after.stdout)) {
+    log.warn(
+      'sandbox: recreated the rootless namespace but its /proc is STILL not fully visible — ' +
+        'agent-hub itself is running under a /proc-masking directive (ProtectProc/ProtectKernelLogs). ' +
+        'See the REJECTED list in install/agent-hub.service.',
+    );
+    return { healed: false, why: 'agent-hub is still masking /proc' };
+  }
+  log.info('sandbox: recreated the rootless namespace with a fully-visible /proc — sessions can start again');
+  return { healed: true };
+}
+
+/**
+ * Is this /proc mount table one that a container CANNOT mount a fresh /proc over?
+ *
+ * The kernel refuses an unprivileged container a new proc mount unless it
+ * already has a "fully visible" proc. Two systemd directives break that, both
+ * seen taking the whole fleet down:
+ *
+ *   ProtectProc=invisible   mounts /proc `hidepid` — the flag lives in the
+ *                           SUPERBLOCK options after the ` - ` separator, and
+ *                           `hidepid=0`/`off` is the visible default, not it.
+ *   ProtectKernelLogs=yes   overmounts /proc/kmsg onto systemd's
+ *   (and the ProtectKernel* /systemd/inaccessible/ marker, which hides a /proc
+ *   family)                 pseudo-file and makes the whole /proc not-visible.
+ *
+ * A functional submount like /proc/sys/fs/binfmt_misc is NOT poisoning (a
+ * healthy box has it and sessions run), so this matches the masking shapes
+ * specifically rather than "any submount" — which would migrate a healthy box
+ * and take its live sessions down with it.
+ *
+ * @param {string} mountinfo
+ */
+function procNotFullyVisible(mountinfo) {
+  for (const line of mountinfo.split('\n')) {
+    const [left, right] = line.split(' - ');
+    if (!right) continue;
+    const fields = left.split(' ');
+    const mountRoot = fields[3]; // field 4: the fs root that is mounted
+    const mountPoint = fields[4]; // field 5: where it is mounted
+    if (mountPoint === '/proc') {
+      const m = right.match(/\bhidepid=(\S+?)(?:,|$)/);
+      if (m && m[1] !== '0' && m[1] !== 'off') return true;
+    }
+    // A /proc pseudo-file hidden behind systemd's inaccessible marker — what
+    // ProtectKernelLogs and the ProtectKernelTunables family do.
+    if (mountPoint.startsWith('/proc/') && mountRoot.includes('/systemd/inaccessible')) return true;
+  }
+  return false;
+}
+
+/**
  * The two volumes and the container name for a session. Derived rather than
  * stored, so nothing can drift out of step with the session's name.
  * @param {string} name

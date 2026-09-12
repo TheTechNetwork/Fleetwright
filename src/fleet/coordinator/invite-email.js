@@ -28,10 +28,11 @@
  *   invitedBy?: string|null,
  *   note?: string|null,
  *   apps?: { ios?: string|null, android?: string|null },
+ *   origin?: string|null,
  * }} about
  * @returns {{ subject: string, text: string }}
  */
-export function composeInvite({ email, fleet, invitedBy = null, note = null, apps = {} }) {
+export function composeInvite({ email, fleet, invitedBy = null, note = null, apps = {}, origin = null }) {
   const who = invitedBy && invitedBy !== 'admin' ? invitedBy : 'The owner';
   const lines = [
     `${who} has given you access to ${fleet}, a small fleet of machines running Claude Code sessions.`,
@@ -46,7 +47,7 @@ export function composeInvite({ email, fleet, invitedBy = null, note = null, app
     'Apple or Google, and the fleet recognises the address above.',
   ];
   if (note) lines.push('', `What this is for: ${note}`);
-  lines.push(...appLines(apps));
+  lines.push(...waysIn(apps, origin));
   lines.push(
     '',
     'Once you are in, you connect your own Claude account (and GitHub or Cloudflare if you need them).',
@@ -80,14 +81,22 @@ export function composeInvite({ email, fleet, invitedBy = null, note = null, app
  * first time, so it is named whenever the URL is one.
  *
  * @param {{ ios?: string|null, android?: string|null }} apps
+ * @param {string|null} [origin]
  * @returns {string[]}
  */
-function appLines({ ios = null, android = null } = {}) {
+function appLines({ ios = null, android = null } = {}, origin = null) {
   if (!ios && !android) {
     // Said rather than left blank. A deployment that has published no link
     // would otherwise send an invitation with no way to act on it, and the
     // person receiving it cannot tell that something is missing.
-    return ['', 'Ask whoever invited you for the app — this deployment has not published a link.'];
+    //
+    // AND IT IS NO LONGER A DEAD END WHEN THERE IS A BROWSER ROUTE. Telling
+    // somebody to go and ask for an app, on a fleet that can be signed into
+    // from any browser, was sending them to a person for something they could
+    // have done in the next thirty seconds.
+    return origin
+      ? ['', 'This deployment has not published an app, so use the browser page below.']
+      : ['', 'Ask whoever invited you for the app — this deployment has not published a link.'];
   }
   const lines = ['', 'Get the app:'];
   if (ios) {
@@ -101,6 +110,50 @@ function appLines({ ios = null, android = null } = {}) {
 }
 
 /**
+ * The route that needs no phone.
+ *
+ * THE INVITATION USED TO BE A DEAD END FOR ANYBODY WITHOUT ONE. It named two
+ * app stores and, on a deployment that had published to neither, said to ask
+ * whoever invited you for the app. A person with a laptop and no iPhone had
+ * nothing to do next, and the thing they most needed to do — connect a Claude
+ * account, without which every session they start is refused — has no other
+ * surface: `connect` and `link` are withheld from agents by default, so even
+ * the MCP endpoint could not do it for them.
+ *
+ * So the browser page is named, and named SECOND: the app is the better
+ * experience and most people have a phone. This is the line that stops the
+ * other people being stuck.
+ *
+ * Omitted rather than guessed when the coordinator does not know its own
+ * public address. A sign-in link pointing at the wrong hostname is worse than
+ * no link: it fails in a way that looks like the fleet refusing them.
+ *
+ * @param {string|null} origin
+ * @param {boolean} hasApp
+ * @returns {string[]}
+ */
+function browserLines(origin, hasApp) {
+  if (!origin) return [];
+  return [
+    '',
+    hasApp ? 'Or from a browser, with no app at all:' : 'From a browser, with no app at all:',
+    `  ${origin.replace(/\/+$/, '')}/me`,
+    '    (sign in there to add your Claude, GitHub and Cloudflare accounts)',
+  ];
+}
+
+/**
+ * Both routes in, in the order most people will take them.
+ *
+ * @param {{ ios?: string|null, android?: string|null }} apps
+ * @param {string|null} origin
+ */
+function waysIn(apps, origin) {
+  const hasApp = Boolean(apps?.ios || apps?.android);
+  return [...appLines(apps, origin), ...browserLines(origin, hasApp)];
+}
+
+/**
  * Send it, and never let the attempt fail the invitation.
  *
  * @param {{
@@ -108,7 +161,7 @@ function appLines({ ios = null, android = null } = {}) {
  *   from: string|null,
  * }|null} mailer
  * @param {{ email: string, fleet: string, invitedBy: string, note?: string|null,
- *   apps?: { ios?: string|null, android?: string|null } }} about
+ *   apps?: { ios?: string|null, android?: string|null }, origin?: string|null }} about
  * @returns {Promise<{ sent: boolean, why: string }>}
  */
 export async function sendInvite(mailer, about) {

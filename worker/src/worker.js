@@ -15,6 +15,7 @@ import { Fleet as FleetObject } from './fleet-do.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { isMcpPath } from '../../src/mcp/routes.js';
+import { memberRoutes, isMemberPath, signInClients } from '../../src/fleet/coordinator/member-page.js';
 import * as Sentry from '@sentry/cloudflare';
 import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
@@ -139,6 +140,32 @@ const handler = {
       return new Response(PRIVACY, {
         headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=3600' },
       });
+    }
+
+    // The member page: a sign-in and the form for adding your own Claude,
+    // GitHub and Cloudflare accounts. See src/fleet/coordinator/member-page.js
+    // for why it exists at all.
+    //
+    // SERVED HERE RATHER THAN IN THE DURABLE OBJECT, unlike every other page
+    // this Worker answers. It is entirely static: no state, no credential, no
+    // fleet lookup, so passing it through the object would spend a round trip
+    // to the one script holding the fleet in order to return a string this one
+    // already has. The routes it POSTs to (/api/session, /api/intent) go to the
+    // object exactly as they do from a phone.
+    if (isMemberPath(url.pathname)) {
+      const answer = memberRoutes({ method: request.method, path: url.pathname }, {
+        fleet: env.AGENT_FLEET_NAME || 'this Fleetwright fleet',
+        signIn: signInClients({
+          audiences: String(env.AGENT_FLEET_AUTH_AUDIENCES || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean),
+          appleService: env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+        }),
+      });
+      if (answer) {
+        return new Response(answer.body, {
+          status: answer.status,
+          headers: { 'content-type': answer.contentType, 'cache-control': 'no-store', ...(answer.headers || {}) },
+        });
+      }
     }
 
     // THE PRODUCT PAGE IS NOT SERVED HERE, and the redirect is the point.

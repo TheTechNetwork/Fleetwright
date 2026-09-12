@@ -54,6 +54,19 @@ apps/ios/Fleetwright/Fleetwright.entitlements
 # from here because node cannot import JSX; `npm test` builds it first.
 build/
 
+# V8's raw coverage dump, which is not the coverage this repository measures.
+# `scripts/check-coverage.mjs` writes its lcov into a mkdtemp directory and
+# ratchets against test/coverage-floor.json, so nothing here ever wants a
+# coverage/ in the tree — but NODE_V8_COVERAGE lands wherever a contributor's
+# shell or editor points it, and that is how two files of node-internal byte
+# offsets, covering not one line of this project, reached main.
+#
+# Ignored rather than merely deleted, for the reason *.jks is above: /update
+# refuses to pull into a dirty tree and `git status --porcelain` counts
+# untracked files, so a coverage run left behind in /opt/agent-fleet would
+# silently stop that host updating.
+coverage/
+
 # ERROR REPORTING AUTH TOKENS. A DSN is public and lives in the manifests; these
 # are not — they upload debug symbols and ProGuard mappings, and each one can
 # write to the Sentry project. The wizards create them and add them here; this

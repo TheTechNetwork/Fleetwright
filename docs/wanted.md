@@ -150,6 +150,14 @@ Worth reading Inkbox's own docs before designing: agent-to-agent and the
 cross-channel thread are the parts that are actually hard, and they may have
 already made the decisions worth copying.
 
+**One channel of this has since been designed, and it is the one whose identity
+story works.** WhatsApp's third-party agents have the person mint the key
+themselves, which means a bridge never has to authenticate the sender — it
+holds one device credential and is simply another MCP client. See
+[whatsapp.md](./whatsapp.md). It does not answer the paragraph above, which is
+about a *phone number*; it sidesteps it, and the distinction is the whole
+design.
+
 ### Session configuration from the app and Telegram
 
 Today a session is started with a name, a path and a permission flag, and
@@ -303,6 +311,19 @@ an ordinal — chosen in `plan.md` §4 because `send-keys` reaches a root shell 
 is also the only form a voice assistant can offer reliably.
 
 ### A browser control surface, and a PWA
+
+> **The credentials half is built**, and it was not a nice-to-have in the end.
+> `/me` signs a member in and adds their Claude, GitHub and Cloudflare
+> accounts, as an installable page served by both coordinators
+> (`src/fleet/coordinator/member-page.js`). It exists because the invitation
+> was a dead end for anybody without a phone: `connect` and `link` are withheld
+> from agents by default, so the MCP endpoint could not link an account either,
+> and a session whose actor has no Claude account is refused. Signed in, with a
+> real credential, and unable to do the one thing that makes a session start.
+>
+> What is below is still wanted and is the OTHER half: driving sessions from a
+> browser. `/me` deliberately does not, and the paragraph after next is why the
+> credential question was the harder part.
 
 Same capability as the apps, from a PC. **Explicitly after identity lands**,
 which is what makes it possible to build honestly.
