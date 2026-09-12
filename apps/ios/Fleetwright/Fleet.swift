@@ -192,6 +192,11 @@ struct Fleet {
         /// one lives on. Same reasoning as `entries`: a picker built by parsing
         /// the rendered text would be a picker built from column padding.
         var profiles: [Profile]?
+        /// The named secrets a session could be GRANTED, as DATA and by name
+        /// only, with the host each one lives on. Same reasoning as `profiles`:
+        /// a picker built by parsing prose breaks on a reword, and the value is
+        /// never here to begin with.
+        var secrets: [Secret]?
         /// Which releases this box installs. A field rather than a sentence for
         /// the same reason as everything above it: a picker that had to find
         /// the word "rolling" in the prose would break on a rewording.
@@ -246,6 +251,21 @@ struct Fleet {
         var hostId: String?
         /// Two hosts may both have a profile called "reviewer" and they are not
         /// the same file, so the name alone is not an identity.
+        var id: String { "\(hostId ?? "")/\(name)" }
+    }
+
+    /// A named secret a session can be GRANTED at start. The NAME only: the
+    /// value stays on the host and reaches the session over the credential
+    /// broker, never through this app — see docs/trust.md. A phone that carried
+    /// the value would be the durable credential this design exists to withhold.
+    struct Secret: Codable, Hashable, Identifiable {
+        let name: String
+        /// Which machine holds it. Load-bearing like a profile's: `start` with a
+        /// secret on a host that does not hold it is refused, so a picker that
+        /// lost the attribution would aim at the wrong box.
+        var hostId: String?
+        /// Two hosts may both hold a "github-deploy" and they are not the same
+        /// file, so the name alone is not an identity.
         var id: String { "\(hostId ?? "")/\(name)" }
     }
 
@@ -371,7 +391,8 @@ struct Fleet {
         brief: String? = nil,
         mode: String? = nil,
         host: String? = nil,
-        profile: String? = nil
+        profile: String? = nil,
+        secret: String? = nil
     ) async throws -> Reply {
         var params: [String: String] = [:]
         if let name { params["name"] = name }
@@ -387,6 +408,11 @@ struct Fleet {
         // fails with something a person can act on rather than starting a
         // session that sits there.
         if let profile, !profile.isEmpty { params["profile"] = profile }
+        // WHAT THE SESSION MAY REACH, by name. A NAME, never the value: the host
+        // resolves it and the session fetches the value at runtime over the
+        // broker, so nothing here carries a credential. An unknown name is
+        // refused by the host, like a profile. See docs/trust.md.
+        if let secret, !secret.isEmpty { params["secret"] = secret }
         // `host` is a placement PREFERENCE and rides beside the intent, never
         // inside it — `start` declares no host parameter, and a host receiving
         // one would refuse the whole intent. The coordinator refuses a bad
@@ -427,6 +453,14 @@ struct Fleet {
     /// treats a throw as "no picker" rather than as "no profiles".
     func profiles() async throws -> [Profile] {
         try await intent("profiles", params: [:]).profiles ?? []
+    }
+
+    /// The named secrets the fleet holds, by name only. An empty list is an
+    /// ANSWER — no box holds any — while a host too old to know the verb refuses
+    /// it (`unknown_verb`), which is why the sheet treats a throw as "no picker"
+    /// rather than as "no secrets".
+    func secrets() async throws -> [Secret] {
+        try await intent("secrets", params: [:]).secrets ?? []
     }
 
     /// One host in detail, or the fleet when no name is given.
