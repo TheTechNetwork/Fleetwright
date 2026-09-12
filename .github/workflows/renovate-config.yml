@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '24.20.0'
+          node-version: '24.21.0'
 
       # NO FILE ARGUMENT, deliberately. Given a path, the validator treats the
       # file as SELF-HOSTED GLOBAL config, which is a different schema — it
