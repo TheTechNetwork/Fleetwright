@@ -28,6 +28,10 @@ import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
  * @property {string} message        the host's own sentence about it
  * @property {boolean} configured    whether this box knows where to look
  * @property {boolean} ok            whether the CHECK ITSELF got an answer
+ * @property {string} [reason]       which decision rule fired, when one did —
+ *   'protocol' (a newer release this host cannot take yet), 'current', and so
+ *   on. Absent when the check could not decide at all. Lets a caller render
+ *   "up to date to a compatible version" as a state rather than a sentence.
  *
  * `ok` is the field that separates "asked, and nothing is waiting" from
  * "could not ask". Both of those are `available: null`, and until this existed
@@ -88,7 +92,7 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch } = {}) {
     // release built for a protocol this box does not speak — and true both for
     // "here is one" and for "you are current". Keeping only `version` collapsed
     // the first group into the second.
-    return { available: r.version ?? null, configured: true, ok: r.ok, message: r.message };
+    return { available: r.version ?? null, configured: true, ok: r.ok, reason: r.reason, message: r.message };
   } catch (e) {
     return {
       available: null,

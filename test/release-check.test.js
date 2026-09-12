@@ -122,6 +122,12 @@ test('a release this host could not take is not offered as one it can', async ()
     );
     assert.equal(r.available, null, 'a protocol mismatch was offered as an available update');
     assert.match(r.message, /protocol/);
+    // CARRIED OUT, so the caller can render it as a state. Without `reason` the
+    // only way to tell a protocol hold from a failed check is to sniff the
+    // message, and "up to date to a compatible version" would have to be read
+    // out of prose instead of shown from a field.
+    assert.equal(r.reason, 'protocol');
+    assert.match(r.message, /up to date for the protocol it speaks/);
   } finally {
     rmSync(box.base, { recursive: true, force: true });
   }
