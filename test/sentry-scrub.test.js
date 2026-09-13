@@ -25,6 +25,21 @@ const CREDENTIAL = 'fwk_9f3a1c2b4d5e6f70_a1b2c3d4e5f60718';
 const iosApp = () =>
   readFileSync(new URL('../apps/ios/Fleetwright/FleetwrightApp.swift', import.meta.url), 'utf8');
 
+// And the Android reporter, which is configured entirely in manifest meta-data
+// — there is no Application class and no SentryAndroid.init call. That makes
+// the grep below matter MORE than the Swift one: a meta-data key the SDK does
+// not recognise is SILENTLY IGNORED. No build error, no runtime error, just a
+// replay that never records or a mask that was never asked for.
+const androidManifest = () =>
+  readFileSync(new URL('../apps/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
+
+// One manifest meta-data value, by key name. Returns undefined when the key is
+// absent, which is the case the tests below are actually about.
+const androidMeta = (key) =>
+  androidManifest().match(
+    new RegExp(`name="${key.replace(/\./g, '\\.')}"[^/]*?android:value="([^"]*)"`, 's'),
+  )?.[1];
+
 test('a credential in the query string does not survive', () => {
   // openapi.json: "A credential may arrive as Authorization: Bearer <token> OR
   // as ?token=<token>. The query form is deliberate."
@@ -174,6 +189,66 @@ test('the still-image attachments stay off, replay or no replay', () => {
   const app = iosApp();
   assert.match(app, /options\.attachScreenshot = false/);
   assert.match(app, /options\.attachViewHierarchy = false/);
+});
+
+test('the Android replay is configured, with the keys the SDK actually reads', () => {
+  // EVERY ONE OF THESE IS A LITERAL FROM SENTRY'S OWN DOCUMENTATION, not a name
+  // inferred from the Swift property beside it. docs/error-reporting.md has a
+  // section about the three Sentry versions this repository invented and
+  // shipped; a manifest key is the same failure with no compiler to catch it,
+  // because Android ignores a meta-data name nothing claims.
+  assert.equal(androidMeta('io.sentry.session-replay.mask-all-text'), 'true');
+  assert.equal(androidMeta('io.sentry.session-replay.mask-all-images'), 'true');
+  assert.equal(androidMeta('io.sentry.session-replay.on-error-sample-rate'), '1.0');
+  // The quickstart says 0.1. See the iOS test above and the section in
+  // docs/error-reporting.md before changing this.
+  assert.equal(
+    androidMeta('io.sentry.session-replay.session-sample-rate'),
+    '0.0',
+    'ambient replay recording is on; see docs/error-reporting.md before changing this',
+  );
+});
+
+test('the Android still-image attachments stay off too', () => {
+  assert.equal(androidMeta('io.sentry.attach-screenshot'), 'false');
+  assert.equal(androidMeta('io.sentry.attach-view-hierarchy'), 'false');
+});
+
+test('the Android DSN is a real one, not the placeholder', () => {
+  // It read REPLACE_WITH_ANDROID_DSN for as long as the app had no project to
+  // report to, which made every refusal in that manifest theoretical. Turning
+  // on a replay for an app that posts nowhere would have been the same joke.
+  const dsn = androidMeta('io.sentry.dsn');
+  assert.equal(/REPLACE_WITH/.test(dsn ?? ''), false, 'the Android DSN is still a placeholder');
+  assert.match(dsn ?? '', /^https:\/\/\w+@o\d+\.ingest\.us\.sentry\.io\/\d+$/);
+  // `/0` was the placeholder's project id and is not a project.
+  assert.equal(dsn?.endsWith('/0'), false, 'the DSN has no project id');
+});
+
+// THE TWO PHONES AGREE, which is the rule this repository spends the most
+// effort on. A reporter that is careful on one and not the other is exactly the
+// drift test/design-parity.test.js exists for elsewhere — and here the numbers
+// live in two files, in two languages, with nothing but this asserting they are
+// the same four decisions.
+test('iOS and Android record replays on identical terms', () => {
+  const swift = iosApp();
+  const pairs = [
+    ['maskAllText', 'io.sentry.session-replay.mask-all-text'],
+    ['maskAllImages', 'io.sentry.session-replay.mask-all-images'],
+    ['onErrorSampleRate', 'io.sentry.session-replay.on-error-sample-rate'],
+    ['sessionSampleRate', 'io.sentry.session-replay.session-sample-rate'],
+  ];
+  for (const [swiftName, manifestKey] of pairs) {
+    const onIOS = swift.match(
+      new RegExp(`options\\.sessionReplay\\.${swiftName} = (\\S+)`),
+    )?.[1];
+    assert.ok(onIOS, `${swiftName} is not set on iOS at all`);
+    assert.equal(
+      onIOS,
+      androidMeta(manifestKey),
+      `${swiftName} and ${manifestKey} disagree — one phone is recording on different terms`,
+    );
+  }
 });
 
 test('no DSN means no reporting, with no second code path', () => {
