@@ -133,6 +133,52 @@ Sessions are untouched throughout: `KillMode=process` in the hub's unit is what
 makes that true, and hosts reconnect to a restarted coordinator with the backoff
 the transport already has.
 
+### Commit-confirm: an update that undoes itself
+
+A packaged update puts the new release **on trial**. When it lands, the box has
+a window — `AGENT_HUB_UPDATE_CONFIRM_MS`, ten minutes by default — to prove two
+things: that it can **start a session** (the hub runs a real throwaway
+container), and that it can **reach its coordinator** (the sidecar connects).
+Both, and the trial is confirmed and the update kept. Not both within the
+window, and the previous release is put back and the services restart onto it.
+
+This is the Cisco `reload in` pattern, and it exists for the outage this project
+already lived through: an update that swapped the code, restarted cleanly, and
+left every session dead at `mount proc` — a box that "updated fine" and could no
+longer do its job, with no way to tell you. It does not need to tell you: it
+reverts. Note that *reaching the coordinator alone would have confirmed that
+outage* — the box was online, the sessions were dead — which is why health is
+**two halves** and the session probe is one of them.
+
+**Who watchdogs it is the whole design.** The first cut ran the timer inside the
+sidecar, and a watchdog that has to start in order to run cannot catch its own
+failure to start — and any of the three services can be the one an update
+breaks. So the arbiter is **not app code**: a standing systemd timer
+(`agent-fleet-confirm.timer`) runs a small POSIX-shell script
+(`/usr/local/sbin/fleetwright-confirm`) as the service user, on a schedule,
+independent of whether the hub or sidecar can start. It is the one thing on the
+box always up and never part of an update. The hub and sidecar only *record*
+their half of health; the script decides.
+
+It needs no privilege the services lack: moving the `current` symlink and
+writing the restart marker are things the service user already owns — the same
+reason updates restart the services by exiting rather than by `systemctl`. The
+revert is cheap because it reuses what is here: the previous release is kept on
+disk beside the live one (see *The layout is the rollback*), so a revert is one
+symlink move back, and the marker then bounces all three services onto it — the
+same mechanism `/update --restart` uses to go forward.
+
+Two things worth knowing:
+
+- **The window is uptime, not wall clock.** The script reverts only once the
+  window has passed both on the clock since the update *and* in uptime since
+  boot, so a box merely powered off across the window is not reverted for it —
+  only one that was up and could not prove itself.
+- **Only packaged boxes revert.** A checkout has no `current` symlink and no
+  kept-previous release to move back to, so the timer is installed on packaged
+  Linux boxes only; `AGENT_HUB_UPDATE_CONFIRM_MS=0` turns the trial off, and an
+  update then simply stays as it did before.
+
 ### What an update actually updates
 
 `/update --restart` covers all four moving parts, and it took three separate

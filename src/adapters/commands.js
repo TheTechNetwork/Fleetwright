@@ -87,7 +87,8 @@ import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../c
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
 import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
-import { applyRelease } from '../core/release-apply.js';
+import { applyRelease, currentVersion } from '../core/release-apply.js';
+import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
 import { listSecretNames } from '../core/secret-store.js';
 import { readChannel, writeChannel, pinnedByEnv } from '../core/channel.js';
@@ -1603,6 +1604,9 @@ export const COMMANDS = {
         // so filtering the manifest without moving the address would leave a
         // box that had switched taking stable builds and reporting otherwise.
         const target = manifestUrlFor(ctx.cfg.releaseManifest, channel);
+        // What `current` points at BEFORE the swap — the release a trial would
+        // fall back to. Read now, because applyRelease moves the symlink.
+        const before = currentVersion(ctx.cfg.installDir);
         const r = await applyRelease({
           installDir: ctx.cfg.installDir,
           manifestUrl: target.url,
@@ -1620,6 +1624,15 @@ export const COMMANDS = {
         // it downloaded would apply itself while sessions were mid-answer.
         const applied = r.ok && r.changed && (flags.has('restart') || flags.has('apply'));
         if (applied) {
+          // PUT IT ON TRIAL before restarting onto it. The box now has this long
+          // to reach its coordinator or it puts `before` back on its own — the
+          // answer to "updating would disconnect it, and it could not tell you
+          // afterwards": it does not need to tell you, it reverts. A no-op when
+          // commit-confirm is off or there is nothing to fall back to.
+          const trial = armConfirmation(ctx.cfg, { from: before, to: r.version ?? '' });
+          const trialNote = trial.armed
+            ? `\n\nOn trial: unless this box both starts a session and reaches its coordinator within ${Math.round((trial.windowMs ?? 0) / 60_000)} minutes, a watchdog puts ${trial.from} back on its own.`
+            : '';
           // Root's half of the update — units, hook, sudoers, the helper —
           // rides the release from here: the helper runs the release's own
           // installer with --repair and restarts the services itself. Only
@@ -1627,9 +1640,9 @@ export const COMMANDS = {
           // With what the marker needs: the version that just landed, who
           // asked, and where the siblings look for it.
           const heal = healAfterRelease({ logger: log, head: r.version ?? null, actor: ctx.actor ?? null, stateDir: ctx.cfg.stateDir ?? null });
-          if (heal.scheduled) return { ok: true, text: `${r.message}\n\n${heal.text}` };
+          if (heal.scheduled) return { ok: true, text: `${r.message}${trialNote}\n\n${heal.text}` };
           const restarted = restartSelf();
-          return { ok: restarted.ok, text: `${r.message}\n\n${heal.text}\n\n${restarted.message}` };
+          return { ok: restarted.ok, text: `${r.message}${trialNote}\n\n${heal.text}\n\n${restarted.message}` };
         }
         return {
           ok: r.ok,

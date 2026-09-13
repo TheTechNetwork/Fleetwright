@@ -280,6 +280,16 @@ export function loadConfig(env = process.env) {
     // chased whatever this says.
     sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 0),
 
+    // COMMIT-CONFIRM for updates, in milliseconds. After a packaged update
+    // swaps the release, the box has this long to prove itself — reconnect to
+    // its coordinator — or it puts the previous release back on its own and
+    // restarts onto it. The Cisco `reload in` pattern: a change that undoes
+    // itself unless confirmed, for a fleet with no terminal to type `confirm`
+    // into. Ten minutes by default; 0 turns it off and an update simply stays,
+    // as it did before. Only packaged boxes (a `current` symlink with the
+    // previous release kept beside it) can revert; a checkout cannot.
+    updateConfirmMs: int('AGENT_HUB_UPDATE_CONFIRM_MS', 10 * 60 * 1000),
+
     // How often to make sure the Claude credentials on this box are still
     // live. 0 turns it off.
     //

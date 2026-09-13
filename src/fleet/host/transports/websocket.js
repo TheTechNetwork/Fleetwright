@@ -38,14 +38,19 @@ export class WebSocketTransport {
    *   proof?: (() => Promise<{ nonce: string, proof: string }>)|null,
    *   logger?: typeof import('../../../log.js').log,
    *   maxBackoffMs?: number,
+   *   onConnect?: (() => void)|null,
    * }} opts
    */
-  constructor({ origin, hostId, proof = null, logger, maxBackoffMs = MAX_BACKOFF_MS }) {
+  constructor({ origin, hostId, proof = null, logger, maxBackoffMs = MAX_BACKOFF_MS, onConnect = null }) {
     this.origin = origin;
     this.hostId = hostId;
     // A function rather than a value: it is called on every dial, because each
     // connection needs its own nonce.
     this.proof = proof;
+    // Called once each time a connection comes up — the one signal that says
+    // this box reached its coordinator. The commit-confirm watchdog uses it to
+    // confirm an update on trial; nothing else here needs it, so it is optional.
+    this.onConnect = onConnect;
     this.log = logger || { debug() {}, info() {}, warn() {}, error() {} };
     this.maxBackoffMs = maxBackoffMs;
     /** @type {((msg: unknown) => Promise<void>)|null} */
@@ -112,6 +117,12 @@ export class WebSocketTransport {
       this.backoff = INITIAL_BACKOFF_MS;
       this.connectedOnce = true;
       this.log.info(`fleet: connected to ${this.origin} as ${this.hostId}`);
+      // Reaching the coordinator is the proof a fresh update works. Guarded so a
+      // throwing callback cannot take the transport down — a confirm that fails
+      // is a trial that runs its full window, not a dead connection.
+      if (this.onConnect) {
+        try { this.onConnect(); } catch (e) { this.log.warn(`fleet: onConnect hook threw: ${/** @type {Error} */ (e).message}`); }
+      }
 
       conn.on('message', (text) => {
         let msg;

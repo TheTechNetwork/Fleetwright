@@ -20,6 +20,7 @@ import {
   removeSandboxVolumes,
   healRootlessSandbox,
   sandboxImageStatus,
+  canStartSession,
 } from '../src/core/podman.js';
 
 /**
@@ -248,6 +249,15 @@ test('a box with no image configured cannot tell, and never claims a pinned one'
   assert.equal(st.digest, null);
   assert.equal(st.variant, null);
   assert.equal(st.mutable, false);
+});
+
+test('the session probe runs a throwaway container and reads its exit status', (t) => {
+  // The commit-confirm health signal: a container that mounts its own /proc and
+  // exits. The stub podman exits 0 for `run`, so a box that can reach podman
+  // reports it can start a session.
+  const s = stubPodman(t);
+  assert.equal(canStartSession(s.cfg()), true);
+  assert.ok(s.calls().some((c) => c.startsWith('run ')), 'it actually asked podman to run something');
 });
 
 // --- preparing a session ----------------------------------------------------

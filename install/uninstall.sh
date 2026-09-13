@@ -116,6 +116,13 @@ for s in "${SERVICES[@]}"; do
     rm -f "/etc/systemd/system/$s.service"
   fi
 done
+# The commit-confirm watchdog is a timer, not one of the SERVICES above, and it
+# is Linux-only. Left behind, it would keep firing against a box that no longer
+# has a release layout to revert to.
+if [ "$PLATFORM" = linux ]; then
+  systemctl disable --now agent-fleet-confirm.timer >/dev/null 2>&1 && ok "commit-confirm watchdog stopped and disabled" || true
+  rm -f /etc/systemd/system/agent-fleet-confirm.timer /etc/systemd/system/agent-fleet-confirm.service
+fi
 [ "$PLATFORM" = linux ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
 ok "service definitions removed"
 
@@ -147,6 +154,10 @@ done
 if [ -f /usr/local/sbin/fleetwright-migrate ]; then
   rm -f /usr/local/sbin/fleetwright-migrate
   ok "/usr/local/sbin/fleetwright-migrate"
+fi
+if [ -f /usr/local/sbin/fleetwright-confirm ]; then
+  rm -f /usr/local/sbin/fleetwright-confirm
+  ok "/usr/local/sbin/fleetwright-confirm"
 fi
 
 say "Removing the CLIs"

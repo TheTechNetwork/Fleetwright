@@ -1,0 +1,98 @@
+#!/bin/sh
+# The commit-confirm watchdog. Runs from a systemd timer, as the service user,
+# on a schedule — INDEPENDENT of whether the hub or the sidecar can start.
+#
+# That independence is the whole point. An update can break any of the three
+# services, and a watchdog living inside one of them cannot catch its own
+# failure to start. systemd is the one thing on the box that is always up and
+# never part of an update, so the arbiter lives here: a few lines of POSIX shell
+# that depend on nothing the update ships — not node, not the app, not even jq.
+#
+# It reads the trial record the hub wrote (src/core/update-confirm.js) and the
+# two health-evidence files the hub and sidecar drop, and it does exactly one of
+# three things each time it fires:
+#
+#   both halves of health present and fresh  -> confirm: clear the trial, keep it
+#   window elapsed, health incomplete        -> revert: point `current` back, ask
+#                                               the services to restart onto it
+#   otherwise                                -> nothing yet; wait for the next fire
+#
+# THE WINDOW IS UPTIME, NOT WALL CLOCK. A box merely powered off across the
+# window must not be reverted for it — only one that was up and could not prove
+# itself. So a revert needs BOTH: the wall clock past the deadline (armed +
+# window) AND the machine up for at least a window since boot. A box that comes
+# back after a long outage has a low uptime and is given a fresh window to prove
+# the update before anything is undone.
+#
+# Paths come from the environment the .service unit sets, not from the record,
+# so the record carries only release names and numbers.
+
+set -eu
+
+STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
+FLEET_BASE="${FLEET_BASE:-/opt/fleetwright}"
+
+trial="$STATE_DIR/update-confirm"
+[ -f "$trial" ] || exit 0
+
+# Parsed, never sourced. The values are release names and integers, but reading
+# a file into the shell's namespace by executing it is a habit worth not having.
+FROM=$(sed -n 's/^FROM=//p' "$trial")
+TO=$(sed -n 's/^TO=//p' "$trial")
+WINDOW_MS=$(sed -n 's/^WINDOW_MS=//p' "$trial")
+ARMED_AT=$(sed -n 's/^ARMED_AT=//p' "$trial")
+
+# A record missing any field is not a trial we can reason about. Leave it: the
+# hub rewrites it whole on the next update, and reverting on a half-read file
+# would be acting on nothing.
+[ -n "$FROM" ] && [ -n "$TO" ] && [ -n "$WINDOW_MS" ] && [ -n "$ARMED_AT" ] || exit 0
+
+hub="$STATE_DIR/confirm-hub.ok"
+coord="$STATE_DIR/confirm-coord.ok"
+
+log() { logger -t fleetwright-confirm "$1" 2>/dev/null || true; }
+
+# CONFIRM. Both halves present, and both written AFTER the trial armed (newer
+# than the trial file) — otherwise they are a previous release's health.
+if [ -f "$hub" ] && [ -f "$coord" ] && [ "$hub" -nt "$trial" ] && [ "$coord" -nt "$trial" ]; then
+  rm -f "$trial" "$hub" "$coord"
+  log "update ${TO} confirmed healthy (session + coordinator) — keeping it"
+  exit 0
+fi
+
+now_ms=$(($(date +%s) * 1000))
+deadline=$((ARMED_AT + WINDOW_MS))
+# /proc/uptime is seconds-since-boot; awk turns it into ms without needing bc.
+uptime_ms=$(awk '{printf "%d", $1 * 1000}' /proc/uptime 2>/dev/null || echo 0)
+
+# Not yet: either still inside the window on the clock, or the box has not been
+# up a full window since boot. Wait for a later fire.
+[ "$now_ms" -gt "$deadline" ] || exit 0
+[ "$uptime_ms" -gt "$WINDOW_MS" ] || exit 0
+
+# REVERT. The window passed and health never completed.
+target="$FLEET_BASE/releases/$FROM"
+link="$FLEET_BASE/current"
+if [ -d "$target" ]; then
+  # Atomic like the forward swap: create the link under a temporary name and
+  # rename it over the old one, so `current` is never briefly absent.
+  tmp="$link.revert.$$"
+  ln -sfn "$target" "$tmp"
+  # -T / --no-target-directory: `current` is a symlink to a DIRECTORY, and a
+  # plain `mv` would move tmp INTO it rather than replace it. -T makes the rename
+  # atomic over the link, the same swap release-apply.js does going forward.
+  mv -fT "$tmp" "$link"
+  # The restart marker (src/core/restart-watch.js) bounces all three services
+  # onto the reverted release — the same mechanism /update --restart uses to go
+  # forward. Written in the JSON shape readMarker expects.
+  printf '{"at":%s,"head":"%s","actor":"auto-rollback"}\n' "$now_ms" "$FROM" > "$STATE_DIR/restart-marker.json"
+  rm -f "$trial" "$hub" "$coord"
+  log "update ${TO} did not confirm within ${WINDOW_MS}ms — reverted to ${FROM}, restarting onto it"
+else
+  # The one release a revert needs is the one pruning always keeps, so this
+  # should not happen — but a missing target is a reason to leave `current`
+  # where it is, never to point it at nothing.
+  rm -f "$trial"
+  log "update ${TO} unconfirmed but the revert target ${FROM} is gone — left as is"
+fi
+exit 0
