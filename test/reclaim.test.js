@@ -125,3 +125,25 @@ test('an unpackaged box has nothing to reclaim', () => {
   const cfg = /** @type {any} */ ({ installDir: '/opt/agent-fleet' });
   assert.equal(reclaimStale(cfg, { run: () => ({ status: 0 }), exists: () => true }).reason, 'unpackaged');
 });
+
+test('staleReleases is empty, not a throw, when there is no releases dir', () => {
+  // A box with no releases/ (a checkout, a half-set-up box) is a clean empty
+  // answer — reading a directory that is not there must not take the caller down.
+  assert.deepEqual(staleReleases('/no/such/base'), []);
+});
+
+test('a helper that cannot even be spawned is a report, not a throw', () => {
+  const base = makeBox();
+  mkdirSync(path.join(base, 'releases', '.stale-old-0'), { recursive: true });
+  const cfg = /** @type {any} */ ({ installDir: path.join(base, 'current') });
+  // spawnSync itself throwing (no sudo on PATH, say) is the same kind of event
+  // as a non-zero exit: logged and reported, never thrown out of housekeeping.
+  const r = reclaimStale(cfg, {
+    run: () => { throw new Error('spawnSync sudo ENOENT'); },
+    exists: () => true,
+  });
+  assert.equal(r.swept, false);
+  assert.equal(r.reason, 'failed');
+  assert.match(String(r.message), /ENOENT/);
+  rmSync(base, { recursive: true, force: true });
+});

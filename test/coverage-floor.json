@@ -25,6 +25,7 @@
   "src/core/podman.js": 94,
   "src/core/profiles.js": 99,
   "src/core/reboot.js": 93,
+  "src/core/reclaim.js": 100,
   "src/core/redact.js": 100,
   "src/core/registry.js": 83,
   "src/core/release-apply.js": 94,
