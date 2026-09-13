@@ -194,15 +194,22 @@ So prune no longer fails on it. It **renames** the directory aside to
 user has — and carries on pruning the rest. The update is unaffected; only a
 stale directory is left, out of the release namespace.
 
-Removing that directory is the one step that needs root, and it is automatic:
-`/usr/local/sbin/fleetwright-reclaim` is a root-owned helper the installer puts
-down alongside one narrow sudoers rule, and the hub runs it on the next start
-whenever a `.stale-` directory is present. It is scoped exactly — it removes only
-`<base>/releases/.stale-*`, nothing else, even as root — and doubly gated: a
-normal removal has to fail *first* for anything to be quarantined, and then the
-helper can touch only that quarantine. A box installed before this shipped keeps
-the `.stale-` directory harmlessly until an `install.sh --upgrade` puts the
-helper in place.
+Removing that directory is the one step that needs root, and it is automatic and
+app-driven — no shell. `/usr/local/sbin/fleetwright-reclaim` is a root-owned
+helper installed alongside one narrow sudoers rule, and the hub runs it on the
+next start whenever a `.stale-` directory is present. It is scoped exactly — it
+removes only `<base>/releases/.stale-*`, nothing else, even as root — and doubly
+gated: a normal removal has to fail *first* for anything to be quarantined, and
+then the helper can touch only that quarantine.
+
+The helper installs **itself** through the update flow. Root's half of a packaged
+update already runs the release's own installer with `--repair` (see [Updating](#updating)
+and `healAfterRelease`), and that is what writes the helper and its sudoers rule —
+so a box updating from the app to a release that carries this lands the mechanism
+with no shell, and reclaims on the boot after. The only box that needs a hand is
+one whose `fleetwright-migrate` helper is itself stale (root's half then does not
+run at all, which the hub already reports); refreshing that one helper is the
+pre-existing one-line fix, after which every update refreshes what root owns.
 
 ### What an update actually updates
 

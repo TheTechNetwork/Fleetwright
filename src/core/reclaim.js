@@ -58,17 +58,19 @@ export function reclaimStale(cfg, { run = spawnSync, exists = existsSync } = {})
   if (stale.length === 0) return { swept: false, reason: 'none' };
 
   // THE HELPER MAY NOT BE THERE YET, and that is a state to report rather than
-  // an error to throw. A box that quarantined a release before this shipped will
-  // carry the `.stale-` directory until an installer puts the helper down; until
-  // then the quarantine is harmless (it is out of the release namespace) and the
+  // an error to throw — and not one that needs a shell to fix. Root's half of a
+  // packaged update runs the release's installer with --repair (see
+  // healAfterRelease), which installs this helper and its sudoers rule, so the
+  // next `/update` from the app lands it and the boot after that sweeps. Until
+  // then the quarantine is harmless — out of the release namespace — and the
   // update it came from succeeded regardless.
   if (!exists(RECLAIM_BIN)) {
     return {
       swept: false,
       reason: 'no_helper',
       message:
-        `${stale.length} quarantined release(s) are waiting, but ${RECLAIM_BIN} is not installed to remove them.\n` +
-        'Re-run the installer with --upgrade and it will put the helper and its sudoers rule in place.',
+        `${stale.length} quarantined release(s) are waiting; ${RECLAIM_BIN} is not on this box yet.\n` +
+        'The next update from the app lands it (root\'s half runs the release\'s installer), and the sweep runs on the boot after.',
     };
   }
 
