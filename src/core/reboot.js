@@ -36,7 +36,7 @@ const CHALLENGE_TTL_MS = 120_000;
  * no pin to match and the hostname alone finishes it. Set by step one and only
  * by step one: no argument turns the pin off.
  *
- * @type {{ pin: string|null, actor: string|null, at: number, stage: number }|null}
+ * @type {{ pin: string|null, actor: string|null, at: number }|null}
  */
 let pending = null;
 
@@ -92,7 +92,7 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
     // An empty host asks once. A host with work on it names the work and asks
     // for something only that machine could have issued.
     if (!sessions.length) {
-      pending = { pin: null, actor, at: now(), stage: 2 };
+      pending = { pin: null, actor, at: now() };
       return {
         ok: true,
         reboot: { sessions: 0, pinRequired: false, hostname },
@@ -106,18 +106,24 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
     // is the difference between confirming and giving up — and randomInt is
     // uniform over the range, unlike the modulo of a random byte string.
     const pin = String(randomInt(0, 1_000_000)).padStart(6, '0');
-    pending = { pin, actor, at: now(), stage: 1 };
+    pending = { pin, actor, at: now() };
     return {
       ok: true,
       // AS DATA, so a screen can size its own ceremony rather than parsing this
       // sentence for a number. The apps ask for a fingerprint when this says
       // nothing is running and for the PIN when it does not.
       reboot: { sessions: sessions.length, pinRequired: true, hostname },
-      // STILL THREE STEPS WHEN THERE IS WORK TO LOSE, and still the PIN on its
-      // own first: sending the pin and the hostname together is refused, and
-      // telling somebody to do it in one go would be telling them to fail.
-      // The phone collapses this into two things a PERSON does — type the pin,
-      // then a fingerprint — without collapsing the protocol.
+      // THE PIN AND THE HOSTNAME MAY ARRIVE TOGETHER, and once they were not
+      // allowed to. The protocol asked for the PIN on its own first and refused
+      // `/reboot <pin> <hostname>` in one message — but the apps append the
+      // targeted host to the PIN the person entered, so the two ALWAYS arrive
+      // together and the refusal was a step no phone could get past. Both proofs
+      // are still required and checked — the live PIN this box issued, and the
+      // hostname typed out, which is the wrong-box guard that actually matters —
+      // and step 1 is still its own message, so a reboot still cannot happen in
+      // one shot. What was dropped is only the second round trip, which no client
+      // was making. The prompt still shows two steps for a client that does send
+      // the PIN alone; both paths finish.
       text:
         `Reboot ${hostname}?\n\n` +
         `This will kill ${sessions.length} running session${sessions.length === 1 ? '' : 's'}:\n` +
@@ -151,9 +157,11 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
       return { ok: false, text: 'That PIN does not match. /reboot to start again.' };
     }
 
-    // Step 2: the PIN alone. Ask for the hostname.
+    // The PIN alone: a client that sends it on its own gets step 3, so the
+    // stepwise flow still works. The apps do not — they append the hostname —
+    // and that combined message is handled just below.
     if (args.length === 1) {
-      pending = { ...current, stage: 2, at: now() };
+      pending = { ...current, at: now() };
       return {
         ok: true,
         text:
@@ -162,9 +170,9 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
       };
     }
 
-    if (current.stage < 2) {
-      return { ok: false, text: 'Confirm the PIN on its own first: /reboot ' + current.pin };
-    }
+    // The PIN and the hostname together — the one message the apps actually
+    // send. The wrong-box guard is the same as step 3's on its own: the second
+    // argument has to be this machine's name, or nothing happens.
     if (args[1] !== hostname) {
       return {
         ok: false,

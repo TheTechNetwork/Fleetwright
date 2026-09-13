@@ -31,11 +31,28 @@ test('step 1 says what will be lost before asking anything', () => {
   assert.match(first.text, /Step 2 of 3/);
 });
 
-test('the whole flow needs the PIN AND the hostname, in that order', () => {
+test('the PIN and the hostname together reboot the box — the message the apps send', () => {
+  // The apps append the targeted host to the PIN the person typed, so the
+  // confirm arrives as `/reboot <pin> <hostname>` in one message. That used to
+  // be refused ("confirm the PIN on its own first"), which was a step no phone
+  // could get past. It completes now: both proofs are present — the live PIN and
+  // the right hostname — and step 1 was still its own message.
   const { pin } = begin();
 
-  const skipped = reboot(CFG, [pin, os.hostname()], { actor: 'telegram:1', exec: ok });
-  assert.equal(skipped.ok, false, 'the hostname cannot be sent with the PIN in one go');
+  let ran = false;
+  const done = reboot(CFG, [pin, os.hostname()], {
+    actor: 'telegram:1',
+    exec: () => { ran = true; return ok(); },
+  });
+  assert.equal(done.ok, true, done.text);
+  assert.equal(ran, true);
+});
+
+test('the stepwise flow still works: the PIN alone gets step 3, then the hostname finishes', () => {
+  // A client that does send the PIN on its own is not broken by making the
+  // combined message work — it gets the step-3 prompt and finishes with the
+  // hostname.
+  const { pin } = begin();
 
   const second = reboot(CFG, [pin], { actor: 'telegram:1', exec: ok });
   assert.match(second.text, /Step 3 of 3/);
@@ -47,6 +64,17 @@ test('the whole flow needs the PIN AND the hostname, in that order', () => {
   });
   assert.equal(third.ok, true);
   assert.equal(ran, true);
+});
+
+test('a reboot still cannot happen in one message — step 1 issues the live PIN first', () => {
+  // The footgun the ceremony exists to prevent: a single message that reboots.
+  // Step 1 hands out a live PIN that cannot be known in advance, so a first
+  // message carrying a guessed pin and the hostname has no pending challenge to
+  // match and does nothing.
+  cancelReboot();
+  const cold = reboot(CFG, ['000000', os.hostname()], { actor: 'telegram:1', exec: ok });
+  assert.equal(cold.ok, false);
+  assert.match(cold.text, /No reboot is pending/);
 });
 
 test('the wrong hostname is refused, which is the mistake worth preventing', () => {
