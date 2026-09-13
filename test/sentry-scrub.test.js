@@ -33,6 +33,14 @@ const iosApp = () =>
 const androidManifest = () =>
   readFileSync(new URL('../apps/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 
+// And the two files that decide whether the reporter runs at all, and what it
+// calls this build. Same limitation as the grep above and the same reason for
+// it: CI compiles this on a macOS runner and nothing here can execute it.
+const iosReporting = () =>
+  readFileSync(new URL('../apps/ios/Fleetwright/Reporting.swift', import.meta.url), 'utf8');
+
+const iosProject = () => readFileSync(new URL('../apps/ios/project.yml', import.meta.url), 'utf8');
+
 // One manifest meta-data value, by key name. Returns undefined when the key is
 // absent, which is the case several tests below are actually about.
 //
@@ -261,6 +269,64 @@ test('iOS and Android record replays on identical terms', () => {
       `${swiftName} and ${manifestKey} disagree — one phone is recording on different terms`,
     );
   }
+});
+
+test('a simulator and a test run report nothing', () => {
+  // WHY: the first three hang reports this project received were all CI. The
+  // binary is Fleetwright.debug.dylib under /Users/runner/…/CoreSimulator,
+  // build_type is `simulator`, one of them has XCTestCore on the main thread —
+  // and they arrive tagged `environment: production` on an iPhone18,1, which is
+  // indistinguishable at a glance from an app frozen in somebody's hand. Two of
+  // the three had no app code above the run loop at all.
+  //
+  // Three of this project's first four iOS events are the build system, which
+  // is a tracker nobody reads by the fifth. So these runs do not report.
+  //
+  // The fourth — a watchdog termination from a real TestFlight build — is not
+  // this and is not fixed by this. It is only no longer filed beside CI.
+  const reporting = iosReporting();
+  assert.match(reporting, /#if targetEnvironment\(simulator\)/);
+  assert.match(reporting, /XCTestConfigurationFilePath/);
+  // And the guard is WIRED, not merely defined — the same failure the Worker's
+  // "the hooks are wired" test exists for. Reporting.wanted could be perfect
+  // and never consulted.
+  assert.match(iosApp(), /guard Reporting\.wanted else \{ return \}/);
+});
+
+test('the reporter can still be exercised deliberately', () => {
+  // A refusal nobody can lift is how the replay ends up untested: the docs say
+  // to turn sessionSampleRate up while trying it, and without this the only
+  // place to do that is a signed build on a real phone. It turns reporting ON
+  // and cannot point it anywhere — same shape as Screenshots.swift's arguments.
+  assert.match(iosReporting(), /-fleetwright-report/);
+});
+
+test('a build that reports says which build it is', () => {
+  // Unset, the SDK calls everything `production`. That is how a debug build in
+  // a simulator on a CI runner came to file its reports beside a stranger's App
+  // Store crash — and telling them apart afterwards meant reading the binary
+  // path in the stack trace.
+  const app = iosApp();
+  assert.match(app, /options\.environment = Reporting\.environment/);
+  // Read from the plist key, which project.yml binds to the build
+  // configuration the way it already binds aps-environment.
+  assert.match(iosReporting(), /forInfoDictionaryKey: "SentryEnvironment"/);
+  const project = iosProject();
+  assert.match(project, /SentryEnvironment: \$\(FLEETWRIGHT_SENTRY_ENVIRONMENT\)/);
+  assert.match(project, /Debug:[\s\S]*?FLEETWRIGHT_SENTRY_ENVIRONMENT: development/);
+  assert.match(project, /Release:[\s\S]*?FLEETWRIGHT_SENTRY_ENVIRONMENT: production/);
+});
+
+test('an unset environment is unknown rather than production', () => {
+  // C-5, on the reporter itself. An empty key means the build setting did not
+  // reach the plist — a fact about our packaging, not evidence about where the
+  // app is running. Guessing the commoner answer is the whole bug above.
+  assert.match(iosReporting(), /"unknown"/);
+  assert.equal(
+    /named\.isEmpty \? "production"/.test(iosReporting()),
+    false,
+    'an unset environment is being guessed as production',
+  );
 });
 
 test('no DSN means no reporting, with no second code path', () => {
