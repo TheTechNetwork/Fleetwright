@@ -447,3 +447,33 @@ test('the installer records the manifest the one-liner verified against, before 
   assert.ok(told > 0 && guessed > told, 'the environment is consulted before the git remote');
   assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "\$AGENT_HUB_RELEASE_MANIFEST"/);
 });
+
+test('a packaged box retires a leftover local coordinator, but only when it uses a remote one', () => {
+  // A release ships no coordinator — the fleet meets at the Worker — so a
+  // packaged box that still has an agent-fleet-coordinator unit is a checkout
+  // artifact from before it was packaged: loopback, no hosts, drifting on old
+  // code no update touches. It should retire itself through root's half of an
+  // update rather than needing a shell. But only when the sidecar here points at
+  // a REMOTE coordinator: a box genuinely running its own over stdio/loopback is
+  // still using it.
+  //
+  // The block lives in the "no coordinator in this payload" else, so it can only
+  // fire on a packaged box; a checkout installs and keeps its own coordinator.
+  const start = SH.indexOf('no coordinator in this payload');
+  assert.ok(start > 0, 'the packaged-coordinator branch moved');
+  const block = SH.slice(start, start + 1600);
+
+  // It reads the coordinator URL from the sidecar env, and disables only under a
+  // real (non-loopback) URL.
+  assert.match(block, /AGENT_FLEET_COORDINATOR_URL=/, 'the remote-coordinator signal is not consulted');
+  assert.match(block, /systemctl disable --now agent-fleet-coordinator/, 'the leftover unit is never disabled');
+  assert.match(block, /\*:\/\/\*\)/, 'the disable is not gated on a URL shape');
+
+  // And the loopback / stdio / unset cases are left alone — a coordinator in use
+  // must not be pulled out from under the box.
+  assert.match(block, /''\|stdio:\*\|\*127\.0\.0\.1\*\|\*localhost\*\)/, 'a local coordinator in use is not spared');
+
+  // Never touched by --check: the installer exits at the prerequisites gate
+  // before any unit work.
+  assert.match(SH, /Prerequisites look fine[\s\S]*?exit 0/);
+});

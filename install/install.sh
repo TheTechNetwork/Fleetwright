@@ -1570,6 +1570,36 @@ if [ -f "$DIR/bin/agent-fleet-coordinator" ]; then
   install_unit agent-fleet-coordinator
 else
   ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
+
+  # AND RETIRE A LEFTOVER LOCAL ONE. A release ships no coordinator, so a
+  # packaged box that still has an agent-fleet-coordinator unit is carrying a
+  # checkout artifact from before it was packaged: a loopback coordinator with no
+  # hosts, drifting on old code that no update here touches — the coordinator is
+  # not in the payload, so applyRelease and this installer both pass it by, and
+  # it sits on whatever protocol it was last built at. If the sidecar on this box
+  # talks to a REMOTE coordinator, the local one serves nothing; disable it so
+  # the box stops running a service it migrated away from. This rides root's half
+  # of every packaged update (install.sh --repair), so it needs no shell.
+  #
+  # ONLY WHEN REMOTE IS CONFIRMED. A box that genuinely runs its own coordinator
+  # points its sidecar at it over stdio or loopback, and that one is in use — so
+  # an unset, `stdio:`, or 127.0.0.1/localhost URL leaves the unit alone. Only a
+  # non-loopback URL is proof the fleet meets elsewhere.
+  if [ "$PLATFORM" != macos ] && [ -f /etc/systemd/system/agent-fleet-coordinator.service ]; then
+    COORD_URL="$(sed -n 's/^AGENT_FLEET_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+    case "$COORD_URL" in
+      ''|stdio:*|*127.0.0.1*|*localhost*)
+        : ;;  # local, loopback, or unset — the local coordinator may be in use
+      *://*)
+        if systemctl disable --now agent-fleet-coordinator >/dev/null 2>&1; then
+          ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
+        else
+          warn "a leftover local coordinator is running but could not be disabled — sudo systemctl disable --now agent-fleet-coordinator"
+        fi ;;
+      *)
+        : ;;  # not a URL shape we recognise — leave it rather than guess
+    esac
+  fi
 fi
 
 if [ -n "${UNIT_DIR_SAVED:-}" ]; then DIR="$UNIT_DIR_SAVED"; unset UNIT_DIR_SAVED; fi
