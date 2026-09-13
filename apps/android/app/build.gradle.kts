@@ -266,7 +266,7 @@ dependencies {
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship
   // separately stay compatible.
-  implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
+  implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
   implementation("com.google.firebase:firebase-messaging")
   // Declared even though firebase-messaging pulls it in transitively. The app
   // calls FirebaseInstallations directly now that the FID is the push address,
