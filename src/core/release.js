@@ -373,7 +373,14 @@ export function releasesToPrune(present, live, previous = null, { keep = RELEASE
   // one refuse a directory that already exists. It is never counted against
   // the retention limit either: it is not a version anybody could go back to.
   const incoming = present.filter((v) => v.startsWith('.incoming-'));
-  const releases = present.filter((v) => !v.startsWith('.incoming-'));
+  // QUARANTINED, AND NOT THIS CODE'S TO TOUCH. A `.stale-` entry is a release
+  // prune could not remove as the service user — a legacy one left root-owned by
+  // an old sudo install — that it renamed aside instead of failing on (see
+  // prune in release-apply.js). It is neither a release (it does not count
+  // toward retention, and must never be a rollback target) nor something this
+  // unprivileged path can delete; the root helper fleetwright-reclaim sweeps it.
+  // So it is filtered out here entirely: not kept, not returned for removal.
+  const releases = present.filter((v) => !v.startsWith('.incoming-') && !v.startsWith('.stale-'));
 
   // LIVE AND PREVIOUS ARE KEPT WHATEVER HAPPENS. They are not "the two newest"
   // — `previous` is what a rollback returns to, and it stays kept even if

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, existsSync, rmSync, symlinkSync, renameSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readlinkSync, existsSync, rmSync, symlinkSync, renameSync, readdirSync, chmodSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { applyRelease, releaseLayout, installedVersion } from '../src/core/release-apply.js';
@@ -161,6 +161,61 @@ test('past the limit, the oldest go and the running one never does', async () =>
   // The two that are not negotiable: what it runs, and what it would go back to.
   assert.ok(left.includes('v2'), 'the new release was pruned');
   assert.ok(left.includes('v1'), 'the rollback target was pruned');
+  rmSync(box.base, { recursive: true, force: true });
+});
+
+// Root ignores directory mode bits, so the un-removable directory this test
+// builds is only un-removable for a normal user. CI runs as one; a root shell
+// (a container, some dev boxes) would silently remove it and never enter the
+// catch, so skip rather than pass for the wrong reason.
+const asRoot = (process.getuid?.() ?? 1) === 0;
+
+test('a release it cannot delete is quarantined, not failed on', { skip: asRoot && 'root ignores mode bits' }, async () => {
+  // THE main-81 FAILURE. prune runs AFTER the symlink swap, so the update has
+  // already succeeded — it is only reclaiming disk. A legacy release left
+  // root-owned by an old `sudo` install cannot be removed by the service user,
+  // and an unhandled EACCES there turned a live, applied update into
+  // `update failed: EACCES …/releases/main-81`. It must be stepped over: the
+  // update stays ok, the release is renamed aside to `.stale-` (a rename needs
+  // only parent-dir write, which the service user has), and every OTHER old
+  // release is still pruned. The root helper fleetwright-reclaim removes the
+  // quarantine later.
+  const box = makeBox('v1');
+  for (let i = 0; i < 15; i++) mkdirSync(path.join(box.base, 'releases', `old-${i}`), { recursive: true });
+  // Make one of the to-be-pruned releases un-removable: a child whose contents
+  // cannot be unlinked because its own directory is not writable — the same
+  // EACCES shape, without needing a second uid.
+  const stuck = path.join(box.base, 'releases', 'old-0', 'sub');
+  mkdirSync(stuck, { recursive: true });
+  writeFileSync(path.join(stuck, 'f'), 'x');
+  chmodSync(stuck, 0o500);
+  // Back-date it so it is unambiguously the OLDEST — the fifteen siblings are
+  // created in one loop and share an mtime, and prune removes the oldest first,
+  // so without this the un-removable one might not be in the pruned set at all
+  // and the test would assert against a directory prune never touched.
+  utimesSync(path.join(box.base, 'releases', 'old-0'), new Date(1000), new Date(1000));
+
+  const rel = makeRelease('v2');
+  const r = await applyRelease({
+    installDir: box.current,
+    manifestUrl: URL_,
+    protocol: 2,
+    fetch: serve(rel, { version: 'v2', file: 'r.tar.gz', sha256: rel.sha256, protocol: 2 }),
+  });
+
+  // The update is reported as what it is: applied.
+  assert.equal(r.ok, true, `a prune failure was reported as an update failure: ${r.message}`);
+  assert.equal(r.changed, true);
+  assert.equal(path.basename(readlinkSync(box.current)), 'v2');
+  // The stuck release is renamed aside, not left under its own name and not
+  // silently claimed removed.
+  assert.equal(existsSync(path.join(box.base, 'releases', 'old-0')), false, 'the stuck release kept its name');
+  assert.equal(existsSync(path.join(box.base, 'releases', '.stale-old-0')), true, 'it was not quarantined as .stale-');
+  // And it did not stop the others: pruning continued past it.
+  const left = readdirSync(path.join(box.base, 'releases'));
+  assert.ok(left.length < 17, `nothing else was pruned after the stuck one: ${left.sort().join(' ')}`);
+
+  chmodSync(path.join(box.base, 'releases', '.stale-old-0', 'sub'), 0o700);
   rmSync(box.base, { recursive: true, force: true });
 });
 

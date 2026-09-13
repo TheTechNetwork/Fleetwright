@@ -143,7 +143,7 @@ say "Removing configuration"
 for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
-for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-migrate; do
+for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-migrate /etc/sudoers.d/agent-hub-reclaim; do
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
 # THE ROOT HELPER GOES WITH ITS RULE. It is the one thing the installer puts
@@ -158,6 +158,10 @@ fi
 if [ -f /usr/local/sbin/fleetwright-confirm ]; then
   rm -f /usr/local/sbin/fleetwright-confirm
   ok "/usr/local/sbin/fleetwright-confirm"
+fi
+if [ -f /usr/local/sbin/fleetwright-reclaim ]; then
+  rm -f /usr/local/sbin/fleetwright-reclaim
+  ok "/usr/local/sbin/fleetwright-reclaim"
 fi
 
 say "Removing the CLIs"

@@ -179,6 +179,38 @@ Two things worth knowing:
   Linux boxes only; `AGENT_HUB_UPDATE_CONFIRM_MS=0` turns the trial off, and an
   update then simply stays as it did before.
 
+### Reclaiming a release the update could not delete
+
+The last step of an update prunes old releases, and it runs as the service user
+like everything else about an update. That meets one thing it cannot remove: a
+release directory left **root-owned** by an old `sudo` install (see [Why the
+pull is not sudo](#why-the-pull-is-not-sudo-when-everything-else-is)). An
+unprivileged process cannot `rm` a root-owned tree, and an unhandled error there
+once turned an update that had *already applied* into `update failed: EACCES
+…/releases/main-81`.
+
+So prune no longer fails on it. It **renames** the directory aside to
+`.stale-<name>` — a rename needs write on `releases/` only, which the service
+user has — and carries on pruning the rest. The update is unaffected; only a
+stale directory is left, out of the release namespace.
+
+Removing that directory is the one step that needs root, and it is automatic and
+app-driven — no shell. `/usr/local/sbin/fleetwright-reclaim` is a root-owned
+helper installed alongside one narrow sudoers rule, and the hub runs it on the
+next start whenever a `.stale-` directory is present. It is scoped exactly — it
+removes only `<base>/releases/.stale-*`, nothing else, even as root — and doubly
+gated: a normal removal has to fail *first* for anything to be quarantined, and
+then the helper can touch only that quarantine.
+
+The helper installs **itself** through the update flow. Root's half of a packaged
+update already runs the release's own installer with `--repair` (see [Updating](#updating)
+and `healAfterRelease`), and that is what writes the helper and its sudoers rule —
+so a box updating from the app to a release that carries this lands the mechanism
+with no shell, and reclaims on the boot after. The only box that needs a hand is
+one whose `fleetwright-migrate` helper is itself stale (root's half then does not
+run at all, which the hub already reports); refreshing that one helper is the
+pre-existing one-line fix, after which every update refreshes what root owns.
+
 ### What an update actually updates
 
 `/update --restart` covers all four moving parts, and it took three separate

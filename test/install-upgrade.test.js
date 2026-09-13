@@ -241,7 +241,7 @@ test('the sudoers rules have one implementation, called twice', () => {
   // Every one of them validates before installing. A malformed file in
   // /etc/sudoers.d does not break one rule, it breaks sudo.
   const writers = SH.slice(SH.indexOf('write_upgrade_sudoers() {'), SH.indexOf('# --- 1. prerequisites'));
-  assert.equal((writers.match(/visudo -cf/g) || []).length, 3, 'a rule is installed without being validated');
+  assert.equal((writers.match(/visudo -cf/g) || []).length, 4, 'a rule is installed without being validated');
 });
 
 test('the migration rule names a path the service user cannot write', () => {
@@ -296,6 +296,28 @@ test('the migration helper verifies before it unpacks, and refuses a path', () =
   // Already-packaged is not a failure: a retried migration must not take a
   // working box apart to rebuild it.
   assert.match(mig, /already on the packaged layout/);
+});
+
+test('the reclaim rule names a path the service user cannot write, scoped to .stale', () => {
+  // Same security argument as the migration grant: the service user can write
+  // the whole install tree, so a rule naming anything under $DIR would let it
+  // rewrite the script it runs as root. The helper is root-owned, in
+  // /usr/local/sbin, and takes no arguments.
+  assert.match(SH, /^write_reclaim_sudoers\(\) \{/m);
+  assert.match(SH, /NOPASSWD: \/usr\/local\/sbin\/fleetwright-reclaim/);
+  const rule = SH.slice(SH.indexOf('write_reclaim_sudoers() {'), SH.indexOf('# --- 1. prerequisites'));
+  assert.doesNotMatch(rule, /fleetwright-reclaim [^\\n]/, 'the rule permits arguments');
+
+  // Installed as root, by root, on a packaged box — the mode and owner are the
+  // property, a copy that inherited the checkout's ownership would defeat it.
+  assert.match(SH, /install -m 0755 -o root -g root "\$RECLAIM_SRC\/install\/fleetwright-reclaim" \/usr\/local\/sbin\/fleetwright-reclaim/);
+
+  // And the helper itself removes ONLY the quarantine, even as root — the second
+  // gate. A blast radius wider than `<base>/releases/.stale-*` would make this a
+  // general root `rm`, which is not what the sudoers rule is agreeing to.
+  const helper = readFileSync(new URL('../install/fleetwright-reclaim', import.meta.url), 'utf8');
+  assert.match(helper, /\.stale-\*/, 'the helper does not scope removal to the quarantine prefix');
+  assert.doesNotMatch(helper, /^\s*\.\s+"?\$ENV_FILE/m, 'the env file is sourced, not read');
 });
 
 test('an install ends up packaged unless somebody asks for a checkout', () => {

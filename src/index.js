@@ -15,6 +15,7 @@ import { ensureApiToken } from './core/api-token.js';
 import { adoptBoxAccount } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
 import { readConfirmation, noteHealth } from './core/update-confirm.js';
+import { reclaimStale } from './core/reclaim.js';
 import { Connections } from './core/connectors.js';
 import { rowForActor } from './core/accounts.js';
 import { loadEnvFile } from './core/env-file.js';
@@ -41,6 +42,20 @@ export async function main() {
 
   mkdirSync(cfg.stateDir, { recursive: true });
   ensureWorkdirTrusted(cfg);
+
+  // Sweep any release prune could not delete and quarantined as `.stale-`. An
+  // update runs as the service user, which cannot remove a legacy root-owned
+  // release, so it renames it aside; this is where the disk is actually
+  // reclaimed, through the one narrow root helper. Only shells out when a
+  // `.stale-` directory is present AND the helper is installed, so a settled box
+  // pays a single readdir. Never fatal: housekeeping, not a reason to fail to
+  // start. On the way up because an update restarts the services right after it
+  // quarantines, so the sweep lands on the very next boot.
+  try {
+    reclaimStale(cfg);
+  } catch (e) {
+    log.warn(`update: stale-release reclaim failed: ${/** @type {Error} */ (e).message}`);
+  }
 
   // Undo a rootless pause namespace poisoned by a previous `ProtectProc` unit
   // BEFORE anything tries to start a container. Without this, an in-app update
