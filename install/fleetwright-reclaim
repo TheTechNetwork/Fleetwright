@@ -1,0 +1,66 @@
+#!/bin/sh
+# Remove the release directories prune could not. Root, no arguments.
+#
+#   sudo -n /usr/local/sbin/fleetwright-reclaim
+#
+# WHY THIS EXISTS. A packaged box updates entirely as the service user — fetch,
+# verify, unpack, swap a symlink, prune the old releases. Prune is the one step
+# that can meet a thing the service user cannot touch: a legacy release left
+# root-owned by an old `sudo` install (docs/deployment.md, "why the pull is not
+# sudo"). It cannot `rm` a root-owned tree, so instead it renames that directory
+# aside to `.stale-<name>` (a rename needs write on `releases/` only, which it
+# has) and carries on. Reclaiming the disk is the one step that needs root, and
+# this is it — the same shape as fleetwright-migrate: a narrow, root-owned helper
+# the service user may run through one sudoers rule and cannot rewrite.
+#
+# WHAT IT WILL AND WILL NOT TOUCH, stated plainly because a root grant nobody
+# has bounded is a grant nobody can review:
+#
+#   ONLY direct children of <base>/releases whose names begin with `.stale-`.
+#   Nothing else, ever — not a live release, not `current`, not a path outside
+#   the release tree. Even as root, this removes only what prune already gave up
+#   on and quarantined, which is the whole point of the two gates: a normal
+#   removal has to FAIL FIRST for a `.stale-` entry to exist, and then this can
+#   remove only entries of that one shape.
+#
+# NO ARGUMENTS, for the reason the other rules spell their command lines out:
+# sudoers matches argv, and every argument is a widening. The base is read from
+# the root-owned env file, exactly as fleetwright-migrate reads its manifest URL.
+set -eu
+
+ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/agent-hub.env}"
+log() { printf '%s\n' "$*"; }
+
+# BEING ABLE TO WRITE IS THE REQUIREMENT, NOT BEING ROOT — the same rule
+# fleetwright-migrate and bootstrap.sh state, so the whole path is testable
+# against a temporary tree instead of only ever on a real box.
+BASE="${AGENT_FLEET_BASE:-}"
+if [ -z "$BASE" ]; then
+  # Read it the way systemd does — take the value, never source the file, which
+  # would execute whatever is in it in a root shell.
+  BASE="$(sed -n 's/^AGENT_HUB_INSTALL_DIR=//p' "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+  # AGENT_HUB_INSTALL_DIR points at `<base>/current`; the releases live one level
+  # up. Absent, the default layout is /opt/fleetwright.
+  case "$BASE" in
+    */current) BASE="${BASE%/current}" ;;
+    '') BASE=/opt/fleetwright ;;
+  esac
+fi
+
+RELEASES="$BASE/releases"
+[ -d "$RELEASES" ] || { log "no $RELEASES — nothing to reclaim"; exit 0; }
+
+# A glob, which lists DIRECT CHILDREN only — it never recurses — so this cannot
+# reach past releases/ into a nested path. `[ -e ]` is the guard for the
+# no-match case: an unmatched glob expands to the literal `.stale-*`, which is
+# not a real path, so it is skipped rather than handed to rm. `rm -rf` on a
+# `.stale-` that is itself a symlink removes the link, not its target.
+found=0
+for entry in "$RELEASES"/.stale-*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue    # the no-match case
+  found=1
+  rm -rf -- "$entry"
+  log "reclaimed $(basename "$entry")"
+done
+[ "$found" = 1 ] || log "no quarantined releases to reclaim"
+exit 0

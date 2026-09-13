@@ -290,7 +290,7 @@ function prune(base, live, previous, log) {
   // last, which means it is a candidate for removal rather than something that
   // silently occupies a retention slot.
   const newestFirst = present
-    .filter((v) => !v.startsWith('.incoming-'))
+    .filter((v) => !v.startsWith('.incoming-') && !v.startsWith('.stale-'))
     .map((v) => {
       let at = 0;
       try { at = statSync(path.join(dir, v)).mtimeMs; } catch { /* sorts last */ }
@@ -308,13 +308,29 @@ function prune(base, live, previous, log) {
     // legacy release left root-owned by an old `sudo` install (docs/deployment.md,
     // "why the pull is not sudo") that `rmSync` cannot delete as the service user.
     // A stale directory costs a megabyte; a thrown error costs the update its
-    // report and re-fires on every future update of the same box. So log it and
-    // keep going — every OTHER old release still gets pruned.
+    // report and re-fires on every future update of the same box.
     try {
       rmSync(path.join(dir, name), { recursive: true, force: true });
       log(`update: removed release ${name}`);
-    } catch (e) {
-      log(`update: could not remove old release ${name} (${/** @type {Error} */ (e).message}) — leaving it`);
+    } catch {
+      // CANNOT DELETE IT, SO QUARANTINE IT — rename it out of the release
+      // namespace. A rename needs write on `releases/` only (which the service
+      // user has), NOT on the root-owned directory itself, so this succeeds
+      // where the rm could not. Renamed to `.stale-`, it stops counting as a
+      // release, stops being re-attempted on every future prune, and becomes the
+      // one thing the narrow root helper fleetwright-reclaim is allowed to
+      // remove. The escalation is doubly gated: a normal removal has to fail
+      // FIRST for anything to land here, and root may only ever touch `.stale-`.
+      const stale = path.join(dir, `.stale-${name}`);
+      try {
+        rmSync(stale, { recursive: true, force: true });
+        renameSync(path.join(dir, name), stale);
+        log(`update: could not remove old release ${name}; quarantined it as .stale-${name} for fleetwright-reclaim`);
+      } catch (e2) {
+        // Even the rename failed (a releases/ this user cannot write). Leaving it
+        // is still not fatal — the update already applied.
+        log(`update: could not remove or quarantine old release ${name} (${/** @type {Error} */ (e2).message}) — leaving it`);
+      }
     }
   }
 }

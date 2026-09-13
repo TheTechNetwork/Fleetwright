@@ -179,6 +179,31 @@ Two things worth knowing:
   Linux boxes only; `AGENT_HUB_UPDATE_CONFIRM_MS=0` turns the trial off, and an
   update then simply stays as it did before.
 
+### Reclaiming a release the update could not delete
+
+The last step of an update prunes old releases, and it runs as the service user
+like everything else about an update. That meets one thing it cannot remove: a
+release directory left **root-owned** by an old `sudo` install (see [Why the
+pull is not sudo](#why-the-pull-is-not-sudo-when-everything-else-is)). An
+unprivileged process cannot `rm` a root-owned tree, and an unhandled error there
+once turned an update that had *already applied* into `update failed: EACCES
+…/releases/main-81`.
+
+So prune no longer fails on it. It **renames** the directory aside to
+`.stale-<name>` — a rename needs write on `releases/` only, which the service
+user has — and carries on pruning the rest. The update is unaffected; only a
+stale directory is left, out of the release namespace.
+
+Removing that directory is the one step that needs root, and it is automatic:
+`/usr/local/sbin/fleetwright-reclaim` is a root-owned helper the installer puts
+down alongside one narrow sudoers rule, and the hub runs it on the next start
+whenever a `.stale-` directory is present. It is scoped exactly — it removes only
+`<base>/releases/.stale-*`, nothing else, even as root — and doubly gated: a
+normal removal has to fail *first* for anything to be quarantined, and then the
+helper can touch only that quarantine. A box installed before this shipped keeps
+the `.stale-` directory harmlessly until an `install.sh --upgrade` puts the
+helper in place.
+
 ### What an update actually updates
 
 `/update --restart` covers all four moving parts, and it took three separate

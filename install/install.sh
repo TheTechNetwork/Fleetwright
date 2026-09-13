@@ -638,7 +638,7 @@ previous_install() {
       [ -f "/etc/systemd/system/$u.service" ] && FOUND+=("service   $u")
     fi
   done
-  for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot; do
+  for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-reclaim; do
     [ -f "$f" ] && FOUND+=("sudoers   $f")
   done
   # THE LAST COMMAND OF THIS FUNCTION DECIDES ITS EXIT STATUS, and the loop
@@ -742,6 +742,27 @@ write_reboot_sudoers() {
   printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl reboot\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-reboot
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# RECLAIMING A ROOT-OWNED RELEASE prune COULD NOT DELETE. An update runs as the
+# service user; when prune meets a legacy release left root-owned by an old
+# `sudo` install it renames it aside to `.stale-` and carries on, because the
+# unprivileged process cannot remove a root-owned tree. This rule lets the
+# service user run the one helper that can, and it is scoped exactly the way the
+# migrate rule is: root-owned, outside the writable install tree, no arguments —
+# so the caller cannot widen it, and the helper itself removes only
+# `<base>/releases/.stale-*` and nothing else.
+write_reclaim_sudoers() {
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-reclaim\n' "$RUN_USER" > "$tmp"
+  if visudo -cf "$tmp" >/dev/null 2>&1; then
+    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-reclaim
     rm -f "$tmp"
     return 0
   fi
@@ -1570,6 +1591,27 @@ if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; th
     install_unit agent-fleet-confirm
     install -m 0644 -o root -g root "$CONFIRM_SRC/install/agent-fleet-confirm.timer" /etc/systemd/system/agent-fleet-confirm.timer
     ok "commit-confirm watchdog installed (reverts an update that cannot prove itself)"
+  fi
+fi
+
+# THE STALE-RELEASE RECLAIMER. prune cannot delete a legacy release left
+# root-owned by an old `sudo` install, so it renames it aside to `.stale-` and an
+# update goes on succeeding; this root-owned helper is the one thing that can
+# then remove it, invoked by the service user through one narrow sudoers rule.
+# Packaged Linux only, same as the watchdog: a checkout has no releases/ to prune.
+# Root-owned and outside the writable install tree, for the migrate rule's
+# reason — a helper the service can rewrite is not a narrow grant.
+if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; then
+  RECLAIM_SRC="$SELF_DIR"
+  [ -f "$RECLAIM_SRC/install/fleetwright-reclaim" ] || RECLAIM_SRC="$DIR"
+  if [ -f "$RECLAIM_SRC/install/fleetwright-reclaim" ]; then
+    install -m 0755 -o root -g root "$RECLAIM_SRC/install/fleetwright-reclaim" /usr/local/sbin/fleetwright-reclaim
+    if write_reclaim_sudoers; then
+      ok "installed /usr/local/sbin/fleetwright-reclaim (reclaims releases prune could not delete)"
+    else
+      warn "installed /usr/local/sbin/fleetwright-reclaim but its sudoers rule did not validate"
+      warn "  a root-owned release prune quarantines will need: sudo /usr/local/sbin/fleetwright-reclaim"
+    fi
   fi
 fi
 
