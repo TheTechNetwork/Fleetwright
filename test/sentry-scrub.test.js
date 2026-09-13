@@ -34,11 +34,23 @@ const androidManifest = () =>
   readFileSync(new URL('../apps/android/app/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
 
 // One manifest meta-data value, by key name. Returns undefined when the key is
-// absent, which is the case the tests below are actually about.
-const androidMeta = (key) =>
-  androidManifest().match(
-    new RegExp(`name="${key.replace(/\./g, '\\.')}"[^/]*?android:value="([^"]*)"`, 's'),
-  )?.[1];
+// absent, which is the case several tests below are actually about.
+//
+// Read with ONE STATIC PATTERN into a Map, rather than building a pattern per
+// key. The first version interpolated the key and escaped `.` in it — CodeQL
+// caught that as an incomplete escape and was right: it left `\` and every
+// other metacharacter alone. The fix is not a better escape function. Nothing
+// here needs a regex built at run time, and an exact-string lookup in a Map
+// cannot be wrong in that way at all.
+//
+// `[^>]` already spans newlines, which the two-line `io.sentry.dsn` entry needs,
+// and cannot run past the `/>` of its own element into the next one's value.
+const androidMeta = (key) => {
+  const entries = androidManifest().matchAll(
+    /<meta-data\s[^>]*?android:name="([^"]*)"[^>]*?android:value="([^"]*)"/g,
+  );
+  return new Map([...entries].map((m) => [m[1], m[2]])).get(key);
+};
 
 test('a credential in the query string does not survive', () => {
   // openapi.json: "A credential may arrive as Authorization: Bearer <token> OR
