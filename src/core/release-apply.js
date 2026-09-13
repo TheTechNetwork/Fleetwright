@@ -300,7 +300,21 @@ function prune(base, live, previous, log) {
     .map((e) => e.v);
 
   for (const name of releasesToPrune(present, live, previous, { newestFirst })) {
-    rmSync(path.join(dir, name), { recursive: true, force: true });
-    log(`update: removed release ${name}`);
+    // PAST THE POINT OF NO RETURN, AND THAT IS THE WHOLE REASON THIS IS CAUGHT.
+    // prune runs AFTER the symlink swap (step 7, see the top of this file), so
+    // the update has already SUCCEEDED — this is only reclaiming disk. A release
+    // directory the service user cannot remove is the one shape that turned a
+    // live, applied update into `update failed: EACCES …/releases/main-81`: a
+    // legacy release left root-owned by an old `sudo` install (docs/deployment.md,
+    // "why the pull is not sudo") that `rmSync` cannot delete as the service user.
+    // A stale directory costs a megabyte; a thrown error costs the update its
+    // report and re-fires on every future update of the same box. So log it and
+    // keep going — every OTHER old release still gets pruned.
+    try {
+      rmSync(path.join(dir, name), { recursive: true, force: true });
+      log(`update: removed release ${name}`);
+    } catch (e) {
+      log(`update: could not remove old release ${name} (${/** @type {Error} */ (e).message}) — leaving it`);
+    }
   }
 }
