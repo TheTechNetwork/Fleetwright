@@ -41,13 +41,33 @@ const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').rep
 const gradle = () =>
   readFileSync(new URL('../apps/android/app/build.gradle.kts', import.meta.url), 'utf8');
 
-// The keep file with its commentary gone, for the reason `bare` exists above:
-// that file spends most of its length explaining which resource it deliberately
-// does NOT keep, and a test that reads the explanation as the rule would pass
-// on a file that keeps nothing at all.
-const keepFile = () =>
-  readFileSync(new URL('../apps/android/app/src/main/res/raw/keep.xml', import.meta.url), 'utf8')
-    .replace(/<!--[\s\S]*?-->/g, '');
+// What keep.xml actually keeps, as a list.
+//
+// THE ATTRIBUTE, NOT THE FILE, and the difference is the whole helper. That
+// file spends most of its length explaining which resource it deliberately does
+// NOT keep, so a whole-file grep would read the explanation as the rule and
+// pass on a file that keeps nothing at all.
+//
+// The first version stripped the comments with `.replace(/<!--[\s\S]*?-->/g, '')`
+// and asserted over what was left, which CodeQL failed as an incomplete
+// multi-character sanitization and was right about: one pass over `<!--<!---->`
+// leaves a `<!--` behind. The answer is not a better regex — it is that nothing
+// here needs one. The thing under test is a single attribute, and reading it is
+// exact.
+//
+// Same lesson, and the same shape, as the androidMeta helper in
+// sentry-scrub.test.js.
+const keptResources = () => {
+  const xml = readFileSync(
+    new URL('../apps/android/app/src/main/res/raw/keep.xml', import.meta.url),
+    'utf8',
+  );
+  const keep = /\stools:keep="([^"]*)"/.exec(xml)?.[1] ?? '';
+  return keep
+    .split(',')
+    .map((r) => r.trim())
+    .filter(Boolean);
+};
 
 test('nothing asks for the default FirebaseApp without checking there is one', () => {
   const app = bare(androidSources());
@@ -98,18 +118,17 @@ test('the resource shrinker is told to keep what Firebase reads by name', () => 
   // Firebase SDK happens to hold the name as a literal in its own dex, which
   // the shrinker reads: a heuristic about somebody else's code, one R8 release
   // or one SDK refactor from being false, with a green build either way.
-  const keep = keepFile();
+  const kept = keptResources();
   // The one that decides. FirebaseOptions.fromResource returns null the moment
   // it is empty, and everything downstream follows from that.
-  assert.match(keep, /@string\/google_app_id/);
-  for (const name of ['google_api_key', 'gcm_defaultSenderId', 'project_id']) {
-    assert.match(keep, new RegExp(`@string/${name}`), `${name} is not kept`);
+  for (const name of ['google_app_id', 'google_api_key', 'gcm_defaultSenderId', 'project_id']) {
+    assert.ok(kept.includes(`@string/${name}`), `${name} is not kept`);
   }
   // Not default_web_client_id: the shrinker stripped that one, it reached
   // people, and the answer was to stop needing it at run time rather than to
   // keep it. build.gradle.kts compiles it into BuildConfig instead.
   assert.equal(
-    keep.includes('default_web_client_id'),
+    kept.some((r) => r.includes('default_web_client_id')),
     false,
     'default_web_client_id is read from BuildConfig now; keeping the resource resurrects a lookup nobody makes',
   );
