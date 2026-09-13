@@ -41,7 +41,7 @@
 
          What is left is the crash and the stack, which is what this is for. -->
     <meta-data android:name="io.sentry.dsn"
-        android:value="https://REPLACE_WITH_ANDROID_DSN@o4512012096765952.ingest.us.sentry.io/0" />
+        android:value="https://a9b18b2c6f1215fcb90fa31b1478f537@o4512012096765952.ingest.us.sentry.io/4512012110790656" />
     <meta-data android:name="io.sentry.send-default-pii" android:value="false" />
     <meta-data android:name="io.sentry.attach-screenshot" android:value="false" />
     <meta-data android:name="io.sentry.attach-view-hierarchy" android:value="false" />
@@ -51,6 +51,57 @@
     <!-- Not 1.0. Tracing is off entirely: this app's spans would be its own
          requests to the coordinator, which is the one thing not to record. -->
     <meta-data android:name="io.sentry.traces.sample-rate" android:value="0.0" />
+
+    <!-- SESSION REPLAY, WHICH IS A RECORDING OF THIS APP'S SCREENS AND IS THE
+         ONE THING IN THIS BLOCK THAT IS NOT A REFUSAL.
+
+         The keys above refuse a still of the screen; these ask for the
+         sequence of them. Worth stating, because somebody reading
+         attach-screenshot four lines up will reasonably wonder.
+
+         A REPLAY FRAME IS COMPOSITED, NOT CAPTURED. Every text view and every
+         image view is a rectangle before the frame is encoded, so what leaves
+         the phone is the shape of the app - which screen, which sheet, in
+         which order - and none of the words on it. That order is the part a
+         stack trace does not have; a single masked still is not, which is why
+         the trade comes out differently for the two.
+
+         THE MASKING IS WRITTEN OUT THOUGH BOTH ARE ALREADY THE SDK'S DEFAULT.
+         A default is something a minor version may change and a line is not,
+         and these two are the entire reason the feature is defensible in an
+         app holding a fleet credential, a coordinator address and a signed-in
+         email. Nothing downstream catches them if they go - a frame is not an
+         event and passes through no hook.
+
+         SAME FOUR VALUES AS iOS, deliberately: FleetwrightApp.swift carries
+         the long version of the argument, and test/sentry-scrub.test.js reads
+         both files and fails if they ever stop matching. These keys are also
+         literals from Sentry's documentation rather than names inferred from
+         the Swift beside them - a meta-data name the SDK does not recognise is
+         SILENTLY IGNORED, so a typo here is a replay that never records and
+         says nothing about it.
+
+         The canvas screenshot strategy is the stronger guarantee and was not
+         taken; docs/error-reporting.md says why, and it is one line. -->
+    <meta-data android:name="io.sentry.session-replay.mask-all-text" android:value="true" />
+    <meta-data android:name="io.sentry.session-replay.mask-all-images" android:value="true" />
+    <!-- Every session that goes wrong, which is the whole point: the previous
+         thirty seconds, attached to the error, without anybody having to
+         reproduce it. -->
+    <meta-data android:name="io.sentry.session-replay.on-error-sample-rate" android:value="1.0" />
+    <!-- AND NO AMBIENT RECORDING. The quickstart says 0.1 and that is the one
+         number here it does not get: one session in ten would be a recording
+         of somebody's fleet made with no incident behind it and nothing
+         waiting to read it, which is collection this file has spent every
+         other line declining. Same argument that put traces.sample-rate above
+         at 0.0 and the Worker's at 0.05 rather than 1.0.
+
+         It costs nothing diagnostic - the line above already covers every
+         session that breaks, and a session that did not is not one anybody
+         opens. Raising it is this one line, and it is the line to raise while
+         testing the feature, since until somebody does a replay only ever
+         appears attached to an error. -->
+    <meta-data android:name="io.sentry.session-replay.session-sample-rate" android:value="0.0" />
 
     <activity
         android:name=".MainActivity"

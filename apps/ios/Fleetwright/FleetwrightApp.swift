@@ -95,10 +95,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ///   for a URL this app did not build.
     /// - `sendDefaultPii` stays OFF, so no IP address and no identifiers.
     /// - Tracing is off entirely: the spans would be those same requests.
+    /// - Session replay is ON, and is the one thing here that is not a refusal.
+    ///   It records only when something broke — `sessionSampleRate` is 0, not
+    ///   the quickstart's 0.1 — and every text run and image in the frame is a
+    ///   rectangle before it is encoded. What it sends is the order the screens
+    ///   came in, which is the part the stack trace is missing. The paragraph
+    ///   at the call site is the long version, including why this and
+    ///   `attachScreenshot` come out differently.
     ///
     /// And `beforeSend` is the backstop rather than the plan. Every switch
     /// above can be undone by a careless edit or a new SDK default; a token
     /// that reaches this closure is still removed.
+    ///
+    /// It is not a backstop for the replay, and nothing is — a frame never
+    /// passes through it. The masking switches are load-bearing on their own,
+    /// which is why they are written out rather than inherited from the SDK.
     private func startErrorReporting() {
         // Absent means no reporting, which is what a fork or a fresh clone
         // gets. One code path rather than an `if` somebody can get wrong.
@@ -115,6 +126,60 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             options.enableCaptureFailedRequests = false
             options.enableUserInteractionTracing = false
             options.tracesSampleRate = 0.0
+            // SESSION REPLAY, WHICH IS A RECORDING OF THIS APP'S SCREENS
+            // AND THEREFORE NEEDS A PARAGRAPH RATHER THAN A LINE.
+            //
+            // The switches above refuse a still of the screen; this asks for
+            // the sequence of them. Worth stating, because somebody reading
+            // `attachScreenshot = false` a few lines up will reasonably wonder.
+            //
+            // A REPLAY FRAME IS COMPOSITED, NOT CAPTURED. Every text run and
+            // every image is a rectangle before the frame is encoded, so what
+            // leaves the phone is the shape of the app — which screen, which
+            // sheet, in which order — and none of the words on it. That order
+            // is the part a stack trace does not have. A single masked still is
+            // not, which is why the trade comes out differently for the two and
+            // `attachScreenshot` stays off rather than being reconsidered.
+            //
+            // THE MASKING IS WRITTEN OUT THOUGH BOTH ARE ALREADY THE DEFAULT.
+            // A default is something an SDK may change in a minor version and a
+            // line is not, and these two are the entire reason the feature is
+            // defensible in an app holding a fleet credential, a coordinator
+            // address and a signed-in email. Nothing downstream catches them if
+            // they go — a frame never passes through `beforeSend`. Turning
+            // either off is not a tuning change; it is the credentials sheet,
+            // legible, on somebody else's server.
+            options.sessionReplay.maskAllText = true
+            options.sessionReplay.maskAllImages = true
+            // Every session that goes wrong, which is the whole point: the
+            // seconds before the crash, attached to the crash, without anybody
+            // having to reproduce it.
+            options.sessionReplay.onErrorSampleRate = 1.0
+            // AND NO AMBIENT RECORDING. The quickstart says 0.1 and that is the
+            // one number here it does not get: one session in ten would be a
+            // recording of somebody's fleet made with no incident behind it and
+            // nothing waiting to read it, which is collection this file has
+            // spent every other line declining. Same argument that put the
+            // Worker's `tracesSampleRate` at 0.05 rather than 1.0.
+            //
+            // It costs nothing diagnostic — the line above already covers every
+            // session that breaks, and a session that did not is not one anybody
+            // opens. Raising it is this one line, and it is the line to raise
+            // while testing the feature, since until somebody does a replay only
+            // ever appears attached to an error.
+            options.sessionReplay.sessionSampleRate = 0.0
+            // NETWORK DETAIL IS LEFT UNSET, and that is the configuration
+            // rather than an omission. `networkDetailAllowUrls`,
+            // `networkRequestHeaders` and `networkResponseHeaders` would attach
+            // request and response detail to the replay, and every request this
+            // app makes carries the fleet credential in a header — the same
+            // refusal `enableNetworkBreadcrumbs` above makes by another route.
+            // Named so that adding one later is a decision somebody takes
+            // rather than a blank they fill in.
+            //
+            // No `if #available(iOS 16.0, *)`: replay needs 16 and the
+            // deployment target is 26, so the guard would be unreachable.
+            // docs/error-reporting.md carries the rest of the argument.
             options.beforeSend = { event in
                 event.user = nil
                 event.request?.headers = nil
