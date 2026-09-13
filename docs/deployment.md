@@ -582,21 +582,40 @@ button that would apply it runs the very code that refuses.
 The one lever a stranded host still obeys is the **manifest it polls** — and its
 gate only fires when the manifest *has* a protocol (`if (typeof m.protocol ===
 'number' && …)`). So a **recovery release built without one** is accepted by
-every host's existing update button, stuck-old or current:
+every host's existing update button, stuck-old or current.
+
+**On the rolling channel, this is a button.** Run the *Host release* workflow by
+hand (Actions → Host release → Run workflow) with **recovery** ticked. It builds
+from `main` (which carries the fix), omits the manifest's protocol field, and
+republishes the rolling tag — the one address a rolling host polls. No shell, no
+release to cut, no per-box work:
+
+1. Actions → **Host release** → **Run workflow**, branch `main`, **recovery: ✓**.
+2. Wait for it to go green (it publishes to the `rolling` tag).
+3. **Hold merges to `main` for ~20 minutes.** Hosts poll every 15 minutes, and
+   the *next* ordinary merge republishes a protocol-carrying manifest that would
+   re-strand any host that has not yet polled. This window is the whole cost of
+   the guard being off.
+4. Each stranded host's update button now offers the release (the deadlock
+   message is gone). Apply it per host, or fleet-wide with `/update` from the
+   app. The host lands on the fixed code and rejoins by negotiation.
+
+Once every host is across, **resume merges** — the next one restores the
+protocol-carrying manifest and the downgrade guard with it. A host on the fixed
+code crosses every future bump on its own; this is the last manual step the
+deadlock needs.
+
+**Off the rolling channel** (a stable host polling `releases/latest/download`),
+the same manifest has to be built and attached by hand, because "latest" tracks
+GitHub's own published-release pointer rather than a movable tag:
 
 ```sh
 # From the fixed code (the release you cut carries decideRelease's forward-bump
 # fix). RELEASE_RECOVERY omits the manifest's protocol field.
 RELEASE_RECOVERY=1 node tools/build-host-package.mjs
-# Publish the resulting manifest.json + tarball to the channel the stuck hosts
-# poll (rolling or latest), exactly as a normal release.
+# Attach the resulting manifest.json + tarball to the release the stuck hosts'
+# `latest` pointer resolves to, then cut a normal release once they are across.
 ```
-
-Stuck hosts catch it on their next check, apply it, restart onto the fixed code,
-and rejoin the coordinator by negotiation — no ssh, no per-box work. Once they
-are across, **cut a normal release** (protocol carried again) so the downgrade
-guard the field also provides is back on. This is the last manual step the
-deadlock needs: a host on the fixed code crosses every future bump on its own.
 
 ### Why the pull is not sudo, when everything else is
 

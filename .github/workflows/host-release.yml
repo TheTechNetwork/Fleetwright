@@ -23,6 +23,32 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      recovery:
+        # THE BUTTON THAT UNSTICKS A STRANDED FLEET, and it exists because the
+        # deadlock it fixes is only reachable from OUTSIDE the host. A box on
+        # code that predates the forward-bump fix (see decideRelease in
+        # src/core/release.js) refuses every manifest whose protocol is not its
+        # own — and the only manifest it polls is the rolling tag, fetched
+        # straight from GitHub with the coordinator nowhere in the path. So
+        # nothing the host runs, and nothing a coordinator deploy changes, can
+        # reach it. Its one lever is the manifest.
+        #
+        # RELEASE_RECOVERY builds that manifest WITHOUT a protocol field, which
+        # every host — stuck-old or current — accepts, because the old gate only
+        # fires when the field is present. Ticking this republishes the rolling
+        # manifest that way, from main (which carries the fix), so a stranded
+        # host's EXISTING update button offers it, lands the box on fixed code,
+        # and it rejoins by negotiation. The tarball is a normal build; only the
+        # manifest omits the field.
+        #
+        # THE DOWNGRADE GUARD IS OFF FOR THAT MANIFEST until the next normal
+        # merge to main republishes a protocol-carrying one. Hosts poll every 15
+        # minutes, so HOLD MERGES TO MAIN for ~20 minutes after running this —
+        # a merge in that window re-strands any host that has not yet polled.
+        description: 'Republish the rolling manifest without a protocol field, to unstick hosts stranded on pre-fix code'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -66,6 +92,12 @@ jobs:
           # changes rather than a commit. Unset means everybody, which is how
           # every release has behaved until now.
           RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
+          # OFF EXCEPT ON THE RECOVERY BUTTON. `inputs.recovery` is empty on a
+          # push or a release, and the builder treats only '1'/'true' as
+          # recovery — so this changes nothing until somebody ticks the box.
+          # It omits the manifest's protocol field; the tarball is byte-identical
+          # to a normal build, so the reproducibility check below still holds.
+          RELEASE_RECOVERY: ${{ inputs.recovery }}
         run: |
           node tools/build-host-package.mjs | tee build.log
           echo "sha256=$(awk '/^sha256/ {print $2}' build.log)" >> "$GITHUB_OUTPUT"
@@ -89,6 +121,10 @@ jobs:
           # changes rather than a commit. Unset means everybody, which is how
           # every release has behaved until now.
           RELEASE_ROLLOUT: ${{ vars.RELEASE_ROLLOUT }}
+          # Same value as the first build, or the two would differ for a reason
+          # that has nothing to do with the code — and the recovery build has to
+          # be reproducible too.
+          RELEASE_RECOVERY: ${{ inputs.recovery }}
         run: |
           first="${{ steps.build.outputs.sha256 }}"
           rm -rf dist
@@ -183,7 +219,13 @@ jobs:
   # Same mechanism as a release, different address.
   rolling-channel:
     needs: package
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Every merge to main, AND the recovery button. The recovery build publishes
+    # the same tarball with a protocol-omitted manifest to this same tag — the
+    # one address a stranded rolling host polls — so the publish step below is
+    # reused unchanged; only the manifest it uploads differs.
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.recovery)
     runs-on: ubuntu-latest
     permissions:
       contents: write

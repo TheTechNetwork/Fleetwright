@@ -200,9 +200,39 @@ test('the rolling channel is main, and it is published somewhere a host can poll
   // that address cannot see main even by accident.
   assert.match(job, /--prerelease/);
 
-  // Only on a merge to main, and never on a published release — that is the
-  // attach job's business.
-  assert.match(job, /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+  // On a merge to main, and never on a published release — that is the attach
+  // job's business.
+  assert.match(job, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+  assert.doesNotMatch(job, /github\.event_name == 'release'/, 'the rolling job runs on a published release');
+
+  // AND ON THE RECOVERY BUTTON. A host stranded on pre-fix code refuses every
+  // manifest whose protocol is not its own, and the rolling tag it polls is the
+  // only address that can reach it — the coordinator is not in that path. So a
+  // manual run with `recovery` republishes this same tag with a protocol-omitted
+  // manifest, which the old gate does not refuse. Without this clause the one
+  // lever that unsticks a fleet would need a shell on every box.
+  assert.match(job, /github\.event_name == 'workflow_dispatch' && inputs\.recovery/);
+});
+
+test('the recovery button builds a protocol-omitted manifest, off by default', () => {
+  // The deadlock is only reachable from outside the host, so the fix is a button
+  // in CI rather than code the host runs. It must default OFF — a recovery
+  // manifest turns the downgrade guard off for that build — and it must feed the
+  // builder's recovery mode, or the button would publish an ordinary manifest a
+  // stranded host still refuses.
+  const yml = readFileSync(new URL('../.github/workflows/host-release.yml', import.meta.url), 'utf8');
+
+  // Declared as a dispatch input, defaulting to false.
+  const dispatch = yml.slice(yml.indexOf('workflow_dispatch:'), yml.indexOf('concurrency:'));
+  assert.match(dispatch, /recovery:/, 'no recovery input on the manual trigger');
+  assert.match(dispatch, /type: boolean/);
+  assert.match(dispatch, /default: false/, 'the recovery button is not off by default');
+
+  // And wired into the build's recovery mode. Both builds (the second proves the
+  // first reproduces) must pass it, or they would differ for a reason unrelated
+  // to the code.
+  const passes = yml.match(/RELEASE_RECOVERY: \$\{\{ inputs\.recovery \}\}/g) || [];
+  assert.equal(passes.length, 2, `RELEASE_RECOVERY is wired into ${passes.length} build steps, not both`);
 });
 
 test('a stable host pointed at main by hand is still refused', () => {
