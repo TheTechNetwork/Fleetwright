@@ -164,6 +164,12 @@ android {
       // included. Use R8 to get the best performance", an optimisation score of
       // Low, and an unshrunk bundle.
       isMinifyEnabled = true
+      // AND SEE res/raw/keep.xml, which is the other half of the comment forty
+      // lines above about default_web_client_id. The shrinker removes any
+      // resource nothing statically references, the Google Services plugin's
+      // output is referenced only by name through getIdentifier, and a missing
+      // `google_app_id` is not a missing string — it is `FirebaseApp` never
+      // initialising and every call into it throwing.
       isShrinkResources = true
       proguardFiles(
         // -optimize, not the plain one. The default android.txt disables the

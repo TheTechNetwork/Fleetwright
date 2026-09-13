@@ -41,6 +41,14 @@ const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').rep
 const gradle = () =>
   readFileSync(new URL('../apps/android/app/build.gradle.kts', import.meta.url), 'utf8');
 
+// The keep file with its commentary gone, for the reason `bare` exists above:
+// that file spends most of its length explaining which resource it deliberately
+// does NOT keep, and a test that reads the explanation as the rule would pass
+// on a file that keeps nothing at all.
+const keepFile = () =>
+  readFileSync(new URL('../apps/android/app/src/main/res/raw/keep.xml', import.meta.url), 'utf8')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
 test('nothing asks for the default FirebaseApp without checking there is one', () => {
   const app = bare(androidSources());
   // The bare getInstance() is the throw. Its argument-taking sibling is not:
@@ -74,4 +82,43 @@ test('a build with no Firebase config is still a build this repository expects',
   // then "no default app" stops being a supported state, and the guard could
   // be argued away — so the two are asserted together rather than separately.
   assert.match(gradle(), /if \(file\("google-services\.json"\)\.exists\(\)\) \{/);
+});
+
+// --- and the other way to have no default app ---------------------------------
+//
+// The guard above stops the crash. It does not put push back, and the question
+// of why a Play build with google-services.json committed had no `google_app_id`
+// is a separate one with its own answer below.
+
+test('the resource shrinker is told to keep what Firebase reads by name', () => {
+  // isShrinkResources removes any resource nothing STATICALLY references, and
+  // the Google Services plugin's output is referenced only through
+  // getIdentifier — the identical shape that stripped default_web_client_id
+  // and reached people. `google_app_id` survived that round because the
+  // Firebase SDK happens to hold the name as a literal in its own dex, which
+  // the shrinker reads: a heuristic about somebody else's code, one R8 release
+  // or one SDK refactor from being false, with a green build either way.
+  const keep = keepFile();
+  // The one that decides. FirebaseOptions.fromResource returns null the moment
+  // it is empty, and everything downstream follows from that.
+  assert.match(keep, /@string\/google_app_id/);
+  for (const name of ['google_api_key', 'gcm_defaultSenderId', 'project_id']) {
+    assert.match(keep, new RegExp(`@string/${name}`), `${name} is not kept`);
+  }
+  // Not default_web_client_id: the shrinker stripped that one, it reached
+  // people, and the answer was to stop needing it at run time rather than to
+  // keep it. build.gradle.kts compiles it into BuildConfig instead.
+  assert.equal(
+    keep.includes('default_web_client_id'),
+    false,
+    'default_web_client_id is read from BuildConfig now; keeping the resource resurrects a lookup nobody makes',
+  );
+});
+
+test('shrinking stays on, and the keep file is why that is safe', () => {
+  // The alternative fix is isShrinkResources = false, which would work and
+  // would cost the app its size back. Asserted so that turning shrinking off
+  // is a decision somebody takes rather than a way to make this test pass.
+  assert.match(gradle(), /isShrinkResources = true/);
+  assert.match(gradle(), /res\/raw\/keep\.xml/);
 });

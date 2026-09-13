@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  THE RESOURCE SHRINKER MAY NOT HAVE THESE.
+
+  `isShrinkResources = true` removes every resource nothing statically
+  references, and the Google Services plugin's output is referenced by NAME at
+  run time and by nothing at all at compile time:
+
+      StringResourceValueReader reader = new StringResourceValueReader(context);
+      String applicationId = reader.getString("google_app_id");   // getIdentifier
+
+  `FirebaseOptions.fromResource` returns null the moment that string is empty,
+  `FirebaseApp.initializeApp` then returns null after logging one line nobody
+  reads, and every later call throws
+
+      IllegalStateException: Default FirebaseApp is not initialized in this
+      process. Make sure to call FirebaseApp.initializeApp(Context) first.
+
+  which is the fatal that arrived from a Play install on 0.2.3+441.
+
+  THIS FILE IS INSURANCE, NOT A DIAGNOSIS. `app/build.gradle.kts` records
+  measuring `google_app_id` PRESENT in resources.arsc of a shipped beta, and
+  the reason it survived is that "google_app_id" appears as a string literal in
+  the Firebase SDK's own dex, which the shrinker reads. That is a heuristic
+  about somebody else's code holding a literal we do not control: it is one
+  R8 release or one SDK refactor away from being false, and nothing would say
+  so — the build would go green and push would simply stop working.
+
+  Naming them here makes the shrinker's decision ours. It costs a few hundred
+  bytes in the APK and removes a silent failure mode.
+
+  WHAT IS NOT HERE IS `default_web_client_id`, and its absence is deliberate
+  rather than an oversight. The shrinker DID strip that one, it reached people,
+  and the fix was to stop needing it at run time: `app/build.gradle.kts` reads
+  the value out of google-services.json and compiles it into BuildConfig, so
+  there is no resource to look up. Keeping it here would resurrect a resource
+  nothing reads.
+
+  AND THIS FILE IS NOT PACKAGED. `res/raw/keep.xml` is read by AGP's shrinker
+  and dropped; it does not ship. A name that matches no resource — which is
+  every name below, in a fork building without google-services.json — matches
+  nothing and keeps nothing.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@string/google_app_id,@string/google_api_key,@string/gcm_defaultSenderId,@string/project_id,@string/google_storage_bucket,@string/firebase_database_url" />
