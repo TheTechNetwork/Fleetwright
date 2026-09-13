@@ -179,6 +179,79 @@ Worker gained one, all three failed with `ERR_MODULE_NOT_FOUND` — while
 A local check that cannot fail the way CI fails certifies nothing. The job now
 installs the Worker's dependencies too.
 
+## Which launches report at all
+
+**A simulator does not, and neither does a test run.** The first three hang
+reports this project ever received were CI running its own tests, and nothing in
+the tracker said so at a glance — they arrived as `environment: production` on an
+`iPhone18,1`, which reads as an app frozen for three seconds in somebody's hand.
+What they actually were is in the detail:
+
+| what the report said | what it meant |
+| --- | --- |
+| `Fleetwright.debug.dylib`, under `/Users/runner/…/CoreSimulator/…` | a GitHub Actions runner, building Debug |
+| `build_type: simulator`, `device.simulator: True` | not a phone |
+| `XCTestCore` on the main thread, between UIKit and the `write` it was blocked in | `xcodebuild test` writing its own log |
+| `main` → SwiftUI → `UIApplicationMain` → `CFRunLoopRun` → `mach_msg`, and no app frames above it | an app sitting still |
+| `processor_count: 3`, `free_memory: 117 MB` | the machine, not the app |
+
+Sentry's app-hang threshold is two seconds of a blocked main thread — a fair
+number for a phone, a meaningless one for a virtualised runner under full load.
+So these were real measurements of the wrong machine, arriving labelled exactly
+like the ones that would matter. Three of this project's first four iOS events
+are the build system, which is a tracker nobody reads by the fifth.
+
+`apps/ios/Fleetwright/Reporting.swift` is the guard and carries the argument.
+The simulator half is `#if targetEnvironment(simulator)`, settled at compile
+time; the test half is the `XCTestConfigurationFilePath` environment variable,
+which needs a runtime check because the unit tests are hosted by the app itself.
+
+**It refuses runs, not hangs.** Nothing here makes the app faster, because
+nothing was slow. It makes the next report mean what it says.
+
+**The fourth event is not this, and is not fixed by this.** A watchdog
+termination on `0.2.3+328` — a real TestFlight build on a real phone — with no
+stack, no breadcrumbs and no device context, because the SDK synthesises that
+event on the *next* launch from what it managed to store on the last one. The
+app's own code was read for the usual causes and has none of them: the polling
+loops are cancellable `Task.sleep`, the single keychain read happens once during
+`Settings.init`, the outbox file is small and written atomically, and no view
+body does file or network work. It is unexplained, and saying so is the point of
+this paragraph — what changes for it is that a recurrence will no longer be one
+of four events three of which are CI.
+
+**`-fleetwright-report` lifts it**, for the same reason the replay section says
+to raise `sessionSampleRate` while testing: a reporter nobody can exercise is a
+reporter nobody can fix. Like the launch arguments in `Screenshots.swift` it can
+turn something on and cannot point it anywhere.
+
+**Android needs none of this.** `android.yml` is a plain JVM run — no emulator,
+no device — so that app has never reported from CI and a matching guard there
+would be a guess at a failure it cannot have. This is the one place the two
+phones deliberately differ, and `docs/app-parity.md` is where that is otherwise
+policed.
+
+## And what a build that does report calls itself
+
+`options.environment`, from the build configuration by way of `Info.plist`, the
+way the DSN and `aps-environment` already are. Unset, the SDK calls everything
+`production` — which is how a Debug build in a simulator on a CI runner came to
+file its reports beside a stranger's App Store crash, and why telling them apart
+afterwards meant reading a binary path out of a stack trace.
+
+`project.yml` sets `FLEETWRIGHT_SENTRY_ENVIRONMENT` per configuration, so it
+follows the build rather than needing anyone to remember: `development` on
+Debug, `production` on Release. A TestFlight build is an archive and therefore
+Release, so beta and store builds share a label — their version numbers already
+separate them, and a third name here would claim a distinction the build system
+does not make.
+
+**An unset key is `unknown`, not `production`.** An empty value means the build
+setting did not reach the plist, which is a fact about our packaging rather than
+evidence about where the app is running. Guessing the commoner answer is the
+whole of the bug above. Same rule as everywhere else in this repository: `null`
+is *cannot tell*, never *nothing*.
+
 ## The first real event, and what it taught
 
 `Durable Object reset because its code was updated.` on `POST /api/host/challenge`,
@@ -197,6 +270,24 @@ nonce that costs nothing to mint twice. Everything else gets **503 with
 `Retry-After`** — the honest answer, because the request may or may not have
 happened, and a caller that knows to come back is better served than one handed
 a 500 and a guess.
+
+### And the second one, which was ours
+
+The same message, on the same route, months later — and this time the culprit
+was `callFleet` itself. The replay was awaited **outside** the `try` that caught
+the first reset, so a request retried into the middle of a still-rolling deploy
+threw straight past the handler. `POST /api/host/challenge` was the one route
+safe to retry and therefore the one route where retrying could still produce the
+500 the function exists to avoid.
+
+One extra attempt, then the same 503. There is no third: a loop against a deploy
+in progress holds the request open for as long as the deploy takes, which is
+worse for the caller than an answer, and the host that raised both of these
+reconnects on its own backoff and needs only to be told to.
+
+The narrowness of `isObjectReset` holds on the second attempt too. A genuine
+fault during the replay is still raised, because "come back in two seconds" is
+advice that cannot work being given to a caller who will follow it.
 
 The reporting earned its place on day one, and not by finding a bug: it found a
 **wrong answer to an expected event**, which no test would have failed on.

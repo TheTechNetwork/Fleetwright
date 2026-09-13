@@ -115,9 +115,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // gets. One code path rather than an `if` somebody can get wrong.
         let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String ?? ""
         guard !dsn.isEmpty else { return }
+        // AND NOT FROM A SIMULATOR OR A TEST RUN. Reporting.swift is the
+        // argument; the short version is that the first three hang reports this
+        // project ever received were all CI running its own tests.
+        guard Reporting.wanted else { return }
 
         SentrySDK.start { options in
             options.dsn = dsn
+            // WHICH BUILD IS SPEAKING. Unset, the SDK labels everything
+            // `production`, so a debug build on somebody's desk files its
+            // reports beside a stranger's App Store crash and the tracker
+            // cannot tell them apart. It said `production` on every one of
+            // those CI runs.
+            options.environment = Reporting.environment
             options.sendDefaultPii = false
             options.attachScreenshot = false
             options.attachViewHierarchy = false

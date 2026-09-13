@@ -138,6 +138,42 @@ The app moved with it:
 startup as well as on change, so a registration that quietly lapsed repairs
 itself instead of waiting for a rotation that may never come.
 
+### And `getInstance()` is a throw when there is no Firebase
+
+`FirebaseInstallations.getInstance()` reaches for the default `FirebaseApp` and
+raises `IllegalStateException: Default FirebaseApp is not initialized in this
+process` when there is not one. It arrived as a fatal from a Play install on
+`0.2.3+441`, and it arrived at the end of onboarding: `registerForPush` runs
+from `onCreate`, where an unconfigured app returns before touching Firebase, and
+again from `onSignedIn` — so the first launch survives, the settings get filled
+in, and the app dies on the last tap of its own setup.
+
+**A build with no default app is a build this repository ships on purpose.**
+`app/build.gradle.kts` applies the Google Services plugin only
+`if (file("google-services.json").exists())`, so that a fork or a self-hoster
+can build at all; the comment there promises that "push simply does nothing for
+them", and that was the intent rather than the behaviour. The other way to get
+there is the `FirebaseInitProvider` that normally does this having run and found
+nothing to read.
+
+`MainActivity.registerForPush` now calls `FirebaseApp.initializeApp` and checks
+the result, which answers both: it is idempotent and hands back the app the
+provider already made, it makes one when the provider did not, and it returns
+**null** rather than throwing when there is no configuration to read. Push is
+off in that last case and the app is not — and "Send a test notification" in the
+settings is still where somebody finds out, which is the answer that screen
+already had for a registration that never arrived.
+
+**What is still unexplained** is why the default app was missing on a Play build
+that has `google-services.json` committed. Sentry's own `ContentProvider` had
+plainly run in that process — the report carries its lifecycle breadcrumbs — so
+provider auto-init was working, which points at `FirebaseOptions.fromResource`
+finding no `google_app_id` rather than at the provider not running. That is the
+failure `app/build.gradle.kts` already documents happening to
+`default_web_client_id` under `isShrinkResources`, and the same file records
+measuring `google_app_id` *present* in a shipped beta APK. Settling it means
+looking in the bundle that Play actually served, not in this repository.
+
 **The coordinator did not change, and that is not luck.** The FCM v1 `token`
 field is documented as *"Deprecated: Use `fid` instead … During the transition
 period, this field also accepts a Firebase Installation ID (FID)."* So a phone

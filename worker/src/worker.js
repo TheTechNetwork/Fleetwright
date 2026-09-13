@@ -60,6 +60,10 @@ export const Fleet = Sentry.instrumentDurableObjectWithSentry(sentryOptions, Fle
  * request may or may not have happened, and a caller that knows to come back
  * is better served than one handed a 500 and a guess.
  *
+ * AND SO DOES A REPLAY THAT RESETS AGAIN, which is the second report this route
+ * produced and the reason the retry is inside a `try` now. One extra attempt,
+ * then the same 503: a deploy takes longer than a request should wait.
+ *
  * @param {any} env
  * @param {Request} request
  */
@@ -81,9 +85,24 @@ async function callFleet(env, request) {
   } catch (e) {
     if (!isObjectReset(e)) throw e;
     if (spare) {
-      // A FRESH STUB, not the old one: the point is to reach the object as
-      // rebuilt by the deploy. Storage is durable and unaffected.
-      return await env.FLEET.get(env.FLEET.idFromName('fleet')).fetch(spare);
+      try {
+        // A FRESH STUB, not the old one: the point is to reach the object as
+        // rebuilt by the deploy. Storage is durable and unaffected.
+        return await env.FLEET.get(env.FLEET.idFromName('fleet')).fetch(spare);
+      } catch (again) {
+        // AND THE REPLAY CAN RESET TOO, which is not hypothetical: this is the
+        // second error report on this route, and it named this function. The
+        // rollout is not instantaneous, so a request retried into the middle of
+        // it can be evicted a second time — and because that throw was outside
+        // the `try` above, it escaped as the 500 this whole function exists to
+        // avoid, on the one route that was safe to retry.
+        //
+        // No third attempt. A loop against a deploy still in progress is a
+        // request held open for as long as the deploy takes, which is worse for
+        // the caller than an answer; the host that raised both of these
+        // reconnects on its own backoff and needs only to be told to.
+        if (!isObjectReset(again)) throw again;
+      }
     }
     return json(
       {

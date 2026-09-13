@@ -310,9 +310,16 @@ dependencies {
   // real browser rather than a WebView. Pinned, like everything else here.
   implementation("androidx.browser:browser:1.10.0")
 
-  // Firebase Cloud Messaging is deliberately NOT here yet — it needs a
-  // google-services.json from your Firebase project, and the Google Services
-  // Gradle plugin FAILS THE BUILD when that file is absent. Adding it now would
-  // mean nobody can build the app until Firebase exists. See apps/android/README.md
-  // for the four lines that turn it on; the server side is already done.
+  // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
+  // somebody went looking for why an app with no google-services.json crashes
+  // at sign-in: "deliberately NOT here yet ... adding it now would mean nobody
+  // can build the app until Firebase exists". It has been here since the round
+  // that added the BOM, and what kept the build working for a fork without
+  // Firebase is the conditional plugin at the top of this file, not the absence
+  // of the dependency.
+  //
+  // Left as a sentence rather than deleted, because the wrong half of it is the
+  // reason MainActivity.registerForPush now checks: a comment saying Firebase
+  // cannot be here is a comment that makes "then the SDK is always initialised"
+  // look safe to assume.
 }

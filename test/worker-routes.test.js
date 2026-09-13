@@ -394,6 +394,60 @@ test('a request that cannot be safely replayed gets 503 and a Retry-After', asyn
   assert.match(body.text, /Nothing was lost/);
 });
 
+test('a replay that is reset again answers, rather than becoming a 500', async () => {
+  // THE SECOND REPORT ON THIS ROUTE, and it named callFleet: the replay above
+  // was awaited OUTSIDE the try that caught the first reset, so a request
+  // retried into the middle of a still-rolling deploy threw straight past the
+  // handler. /api/host/challenge is the one route safe to retry, and it was
+  // the one route where retrying could still produce the 500 the whole
+  // function exists to avoid.
+  let attempts = 0;
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        attempts++;
+        throw new Error('Durable Object reset because its code was updated.');
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{"hostId":"deb132"}' }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(attempts, 2, 'one replay, and not a loop against a deploy in progress');
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get('retry-after'), '2');
+  assert.equal(/** @type {any} */ ((await res.json()).error).code, 'restarting');
+});
+
+test('a real failure during the replay is still raised, not swallowed', async () => {
+  // The narrowness of isObjectReset has to hold on the second attempt too.
+  // Catching everything there would turn a genuine fault into "come back in two
+  // seconds" — advice that cannot work, given to a caller who will follow it.
+  let attempts = 0;
+  const fleet = {
+    idFromName: () => 'id',
+    get: () => ({
+      fetch: async () => {
+        attempts++;
+        throw new Error(
+          attempts === 1 ? 'Durable Object reset because its code was updated.' : 'storage quota exceeded',
+        );
+      },
+    }),
+  };
+  const res = await worker.fetch(
+    new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
+    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+  );
+  assert.equal(attempts, 2);
+  // It leaves callFleet as a throw, which the handler below turns into the 500
+  // that also reaches the reporter — the opposite of being told to come back.
+  assert.equal(res.status, 500);
+  assert.equal(/** @type {any} */ ((await res.json()).error).code, 'internal');
+});
+
 test('a real failure is still a real failure', async () => {
   // Matching on the message is how these are recognised, so the match has to be
   // narrow. Anything broader would swallow a genuine fault and retry it, which
