@@ -44,6 +44,64 @@ could only break the build. Until somebody adds the token, a release crash
 reports with an obfuscated stack: worse than a readable one, much better than no
 report.
 
+## Session replay, on iOS only
+
+The one thing in this document that is not a refusal, so it gets the argument
+rather than a line in the table.
+
+A replay is a recording of the app's screens. Read against the paragraph above
+that turns screenshots off, that looks like a contradiction, and it is not:
+
+- **A replay frame is composited, not captured.** Every text run and every
+  image is replaced by a rectangle before the frame is encoded. What leaves the
+  phone is the *shape* of the app — which screen, which sheet, in which order —
+  and none of the words on it. `maskAllText` and `maskAllImages` are the SDK's
+  defaults and are written out anyway, because the reporter's whole posture is
+  that a default is something a minor version may change and a line is not.
+- **The sequence is the part a stack trace does not have.** A crash in the pane
+  reads differently depending on whether somebody had just switched hosts or
+  had been sitting still for a minute. A single masked still adds nearly
+  nothing the trace lacks, which is why the trade comes out differently for the
+  two — `attachScreenshot` stays off rather than being reconsidered.
+- **`sessionSampleRate` is 0.0, not the quickstart's 0.1.** Same reasoning as
+  the Worker's `tracesSampleRate`, landing harder on a phone: one session in
+  ten would be a recording of somebody's fleet made for no reason, with no
+  incident behind it and nothing waiting to read it. `onErrorSampleRate` is
+  1.0, so every session that goes wrong is covered, and a session that went
+  right is not one anybody opens. **Raise it while testing the feature** — until
+  somebody does, a replay only ever appears attached to an error.
+- **Network detail is left unset.** `networkDetailAllowUrls`,
+  `networkRequestHeaders` and `networkResponseHeaders` would attach request and
+  response detail to the replay, and every request this app makes carries the
+  fleet credential in a header. Empty is the same refusal
+  `enableNetworkBreadcrumbs` makes by another route.
+
+`beforeSend` is **not** a backstop here and nothing is — a frame never passes
+through it. The masking switches are load-bearing alone, which is what
+`test/sentry-scrub.test.js` asserts about the Swift source.
+
+**What it costs when nothing breaks.** A non-zero `onErrorSampleRate` means the
+SDK composites and buffers frames continuously, for a recording discarded
+unless an error arrives. That is real battery on a phone that is often just
+sitting on a session list, and it is the price of the replay being there for
+the crash that does not reproduce.
+
+**No version bump was needed.** Replay wants sentry-cocoa 8.43.0 or newer and
+`project.yml` already pins 9.27.0 exact; on the v9 line the options live at
+`options.sessionReplay` rather than the 8.x `options.experimental.sessionReplay`.
+The install snippet's `from: "9.28.0"` is a range, and a range is a build that
+changes without a commit — the pin stays exact and stays where it is. Replay
+needs iOS 16; the deployment target is 26, so there is no `#available` guard to
+write.
+
+**Android does not have it,** and the two apps are deliberately not at parity
+here. `sentry-android` supports replay; the manifest in this repository does
+not enable it, and enabling it there is a separate change — a different SDK,
+different masking APIs, and an Android DSN that is still the placeholder in
+"Still to do" below, so the app it would be turned on for reports nothing
+today. Parity in `docs/app-parity.md` is about what somebody can *do* on each
+phone, which this is not.
+
 ## A DSN is not a secret
 
 It identifies a project and grants only the ability to send it events, which is

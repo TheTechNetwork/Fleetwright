@@ -12,10 +12,18 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { scrubUrl, scrubEvent, sentryOptions } from '../worker/src/sentry.js';
 
 const CREDENTIAL = 'fwk_9f3a1c2b4d5e6f70_a1b2c3d4e5f60718';
+
+// The iOS reporter, read as text. Several rules below live only in Swift — CI
+// compiles it on a macOS runner and nothing here can execute it, so a grep is
+// what is available. It cannot prove the SDK does anything; it proves nobody
+// deleted the lines that ask it to, which is the failure worth a tripwire.
+const iosApp = () =>
+  readFileSync(new URL('../apps/ios/Fleetwright/FleetwrightApp.swift', import.meta.url), 'utf8');
 
 test('a credential in the query string does not survive', () => {
   // openapi.json: "A credential may arrive as Authorization: Bearer <token> OR
@@ -81,7 +89,7 @@ test('breadcrumbs are scrubbed too, because outbound calls carry the credential'
   assert.equal(flat.includes('authorization'), false);
 });
 
-test('the iOS breadcrumb scrub removes headers rather than marking them', async () => {
+test('the iOS breadcrumb scrub removes headers rather than marking them', () => {
   // The first version wrote "[redacted]" into the headers key and justified it
   // as "removal would need a second API to guess at". That was an excuse for
   // not looking: setDataValue:forKey: takes a nullable id, and its own
@@ -91,13 +99,81 @@ test('the iOS breadcrumb scrub removes headers rather than marking them', async 
   // sent to a third party, and the next person reading a breadcrumb has to work
   // out whether Sentry captured a header called "[redacted]" or whether we put
   // it there. Absent is unambiguous.
-  const { readFileSync } = await import('node:fs');
-  const app = readFileSync(new URL('../apps/ios/Fleetwright/FleetwrightApp.swift', import.meta.url), 'utf8');
+  const app = iosApp();
   assert.match(app, /crumb\.setData\(value: nil, key: "headers"\)/);
   assert.equal(/setData\(value: "\[redacted\]"/.test(app), false, 'a marker is being invented and sent');
   // And the deprecated setter is gone: "will become read-only in a future
   // release" is a deadline, not an opinion.
   assert.equal(/crumb\.data\?\[[^\]]+\] =/.test(app), false, 'assigning through the deprecated data setter');
+});
+
+// SESSION REPLAY, THE ONE THING IN THE REPORTER THAT IS NOT A REFUSAL.
+//
+// It records the app's screens. That is defensible in an app holding a fleet
+// credential for exactly one reason — every text run and image is a rectangle
+// before the frame is encoded — and that reason is two lines of configuration.
+// Nothing downstream catches it if they go: `beforeSend` never sees a frame.
+
+test('the replay masking switches are written out, not inherited from the SDK', () => {
+  const app = iosApp();
+  // Both are already the SDK's default. They are written anyway because a
+  // default is something a minor version may change and a line is not — and
+  // this is the whole of what stands between a replay and the credentials
+  // sheet in legible text on somebody else's server.
+  assert.match(app, /options\.sessionReplay\.maskAllText = true/);
+  assert.match(app, /options\.sessionReplay\.maskAllImages = true/);
+  assert.equal(
+    /options\.sessionReplay\.maskAll(Text|Images) = false/.test(app),
+    false,
+    'replay masking has been turned off',
+  );
+});
+
+test('replay records when something broke, and not otherwise', () => {
+  const app = iosApp();
+  // The quickstart says sessionSampleRate = 0.1. One session in ten would be a
+  // recording of somebody's fleet made with no incident behind it and nothing
+  // waiting to read it — the same argument that put the Worker's
+  // tracesSampleRate at 0.05 rather than 1.0, landing harder on a phone.
+  //
+  // Deliberately asserts the VALUE rather than "less than 1". Raising this is a
+  // real decision and should have to come through this test, but it is also the
+  // line somebody turns up while testing the feature — so the failure names it.
+  assert.match(
+    app,
+    /options\.sessionReplay\.sessionSampleRate = 0\.0/,
+    'ambient replay recording is on; see docs/error-reporting.md before changing this',
+  );
+  // And the half that earns the feature its place: every session that goes
+  // wrong is covered.
+  assert.match(app, /options\.sessionReplay\.onErrorSampleRate = 1\.0/);
+});
+
+test('the replay carries no network detail, because every request is a credential', () => {
+  // networkDetailAllowUrls, networkRequestHeaders and networkResponseHeaders
+  // attach request and response detail to the replay. This app's every request
+  // is an intent to the coordinator with the fleet credential in a header, so
+  // unset is the configuration — the same refusal enableNetworkBreadcrumbs
+  // makes by another route. A grep is enough: the SDK sends none of it unless
+  // one of these names appears.
+  const app = iosApp();
+  for (const key of ['networkDetailAllowUrls', 'networkRequestHeaders', 'networkResponseHeaders']) {
+    // The assignment, not the bare name — the paragraph above the call site
+    // names all three in prose so that adding one later is a decision somebody
+    // takes rather than a blank they fill in, and a test that broke on its own
+    // documentation would just get the documentation deleted.
+    const assigned = new RegExp(`options\\.sessionReplay\\.${key}\\s*=`);
+    assert.equal(assigned.test(app), false, `${key} is being set on the replay`);
+  }
+});
+
+test('the still-image attachments stay off, replay or no replay', () => {
+  // Replay is masked frames in sequence; these two are a different trade and
+  // came out differently. Asserted here so that "we send frames now anyway"
+  // cannot quietly become a reason to turn them on.
+  const app = iosApp();
+  assert.match(app, /options\.attachScreenshot = false/);
+  assert.match(app, /options\.attachViewHierarchy = false/);
 });
 
 test('no DSN means no reporting, with no second code path', () => {
