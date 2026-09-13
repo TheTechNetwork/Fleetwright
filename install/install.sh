@@ -1585,17 +1585,26 @@ else
   # points its sidecar at it over stdio or loopback, and that one is in use — so
   # an unset, `stdio:`, or 127.0.0.1/localhost URL leaves the unit alone. Only a
   # non-loopback URL is proof the fleet meets elsewhere.
+  #
+  # REMOVE THE UNIT, DO NOT JUST DISABLE IT. `disable --now` stops the service
+  # and clears its boot symlinks but LEAVES THE UNIT FILE — and section 9 below
+  # restarts every unit `list-unit-files` still reports, so a disable here was
+  # undone by a restart in the same run, and the leftover reappeared on the next
+  # update besides. Deleting the file and reloading is what makes the retirement
+  # stick: nothing can find it to restart, this run or any later one.
   if [ "$PLATFORM" != macos ] && [ -f /etc/systemd/system/agent-fleet-coordinator.service ]; then
     COORD_URL="$(sed -n 's/^AGENT_FLEET_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
     case "$COORD_URL" in
       ''|stdio:*|*127.0.0.1*|*localhost*)
         : ;;  # local, loopback, or unset — the local coordinator may be in use
       *://*)
-        if systemctl disable --now agent-fleet-coordinator >/dev/null 2>&1; then
-          ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
-        else
-          warn "a leftover local coordinator is running but could not be disabled — sudo systemctl disable --now agent-fleet-coordinator"
-        fi ;;
+        systemctl disable --now agent-fleet-coordinator >/dev/null 2>&1 || true
+        rm -f /etc/systemd/system/agent-fleet-coordinator.service
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
+        # The env and state stay: harmless, and removing them is a bigger
+        # decision than "stop running a service you migrated away from".
+        ;;
       *)
         : ;;  # not a URL shape we recognise — leave it rather than guess
     esac

@@ -461,13 +461,24 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
   // fire on a packaged box; a checkout installs and keeps its own coordinator.
   const start = SH.indexOf('no coordinator in this payload');
   assert.ok(start > 0, 'the packaged-coordinator branch moved');
-  const block = SH.slice(start, start + 1600);
+  const block = SH.slice(start, start + 2800);
 
-  // It reads the coordinator URL from the sidecar env, and disables only under a
+  // It reads the coordinator URL from the sidecar env, and retires only under a
   // real (non-loopback) URL.
   assert.match(block, /AGENT_FLEET_COORDINATOR_URL=/, 'the remote-coordinator signal is not consulted');
   assert.match(block, /systemctl disable --now agent-fleet-coordinator/, 'the leftover unit is never disabled');
-  assert.match(block, /\*:\/\/\*\)/, 'the disable is not gated on a URL shape');
+  assert.match(block, /\*:\/\/\*\)/, 'the retire is not gated on a URL shape');
+
+  // DISABLE IS NOT ENOUGH — it leaves the unit file, and section 9 restarts
+  // every unit list-unit-files still reports, so a mere disable is undone in
+  // the same run. The file has to go, then a daemon-reload, or the retirement
+  // does not stick.
+  assert.match(
+    block,
+    /rm -f \/etc\/systemd\/system\/agent-fleet-coordinator\.service/,
+    'the unit file is left on disk, so the restart step resurrects it',
+  );
+  assert.match(block, /systemctl daemon-reload/, 'systemd is not told the unit is gone');
 
   // And the loopback / stdio / unset cases are left alone — a coordinator in use
   // must not be pulled out from under the box.
