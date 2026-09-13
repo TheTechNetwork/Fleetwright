@@ -261,7 +261,7 @@ dependencies {
   // Error reporting. Pinned like everything else here — a range is a build that
   // changes without a commit. The version is the one Maven Central actually
   // publishes; the first attempt at this line invented a number.
-  implementation("io.sentry:sentry-android:8.55.0")
+  implementation("io.sentry:sentry-android:8.56.0")
 
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship
