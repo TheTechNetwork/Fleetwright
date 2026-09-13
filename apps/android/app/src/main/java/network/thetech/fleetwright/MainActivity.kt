@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.google.firebase.FirebaseApp
 import com.google.firebase.installations.FirebaseInstallations
 import kotlinx.coroutines.launch
 
@@ -62,11 +63,54 @@ class MainActivity : ComponentActivity() {
      * Silent when the app has no coordinator yet — there is nowhere to send it,
      * and an error about that on first launch would be noise in front of the
      * settings screen the person is about to fill in.
+     *
+     * AND SILENT WHEN THERE IS NO FIREBASE, which used to be a crash.
+     * `FirebaseInstallations.getInstance()` reaches for the default FirebaseApp
+     * and THROWS when there is not one —
+     *
+     *     IllegalStateException: Default FirebaseApp is not initialized in this
+     *     process network.thetech.fleetwright. Make sure to call
+     *     FirebaseApp.initializeApp(Context) first.
+     *
+     * — which arrived as a fatal from a Play install on 0.2.3+441, and arrived
+     * at the worst possible moment. This runs twice: once from `onCreate`,
+     * where an unconfigured app returns at the line above without touching
+     * Firebase, and once from `onSignedIn`. So the first launch survives, the
+     * person fills the settings in, signs in, and the app dies on the last tap
+     * of its own onboarding.
+     *
+     * THERE ARE TWO WAYS TO HAVE NO DEFAULT APP and this repository deliberately
+     * ships one of them. `app/build.gradle.kts` applies the Google Services
+     * plugin only `if (file("google-services.json").exists())`, so that a fork
+     * or a self-hoster can build at all — "push simply does nothing for them,
+     * which is the honest outcome rather than a broken build" is the comment
+     * there, and it was not true: nothing was doing nothing, this line was
+     * killing the app. The other way is the provider that normally does this
+     * not having run, which is what a virtualised or cloned app container does
+     * to a manifest's ContentProviders.
+     *
+     * `FirebaseApp.initializeApp` RATHER THAN A try/catch, because it answers
+     * both. It is idempotent and returns the app that is already there when the
+     * provider did its job; it initialises one when the provider did not, which
+     * REPAIRS the second case rather than merely surviving it; and it returns
+     * null rather than throwing when there is genuinely no configuration to
+     * read, which is the fork, and is the one case where doing nothing is
+     * right. A catch would have turned all three into the same shrug.
+     *
+     * Not fatal, and not hidden either: a fleet app that cannot wake you is
+     * still a fleet app you can read, and "Send a test notification" in the
+     * settings is where somebody finds out that it cannot — which is the answer
+     * this screen already had for a registration that never arrived.
      */
     private fun registerForPush() {
         val settings = Settings(applicationContext)
         if (!settings.configured) return
-        FirebaseInstallations.getInstance().id.addOnCompleteListener { task ->
+        val firebase = FirebaseApp.initializeApp(applicationContext)
+        if (firebase == null) {
+            Log.w("Fleetwright", "no Firebase configuration in this build, so push is off")
+            return
+        }
+        FirebaseInstallations.getInstance(firebase).id.addOnCompleteListener { task ->
             val token = task.result
             if (!task.isSuccessful || token.isNullOrBlank()) {
                 Log.w("Fleetwright", "no Firebase installation ID: ${task.exception?.message}")

@@ -94,6 +94,17 @@ targets:
         # reporting, which is what a fork or a fresh clone gets; FleetwrightApp
         # returns early rather than starting the SDK.
         SentryDSN: https://62d7ede761c48f65f65f07dc94b7a4ee@o4512012096765952.ingest.us.sentry.io/4512012119769088
+        # AND WHICH BUILD IS REPORTING, from the configuration below rather
+        # than from a literal — the same trick as `aps-environment`, for the
+        # same reason: the archive builds Release and Xcode runs Debug, so this
+        # follows the build instead of needing anyone to remember.
+        #
+        # Unset, the SDK calls everything `production`. That is how the first
+        # three hang reports this project received — CI, in a simulator, running
+        # its own tests — arrived looking like somebody's phone. Reporting.swift
+        # is the long version, and it refuses those runs outright now; this is
+        # the half of the answer that applies to the builds that DO report.
+        SentryEnvironment: $(FLEETWRIGHT_SENTRY_ENVIRONMENT)
         CFBundleDisplayName: Fleetwright
         # OTHER NAMES SIRI WILL ACCEPT FOR THIS APP.
         #
@@ -220,8 +231,16 @@ targets:
         # rather than needing anyone to remember.
         Debug:
           APS_ENVIRONMENT: development
+          # What Sentry files this build's events under, read back through the
+          # Info.plist key above. A TestFlight build is an archive and
+          # therefore Release, so beta and store builds share `production` —
+          # their version numbers already tell them apart, and inventing a
+          # third name here would mean claiming a distinction the build system
+          # does not actually make.
+          FLEETWRIGHT_SENTRY_ENVIRONMENT: development
         Release:
           APS_ENVIRONMENT: production
+          FLEETWRIGHT_SENTRY_ENVIRONMENT: production
     entitlements:
       # Generated and gitignored for the same reason as Info.plist above.
       path: Fleetwright/Fleetwright.entitlements

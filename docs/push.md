@@ -138,6 +138,87 @@ The app moved with it:
 startup as well as on change, so a registration that quietly lapsed repairs
 itself instead of waiting for a rotation that may never come.
 
+### And `getInstance()` is a throw when there is no Firebase
+
+`FirebaseInstallations.getInstance()` reaches for the default `FirebaseApp` and
+raises `IllegalStateException: Default FirebaseApp is not initialized in this
+process` when there is not one. It arrived as a fatal from a Play install on
+`0.2.3+441`, and it arrived at the end of onboarding: `registerForPush` runs
+from `onCreate`, where an unconfigured app returns before touching Firebase, and
+again from `onSignedIn` — so the first launch survives, the settings get filled
+in, and the app dies on the last tap of its own setup.
+
+**A build with no default app is a build this repository ships on purpose.**
+`app/build.gradle.kts` applies the Google Services plugin only
+`if (file("google-services.json").exists())`, so that a fork or a self-hoster
+can build at all; the comment there promises that "push simply does nothing for
+them", and that was the intent rather than the behaviour. The other way to get
+there is the `FirebaseInitProvider` that normally does this having run and found
+nothing to read.
+
+`MainActivity.registerForPush` now calls `FirebaseApp.initializeApp` and checks
+the result, which answers both: it is idempotent and hands back the app the
+provider already made, it makes one when the provider did not, and it returns
+**null** rather than throwing when there is no configuration to read. Push is
+off in that last case and the app is not — and "Send a test notification" in the
+settings is still where somebody finds out, which is the answer that screen
+already had for a registration that never arrived.
+
+**And the crash moves once a phone is configured.** The reported event is the
+`onSignedIn` one — the breadcrumbs are created, started, foreground, resumed and
+then a battery event, so that activity finished `onCreate` and sat there for a
+while first. But `registerForPush` is called from `onCreate` too, and the guard
+in front of it is `settings.configured`, which is now true. So the second launch
+crashes before the first frame, and every launch after that. One tap turned the
+app into one that does not open: worse than the fatal it starts as, and the
+reason this is a guard rather than a note in a backlog.
+
+### Why the resource can be missing, which is the other half
+
+`FirebaseOptions.fromResource` reads `google_app_id` through
+`Resources.getIdentifier`, and `isShrinkResources = true` removes any resource
+nothing references statically. That is the identical shape that stripped
+`default_web_client_id` out of a shipped beta and reached people, and
+`app/build.gradle.kts` documents it.
+
+`google_app_id` survived that round, and the same file records measuring it
+present in `resources.arsc`. The reason it survived is that the string
+`"google_app_id"` appears as a literal in the Firebase SDK's own dex, which the
+shrinker reads and treats as a reference — **a heuristic about somebody else's
+code holding a literal we do not control.** One R8 release or one SDK refactor
+and it is false, the build is still green, and push stops working with no
+message anywhere.
+
+`app/src/main/res/raw/keep.xml` names those resources, so the decision is ours
+rather than inferred. It costs a few hundred bytes and removes a silent failure
+mode. `default_web_client_id` is deliberately not in it: that one is compiled
+into `BuildConfig` now, and keeping the resource would resurrect a lookup
+nothing makes.
+
+### What the configuration cache does and does not explain
+
+`org.gradle.configuration-cache=true`, and the plugin is applied by a
+conditional `apply(plugin = …)` guarded by `file("google-services.json")
+.exists()` — a file-system check during configuration. Worth raising, and it
+does not explain a Play build:
+
+- **CI never reuses a configuration cache.** `gradle/actions/setup-gradle` only
+  stores configuration-cache data when it is given a `cache-encryption-key`, and
+  `android.yml` passes the action no inputs at all. Every release build
+  configures from scratch, so there is no earlier phase for it to reuse.
+- **And the checkout always has the file**, because it is committed. The state
+  the guard skips on has never existed on a runner.
+- Gradle also tracks file-system entry checks made during configuration as
+  build-configuration inputs, so the entry is invalidated when such a file
+  appears or disappears. That is a local-development property rather than
+  something CI depends on, and it is worth knowing before anyone relies on it.
+
+**Settling which of these actually shipped means looking in the bundle Play
+served** — `aapt2 dump resources` on the base APK of `0.2.3+441`, for
+`string/google_app_id` and whether it has a value. That artifact is not in this
+repository, and neither the guard nor the keep file needs the answer: one stops
+the crash, the other stops the resource from depending on a heuristic.
+
 **The coordinator did not change, and that is not luck.** The FCM v1 `token`
 field is documented as *"Deprecated: Use `fid` instead … During the transition
 period, this field also accepts a Firebase Installation ID (FID)."* So a phone
