@@ -58,6 +58,7 @@ that turns screenshots off, that looks like a contradiction, and it is not:
   and none of the words on it. `maskAllText` and `maskAllImages` are the SDK's
   defaults and are written out anyway, because the reporter's whole posture is
   that a default is something a minor version may change and a line is not.
+  On Android they are a second line rather than the first — see Canvas, below.
 - **The sequence is the part a stack trace does not have.** A crash in the pane
   reads differently depending on whether somebody had just switched hosts or
   had been sitting still for a minute. A single masked still adds nearly
@@ -79,8 +80,10 @@ that turns screenshots off, that looks like a contradiction, and it is not:
   also why only the iOS side of this has a test.
 
 `beforeSend` is **not** a backstop here and nothing is — a frame never passes
-through it. The masking switches are load-bearing alone, which is what
-`test/sentry-scrub.test.js` asserts about the Swift source.
+through it. On iOS that leaves the two masking properties load-bearing alone,
+which is what `test/sentry-scrub.test.js` asserts about the Swift source;
+Android puts a stronger thing underneath them, in "Android masks by the Canvas
+screenshot strategy" below.
 
 **What it costs when nothing breaks.** A non-zero `onErrorSampleRate` means the
 SDK composites and buffers frames continuously, for a recording discarded
@@ -125,13 +128,39 @@ for.
 broke the build under AGP 9, above. Android's sample rates both default to
 0.0, so replay was simply off until `on-error-sample-rate` turned it on.
 
-**The Canvas screenshot strategy was considered and not taken.**
-`io.sentry.session-replay.screenshot-strategy` set to `canvas` always masks
-text and images and cannot be told otherwise, which is a stronger guarantee
-than two booleans and is what Sentry recommends for strict PII. It is also
-still experimental, and it has no counterpart on iOS — taking it would mean the
-two phones masking by different mechanisms with only one of them testable. One
-line when it leaves experimental.
+**Android masks by the Canvas screenshot strategy**, which is the strongest
+guarantee either phone has and is why that one extra key is there:
+
+```xml
+<meta-data android:name="io.sentry.session-replay.screenshot-strategy" android:value="canvas" />
+```
+
+The default strategy, `PIXEL_COPY`, masks by *consulting* `maskAllText` and
+`maskAllImages` — so the masking is only ever as good as two values somebody
+could flip, and nothing downstream would catch it. Canvas does not consult
+them. It always masks text and images and cannot be told otherwise, which is
+why Sentry names it the strategy for strict PII and why this app is exactly
+what it is for.
+
+**What it costs, stated rather than discovered.** Canvas is still
+*experimental*, so it may change or render differently under a version bump,
+and Sentry says `PIXEL_COPY` is the faster of the two. Both were accepted
+deliberately: a guarantee that does not depend on anybody's future edit is
+worth a strategy that is younger and slower. It needs SDK 8.24.0 or newer and
+`build.gradle.kts` pins 8.56.0.
+
+**The two booleans stay, though Canvas ignores them.** They are the belt: if
+Canvas is ever dropped — it leaves experimental under a different name, a
+version bump removes it, somebody reverts that line — the strategy falls back
+to `PIXEL_COPY`, and `PIXEL_COPY` reads them. Deleting them would turn that
+fallback into a silent unmasking rather than a no-op.
+
+**This makes the two phones asymmetric, and that is deliberate.** iOS has no
+Canvas strategy; it masks by the equivalent of those two properties. So the
+phones reach the same guarantee by different mechanisms. The four *values*
+still match and `test/sentry-scrub.test.js` still fails if they stop — it is
+the mechanism that differs, not the policy. When iOS grows an equivalent, this
+paragraph is the note to close the gap.
 
 ## A DSN is not a secret
 

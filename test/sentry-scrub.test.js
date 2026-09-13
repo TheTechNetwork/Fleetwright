@@ -221,6 +221,30 @@ test('the Android replay is configured, with the keys the SDK actually reads', (
   );
 });
 
+test('Android masks by canvas, which cannot be told not to', () => {
+  // The default strategy, PIXEL_COPY, masks by consulting the two booleans
+  // above — so the masking is only ever as good as two values somebody could
+  // flip, and nothing downstream catches it: a frame is not an event and
+  // passes through no hook. Canvas does not consult them. It always masks text
+  // and images and cannot be told otherwise, which is why Sentry names it the
+  // strategy for strict PII.
+  //
+  // THE TYPO CASE IS WHY THIS IS ASSERTED RATHER THAN TRUSTED. A meta-data name
+  // the SDK does not recognise is silently ignored, and the fallback is not an
+  // error — it is PIXEL_COPY, quietly, with the guarantee downgraded to two
+  // booleans and nothing anywhere saying so.
+  assert.equal(androidMeta('io.sentry.session-replay.screenshot-strategy'), 'canvas');
+});
+
+test('the masking booleans stay even though canvas ignores them', () => {
+  // They are the belt. If canvas is ever dropped — it leaves experimental
+  // under a different name, a version bump removes it, somebody reverts that
+  // line — the strategy falls back to PIXEL_COPY, and PIXEL_COPY reads these.
+  // Deleting them would make that a silent unmasking rather than a no-op.
+  assert.equal(androidMeta('io.sentry.session-replay.mask-all-text'), 'true');
+  assert.equal(androidMeta('io.sentry.session-replay.mask-all-images'), 'true');
+});
+
 test('the Android still-image attachments stay off too', () => {
   assert.equal(androidMeta('io.sentry.attach-screenshot'), 'false');
   assert.equal(androidMeta('io.sentry.attach-view-hierarchy'), 'false');
@@ -242,6 +266,11 @@ test('the Android DSN is a real one, not the placeholder', () => {
 // drift test/design-parity.test.js exists for elsewhere — and here the numbers
 // live in two files, in two languages, with nothing but this asserting they are
 // the same four decisions.
+//
+// THE MECHANISMS DIFFER AND THE POLICY DOES NOT. Android masks by the canvas
+// strategy, which has no iOS counterpart; iOS masks by the two properties this
+// compares. That asymmetry is deliberate and argued in both files. What must
+// not drift is the four VALUES, which is what this reads.
 test('iOS and Android record replays on identical terms', () => {
   const swift = iosApp();
   const pairs = [

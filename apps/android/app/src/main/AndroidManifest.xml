@@ -66,23 +66,42 @@
          stack trace does not have; a single masked still is not, which is why
          the trade comes out differently for the two.
 
-         THE MASKING IS WRITTEN OUT THOUGH BOTH ARE ALREADY THE SDK'S DEFAULT.
-         A default is something a minor version may change and a line is not,
-         and these two are the entire reason the feature is defensible in an
-         app holding a fleet credential, a coordinator address and a signed-in
-         email. Nothing downstream catches them if they go - a frame is not an
-         event and passes through no hook.
+         CANVAS IS WHAT GUARANTEES THAT HERE, AND IT IS THE POINT OF THIS
+         BLOCK. The default strategy, PIXEL_COPY, masks by consulting the two
+         booleans below - which means the masking is only ever as good as two
+         values somebody could flip, and nothing downstream would catch it: a
+         frame is not an event and passes through no hook. CANVAS DOES NOT
+         CONSULT THEM. It always masks text and images and cannot be told
+         otherwise, which is why Sentry names it the strategy for strict PII
+         and why this app - holding a fleet credential, a coordinator address
+         and a signed-in email - is exactly what it is for.
 
-         SAME FOUR VALUES AS iOS, deliberately: FleetwrightApp.swift carries
-         the long version of the argument, and test/sentry-scrub.test.js reads
-         both files and fails if they ever stop matching. These keys are also
-         literals from Sentry's documentation rather than names inferred from
-         the Swift beside them - a meta-data name the SDK does not recognise is
-         SILENTLY IGNORED, so a typo here is a replay that never records and
-         says nothing about it.
+         WHAT IT COSTS. It is still EXPERIMENTAL, so it may change or render
+         differently under a version bump, and Sentry says PIXEL_COPY is the
+         faster of the two. Both are accepted deliberately: a guarantee that
+         does not depend on anybody's future edit is worth a strategy that is
+         younger and slower.
 
-         The canvas screenshot strategy is the stronger guarantee and was not
-         taken; docs/error-reporting.md says why, and it is one line. -->
+         AND IT MAKES THE TWO PHONES ASYMMETRIC, which is worth naming because
+         this repository usually treats that as a defect. iOS has no canvas
+         strategy; it masks by the equivalent of the two booleans below, so the
+         phones now reach the same guarantee by different mechanisms. The four
+         VALUES still match and test/sentry-scrub.test.js still fails if they
+         stop - it is the mechanism that differs, not the policy.
+
+         THE TWO BOOLEANS STAY, THOUGH CANVAS IGNORES THEM. They are the belt:
+         if canvas is ever dropped - it leaves experimental with a different
+         name, a version bump removes it, somebody reverts that line - the
+         strategy silently reverts to PIXEL_COPY, and PIXEL_COPY reads these.
+         Deleting them would make that a silent unmasking rather than a
+         no-op. They are also what the parity test compares against iOS.
+
+         EVERY KEY HERE IS A LITERAL FROM SENTRY'S DOCUMENTATION, including the
+         value `canvas`, rather than a name inferred from the Swift beside it -
+         a meta-data name the SDK does not recognise is SILENTLY IGNORED, so a
+         typo is a replay that never records and says nothing about it. Canvas
+         needs SDK 8.24.0 or newer; build.gradle.kts pins 8.56.0. -->
+    <meta-data android:name="io.sentry.session-replay.screenshot-strategy" android:value="canvas" />
     <meta-data android:name="io.sentry.session-replay.mask-all-text" android:value="true" />
     <meta-data android:name="io.sentry.session-replay.mask-all-images" android:value="true" />
     <!-- Every session that goes wrong, which is the whole point: the previous
