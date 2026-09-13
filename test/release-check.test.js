@@ -103,11 +103,11 @@ test('a box already on the release is told that, not offered it', async () => {
   }
 });
 
-test('a release this host could not take is not offered as one it can', async () => {
-  // THE PROPERTY THE WHOLE FILE IS FOR. "There is an update" and "you may
-  // install it" have to be one answer: a box that advertises an update and then
-  // refuses it when tapped is worse than one that says nothing, because the
-  // refusal arrives after somebody decided to act.
+test('a release AHEAD on protocol is offered — taking it is the only way to cross', async () => {
+  // THE DEADLOCK THIS FILE NOW GUARDS AGAINST. A release one protocol ahead used
+  // to be refused, which meant a host could never cross a protocol bump — the
+  // release is the only path to the new protocol. Negotiation makes the forward
+  // move safe, so it is offered.
   const box = packagedBox('v0.2.2');
   const { doFetch } = serving({
     version: 'v9.9.9',
@@ -120,8 +120,32 @@ test('a release this host could not take is not offered as one it can', async ()
       /** @type {any} */ ({ installDir: box.installDir, releaseManifest: MANIFEST, stateDir: box.base, hostname: 'h' }),
       { fetch: /** @type {any} */ (doFetch) },
     );
-    assert.equal(r.available, null, 'a protocol mismatch was offered as an available update');
-    assert.match(r.message, /protocol/);
+    assert.equal(r.available, 'v9.9.9', 'a forward protocol bump must be offered, not deadlocked');
+    assert.equal(r.ok, true);
+  } finally {
+    rmSync(box.base, { recursive: true, force: true });
+  }
+});
+
+test('a protocol DOWNGRADE is not offered as an update', async () => {
+  // "There is an update" and "you may install it" have to be one answer, and a
+  // downgrade is the one the host must not take — moving backward can drop it
+  // below the coordinator's floor.
+  const box = packagedBox('v0.2.2');
+  const { doFetch } = serving({
+    version: 'v0.0.1',
+    file: 'fleetwright-host-v0.0.1.tar.gz',
+    sha256: 'a'.repeat(64),
+    protocol: PROTOCOL_VERSION - 1,
+  });
+  try {
+    const r = await checkRelease(
+      /** @type {any} */ ({ installDir: box.installDir, releaseManifest: MANIFEST, stateDir: box.base, hostname: 'h' }),
+      { fetch: /** @type {any} */ (doFetch) },
+    );
+    assert.equal(r.available, null, 'a downgrade was offered as an available update');
+    assert.equal(r.reason, 'protocol');
+    assert.match(r.message, /downgrade, not an update/);
   } finally {
     rmSync(box.base, { recursive: true, force: true });
   }

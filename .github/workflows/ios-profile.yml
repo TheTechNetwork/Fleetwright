@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '24.20.0'
+          node-version: '24.21.0'
 
       - name: Preflight — the credentials this cannot run without
         env:

@@ -94,6 +94,25 @@ test('the manifest says what a host needs before it commits to the update', () =
   assert.equal(typeof m.protocol, 'number');
 });
 
+test('a recovery build omits protocol, so a stranded host will accept it', () => {
+  // The one manifest a host stuck on pre-fix code will take: its old gate only
+  // refuses when protocol is present, so RELEASE_RECOVERY builds without it.
+  const out = mkdtempSync(path.join(tmpdir(), 'recovery-'));
+  try {
+    execFileSync(process.execPath, [path.join(ROOT, 'tools/build-host-package.mjs')], {
+      cwd: ROOT,
+      env: { ...process.env, RELEASE_VERSION: 'recovery-1', RELEASE_RECOVERY: '1', RELEASE_OUT_DIR: out },
+      stdio: 'pipe',
+    });
+    const m = JSON.parse(readFileSync(path.join(out, 'manifest.json'), 'utf8'));
+    assert.equal('protocol' in m, false, 'a recovery manifest must omit protocol, not carry it');
+    assert.equal(m.version, 'recovery-1');
+    assert.match(m.sha256, /^[0-9a-f]{64}$/);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test('two builds of one commit are byte-identical', () => {
   // Otherwise the digest is a statement about a build machine rather than
   // about the code, and "has this host been tampered with" has no answer.

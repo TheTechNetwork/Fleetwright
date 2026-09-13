@@ -147,7 +147,7 @@ export function currentVersion(installDir) {
  * @param {boolean} [opts.dryRun]     decide and report, download nothing
  * @param {typeof fetch} [opts.fetch]
  * @param {(m: string) => void} [opts.log]
- * @returns {Promise<{ ok: boolean, changed: boolean, version?: string, message: string }>}
+ * @returns {Promise<{ ok: boolean, changed: boolean, version?: string, reason?: string, message: string }>}
  */
 export async function applyRelease({ installDir, manifestUrl, protocol, channel = 'stable', hostKey = '', dryRun = false, fetch: doFetch = fetch, log = () => {} }) {
   const layout = releaseLayout(installDir);
@@ -167,7 +167,12 @@ export async function applyRelease({ installDir, manifestUrl, protocol, channel 
   if (!decision.act) {
     // `current` is not a failure — a box asking whether it is up to date and
     // being told it is has got the answer it wanted.
-    return { ok: decision.reason === 'current', changed: false, message: decision.message };
+    //
+    // `reason` is CARRIED OUT, not collapsed into `ok`. A caller needs to tell
+    // "could not decide" (a 404, a layout it cannot swap) from "decided not to,
+    // and here is which rule" — a protocol-held release is a definite answer,
+    // not a check that failed, and the `updates` reply renders it as one.
+    return { ok: decision.reason === 'current', reason: decision.reason, changed: false, message: decision.message };
   }
   if (dryRun) return { ok: true, changed: false, version: decision.manifest.version, message: `${decision.message} (available)` };
 
