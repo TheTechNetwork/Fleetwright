@@ -15,7 +15,7 @@ change as this page.
 |---|---|---|---|
 | 1 | Separate uids; run sessions in their own user namespace | holds | **holds, with a correction: `nomap`, not `auto`** |
 | 2 | Keep the Claude refresh token out of the session | withdrawn | withdrawn; the machinery an experiment needs already exists |
-| 3 | Egress allowlist via an internal network and one proxy | holds | holds; already `SEC-INJECT-2`, marked aspirational |
+| 3 | Egress allowlist via an internal network and one proxy | holds | holds; already `SEC-INJECT-2`, marked aspirational; `HTTPS_PROXY` only, no CA bundle |
 | 4 | Move the OAuth code exchange to the host, with PKCE | holds | holds; no `code_verifier` anywhere in the tree |
 | 5 | Narrow the loopback API | holds | holds, **narrower than stated**: it has a token now, and two comments still said it did not |
 | 6 | Hooks instead of pane scraping | holds, one gap | holds; only `SessionStart` is registered |
@@ -87,6 +87,31 @@ reads it:
   the socket `0600`, owned by the service user, and a remapped container root
   cannot connect to it. `:U` on that one bind mount chowns one inode and is
   the documented fix; the listening server keeps its descriptor regardless.
+  **But the hub's own probe has to learn the difference first.**
+  `clearStaleSocket` in the same file (near line 432) treats every connect
+  error as "the listener is gone" and unlinks the path. Once `:U` has chowned
+  a live socket to the first subordinate uid, the hub's probe gets `EACCES`
+  on it, and that code deletes a socket a running container is talking to,
+  which is the exact hijack the function's comment exists to prevent. The
+  probe has to treat `ECONNREFUSED` and `ENOENT` as stale and `EACCES` as
+  live before `:U` ships.
+
+**Three things to carry with it, none of them in the recommendation.**
+
+- `nomap` "is not allowed for containers created by the root user".
+  `docs/design.md` §10 records every hardware run as root and names the
+  non-root service user as the correct posture. A host still running the
+  service as root cannot take this change until it has moved, which makes
+  the move a prerequisite rather than a parallel task.
+- Every existing session volume was written under the `host` mapping, so on
+  the host side its contents belong to the service uid. Under `nomap` that
+  uid is the one uid not mapped, so a resumed session's container root cannot
+  read its own workspace or credential. Each existing volume needs a one-time
+  chown, either `podman unshare chown` before the switch or one resume with
+  `:U`, and the update path has to do it rather than leave it to the first
+  person whose resume comes up unreadable.
+- The Containerfile's sentence above `ENV IS_SANDBOX=1` (item 9) becomes
+  true at the same moment, and should say that it did.
 
 **Verdict.** Holds. It is the single change that would turn `SEC-SESSION-5`
 from unverified into a property with a test: start a session, read
@@ -123,10 +148,16 @@ parts for its experiment are built:
   needs.
 
 The missing part is the rewrite happening while the container is running and
-the CLI noticing. That is one function and one test, and the pass condition
-is the same one `keepalive.js` already uses: a session whose seeded file
-carried no refresh token keeps making requests after the access token it
-started with has expired.
+the CLI noticing. That is one function and one test, with two constraints
+the function has to meet. The write must be atomic inside the volume, a temp
+file and a rename, because the CLI can read the file at any moment and a
+half-written credential is a logged-out session. And Remote Control is a
+second reader with its own lifecycle: its page says that when a server's
+registration credential expires "the server registers with the Anthropic API
+again", and nothing says what it reads to do so. So the pass condition is
+not one request but the harder one: a Remote Control session, seeded with no
+`refreshToken`, survives one access-token rotation and is still reachable
+from the phone afterwards.
 
 **Verdict.** Withdrawn as a plan; stands as an experiment with a clear pass
 condition and most of its parts on the shelf.
@@ -150,17 +181,27 @@ probe), so they are unaffected. `src/core/sandbox-args.js` refuses
 `AGENT_HUB_SANDBOX_ARGS` passes that check, which is correct.
 
 One thing the review's precision implies and the code will need: the session
-has to be told about the proxy. Inside the container that is `HTTPS_PROXY`
-and a CA bundle, and nothing in `sandbox/Containerfile` or
-`sandbox/entrypoint.sh` sets either today.
+has to be told about the proxy. That is `HTTPS_PROXY` in the session
+environment and nothing else. A CONNECT allowlist proxy does not terminate
+TLS, so no CA bundle enters the container; Claude Code's network page says it
+"respects standard proxy environment variables" and needs
+`NODE_EXTRA_CA_CERTS` only for TLS-inspection proxies, which this is not.
+Nothing in `sandbox/Containerfile` or `sandbox/entrypoint.sh` sets the
+variable today. Two more facts off the same page shape the allowlist: SOCKS
+is unsupported, so the proxy is HTTP CONNECT; and `platform.claude.com` is
+on the list of hosts the CLI needs, for "OAuth token exchange, refresh, and
+revocation", so an allowlist that carries only `api.anthropic.com` breaks
+credential renewal on the idle box rather than sign-in, which is the failure
+`src/core/keepalive.js` exists to prevent.
 
 **Verdict.** Holds, and is already on the books as aspirational. Nothing here
-contradicts the spec; this page adds the routing-not-firewall precision and
-the proxy-variable gap to it.
+contradicts the spec; this page adds the routing-not-firewall precision, the
+proxy-variable gap, and the two hosts the allowlist cannot omit.
 
 Sources: [podman-network-create](https://docs.podman.io/en/latest/markdown/podman-network-create.1.html),
 [podman `--network`](https://github.com/containers/podman/blob/main/docs/source/markdown/options/network.md),
-[discussion #21451](https://github.com/containers/podman/discussions/21451).
+[discussion #21451](https://github.com/containers/podman/discussions/21451),
+[Claude Code network configuration](https://code.claude.com/docs/en/network-config).
 
 ## 4. Move the OAuth code exchange to the host, with PKCE
 
@@ -201,10 +242,14 @@ Sources: [Generating a user access token](https://docs.github.com/en/apps/creati
 generated into `${stateDir}/api-token` and read by the sidecar, and
 `#authorised` in `http.js` fails closed when there is none. So "reaching it"
 is no longer enough; holding the token is. That narrows the recommendation
-without dissolving it: a process with the token can run any line, and the
-sidecar's verb allowlist (**SEC-PROTO-2**) is enforced in the sidecar, one
-hop before this endpoint. The narrowing that remains is a verb allowlist on
-the endpoint itself, matching the shapes `toCommandLine` can emit.
+without dissolving it, and the sentence that survives is separate from the
+token: given the token, the endpoint runs any line, `/login` included
+(`src/adapters/commands.js` dispatches it), and the sidecar holds that token
+for as long as it runs. The sidecar's verb allowlist (**SEC-PROTO-2**) is
+enforced in the sidecar, one hop before this endpoint, so a compromised
+sidecar, or anything that reads `${stateDir}/api-token`, is past it. The
+narrowing that remains is a verb allowlist on the endpoint itself, matching
+the shapes `toCommandLine` can emit and refusing the rest.
 
 **Two comments were still describing the old API.** The header of
 `src/adapters/http.js` said the loopback bind needed no token because
@@ -280,8 +325,9 @@ event loop.
 The image build is the case to lead with. Its comment says it "blocks the
 session that asked for it, which is the point". It blocks the process: for
 the minutes a build takes, `/api/state` does not answer, the sidecar's health
-frame does not go out, and the coordinator reports the host as it would a
-dead one. The comment is true of the person waiting and false of the box.
+frame does not go out, and the coordinator marks the host degraded for the
+length of the build, which every phone then shows. The comment is true of
+the person waiting and false of the box.
 
 **Verdict.** Holds. The two wrappers are the whole surface, which makes it a
 contained change.
@@ -308,8 +354,8 @@ root maps to an unprivileged host user", is the sentence item 1 is about.
 
 **Verdict.** Confirmed. The whole launch path rests on a flag Anthropic has
 not committed to. The mitigation that does not depend on Anthropic is item 1:
-once container root is not the service user, the flag stops being asked to
-carry a claim and becomes only a bypass.
+under `nomap` the Containerfile's sentence becomes true for the first time,
+and the flag stops being asked to carry a claim and becomes only a bypass.
 
 Source: [anthropics/claude-code#58150](https://github.com/anthropics/claude-code/issues/58150).
 
