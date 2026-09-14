@@ -210,10 +210,10 @@ fi
 # builds the image, so three bare `//` from a converted comment block reached
 # main and failed four minutes into a build matrix.
 printf 'container  ... '
-if node scripts/check-containerfile.mjs sandbox/Containerfile >/dev/null 2>&1; then
+if node scripts/check-containerfile.mjs sandbox/Containerfile sandbox/egress/Containerfile >/dev/null 2>&1; then
   printf 'parses\n'
 else
-  printf 'FAILED\n'; node scripts/check-containerfile.mjs sandbox/Containerfile 2>&1 | sed 's/^/  /'; fail=1
+  printf 'FAILED\n'; node scripts/check-containerfile.mjs sandbox/Containerfile sandbox/egress/Containerfile 2>&1 | sed 's/^/  /'; fail=1
 fi
 
 printf 'sandbox    ... '

@@ -9,6 +9,7 @@ import { dewrapPane, RC_URL_RE } from './pane.js';
 import { log } from '../log.js';
 import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs, hookSocketMount } from './sandbox-userns.js';
+import { egressArgs } from './egress.js';
 
 /** @param {number} ms */
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -117,6 +118,12 @@ function sandboxArgv(cfg, name, hookSocket) {
   if (hookSocket) {
     argv.push('-v', hookSocketMount(cfg, `${cfg.sandboxHookSocketDir}/${name}.sock`, '/run/hub.sock'));
   }
+
+  // Where it may reach: nothing, when the box is on an allowlist, except the
+  // proxy on the internal network — which is told to it here, because a
+  // session finds its only way out by being handed the address. Empty when
+  // egress is open, which is the line every session ran before.
+  argv.push(...egressArgs(cfg));
 
   // One mechanism for resource limits instead of a separate cgroup layer.
   if (cfg.sandboxMemory) argv.push(`--memory=${cfg.sandboxMemory}`);

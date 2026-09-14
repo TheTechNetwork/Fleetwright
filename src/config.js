@@ -294,6 +294,15 @@ export function loadConfig(env = process.env) {
     // there) or the engine is docker (which has no such option).
     sandboxUserns: userns.mode,
     sandboxUsernsNote: userns.note,
+    // WHERE A SESSION MAY REACH. `open` (the default, and what every session
+    // has had): anywhere. `allowlist`: only the hosts in core/egress.js plus
+    // AGENT_HUB_SANDBOX_EGRESS_ALLOW, through a proxy container on an
+    // internal network — SEC-INJECT-2 in docs/security.md, built and opt-in.
+    sandboxEgress: str('AGENT_HUB_SANDBOX_EGRESS', 'open') === 'allowlist' ? 'allowlist' : 'open',
+    sandboxEgressAllow: list('AGENT_HUB_SANDBOX_EGRESS_ALLOW'),
+    sandboxEgressSubnet: str('AGENT_HUB_SANDBOX_EGRESS_SUBNET', '10.89.201.0/24'),
+    sandboxEgressImage: str('AGENT_HUB_SANDBOX_EGRESS_IMAGE', 'localhost/agent-egress:latest'),
+    sandboxEgressContainerfile: str('AGENT_HUB_SANDBOX_EGRESS_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'egress', 'Containerfile')),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),

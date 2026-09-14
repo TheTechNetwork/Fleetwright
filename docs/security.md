@@ -452,13 +452,20 @@ The test that would matter is the *absence* of egress control — see SEC-INJECT
 - **The permission mode.** Dangerous is the default; the "safe mode" that several
   arguments lean on is not shipped as the default and MUST NOT be assumed active.
 
-**SEC-INJECT-2** (ASPIRATIONAL) — Default-deny egress through a credential-
-terminating proxy (`trust.md`, `ROADMAP §2`) is the control that would bound
-misuse to a named allowlist of destinations. It is **not built**. Until it is,
-the security posture of a session on untrusted input is "trusted to the extent
-of everything it can reach."
-*Falsify:* `sandboxArgv` in `claude.js` passes no `--network` restriction; grep
-for a proxy/netns. Absent.
+**SEC-INJECT-2** (BUILT, OPT-IN, NOT YET MEASURED) — Default-deny egress
+through a named allowlist is the control that bounds misuse to a set of
+destinations. It is built as `AGENT_HUB_SANDBOX_EGRESS=allowlist`
+(`src/core/egress.js`): sessions join a podman `--internal` network, which
+has no route out, and one CONNECT-only proxy container on both that network
+and the default one is the only path; the allowlist lives in the proxy
+because the network cannot express one. It is **off by default**, and until a
+box has been seen refusing `curl https://example.com` from a session while
+`claude` signs in and answers, the property stays unmeasured. Off, the
+posture of a session on untrusted input is still "trusted to the extent of
+everything it can reach." Not a credential-terminating proxy: the tunnel is
+bytes in, bytes out, and the CLI needs `HTTPS_PROXY` and no CA bundle.
+*Falsify:* `egressArgs` in `egress.js` empty under `allowlist`; `sandboxArgv`
+in `claude.js` not spreading it; `test/egress.test.js`.
 
 **SEC-INJECT-3** — Starting a session in dangerous mode on a repository the
 operator did not write is accepting that injected content in that repository may
@@ -488,11 +495,13 @@ does.
 *Falsify:* `podman.js` / `sandboxArgv`; a test that a stopped-and-resumed session
 keeps `/work` and loses `/etc` changes.
 
-**SEC-SESSION-4** — Egress from a session is **open** by design today
-(`design.md §2`, confirmed: `sandboxArgv` sets no network restriction). This MUST
-be stated wherever containment is described, so nobody reads "sandbox" as
-"contained network."
-*Falsify:* grep `claude.js` `sandboxArgv` for `--network`; absent.
+**SEC-SESSION-4** — Egress from a session is **open** by default
+(`design.md §2`, confirmed: `sandboxArgv` sets no network restriction unless
+`AGENT_HUB_SANDBOX_EGRESS=allowlist`, SEC-INJECT-2). This MUST be stated
+wherever containment is described, so nobody reads "sandbox" as "contained
+network" on a box that has not turned the allowlist on.
+*Falsify:* grep `claude.js` `sandboxArgv` for `egressArgs`; `test/egress.test.js`
+pins that it is empty when open.
 
 **SEC-SESSION-5** (UNVERIFIED) — Rootless podman is claimed to map container-root
 to an unprivileged host user, so an escape is unprivileged on the host. This is

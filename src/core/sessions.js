@@ -23,6 +23,7 @@ import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
+import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor } from './activity.js';
@@ -439,6 +440,15 @@ export class SessionManager {
       // A colleague resuming somebody else's session must not move it onto
       // their own Claude account.
       const known = this.registry.get(name);
+      // THE WAY OUT BEFORE THE SESSION, when the box is on an allowlist: a
+      // session put on the internal network before its proxy is up has no
+      // route anywhere and sits at a sign-in that cannot complete. No-op when
+      // egress is open.
+      const egress = await ensureEgress(this.cfg);
+      if (!egress.ok) {
+        this.registry.upsert(name, { status: 'error', detail: egress.message ?? 'egress setup failed', cwd, createdBy: actor });
+        return { ok: false, message: `Could not prepare the egress proxy for "${name}": ${egress.message}` };
+      }
       const volumes = await ensureSandboxVolumes(this.cfg, name, actor, {
         account: known?.account ?? null,
         createdBy: known?.createdBy ?? null,
