@@ -32,7 +32,7 @@ const UNSAFE = [
   [(a) => a === '--privileged', 'gives the session every capability on the host — the container stops being a boundary'],
   [
     (a, next) => /^--(net|network)(=|$)/.test(a) && val(a, next) === 'host',
-    'puts the session on the host network: it can reach 127.0.0.1:8790, which is the hub\'s own unauthenticated loopback API',
+    'puts the session on the host network: it can reach 127.0.0.1:8790, the hub\'s own loopback API — tokened, but a session should not have a route to it at all',
   ],
   [(a, next) => /^--pid(=|$)/.test(a) && val(a, next) === 'host', 'lets the session see and signal every process on the box, including agent-hub'],
   [(a, next) => /^--ipc(=|$)/.test(a) && val(a, next) === 'host', 'shares the host IPC namespace with the session'],
