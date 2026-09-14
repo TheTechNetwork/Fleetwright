@@ -129,7 +129,14 @@ issued to, and a caller-supplied `actor` cannot override it — an actor the
 caller chooses is a label, not an attribution.
 
 Both coordinators — the Worker and the Node one — implement these identically,
-because an app must not be able to tell which one it is talking to.
+because an app must not be able to tell which one it is talking to. The one
+deliberate difference is `POST /api/enroll`, which mints a pin: the Worker
+refuses it without a token like every other route, while the Node coordinator,
+which is allowed to run with no admin token on loopback for testing, accepts it
+from an unauthenticated caller — but only bound to loopback, and only for a
+plain host pin the local box uses to enrol itself. A device pin, a re-admitted
+named host, or a chosen actor still needs a credential there too, so the widest
+an anonymous caller gets is "this machine, joining the fleet it is running on".
 
 Configure with three settings, and they do not all live in the same place.
 The two identifiers are `[vars]` — ours are in `worker/wrangler.production.toml`,

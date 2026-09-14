@@ -301,6 +301,10 @@ export class Coordinator {
 
   /** @param {number} port @param {string} host */
   async listen(port = 8791, host = '127.0.0.1') {
+    // Remembered so the enrolment route can tell whether this coordinator is
+    // reachable off-box. An UNAUTHENTICATED mint is allowed only when it is not
+    // — see the /api/enroll POST handler.
+    this.bindHost = host;
     this.server = createServer((req, res) => {
       this.#route(req, res).catch((e) => {
         this.log.error('coordinator: unhandled', e);
@@ -1084,6 +1088,48 @@ export class Coordinator {
     if (p === '/api/enroll' && req.method === 'POST') {
       const body = await readJson(req);
       const kind = body?.kind === 'device' ? 'device' : 'host';
+
+      // AN UNAUTHENTICATED MINT IS LOOPBACK-ONLY, AND ONLY A PLAIN HOST PIN FOR
+      // THIS BOX. This is the one place the Node coordinator was laxer than the
+      // Worker, which 503s every request without a token (#353).
+      //
+      // A request that reached here with a device credential or the admin token
+      // is the app, or break-glass, adding a machine, and mints as it always
+      // has — from anywhere, for any host, host pin or device pin. But the
+      // entrypoint allows NO admin token on loopback for testing
+      // (bin/agent-fleet-coordinator), and there a credential-less request
+      // arrives with `client` null and nothing presented. Left open, anything
+      // that could reach the port could mint a pin, and a pin admits a machine
+      // to the fleet.
+      //
+      // So with no credential behind it: the coordinator must be bound to
+      // loopback (a wide bind already forces an admin token at startup, which
+      // makes this branch unreachable — this is that guarantee stated where it
+      // is enforced rather than a file away), and it may mint only a fresh host
+      // pin for the box in front of it. A device pin, a named or re-admit
+      // hostId, or a chosen actor is minting for something other than "this
+      // machine, enrolling itself", and wants a sign-in.
+      const anonymous = client === null && this.apiToken === null;
+      if (anonymous) {
+        const loopbackBind = ['127.0.0.1', 'localhost', '::1'].includes(String(this.bindHost));
+        if (!loopbackBind) {
+          return json(res, 401, {
+            ok: false,
+            error: { code: 'unauthorised' },
+            text: 'Minting an enrolment pin needs a signed-in credential or the admin token on this coordinator.',
+          });
+        }
+        if (kind !== 'host' || (body?.hostId && String(body.hostId).trim()) || body?.readmit || body?.actor) {
+          return json(res, 403, {
+            ok: false,
+            error: { code: 'forbidden' },
+            text:
+              'Without a credential this box mints only a plain host pin for itself. ' +
+              'Sign in to mint a device pin, re-admit a named host, or set who it is for.',
+          });
+        }
+      }
+
       // Six digits is small enough to read down a phone and small enough to
       // guess, so the guessing is what has to be bounded — see enrollment.js.
       const issued = this.core.enrollment.mint({

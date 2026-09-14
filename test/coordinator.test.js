@@ -547,6 +547,84 @@ test('an API token is enforced when set', async (t) => {
   assert.equal(ok.status, 200);
 });
 
+// --- who may mint an enrolment pin -------------------------------------------
+//
+// The pin admits a machine to the fleet, so minting it is not a thing an
+// anonymous caller should be able to do off-box. The Worker refuses every
+// request without a token; the Node coordinator allows no token on loopback for
+// testing, which left this one route open there (#353). An unauthenticated mint
+// is now confined to what a box enrolling ITSELF on loopback needs: a plain
+// host pin, over loopback, and nothing that names another target.
+
+/** @param {number} port @param {Record<string, any>} body @param {string} [token] */
+async function mintPin(port, body, token) {
+  return fetch(`http://127.0.0.1:${port}/api/enroll`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+test('a loopback box with no token can mint a plain host pin for itself', async (t) => {
+  // The legitimate dev / self-host flow this route exists for: mint a pin
+  // locally, enrol the box it is running on. It must keep working.
+  const coordinator = new Coordinator();
+  const port = await coordinator.listen(0, '127.0.0.1');
+  t.after(() => coordinator.close());
+
+  const res = await mintPin(port, { kind: 'host' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.match(body.code || '', /^\d{6}$/, 'a six-digit pin came back');
+});
+
+test('an unauthenticated caller cannot mint a device pin, a named host, or an actor', async (t) => {
+  // Everything but "this machine, enrolling itself" needs a sign-in — a device
+  // credential, re-admitting a named host, or attributing the pin to somebody.
+  const coordinator = new Coordinator();
+  const port = await coordinator.listen(0, '127.0.0.1');
+  t.after(() => coordinator.close());
+
+  for (const body of [
+    { kind: 'device' },
+    { kind: 'host', hostId: 'some-other-box', readmit: true },
+    { kind: 'host', actor: 'someone@example.com' },
+  ]) {
+    const res = await mintPin(port, body);
+    assert.equal(res.status, 403, `refused: ${JSON.stringify(body)}`);
+  }
+});
+
+test('a wide bind with no token refuses even an anonymous host pin', async (t) => {
+  // The entrypoint already forces an admin token on a non-loopback bind, so this
+  // branch is unreachable in production — but the guarantee belongs at the route
+  // it protects, not only in bin/. Bound to 0.0.0.0, a credential-less mint is
+  // refused; 127.0.0.1 still reaches the same server on Linux, so the request
+  // arrives and it is the BIND, not the peer, that turns it away.
+  const coordinator = new Coordinator();
+  const port = await coordinator.listen(0, '0.0.0.0');
+  t.after(() => coordinator.close());
+
+  const res = await mintPin(port, { kind: 'host' });
+  assert.equal(res.status, 401);
+});
+
+test('an admin token still mints a device pin and re-admits a named host', async (t) => {
+  // The authenticated path — the app, or break-glass — is unchanged: any host,
+  // host pin or device pin, from anywhere.
+  const coordinator = new Coordinator({ apiToken: 'a-token-at-least-16ch' });
+  const port = await coordinator.listen(0, '127.0.0.1');
+  t.after(() => coordinator.close());
+
+  const dev = await mintPin(port, { kind: 'device' }, 'a-token-at-least-16ch');
+  assert.equal(dev.status, 200);
+  const readmit = await mintPin(port, { kind: 'host', hostId: 'attic-pi', readmit: true }, 'a-token-at-least-16ch');
+  assert.equal(readmit.status, 200);
+});
+
 test('a host that was never enrolled cannot connect at all', async (t) => {
   const coordinator = new Coordinator();
   const port = await coordinator.listen(0, '127.0.0.1');
