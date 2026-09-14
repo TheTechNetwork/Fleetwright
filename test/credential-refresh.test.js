@@ -21,7 +21,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync, existsSync, chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -60,6 +60,9 @@ case "$1 $2" in
 esac
 case "$1" in
   run)
+    # What arrived on stdin: a seed travels there now, never on the command
+    # line, so the credential that reached the volume is read back from here.
+    cat > "${dir}/stdin.$$.txt"
     case "$*" in
       *oauth-account.json*cat*|*cat*oauth-account.json*)
         ${oauthAccount ? `printf '%s' '${JSON.stringify(oauthAccount)}'` : 'true'}
@@ -78,9 +81,12 @@ exit 0
   mkdirSync(state, { recursive: true });
   mkdirSync(home, { recursive: true });
 
-  /** @param {string} file @param {number} expiresAt */
-  const credential = (file, expiresAt) => {
-    writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt } }));
+  /** @param {string} file @param {number} expiresAt @param {string} [owner] */
+  const credential = (file, expiresAt, owner = 'shared') => {
+    // The owner's name is written INTO the bytes, so a test can tell whose
+    // credential reached a volume by reading what was seeded rather than by
+    // reading a path off the command line — where it no longer appears.
+    writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: `a-${owner}`, refreshToken: 'r', expiresAt } }));
     return file;
   };
   const shared = credential(path.join(home, '.credentials.json'), Date.now() + 5 * HOUR);
@@ -91,17 +97,25 @@ exit 0
     shared,
     credential,
     calls: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []),
-    /** Seeding invocations only — `run` calls that copy rather than read. */
+    /** Seeding invocations only — `run` calls that write a volume from stdin
+     * (a bare `sh` reading its script) rather than read one (`sh -c cat`). */
     seeds: () =>
       (existsSync(log) ? readFileSync(log, 'utf8').split('\n') : []).filter(
-        (c) => c.startsWith('run ') && c.includes('/seed/.credentials.json'),
+        (c) => c.startsWith('run ') && c.includes(':/dest') && / sh$/.test(c),
       ),
+    /** Every credential that was seeded, decoded from what travelled on stdin. */
+    seeded: () =>
+      readdirSync(dir)
+        .filter((f) => f.startsWith('stdin.'))
+        .map((f) => readFileSync(path.join(dir, f), 'utf8'))
+        .flatMap((script) => [...script.matchAll(/printf '%s' '([A-Za-z0-9+/=]+)'/g)].map((m) => Buffer.from(m[1], 'base64').toString()))
+        .join('\n'),
     /** Link a Claude account for `email` and return its credential path. */
     /** @param {string} email @param {number} [expiresAt] */
     link: (email, expiresAt = Date.now() + 5 * HOUR) => {
       const accounts = path.join(state, 'accounts');
       mkdirSync(accounts, { recursive: true });
-      return credential(path.join(accounts, `${email}.json`), expiresAt);
+      return credential(path.join(accounts, `${email}.json`), expiresAt, email);
     },
     /** @param {Partial<any>} patch @returns {any} */
     cfg: (patch = {}) => ({
@@ -160,8 +174,10 @@ test('a resume keeps the account it began with, not the account resuming it', (t
   const r = ensureSandboxVolumes(s.cfg(), 'alices', 'fleet:bob@example.com', { account: 'alice@example.com' });
 
   assert.equal(r.account, 'alice@example.com');
-  assert.match(s.seeds()[0], new RegExp(alice.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.ok(!s.seeds()[0].includes('bob@example.com'), "bob's credential went nowhere near it");
+  assert.equal(s.seeds().length, 1);
+  assert.ok(!s.seeds()[0].includes(alice), 'the host path is not on the command line');
+  assert.match(s.seeded(), /a-alice@example\.com/, "alice's bytes are what reached the volume");
+  assert.ok(!s.seeded().includes('bob@example.com'), "bob's credential went nowhere near it");
 });
 
 test('a session whose account is not on the record asks the volume', (t) => {

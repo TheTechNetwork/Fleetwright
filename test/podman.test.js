@@ -21,6 +21,8 @@ import {
   healRootlessSandbox,
   sandboxImageStatus,
   canStartSession,
+  seedScript,
+  adoptVolumeOwnership,
 } from '../src/core/podman.js';
 
 /**
@@ -45,17 +47,30 @@ function stubPodman(
     stillMasked = false,
     failUnshare = false,
     failMigrate = false,
+    volumeOwner = null,
   } = {},
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'podman-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   const log = path.join(dir, 'calls.log');
+  const stdinLog = path.join(dir, 'stdin.log');
   const bin = path.join(dir, 'podman');
   writeFileSync(
     bin,
     `#!/bin/sh
 echo "$@" >> ${log}
+# What a \`run\` was handed on stdin, because the things that must never be on
+# the command line — a credential, a person's house rules — travel there.
+if [ "$1" = run ]; then cat >> ${stdinLog}; fi
+# A volume's mount point and who owns it, for the ownership adoption a nomap
+# box performs on volumes from before it. \`volumeOwner\` null means the stub
+# knows no volumes (volume inspect fails, as it does for a missing one).
+if [ "$1 $2 $3" = "volume inspect --format" ]; then
+  ${volumeOwner === null ? 'exit 1' : `echo /vol/$5/_data; exit 0`}
+fi
+if [ "$1 $2" = "unshare stat" ]; then echo "${volumeOwner ?? ''}"; exit 0; fi
+if [ "$1 $2" = "unshare chown" ]; then exit 0; fi
 # INSPECT, NOT EXISTS. Podman has "volume exists" and friends; Docker has no
 # equivalent, and CI has Docker and no Podman -- so the container half of the
 # sandbox could never be exercised there. "inspect" is on both engines and
@@ -114,6 +129,7 @@ exit 0
     dir,
     containerfile,
     calls: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []),
+    stdin: () => (existsSync(stdinLog) ? readFileSync(stdinLog, 'utf8') : ''),
     /** @param {Partial<any>} patch @returns {any} */
     cfg: (patch = {}) => ({
       podmanBin: bin,
@@ -307,6 +323,96 @@ test('a build failure stops before any volume is created', (t) => {
 
   assert.equal(r.ok, false);
   assert.ok(!s.calls().some((c) => c.startsWith('volume create')));
+});
+
+test('the credential is seeded over stdin, never bind-mounted', (t) => {
+  // Under --userns=nomap the host's 0600 credential is owned by a uid the
+  // container does not map, so a `cp` inside the container cannot open it.
+  // This process can: it reads the bytes and hands them over on stdin, where
+  // `ps` never shows them and nothing parses them as a command line.
+  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const email = linkAccount(s.dir);
+  const credential = JSON.stringify({ claudeAiOauth: { accessToken: "it's 'quoted'" } });
+  writeFileSync(path.join(s.dir, 'accounts', `${email}.json`), credential);
+
+  const r = ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap' }), 'bigjob');
+
+  assert.equal(r.ok, true);
+  const seed = s.calls().find((c) => c.includes(':/dest') && c.includes(' sh'));
+  assert.ok(seed, 'a seeding container ran');
+  assert.ok(!seed.includes('/seed/'), `the host credential path is not on the command line: ${seed}`);
+  assert.match(seed, /--userns=nomap/, 'the seed runs in the session namespace');
+  assert.match(seed, /--network none/);
+  assert.ok(!seed.includes("it's"), 'the credential itself is not on the command line');
+  assert.ok(s.stdin().includes(Buffer.from(credential).toString('base64')), 'the bytes travelled on stdin');
+  assert.match(s.stdin(), /chmod 600 '\/dest\/\.credentials\.json'/);
+});
+
+test('every helper container that touches a volume carries the same userns flag', (t) => {
+  // One flag, every container. A volume written under one mapping and read
+  // under another is unreadable on the next resume, silently.
+  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  linkAccount(s.dir);
+  writeFileSync(path.join(s.dir, 'CLAUDE.md'), '# rules\n');
+
+  ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap', workdir: s.dir }), 'bigjob');
+
+  const runs = s.calls().filter((c) => c.startsWith('run ') && c.includes(':/dest'));
+  assert.ok(runs.length >= 1);
+  for (const run of runs) assert.match(run, /--userns=nomap/, run);
+});
+
+test('with the host namespace chosen, no container gets a --userns at all', (t) => {
+  // The exact line every session ran before the setting existed.
+  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  linkAccount(s.dir);
+
+  ensureSandboxVolumes(s.cfg({ sandboxUserns: 'host' }), 'bigjob');
+
+  assert.ok(!s.calls().some((c) => c.includes('--userns')));
+});
+
+test('seedScript keeps a credential inside its quotes whatever it contains', () => {
+  const script = seedScript([
+    { name: '.credentials.json', data: Buffer.from(`'; rm -rf / #`) },
+    { name: '.oauth-account.json', data: Buffer.from('{}') },
+  ]);
+  const lines = script.trim().split('\n');
+  assert.equal(lines[0], 'set -e');
+  assert.equal(lines[1], 'umask 077', 'never readable, not merely readable-then-fixed');
+  for (const line of lines.slice(2)) {
+    assert.match(line, /^(printf '%s' '[A-Za-z0-9+/=]+' \| base64 -d > '\/dest\/[A-Za-z0-9._-]+'|chmod 600 '\/dest\/[A-Za-z0-9._-]+')$/, line);
+  }
+  assert.throws(() => seedScript([{ name: '../etc/passwd', data: Buffer.from('') }]), /not a seedable/);
+});
+
+test('a volume from before nomap is moved into the session namespace, once', (t) => {
+  // In the rootless namespace `podman unshare` shows, the service uid is 0 and
+  // the first subordinate uid — container root under nomap — is 1. A mount
+  // point owned by 0 is a volume every session used to write as the service
+  // user, and a resume under nomap would find it unreadable.
+  const s = stubPodman(t, { volumeOwner: '0' });
+
+  assert.deepEqual(adoptVolumeOwnership(s.cfg({ sandboxUserns: 'nomap' }), 'work-bigjob'), { adopted: true });
+  assert.ok(s.calls().some((c) => c === 'unshare chown -R 1:1 /vol/work-bigjob/_data'));
+});
+
+test('a volume already in the session namespace is left exactly alone', (t) => {
+  const s = stubPodman(t, { volumeOwner: '1' });
+
+  const r = adoptVolumeOwnership(s.cfg({ sandboxUserns: 'nomap' }), 'work-bigjob');
+
+  assert.equal(r.adopted, false);
+  assert.ok(!s.calls().some((c) => c.startsWith('unshare chown')));
+});
+
+test('under the host namespace no volume is ever touched', (t) => {
+  const s = stubPodman(t, { volumeOwner: '0' });
+
+  const r = adoptVolumeOwnership(s.cfg({ sandboxUserns: 'host' }), 'work-bigjob');
+
+  assert.equal(r.adopted, false);
+  assert.ok(!s.calls().some((c) => c.startsWith('unshare')));
 });
 
 test('podman missing entirely is its own message', (t) => {

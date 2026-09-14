@@ -25,6 +25,7 @@ import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAcc
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
+import { usernsArgs } from './sandbox-userns.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -525,7 +526,14 @@ export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorde
   let fresh = false;
 
   for (const volume of [claude, work]) {
-    if (volumeExists(cfg, volume)) continue;
+    if (volumeExists(cfg, volume)) {
+      // A volume from before sessions had their own namespace is owned by the
+      // service uid, which a nomap container does not map. Brought across
+      // once, here, rather than left for the first resume that comes up
+      // unable to read its own workspace.
+      adoptVolumeOwnership(cfg, volume);
+      continue;
+    }
     const created = podman(cfg, ['volume', 'create', volume]);
     if (created.status !== 0) {
       return { ok: false, message: `could not create volume ${volume}: ${created.stderr.trim().slice(0, 200)}` };
@@ -670,7 +678,7 @@ export function credentialSourceForAccount(cfg, account) {
  */
 export function volumeAccount(cfg, volume) {
   const r = podman(cfg, [
-    'run', '--rm', '-v', `${volume}:/dest:ro`, sessionImage(cfg),
+    'run', '--rm', ...usernsArgs(cfg), '-v', `${volume}:/dest:ro`, '--network', 'none', sessionImage(cfg),
     'sh', '-c', 'cat /dest/.oauth-account.json 2>/dev/null || true',
   ]);
   if (r.status !== 0) return null;
@@ -726,7 +734,7 @@ function seedHouseRules(cfg, volume) {
 
   const r = podman(
     cfg,
-    ['run', '--rm', '-i', '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg),
+    ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg),
       'sh', '-c', 'cat > /dest/CLAUDE.md && chmod 644 /dest/CLAUDE.md'],
     { input: rules.text },
   );
@@ -792,11 +800,20 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // every start — the newer CLI reads logged-in-ness off the PAIR, and a
   // credential without its oauthAccount is a login that fails while every
   // file involved is genuine.
-  const mounts = ['-v', `${volume}:/dest`, '-v', `${source}:/seed/.credentials.json:ro`];
-  let copy = 'cp /seed/.credentials.json /dest/.credentials.json && chmod 600 /dest/.credentials.json';
-  if (picked.accountMeta) {
-    mounts.push('-v', `${picked.accountMeta}:/seed/.oauth-account.json:ro`);
-    copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
+  //
+  // READ HERE, WRITTEN OVER STDIN — not bind-mounted. The host's credential is
+  // a 0600 file owned by the service user, and under --userns=nomap that is a
+  // uid the container does not map, so a `cp` inside could not open it. This
+  // process can, so it reads the bytes and hands them to the container the
+  // same way the house rules travel: on stdin, where nothing parses them as a
+  // command line and `ps` never shows them. See seedScript for the shape.
+  /** @type {Array<{ name: string, data: Buffer }>} */
+  const files = [];
+  try {
+    files.push({ name: '.credentials.json', data: readFileSync(source) });
+    if (picked.accountMeta) files.push({ name: '.oauth-account.json', data: readFileSync(picked.accountMeta) });
+  } catch (e) {
+    return { ok: false, message: `could not read the credential to seed into ${volume}: ${/** @type {Error} */ (e).message}` };
   }
   // The other credentials — GitHub, Cloudflare, whatever gets added — ARE NOT
   // SEEDED ANY MORE. They used to be copied in as `.secrets.env` and exported
@@ -807,15 +824,93 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // credential-broker.js. Nothing about the Claude credential changes — that
   // one is read by a CLI we do not control, from a path it expects, so it is
   // still a file in the volume.
-  const r = podman(cfg, ['run', '--rm', ...mounts, sessionImage(cfg), 'sh', '-c', copy]);
+  const r = podman(
+    cfg,
+    ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg), 'sh'],
+    { input: seedScript(files) },
+  );
   if (r.status !== 0) {
     return {
       ok: false,
-      message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}\n(is ${source} readable?)`,
+      message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}`,
     };
   }
   log.info(`sandbox: seeded ${picked.account} credentials into ${volume}`);
   return { ok: true, account: picked.account };
+}
+
+/**
+ * The shell that writes seeded files into a volume, read by `sh` from stdin.
+ *
+ * Each file is base64 on the way in, which keeps the script a fixed shape no
+ * matter what the JSON contains: the only characters between the quotes are
+ * from the base64 alphabet, so there is nothing a credential could say that
+ * ends the quote early. `umask 077` before the first write and an explicit
+ * `chmod 600` after it, so the file is never readable at any point of its
+ * existence rather than only at the end.
+ *
+ * Exported for the test that pins that property, because the container that
+ * would prove it does not run in CI.
+ *
+ * @param {Array<{ name: string, data: Buffer }>} files  basenames under /dest
+ */
+export function seedScript(files) {
+  const lines = ['set -e', 'umask 077'];
+  for (const { name, data } of files) {
+    if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`not a seedable name: ${name}`);
+    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '/dest/${name}'`);
+    lines.push(`chmod 600 '/dest/${name}'`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Bring a volume written under the host user namespace into the session one.
+ *
+ * Before sessions had their own namespace, every file in a volume was owned by
+ * the service uid on the host. Under `nomap` that is the one uid a session
+ * does not map, so a resumed session would find its own workspace and
+ * credential owned by nobody it can be. Podman only chowns a volume on FIRST
+ * use, so this is not something a restart fixes on its own.
+ *
+ * `podman unshare` runs in the rootless namespace every container is built
+ * from: the service uid appears there as 0 and the first subordinate uid as 1,
+ * which is the uid container root becomes under `nomap`. So a mount point
+ * that stats as 0 is a volume from before, and `chown -R 1:1` is the move.
+ * A mount point that already stats as anything else is left exactly alone:
+ * guessing at ownership is how a workspace gets handed to the wrong uid.
+ *
+ * NEVER FAILS A START. A volume this could not read or move is the volume the
+ * session had yesterday; refusing to resume it would be a worse outcome than
+ * the unreadable workspace this exists to prevent, and the warning says which
+ * volume and why.
+ *
+ * NOT YET MEASURED ON HARDWARE. The 0/1 mapping is podman's documented
+ * arrangement for `unshare` and `nomap`; the test that closes the loop is a
+ * session reading /proc/self/uid_map, which docs/security.md G4 names.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} volume
+ * @returns {{ adopted: boolean, why?: string }}
+ */
+export function adoptVolumeOwnership(cfg, volume) {
+  if (cfg.sandboxUserns !== 'nomap') return { adopted: false, why: 'sessions run in the host namespace' };
+  const mp = podman(cfg, ['volume', 'inspect', '--format', '{{.Mountpoint}}', volume]);
+  const mountpoint = mp.status === 0 ? mp.stdout.trim() : '';
+  if (!mountpoint) return { adopted: false, why: 'no mountpoint' };
+  const owner = podman(cfg, ['unshare', 'stat', '-c', '%u', mountpoint]);
+  if (owner.status !== 0) {
+    log.warn(`sandbox: could not read who owns ${volume}: ${owner.stderr.trim().slice(0, 200)}`);
+    return { adopted: false, why: 'could not stat the volume' };
+  }
+  if (owner.stdout.trim() !== '0') return { adopted: false, why: 'already in the session namespace' };
+  const moved = podman(cfg, ['unshare', 'chown', '-R', '1:1', mountpoint]);
+  if (moved.status !== 0) {
+    log.warn(`sandbox: ${volume} is owned by the service user and could not be moved into the session namespace: ${moved.stderr.trim().slice(0, 200)}`);
+    return { adopted: false, why: 'chown failed' };
+  }
+  log.info(`sandbox: moved ${volume} into the session user namespace (it predates --userns=nomap)`);
+  return { adopted: true };
 }
 
 /**

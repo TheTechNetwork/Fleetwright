@@ -429,10 +429,34 @@ async function clearStaleSocket(sock) {
     };
     probe.setTimeout(1000, () => done(true)); // answered slowly enough to be real
     probe.on('connect', () => done(true));
-    probe.on('error', () => done(false)); // ECONNREFUSED — the listener is gone
+    probe.on('error', (e) => done(!probeSaysStale(e)));
   });
   if (live) throw new Error(`${sock} is already in use by a live listener`);
   rmSync(sock, { force: true });
+}
+
+/**
+ * Does a failed probe mean nothing is listening?
+ *
+ * This used to be `on('error', () => stale)`, and it was right for exactly as
+ * long as the hub could always open its own sockets. Under `--userns=nomap`
+ * the socket is bind-mounted with `:U`, which chowns it to the session's
+ * uid — and the hub, which no longer owns the file, gets EACCES on connect.
+ * Reading that as "the listener is gone" would unlink a socket a running
+ * container is talking to: the exact hijack clearStaleSocket's comment exists
+ * to prevent, performed by the hub on itself.
+ *
+ * So only the two answers that mean "nothing behind this path" count as
+ * stale: refused (a socket file with no listener) and gone (raced away
+ * between the stat and the connect). Every other error is treated as live,
+ * because the cost of that mistake is a start that fails loudly, and the cost
+ * of the other is a session whose next report lands in the wrong process.
+ *
+ * @param {NodeJS.ErrnoException|undefined|null} err
+ */
+export function probeSaysStale(err) {
+  const code = err?.code;
+  return code === 'ECONNREFUSED' || code === 'ENOENT';
 }
 
 /**

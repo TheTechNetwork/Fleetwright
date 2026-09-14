@@ -8,6 +8,7 @@ import { capturePane, hasSession, sendKeys } from './tmux.js';
 import { dewrapPane, RC_URL_RE } from './pane.js';
 import { log } from '../log.js';
 import { sessionImage } from './sandbox-variant.js';
+import { usernsArgs, hookSocketMount } from './sandbox-userns.js';
 
 /** @param {number} ms */
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -79,9 +80,13 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
  * claude renders nothing and the resume dialog can never be detected. Confirmed
  * on hardware (design.md §10: TTY=/dev/pts/0 inside a tmux pane).
  *
- * IS_SANDBOX=1 is set on the outer command as before, and this is the release
- * where it stops being a lie told to bypass a safety check: run rootless and
- * container-root maps through a user namespace to an unprivileged host user.
+ * IS_SANDBOX=1 is set on the outer command as before. The sentence that used
+ * to sit here — "container-root maps through a user namespace to an
+ * unprivileged host user" — was true only in the sense that the service user
+ * is not uid 0: with no `--userns`, rootless podman's default is `host`, and
+ * container root WAS the service user, the account that owns the credential.
+ * `--userns=nomap` is what makes it true; see sandbox-userns.js for why that
+ * and not `auto`, and why every helper container carries the same flag.
  *
  * @param {import('../config.js').Config} cfg
  * @param {string} name
@@ -91,6 +96,7 @@ function sandboxArgv(cfg, name, hookSocket) {
   const argv = [
     cfg.podmanBin, 'run', '--rm', '-it',
     '--name', `agent-${name}`,
+    ...usernsArgs(cfg),
     // Inside the container, not merely on the podman process. Claude refuses
     // --dangerously-skip-permissions when running as root unless it is told it
     // is in a sandbox, and the container IS root — so without this the session
@@ -109,7 +115,7 @@ function sandboxArgv(cfg, name, hookSocket) {
   // so the session can report its conversation uuid without being able to name
   // any session but its own. See src/core/hook-socket.js.
   if (hookSocket) {
-    argv.push('-v', `${cfg.sandboxHookSocketDir}/${name}.sock:/run/hub.sock`);
+    argv.push('-v', hookSocketMount(cfg, `${cfg.sandboxHookSocketDir}/${name}.sock`, '/run/hub.sock'));
   }
 
   // One mechanism for resource limits instead of a separate cgroup layer.

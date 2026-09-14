@@ -35,6 +35,7 @@
 import { isValidName } from './names.js';
 import { podman, sandboxNames, podmanAvailable, workspaceExists } from './podman.js';
 import { sessionImage } from './sandbox-variant.js';
+import { usernsArgs } from './sandbox-userns.js';
 
 /** Bytes of a file this will return. Generous for source, refuses a blob. */
 export const MAX_READ_BYTES = 256 * 1024;
@@ -136,6 +137,9 @@ function run(cfg, name, script, args, { write = false, stdin } = {}) {
       'run',
       '--rm',
       '-i',
+      // THE SESSION'S OWN NAMESPACE, or a file this writes is owned by a uid
+      // the session cannot read. See sandbox-userns.js.
+      ...usernsArgs(cfg),
       // NOTHING ELSE IS MOUNTED, and :ro unless this is a write. The
       // conversation volume — which holds the Claude credential — is a sibling
       // of this one and is deliberately absent.

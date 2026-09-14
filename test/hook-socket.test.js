@@ -22,6 +22,7 @@ import {
   HOOK_PATH,
   SECRET_PATH,
   CONTAINER_SOCKET_PATH,
+  probeSaysStale,
 } from '../src/core/hook-socket.js';
 
 const UUID = 'a1b2c3d4-1111-2222-3333-444455556666';
@@ -348,6 +349,19 @@ test('a socket with a LIVE listener is never stolen', async (t) => {
   t.after(() => second.closeAll());
 
   await assert.rejects(() => second.open('bigjob'), /already in use/);
+});
+
+test('a probe the hub is not allowed to make is a live socket, not a stale one', () => {
+  // Under --userns=nomap the socket is chowned to the session's uid by `:U`,
+  // so the hub's own probe gets EACCES on a socket a running container is
+  // talking to. Unlinking on that would be the hijack this file's stale-socket
+  // test guards against, performed by the hub on itself.
+  assert.equal(probeSaysStale({ code: 'ECONNREFUSED' }), true, 'a file with nothing behind it');
+  assert.equal(probeSaysStale({ code: 'ENOENT' }), true, 'raced away since the stat');
+  assert.equal(probeSaysStale({ code: 'EACCES' }), false);
+  assert.equal(probeSaysStale({ code: 'EPERM' }), false);
+  assert.equal(probeSaysStale({ code: 'ETIMEDOUT' }), false, 'anything else errs towards live');
+  assert.equal(probeSaysStale(undefined), false);
 });
 
 test('opening the same session twice is idempotent', async (t) => {
