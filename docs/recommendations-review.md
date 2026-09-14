@@ -226,8 +226,25 @@ Cloudflare's endpoint is treated as RFC 6749 form-encoded and was not
 re-verified against Cloudflare's own documentation here either.
 
 **Verdict.** Holds. The verifier lives on the host, the challenge rides the
-`link` intent's URL, and the code comes back over the socket the coordinator
-already relays on.
+`connect` reply, and the code comes back over the socket the coordinator
+already relays on. Not `link`: that is the intent that later delivers the
+secret to the host and carries no URL. The authorize URL is built by
+`offerOauth` in `src/fleet/coordinator/core.js` (near line 1347), which
+rewrites the reply to a `connect` intent, so the sequence is:
+
+1. `connect` reaches the host. The host generates the verifier, keeps it
+   keyed by provider, and returns the challenge in its reply.
+2. The coordinator puts that challenge in the authorize URL it adds to the
+   `connect` reply.
+3. The callback brings the code. The coordinator relays `{code, state}`
+   down the socket instead of exchanging it.
+4. The host exchanges with its stored verifier and the frame-delivered
+   client secret.
+
+One thing that adds: the host holds a pending verifier between steps 1 and
+4, so it needs the same discipline `PendingAuthorizations` in
+`src/fleet/coordinator/oauth.js` already applies to `state`: single-use,
+and a ten-minute expiry so an abandoned flow does not sit in memory.
 
 Sources: [Generating a user access token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app),
 [Refreshing user access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens).
