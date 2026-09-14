@@ -147,22 +147,22 @@ exit 0
 
 // --- getting the image ------------------------------------------------------
 
-test('an image that is already there is not rebuilt', (t) => {
+test('an image that is already there is not rebuilt', async (t) => {
   const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
 
-  const r = ensureSandboxImage(s.cfg());
+  const r = await ensureSandboxImage(s.cfg());
 
   assert.equal(r.ok, true);
   assert.equal(r.built, false);
   assert.ok(!s.calls().some((c) => c.startsWith('build')), 'rebuilding a present image is minutes of nothing');
 });
 
-test('a missing local image is BUILT rather than refused', (t) => {
+test('a missing local image is BUILT rather than refused', async (t) => {
   // Refusing to start a session over something we know exactly how to fix is
   // just making the operator do it by hand.
   const s = stubPodman(t, { has: [] });
 
-  const r = ensureSandboxImage(s.cfg());
+  const r = await ensureSandboxImage(s.cfg());
 
   assert.equal(r.ok, true);
   assert.equal(r.built, true);
@@ -172,22 +172,22 @@ test('a missing local image is BUILT rather than refused', (t) => {
   assert.match(build, /-f .*Containerfile/);
 });
 
-test('a missing REMOTE image is pulled, not built', (t) => {
+test('a missing REMOTE image is pulled, not built', async (t) => {
   // Building our Containerfile and tagging it with somebody else's name would
   // be a lie about what the image contains.
   const s = stubPodman(t, { has: [] });
 
-  const r = ensureSandboxImage(s.cfg({ sandboxImage: 'ghcr.io/someone/agent-session:v2' }));
+  const r = await ensureSandboxImage(s.cfg({ sandboxImage: 'ghcr.io/someone/agent-session:v2' }));
 
   assert.equal(r.ok, true);
   assert.ok(s.calls().some((c) => c === 'pull ghcr.io/someone/agent-session:v2'));
   assert.ok(!s.calls().some((c) => c.startsWith('build')));
 });
 
-test('auto-build can be turned off, and then it says so', (t) => {
+test('auto-build can be turned off, and then it says so', async (t) => {
   const s = stubPodman(t, { has: [] });
 
-  const r = ensureSandboxImage(s.cfg({ sandboxAutoBuild: false }));
+  const r = await ensureSandboxImage(s.cfg({ sandboxAutoBuild: false }));
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /auto-build is off/);
@@ -195,21 +195,21 @@ test('auto-build can be turned off, and then it says so', (t) => {
   assert.ok(!s.calls().some((c) => c.startsWith('build')));
 });
 
-test('a failed build reports the end of the log, not the whole thing', (t) => {
+test('a failed build reports the end of the log, not the whole thing', async (t) => {
   // The last lines say what failed; everything before is layers succeeding.
   const s = stubPodman(t, { has: [], failBuild: true });
 
-  const r = ensureSandboxImage(s.cfg());
+  const r = await ensureSandboxImage(s.cfg());
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /apt-get update failed/);
   assert.match(String(r.message), /podman build -t/);
 });
 
-test('a missing Containerfile is named, rather than failing inside podman', (t) => {
+test('a missing Containerfile is named, rather than failing inside podman', async (t) => {
   const s = stubPodman(t, { has: [] });
 
-  const r = ensureSandboxImage(s.cfg({ sandboxContainerfile: '/nowhere/Containerfile' }));
+  const r = await ensureSandboxImage(s.cfg({ sandboxContainerfile: '/nowhere/Containerfile' }));
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /\/nowhere\/Containerfile does not exist/);
@@ -217,7 +217,7 @@ test('a missing Containerfile is named, rather than failing inside podman', (t) 
 
 // --- what image a session runs, and whether it drifts -----------------------
 
-test('a registry tag we pull on our own is reported mutable, with its local digest', (t) => {
+test('a registry tag we pull on our own is reported mutable, with its local digest', async (t) => {
   const s = stubPodman(t);
   // A remote `:latest` — a tag whose bytes can move under the same name, so an
   // update following it can change what a session runs. sessionImage returns it
@@ -230,7 +230,7 @@ test('a registry tag we pull on our own is reported mutable, with its local dige
   assert.equal(st.digest, 'abcdef012345', 'the digest is read locally and shown short');
 });
 
-test('a digest-pinned image is not mutable, and says it is pinned', (t) => {
+test('a digest-pinned image is not mutable, and says it is pinned', async (t) => {
   const s = stubPodman(t);
   const ref =
     'ghcr.io/thetechnetwork/fleetwright-session@sha256:' +
@@ -244,7 +244,7 @@ test('a digest-pinned image is not mutable, and says it is pinned', (t) => {
   assert.equal(st.pinned, true);
 });
 
-test('a localhost image built here does not drift — the other tag was never pushed', (t) => {
+test('a localhost image built here does not drift — the other tag was never pushed', async (t) => {
   const s = stubPodman(t);
   // The default cfg image is a localhost build. It is our own minimal variant,
   // so variantOf answers, but there is no registry to re-pull from.
@@ -255,7 +255,7 @@ test('a localhost image built here does not drift — the other tag was never pu
   assert.equal(st.mutable, false, 'a local build cannot change under us — nothing pulls it');
 });
 
-test('a box with no image configured cannot tell, and never claims a pinned one', (t) => {
+test('a box with no image configured cannot tell, and never claims a pinned one', async (t) => {
   const s = stubPodman(t);
   // C-5: sessionImage yielding nothing is cannot-tell (null), never "up to
   // date" and never a false pin.
@@ -267,12 +267,12 @@ test('a box with no image configured cannot tell, and never claims a pinned one'
   assert.equal(st.mutable, false);
 });
 
-test('the session probe runs a throwaway container and reads its exit status', (t) => {
+test('the session probe runs a throwaway container and reads its exit status', async (t) => {
   // The commit-confirm health signal: a container that mounts its own /proc and
   // exits. The stub podman exits 0 for `run`, so a box that can reach podman
   // reports it can start a session.
   const s = stubPodman(t);
-  assert.equal(canStartSession(s.cfg()), true);
+  assert.equal(await canStartSession(s.cfg()), true);
   assert.ok(s.calls().some((c) => c.startsWith('run ')), 'it actually asked podman to run something');
 });
 
@@ -286,25 +286,25 @@ function linkAccount(dir, email = 'operator@example.com') {
   return email;
 }
 
-test('a box where nobody has linked an account refuses, and names the remedy', (t) => {
+test('a box where nobody has linked an account refuses, and names the remedy', async (t) => {
   // THE BOX HAS NO CLAUDE ACCOUNT OF ITS OWN ANY MORE —
   // docs/one-account-per-person.md. Starting anyway would produce a session
   // sitting at a login prompt with nobody there to answer it, which is the
   // exact silent hang this tool exists to prevent.
   const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'nobody');
+  const r = await ensureSandboxVolumes(s.cfg(), 'nobody');
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /No Claude account/);
   assert.match(String(r.message), /nobody has linked/);
 });
 
-test('starting a session builds the image, then creates its volumes', (t) => {
+test('starting a session builds the image, then creates its volumes', async (t) => {
   const s = stubPodman(t, { has: [] });
   linkAccount(s.dir);
 
-  const r = ensureSandboxVolumes(s.cfg(), 'bigjob');
+  const r = await ensureSandboxVolumes(s.cfg(), 'bigjob');
 
   assert.equal(r.ok, true);
   const calls = s.calls().join('\n');
@@ -313,19 +313,19 @@ test('starting a session builds the image, then creates its volumes', (t) => {
   assert.match(calls, /volume create work-bigjob/);
 });
 
-test('a build failure stops before any volume is created', (t) => {
+test('a build failure stops before any volume is created', async (t) => {
   // Half-prepared state is worse than none: the next attempt then has volumes
   // it did not make and cannot reason about.
   const s = stubPodman(t, { has: [], failBuild: true });
 
   linkAccount(s.dir);
-  const r = ensureSandboxVolumes(s.cfg(), 'bigjob');
+  const r = await ensureSandboxVolumes(s.cfg(), 'bigjob');
 
   assert.equal(r.ok, false);
   assert.ok(!s.calls().some((c) => c.startsWith('volume create')));
 });
 
-test('the credential is seeded over stdin, never bind-mounted', (t) => {
+test('the credential is seeded over stdin, never bind-mounted', async (t) => {
   // Under --userns=nomap the host's 0600 credential is owned by a uid the
   // container does not map, so a `cp` inside the container cannot open it.
   // This process can: it reads the bytes and hands them over on stdin, where
@@ -335,7 +335,7 @@ test('the credential is seeded over stdin, never bind-mounted', (t) => {
   const credential = JSON.stringify({ claudeAiOauth: { accessToken: "it's 'quoted'" } });
   writeFileSync(path.join(s.dir, 'accounts', `${email}.json`), credential);
 
-  const r = ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap' }), 'bigjob');
+  const r = await ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap' }), 'bigjob');
 
   assert.equal(r.ok, true);
   const seed = s.calls().find((c) => c.includes(':/dest') && c.includes(' sh'));
@@ -348,31 +348,31 @@ test('the credential is seeded over stdin, never bind-mounted', (t) => {
   assert.match(s.stdin(), /chmod 600 '\/dest\/\.credentials\.json'/);
 });
 
-test('every helper container that touches a volume carries the same userns flag', (t) => {
+test('every helper container that touches a volume carries the same userns flag', async (t) => {
   // One flag, every container. A volume written under one mapping and read
   // under another is unreadable on the next resume, silently.
   const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
   linkAccount(s.dir);
   writeFileSync(path.join(s.dir, 'CLAUDE.md'), '# rules\n');
 
-  ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap', workdir: s.dir }), 'bigjob');
+  await ensureSandboxVolumes(s.cfg({ sandboxUserns: 'nomap', workdir: s.dir }), 'bigjob');
 
   const runs = s.calls().filter((c) => c.startsWith('run ') && c.includes(':/dest'));
   assert.ok(runs.length >= 1);
   for (const run of runs) assert.match(run, /--userns=nomap/, run);
 });
 
-test('with the host namespace chosen, no container gets a --userns at all', (t) => {
+test('with the host namespace chosen, no container gets a --userns at all', async (t) => {
   // The exact line every session ran before the setting existed.
   const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
   linkAccount(s.dir);
 
-  ensureSandboxVolumes(s.cfg({ sandboxUserns: 'host' }), 'bigjob');
+  await ensureSandboxVolumes(s.cfg({ sandboxUserns: 'host' }), 'bigjob');
 
   assert.ok(!s.calls().some((c) => c.includes('--userns')));
 });
 
-test('seedScript keeps a credential inside its quotes whatever it contains', () => {
+test('seedScript keeps a credential inside its quotes whatever it contains', async () => {
   const script = seedScript([
     { name: '.credentials.json', data: Buffer.from(`'; rm -rf / #`) },
     { name: '.oauth-account.json', data: Buffer.from('{}') },
@@ -386,7 +386,7 @@ test('seedScript keeps a credential inside its quotes whatever it contains', () 
   assert.throws(() => seedScript([{ name: '../etc/passwd', data: Buffer.from('') }]), /not a seedable/);
 });
 
-test('a volume from before nomap is moved into the session namespace, once', (t) => {
+test('a volume from before nomap is moved into the session namespace, once', async (t) => {
   // In the rootless namespace `podman unshare` shows, the service uid is 0 and
   // the first subordinate uid — container root under nomap — is 1. A mount
   // point owned by 0 is a volume every session used to write as the service
@@ -397,7 +397,7 @@ test('a volume from before nomap is moved into the session namespace, once', (t)
   assert.ok(s.calls().some((c) => c === 'unshare chown -R 1:1 /vol/work-bigjob/_data'));
 });
 
-test('a volume already in the session namespace is left exactly alone', (t) => {
+test('a volume already in the session namespace is left exactly alone', async (t) => {
   const s = stubPodman(t, { volumeOwner: '1' });
 
   const r = adoptVolumeOwnership(s.cfg({ sandboxUserns: 'nomap' }), 'work-bigjob');
@@ -406,7 +406,7 @@ test('a volume already in the session namespace is left exactly alone', (t) => {
   assert.ok(!s.calls().some((c) => c.startsWith('unshare chown')));
 });
 
-test('under the host namespace no volume is ever touched', (t) => {
+test('under the host namespace no volume is ever touched', async (t) => {
   const s = stubPodman(t, { volumeOwner: '0' });
 
   const r = adoptVolumeOwnership(s.cfg({ sandboxUserns: 'host' }), 'work-bigjob');
@@ -415,9 +415,9 @@ test('under the host namespace no volume is ever touched', (t) => {
   assert.ok(!s.calls().some((c) => c.startsWith('unshare')));
 });
 
-test('podman missing entirely is its own message', (t) => {
+test('podman missing entirely is its own message', async (t) => {
   const s = stubPodman(t);
-  const r = ensureSandboxVolumes(s.cfg({ podmanBin: '/nonexistent/podman' }), 'bigjob');
+  const r = await ensureSandboxVolumes(s.cfg({ podmanBin: '/nonexistent/podman' }), 'bigjob');
 
   assert.equal(r.ok, false);
   assert.match(String(r.message), /is not installed, but AGENT_HUB_SANDBOX is on/);
@@ -435,7 +435,7 @@ test('podman missing entirely is its own message', (t) => {
 // rather than assuming it, and never migrates a healthy box (which would take
 // its live sessions down) — including not mistaking binfmt_misc for poisoning.
 
-test('a hidepid-poisoned namespace (ProtectProc) is recreated so sessions can mount /proc again', (t) => {
+test('a hidepid-poisoned namespace (ProtectProc) is recreated so sessions can mount /proc again', async (t) => {
   const s = stubPodman(t, { poisoned: true, maskKind: 'hidepid' });
 
   const r = healRootlessSandbox(s.cfg());
@@ -444,7 +444,7 @@ test('a hidepid-poisoned namespace (ProtectProc) is recreated so sessions can mo
   assert.ok(s.calls().some((c) => c === 'system migrate'), 'it recreates the pause namespace');
 });
 
-test('a /proc/kmsg-poisoned namespace (ProtectKernelLogs) is recreated too', (t) => {
+test('a /proc/kmsg-poisoned namespace (ProtectKernelLogs) is recreated too', async (t) => {
   // The mask that dropping ProtectProc alone missed — a /proc/kmsg overmount is
   // just as invisible to a container as hidepid.
   const s = stubPodman(t, { poisoned: true, maskKind: 'kmsg' });
@@ -455,7 +455,7 @@ test('a /proc/kmsg-poisoned namespace (ProtectKernelLogs) is recreated too', (t)
   assert.ok(s.calls().some((c) => c === 'system migrate'));
 });
 
-test('a healthy namespace is left alone — binfmt_misc is not mistaken for poisoning', (t) => {
+test('a healthy namespace is left alone — binfmt_misc is not mistaken for poisoning', async (t) => {
   // The stub always carries a /proc/sys/fs/binfmt_misc submount, as a real box
   // does; it is functional, not a mask, and must never trigger a migrate that
   // would take a live session down.
@@ -467,7 +467,7 @@ test('a healthy namespace is left alone — binfmt_misc is not mistaken for pois
   assert.ok(!s.calls().some((c) => c === 'system migrate'), 'a clean box is never migrated');
 });
 
-test('the self-heal without podman is a no-op with a reason, not a crash', (t) => {
+test('the self-heal without podman is a no-op with a reason, not a crash', async (t) => {
   const s = stubPodman(t);
 
   const r = healRootlessSandbox(s.cfg({ podmanBin: '/nonexistent/podman' }));
@@ -476,7 +476,7 @@ test('the self-heal without podman is a no-op with a reason, not a crash', (t) =
   assert.match(String(r.why), /podman/);
 });
 
-test('a rootless namespace that cannot be read is a no-op, not a false heal', (t) => {
+test('a rootless namespace that cannot be read is a no-op, not a false heal', async (t) => {
   const s = stubPodman(t, { failUnshare: true });
 
   const r = healRootlessSandbox(s.cfg());
@@ -486,7 +486,7 @@ test('a rootless namespace that cannot be read is a no-op, not a false heal', (t
   assert.ok(!s.calls().some((c) => c === 'system migrate'));
 });
 
-test('a failed namespace recreate is reported, not hidden behind a healed=true', (t) => {
+test('a failed namespace recreate is reported, not hidden behind a healed=true', async (t) => {
   const s = stubPodman(t, { poisoned: true, failMigrate: true });
 
   const r = healRootlessSandbox(s.cfg());
@@ -495,7 +495,7 @@ test('a failed namespace recreate is reported, not hidden behind a healed=true',
   assert.match(String(r.why), /migrate failed/);
 });
 
-test('a migrate that leaves /proc still masked is reported, not falsely called healed', (t) => {
+test('a migrate that leaves /proc still masked is reported, not falsely called healed', async (t) => {
   // The box where agent-hub ITSELF still masks /proc: migrate runs, but the new
   // pause comes back just as poisoned. The self-heal must verify, not assume —
   // this is the failure that made the first version log a reassuring lie.
@@ -510,7 +510,7 @@ test('a migrate that leaves /proc still masked is reported, not falsely called h
 
 // --- names and teardown -----------------------------------------------------
 
-test('volumes and the container are named per session', () => {
+test('volumes and the container are named per session', async () => {
   assert.deepEqual(sandboxNames('bigjob'), {
     claude: 'claude-bigjob',
     work: 'work-bigjob',
@@ -518,7 +518,7 @@ test('volumes and the container are named per session', () => {
   });
 });
 
-test('forgetting a session removes both of its volumes', (t) => {
+test('forgetting a session removes both of its volumes', async (t) => {
   const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
   // volumeExists says no in the stub, so nothing is removed — which is itself
   // the right behaviour: never try to delete what is not there.

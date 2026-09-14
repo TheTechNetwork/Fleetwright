@@ -13,10 +13,13 @@
 // into it — which is why resume-dialog detection, the Remote Control retry and
 // peek all keep working untouched. Validated on hardware, design.md §10.
 //
-// Everything here is argv-array spawnSync, never a shell string, for the same
-// reason tmux.js is: a session name must never be able to become a command.
+// Everything here is an argv array, never a shell string, for the same reason
+// tmux.js is: a session name must never be able to become a command. The
+// quick calls are spawnSync; the ones that take minutes — build, pull, the
+// start probe — go through podmanAsync, so a build no longer stops the box
+// answering while it runs.
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -83,6 +86,78 @@ export function podman(cfg, args, { timeout, input } = {}) {
  */
 function exists(cfg, kind, id) {
   return podman(cfg, [kind, 'inspect', id]).status === 0;
+}
+
+/**
+ * The same call, off the event loop.
+ *
+ * WHICH CALLS GET THIS, AND WHY NOT ALL OF THEM. `podman()` above is
+ * synchronous, and for a `volume inspect` that answers in tens of
+ * milliseconds that is the simpler shape and the one every caller was written
+ * against. An image BUILD is minutes, a PULL is however long the registry
+ * takes, and the start probe is a container coming up — and for the whole of
+ * that time a synchronous call holds the event loop, so `/api/state` does not
+ * answer, the sidecar's health frame does not go out, and the coordinator
+ * marks the host degraded for the length of a build. The old comment on the
+ * build said it "blocks the session that asked for it, which is the point";
+ * it blocked the box. docs/recommendations-review.md §8.
+ *
+ * So the long ones come here, and everything that awaits them was already
+ * async or had one caller that was. Same result shape as `podman()`, so a
+ * caller reads the answer the same way; same stdin rule, for the same reason.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string[]} args
+ * @param {{ timeout?: number, input?: string }} [opts]
+ * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
+ */
+export function podmanAsync(cfg, args, { timeout, input } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    /** @param {{ status: number, stdout: string, stderr: string }} r */
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(r);
+    };
+    // Its own process group, so a timeout can kill the whole tree: a `podman
+    // build` is podman plus buildah plus whatever RUN line was executing, and
+    // killing only the parent leaves the rest holding the pipes open — the
+    // `close` event then waits on a grandchild nobody asked to keep going.
+    const child = spawn(cfg.podmanBin, args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    let timedOut = false;
+    // A timeout kills rather than abandons: a build left running after its
+    // caller gave up would still be eating the box, and would then race the
+    // next attempt for the same tag.
+    const timer = timeout
+      ? setTimeout(() => {
+          timedOut = true;
+          stderr += `\n${cfg.podmanBin} ${args[0]} timed out after ${Math.round(timeout / 1000)}s`;
+          try {
+            if (child.pid) process.kill(-child.pid, 'SIGKILL');
+            else child.kill('SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        }, timeout)
+      : null;
+    // The same 8MB bound as the synchronous call: a truncated read that looks
+    // successful is worse than a refusal.
+    const cap = 8 * 1024 * 1024;
+    child.stdout.on('data', (d) => { if (stdout.length < cap) stdout += d; });
+    child.stderr.on('data', (d) => { if (stderr.length < cap) stderr += d; });
+    child.on('error', (e) => finish({ status: 1, stdout, stderr: stderr || e.message }));
+    // After a kill, `exit` is the event to settle on: `close` waits for every
+    // holder of the pipes, and the point of the kill is not to wait.
+    child.on('exit', () => { if (timedOut) finish({ status: 1, stdout, stderr }); });
+    child.on('close', (code) => finish({ status: code === null ? 1 : code, stdout, stderr }));
+    child.stdin.on('error', () => { /* the child exited before reading; the close event carries the answer */ });
+    if (input === undefined) child.stdin.end();
+    else child.stdin.end(input);
+  });
 }
 
 /** @param {import('../config.js').Config} cfg */
@@ -231,10 +306,13 @@ export function sandboxImageExists(cfg) {
  * else names a registry, so it gets pulled — building our Containerfile and
  * tagging it with somebody else's name would be a lie.
  *
+ * ASYNC, because a build is minutes and a pull is a registry away; see
+ * podmanAsync for what a synchronous minute costs the rest of the box.
+ *
  * @param {import('../config.js').Config} cfg
- * @returns {{ ok: boolean, built?: boolean, message?: string }}
+ * @returns {Promise<{ ok: boolean, built?: boolean, message?: string }>}
  */
-export function ensureSandboxImage(cfg, { refresh = false } = {}) {
+export async function ensureSandboxImage(cfg, { refresh = false } = {}) {
   // `refresh` is what /update passes. Without it this returns on the first
   // line for the entire life of a box: the image was treated as a one-time
   // install, and it is a moving dependency — the session entrypoint, the
@@ -247,7 +325,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   // changed it from a phone while the build was running.
   const image = sessionImage(cfg);
   if (refresh && !image.startsWith('localhost/')) {
-    const pulled = refreshSandboxImage(cfg);
+    const pulled = await refreshSandboxImage(cfg);
     // A failed refresh is NOT fatal. The box has a working image; the network
     // is what failed. Falling through to the existence check leaves it running
     // on what it has rather than breaking an update over a registry hiccup.
@@ -267,7 +345,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   const isLocal = image.startsWith('localhost/');
   if (!isLocal) {
     log.info(`sandbox: pulling ${image}`);
-    const pulled = podman(cfg, ['pull', image]);
+    const pulled = await podmanAsync(cfg, ['pull', image]);
     if (pulled.status === 0) return { ok: true, built: true };
     return { ok: false, message: `could not pull ${image}: ${pulled.stderr.trim().slice(0, 300)}` };
   }
@@ -279,12 +357,14 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
     };
   }
 
-  // This blocks the session that asked for it, which is the point — it is the
-  // difference between waiting once and being told to go and do it yourself.
+  // This makes the session that asked for it wait, which is the point — it is
+  // the difference between waiting once and being told to go and do it
+  // yourself. It makes ONLY that session wait: the build runs off the event
+  // loop, so the health frame, the API and every other session carry on.
   log.warn(`sandbox: ${image} is not built — building it now, this takes a few minutes`);
   const context = path.dirname(cfg.sandboxContainerfile);
-  const built = spawnSync(
-    cfg.podmanBin,
+  const built = await podmanAsync(
+    cfg,
     // --build-arg, because a LOCAL build of the browser variant is the same
     // Containerfile with the conditional layer switched on. Without this a box
     // that builds rather than pulls would tag a minimal image `:web` and every
@@ -292,7 +372,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
     // saying it should have worked.
     ['build', '-t', image, ...(variantOf(image) === 'browser' ? ['--build-arg', 'WITH_CHROMIUM=1'] : []),
       '-f', cfg.sandboxContainerfile, context],
-    { encoding: 'utf8', timeout: BUILD_TIMEOUT_MS },
+    { timeout: BUILD_TIMEOUT_MS },
   );
   if (built.status === 0) {
     log.info(`sandbox: built ${image}`);
@@ -351,9 +431,9 @@ function volumeExists(cfg, volume) {
  * session slowly for a day.
  *
  * @param {import('../config.js').Config} cfg
- * @returns {{ changed: boolean }}
+ * @returns {Promise<{ changed: boolean }>}
  */
-export function refreshSandboxImageIfStale(cfg) {
+export async function refreshSandboxImageIfStale(cfg) {
   const every = cfg.sandboxRefreshMs ?? 0;
   if (!every || String(sessionImage(cfg) || '').startsWith('localhost/')) return { changed: false };
   const stamp = path.join(cfg.stateDir, '.sandbox-image-checked');
@@ -366,7 +446,7 @@ export function refreshSandboxImageIfStale(cfg) {
   }
   let changed = false;
   try {
-    const r = refreshSandboxImage(cfg, { timeout: 60_000 });
+    const r = await refreshSandboxImage(cfg, { timeout: 60_000 });
     changed = r.ok && r.changed;
     if (!r.ok) log.warn(`sandbox: image check failed, starting on the image already here: ${r.message}`);
   } catch (e) {
@@ -389,15 +469,15 @@ export function refreshSandboxImageIfStale(cfg) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ timeout?: number }} [opts]
- * @returns {{ ok: boolean, changed: boolean, message?: string }}
+ * @returns {Promise<{ ok: boolean, changed: boolean, message?: string }>}
  */
-export function refreshSandboxImage(cfg, { timeout } = {}) {
+export async function refreshSandboxImage(cfg, { timeout } = {}) {
   const digest = () => {
     const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', sessionImage(cfg)]);
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
   const before = digest();
-  const pulled = podman(cfg, ['pull', sessionImage(cfg)], { timeout });
+  const pulled = await podmanAsync(cfg, ['pull', sessionImage(cfg)], { timeout });
   if (pulled.status !== 0) {
     return { ok: false, changed: false, message: pulled.stderr.trim().slice(0, 200) };
   }
@@ -473,11 +553,11 @@ export function sandboxImageStatus(cfg) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ timeout?: number }} [opts]
- * @returns {boolean}
+ * @returns {Promise<boolean>}
  */
-export function canStartSession(cfg, { timeout = 30_000 } = {}) {
+export async function canStartSession(cfg, { timeout = 30_000 } = {}) {
   try {
-    const r = podman(cfg, ['run', '--rm', '--network=none', sessionImage(cfg), 'true'], { timeout });
+    const r = await podmanAsync(cfg, ['run', '--rm', '--network=none', sessionImage(cfg), 'true'], { timeout });
     return r.status === 0;
   } catch {
     return false;
@@ -503,9 +583,9 @@ export function canStartSession(cfg, { timeout = 30_000 } = {}) {
  *   account its volume holds, and the actor who started it. See
  *   refreshSeededCredentials for why both are needed and why neither is the
  *   actor pressing resume.
- * @returns {{ ok: boolean, message?: string, account?: string|null }}
+ * @returns {Promise<{ ok: boolean, message?: string, account?: string|null }>}
  */
-export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
+export async function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
@@ -514,9 +594,9 @@ export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorde
   // entirely, and keeps the image it began with.
   const { claude: claudeVol, work: workVol } = sandboxNames(name);
   const creating = !volumeExists(cfg, claudeVol) || !volumeExists(cfg, workVol);
-  if (creating) refreshSandboxImageIfStale(cfg);
+  if (creating) await refreshSandboxImageIfStale(cfg);
 
-  const image = ensureSandboxImage(cfg);
+  const image = await ensureSandboxImage(cfg);
   if (!image.ok) return { ok: false, message: image.message };
 
   const { claude, work } = sandboxNames(name);

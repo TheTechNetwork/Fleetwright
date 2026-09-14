@@ -368,9 +368,9 @@ const STEPS = [
      * @param {import('../config.js').Config} cfg
      * @param {{ changed: boolean }} [_state] unused; the signature is shared
      *   across STEPS so the union stays inferable
-     * @returns {{ ok: boolean, changed: boolean, text?: string }}
+     * @returns {Promise<{ ok: boolean, changed: boolean, text?: string }>}
      */
-    run(cfg, _state) {
+    async run(cfg, _state) {
       if (!cfg.sandbox) return { ok: true, changed: false };
       // Local builds are not pullable, and a box that builds its own image is
       // saying it wants that one.
@@ -378,7 +378,7 @@ const STEPS = [
         return { ok: true, changed: false, text: 'Sandbox image is built locally — not refreshed.' };
       }
       if (!podmanAvailable(cfg)) return { ok: true, changed: false };
-      const r = refreshSandboxImage(cfg);
+      const r = await refreshSandboxImage(cfg);
       if (!r.ok) {
         // NOT a failure of the update. The box has a working image and the
         // registry is what went wrong; saying so and carrying on beats
@@ -528,9 +528,9 @@ export function restartSelf({ actor = null, stateDir = null, head = null, exit }
 /**
  * @param {import('../config.js').Config} cfg
  * @param {{ restart?: boolean, actor?: string|null, exit?: (code: number) => void }} opts
- * @returns {{ ok: boolean, changed: boolean, message: string, restarting: boolean }}
+ * @returns {Promise<{ ok: boolean, changed: boolean, message: string, restarting: boolean }>}
  */
-export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
+export async function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   const status = updateStatus(cfg);
   if (!status.ok) return { ok: false, changed: false, message: status.message ?? 'update failed', restarting: false };
 
@@ -552,7 +552,10 @@ export function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   const parts = [];
   let changed = false;
   for (const step of STEPS) {
-    const result = step.run(cfg, { changed });
+    // Awaited: the sandbox-image step pulls from a registry, and that pull
+    // no longer holds the event loop for the length of the transfer.
+    /** @type {{ ok: boolean, changed: boolean, text?: string }} */
+    const result = await step.run(cfg, { changed });
     // A step with nothing to say says nothing, rather than contributing a blank
     // paragraph to a chat message.
     if (result.text) parts.push(result.text);

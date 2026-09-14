@@ -132,14 +132,14 @@ exit 0
 
 // --- the fix ----------------------------------------------------------------
 
-test('resuming a session re-seeds the credential it already had', (t) => {
+test('resuming a session re-seeds the credential it already had', async (t) => {
   const s = stubPodman(t, { volumes: ['claude-old', 'work-old'] });
 
   // 'shared' is what volumes made before docs/one-account-per-person.md
   // recorded. It resolves through the operator now — the same person the box
   // credential was adopted as — so an old volume keeps the account it began on.
   s.link('operator@example.com');
-  const r = ensureSandboxVolumes(s.cfg(), 'old', 'fleet:someone@example.com', { account: 'shared' });
+  const r = await ensureSandboxVolumes(s.cfg(), 'old', 'fleet:someone@example.com', { account: 'shared' });
 
   assert.equal(r.ok, true);
   assert.equal(r.account, 'operator@example.com');
@@ -149,13 +149,13 @@ test('resuming a session re-seeds the credential it already had', (t) => {
   assert.ok(!s.calls().some((c) => c.startsWith('volume create')), 'nothing is recreated');
 });
 
-test('a fresh start still seeds exactly once and does not then refresh it', (t) => {
+test('a fresh start still seeds exactly once and does not then refresh it', async (t) => {
   // The refresh is for volumes that already existed. Running it after a create
   // would copy the same file twice and add a container run to every start.
   const s = stubPodman(t, { volumes: [] });
   s.link('operator@example.com');
 
-  const r = ensureSandboxVolumes(s.cfg(), 'brandnew', null);
+  const r = await ensureSandboxVolumes(s.cfg(), 'brandnew', null);
 
   assert.equal(r.ok, true);
   assert.equal(s.seeds().length, 1);
@@ -163,7 +163,7 @@ test('a fresh start still seeds exactly once and does not then refresh it', (t) 
 
 // --- the pinning, which is the part that must not go wrong ------------------
 
-test('a resume keeps the account it began with, not the account resuming it', (t) => {
+test('a resume keeps the account it began with, not the account resuming it', async (t) => {
   // Somebody else pressing resume must not move a session onto their Claude
   // subscription. The account comes off the record; the actor is only used for
   // the provider tokens, which key on the person by design.
@@ -171,7 +171,7 @@ test('a resume keeps the account it began with, not the account resuming it', (t
   const alice = s.link('alice@example.com');
   s.link('bob@example.com');
 
-  const r = ensureSandboxVolumes(s.cfg(), 'alices', 'fleet:bob@example.com', { account: 'alice@example.com' });
+  const r = await ensureSandboxVolumes(s.cfg(), 'alices', 'fleet:bob@example.com', { account: 'alice@example.com' });
 
   assert.equal(r.account, 'alice@example.com');
   assert.equal(s.seeds().length, 1);
@@ -180,7 +180,7 @@ test('a resume keeps the account it began with, not the account resuming it', (t
   assert.ok(!s.seeded().includes('bob@example.com'), "bob's credential went nowhere near it");
 });
 
-test('a session whose account is not on the record asks the volume', (t) => {
+test('a session whose account is not on the record asks the volume', async (t) => {
   // Every session anybody has running when this ships predates the refresh, so
   // the record is the wrong place to require an answer. The volume can
   // identify itself: .oauth-account.json is seeded beside the credential.
@@ -190,23 +190,23 @@ test('a session whose account is not on the record asks the volume', (t) => {
   });
   s.link('alice@example.com');
 
-  const r = ensureSandboxVolumes(s.cfg(), 'older', null, { account: null });
+  const r = await ensureSandboxVolumes(s.cfg(), 'older', null, { account: null });
 
   assert.equal(r.account, 'alice@example.com');
 });
 
-test('a volume that cannot say whose it is keeps the credential it has', (t) => {
+test('a volume that cannot say whose it is keeps the credential it has', async (t) => {
   // Cannot-tell is not shared. Guessing here would silently move a session
   // onto a different account, which is worse than the staleness being fixed.
   const s = stubPodman(t, { volumes: ['claude-mystery', 'work-mystery'], oauthAccount: null });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'mystery', null, { account: null });
+  const r = await ensureSandboxVolumes(s.cfg(), 'mystery', null, { account: null });
 
   assert.equal(r.ok, true);
   assert.equal(s.seeds().length, 0, 'nothing was seeded');
 });
 
-test('an account unlinked since the session started is reported, not substituted', (t) => {
+test('an account unlinked since the session started is reported, not substituted', async (t) => {
   const s = stubPodman(t, { volumes: ['claude-orphan', 'work-orphan'] });
 
   const r = refreshSeededCredentials(s.cfg(), 'orphan', { account: 'gone@example.com' });
@@ -217,7 +217,7 @@ test('an account unlinked since the session started is reported, not substituted
   assert.equal(s.seeds().length, 0, 'the shared credential was not quietly used instead');
 });
 
-test('a host credential that is itself expired is not copied over a live one', (t) => {
+test('a host credential that is itself expired is not copied over a live one', async (t) => {
   // The session's copy might still hold a working refresh token. Overwriting
   // it with a dead one would turn a session that could have recovered into one
   // that cannot — a refresh has to be able to decline.
@@ -232,14 +232,14 @@ test('a host credential that is itself expired is not copied over a live one', (
   assert.equal(s.seeds().length, 0);
 });
 
-test('a refresh that fails is not fatal to the resume', (t) => {
+test('a refresh that fails is not fatal to the resume', async (t) => {
   // Resuming with the credential it had is exactly the old behaviour. Refusing
   // to resume because a refresh could not happen would be a worse bug than the
   // one this fixes — it would lose work rather than delay it.
   const s = stubPodman(t, { volumes: ['claude-x', 'work-x'] });
 
   s.link('operator@example.com');
-  const r = ensureSandboxVolumes(s.cfg({ sandboxCredentialsFile: '/nowhere/.credentials.json' }), 'x', null, {
+  const r = await ensureSandboxVolumes(s.cfg({ sandboxCredentialsFile: '/nowhere/.credentials.json' }), 'x', null, {
     account: 'gone@example.com',
   });
 
@@ -248,7 +248,7 @@ test('a refresh that fails is not fatal to the resume', (t) => {
 
 // --- resolving an account to a file -----------------------------------------
 
-test('an account resolves to its own file, or to nothing at all', (t) => {
+test('an account resolves to its own file, or to nothing at all', async (t) => {
   const s = stubPodman(t);
   const alice = s.link('alice@example.com');
 

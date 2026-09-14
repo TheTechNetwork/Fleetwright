@@ -424,7 +424,7 @@ export class SessionManager {
       // A colleague resuming somebody else's session must not move it onto
       // their own Claude account.
       const known = this.registry.get(name);
-      const volumes = ensureSandboxVolumes(this.cfg, name, actor, {
+      const volumes = await ensureSandboxVolumes(this.cfg, name, actor, {
         account: known?.account ?? null,
         createdBy: known?.createdBy ?? null,
       });

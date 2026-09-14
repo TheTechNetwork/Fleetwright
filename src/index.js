@@ -79,7 +79,7 @@ export async function main() {
   // throws simply leaves the evidence unwritten, which is a revert, not a crash.
   if (cfg.sandbox && readConfirmation(cfg)) {
     try {
-      if (canStartSession(cfg)) noteHealth(cfg, 'hub');
+      if (await canStartSession(cfg)) noteHealth(cfg, 'hub');
       else log.warn('update: a release is on trial and a session did not start here — leaving it unconfirmed');
     } catch (e) {
       log.warn(`update: could not run the session probe: ${/** @type {Error} */ (e).message}`);
