@@ -1033,6 +1033,7 @@
                       "connect",
                       "copyfile",
                       "deletefile",
+                      "exchange",
                       "files",
                       "forget",
                       "health",

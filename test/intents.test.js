@@ -54,6 +54,11 @@ test('the verb set is exactly what is documented', () => {
     // decides whether a bump is needed.
     'copyfile',
     'deletefile',
+    // The PKCE finish: the coordinator relays the callback's code to the host
+    // that minted the verifier, and the host exchanges it. No version bump for
+    // the verb itself — an older host never offers a challenge, so it is never
+    // sent this — and the visible edit is here. docs/recommendations-review.md §4.
+    'exchange',
     'files',
     'forget',
     'health',
@@ -235,7 +240,7 @@ test('only state-changing verbs are marked mutating', () => {
     // one — the reply comes back long before the runner does, so a caller that
     // retries on a slow answer is exactly the case.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'start', 'stop', 'unlink', 'update', 'upgrade', 'writefile'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);
