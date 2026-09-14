@@ -46,6 +46,8 @@
 import os from 'node:os';
 import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
 import { readConfigFrame } from '../protocol/config-frame.js';
+import { PendingVerifiers } from './pkce.js';
+import { exchangeCode, exchangeCloudflareCode, connectedText } from '../coordinator/oauth.js';
 import { renewProviderTokens } from '../../core/keepalive.js';
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
@@ -100,6 +102,7 @@ const PEEK_CONCURRENCY = 4;
 const CAPABILITY_VERBS = new Set([
   'connect',
   'link',
+  'exchange',
   'unlink',
   'renew',
   'update',
@@ -132,6 +135,7 @@ export class Sidecar {
    *   idleRestartMs?: number,
    *   renewIntervalMs?: number,
    *   hubConfig?: any,
+   *   fetchImpl?: typeof globalThis.fetch,
    *   watch?: boolean,
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null })|null,
    *   adoptUpdates?: ((waiting: any) => void)|null,
@@ -145,6 +149,7 @@ export class Sidecar {
     idleRestartMs = 0,
     renewIntervalMs = 3_600_000,
     hubConfig = null,
+    fetchImpl = globalThis.fetch,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -200,6 +205,13 @@ export class Sidecar {
     // the process holding the secret write the result where the sessions will
     // read it.
     this.hubConfig = hubConfig;
+    // The PKCE verifiers this box is holding between a `connect` it answered
+    // and the `exchange` that spends one — see ./pkce.js. Memory only, like
+    // the client secret they are used with.
+    this.verifiers = new PendingVerifiers();
+    // Injected so a test can stand in for GitHub; the exchange is the one
+    // network call this process makes on its own account.
+    this.fetchImpl = fetchImpl;
     /**
      * Which service logs this box can read, once asked. See #logSources.
      * @type {string[]|null}
@@ -427,6 +439,12 @@ export class Sidecar {
         });
       }
 
+      // The exchange is this process's own: it needs the client secret, which
+      // lives in this sidecar's memory and nowhere on the box, so it never
+      // becomes a command line at all. The token it produces does — through
+      // `/link`, the same way a pasted one would.
+      if (intent.verb === 'exchange') return reply(await this.#exchange(intent));
+
       // Everything else goes through the same command registry Telegram, the
       // web UI and the CLI use, so a fleet command cannot behave differently
       // from the same command typed into chat — or exist when that one does not.
@@ -482,6 +500,13 @@ export class Sidecar {
       }
       this.log.info(`sidecar: ${actor} → ${redactCommandLine(line)}`);
       const r = await this.hub.command(line, meta);
+
+      // A `connect` reply carries this host's PKCE challenge per provider, so
+      // the authorize URL the coordinator builds around it produces a code
+      // only this host can spend. See #offerChallenges.
+      if (intent.verb === 'connect' && Array.isArray(r?.connections?.catalogue)) {
+        r.connections = { ...r.connections, catalogue: this.#offerChallenges(r.connections.catalogue, intent) };
+      }
 
       // A CHECK IS A READ THAT CHANGES WHAT THIS BOX KNOWS. `updates` is not
       // mutating — it moves nothing on the machine — so it is deliberately not
@@ -936,6 +961,98 @@ export class Sidecar {
       // for health to fail.
       return null;
     }
+  }
+
+  /**
+   * Mint a PKCE verifier per provider this host can exchange for, and put the
+   * challenge on the catalogue entry.
+   *
+   * ONLY FOR A PROVIDER WHOSE CLIENT SECRET IS ON THE FRAME. A challenge is a
+   * promise to finish the exchange here, and without the secret this host
+   * cannot keep it — the coordinator would relay a code to a host that then
+   * answers "no secret", and the person would see a sign-in that failed for a
+   * reason neither end can name. With no secret the entry goes out as it was,
+   * and the coordinator exchanges as it always did.
+   *
+   * Keyed by provider and by the person asking, so two members connecting the
+   * same provider on one box do not spend each other's verifier.
+   *
+   * @param {any[]} catalogue
+   * @param {import('../protocol/intents.js').Intent} intent
+   */
+  #offerChallenges(catalogue, intent) {
+    const who = intent.actor ? emailFromActor(`fleet:${intent.actor}`) : null;
+    return catalogue.map((entry) => {
+      const provider = entry?.provider;
+      if (provider !== 'github' && provider !== 'cloudflare') return entry;
+      if (!this.config.get(`${provider}ClientSecret`)) return entry;
+      return { ...entry, codeChallenge: this.verifiers.mint(provider, who) };
+    });
+  }
+
+  /**
+   * Finish an authorization whose code the coordinator relayed here.
+   *
+   * The sequence docs/recommendations-review.md §4 lays out, from this end:
+   * the verifier minted at `connect` is spent, once; the code is exchanged
+   * with it and the frame's client secret; the access token is stored by the
+   * same `/link` a pasted token takes, and the renewal material by the same
+   * `/renew` the coordinator used to deposit. What changes is what the
+   * coordinator saw on the way: a code it cannot use, and nothing else.
+   *
+   * ONE ANSWER FOR NO VERIFIER, AN EXPIRED ONE AND A SPENT ONE. Which of the
+   * three it was is not something the person can act on differently — the
+   * remedy is the same — and a retry of the intent replays this reply from
+   * the idempotency cache rather than reaching a second, refused, exchange.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @returns {Promise<Record<string, any>>}
+   */
+  async #exchange(intent) {
+    const provider = String(intent.params.provider);
+    const label = provider === 'github' ? 'GitHub' : 'Cloudflare';
+    const who = intent.actor ? emailFromActor(`fleet:${intent.actor}`) : null;
+    const actor = intent.actor ? `fleet:${intent.actor}` : '';
+
+    const verifier = this.verifiers.spend(provider, who);
+    if (!verifier) {
+      return { ok: false, text: `No ${label} sign-in is waiting on this host — start again from the app.` };
+    }
+    const clientSecret = this.config.get(`${provider}ClientSecret`);
+    if (!clientSecret) {
+      return { ok: false, text: `This host has no ${label} client secret to finish the sign-in with.` };
+    }
+
+    const exchange = provider === 'github' ? exchangeCode : exchangeCloudflareCode;
+    const exchanged = await exchange({
+      clientId: String(intent.params.clientId),
+      clientSecret,
+      code: String(intent.params.code),
+      origin: String(intent.params.origin),
+      codeVerifier: verifier,
+      fetch: this.fetchImpl,
+    });
+    if (!exchanged.ok) return { ok: false, text: exchanged.message };
+
+    // THE ACCESS TOKEN, NEVER THE REFRESH TOKEN, stored by the verb that
+    // already stores pasted ones — same validation, same redaction, same
+    // per-person file (core.js #storeAuthorizedToken says why).
+    const linkParams = { provider, secret: exchanged.accessToken };
+    const linkLine = toCommandLine({ verb: 'link', params: linkParams, actor: intent.actor });
+    this.log.info(`sidecar: ${actor || 'fleet'} → ${redactCommandLine(linkLine)}`);
+    const linked = await this.hub.command(linkLine, commandMeta('link', linkParams, actor));
+    if (linked?.ok === false) return { ok: false, text: linked.text || `The ${label} token could not be stored.` };
+
+    let renewable = false;
+    if (exchanged.refreshToken) {
+      const renewParams = { provider, clientId: String(intent.params.clientId), refresh: exchanged.refreshToken };
+      const renewLine = toCommandLine({ verb: 'renew', params: renewParams, actor: intent.actor });
+      this.log.info(`sidecar: ${actor || 'fleet'} → ${redactCommandLine(renewLine)}`);
+      const deposited = await this.hub.command(renewLine, commandMeta('renew', renewParams, actor));
+      renewable = deposited?.ok !== false;
+      if (!renewable) this.log.warn(`sidecar: ${provider}: could not store renewal material: ${deposited?.text}`);
+    }
+    return { ok: true, text: connectedText({ label, expiresIn: exchanged.expiresIn, renewable }) };
   }
 
   /**

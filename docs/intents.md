@@ -133,6 +133,7 @@ and "dead host" is the one it retries.
 | `verify` | `provider`, `scope?` | | `/verify <provider>` |
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
+| `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
 | `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket` | ✅ | `/provision <platform> [minutes]` |
 
 `provision` is the other odd one, and in the opposite direction: every verb
@@ -153,6 +154,18 @@ host what it needs to stop asking**. A GitHub App user token lasts eight hours
 and is not renewed by being used — only by an explicit exchange that needs the
 App's client secret — so without this the refresh token arrived at the
 coordinator and was discarded, and every App connection died overnight.
+
+`exchange` is `renew`'s companion, and turns the flow the other way round. A
+host that holds the App's client secret (it arrives on the config frame) mints
+a PKCE verifier when it answers `connect` and puts only the challenge on the
+catalogue entry; the coordinator builds the challenge into the authorize URL,
+and when the callback brings the code it does not exchange it — it sends it
+down this verb to the host that can. The host exchanges with its verifier and
+its secret, stores the token by its own `/link`, and the renewal material by
+its own `/renew`. What a compromised coordinator sees at link time drops from
+"the access and refresh tokens" to "a code it cannot spend". A host that
+predates the verb never offers a challenge, so the coordinator exchanges as
+before and never sends it this.
 
 It is sent **once**, at the end of the OAuth flow, and the host renews on its
 own timer from then on. The material lands in a third file that no session is

@@ -33,7 +33,7 @@ test('a state is redeemable exactly once', () => {
   p.mint({ state: 's1', hostId: 'box', email: 'a@b.com' });
   assert.deepEqual(
     { ...p.redeem('s1'), at: undefined },
-    { hostId: 'box', email: 'a@b.com', at: undefined },
+    { hostId: 'box', email: 'a@b.com', pkce: false, at: undefined },
   );
   assert.equal(p.redeem('s1'), null);
 });

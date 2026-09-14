@@ -3,8 +3,12 @@
 //
 // The server is ALWAYS started, even in a Telegram-only deployment, because
 // the hook needs somewhere to report. What varies is the bind address:
-// 127.0.0.1 by default (no token needed — reaching it already means shell
-// access), and anything wider requires a token (enforced in config.js).
+// 127.0.0.1 by default, and anything wider requires a token to be configured
+// (enforced in config.js). THE TOKEN IS REQUIRED ON LOOPBACK TOO. This header
+// used to say reaching the port "already means shell access", and that was
+// wrong by every other account on the box — see #authorised below and
+// docs/security.md G6. When none is configured one is generated into the state
+// directory, and the sidecar reads it from there.
 //
 // To expose the UI: point a Cloudflare Tunnel at 127.0.0.1:8790 and leave the
 // bind loopback. That way the port is never listening on a routable interface,

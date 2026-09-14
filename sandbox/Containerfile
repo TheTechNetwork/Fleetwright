@@ -100,7 +100,7 @@ RUN printf '%s\n' '{' \
 # shared HTTP port: the socket the container can reach determines which session
 # it is, so it cannot report against anyone else's. See docs/hook-socket.md.
 COPY hook.mjs /usr/local/lib/agent-session-hook.mjs
-RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs\n' > /usr/local/bin/agent-session-hook \
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs "$@"\n' > /usr/local/bin/agent-session-hook \
     && chmod +x /usr/local/bin/agent-session-hook
 
 # The credential broker's client, on the same socket and for the same reason.
@@ -176,7 +176,10 @@ RUN chmod +x /usr/local/bin/entrypoint
 # Claude refuses --dangerously-skip-permissions as root unless it is told it is
 # in a sandbox. Inside this image that is not a lie told to bypass a safety
 # check — it is a container whose filesystem is discarded on every stop, and
-# under rootless podman its root maps to an unprivileged host user.
+# the launcher runs it with --userns=nomap, so its root is a subordinate uid
+# that owns nothing on the host. (Before that flag, this line said "maps to an
+# unprivileged host user", and the user it mapped to was the service account
+# that owns the credential. See src/core/sandbox-userns.js.)
 ENV IS_SANDBOX=1
 
 # The CLI updates itself otherwise, INSIDE a container whose whole point is

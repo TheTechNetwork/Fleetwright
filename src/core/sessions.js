@@ -23,8 +23,10 @@ import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
 import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
+import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { readSessionLogs } from './logs.js';
+import { phaseFor } from './activity.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -53,6 +55,13 @@ export class SessionManager {
     // Optional: an unsandboxed deployment does not need one, and the fleet
     // sidecar can supply its own.
     this.hooks = hooks;
+    // What each running session is doing, as its own CLI reported over the
+    // hook socket — see src/core/activity.js. Runtime state, not a record:
+    // it belongs to one life of a container and is dropped on every launch
+    // and stop, so a "back at its prompt" from yesterday can never answer a
+    // question about today.
+    /** @type {Map<string, import('./activity.js').Activity>} */
+    this.activity = new Map();
     // The task profiles this box has. Read from disk on every call rather than
     // cached: editing a profile should take effect on the next session, not on
     // the next restart of the hub, and the whole store is a handful of small
@@ -174,7 +183,14 @@ export class SessionManager {
   /** Everything we know about, running or resumable. */
   list() {
     this.reconcile();
-    return this.registry.list();
+    // The activity rides on each running record for whoever reads /api/state,
+    // which is where the sidecar's watcher decides what a session is doing.
+    // Never on a stopped one: whatever the CLI last said, it is not saying it
+    // now.
+    return this.registry.list().map((rec) => ({
+      ...rec,
+      activity: rec.status === 'running' ? (this.activity.get(rec.name) ?? null) : null,
+    }));
   }
 
   /** @param {string} name */
@@ -424,7 +440,16 @@ export class SessionManager {
       // A colleague resuming somebody else's session must not move it onto
       // their own Claude account.
       const known = this.registry.get(name);
-      const volumes = ensureSandboxVolumes(this.cfg, name, actor, {
+      // THE WAY OUT BEFORE THE SESSION, when the box is on an allowlist: a
+      // session put on the internal network before its proxy is up has no
+      // route anywhere and sits at a sign-in that cannot complete. No-op when
+      // egress is open.
+      const egress = await ensureEgress(this.cfg);
+      if (!egress.ok) {
+        this.registry.upsert(name, { status: 'error', detail: egress.message ?? 'egress setup failed', cwd, createdBy: actor });
+        return { ok: false, message: `Could not prepare the egress proxy for "${name}": ${egress.message}` };
+      }
+      const volumes = await ensureSandboxVolumes(this.cfg, name, actor, {
         account: known?.account ?? null,
         createdBy: known?.createdBy ?? null,
       });
@@ -451,6 +476,9 @@ export class SessionManager {
         // has already done it.
         prompt,
       });
+      // A new life of the container: whatever the CLI last said belongs to the
+      // old one, and the pane is the only witness until it speaks again.
+      this.activity.delete(name);
       const spawned = newSession({ name, cwd, command });
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
@@ -725,6 +753,7 @@ export class SessionManager {
       const detail = (killed.stderr || 'tmux kill-session failed').trim().slice(0, 300);
       return { ok: false, message: `Could not stop "${name}": ${detail}` };
     }
+    this.activity.delete(name);
     const updated = this.registry.upsert(name, {
       status: 'stopped',
       // Someone asked for this. It must NOT come back by itself at the next
@@ -773,6 +802,7 @@ export class SessionManager {
     // put the record back on top of them.
     if (this.cfg.binTtlMs > 0) {
       if (hasSession(name)) killSession(name);
+      this.activity.delete(name);
       if (this.cfg.sandbox) {
         void this.hooks?.close(name);
         // The CONTAINER stops; the VOLUMES stay. That is the whole
@@ -955,6 +985,33 @@ export class SessionManager {
   }
 
   /**
+   * A lifecycle hook fired inside a session, arriving over its own socket.
+   *
+   * The phase is what a person needs to know — working, waiting on them,
+   * back at its prompt — and src/core/activity.js is the one place an event
+   * is turned into one. SessionStart clears rather than sets: a new life of
+   * the container starts with the pane as the only witness, as it did before
+   * these events existed, until the CLI says something.
+   *
+   * @param {{ name: string, event: string, detail?: string|null, at?: number }} e
+   * @returns {{ ok: boolean, message?: string, phase?: string|null }}
+   */
+  recordEvent({ name, event, detail = null, at = Date.now() }) {
+    if (!isValidName(name)) return { ok: false, message: nameError(name) };
+    if (event === 'SessionStart') {
+      this.activity.delete(name);
+      return { ok: true, phase: null };
+    }
+    const phase = phaseFor(event, detail);
+    if (!phase) return { ok: true, phase: null };
+    this.activity.set(name, { phase, event, detail, at });
+    // Working is every tool call; the two that change what a person does
+    // are the ones worth a line.
+    if (phase !== 'working') log.info(`hook: ${name} ${event}${detail ? ` ${detail}` : ''} → ${phase}`);
+    return { ok: true, phase };
+  }
+
+  /**
    * Record a conversation uuid reported by the SessionStart hook. This is what
    * makes resume reliable: claude hands the hook its own session_id and
    * transcript path, so the uuid is authoritative rather than scraped.
@@ -1042,6 +1099,7 @@ export class SessionManager {
           resumeUuid: rec.uuid,
           skipPermissions: rec.skipPermissions ?? null,
         });
+        this.activity.delete(rec.name);
         const spawned = newSession({ name: rec.name, cwd: rec.cwd || this.cfg.workdir, command });
         if (spawned.status !== 0 || !hasSession(rec.name)) {
           const why = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 200);

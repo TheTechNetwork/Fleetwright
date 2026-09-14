@@ -508,7 +508,9 @@ test('the installer brings a converted box forward before it writes units', (t) 
   // the repair. Ordering is the whole point, so it is asserted.
   const src = readFileSync(path.join(ROOT, 'install', 'install.sh'), 'utf8');
   const call = src.indexOf('\nrefresh_release_if_converted\n');
-  const units = src.indexOf('install_unit agent-hub');
+  // THE SERVICE UNIT, exactly: `install_unit agent-hub-upgrade` is the oneshot
+  // helper's, defined further up, and is not the write this ordering is about.
+  const units = src.search(/^\s*install_unit agent-hub$/m);
   assert.ok(call > 0, 'the installer never refreshes a converted box');
   assert.ok(call < units, 'the release is refreshed after the units are written');
   // And it must not loop: the helper re-runs the installer.

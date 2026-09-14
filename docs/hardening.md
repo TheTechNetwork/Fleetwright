@@ -87,7 +87,7 @@ equivalent yet.
 | `RestrictSUIDSGID` | podman does not start: crun dies with ``cannot resolve `null` under rootfs``. It also stops a session running `apt install sudo` |
 | `PrivateTmp` | tmux's socket is `/tmp/tmux-<uid>`. A tmux server started under this is **invisible to `tmux ls` from the user's shell** — every `agent-hub attach` stops working |
 | `ProtectHome` | rootless podman stores images in `~/.local/share/containers`; the Claude credential is in `~/.claude` |
-| `ProtectSystem=strict` | podman run fails. `full` is what fits: read-only `/usr`, `/boot`, `/etc` — nothing writes to `/etc`, the two files named in messages are only read |
+| `ProtectSystem=strict` | podman run fails. `full` fitted podman and then failed the upgrade, three rounds of it, because the sudo'd `apt-get` ran inside the hub's namespace and dpkg could not write `/etc` or `/usr`. That upgrade now runs in its own oneshot unit (`install/agent-hub-upgrade.service`) and the hub's grant is `systemctl start` of it, so the reason `full` was rejected is gone — but `full` against `podman run` under this unit has not been re-measured since, and the unit stays `no` until it is; the line to run is in the unit's own comment |
 | `ProtectKernelTunables` | podman run fails |
 | `ProtectControlGroups` | podman run fails; it writes its own cgroup |
 | `ProtectHostname` | podman run fails |

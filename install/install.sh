@@ -631,7 +631,7 @@ previous_install() {
   for d in /var/lib/agent-hub /var/lib/agent-fleet-coordinator; do
     [ -d "$d" ] && FOUND+=("state     $d")
   done
-  for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+  for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator agent-hub-upgrade agent-hub-apt-update; do
     if [ "$PLATFORM" = macos ]; then
       [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] && FOUND+=("service   $u")
     else
@@ -678,6 +678,17 @@ if [ -f /var/lib/agent-fleet/host-key.json ] && [ -f /var/lib/agent-fleet/machin
   fi
 fi
 
+# The two oneshot units the upgrade grant names. Linux only — launchd has no
+# equivalent and a Mac host applies nothing from chat — and only when the
+# operator has said yes to upgrades, because a unit that runs apt as root is
+# part of that decision rather than furniture every box gets.
+install_upgrade_units() {
+  [ "$PLATFORM" = macos ] && return 0
+  install_unit agent-hub-upgrade
+  install_unit agent-hub-apt-update
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
 # --- writing the sudoers rules ----------------------------------------------
 #
 # ONE IMPLEMENTATION, called by the wizard when somebody says yes and by
@@ -694,10 +705,21 @@ fi
 write_upgrade_sudoers() {
   local tmp
   tmp="$(mktemp)"
+  # TWO NAMED UNITS, AND NOTHING THAT TAKES ARGUMENTS. This used to grant
+  # three exact apt-get command lines, and the grant was the reason
+  # agent-hub.service could not keep ProtectSystem: sudo does not escape the
+  # hub's mount namespace, so the upgrade ran with the hub's read-only /usr and
+  # /etc and dpkg failed on the first conffile. The upgrade now runs in
+  # install/agent-hub-upgrade.service — a oneshot with a namespace of its own —
+  # and the hub may only START it. `systemctl start <unit>` has no argument
+  # anybody can widen; the flags live in the unit, owned by root.
+  #
+  # The old apt-get lines are not written any more. upgrades.js still tries
+  # them when the unit grant is refused, so a box whose rule predates this
+  # keeps upgrading the way it did until --repair moves it across.
   {
-    printf 'Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"\n'
-    printf '%s ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, ' "$RUN_USER"
-    printf '/usr/bin/apt-get -y -o Dpkg\\:\\:Options\\:\\:\\=--force-confold -o Dpkg\\:\\:Options\\:\\:\\=--force-confdef upgrade\n'
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start agent-hub-upgrade.service, ' "$RUN_USER"
+    printf '/usr/bin/systemctl start agent-hub-apt-update.service\n'
   } > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-upgrade
@@ -1515,6 +1537,9 @@ install_unit() { # install_unit NAME
   # systemd will not tell you either: it reports "Failed with result exit-code"
   # and the reason is in the journal, on a box somebody has to log in to.
   UNIT_TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' "$dest" | head -1)"
+  # A PATH, not an option: the oneshot units run `apt-get -y ...`, and `-y`
+  # is not a file that should exist.
+  case "$UNIT_TARGET" in -*) UNIT_TARGET="" ;; esac
   if [ -n "$UNIT_TARGET" ] && [ ! -f "$UNIT_TARGET" ]; then
     warn "$dest names $UNIT_TARGET, which does not exist — this service cannot start"
     warn "  the install continued; fix the payload and re-run, or use --from-source"
@@ -1526,7 +1551,7 @@ install_unit() { # install_unit NAME
 # record of where the previous install lived — and install_unit is about to
 # replace it. Section 8 reads these to know what it is replacing.
 OLD_UNIT_BACKUP_DIR="$(mktemp -d)"
-for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator agent-hub-upgrade agent-hub-apt-update; do
   if [ "$PLATFORM" = macos ]; then
     [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] \
       && cp "/Library/LaunchDaemons/network.thetech.$u.plist" "$OLD_UNIT_BACKUP_DIR/$u.service" || true
@@ -2269,10 +2294,13 @@ if [ "$WIZARD" = yes ]; then
       # unattended upgrade could not pass the flags that make it unattended.
       # The plain form is kept so a box whose rule predates this keeps working:
       # upgrades.js tries the option form and falls back on a refusal.
+      # The units the grant names, first: a rule that may start a unit that
+      # is not installed is a rule that permits nothing.
+      install_upgrade_units
       if write_upgrade_sudoers; then
         set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
-        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may run apt-get update and apt-get -y upgrade"
+        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may start agent-hub-upgrade and agent-hub-apt-update"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
@@ -2636,6 +2664,7 @@ if [ "$REPAIR" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   say "Repairing what this box has already agreed to"
   if command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     if [ "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" = 1 ]; then
+      install_upgrade_units
       if write_upgrade_sudoers; then
         ok "/etc/sudoers.d/agent-hub-upgrade rewritten"
       else

@@ -261,13 +261,23 @@ export class SessionWatcher {
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
       if (!running) this.prompts.delete(name);
+      // WHAT THE CLI SAID, when it said anything. A running session carries
+      // its last lifecycle hook on the record (src/core/activity.js), and
+      // where one exists it answers the two questions a regex over the pane
+      // could only guess at: working or ready, and waiting on a person. The
+      // pane still decides `drawing` (the restart gate is about the process
+      // painting, which no hook reports) and still catches the resume dialog,
+      // which appears before any hook can fire. A session with no record — an
+      // older image, or nothing said yet in this life — is read exactly as
+      // before.
+      const activity = running && session.activity && typeof session.activity.phase === 'string' ? session.activity : null;
       if (running) {
         const pane = await this.hub.peek(name).catch(() => null);
         if (pane) {
           this.#noteIdle(name, pane);
-          awaiting = AWAITING_RE.test(pane);
+          awaiting = AWAITING_RE.test(pane) || activity?.phase === 'awaiting';
           atRest = DRAWING_RE.test(pane);
-          ready = READY_RE.test(pane);
+          ready = activity ? activity.phase === 'ready' : READY_RE.test(pane);
           // Kept beside the clock so health can report WHY a pane is still
           // without reading it a second time. "Still" is not one fact: a
           // finished session and a wedged one look identical on a timer and

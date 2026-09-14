@@ -46,55 +46,55 @@ function scriptedPodman(digestAfterPull = 'sha256:bbb') {
   };
 }
 
-test('the first start since install checks, and notices a change', () => {
+test('the first start since install checks, and notices a change', async () => {
   const p = scriptedPodman();
-  const r = refreshSandboxImageIfStale(p.cfg);
+  const r = await refreshSandboxImageIfStale(p.cfg);
   assert.equal(r.changed, true);
   assert.equal(p.pulls(), 1);
   assert.ok(existsSync(join(p.dir, '.sandbox-image-checked')), 'the check is stamped');
 });
 
-test('a second start inside the window does not touch the registry', () => {
+test('a second start inside the window does not touch the registry', async () => {
   // A pull per start would put a registry between a person and their session.
   const p = scriptedPodman();
-  refreshSandboxImageIfStale(p.cfg);
+  await refreshSandboxImageIfStale(p.cfg);
   const after = p.pulls();
-  refreshSandboxImageIfStale(p.cfg);
-  refreshSandboxImageIfStale(p.cfg);
+  await refreshSandboxImageIfStale(p.cfg);
+  await refreshSandboxImageIfStale(p.cfg);
   assert.equal(p.pulls(), after, 'no further pulls inside the window');
 });
 
-test('once the window passes, it checks again', () => {
+test('once the window passes, it checks again', async () => {
   const p = scriptedPodman();
-  refreshSandboxImageIfStale(p.cfg);
+  await refreshSandboxImageIfStale(p.cfg);
   const stamp = join(p.dir, '.sandbox-image-checked');
   const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
   utimesSync(stamp, old, old);
-  refreshSandboxImageIfStale(p.cfg);
+  await refreshSandboxImageIfStale(p.cfg);
   assert.equal(p.pulls(), 2);
 });
 
-test('a failed check is stamped too, so an offline box does not retry every start', () => {
+test('a failed check is stamped too, so an offline box does not retry every start', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'offline-'));
   const bin = join(dir, 'podman');
   writeFileSync(bin, '#!/bin/sh\necho "no route to host" >&2\nexit 1\n');
   chmodSync(bin, 0o755);
   const cfg = { podmanBin: bin, sandboxImage: 'ghcr.io/x/y:latest', stateDir: dir, sandboxRefreshMs: 60_000 };
 
-  const r = refreshSandboxImageIfStale(cfg);
+  const r = await refreshSandboxImageIfStale(cfg);
   assert.equal(r.changed, false, 'a failure is not a change');
   assert.ok(existsSync(join(dir, '.sandbox-image-checked')), 'stamped anyway');
 });
 
-test('a locally built image is never chased', () => {
+test('a locally built image is never chased', async () => {
   const p = scriptedPodman();
-  const r = refreshSandboxImageIfStale({ ...p.cfg, sandboxImage: 'localhost/agent-session:latest' });
+  const r = await refreshSandboxImageIfStale({ ...p.cfg, sandboxImage: 'localhost/agent-session:latest' });
   assert.equal(r.changed, false);
   assert.equal(p.pulls(), 0, 'a box that builds its own image is saying it wants that one');
 });
 
-test('zero disables the check entirely', () => {
+test('zero disables the check entirely', async () => {
   const p = scriptedPodman();
-  refreshSandboxImageIfStale({ ...p.cfg, sandboxRefreshMs: 0 });
+  await refreshSandboxImageIfStale({ ...p.cfg, sandboxRefreshMs: 0 });
   assert.equal(p.pulls(), 0);
 });
