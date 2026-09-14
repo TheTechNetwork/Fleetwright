@@ -29,22 +29,27 @@ import {
 } from '../src/core/egress.js';
 import { buildCommand } from '../src/core/claude.js';
 
+/** Is this exact name on the list? Whole-string membership, never a substring:
+ * the lists here hold hostnames and the question is which ones are present.
+ * @param {string[]|undefined} list @param {string} name */
+const listed = (list, name) => Array.isArray(list) && list.some((x) => x === name);
+
 test('the four hosts the CLI cannot work without are on every list, and cannot be removed', () => {
   const { hosts } = allowlistFor({ sandboxEgressAllow: [] });
-  for (const h of ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'claude.com']) assert.ok(hosts.includes(h), h);
+  for (const h of ['api.anthropic.com', 'platform.claude.com', 'claude.ai', 'claude.com']) assert.ok(listed(hosts, h), h);
   assert.deepEqual([...REQUIRED_HOSTS].sort(), ['api.anthropic.com', 'claude.ai', 'claude.com', 'platform.claude.com']);
   // platform.claude.com is the one an allowlist is most likely to omit: it
   // carries token refresh, so omitting it breaks the idle box, not sign-in.
-  assert.ok(hosts.includes('platform.claude.com'));
+  assert.ok(listed(hosts, 'platform.claude.com'));
 });
 
 test('extras are validated as hostnames, lowercased, deduplicated and sorted', () => {
   const { hosts, refused } = allowlistFor({
     sandboxEgressAllow: ['Example.COM', 'example.com', 'pypi.org', 'http://bad', '*.wild.com', 'no spaces', 'localhost', ''],
   });
-  assert.ok(hosts.includes('example.com'));
+  assert.ok(listed(hosts, 'example.com'));
   assert.equal(hosts.filter((h) => h === 'example.com').length, 1);
-  assert.ok(hosts.includes('pypi.org'));
+  assert.ok(listed(hosts, 'pypi.org'));
   assert.deepEqual(refused, ['http://bad', '*.wild.com', 'no spaces', 'localhost']);
   assert.deepEqual(hosts, [...hosts].sort(), 'sorted, so the config hashes the same whatever order was typed');
 });
@@ -62,10 +67,10 @@ test('a session on the allowlist is put on the internal network and told the pro
   assert.deepEqual(egressArgs({}), []);
   const args = egressArgs({ sandboxEgress: 'allowlist' });
   assert.deepEqual(args.slice(0, 2), ['--network', EGRESS_NETWORK]);
-  assert.ok(args.includes('HTTPS_PROXY=http://10.89.201.2:3128'));
-  assert.ok(args.includes('NO_PROXY=localhost,127.0.0.1,::1'));
+  assert.ok(listed(args, 'HTTPS_PROXY=http://10.89.201.2:3128'));
+  assert.ok(listed(args, 'NO_PROXY=localhost,127.0.0.1,::1'));
   assert.equal(args.some((a) => /CA_CERTS|NODE_EXTRA/.test(a)), false, 'a CONNECT proxy terminates no TLS, so no CA bundle');
-  assert.ok(egressArgs({ sandboxEgress: 'allowlist', sandboxEgressSubnet: '10.7.0.0/24' }).includes('HTTPS_PROXY=http://10.7.0.2:3128'));
+  assert.ok(listed(egressArgs({ sandboxEgress: 'allowlist', sandboxEgressSubnet: '10.7.0.0/24' }), 'HTTPS_PROXY=http://10.7.0.2:3128'));
   assert.equal(proxyAddress('10.89.201.0/24'), '10.89.201.2');
   assert.throws(() => proxyAddress('not a subnet'), /not a usable egress subnet/);
 });
@@ -156,7 +161,7 @@ test('a first start creates the internal network and runs the proxy on both netw
   const conf = readFileSync(path.join(s.cfg().stateDir, 'egress', 'tinyproxy.conf'), 'utf8');
   const allow = readFileSync(path.join(s.cfg().stateDir, 'egress', 'allow.list'), 'utf8');
   assert.match(conf, /FilterDefaultDeny Yes/);
-  for (const h of REQUIRED_HOSTS) assert.ok(allow.split('\n').includes(h), h);
+  for (const h of REQUIRED_HOSTS) assert.ok(listed(allow.split('\n'), h), h);
 });
 
 test('a proxy already running with this config is left alone; a changed allowlist replaces it', async (t) => {
@@ -188,8 +193,8 @@ test('a missing local image is built before the proxy is started, and a hostname
   const build = calls.findIndex((c) => c.startsWith('build -t localhost/agent-egress:latest'));
   const run = calls.findIndex((c) => c.startsWith('run -d'));
   assert.ok(build >= 0 && run > build, 'built, then started');
-  assert.ok(r.hosts?.includes('ok.example'));
-  assert.ok(!r.hosts?.includes('nope nope'));
+  assert.ok(listed(r.hosts, 'ok.example'));
+  assert.ok(!listed(r.hosts, 'nope nope'));
 });
 
 test('with egress open, nothing is asked of podman at all', async (t) => {
