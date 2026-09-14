@@ -136,3 +136,46 @@ identifies the session**, and nothing in the request could be believed.
 A second socket would have meant a second lifecycle, a second mount, and a
 second place to get that reasoning wrong. See
 [credential-broker.md](./credential-broker.md).
+
+## The third thing on this socket: what the session is doing
+
+Until now the only witness to a session's state was its pane, and
+`src/fleet/host/watcher.js` records what that cost: the permission-mode line
+is drawn whether the CLI is working or waiting, so "ready for input" matched a
+session mid-tool-call and the apps showed "ready · idle" over a build. No
+regex over pane text can tell "working quietly" from "wedged". The CLI can,
+and its hooks say so — every hook receives the session's own `session_id`,
+`transcript_path`, `cwd` and `permission_mode` on stdin, which is the shape
+`sandbox/hook.mjs` already consumed for `SessionStart`.
+
+So `sandbox/entrypoint.sh` registers the rest, each as `agent-session-hook
+<event> [matcher]`, and they post to `/internal/session-event` on the same
+socket with the same authority: the socket names the session, the body says
+only what happened.
+
+| Hook | What it means for a person | Phase |
+|---|---|---|
+| `UserPromptSubmit` | somebody typed | working |
+| `PostToolUse` | a tool ran, so any permission prompt before it was answered | working |
+| `PermissionRequest` | a dialog is up and needs an answer | awaiting |
+| `Notification` `permission_prompt`, `agent_needs_input` | the same, said the other way | awaiting |
+| `Notification` `idle_prompt` | at its prompt with nobody typing | ready |
+| `Stop`, `StopFailure` | the turn ended; back at its prompt | ready |
+| `SessionEnd` | the CLI exited | ended |
+
+`src/core/activity.js` is the one table; `SessionManager.recordEvent` keeps
+the last phase per running session and drops it on every launch, resume and
+stop, so nothing said in one life of a container answers a question about the
+next. `/api/state` carries it as `activity` on each running record, and the
+watcher reads it there: where a record exists it decides `ready` and
+`awaiting`; the pane still decides whether the CLI is painting (the idle
+restart's gate, which no hook reports) and still catches the resume dialog,
+which appears before the CLI has a session and so before any hook can fire.
+A session from an older image sends nothing and is read off the pane exactly
+as before.
+
+A session can lie about its phase. It could already do everything that
+decides — a notification, an "is it done" answer, the restart's exclusions —
+by painting its pane, which is what these events replace, so nothing here
+widens what a hostile session reaches. `test/activity.test.js`,
+`test/hook-socket.test.js`, `test/watcher.test.js`.

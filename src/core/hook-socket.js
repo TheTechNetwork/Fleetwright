@@ -50,6 +50,7 @@
 
 import { answerCredentialRequest, CREDENTIAL_PATH } from './credential-broker.js';
 import { answerSecretRequest } from './secret-store.js';
+import { SESSION_EVENTS, cleanDetail } from './activity.js';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
@@ -59,6 +60,11 @@ import path from 'node:path';
 /** The one route a session socket answers. Same path agent-hub's HTTP adapter
  * uses, so the hook payload and the hub's handler are unchanged. */
 export const HOOK_PATH = '/internal/session-start';
+
+/** The lifecycle route: Stop, PermissionRequest and the rest of the hooks
+ * sandbox/entrypoint.sh registers, each saying what the session is doing so
+ * nobody has to guess it off the pane. See src/core/activity.js. */
+export const SESSION_EVENT_PATH = '/internal/session-event';
 
 /** The named-secret route, sibling of the credential broker's. A session names
  * a secret `start --secret` granted it; the value is read here and returned,
@@ -116,17 +122,22 @@ export function isValidSessionName(name) {
  *   name it asked for, decide whether the grant allows it and return the value
  *   from the store, read now. Absent means the route answers 404, which is what
  *   an older or non-sandboxed host does. See src/core/secret-store.js.
+ * @property {(e: { name: string, event: string, detail: string|null, at: number }) => { ok: boolean, message?: string } | void} [onSessionEvent]
+ *   A lifecycle hook fired inside the session — Stop, PermissionRequest and
+ *   the rest of src/core/activity.js — with the name from the socket. Absent
+ *   means the route answers 404, which is what an older host does.
  * @property {{ info: (m: string) => void, warn: (m: string) => void }} [logger]
  */
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, namedSecretFor, logger }) {
+  constructor({ dir = DEFAULT_SOCKET_DIR, onSessionStart, secretsFor, expiryFor, namedSecretFor, onSessionEvent, logger }) {
     this.dir = dir;
     this.onSessionStart = onSessionStart;
     this.secretsFor = secretsFor || null;
     this.expiryFor = expiryFor || null;
     this.namedSecretFor = namedSecretFor || null;
+    this.onSessionEvent = onSessionEvent || null;
     this.log = logger || { info: () => {}, warn: () => {} };
     /** @type {Map<string, import('node:http').Server>} */
     this.servers = new Map();
@@ -223,6 +234,7 @@ export class HookSocketServer {
     const route = (req.url || '').split('?')[0];
     if (route === CREDENTIAL_PATH) return this.#credential(name, req, res);
     if (route === SECRET_PATH) return this.#secret(name, req, res);
+    if (route === SESSION_EVENT_PATH) return this.#event(name, req, res);
     if (route !== HOOK_PATH) {
       return json(res, 404, { ok: false, error: 'not found' });
     }
@@ -261,6 +273,39 @@ export class HookSocketServer {
 
     const result = await this.onSessionStart({ name, cwd, uuid, title });
     return json(res, result.ok ? 200 : 400, result);
+  }
+
+  /**
+   * A lifecycle event. Same authority as the uuid report: the session is the
+   * socket, and the body says only WHAT happened — one of a fixed list of
+   * events and a bounded detail — never who it happened to.
+   *
+   * A session can lie about its phase, and the consequence is bounded by what
+   * a phase decides: a notification, an "is it done" answer, and the idle
+   * restart's exclusions. It could already do all of that by painting its
+   * pane, which is what these events replace; nothing here widens what a
+   * hostile session reaches.
+   *
+   * @param {string} name
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   */
+  async #event(name, req, res) {
+    if (!this.onSessionEvent) {
+      return json(res, 404, { ok: false, error: 'not found' });
+    }
+    if (req.method !== 'POST') {
+      return json(res, 405, { ok: false, error: 'POST only' });
+    }
+    const body = await readJson(req);
+    if (body === null) return json(res, 400, { ok: false, error: 'body too large or not JSON' });
+    const event = String(body.event || '');
+    if (!SESSION_EVENTS.includes(event)) {
+      return json(res, 400, { ok: false, error: `not a session event: ${event.slice(0, 40)}` });
+    }
+    const result = await this.onSessionEvent({ name, event, detail: cleanDetail(body.detail), at: Date.now() });
+    const answer = result ?? { ok: true };
+    return json(res, answer.ok === false ? 400 : 200, answer);
   }
 
   /**

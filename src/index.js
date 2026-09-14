@@ -97,6 +97,10 @@ export async function main() {
       ? new HookSocketServer({
           dir: cfg.sandboxHookSocketDir,
           onSessionStart: (r) => sessions.recordUuid(r),
+          // The lifecycle hooks — Stop, PermissionRequest and the rest —
+          // saying what the session is doing, so the watcher can stop
+          // guessing it off the pane. See src/core/activity.js.
+          onSessionEvent: (e) => sessions.recordEvent(e),
           // The credential broker's reader. READ PER REQUEST, deliberately:
           // a token rotated while a session is running reaches it without a
           // restart, which is the difference between the broker and the

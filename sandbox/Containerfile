@@ -100,7 +100,7 @@ RUN printf '%s\n' '{' \
 # shared HTTP port: the socket the container can reach determines which session
 # it is, so it cannot report against anyone else's. See docs/hook-socket.md.
 COPY hook.mjs /usr/local/lib/agent-session-hook.mjs
-RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs\n' > /usr/local/bin/agent-session-hook \
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs "$@"\n' > /usr/local/bin/agent-session-hook \
     && chmod +x /usr/local/bin/agent-session-hook
 
 # The credential broker's client, on the same socket and for the same reason.

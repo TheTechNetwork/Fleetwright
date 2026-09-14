@@ -613,3 +613,74 @@ test('when it came back to its prompt is remembered for this run, and forgotten 
   await watcher.tick();
   assert.equal(watcher.readyAt('job'), null, 'a resumed session starts with no return on record');
 });
+
+// --- what the CLI said, over what the pane looks like -------------------------
+//
+// A running record carries its last lifecycle hook (src/core/activity.js).
+// Where one exists it answers "ready" and "awaiting"; the pane still decides
+// whether the CLI is painting, and still catches the resume dialog, which
+// fires before any hook can.
+
+test('a Stop hook is "back at its prompt" even when the pane looks like it is working', async (t) => {
+  // The permission-mode line is drawn in both states — watcher.js records at
+  // length how a regex got this wrong both ways. The hook cannot.
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'working', event: 'PostToolUse', detail: 'Bash', at: 1 } });
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [rec],
+    panes: { job: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  await watcher.tick();
+  assert.equal(events.filter((e) => e.event === 'session.ready').length, 0);
+
+  // The pane text does not change at all; only the CLI's word does.
+  stub.sessions[0].activity = { phase: 'ready', event: 'Stop', detail: null, at: 2 };
+  await watcher.tick();
+  await watcher.tick();
+
+  const ready = events.filter((e) => e.event === 'session.ready');
+  assert.equal(ready.length, 1);
+  assert.equal(ready[0].name, 'job');
+});
+
+test('a working hook keeps a session from reading as ready off a prompt-shaped pane', async (t) => {
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'working', event: 'UserPromptSubmit', detail: null, at: 1 } });
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [rec],
+    panes: { job: WORKING },
+  });
+  await watcher.tick({ quiet: true });
+  // The pane now shows the prompt chrome, which used to mean "ready". The CLI
+  // has said it is working, and it has not said otherwise.
+  stub.panes.job = AT_PROMPT;
+  await watcher.tick();
+  await watcher.tick();
+  assert.equal(events.filter((e) => e.event === 'session.ready').length, 0, 'the pane does not outrank the hook');
+  assert.equal(watcher.readyAt('job'), null);
+});
+
+test('a PermissionRequest hook is awaiting input, whatever the pane shows', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running' })],
+    panes: { job: 'a dialog this box has never seen the shape of' },
+  });
+  await watcher.tick({ quiet: true });
+  stub.sessions[0].activity = { phase: 'awaiting', event: 'PermissionRequest', detail: 'Bash', at: 2 };
+  await watcher.tick();
+  await watcher.tick();
+
+  const waiting = events.filter((e) => e.event === 'session.awaiting-input');
+  assert.equal(waiting.length, 1, 'the transition, once');
+  assert.equal(waiting[0].name, 'job');
+});
+
+test('the resume dialog still comes off the pane, because it fires before any hook can', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running', activity: null })],
+    panes: { job: 'starting' },
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes.job = RESUME_DIALOG;
+  await watcher.tick();
+  assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 1);
+});
