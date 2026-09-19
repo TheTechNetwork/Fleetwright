@@ -53,6 +53,25 @@ function run(argv, timeout = CHECK_TIMEOUT_MS) {
  * Kept beside each other because the fallback only makes sense as a pair: the
  * day nothing is left on the old rule, both go.
  */
+/**
+ * THE UNITS, which are what a box installed from here on is granted.
+ *
+ * `sudo -n systemctl start <unit>` is the whole privilege: the unit is owned
+ * by root, its ExecStart carries the apt-get flags, and `start` takes no
+ * argument anybody could widen. install/agent-hub-upgrade.service says why
+ * this shape and not a sudoers line naming apt-get — in one sentence, the
+ * hub's own mount namespace, which sudo does not escape and an upgrade
+ * cannot live inside.
+ *
+ * The apt-get forms below are what a box on the OLD grant is still permitted
+ * to run, tried when the unit start is refused. sudo matches the whole
+ * command line, so a refusal is a clean signal and not a mystery.
+ */
+export const UPGRADE_UNIT = 'agent-hub-upgrade.service';
+export const APT_UPDATE_UNIT = 'agent-hub-apt-update.service';
+const SYSTEMCTL = '/usr/bin/systemctl';
+const REFUSED_RE = /not allowed to execute|sorry, user|a password is required/i;
+
 const APT_PLAIN = Object.freeze(['/usr/bin/apt-get', '-y', 'upgrade']);
 const APT_SAFE = Object.freeze([
   '/usr/bin/apt-get',
@@ -175,16 +194,21 @@ function packageListAgeHours() {
  * this runs off a health report.
  *
  * @param {{ systemUpgrade?: boolean }} cfg
- * @param {{ now?: () => number, minAgeHours?: number }} [opts]
+ * @param {{ now?: () => number, minAgeHours?: number, exec?: typeof run }} [opts]  `exec`
+ *   stands in for spawning, so a test can script sudo's answers
  */
-export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6 } = {}) {
+export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6, exec = run } = {}) {
   if (!cfg.systemUpgrade) return { ok: false, reason: 'not permitted' };
   const age = packageListAgeHours();
   if (age !== null && age < minAgeHours) return { ok: false, reason: 'recent enough' };
   if (now() - lastRefreshAttempt < minAgeHours * 3_600_000) return { ok: false, reason: 'tried recently' };
 
   lastRefreshAttempt = now();
-  const r = run(['sudo', '-n', '/usr/bin/apt-get', 'update'], 120_000);
+  // The unit first; the apt-get line only for a box whose grant predates it.
+  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', APT_UPDATE_UNIT], 120_000);
+  if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
+    r = exec(['sudo', '-n', '/usr/bin/apt-get', 'update'], 120_000);
+  }
   if (r.status !== 0) {
     log.warn(`upgrade: could not refresh package lists: ${(r.stderr || r.stdout).split('\n')[0]}`);
     return { ok: false, reason: 'failed' };
@@ -307,9 +331,11 @@ export function describeApplied(applied, plan) {
  * off and they want it on.
  *
  * @param {import('../config.js').Config} cfg
- * @param {{ actor?: string|null }} [opts]
+ * @param {{ actor?: string|null, exec?: typeof run, updates?: typeof systemUpdates }} [opts]
+ *   `exec` and `updates` stand in for spawning and for `apt list`, so a test
+ *   can script what sudo and apt answer without either on the box
  */
-export function runUpgrade(cfg, { actor = null } = {}) {
+export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpdates } = {}) {
   if (!cfg.systemUpgrade) {
     return {
       ok: false,
@@ -325,18 +351,21 @@ export function runUpgrade(cfg, { actor = null } = {}) {
         // The backslashes are not decoration: `:` and `=` are sudoers
         // metacharacters, separating the host, runas and command sections, and
         // visudo rejects the line without them.
+        // THE UNITS FIRST: a grant to start a unit that is not installed
+        // permits nothing. Both live in install/ and take no arguments.
+        '  sudo install -m 0644 install/agent-hub-upgrade.service install/agent-hub-apt-update.service /etc/systemd/system/\n' +
+        '  sudo systemctl daemon-reload\n' +
         '  sudo tee /etc/sudoers.d/agent-hub-upgrade >/dev/null <<\'EOF\'\n' +
-        '  Defaults!/usr/bin/apt-get env_keep += "DEBIAN_FRONTEND"\n' +
-        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, ` +
-        '/usr/bin/apt-get -y -o Dpkg\\:\\:Options\\:\\:\\=--force-confold -o Dpkg\\:\\:Options\\:\\:\\=--force-confdef upgrade\n' +
+        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}\n` +
         '  EOF\n' +
         '  sudo chmod 0440 /etc/sudoers.d/agent-hub-upgrade\n\n' +
         'then set AGENT_HUB_SYSTEM_UPGRADE=1 in /etc/agent-hub.env and restart.\n' +
-        'Scoped to those three commands: it cannot install, remove or run anything else.',
+        `Scoped to starting those two units — one runs \`apt-get -y upgrade\` with conffile prompts answered, the other \`apt-get update\` — ` +
+        'it cannot install, remove or run anything else.',
     };
   }
 
-  const before = systemUpdates();
+  const before = updates();
   if (before.supported && !before.count) {
     return { ok: true, text: 'Nothing to upgrade.' + (before.rebootRequired ? ' A reboot is still pending.' : '') };
   }
@@ -367,13 +396,29 @@ export function runUpgrade(cfg, { actor = null } = {}) {
   // bare form, so the safe one is refused — and refusing to upgrade at all
   // would be worse than upgrading the way it always has. Re-running the
   // installer is what moves a box onto the new rule.
-  let r = run(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
-  if (r.status !== 0 && /not allowed to execute|sorry, user/i.test(`${r.stderr}${r.stdout}`)) {
+  // THE UNIT, THEN THE TWO OLD GRANTS, in the order a box could have been
+  // installed. `systemctl start` on a oneshot waits for it and fails when it
+  // fails; the output is in the journal under the unit's name, which the
+  // installer lets the service user read (it joins systemd-journal for
+  // /logs). A refusal from sudo means the grant predates the unit — the
+  // remedy is `install.sh --repair`, and until then the old line still works.
+  const startedAt = Date.now();
+  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', UPGRADE_UNIT], 15 * 60_000);
+  if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
     log.warn(
-      "upgrade: this box's sudoers rule predates the noninteractive flags. " +
+      "upgrade: this box's sudoers rule predates the upgrade unit. " +
         'Fix it without a full reinstall: sudo /opt/agent-fleet/install/install.sh --repair',
     );
-    r = run(['sudo', '-n', ...APT_PLAIN], 15 * 60_000);
+    r = exec(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
+    if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
+      r = exec(['sudo', '-n', ...APT_PLAIN], 15 * 60_000);
+    }
+  } else if (r.status !== 0) {
+    // What apt said, from the journal: `systemctl start` reports only that
+    // the job failed, and the dpkg line is what adviseOnFailure reads.
+    const since = `-${Math.ceil((Date.now() - startedAt) / 1000) + 5}s`;
+    const said = exec(['journalctl', '-u', UPGRADE_UNIT, '--since', since, '--no-pager', '-o', 'cat'], 10_000);
+    if (said.status === 0 && said.stdout.trim()) r = { ...r, stderr: `${said.stdout.trim()}\n${r.stderr}`.trim() };
   }
   if (r.status !== 0) {
     const detail = upgradeFailureDetail(r);
@@ -388,7 +433,7 @@ export function runUpgrade(cfg, { actor = null } = {}) {
     };
   }
 
-  const after = systemUpdates();
+  const after = updates();
   const applied = Math.max(0, before.count - after.count);
   return {
     ok: true,
@@ -699,15 +744,16 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg 
     // of this blamed the image and said nothing typed on the box would help —
     // told to somebody whose filesystem was perfectly writable.
     //
-    // agent-hub.service sets `ProtectSystem=full`, which makes /usr, /boot AND
-    // /etc read-only for the service and every child of it. A mount namespace
-    // is not something `sudo` escapes, so the sanctioned `sudo -n apt-get`
-    // inherited it and dpkg could not write /etc/debian_version.
-    //
-    // The unit ships with ReadWritePaths=/etc now, so a box that still shows
-    // this is running an older one — which is a re-run of the installer, not a
-    // new image. Naming the unit is what makes that findable; "your filesystem
-    // is read-only" sent somebody to look at a filesystem that was fine.
+    // agent-hub.service used to set `ProtectSystem=full`, which makes /usr,
+    // /boot AND /etc read-only for the service and every child of it. A mount
+    // namespace is not something `sudo` escapes, so the sanctioned
+    // `sudo -n apt-get` inherited it and dpkg could not write
+    // /etc/debian_version. The upgrade now runs in its own oneshot unit
+    // (install/agent-hub-upgrade.service) with no such protection, so a box
+    // that still shows this is on the old grant and the old unit — a re-run
+    // of the installer, not a new image. Naming the unit is what makes that
+    // findable; "your filesystem is read-only" sent somebody to look at a
+    // filesystem that was fine.
     //
     // AND THEN THAT WAS WRONG TOO, WHICH IS WHY THIS NOW MEASURES.
     //

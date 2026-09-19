@@ -1659,6 +1659,7 @@ const OPENAPI = JSON.stringify({
                       "connect",
                       "copyfile",
                       "deletefile",
+                      "exchange",
                       "files",
                       "forget",
                       "health",

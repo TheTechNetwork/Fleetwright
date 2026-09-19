@@ -94,7 +94,7 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 // `start` without the new capability and lights it up when it updates, no
 // coordinated round, no loud window. The apps do not carry this number either.
 /** @type {number} */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 // THE FLOOR: the oldest protocol this host's code still reads correctly, and the
 // change that stops a routine feature bump stranding a host. See
@@ -791,6 +791,41 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary: 'Forget a stored credential on one host. Does not revoke it at the provider.',
+  },
+
+  // FINISH AN APP-FLOW AUTHORIZATION HERE, NOT AT THE COORDINATOR.
+  //
+  // The coordinator relays every authorization and used to perform the
+  // exchange too, so a compromised coordinator saw the access and refresh
+  // tokens at link time. Now the host mints a PKCE verifier when it answers
+  // `connect` (the challenge rides the reply, into the authorize URL), and
+  // the callback's code comes down this verb to be exchanged HERE with that
+  // verifier and the client secret the config frame already delivers. A
+  // coordinator that captured the code cannot spend it. The wording of that
+  // rule and the four-step sequence are docs/recommendations-review.md §4.
+  //
+  // A VERB AND NOT PARAMETERS ON `link`, the same reasoning `renew` gives:
+  // adding a parameter is a flag day and adding a verb is free. A host that
+  // predates this one never offers a challenge, so the coordinator never
+  // sends it this verb and exchanges as before.
+  exchange: {
+    params: {
+      provider: { type: 'enum', required: true, values: ['github', 'cloudflare'], since: 5 },
+      // THE AUTHORIZATION CODE. Typed `secret` for the handling it gets — byte
+      // identical, masked in every log, never quoted in a refusal — and
+      // because, alone, it is worth nothing: it is spent only with the
+      // verifier this host holds.
+      code: { type: 'secret', required: true, max: 2048, since: 5 },
+      // Which app, carried rather than configured, as `renew` argues.
+      clientId: { type: 'secret', required: true, max: 256, since: 5 },
+      // THE COORDINATOR'S PUBLIC ORIGIN, so the exchange names the same
+      // redirect the authorize request did — the provider refuses a mismatch,
+      // which is the binding the flow depends on. `secret` for the same
+      // handling reason as clientId: it has to arrive byte-identical.
+      origin: { type: 'secret', required: true, max: 512, since: 5 },
+    },
+    mutating: true,
+    summary: 'Finish an app-flow authorization on this host: the callback code, exchanged here with the verifier this host minted.',
   },
 
   // WHAT A HOST NEEDS TO KEEP A CONNECTION ALIVE BY ITSELF.

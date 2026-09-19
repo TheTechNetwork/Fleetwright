@@ -122,13 +122,13 @@ exit 0
 
 // --- reading them -----------------------------------------------------------
 
-test('a box with no rules file has none, which is not a fault', (t) => {
+test('a box with no rules file has none, which is not a fault', async (t) => {
   const s = box(t, { rules: null });
   assert.equal(readHouseRules(s.cfg()), null);
   assert.equal(describeHouseRules(null), null, 'and nothing is said about it');
 });
 
-test('rules are read with their size, because the size is the cost', (t) => {
+test('rules are read with their size, because the size is the cost', async (t) => {
   const s = box(t, { rules: '# How we work here\n\nSmall commits.\n' });
   const rules = readHouseRules(s.cfg());
 
@@ -139,7 +139,7 @@ test('rules are read with their size, because the size is the cost', (t) => {
   assert.match(String(describeHouseRules(rules)), new RegExp(`${written.length} characters`));
 });
 
-test('an oversized file is refused rather than cut short, and says which it is', (t) => {
+test('an oversized file is refused rather than cut short, and says which it is', async (t) => {
   // NOT TRUNCATED, which is the opposite of what a profile does. A profile cut
   // short is a shorter instruction; rules cut short are DIFFERENT RULES, and
   // half of "never force-push, except on a branch you created" is a licence.
@@ -153,7 +153,7 @@ test('an oversized file is refused rather than cut short, and says which it is',
   assert.match(String(describeHouseRules(rules)), /NOT IN USE/);
 });
 
-test('a file of blank lines is not rules', (t) => {
+test('a file of blank lines is not rules', async (t) => {
   // C-5, on this project's own doorstep: reporting whitespace as house rules
   // would be claiming a state the evidence does not support.
   const s = box(t, { rules: '\n\n   \n' });
@@ -163,7 +163,7 @@ test('a file of blank lines is not rules', (t) => {
   assert.match(String(rules?.why), /empty/);
 });
 
-test('a directory where the file should be is reported, not ignored', (t) => {
+test('a directory where the file should be is reported, not ignored', async (t) => {
   const s = box(t, { rules: null });
   mkdirSync(s.rulesFile);
   const rules = readHouseRules(s.cfg());
@@ -174,7 +174,7 @@ test('a directory where the file should be is reported, not ignored', (t) => {
 
 // --- getting them into a session --------------------------------------------
 
-test('a new session gets the rules, and they never touch the argument list', (t) => {
+test('a new session gets the rules, and they never touch the argument list', async (t) => {
   // BOTH HALVES MATTER. That the content arrives is the feature; that it
   // arrives ONLY on stdin is the reason this is safe to have at all. Prose
   // somebody wrote, in a shell command, is the failure mode this repository
@@ -182,7 +182,7 @@ test('a new session gets the rules, and they never touch the argument list', (t)
   const secret = '# House rules\n\nAlways `run the tests`; never $(guess).\n';
   const s = box(t, { rules: secret });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'fresh', null);
+  const r = await ensureSandboxVolumes(s.cfg(), 'fresh', null);
   assert.equal(r.ok, true);
 
   assert.equal(s.stdin(), secret, 'the rules did not reach the container');
@@ -192,35 +192,35 @@ test('a new session gets the rules, and they never touch the argument list', (t)
   }
 });
 
-test('a resumed session keeps the rules it began with', (t) => {
+test('a resumed session keeps the rules it began with', async (t) => {
   // ON CREATION ONLY. A session's standing instructions must not change under
   // it — that is what makes a running session something you can reason about.
   // Edit the file and the NEXT session gets it.
   const s = box(t, { rules: '# rules\n', volumes: ['claude-old', 'work-old'] });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'old', null, { account: 'shared' });
+  const r = await ensureSandboxVolumes(s.cfg(), 'old', null, { account: 'shared' });
 
   assert.equal(r.ok, true);
   assert.equal(s.writes().length, 0, 'a resume rewrote the rules under a live session');
 });
 
-test('a box with no rules file starts sessions exactly as it did before', (t) => {
+test('a box with no rules file starts sessions exactly as it did before', async (t) => {
   const s = box(t, { rules: null });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'plain', null);
+  const r = await ensureSandboxVolumes(s.cfg(), 'plain', null);
 
   assert.equal(r.ok, true);
   assert.equal(s.writes().length, 0);
   assert.equal(s.stdin(), null);
 });
 
-test('rules that cannot be used do not stop a session starting', (t) => {
+test('rules that cannot be used do not stop a session starting', async (t) => {
   // A session without a credential comes up at a login prompt nobody can
   // answer, so that refuses. A session without house rules does the same work
   // slightly differently, so this must not. The warning is the remedy.
   const s = box(t, { rules: 'x'.repeat(RULES_MAX + 1) });
 
-  const r = ensureSandboxVolumes(s.cfg(), 'fresh', null);
+  const r = await ensureSandboxVolumes(s.cfg(), 'fresh', null);
 
   assert.equal(r.ok, true, 'an unusable rules file refused a start');
   assert.equal(s.writes().length, 0);

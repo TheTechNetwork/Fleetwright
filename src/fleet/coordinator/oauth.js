@@ -49,7 +49,7 @@ export class PendingAuthorizations {
   constructor({ now = () => Date.now(), ttlMs = STATE_TTL_MS } = {}) {
     this.now = now;
     this.ttlMs = ttlMs;
-    /** @type {Map<string, { hostId: string, email: string|null, at: number }>} */
+    /** @type {Map<string, { hostId: string, email: string|null, pkce: boolean, at: number }>} */
     this.pending = new Map();
   }
 
@@ -60,9 +60,9 @@ export class PendingAuthorizations {
   }
 
   /**
-   * @param {{ state: string, hostId: string, email: string|null }} flow
+   * @param {{ state: string, hostId: string, email: string|null, pkce?: boolean }} flow
    */
-  mint({ state, hostId, email }) {
+  mint({ state, hostId, email, pkce = false }) {
     this.sweep();
     // Oldest first, so a flood of abandoned flows cannot evict a live one that
     // somebody is in the middle of.
@@ -71,7 +71,10 @@ export class PendingAuthorizations {
       if (oldest === undefined) break;
       this.pending.delete(oldest);
     }
-    this.pending.set(state, { hostId, email, at: this.now() });
+    // `pkce`: the host offered a challenge, so the code goes BACK TO IT to be
+    // exchanged rather than being exchanged here. See `exchange` in
+    // src/fleet/protocol/intents.js.
+    this.pending.set(state, { hostId, email, pkce: Boolean(pkce), at: this.now() });
     return state;
   }
 
@@ -138,15 +141,23 @@ export function normaliseOrigin(value) {
  * somebody else's coordinator — GitHub matches it against the registered list
  * and refuses a mismatch, which is the behaviour we want to depend on.
  *
- * @param {{ clientId: string, origin: string, state: string }} args
+ * @param {{ clientId: string, origin: string, state: string, codeChallenge?: string|null }} args
  */
-export function authorizeUrl({ clientId, origin, state }) {
+export function authorizeUrl({ clientId, origin, state, codeChallenge = null }) {
   const base = normaliseOrigin(origin);
   if (!base) return null;
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', `${base}/oauth/github/callback`);
   url.searchParams.set('state', state);
+  // PKCE, when the host minted a verifier: only the challenge leaves the
+  // host, and the code that comes back is worth nothing without the verifier
+  // — including to this coordinator. S256 and never `plain`, which would
+  // hand the relay the verifier itself.
+  if (codeChallenge) {
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+  }
   return url.toString();
 }
 
@@ -166,9 +177,9 @@ export function authorizeUrl({ clientId, origin, state }) {
  * the visible failure we want over a token quietly granted less than the work
  * needs.
  *
- * @param {{ clientId: string, origin: string, state: string, scopes: string }} args
+ * @param {{ clientId: string, origin: string, state: string, scopes: string, codeChallenge?: string|null }} args
  */
-export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes }) {
+export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes, codeChallenge = null }) {
   const base = normaliseOrigin(origin);
   if (!base) return null;
   const url = new URL('https://dash.cloudflare.com/oauth2/auth');
@@ -179,6 +190,10 @@ export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes }) {
   // list in an environment variable gets written both ways.
   url.searchParams.set('scope', String(scopes).split(/[\s,]+/).filter(Boolean).join(' '));
   url.searchParams.set('state', state);
+  if (codeChallenge) {
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+  }
   return url.toString();
 }
 
@@ -189,9 +204,13 @@ export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes }) {
  * unexpected must produce a message somebody can act on rather than a stack
  * trace in a Worker log and a blank page in a browser.
  *
- * @param {{ clientId: string, clientSecret: string, code: string, origin: string, fetch?: typeof globalThis.fetch }} args
+ * `codeVerifier` is what a HOST passes, exchanging a code the coordinator
+ * relayed to it: the verifier never left the host, so the same function serves
+ * both places and only one of them can ever fill this in.
+ *
+ * @param {{ clientId: string, clientSecret: string, code: string, origin: string, codeVerifier?: string|null, fetch?: typeof globalThis.fetch }} args
  */
-export async function exchangeCode({ clientId, clientSecret, code, origin, fetch: doFetch = globalThis.fetch }) {
+export async function exchangeCode({ clientId, clientSecret, code, origin, codeVerifier = null, fetch: doFetch = globalThis.fetch }) {
   const base = normaliseOrigin(origin);
   if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
   let body;
@@ -204,6 +223,7 @@ export async function exchangeCode({ clientId, clientSecret, code, origin, fetch
         client_secret: clientSecret,
         code,
         redirect_uri: `${base}/oauth/github/callback`,
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
       }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -251,9 +271,9 @@ export async function exchangeCode({ clientId, clientSecret, code, origin, fetch
  * and the caller says so to the person, the same way the GitHub flow does when
  * renewal material cannot be deposited.
  *
- * @param {{ clientId: string, clientSecret: string, code: string, origin: string, fetch?: typeof globalThis.fetch }} args
+ * @param {{ clientId: string, clientSecret: string, code: string, origin: string, codeVerifier?: string|null, fetch?: typeof globalThis.fetch }} args
  */
-export async function exchangeCloudflareCode({ clientId, clientSecret, code, origin, fetch: doFetch = globalThis.fetch }) {
+export async function exchangeCloudflareCode({ clientId, clientSecret, code, origin, codeVerifier = null, fetch: doFetch = globalThis.fetch }) {
   const base = normaliseOrigin(origin);
   if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
   /** @type {any} */
@@ -271,6 +291,7 @@ export async function exchangeCloudflareCode({ clientId, clientSecret, code, ori
         redirect_uri: `${base}/oauth/cloudflare/callback`,
         client_id: clientId,
         client_secret: clientSecret,
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
       }).toString(),
       signal: AbortSignal.timeout(15_000),
     });
@@ -357,4 +378,26 @@ a.back{display:inline-block;margin-top:1rem}</style>
 <p>${safe}</p>
 <p><a class="back" href="${back}">Back to Fleetwright</a></p>
 ${installed ? '' : `<script>location.replace(${JSON.stringify(back)})</script>`}`;
+}
+
+/**
+ * What a person is told once a provider is connected.
+ *
+ * One function for both places an exchange can finish — the coordinator, or a
+ * host that minted a PKCE verifier — because the sentence carries a promise
+ * ("renews it by itself") that has to mean the same thing wherever it was
+ * decided. Honest about the hours rather than quiet about them, and honest
+ * about which of the two situations this is: a token that stops working
+ * tomorrow, from a screen that said "connected", is worse than one that said
+ * so.
+ *
+ * @param {{ label: string, expiresIn: number|null|undefined, renewable: boolean }} args
+ */
+export function connectedText({ label, expiresIn, renewable }) {
+  if (!expiresIn) return `Your sessions can use ${label} now.`;
+  const hours = Math.round(expiresIn / 3600);
+  return renewable
+    ? `Your sessions can use ${label} now. The token lasts ${hours} hours and that machine renews it by itself from here on.`
+    : `Your sessions can use ${label} now. This token lasts ${hours} hours, and that machine could not store what it ` +
+      'needs to renew it — connect again when it expires.';
 }

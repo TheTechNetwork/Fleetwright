@@ -23,7 +23,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { upgradeFailureDetail } from '../src/core/upgrades.js';
+import { upgradeFailureDetail, runUpgrade } from '../src/core/upgrades.js';
 
 /** The real shape: cause on stdout, debconf and the summary on stderr. */
 const REAL = {
@@ -130,22 +130,35 @@ test('the rule printed by hand is the rule the installer writes', () => {
   // Somebody who pastes the message and somebody who re-runs the installer must
   // end up with the same permissions, or one gets an upgrade that stalls on a
   // conffile prompt and the other does not.
-  const src = readFileSync(new URL('../src/core/upgrades.js', import.meta.url), 'utf8');
+  //
+  // THE RULE IS A GRANT TO START TWO UNITS NOW, and the flags that used to be
+  // in it — noninteractive, conffile prompts answered — live in the unit,
+  // owned by root. So parity is three-way: the printed rule, the installer's
+  // rule, and the unit they both point at.
+  // The printed rule as a PERSON sees it, rendered — the source interpolates
+  // the unit names, so reading the file would test the wrong string.
+  const src = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' })).text;
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  const unit = readFileSync(new URL('../install/agent-hub-upgrade.service', import.meta.url), 'utf8');
 
-  for (const piece of ['env_keep += "DEBIAN_FRONTEND"', 'force-confold', 'force-confdef']) {
+  for (const piece of ['systemctl start agent-hub-upgrade.service', 'systemctl start agent-hub-apt-update.service']) {
     assert.ok(src.includes(piece), `the printed rule is missing ${piece}`);
     assert.ok(sh.includes(piece), `the installer's rule is missing ${piece}`);
   }
-
-  // ESCAPED IN BOTH. `:` and `=` are sudoers metacharacters — they separate the
-  // host, runas and command sections — and visudo rejects the line without the
-  // backslashes. Found by running visudo on it rather than by reading the
-  // grammar, and the installer validates with visudo before installing.
-  // Both files carry `Dpkg\\:\\:Options` as source text — a shell printf and a
-  // JS string literal each needing one level of escaping to emit one backslash.
+  for (const piece of ['DEBIAN_FRONTEND=noninteractive', 'force-confold', 'force-confdef']) {
+    assert.ok(unit.includes(piece), `the unit is missing ${piece}`);
+  }
+  // Neither grant carries an apt-get line any more: that is the door the
+  // hub's own namespace could not close. The old lines survive only as the
+  // fallback upgrades.js tries when the unit start is refused.
   for (const [name, text] of [['upgrades.js', src], ['install.sh', sh]]) {
-    assert.ok(text.includes('Dpkg\\\\:\\\\:Options'), `${name} does not escape the sudoers metacharacters`);
+    // Comments stripped from the installer's function: its own comment names
+    // the apt-get lines it replaced, and prose about a thing is not the thing.
+    const grant = name === 'upgrades.js'
+      ? /NOPASSWD: [^\n]*/.exec(text)?.[0] ?? ''
+      : (/write_upgrade_sudoers\(\) \{[\s\S]*?\n\}/.exec(text)?.[0] ?? '').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+    assert.ok(grant, `${name}: no grant found`);
+    assert.doesNotMatch(grant, /apt-get/, `${name} grants apt-get again`);
   }
   assert.match(sh, /visudo -cf/);
 });

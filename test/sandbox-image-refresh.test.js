@@ -49,7 +49,7 @@ test('a refresh reports changed only when the digest actually moves', async (t) 
   chmodSync(bin, 0o755);
 
   const cfg = { podmanBin: bin, sandboxImage: 'ghcr.io/example/session:latest' };
-  const moved = refreshSandboxImage(cfg);
+  const moved = await refreshSandboxImage(cfg);
   assert.equal(moved.ok, true);
   assert.equal(moved.changed, true, 'aaa -> bbb is a change');
 
@@ -63,7 +63,7 @@ test('a refresh reports changed only when the digest actually moves', async (t) 
     'esac',
   ].join('\n'));
   chmodSync(bin, 0o755);
-  const same = refreshSandboxImage(cfg);
+  const same = await refreshSandboxImage(cfg);
   assert.equal(same.ok, true);
   assert.equal(same.changed, false, 'an unchanged digest is not a change');
 });
@@ -79,7 +79,7 @@ test('a failed pull is reported, not thrown', async () => {
 
   // A registry that is down must not fail the update: the box has a working
   // image and the network is what broke.
-  const r = refreshSandboxImage({ podmanBin: bin, sandboxImage: 'ghcr.io/example/session:latest' });
+  const r = await refreshSandboxImage({ podmanBin: bin, sandboxImage: 'ghcr.io/example/session:latest' });
   assert.equal(r.ok, false);
   assert.equal(r.changed, false);
   assert.match(r.message, /no route to host/);

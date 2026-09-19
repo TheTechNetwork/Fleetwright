@@ -452,13 +452,20 @@ The test that would matter is the *absence* of egress control — see SEC-INJECT
 - **The permission mode.** Dangerous is the default; the "safe mode" that several
   arguments lean on is not shipped as the default and MUST NOT be assumed active.
 
-**SEC-INJECT-2** (ASPIRATIONAL) — Default-deny egress through a credential-
-terminating proxy (`trust.md`, `ROADMAP §2`) is the control that would bound
-misuse to a named allowlist of destinations. It is **not built**. Until it is,
-the security posture of a session on untrusted input is "trusted to the extent
-of everything it can reach."
-*Falsify:* `sandboxArgv` in `claude.js` passes no `--network` restriction; grep
-for a proxy/netns. Absent.
+**SEC-INJECT-2** (BUILT, OPT-IN, NOT YET MEASURED) — Default-deny egress
+through a named allowlist is the control that bounds misuse to a set of
+destinations. It is built as `AGENT_HUB_SANDBOX_EGRESS=allowlist`
+(`src/core/egress.js`): sessions join a podman `--internal` network, which
+has no route out, and one CONNECT-only proxy container on both that network
+and the default one is the only path; the allowlist lives in the proxy
+because the network cannot express one. It is **off by default**, and until a
+box has been seen refusing `curl https://example.com` from a session while
+`claude` signs in and answers, the property stays unmeasured. Off, the
+posture of a session on untrusted input is still "trusted to the extent of
+everything it can reach." Not a credential-terminating proxy: the tunnel is
+bytes in, bytes out, and the CLI needs `HTTPS_PROXY` and no CA bundle.
+*Falsify:* `egressArgs` in `egress.js` empty under `allowlist`; `sandboxArgv`
+in `claude.js` not spreading it; `test/egress.test.js`.
 
 **SEC-INJECT-3** — Starting a session in dangerous mode on a repository the
 operator did not write is accepting that injected content in that repository may
@@ -488,11 +495,13 @@ does.
 *Falsify:* `podman.js` / `sandboxArgv`; a test that a stopped-and-resumed session
 keeps `/work` and loses `/etc` changes.
 
-**SEC-SESSION-4** — Egress from a session is **open** by design today
-(`design.md §2`, confirmed: `sandboxArgv` sets no network restriction). This MUST
-be stated wherever containment is described, so nobody reads "sandbox" as
-"contained network."
-*Falsify:* grep `claude.js` `sandboxArgv` for `--network`; absent.
+**SEC-SESSION-4** — Egress from a session is **open** by default
+(`design.md §2`, confirmed: `sandboxArgv` sets no network restriction unless
+`AGENT_HUB_SANDBOX_EGRESS=allowlist`, SEC-INJECT-2). This MUST be stated
+wherever containment is described, so nobody reads "sandbox" as "contained
+network" on a box that has not turned the allowlist on.
+*Falsify:* grep `claude.js` `sandboxArgv` for `egressArgs`; `test/egress.test.js`
+pins that it is empty when open.
 
 **SEC-SESSION-5** (UNVERIFIED) — Rootless podman is claimed to map container-root
 to an unprivileged host user, so an escape is unprivileged on the host. This is
@@ -572,7 +581,7 @@ this at real machines. G5–G7 are real and smaller.
 | **G1** | **corrected.** Every site now states the real bound: `intents.js`, `intents.md`, `connectors.md`, `design.md`, `coordinator.md`, `trust.md` ×2. The two `trust.md` conclusions that leaned on the understated baseline were re-derived and **both survive** — the vault refusal and the minting-key placement rest on the *delta*, which correcting the baseline widens rather than narrows. |
 | **G2** | **fixed.** The config frame `github-app.md` describes is built (`src/fleet/protocol/config-frame.js`), sent on every host connect, and held in the sidecar's memory. `saveRenewal` no longer stores `client`; `renew` accepts it and discards it so an older coordinator is not refused. The renewal timer moved from agent-hub to the sidecar, because the exchange needs the secret and the sidecar is the process that has it. `test/config-frame.test.js`, `test/github-renewal.test.js`. |
 | **G3** | **fixed.** `promptId` folds in a bounded, non-travelling digest of the dialog body, for the kinds that recur (`permission`, `trust`) and not for the one that does not (`resume`, whose body carries a live counter). `test/prompt.test.js`. |
-| **G4** | **still open.** SEC-SESSION-5 holds: the fleet deploys rootless, and nothing yet asserts that uid 0 in a container maps to the unprivileged service uid on the host. (This row briefly claimed "fixed" on the strength of the pane-detection work in `test/real-panes.test.js`, which belongs to a different finding entirely — recorded rather than erased, because a security row marked fixed by an unrelated bug fix is exactly the failure this register exists to catch.) |
+| **G4** | **built, not yet measured.** SEC-SESSION-5 stays unverified until a session on hardware reads `/proc/self/uid_map`. What changed: `sandboxArgv` used to pass no `--userns`, and rootless podman's default for that is `host` inside the caller's namespace, so container root WAS the service uid — the account that owns the credential and the socket directory ([`recommendations-review.md`](./recommendations-review.md) §1). Sessions now run `--userns=nomap` by default (`AGENT_HUB_SANDBOX_USERNS`, `src/core/sandbox-userns.js`), the same flag on every helper container that touches a session volume, the credential seeded over stdin rather than a bind mount the remapped root could not open, the hook socket mounted `:U`, the hub's stale-socket probe taught that `EACCES` is a live socket, and volumes from before moved into the namespace once on resume. On a box that runs the service as root the setting falls back to `host` with a warning, because podman refuses `nomap` there. `test/sandbox-userns.test.js`, `test/podman.test.js`, `test/hook-socket.test.js`. | (This row briefly claimed "fixed" on the strength of the pane-detection work in `test/real-panes.test.js`, which belongs to a different finding entirely — recorded rather than erased, because a security row marked fixed by an unrelated bug fix is exactly the failure this register exists to catch.) |
 | **G5** | **fixed.** `Connections` re-checks mode on every credential read, tightens, and warns. `test/connectors.test.js`. |
 | **G6** | **fixed.** The loopback API always has a token — generated into `${stateDir}/api-token` when none is configured, read by the sidecar from the same file — and `#authorised` now fails closed. `test/api-token.test.js`, which is also the first test in this repo to construct the HTTP adapter at all. |
 | **G7** | **fixed rather than stated.** The lockout is a growing, capped DELAY now instead of a refusal: an attacker's guess rate stays bounded (a million guesses is tens of days against a ten-minute code) and somebody holding a real pin always gets in. The wait applies to correct codes too, because waiting only on failures would time-leak the answer. `test/identity.test.js`. |

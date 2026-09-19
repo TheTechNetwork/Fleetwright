@@ -1,0 +1,33 @@
+[Unit]
+Description=agent-hub — apply system updates, on request from the hub
+Documentation=https://github.com/ambersecurityinc/agent-hub
+
+[Service]
+# ONESHOT, AS ROOT, WITH NO SANDBOXING — and that is the whole design.
+#
+# agent-hub's own unit could not keep ProtectSystem while its sudoers grant
+# was `apt-get -y upgrade`: a mount namespace is not something sudo escapes,
+# so the upgrade inherited the hub's read-only /usr and /etc and dpkg failed
+# on the first conffile. Three rounds of that are written up in
+# install/agent-hub.service. This unit is the way out it names: the upgrade
+# gets a namespace of its own with nothing protected, because rewriting /usr,
+# /etc and /boot is what an upgrade IS, and the hub's grant narrows from "run
+# apt as root" to "start this one named unit" — which cannot be given other
+# arguments, because it has none.
+#
+# The flags are the ones upgrades.js has always passed: noninteractive, and
+# conffile prompts answered conservatively so a package that ships a changed
+# config cannot stall an upgrade nobody is watching. DEBIAN_FRONTEND is set
+# here rather than kept through sudo, so the sudoers rule no longer needs an
+# env_keep at all.
+Type=oneshot
+User=root
+Environment=DEBIAN_FRONTEND=noninteractive
+ExecStart=/usr/bin/apt-get -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef upgrade
+# Long enough for a kernel plus a toolchain on a slow mirror; upgrades.js waits
+# the same fifteen minutes on `systemctl start`.
+TimeoutStartSec=900
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-hub-upgrade

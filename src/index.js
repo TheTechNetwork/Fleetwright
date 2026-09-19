@@ -79,7 +79,7 @@ export async function main() {
   // throws simply leaves the evidence unwritten, which is a revert, not a crash.
   if (cfg.sandbox && readConfirmation(cfg)) {
     try {
-      if (canStartSession(cfg)) noteHealth(cfg, 'hub');
+      if (await canStartSession(cfg)) noteHealth(cfg, 'hub');
       else log.warn('update: a release is on trial and a session did not start here — leaving it unconfirmed');
     } catch (e) {
       log.warn(`update: could not run the session probe: ${/** @type {Error} */ (e).message}`);
@@ -97,6 +97,10 @@ export async function main() {
       ? new HookSocketServer({
           dir: cfg.sandboxHookSocketDir,
           onSessionStart: (r) => sessions.recordUuid(r),
+          // The lifecycle hooks — Stop, PermissionRequest and the rest —
+          // saying what the session is doing, so the watcher can stop
+          // guessing it off the pane. See src/core/activity.js.
+          onSessionEvent: (e) => sessions.recordEvent(e),
           // The credential broker's reader. READ PER REQUEST, deliberately:
           // a token rotated while a session is running reaches it without a
           // restart, which is the difference between the broker and the

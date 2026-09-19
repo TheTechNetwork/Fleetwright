@@ -19,7 +19,7 @@ import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
-import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode } from './oauth.js';
+import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
@@ -1351,6 +1351,19 @@ export class CoordinatorCore {
     /** @type {Record<string, { url: string, hint: string }>} */
     const offers = {};
 
+    // THE HOST'S CHALLENGE, when it minted one. A host that holds the client
+    // secret answers `connect` with a PKCE challenge per provider on the
+    // catalogue entry, and from then on the code that comes back is worth
+    // nothing to anybody but that host — this coordinator included. Shape
+    // checked before it is built into a URL: 43 base64url characters is what
+    // S256 produces and anything else is not a challenge.
+    /** @param {string} provider */
+    const challengeFrom = (provider) => {
+      const entry = catalogue.find((c) => c?.provider === provider);
+      const value = entry?.codeChallenge;
+      return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+    };
+
     // An origin we cannot parse means no offer, and the paste route is
     // returned untouched. Better a working paste than an authorize URL built
     // out of something that was not an address. Each provider gets its OWN
@@ -1358,9 +1371,10 @@ export class CoordinatorCore {
     // other's flow.
     if (this.githubApp?.clientId && this.githubApp?.clientSecret) {
       const state = this.newId();
-      const url = authorizeUrl({ clientId: this.githubApp.clientId, origin, state });
+      const codeChallenge = challengeFrom('github');
+      const url = authorizeUrl({ clientId: this.githubApp.clientId, origin, state, codeChallenge });
       if (url) {
-        this.pendingGithub.mint({ state, hostId, email });
+        this.pendingGithub.mint({ state, hostId, email, pkce: Boolean(codeChallenge) });
         offers.github = {
           url,
           hint:
@@ -1378,14 +1392,16 @@ export class CoordinatorCore {
     // keeps the paste route, which works.
     if (this.cloudflareOauth?.clientId && this.cloudflareOauth?.clientSecret && this.cloudflareOauth?.scopes) {
       const state = this.newId();
+      const codeChallenge = challengeFrom('cloudflare');
       const url = cloudflareAuthorizeUrl({
         clientId: this.cloudflareOauth.clientId,
         origin,
         state,
         scopes: this.cloudflareOauth.scopes,
+        codeChallenge,
       });
       if (url) {
-        this.pendingCloudflare.mint({ state, hostId, email });
+        this.pendingCloudflare.mint({ state, hostId, email, pkce: Boolean(codeChallenge) });
         offers.cloudflare = {
           url,
           hint:
@@ -1474,6 +1490,8 @@ export class CoordinatorCore {
       return { ok: false, text: 'GitHub did not send an authorization code back.' };
     }
 
+    if (flow.pkce) return this.#exchangeOnHost({ provider: 'github', flow, code, clientId, origin });
+
     const exchanged = await exchangeCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
@@ -1509,10 +1527,49 @@ export class CoordinatorCore {
       return { ok: false, text: 'Cloudflare did not send an authorization code back.' };
     }
 
+    if (flow.pkce) return this.#exchangeOnHost({ provider: 'cloudflare', flow, code, clientId, origin });
+
     const exchanged = await exchangeCloudflareCode({ clientId, clientSecret, code, origin });
     if (!exchanged.ok) return { ok: false, text: exchanged.message };
 
     return this.#storeAuthorizedToken({ provider: 'cloudflare', label: 'Cloudflare', flow, exchanged, clientId });
+  }
+
+  /**
+   * Hand the code to the host that minted the verifier, and say what it said.
+   *
+   * THIS COORDINATOR NEVER SEES THE TOKENS on this path. It relays a code it
+   * cannot spend to the one host that can, over the socket that host already
+   * holds open; the host exchanges with its verifier and the client secret the
+   * config frame gave it, stores the access token by its own `link`, deposits
+   * the renewal material by its own `renew`, and answers with the sentence a
+   * person should read. Compared with #storeAuthorizedToken below, what a
+   * compromised coordinator learns at link time drops from "the access and
+   * refresh tokens" to "a code it cannot use".
+   *
+   * `unknown_verb` cannot happen — a host that offered a challenge is a host
+   * that speaks this verb — but it is answered anyway, because a silent
+   * mismatch here would read as "GitHub refused" to the person.
+   *
+   * @param {{ provider: 'github'|'cloudflare', flow: { hostId: string, email: string|null },
+   *   code: string, clientId: string, origin: string }} args
+   */
+  async #exchangeOnHost({ provider, flow, code, clientId, origin }) {
+    const base = new URL(origin).origin;
+    const reply = await this.dispatch({
+      verb: 'exchange',
+      params: { provider, code, clientId, origin: base },
+      actor: flow.email ?? undefined,
+      preferHost: flow.hostId,
+      // The person authorized in a browser; the state is what proved who they
+      // are, and it has just been spent.
+      requester: null,
+    });
+    if (reply?.error?.code === 'unknown_verb') {
+      return { ok: false, text: 'That host offered a secure sign-in it does not know how to finish. Update the host and try again.' };
+    }
+    if (reply?.ok === false) return { ok: false, text: reply.text || 'The host could not finish the sign-in.' };
+    return { ok: true, text: reply?.text || connectedText({ label: provider === 'github' ? 'GitHub' : 'Cloudflare', expiresIn: null, renewable: false }) };
   }
 
   /**
@@ -1585,21 +1642,10 @@ export class CoordinatorCore {
       if (!renewable) this.log?.warn?.(`${provider}: ${flow.hostId} could not store renewal material: ${deposited?.text}`);
     }
 
-    return {
-      ok: true,
-      // Honest about the hours rather than quiet about them, and honest about
-      // which of the two situations this is. A token that stops working
-      // tomorrow, from a screen that said "connected", is worse than one that
-      // said so — and a token that renews itself should not still be
-      // apologising for a limitation that no longer applies.
-      text: !exchanged.expiresIn
-        ? `Your sessions can use ${label} now.`
-        : renewable
-          ? `Your sessions can use ${label} now. The token lasts ${Math.round(exchanged.expiresIn / 3600)} hours and ` +
-            'that machine renews it by itself from here on.'
-          : `Your sessions can use ${label} now. This token lasts ${Math.round(exchanged.expiresIn / 3600)} hours, and ` +
-            'that machine could not store what it needs to renew it — connect again when it expires.',
-    };
+    // The sentence is shared with the host's own exchange path (connectedText),
+    // because it carries a promise that has to mean the same thing wherever
+    // it was decided.
+    return { ok: true, text: connectedText({ label, expiresIn: exchanged.expiresIn, renewable }) };
   }
 
   /**

@@ -437,9 +437,13 @@ still waits on the broker's minting half. The reasoning is kept because the
 order was the point:
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
-   `code` and `state`, exchanges it for an access + refresh token, and relays
-   the result to the host the flow started from — over the socket that host
-   already holds open. Nothing is stored at the coordinator.
+   `code` and `state`, and relays the code to the host the flow started from —
+   over the socket that host already holds open — for that host to exchange
+   with the PKCE verifier it minted at `connect` and the client secret the
+   config frame gave it (`exchange` in [`intents.md`](./intents.md)). Nothing is
+   stored at the coordinator, and on this path nothing is seen there either: a
+   code without the verifier is worth nothing. A host that predates PKCE
+   offers no challenge, and for it the coordinator exchanges as it always did.
 2. **`state` is the binding**, and it is the security of the whole flow: it
    names the host and the person, it is single-use, it expires in minutes, and
    a callback whose state does not match a flow this coordinator started is

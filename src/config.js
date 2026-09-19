@@ -42,6 +42,48 @@ function bool(name, fallback) {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+/**
+ * Which user namespace sessions get, and why it is not the one asked for.
+ *
+ * `nomap` is refused by podman "for containers created by the root user", and
+ * docker has no such option — so on either box the setting quietly becomes
+ * `host`, and the reason is carried out as a warning rather than swallowed,
+ * because a box whose sessions run as the service user again should say so
+ * on every start. See core/sandbox-userns.js.
+ *
+ * @param {string} requested
+ * @param {string} podmanBin
+ * @param {{ uid?: number|null }} [opts]  the uid this process runs as; exposed
+ *   so the root downgrade is testable off a root box
+ * @returns {{ mode: 'nomap'|'host', note: string }}
+ */
+export function resolveUserns(requested, podmanBin, { uid = typeof process.getuid === 'function' ? process.getuid() : null } = {}) {
+  const wanted = requested === 'host' ? 'host' : 'nomap';
+  if (requested !== 'nomap' && requested !== 'host') {
+    return {
+      mode: 'nomap',
+      note: `AGENT_HUB_SANDBOX_USERNS=${requested} is not a mode this understands (nomap or host); using nomap.`,
+    };
+  }
+  if (wanted === 'host') return { mode: 'host', note: '' };
+  if (uid === 0) {
+    return {
+      mode: 'host',
+      note:
+        'AGENT_HUB_SANDBOX_USERNS=nomap needs a non-root service user — podman refuses it for containers ' +
+        'created by root — so sessions run in the host user namespace: container root IS this process\'s uid. ' +
+        'Run agent-hub as a dedicated user (install.sh does this) to get the separation back.',
+    };
+  }
+  if (path.basename(podmanBin) === 'docker') {
+    return {
+      mode: 'host',
+      note: 'AGENT_HUB_PODMAN_BIN is docker, which has no --userns=nomap; sessions run in the host user namespace.',
+    };
+  }
+  return { mode: 'nomap', note: '' };
+}
+
 /** Comma/whitespace separated list → trimmed non-empty strings. */
 /** @param {string} name */
 function list(name) {
@@ -58,6 +100,7 @@ export function loadConfig(env = process.env) {
 
   const home = os.homedir();
   const stateDir = str('AGENT_HUB_STATE_DIR', '/var/lib/agent-hub');
+  const userns = resolveUserns(str('AGENT_HUB_SANDBOX_USERNS', 'nomap'), str('AGENT_HUB_PODMAN_BIN', 'podman'));
 
   const cfg = {
     // --- where state lives -------------------------------------------------
@@ -242,6 +285,24 @@ export function loadConfig(env = process.env) {
     // Unset means unset. channel.js owns what that falls back to, in one place,
     // and it falls back to stable.
     releaseChannel: str('AGENT_HUB_RELEASE_CHANNEL', ''),
+    // Which user namespace a session runs in. `nomap`: container root is a
+    // subordinate uid that owns nothing on the box. `host`: container root is
+    // the service user — the account that owns the credential and the sockets,
+    // which is what every session got before this setting existed. See
+    // core/sandbox-userns.js. Downgraded to `host` at load time, with a warning
+    // from validateConfig, when the service runs as root (podman refuses nomap
+    // there) or the engine is docker (which has no such option).
+    sandboxUserns: userns.mode,
+    sandboxUsernsNote: userns.note,
+    // WHERE A SESSION MAY REACH. `open` (the default, and what every session
+    // has had): anywhere. `allowlist`: only the hosts in core/egress.js plus
+    // AGENT_HUB_SANDBOX_EGRESS_ALLOW, through a proxy container on an
+    // internal network — SEC-INJECT-2 in docs/security.md, built and opt-in.
+    sandboxEgress: str('AGENT_HUB_SANDBOX_EGRESS', 'open') === 'allowlist' ? 'allowlist' : 'open',
+    sandboxEgressAllow: list('AGENT_HUB_SANDBOX_EGRESS_ALLOW'),
+    sandboxEgressSubnet: str('AGENT_HUB_SANDBOX_EGRESS_SUBNET', '10.89.201.0/24'),
+    sandboxEgressImage: str('AGENT_HUB_SANDBOX_EGRESS_IMAGE', 'localhost/agent-egress:latest'),
+    sandboxEgressContainerfile: str('AGENT_HUB_SANDBOX_EGRESS_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'egress', 'Containerfile')),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
@@ -428,6 +489,10 @@ export function validateConfig(cfg) {
       // that tells them.
       (cfg.sandboxAllowUnsafeArgs ? warnings : errors).push(unsafeSandboxMessage(unsafe));
     }
+    // The namespace the sessions actually get, when it is not the one asked
+    // for. A warning and not an error: the box still works, it just works the
+    // way it did before nomap existed, and somebody should be able to read why.
+    if (cfg.sandboxUsernsNote) warnings.push(cfg.sandboxUsernsNote);
   }
 
   // A control surface reachable off-box with no token is remote shell access

@@ -1,0 +1,19 @@
+# The egress proxy: the one way out of the internal network sessions sit on.
+#
+# tinyproxy on Alpine, and nothing else. It answers CONNECT to port 443 for
+# the hostnames in /etc/tinyproxy/allow.list and refuses everything else —
+# both files are bind-mounted from the host, written by agent-hub from
+# AGENT_HUB_SANDBOX_EGRESS_ALLOW, so this image carries no policy of its own
+# and a changed allowlist is a restart of the container, not a rebuild. See
+# src/core/egress.js.
+#
+# It does not terminate TLS. A CONNECT tunnel is bytes in, bytes out; the
+# session's own trust store decides who it is talking to, and no CA bundle is
+# injected anywhere.
+FROM docker.io/library/alpine:3.20
+
+RUN apk add --no-cache tinyproxy
+
+# Foreground, with the config the host mounted. `-d` keeps it in the
+# foreground so podman owns the process; logs go to the container's stdout.
+ENTRYPOINT ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]
