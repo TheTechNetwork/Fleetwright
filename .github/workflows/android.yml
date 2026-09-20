@@ -77,7 +77,7 @@ jobs:
       - uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: '25.0.4+7.0.LTS'
       - uses: android-actions/setup-android@v4.0.4
         with:
           # Installed explicitly rather than left to AGP's auto-download, so a
@@ -160,7 +160,7 @@ jobs:
       - uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: '25.0.4+7.0.LTS'
       - uses: android-actions/setup-android@v4.0.4
         with:
           # Installed explicitly rather than left to AGP's auto-download, so a
