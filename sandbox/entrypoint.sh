@@ -73,9 +73,18 @@ fi
 # broker is broken.
 rm -f /root/.claude/.secrets.env
 
-# The SessionStart hook, registered the same way install.sh does it on a host,
-# but pointed at the unix socket. Merged with node rather than rewritten, so a
-# session that adds its own hooks keeps them across resumes.
+# The hooks, registered the same way install.sh does it on a host, but pointed
+# at the unix socket. Merged with node rather than rewritten, so a session that
+# adds its own hooks keeps them across resumes.
+#
+# SessionStart reports the conversation uuid, as it always has. The rest say
+# what the session is DOING — working, waiting on a person, back at its prompt,
+# gone — so the host stops guessing that off the pane (src/core/activity.js).
+# The event name and, for Notification, the matcher are passed as arguments:
+# they are this registration's words, and the hook should not have to parse
+# them back out of a payload whose field names belong to the CLI's release
+# cycle. A five-second timeout on each, so a socket that has gone away can
+# never hold a turn open.
 if [ -S /run/hub.sock ]; then
   node <<'NODE'
 const fs = require('fs');
@@ -84,11 +93,34 @@ const cmd = 'agent-session-hook';
 let settings = {};
 try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first run */ }
 settings.hooks ||= {};
-settings.hooks.SessionStart ||= [];
-if (!JSON.stringify(settings.hooks.SessionStart).includes(cmd)) {
-  settings.hooks.SessionStart.push({ hooks: [{ type: 'command', command: cmd }] });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+// [event, matcher, argument words]
+const wanted = [
+  ['SessionStart', null, ''],
+  ['UserPromptSubmit', null, 'UserPromptSubmit'],
+  ['PostToolUse', null, 'PostToolUse'],
+  ['PermissionRequest', null, 'PermissionRequest'],
+  ['Notification', 'permission_prompt', 'Notification permission_prompt'],
+  ['Notification', 'agent_needs_input', 'Notification agent_needs_input'],
+  ['Notification', 'idle_prompt', 'Notification idle_prompt'],
+  ['Stop', null, 'Stop'],
+  ['StopFailure', null, 'StopFailure'],
+  ['SessionEnd', null, 'SessionEnd'],
+];
+let changed = false;
+for (const [event, matcher, words] of wanted) {
+  const command = words ? `${cmd} ${words}` : cmd;
+  settings.hooks[event] ||= [];
+  const present = settings.hooks[event].some((entry) =>
+    (matcher ? entry?.matcher === matcher : !entry?.matcher)
+    && Array.isArray(entry?.hooks) && entry.hooks.some((h) => h?.command === command));
+  if (present) continue;
+  settings.hooks[event].push({
+    ...(matcher ? { matcher } : {}),
+    hooks: [{ type: 'command', command, ...(words ? { timeout: 5 } : {}) }],
+  });
+  changed = true;
 }
+if (changed) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
 NODE
 fi
 

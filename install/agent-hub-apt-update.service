@@ -1,0 +1,19 @@
+[Unit]
+Description=agent-hub — refresh the package lists, on request from the hub
+Documentation=https://github.com/ambersecurityinc/agent-hub
+
+[Service]
+# The read half of agent-hub-upgrade.service, and its own unit for the same
+# reason that one exists: `apt-get update` needs root and writes under
+# /var/lib/apt, and the hub's grant is "start this named unit" rather than
+# "run apt-get with these arguments". It fetches metadata and changes nothing
+# else, which is why the hub may run it off a health report.
+Type=oneshot
+User=root
+Environment=DEBIAN_FRONTEND=noninteractive
+ExecStart=/usr/bin/apt-get update
+TimeoutStartSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-hub-apt-update

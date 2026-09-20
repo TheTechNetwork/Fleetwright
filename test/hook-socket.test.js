@@ -22,6 +22,8 @@ import {
   HOOK_PATH,
   SECRET_PATH,
   CONTAINER_SOCKET_PATH,
+  SESSION_EVENT_PATH,
+  probeSaysStale,
 } from '../src/core/hook-socket.js';
 
 const UUID = 'a1b2c3d4-1111-2222-3333-444455556666';
@@ -348,6 +350,92 @@ test('a socket with a LIVE listener is never stolen', async (t) => {
   t.after(() => second.closeAll());
 
   await assert.rejects(() => second.open('bigjob'), /already in use/);
+});
+
+// --- the lifecycle route ------------------------------------------------------
+//
+// Stop, PermissionRequest and the rest of src/core/activity.js, on the same
+// socket and under the same rule: the socket names the session, the body says
+// only what happened.
+
+/** @param {import('node:test').TestContext} t */
+function eventHarness(t) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hook-sock-'));
+  /** @type {Array<{name: string, event: string, detail: string|null, at: number}>} */
+  const events = [];
+  const server = new HookSocketServer({
+    dir,
+    onSessionStart: () => ({ ok: true }),
+    onSessionEvent: (e) => {
+      events.push(e);
+      return { ok: true, phase: 'ready' };
+    },
+    logger: { info: () => {}, warn: () => {} },
+  });
+  t.after(async () => {
+    await server.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { dir, server, events };
+}
+
+test('a lifecycle event records against the socket it arrived on, with a bounded detail', async (t) => {
+  const { server, events } = eventHarness(t);
+  const sock = await server.open('bigjob');
+
+  const r = await rawPost(sock, JSON.stringify({ event: 'PermissionRequest', detail: 'Bash\nsecond line' }), { path: SESSION_EVENT_PATH });
+
+  assert.equal(r.status, 200);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].name, 'bigjob', 'the socket is the authority');
+  assert.equal(events[0].event, 'PermissionRequest');
+  assert.equal(events[0].detail, 'Bash', 'one line, no more');
+  assert.equal(typeof events[0].at, 'number');
+});
+
+test('an event this host does not know is refused, and records nothing', async (t) => {
+  // An event the table has no reading for is one it must not pretend to
+  // understand: PreToolUse is real, and deliberately not registered.
+  const { server, events } = eventHarness(t);
+  const sock = await server.open('bigjob');
+
+  const r = await rawPost(sock, JSON.stringify({ event: 'PreToolUse' }), { path: SESSION_EVENT_PATH });
+
+  assert.equal(r.status, 400);
+  assert.match(String(JSON.parse(r.text).error), /not a session event/);
+  assert.equal(events.length, 0);
+});
+
+test('a host with no event reader answers 404, so an older hub is not an error', async (t) => {
+  const { server } = harness(t);
+  const sock = await server.open('bigjob');
+
+  const r = await rawPost(sock, JSON.stringify({ event: 'Stop' }), { path: SESSION_EVENT_PATH });
+
+  assert.equal(r.status, 404);
+});
+
+test('the lifecycle route is POST only', async (t) => {
+  const { server, events } = eventHarness(t);
+  const sock = await server.open('bigjob');
+
+  const r = await rawPost(sock, '', { method: 'GET', path: SESSION_EVENT_PATH });
+
+  assert.equal(r.status, 405);
+  assert.equal(events.length, 0);
+});
+
+test('a probe the hub is not allowed to make is a live socket, not a stale one', () => {
+  // Under --userns=nomap the socket is chowned to the session's uid by `:U`,
+  // so the hub's own probe gets EACCES on a socket a running container is
+  // talking to. Unlinking on that would be the hijack this file's stale-socket
+  // test guards against, performed by the hub on itself.
+  assert.equal(probeSaysStale({ code: 'ECONNREFUSED' }), true, 'a file with nothing behind it');
+  assert.equal(probeSaysStale({ code: 'ENOENT' }), true, 'raced away since the stat');
+  assert.equal(probeSaysStale({ code: 'EACCES' }), false);
+  assert.equal(probeSaysStale({ code: 'EPERM' }), false);
+  assert.equal(probeSaysStale({ code: 'ETIMEDOUT' }), false, 'anything else errs towards live');
+  assert.equal(probeSaysStale(undefined), false);
 });
 
 test('opening the same session twice is idempotent', async (t) => {

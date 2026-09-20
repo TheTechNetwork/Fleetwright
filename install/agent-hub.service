@@ -81,13 +81,27 @@ ProtectKernelModules=yes
 # purpose. ProtectSystem was defending the door that the sudoers rule holds open
 # on purpose.
 #
-# THE HARDENING CAN COME BACK, AND HERE IS HOW. Give the upgrade its own
-# oneshot unit with no sandboxing, and grant this service `systemctl start
-# agent-hub-upgrade.service` and nothing else. agent-hub keeps ProtectSystem,
-# dpkg gets a clean namespace, and the sudoers grant narrows from "run apt as
-# root" to "start one named unit". That is the right shape and it is not built —
-# it changes how output is captured and how failures are detected, and this box
-# has been unable to take a security update through four rounds of this.
+# THE HARDENING CAN COME BACK, AND HALF OF THE WAY IS NOW BUILT. The upgrade
+# has its own oneshot unit with no sandboxing — install/agent-hub-upgrade.service
+# — and the sudoers grant has narrowed from "run apt as root" to `systemctl
+# start` of that unit and its apt-update sibling, and nothing else. dpkg gets a
+# clean namespace, the output lands in the journal under the unit's name, and
+# upgrades.js reads it from there. The door the grant held open is closed.
+#
+# WHAT IS STILL `no`, AND WHY. `full` was rejected three times above, every
+# time on dpkg — and dpkg is no longer in this namespace. Nothing measured says
+# `full` breaks podman; nothing measured says it does not, either, and this
+# unit has taken the fleet down once with a directive that was reasoned
+# rather than run (ProtectProc, below). So `full` waits for the one line that
+# decides it, on a box, before it goes in:
+#
+#   systemd-run --quiet --wait --pipe --property=ProtectSystem=full \
+#     podman run --rm docker.io/library/alpine:latest true
+#
+# If that exits 0, change this line to `full` and move this paragraph to the
+# measured list. Until then the UNPRIVILEGED USER and ordinary file
+# permissions on /usr and /etc are what stand between this service and the
+# system, which is what they were doing all along.
 ProtectSystem=no
 RestrictRealtime=yes
 LockPersonality=yes

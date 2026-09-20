@@ -13,10 +13,13 @@
 // into it — which is why resume-dialog detection, the Remote Control retry and
 // peek all keep working untouched. Validated on hardware, design.md §10.
 //
-// Everything here is argv-array spawnSync, never a shell string, for the same
-// reason tmux.js is: a session name must never be able to become a command.
+// Everything here is an argv array, never a shell string, for the same reason
+// tmux.js is: a session name must never be able to become a command. The
+// quick calls are spawnSync; the ones that take minutes — build, pull, the
+// start probe — go through podmanAsync, so a build no longer stops the box
+// answering while it runs.
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -25,6 +28,7 @@ import { Accounts, emailFromActor, extractOauthAccount, rowForActor, operatorAcc
 import { readCredentialState } from './claude-credential.js';
 import { Connections } from './connectors.js';
 import { sessionImage, variantOf, pinnedByEnv } from './sandbox-variant.js';
+import { usernsArgs } from './sandbox-userns.js';
 
 // A first build pulls a base image, apt-installs a toolchain and npm-installs
 // the CLI. Minutes, not seconds — and a timeout shorter than the work turns a
@@ -82,6 +86,78 @@ export function podman(cfg, args, { timeout, input } = {}) {
  */
 function exists(cfg, kind, id) {
   return podman(cfg, [kind, 'inspect', id]).status === 0;
+}
+
+/**
+ * The same call, off the event loop.
+ *
+ * WHICH CALLS GET THIS, AND WHY NOT ALL OF THEM. `podman()` above is
+ * synchronous, and for a `volume inspect` that answers in tens of
+ * milliseconds that is the simpler shape and the one every caller was written
+ * against. An image BUILD is minutes, a PULL is however long the registry
+ * takes, and the start probe is a container coming up — and for the whole of
+ * that time a synchronous call holds the event loop, so `/api/state` does not
+ * answer, the sidecar's health frame does not go out, and the coordinator
+ * marks the host degraded for the length of a build. The old comment on the
+ * build said it "blocks the session that asked for it, which is the point";
+ * it blocked the box. docs/recommendations-review.md §8.
+ *
+ * So the long ones come here, and everything that awaits them was already
+ * async or had one caller that was. Same result shape as `podman()`, so a
+ * caller reads the answer the same way; same stdin rule, for the same reason.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string[]} args
+ * @param {{ timeout?: number, input?: string }} [opts]
+ * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
+ */
+export function podmanAsync(cfg, args, { timeout, input } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    /** @param {{ status: number, stdout: string, stderr: string }} r */
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(r);
+    };
+    // Its own process group, so a timeout can kill the whole tree: a `podman
+    // build` is podman plus buildah plus whatever RUN line was executing, and
+    // killing only the parent leaves the rest holding the pipes open — the
+    // `close` event then waits on a grandchild nobody asked to keep going.
+    const child = spawn(cfg.podmanBin, args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    let timedOut = false;
+    // A timeout kills rather than abandons: a build left running after its
+    // caller gave up would still be eating the box, and would then race the
+    // next attempt for the same tag.
+    const timer = timeout
+      ? setTimeout(() => {
+          timedOut = true;
+          stderr += `\n${cfg.podmanBin} ${args[0]} timed out after ${Math.round(timeout / 1000)}s`;
+          try {
+            if (child.pid) process.kill(-child.pid, 'SIGKILL');
+            else child.kill('SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        }, timeout)
+      : null;
+    // The same 8MB bound as the synchronous call: a truncated read that looks
+    // successful is worse than a refusal.
+    const cap = 8 * 1024 * 1024;
+    child.stdout.on('data', (d) => { if (stdout.length < cap) stdout += d; });
+    child.stderr.on('data', (d) => { if (stderr.length < cap) stderr += d; });
+    child.on('error', (e) => finish({ status: 1, stdout, stderr: stderr || e.message }));
+    // After a kill, `exit` is the event to settle on: `close` waits for every
+    // holder of the pipes, and the point of the kill is not to wait.
+    child.on('exit', () => { if (timedOut) finish({ status: 1, stdout, stderr }); });
+    child.on('close', (code) => finish({ status: code === null ? 1 : code, stdout, stderr }));
+    child.stdin.on('error', () => { /* the child exited before reading; the close event carries the answer */ });
+    if (input === undefined) child.stdin.end();
+    else child.stdin.end(input);
+  });
 }
 
 /** @param {import('../config.js').Config} cfg */
@@ -230,10 +306,13 @@ export function sandboxImageExists(cfg) {
  * else names a registry, so it gets pulled — building our Containerfile and
  * tagging it with somebody else's name would be a lie.
  *
+ * ASYNC, because a build is minutes and a pull is a registry away; see
+ * podmanAsync for what a synchronous minute costs the rest of the box.
+ *
  * @param {import('../config.js').Config} cfg
- * @returns {{ ok: boolean, built?: boolean, message?: string }}
+ * @returns {Promise<{ ok: boolean, built?: boolean, message?: string }>}
  */
-export function ensureSandboxImage(cfg, { refresh = false } = {}) {
+export async function ensureSandboxImage(cfg, { refresh = false } = {}) {
   // `refresh` is what /update passes. Without it this returns on the first
   // line for the entire life of a box: the image was treated as a one-time
   // install, and it is a moving dependency — the session entrypoint, the
@@ -246,7 +325,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   // changed it from a phone while the build was running.
   const image = sessionImage(cfg);
   if (refresh && !image.startsWith('localhost/')) {
-    const pulled = refreshSandboxImage(cfg);
+    const pulled = await refreshSandboxImage(cfg);
     // A failed refresh is NOT fatal. The box has a working image; the network
     // is what failed. Falling through to the existence check leaves it running
     // on what it has rather than breaking an update over a registry hiccup.
@@ -266,7 +345,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
   const isLocal = image.startsWith('localhost/');
   if (!isLocal) {
     log.info(`sandbox: pulling ${image}`);
-    const pulled = podman(cfg, ['pull', image]);
+    const pulled = await podmanAsync(cfg, ['pull', image]);
     if (pulled.status === 0) return { ok: true, built: true };
     return { ok: false, message: `could not pull ${image}: ${pulled.stderr.trim().slice(0, 300)}` };
   }
@@ -278,12 +357,14 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
     };
   }
 
-  // This blocks the session that asked for it, which is the point — it is the
-  // difference between waiting once and being told to go and do it yourself.
+  // This makes the session that asked for it wait, which is the point — it is
+  // the difference between waiting once and being told to go and do it
+  // yourself. It makes ONLY that session wait: the build runs off the event
+  // loop, so the health frame, the API and every other session carry on.
   log.warn(`sandbox: ${image} is not built — building it now, this takes a few minutes`);
   const context = path.dirname(cfg.sandboxContainerfile);
-  const built = spawnSync(
-    cfg.podmanBin,
+  const built = await podmanAsync(
+    cfg,
     // --build-arg, because a LOCAL build of the browser variant is the same
     // Containerfile with the conditional layer switched on. Without this a box
     // that builds rather than pulls would tag a minimal image `:web` and every
@@ -291,7 +372,7 @@ export function ensureSandboxImage(cfg, { refresh = false } = {}) {
     // saying it should have worked.
     ['build', '-t', image, ...(variantOf(image) === 'browser' ? ['--build-arg', 'WITH_CHROMIUM=1'] : []),
       '-f', cfg.sandboxContainerfile, context],
-    { encoding: 'utf8', timeout: BUILD_TIMEOUT_MS },
+    { timeout: BUILD_TIMEOUT_MS },
   );
   if (built.status === 0) {
     log.info(`sandbox: built ${image}`);
@@ -350,9 +431,9 @@ function volumeExists(cfg, volume) {
  * session slowly for a day.
  *
  * @param {import('../config.js').Config} cfg
- * @returns {{ changed: boolean }}
+ * @returns {Promise<{ changed: boolean }>}
  */
-export function refreshSandboxImageIfStale(cfg) {
+export async function refreshSandboxImageIfStale(cfg) {
   const every = cfg.sandboxRefreshMs ?? 0;
   if (!every || String(sessionImage(cfg) || '').startsWith('localhost/')) return { changed: false };
   const stamp = path.join(cfg.stateDir, '.sandbox-image-checked');
@@ -365,7 +446,7 @@ export function refreshSandboxImageIfStale(cfg) {
   }
   let changed = false;
   try {
-    const r = refreshSandboxImage(cfg, { timeout: 60_000 });
+    const r = await refreshSandboxImage(cfg, { timeout: 60_000 });
     changed = r.ok && r.changed;
     if (!r.ok) log.warn(`sandbox: image check failed, starting on the image already here: ${r.message}`);
   } catch (e) {
@@ -388,15 +469,15 @@ export function refreshSandboxImageIfStale(cfg) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ timeout?: number }} [opts]
- * @returns {{ ok: boolean, changed: boolean, message?: string }}
+ * @returns {Promise<{ ok: boolean, changed: boolean, message?: string }>}
  */
-export function refreshSandboxImage(cfg, { timeout } = {}) {
+export async function refreshSandboxImage(cfg, { timeout } = {}) {
   const digest = () => {
     const r = podman(cfg, ['image', 'inspect', '--format', '{{.Digest}}', sessionImage(cfg)]);
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
   const before = digest();
-  const pulled = podman(cfg, ['pull', sessionImage(cfg)], { timeout });
+  const pulled = await podmanAsync(cfg, ['pull', sessionImage(cfg)], { timeout });
   if (pulled.status !== 0) {
     return { ok: false, changed: false, message: pulled.stderr.trim().slice(0, 200) };
   }
@@ -472,11 +553,11 @@ export function sandboxImageStatus(cfg) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ timeout?: number }} [opts]
- * @returns {boolean}
+ * @returns {Promise<boolean>}
  */
-export function canStartSession(cfg, { timeout = 30_000 } = {}) {
+export async function canStartSession(cfg, { timeout = 30_000 } = {}) {
   try {
-    const r = podman(cfg, ['run', '--rm', '--network=none', sessionImage(cfg), 'true'], { timeout });
+    const r = await podmanAsync(cfg, ['run', '--rm', '--network=none', sessionImage(cfg), 'true'], { timeout });
     return r.status === 0;
   } catch {
     return false;
@@ -502,9 +583,9 @@ export function canStartSession(cfg, { timeout = 30_000 } = {}) {
  *   account its volume holds, and the actor who started it. See
  *   refreshSeededCredentials for why both are needed and why neither is the
  *   actor pressing resume.
- * @returns {{ ok: boolean, message?: string, account?: string|null }}
+ * @returns {Promise<{ ok: boolean, message?: string, account?: string|null }>}
  */
-export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
+export async function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
   }
@@ -513,9 +594,9 @@ export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorde
   // entirely, and keeps the image it began with.
   const { claude: claudeVol, work: workVol } = sandboxNames(name);
   const creating = !volumeExists(cfg, claudeVol) || !volumeExists(cfg, workVol);
-  if (creating) refreshSandboxImageIfStale(cfg);
+  if (creating) await refreshSandboxImageIfStale(cfg);
 
-  const image = ensureSandboxImage(cfg);
+  const image = await ensureSandboxImage(cfg);
   if (!image.ok) return { ok: false, message: image.message };
 
   const { claude, work } = sandboxNames(name);
@@ -525,7 +606,14 @@ export function ensureSandboxVolumes(cfg, name, actor = null, { account: recorde
   let fresh = false;
 
   for (const volume of [claude, work]) {
-    if (volumeExists(cfg, volume)) continue;
+    if (volumeExists(cfg, volume)) {
+      // A volume from before sessions had their own namespace is owned by the
+      // service uid, which a nomap container does not map. Brought across
+      // once, here, rather than left for the first resume that comes up
+      // unable to read its own workspace.
+      adoptVolumeOwnership(cfg, volume);
+      continue;
+    }
     const created = podman(cfg, ['volume', 'create', volume]);
     if (created.status !== 0) {
       return { ok: false, message: `could not create volume ${volume}: ${created.stderr.trim().slice(0, 200)}` };
@@ -670,7 +758,7 @@ export function credentialSourceForAccount(cfg, account) {
  */
 export function volumeAccount(cfg, volume) {
   const r = podman(cfg, [
-    'run', '--rm', '-v', `${volume}:/dest:ro`, sessionImage(cfg),
+    'run', '--rm', ...usernsArgs(cfg), '-v', `${volume}:/dest:ro`, '--network', 'none', sessionImage(cfg),
     'sh', '-c', 'cat /dest/.oauth-account.json 2>/dev/null || true',
   ]);
   if (r.status !== 0) return null;
@@ -726,7 +814,7 @@ function seedHouseRules(cfg, volume) {
 
   const r = podman(
     cfg,
-    ['run', '--rm', '-i', '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg),
+    ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg),
       'sh', '-c', 'cat > /dest/CLAUDE.md && chmod 644 /dest/CLAUDE.md'],
     { input: rules.text },
   );
@@ -792,11 +880,20 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // every start — the newer CLI reads logged-in-ness off the PAIR, and a
   // credential without its oauthAccount is a login that fails while every
   // file involved is genuine.
-  const mounts = ['-v', `${volume}:/dest`, '-v', `${source}:/seed/.credentials.json:ro`];
-  let copy = 'cp /seed/.credentials.json /dest/.credentials.json && chmod 600 /dest/.credentials.json';
-  if (picked.accountMeta) {
-    mounts.push('-v', `${picked.accountMeta}:/seed/.oauth-account.json:ro`);
-    copy += ' && cp /seed/.oauth-account.json /dest/.oauth-account.json && chmod 600 /dest/.oauth-account.json';
+  //
+  // READ HERE, WRITTEN OVER STDIN — not bind-mounted. The host's credential is
+  // a 0600 file owned by the service user, and under --userns=nomap that is a
+  // uid the container does not map, so a `cp` inside could not open it. This
+  // process can, so it reads the bytes and hands them to the container the
+  // same way the house rules travel: on stdin, where nothing parses them as a
+  // command line and `ps` never shows them. See seedScript for the shape.
+  /** @type {Array<{ name: string, data: Buffer }>} */
+  const files = [];
+  try {
+    files.push({ name: '.credentials.json', data: readFileSync(source) });
+    if (picked.accountMeta) files.push({ name: '.oauth-account.json', data: readFileSync(picked.accountMeta) });
+  } catch (e) {
+    return { ok: false, message: `could not read the credential to seed into ${volume}: ${/** @type {Error} */ (e).message}` };
   }
   // The other credentials — GitHub, Cloudflare, whatever gets added — ARE NOT
   // SEEDED ANY MORE. They used to be copied in as `.secrets.env` and exported
@@ -807,15 +904,93 @@ function seedCredentials(cfg, volume, picked, actor = null) {
   // credential-broker.js. Nothing about the Claude credential changes — that
   // one is read by a CLI we do not control, from a path it expects, so it is
   // still a file in the volume.
-  const r = podman(cfg, ['run', '--rm', ...mounts, sessionImage(cfg), 'sh', '-c', copy]);
+  const r = podman(
+    cfg,
+    ['run', '--rm', '-i', ...usernsArgs(cfg), '-v', `${volume}:/dest`, '--network', 'none', sessionImage(cfg), 'sh'],
+    { input: seedScript(files) },
+  );
   if (r.status !== 0) {
     return {
       ok: false,
-      message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}\n(is ${source} readable?)`,
+      message: `could not seed credentials into ${volume}: ${r.stderr.trim().slice(0, 200)}`,
     };
   }
   log.info(`sandbox: seeded ${picked.account} credentials into ${volume}`);
   return { ok: true, account: picked.account };
+}
+
+/**
+ * The shell that writes seeded files into a volume, read by `sh` from stdin.
+ *
+ * Each file is base64 on the way in, which keeps the script a fixed shape no
+ * matter what the JSON contains: the only characters between the quotes are
+ * from the base64 alphabet, so there is nothing a credential could say that
+ * ends the quote early. `umask 077` before the first write and an explicit
+ * `chmod 600` after it, so the file is never readable at any point of its
+ * existence rather than only at the end.
+ *
+ * Exported for the test that pins that property, because the container that
+ * would prove it does not run in CI.
+ *
+ * @param {Array<{ name: string, data: Buffer }>} files  basenames under /dest
+ */
+export function seedScript(files) {
+  const lines = ['set -e', 'umask 077'];
+  for (const { name, data } of files) {
+    if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error(`not a seedable name: ${name}`);
+    lines.push(`printf '%s' '${data.toString('base64')}' | base64 -d > '/dest/${name}'`);
+    lines.push(`chmod 600 '/dest/${name}'`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Bring a volume written under the host user namespace into the session one.
+ *
+ * Before sessions had their own namespace, every file in a volume was owned by
+ * the service uid on the host. Under `nomap` that is the one uid a session
+ * does not map, so a resumed session would find its own workspace and
+ * credential owned by nobody it can be. Podman only chowns a volume on FIRST
+ * use, so this is not something a restart fixes on its own.
+ *
+ * `podman unshare` runs in the rootless namespace every container is built
+ * from: the service uid appears there as 0 and the first subordinate uid as 1,
+ * which is the uid container root becomes under `nomap`. So a mount point
+ * that stats as 0 is a volume from before, and `chown -R 1:1` is the move.
+ * A mount point that already stats as anything else is left exactly alone:
+ * guessing at ownership is how a workspace gets handed to the wrong uid.
+ *
+ * NEVER FAILS A START. A volume this could not read or move is the volume the
+ * session had yesterday; refusing to resume it would be a worse outcome than
+ * the unreadable workspace this exists to prevent, and the warning says which
+ * volume and why.
+ *
+ * NOT YET MEASURED ON HARDWARE. The 0/1 mapping is podman's documented
+ * arrangement for `unshare` and `nomap`; the test that closes the loop is a
+ * session reading /proc/self/uid_map, which docs/security.md G4 names.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {string} volume
+ * @returns {{ adopted: boolean, why?: string }}
+ */
+export function adoptVolumeOwnership(cfg, volume) {
+  if (cfg.sandboxUserns !== 'nomap') return { adopted: false, why: 'sessions run in the host namespace' };
+  const mp = podman(cfg, ['volume', 'inspect', '--format', '{{.Mountpoint}}', volume]);
+  const mountpoint = mp.status === 0 ? mp.stdout.trim() : '';
+  if (!mountpoint) return { adopted: false, why: 'no mountpoint' };
+  const owner = podman(cfg, ['unshare', 'stat', '-c', '%u', mountpoint]);
+  if (owner.status !== 0) {
+    log.warn(`sandbox: could not read who owns ${volume}: ${owner.stderr.trim().slice(0, 200)}`);
+    return { adopted: false, why: 'could not stat the volume' };
+  }
+  if (owner.stdout.trim() !== '0') return { adopted: false, why: 'already in the session namespace' };
+  const moved = podman(cfg, ['unshare', 'chown', '-R', '1:1', mountpoint]);
+  if (moved.status !== 0) {
+    log.warn(`sandbox: ${volume} is owned by the service user and could not be moved into the session namespace: ${moved.stderr.trim().slice(0, 200)}`);
+    return { adopted: false, why: 'chown failed' };
+  }
+  log.info(`sandbox: moved ${volume} into the session user namespace (it predates --userns=nomap)`);
+  return { adopted: true };
 }
 
 /**

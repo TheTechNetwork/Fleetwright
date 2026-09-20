@@ -1686,7 +1686,7 @@ export const COMMANDS = {
       }
 
       const restart = flags.has('restart') || flags.has('apply');
-      const r = runUpdate(ctx.cfg, { restart, actor: ctx.actor });
+      const r = await runUpdate(ctx.cfg, { restart, actor: ctx.actor });
 
       // Offer the restart as a tap rather than making someone remember a flag.
       // Only when there is something to apply and we can actually do it.

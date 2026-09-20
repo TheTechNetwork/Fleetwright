@@ -29,7 +29,7 @@ test('a queue never holds a verb that carries a credential', () => {
     // word too, and matching that matched an empty list.
     const list = /(static let holdable: Set<String> = \[[^\]]*\])|(val HOLDABLE = setOf\([^)]*\))/is.exec(source)?.[0] ?? '';
     assert.ok(list, `${name}: no holdable list found`);
-    for (const forbidden of ['link', 'renew', 'connect']) {
+    for (const forbidden of ['link', 'renew', 'connect', 'exchange']) {
       assert.equal(
         new RegExp(`["']${forbidden}["']`).test(list),
         false,

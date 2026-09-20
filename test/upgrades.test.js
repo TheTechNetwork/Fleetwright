@@ -113,10 +113,11 @@ test('with upgrades off, the refusal is the instructions', () => {
   // see it.
   const r = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/apt-get update, \/usr\/bin\/apt-get -y upgrade/);
+  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/systemctl start agent-hub-upgrade\.service, \/usr\/bin\/systemctl start agent-hub-apt-update\.service/);
   assert.match(r.text, /AGENT_HUB_SYSTEM_UPGRADE=1/);
   assert.match(r.text, /cannot install, remove or run anything else/);
-  assert.match(r.text, /apt-get update/, 'the refresh is in the rule, because this box never does it itself');
+  assert.match(r.text, /apt-get update/, 'the refresh is in the grant, because this box never does it itself');
+  assert.match(r.text, /install -m 0644 install\/agent-hub-upgrade\.service/, 'a grant to start a unit that is not installed permits nothing');
 });
 
 test('stale package lists are reported, because "no updates" would be a lie', () => {

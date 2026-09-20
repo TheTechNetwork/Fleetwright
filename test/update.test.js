@@ -70,7 +70,7 @@ function deployment(t) {
 
 // --- reading the state ------------------------------------------------------
 
-test('a checkout reports its branch and head', (t) => {
+test('a checkout reports its branch and head', async (t) => {
   const { cfg, clone } = deployment(t);
   const s = updateStatus(cfg);
 
@@ -81,7 +81,7 @@ test('a checkout reports its branch and head', (t) => {
   assert.deepEqual(s.dirty, []);
 });
 
-test('somewhere that is not a checkout says so, rather than failing at git', (t) => {
+test('somewhere that is not a checkout says so, rather than failing at git', async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'notrepo-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -93,11 +93,11 @@ test('somewhere that is not a checkout says so, rather than failing at git', (t)
 
 // --- pulling ----------------------------------------------------------------
 
-test('a deployment that is behind is fast-forwarded, and says what arrived', (t) => {
+test('a deployment that is behind is fast-forwarded, and says what arrived', async (t) => {
   const { cfg, pushUpstream } = deployment(t);
   pushUpstream('the fix everyone is waiting for');
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.ok, true);
   assert.equal(r.changed, true);
@@ -105,20 +105,20 @@ test('a deployment that is behind is fast-forwarded, and says what arrived', (t)
   assert.match(r.message, /[0-9a-f]{7} → [0-9a-f]{7}/);
 });
 
-test('an up-to-date deployment changes nothing and says nothing happened', (t) => {
+test('an up-to-date deployment changes nothing and says nothing happened', async (t) => {
   const { cfg } = deployment(t);
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.ok, true);
   assert.equal(r.changed, false);
   assert.match(r.message, /Already up to date/);
 });
 
-test('several new commits are summarised, not dumped', (t) => {
+test('several new commits are summarised, not dumped', async (t) => {
   const { cfg, pushUpstream } = deployment(t);
   for (let i = 1; i <= 14; i++) pushUpstream(`commit number ${i}`);
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.changed, true);
   assert.match(r.message, /…and 4 more/, 'a chat message is not a place for an unbounded log');
@@ -127,14 +127,14 @@ test('several new commits are summarised, not dumped', (t) => {
 
 // --- what it refuses to do --------------------------------------------------
 
-test('a dirty tree is refused, with the files listed', (t) => {
+test('a dirty tree is refused, with the files listed', async (t) => {
   // Someone is editing the box directly: mid-debug or mid-hotfix. Discarding
   // that from a chat message is not a recoverable mistake.
   const { cfg, clone, pushUpstream } = deployment(t);
   pushUpstream('upstream moved on');
   writeFileSync(path.join(clone, 'README.md'), 'edited by hand on the box\n');
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.ok, false);
   assert.equal(r.changed, false);
@@ -146,7 +146,7 @@ test('a dirty tree is refused, with the files listed', (t) => {
   assert.equal(git(clone, ['log', '--oneline']).stdout.split('\n').filter(Boolean).length, 1);
 });
 
-test('a diverged deployment fails loudly rather than merging', (t) => {
+test('a diverged deployment fails loudly rather than merging', async (t) => {
   // --ff-only. A merge commit nobody reviewed, created from a chat message, is
   // how a deployment's history stops matching anything anyone can reason about.
   const { cfg, clone, pushUpstream } = deployment(t);
@@ -155,24 +155,24 @@ test('a diverged deployment fails loudly rather than merging', (t) => {
   git(clone, ['add', '-A']);
   git(clone, ['commit', '-qm', 'local hotfix']);
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.ok, false);
   assert.match(r.message, /local commits that are not upstream/);
   assert.ok(!git(clone, ['log', '--oneline']).stdout.includes('Merge'), 'must not have merged');
 });
 
-test('an unreachable remote is reported, not swallowed', (t) => {
+test('an unreachable remote is reported, not swallowed', async (t) => {
   const { cfg, clone } = deployment(t);
   git(clone, ['remote', 'set-url', 'origin', '/definitely/not/a/repo']);
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.ok, false);
   assert.match(r.message, /git pull failed/);
 });
 
-test("git's \"insufficient permission\" counts as the ownership problem", () => {
+test("git's \"insufficient permission\" counts as the ownership problem", async () => {
   // The exact porcelain from a box where somebody ran `sudo git pull` once.
   // Git does NOT say "permission denied" here — matching only that phrase
   // left this branch dead for the failure it was written for, and the
@@ -206,17 +206,17 @@ test("git's \"insufficient permission\" counts as the ownership problem", () => 
 
 // --- restarting -------------------------------------------------------------
 
-test('an update that changed nothing does not restart on its own', (t) => {
+test('an update that changed nothing does not restart on its own', async (t) => {
   const { cfg } = deployment(t);
   let exited = false;
 
-  const r = runUpdate(cfg, { exit: () => (exited = true) });
+  const r = await runUpdate(cfg, { exit: () => (exited = true) });
 
   assert.equal(r.restarting, false);
   assert.equal(exited, false, 'restarting to apply nothing is pure downtime');
 });
 
-test('an explicit restart still restarts when the pull found nothing', (t) => {
+test('an explicit restart still restarts when the pull found nothing', async (t) => {
   // This reverses an earlier decision, on purpose. "Restarting to apply
   // nothing is pure downtime" is true in the abstract and wrong for the path
   // the button actually drives: /update pulls and offers "Restart to apply",
@@ -236,14 +236,14 @@ test('an explicit restart still restarts when the pull found nothing', (t) => {
     else process.env.INVOCATION_ID = previous;
   });
 
-  const r = runUpdate(cfg, { restart: true, exit: () => (exited = true) });
+  const r = await runUpdate(cfg, { restart: true, exit: () => (exited = true) });
 
   assert.equal(r.ok, true);
   assert.equal(r.restarting, true, 'somebody asked for a restart');
   assert.match(r.message, /already fetched/, 'and it says why there was nothing to pull');
 });
 
-test('--restart exits so systemd brings the new code back', (t) => {
+test('--restart exits so systemd brings the new code back', async (t) => {
   // Exiting rather than `systemctl restart`: Restart=always brings us back and
   // it needs no privilege the service user does not already have.
   const { cfg, pushUpstream } = deployment(t);
@@ -257,7 +257,7 @@ test('--restart exits so systemd brings the new code back', (t) => {
 
   /** @type {number|null} */
   let code = null;
-  const r = runUpdate(cfg, { restart: true, exit: (c) => (code = c) });
+  const r = await runUpdate(cfg, { restart: true, exit: (c) => (code = c) });
 
   assert.equal(r.ok, true);
   assert.equal(r.restarting, true);
@@ -272,7 +272,7 @@ test('--restart exits so systemd brings the new code back', (t) => {
   });
 });
 
-test('without systemd it says so instead of exiting into nothing', (t) => {
+test('without systemd it says so instead of exiting into nothing', async (t) => {
   const { cfg, pushUpstream } = deployment(t);
   pushUpstream('a change');
   const previous = process.env.INVOCATION_ID;
@@ -282,7 +282,7 @@ test('without systemd it says so instead of exiting into nothing', (t) => {
   });
 
   let exited = false;
-  const r = runUpdate(cfg, { restart: true, exit: () => (exited = true) });
+  const r = await runUpdate(cfg, { restart: true, exit: () => (exited = true) });
 
   assert.equal(canSelfRestart(), false);
   assert.equal(r.restarting, false);
@@ -290,11 +290,11 @@ test('without systemd it says so instead of exiting into nothing', (t) => {
   assert.match(r.message, /cannot restart itself/);
 });
 
-test('an update without --restart says the running process is still the old one', (t) => {
+test('an update without --restart says the running process is still the old one', async (t) => {
   const { cfg, pushUpstream } = deployment(t);
   pushUpstream('a change');
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
 
   assert.equal(r.changed, true);
   assert.equal(r.restarting, false);
@@ -309,20 +309,20 @@ test('an update without --restart says the running process is still the old one'
 // dies naming a package nobody has heard of — after the operator was told it
 // worked.
 
-test('a deployment with no package.json is left alone', (t) => {
+test('a deployment with no package.json is left alone', async (t) => {
   // Which is what every other test in this file is, and what a deployment of
   // something that is not an npm project would be. Running npm there is how a
   // perfectly good update reports a failure.
   const { cfg, pushUpstream } = deployment(t);
   pushUpstream('two');
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
   assert.equal(r.ok, true);
   assert.equal(r.changed, true);
   assert.equal(/npm|packages/i.test(r.message), false, 'and says nothing about packages');
 });
 
-test('a pull that changes dependencies installs them', (t) => {
+test('a pull that changes dependencies installs them', async (t) => {
   const { cfg, origin, clone, pushUpstream } = deployment(t);
   // A real package.json with a real lockfile, and no dependencies — so this
   // exercises the whole path, npm included, without a network.
@@ -357,13 +357,13 @@ test('a pull that changes dependencies installs them', (t) => {
   mkdirSync(path.join(clone, 'node_modules'), { recursive: true });
   writeFileSync(path.join(clone, 'node_modules', 'stale.txt'), 'from the old dependencies');
 
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
   assert.equal(r.ok, true, r.message);
   assert.match(r.message, /Packages are up to date/);
   assert.equal(existsSync(path.join(clone, 'node_modules', 'stale.txt')), false, 'npm ci actually ran');
 });
 
-test('nothing pulled and packages present is not worth running npm for', (t) => {
+test('nothing pulled and packages present is not worth running npm for', async (t) => {
   const { cfg, clone } = deployment(t);
   writeFileSync(path.join(clone, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true }));
   mkdirSync(path.join(clone, 'node_modules'), { recursive: true });
@@ -373,7 +373,7 @@ test('nothing pulled and packages present is not worth running npm for', (t) => 
   git(clone, ['clean', '-qfd', '--', '.']);
 
   const started = Date.now();
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
   assert.equal(r.ok, true, r.message);
   // Not a timing assertion so much as a shape one: turning a five-second
   // command into a thirty-second one on every /update is its own bug.
@@ -383,7 +383,7 @@ test('nothing pulled and packages present is not worth running npm for', (t) => 
 
 // --- what actually reaches a host -------------------------------------------
 
-test('a docs-only commit does not make a host say it is behind', (t) => {
+test('a docs-only commit does not make a host say it is behind', async (t) => {
   // The repository is a monorepo; a host runs a fraction of it. Unscoped, a
   // README edit made every box report "1 commit behind" — and somebody who
   // believes that number restarts three services to deliver a paragraph.
@@ -394,14 +394,14 @@ test('a docs-only commit does not make a host say it is behind', (t) => {
   assert.equal(r.behind, 0, 'docs are not something this box runs');
 });
 
-test('a commit touching host code does', (t) => {
+test('a commit touching host code does', async (t) => {
   const { cfg, pushUpstream } = deployment(t);
   pushUpstream('change the hub');
   const r = updateAvailable(cfg, { force: true });
   assert.equal(r.behind, 1);
 });
 
-test('mixed history counts only the host commits', (t) => {
+test('mixed history counts only the host commits', async (t) => {
   const { cfg, pushDocsOnly, pushUpstream } = deployment(t);
   pushDocsOnly('docs one');
   pushUpstream('host one');
@@ -410,13 +410,13 @@ test('mixed history counts only the host commits', (t) => {
   assert.equal(r.behind, 1, 'three commits upstream, one of them for this box');
 });
 
-test('pulling docs-only changes updates the checkout but does not restart', (t) => {
+test('pulling docs-only changes updates the checkout but does not restart', async (t) => {
   // The checkout must still move — a box whose tree drifts from its upstream
   // is a box whose next real update has to reconcile two things at once. What
   // changes is that nothing is restarted for it.
   const { cfg, clone, pushDocsOnly } = deployment(t);
   pushDocsOnly('more documentation');
-  const r = runUpdate(cfg);
+  const r = await runUpdate(cfg);
   assert.equal(r.ok, true, r.message);
   assert.equal(r.changed, false, 'nothing that runs on this box changed');
   assert.match(r.message, /Nothing in that runs on this box/);
