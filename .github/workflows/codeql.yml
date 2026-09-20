@@ -225,7 +225,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v4.0.1
+      - uses: android-actions/setup-android@v4.0.4
         with:
           # Pinned to the same packages android.yml installs. A missing platform
           # fails here with an obvious message instead of halfway through a
