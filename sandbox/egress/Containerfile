@@ -10,7 +10,7 @@
 # It does not terminate TLS. A CONNECT tunnel is bytes in, bytes out; the
 # session's own trust store decides who it is talking to, and no CA bundle is
 # injected anywhere.
-FROM docker.io/library/alpine:3.20
+FROM docker.io/library/alpine:3.24
 
 RUN apk add --no-cache tinyproxy
 
