@@ -86,7 +86,7 @@ import { describe } from '../core/login.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
 import { readCredentialState, describeCredential } from '../core/claude-credential.js';
 import { pickCredentialSource, sandboxImageStatus } from '../core/podman.js';
-import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf } from '../core/update.js';
+import { runUpdate, updateStatus, updateAvailable, canSelfRestart, restartSelf, refreshSandboxImageStep } from '../core/update.js';
 import { applyRelease, currentVersion } from '../core/release-apply.js';
 import { armConfirmation } from '../core/update-confirm.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
@@ -1644,9 +1644,20 @@ export const COMMANDS = {
           const restarted = restartSelf();
           return { ok: restarted.ok, text: `${r.message}${trialNote}\n\n${heal.text}\n\n${restarted.message}` };
         }
+        // THE IMAGE IS NOT PART OF THE RELEASE, and this path used to act as
+        // though it were. The session image is published by its own workflow to
+        // a moving tag, so "already on main-137" says nothing about the bytes a
+        // session will run — and because `runUpdate` returns at `updateStatus`
+        // on a packaged box, the step that pulls it only ever ran on checkouts.
+        // Release-installed hosts could therefore never refresh it from here.
+        //
+        // Not on --check: that answers "is there anything" without changing the
+        // box, and a pull is a change.
+        const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
+        const imageNote = image?.text ? `\n\n${image.text}` : '';
         return {
           ok: r.ok,
-          text: r.message,
+          text: `${r.message}${imageNote}`,
           buttons: r.ok && r.changed && canSelfRestart() ? [{ label: 'Restart to apply', command: '/update --restart' }] : undefined,
         };
       }

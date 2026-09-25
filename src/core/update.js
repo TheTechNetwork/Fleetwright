@@ -211,6 +211,45 @@ export const HOST_PATHS = Object.freeze([
   'package-lock.json',
 ]);
 
+/**
+ * Pull the session image again, as an update step.
+ *
+ * EXPORTED BECAUSE THERE ARE TWO UPDATE PATHS AND THE IMAGE MOVES ON BOTH.
+ * This lived inline in STEPS, which only the git path walks: `runUpdate`
+ * returns at `updateStatus` on a packaged box ("is a release, not a checkout"),
+ * so on every release-installed host the step below was unreachable. The image
+ * is not part of the release — it is a separate moving dependency, published by
+ * its own workflow to a `:latest` tag — so a box could sit on the current
+ * release and run a session image from weeks earlier, with `updates` reporting
+ * both as fine. Two hosts did exactly that: the image was rebuilt with a new
+ * Claude Code, every box stayed on the old bytes, and `/update` answered
+ * "already on main-137" without ever looking at it.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ changed: boolean }} [_state] unused; the signature is shared
+ *   across STEPS so the union stays inferable
+ * @returns {Promise<{ ok: boolean, changed: boolean, text?: string }>}
+ */
+export async function refreshSandboxImageStep(cfg, _state) {
+  if (!cfg.sandbox) return { ok: true, changed: false };
+  // Local builds are not pullable, and a box that builds its own image is
+  // saying it wants that one.
+  if (String(sessionImage(cfg) || '').startsWith('localhost/')) {
+    return { ok: true, changed: false, text: 'Sandbox image is built locally — not refreshed.' };
+  }
+  if (!podmanAvailable(cfg)) return { ok: true, changed: false };
+  const r = await refreshSandboxImage(cfg);
+  if (!r.ok) {
+    // NOT a failure of the update. The box has a working image and the
+    // registry is what went wrong; saying so and carrying on beats
+    // failing an update over a network hiccup.
+    return { ok: true, changed: false, text: `Could not refresh the sandbox image: ${r.message}` };
+  }
+  return r.changed
+    ? { ok: true, changed: true, text: 'Sandbox image updated — new sessions will use it.' }
+    : { ok: true, changed: false, text: 'Sandbox image is up to date.' };
+}
+
 const STEPS = [
   {
     name: 'code',
@@ -370,25 +409,7 @@ const STEPS = [
      *   across STEPS so the union stays inferable
      * @returns {Promise<{ ok: boolean, changed: boolean, text?: string }>}
      */
-    async run(cfg, _state) {
-      if (!cfg.sandbox) return { ok: true, changed: false };
-      // Local builds are not pullable, and a box that builds its own image is
-      // saying it wants that one.
-      if (String(sessionImage(cfg) || '').startsWith('localhost/')) {
-        return { ok: true, changed: false, text: 'Sandbox image is built locally — not refreshed.' };
-      }
-      if (!podmanAvailable(cfg)) return { ok: true, changed: false };
-      const r = await refreshSandboxImage(cfg);
-      if (!r.ok) {
-        // NOT a failure of the update. The box has a working image and the
-        // registry is what went wrong; saying so and carrying on beats
-        // failing an update over a network hiccup.
-        return { ok: true, changed: false, text: `Could not refresh the sandbox image: ${r.message}` };
-      }
-      return r.changed
-        ? { ok: true, changed: true, text: 'Sandbox image updated — new sessions will use it.' }
-        : { ok: true, changed: false, text: 'Sandbox image is up to date.' };
-    },
+    run: refreshSandboxImageStep,
   },
   {
     name: 'credentials',
