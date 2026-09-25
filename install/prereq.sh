@@ -43,7 +43,7 @@ FLOOR=24
 # below is what Renovate matches on; see customManagers in renovate.json.
 #
 # renovate: datasource=github-releases depName=nvm-sh/nvm
-NVM_RELEASE=v0.40.7
+NVM_RELEASE=v0.40.8
 
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
