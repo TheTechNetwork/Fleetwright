@@ -100,7 +100,8 @@ jobs:
           # remove. `|| true` because a future image may not ship it.
           brew untap aws/tap >/dev/null 2>&1 || true
           brew install tmux
-          npm install -g @anthropic-ai/claude-code
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.282
           tmux -V && claude --version
 
       - name: Run as a host until the clock runs out

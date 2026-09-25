@@ -100,8 +100,8 @@ jobs:
           command -v node >/dev/null || { echo "::error::setup-node's node is not visible from the MSYS2 shell."; exit 1; }
           node --version
           npm ci --omit=dev --no-audit --no-fund
-          npm install -g @anthropic-ai/claude-code
-
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.282
       - name: Be a host until the clock runs out
         working-directory: fleet
         env:

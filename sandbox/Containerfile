@@ -58,7 +58,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # rebuild, which is the point.
 #
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.234
+ARG CLAUDE_VERSION=2.1.282
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     && npm cache clean --force
 
