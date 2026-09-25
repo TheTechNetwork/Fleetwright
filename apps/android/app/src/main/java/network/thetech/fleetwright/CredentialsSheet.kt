@@ -92,12 +92,31 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
     // The row underneath is the host's answer and is the one that is right.
     LaunchedEffect(Unit) {
         WebAuth.returned.collect {
+            // CAPTURED BEFORE IT IS CLEARED, because it is the only record of
+            // which provider this callback belongs to — the flow is global and
+            // the query is not trusted.
+            val came = pending
             pending = null
             secret = ""
             busy = true
             Fleet(settings).connections(host).connections?.let { connections = it }
             busy = false
-            result = "Checked with the provider."
+            // SAY WHAT THE HOST FOUND, now that it has been asked.
+            //
+            // This used to say only what the app had done, on the stated
+            // principle that the row below is the one that is right. The
+            // principle holds; the sentence did not. Rendered above a row
+            // reading "not connected" it is two sentences that disagree, and
+            // the reassuring one is on top and where a person looks after
+            // tapping — so a failed connect read as a success.
+            val name = came?.label ?: "the provider"
+            result = when {
+                came == null -> "Checked with the provider."
+                connections.linked(came.provider) != null -> "Connected with $name."
+                else ->
+                    "Checked with $name — it did not connect, so nothing is stored. Try again, and " +
+                        "if it keeps coming back like this the authorisation is not reaching the fleet."
+            }
         }
     }
 
