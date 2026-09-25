@@ -84,7 +84,8 @@ runs:
         # --omit=dev: a host needs `jose` and nothing else. The dev
         # dependencies are a typescript compiler and a browser.
         npm ci --omit=dev --no-audit --no-fund
-        npm install -g @anthropic-ai/claude-code
+        # renovate: datasource=npm depName=@anthropic-ai/claude-code
+        npm install -g @anthropic-ai/claude-code@2.1.282
         # tmux is installed by the workflow, because that is the part that
         # differs. If it is not here the job has already gone wrong and this is
         # where it should say so — before a machine is enrolled into somebody's

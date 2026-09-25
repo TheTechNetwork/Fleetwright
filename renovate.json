@@ -12,14 +12,14 @@
     "",
     "STAY ON LATEST OTHERWISE. This project has no installed base to keep",
     "working and CI builds the APK, compiles the iOS app and bundles the Worker",
-    "on every PR — so a major that breaks something says so in minutes. Holding",
+    "on every PR \u2014 so a major that breaks something says so in minutes. Holding",
     "majors back for review would be buying safety CI already provides, and",
     "paying for it in a permanent backlog of deferred upgrades.",
     "",
     "PIN EVERYTHING; NO RANGES. rangeStrategy: pin, so package.json names an",
     "exact version and every change to what we run is a diff somebody can read.",
     "A caret hides the update inside the lock file: `wrangler: ^4.0.0` had",
-    "quietly become 4.127.1, and the manifest still claimed 4.0.0 — a hundred",
+    "quietly become 4.127.1, and the manifest still claimed 4.0.0 \u2014 a hundred",
     "and twenty-seven minor versions that no PR title ever mentioned. It also",
     "makes the two files say the same thing, so `npm ci` and `npm install` can",
     "no longer disagree about what this project depends on.",
@@ -84,7 +84,7 @@
       ]
     },
     {
-      "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder — including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
+      "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder \u2014 including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
       "matchDepNames": [
         "compileSdk",
         "targetSdk",
@@ -149,7 +149,7 @@
     {
       "description": [
         "The nvm release install/prereq.sh fetches. It is a URL in a shell script,",
-        "which no manager knows how to read — so the version is annotated in place",
+        "which no manager knows how to read \u2014 so the version is annotated in place",
         "and matched here.",
         "",
         "It matters more than an ordinary pin: that script runs as root and pipes",
@@ -163,6 +163,31 @@
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+NVM_RELEASE=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": [
+        "The Claude Code version the sandbox image bakes in and the fleet hosts",
+        "install. It was already annotated in the Containerfile, but nothing read",
+        "that comment: the only customManager here is scoped to install/prereq.sh,",
+        "and Renovate's Dockerfile manager reads FROM lines, not an arbitrary npm",
+        "version in an ARG. So the pin sat at 2.1.234 while npm reached 2.1.282 -",
+        "forty-eight releases that no PR ever mentioned.",
+        "",
+        "The three host installs were worse: unpinned, so every runner build took",
+        "whatever was latest that morning and the fleet ran a different version",
+        "from the image it is supposed to mirror."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^sandbox/Containerfile$/",
+        "/^\\.github/workflows/ephemeral-mac\\.yml$/",
+        "/^install/runner-central/\\.github/workflows/runner-windows\\.yml$/",
+        "/^install/runner-central/\\.github/actions/fleet-host/action\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG CLAUDE_VERSION=(?<currentValue>\\S+)",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+npm install -g @anthropic-ai/claude-code@(?<currentValue>\\S+)"
       ]
     }
   ]
