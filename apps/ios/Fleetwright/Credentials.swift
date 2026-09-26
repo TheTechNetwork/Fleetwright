@@ -468,10 +468,26 @@ struct CredentialsView: View {
             _ = try await WebAuth.authorize(url)
             pending = nil
             await load()
-            // Deliberately not "connected": this says what the app did, and
-            // the row below says what the host found. If they disagree, the
-            // row is right.
-            result = "Checked with \(provider.label)."
+            // SAY WHAT THE HOST FOUND, now that load() has been and asked it.
+            //
+            // This used to say only what the app had done — "Checked with
+            // GitHub." — on the stated principle that the row below is the
+            // one that is right. The principle holds; the sentence did not.
+            // Rendered directly above a row reading "not connected" it is two
+            // sentences that disagree, and the reassuring one is on top and in
+            // the place a person looks after tapping. A failed connect read as
+            // a success, and the way to find out otherwise was to notice the
+            // small grey text underneath contradicting it.
+            //
+            // The row is still the authority. This now reads the same answer
+            // rather than declining to look.
+            if connections.linked(provider.provider) != nil {
+                result = "Connected with \(provider.label)."
+            } else {
+                result = "Checked with \(provider.label) — it did not connect, so nothing is stored. "
+                    + "Try again, and if it keeps coming back like this the authorisation is not "
+                    + "reaching the fleet."
+            }
         } catch {
             // A cancellation has no description on purpose — somebody who
             // changed their mind has not made a mistake to be told about.
