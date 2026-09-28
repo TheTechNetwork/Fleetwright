@@ -91,18 +91,32 @@ test('PATH is searched before the fallback directories', (t) => {
   );
 });
 
+// A NAME NO MACHINE HAS, and these two tests need one.
+//
+// resolveBin searches PATH and then candidateDirs(), which hardcodes
+// /usr/local/bin and /usr/bin. A test that plants a bogus `claude` on an
+// isolated PATH still finds the REAL one in /usr/bin on any box where Claude
+// Code is installed — which is this project's own session image, so the two
+// tests below failed on exactly the machines most likely to run them, and
+// passed in CI because CI has no claude.
+//
+// The behaviour under test is "a non-executable file, or a directory, is not a
+// binary" — nothing about that is specific to claude. A name nothing can
+// supply makes the assertion say only what it means.
+const ABSENT = 'which-test-absent-binary';
+
 test('a file that is not executable is not the binary', (t) => {
   const work = mkdtempSync(path.join(tmpdir(), 'which-noexec-'));
   t.after(() => rmSync(work, { recursive: true, force: true }));
   const bin = path.join(work, 'bin');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(path.join(bin, 'claude'), 'not executable');
-  chmodSync(path.join(bin, 'claude'), 0o644);
+  writeFileSync(path.join(bin, ABSENT), 'not executable');
+  chmodSync(path.join(bin, ABSENT), 0o644);
 
-  // THE BARE NAME COMES BACK, on purpose. The caller's own error — "is claude
-  // on PATH?" — is more useful than a synthetic one from here, and a made-up
+  // THE BARE NAME COMES BACK, on purpose. The caller's own error — "is it on
+  // PATH?" — is more useful than a synthetic one from here, and a made-up
   // absolute path would send somebody looking at a file that is not the problem.
-  assert.equal(withEnv({ PATH: bin, HOME: work }, () => resolveBin('claude')), 'claude');
+  assert.equal(withEnv({ PATH: bin, HOME: work }, () => resolveBin(ABSENT)), ABSENT);
 });
 
 test('a DIRECTORY called claude is not the binary either', (t) => {
@@ -111,9 +125,9 @@ test('a DIRECTORY called claude is not the binary either', (t) => {
   const bin = path.join(work, 'bin');
   // existsSync says yes and it has execute bits, because directories do. Only
   // isFile() tells them apart, which is why that check is there.
-  mkdirSync(path.join(bin, 'claude'), { recursive: true });
+  mkdirSync(path.join(bin, ABSENT), { recursive: true });
 
-  assert.equal(withEnv({ PATH: bin, HOME: work }, () => resolveBin('claude')), 'claude');
+  assert.equal(withEnv({ PATH: bin, HOME: work }, () => resolveBin(ABSENT)), ABSENT);
 });
 
 test('nothing found anywhere gives the name back unchanged', (t) => {
