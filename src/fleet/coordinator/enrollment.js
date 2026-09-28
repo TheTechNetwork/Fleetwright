@@ -256,3 +256,37 @@ export function emailOf(actor) {
   const s = String(actor || '').replace(/^fleet:/, '').trim().toLowerCase();
   return s.includes('@') ? s : null;
 }
+
+/**
+ * The one line that installs a box AND joins it, for a pin just minted.
+ *
+ *     curl -fsSL https://fleet.example/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
+ *
+ * THE PIN IS IN THE COMMAND, NOT IN THE URL. The obvious form — `/install?pin=`
+ * — would put a live credential in the coordinator's request path, where
+ * request logging keeps it for longer than the ten minutes it is good for, and
+ * would make the shim carry a secret, which test/worker-routes.test.js forbids
+ * for a reason. As an environment variable on the command line it reaches the
+ * installer through the shell that runs it and nothing else; the shell history
+ * it lands in is the same one `fleetwright-sidecar enrol 123456` lands in.
+ *
+ * Null when this coordinator publishes no installer (FLEETWRIGHT_INSTALL_URL
+ * unset — its /install answers 404) or does not know its own address: a
+ * command that would fail is worse than no command, and the apps fall back to
+ * the two-step form. C-5.
+ *
+ * @param {{ origin: string|null|undefined, installUrl: string|null|undefined, code: string }} spec
+ * @returns {string|null}
+ */
+export function installCommand({ origin, installUrl, code }) {
+  if (!installUrl || !origin || !/^[0-9]{6}$/.test(String(code))) return null;
+  let base;
+  try {
+    const url = new URL(String(origin));
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    base = url.origin;
+  } catch {
+    return null;
+  }
+  return `curl -fsSL ${base}/install | sudo FLEETWRIGHT_ENROL_PIN=${code} sh`;
+}

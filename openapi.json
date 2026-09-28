@@ -513,6 +513,13 @@
                     },
                     "purpose": {
                       "type": "string"
+                    },
+                    "install": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The one line that installs a fresh box and joins it with this pin \u2014 `curl -fsSL <origin>/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh`. Null when this coordinator publishes no installer, or for a device pin; an older coordinator omits it. The pin rides as an environment variable, never in the URL."
                     }
                   }
                 }

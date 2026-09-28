@@ -40,18 +40,21 @@ yet? Deploy it to your own Cloudflare account first —
 account — and give the installer that URL when it asks (or curl the
 coordinator's own `/install`, which carries it).
 
-Then a pin: from the app, Fleet → Add a host, or with the break-glass admin
-token if no phone has signed in yet:
+Then a pin. From the app — Fleet → Add a host — which shows, beside the six
+digits, the one line that installs a fresh box and joins it:
 
 ```sh
-# Against the coordinator, with the admin token:
-curl -sX POST https://your-coordinator/api/enroll \
-  -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
-  -H 'content-type: application/json' -d '{"kind":"host"}'
+curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
+```
 
-# Back on the box, as the service user:
+A box already installed takes the pin by hand, as the service user:
+
+```sh
 sudo -u fleetwright fleetwright-sidecar enrol <pin>
 ```
+
+No phone signed in yet? The break-glass admin token mints one over curl — see
+the Hosts section of [coordinator-deploy.md](./coordinator-deploy.md).
 
 The pin is single-use and short-lived. Mint it when the box is ready for it.
 

@@ -153,7 +153,7 @@ test('joining a fleet still costs a pin, and the one-liner changes nothing about
   // its own coordinator, with the admin token it had generated seconds earlier.
   // No box runs a coordinator now (docs/auth-and-join.md), so the installer
   // holds nothing that could mint a pin, and every enrolment is asked for.
-  const enrol = /enrol_host\(\) \{[\s\S]*?\n  \}/.exec(SH);
+  const enrol = /enrol_host\(\) \{[\s\S]*?\n\}/.exec(SH);
   assert.ok(enrol, 'enrol_host is gone');
 
   // It always asks.
@@ -165,9 +165,13 @@ test('joining a fleet still costs a pin, and the one-liner changes nothing about
   assert.doesNotMatch(enrol[0], /FLEETWRIGHT_API_TOKEN/);
   assert.doesNotMatch(enrol[0], /FLEET_LOCAL/);
 
-  // NOTHING JOINS A FLEET FROM AN ENVIRONMENT VARIABLE. The shim exports one,
-  // and it is an address; if enrolment ever grew a credential it could read
-  // instead of asking, this is where it would appear.
+  // NOTHING JOINS A FLEET FROM A CREDENTIAL IN THE ENVIRONMENT. The shim
+  // exports one variable and it is an address. The ONE thing enrolment reads
+  // from the environment is FLEETWRIGHT_ENROL_PIN — the same six digits the
+  // person would otherwise be asked for, put on the command line by the
+  // person, single-use and ten minutes long (test/install-command.test.js).
+  // That is the person answering early, not the installer finding a key. A
+  // token, secret or key here would be the other thing, and is refused.
   //
   // Matched on EXPANSION rather than on the name, because the name appears
   // twice for good reasons — see below — and a fuzzy absence test that fires on

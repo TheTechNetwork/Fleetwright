@@ -42,7 +42,7 @@ import { resource } from '../../core/resources.js';
 import { identify } from './identity.js';
 import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
 import { memberRoutes, isMemberPath, signInClients } from './member-page.js';
-import { emailOf } from './enrollment.js';
+import { emailOf, installCommand } from './enrollment.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -1154,7 +1154,11 @@ export class Coordinator {
         ephemeral: Boolean(body?.ephemeral),
       });
       this.saveState();
-      return json(res, 200, { ok: true, ...issued });
+      // No install command: this coordinator publishes no installer (the
+      // Worker's /install is the one that does), so the line would 404. Null
+      // rather than absent, so a client can tell "not offered" from "older
+      // coordinator" — see the OpenAPI document.
+      return json(res, 200, { ok: true, ...issued, install: installCommand({ origin: this.selfOrigin, installUrl: null, code: issued.code }) });
     }
 
     // Push registration. The Worker has had these since push was built; the

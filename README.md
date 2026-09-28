@@ -60,8 +60,12 @@ your own fleet means your own coordinator's URL in its place:
 
 ```sh
 curl -fsSL https://fleet.thetech.network/prereq  | sudo sh   # once, if node is old
-curl -fsSL https://fleet.thetech.network/install | sudo sh
+curl -fsSL https://fleet.thetech.network/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
 ```
+
+The six digits are a pin from the app — Fleet → Add a host mints one and shows
+this exact line beside it, so the usual way to run it is to copy it from the
+phone. Leave the variable off and the installer asks for the pin instead.
 
 The first line is separate on purpose, and is a no-op if this box already has
 Node 24. It is the one thing the installer will not do on your behalf: closing
@@ -100,10 +104,11 @@ from the app (or `--pin 123456`). Unattended, preseed both. [`docs/packaging.md`
 
 **Curling a coordinator is how you join it.** That URL is a fleet's address, and
 `/install` serves a script that carries it through — so the installer never asks
-which fleet, because you already said. It installs what is missing, asks for the
-six-digit pin you mint in the app, enrols the box and starts the services.
+which fleet, because you already said. It installs what is missing, takes the
+six-digit pin from the command line (or asks for it), enrols the box and starts
+the services.
 
-The pin is the only thing it asks for. Nothing else is needed to join a fleet.
+The pin is the only thing it needs. Nothing else is needed to join a fleet.
 (Telegram used to be asked for here too; it is archived, and
 [`docs/telegram.md`](./docs/telegram.md) says why. So did "run the coordinator
 on this box?", and that is gone for a different reason: the coordinator runs

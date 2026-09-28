@@ -2416,6 +2416,121 @@ case "$JOINING" in
   ''|stdio:*|http://127.0.0.1*|http://localhost*) JOINING="" ;;
 esac
 
+ENROLLED=0
+# WRITTEN WHETHER OR NOT THERE IS A TERMINAL. The address arrived with the
+# script, and a box installed unattended off a coordinator's /install must
+# join that coordinator too — it used to be written only inside the wizard, so
+# `curl … | sudo sh` with no terminal installed a box that knew no fleet.
+if [ -n "$JOINING" ] && [ "$CHECK_ONLY" != 1 ]; then
+  set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "$JOINING"
+  "$NODE_BIN" -e '
+    const fs = require("fs");
+    const [f, url] = process.argv.slice(1);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+      .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
+      .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
+  ' "$SIDECAR_ENV" "$JOINING"
+  ok "joining $JOINING"
+fi
+
+# Run a sidecar subcommand as the service user, with the environment the unit
+# would have given it. Running it as root would put a root-owned key file
+# where the service expects its own, and the service would refuse to read it.
+# $1 is a SUBCOMMAND, $2 an optional argument, and the argument is quoted
+# before it reaches the shell.
+#
+# It used to be one string interpolated raw into `bash -lc`, and the only
+# thing ever put in it was a pin the operator pasted at a prompt — running as
+# root. `enrol 123 456` silently enrolled with the code "123"; anything with a
+# $( ) in it did rather more than that. The pin is checked to be six digits
+# first, and %q-quoted after, because either alone would be enough and neither
+# costs anything.
+#
+# Defined here, outside the wizard, because enrol_host below is too — an
+# unattended install that was handed a pin has to be able to spend it. (It
+# used to live inside the wizard; the unattended path then called a function
+# that had never been defined, which `set -e` turned into a silent exit.)
+sidecar_cli() {
+  local sub="$1" arg="${2:-}" quoted=""
+  [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
+  as_user "FLEETWRIGHT_ENROL_QUIET=1 \
+           FLEETWRIGHT_COORDINATOR_URL='$ENROL_URL' \
+           FLEETWRIGHT_HOST_ID='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)' \
+           FLEETWRIGHT_HOST_KEY='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY)' \
+           '$UNIT_NODE_BIN' '$DIR/bin/fleetwright-sidecar' $sub$quoted"
+}
+
+# --- joining the fleet -------------------------------------------------------
+# A pin, spent once, in exchange for this box's public key being known. The
+# pin comes from a person: this installer holds no credential that could mint
+# one, and that is the property — see docs/identity.md. Defined here, outside
+# the wizard, because an unattended install that was handed a pin enrols too.
+enrol_host() {
+  local ENROL_URL
+  ENROL_URL="$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)"
+  [ -n "$ENROL_URL" ] || return 0
+
+  # Already enrolled? `doctor` is the one that asks the coordinator, because a
+  # key on disk looks identical whether it was ever presented or has since
+  # been revoked. Re-running the installer on a working box must not demand a
+  # new pin.
+  #
+  # Two things this line has to get right, and it got both wrong first:
+  #
+  #   CAPTURED, NOT PIPED. doctor exits non-zero when anything it checks is
+  #   unhappy, and on a fresh box something usually is — claude not being
+  #   logged in yet, most often. Under `set -o pipefail` that exit code sinks
+  #   the pipeline no matter what grep found.
+  #
+  #   MATCHED ON THE LEADING " ok ". doctor prints the same words on the
+  #   FAILING line, so grepping for the sentence reports every unenrolled box
+  #   as enrolled and skips the one step this function exists to do.
+  DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
+  if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
+    ok "this box is already enrolled at $ENROL_URL"
+    ENROLLED=1
+    return 0
+  fi
+
+  # THE PIN CAN ARRIVE WITH THE COMMAND. The app prints, beside every pin it
+  # mints, the one line that installs a box and joins it:
+  #
+  #     curl -fsSL https://fleet.example/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
+  #
+  # An environment variable on the command line, not a query string: the pin
+  # never reaches the coordinator's request log, and the shim it fetches stays
+  # an address and nothing else. It is the same six digits the person would
+  # otherwise be asked for below, from the same place, spent the same way — so
+  # this is not enrolment reading a credential it found lying around; it is the
+  # person answering the question before it is asked, which is what makes the
+  # unattended install possible at all. The same variable is how the deb's
+  # debconf question and `fleetwright join --pin` hand the pin in, so asking
+  # again here would be a second prompt for the same six digits.
+  local pin="${FLEETWRIGHT_ENROL_PIN:-}"
+  if [ -n "$pin" ]; then
+    ok "enrolment pin supplied with the command"
+  else
+    printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
+    printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
+    printf '  Blank is fine — run "fleetwright-sidecar enrol <pin>" whenever you have one.\n'
+    ask pin "Enrolment pin"
+    [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
+  fi
+
+  # Six digits or nothing. A pin is not free text and never was.
+  pin="$(printf '%s' "$pin" | tr -cd '0-9')"
+  if [ ${#pin} -ne 6 ]; then
+    warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+    return 0
+  fi
+  if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
+    ok "enrolled at $ENROL_URL"
+    ENROLLED=1
+  else
+    warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+  fi
+}
+
 if [ "$WIZARD" = yes ]; then
   say "Setup"
   printf '  Answers go into the /etc files. Anything you have already edited there is\n'
@@ -2443,15 +2558,7 @@ if [ "$WIZARD" = yes ]; then
   # host — docs/auth-and-join.md. A box that has no fleet yet is told where to
   # get one rather than handed a second implementation to run.
   if [ -n "$JOINING" ]; then
-    set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "$JOINING"
-    "$NODE_BIN" -e '
-      const fs = require("fs");
-      const [f, url] = process.argv.slice(1);
-      fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-        .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
-        .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
-    ' "$SIDECAR_ENV" "$JOINING"
-    ok "joining $JOINING"
+    : # written above, before the wizard, so the unattended path has it too
   elif [ -z "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" ] \
      || [ "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" = "stdio:local" ]; then
     printf '\n  A fleet needs a coordinator, and it runs as a Cloudflare Worker — five commands\n'
@@ -2639,84 +2746,6 @@ if [ "$WIZARD" = yes ]; then
     fi
   fi
 
-  # --- joining the fleet ---------------------------------------------------
-  # A pin, spent once, in exchange for this box's public key being known. The
-  # pin comes from a person: this installer holds no credential that could mint
-  # one, and that is the property — see docs/identity.md.
-  enrol_host() {
-    [ -n "$ENROL_URL" ] || return 0
-
-    # Already enrolled? `doctor` is the one that asks the coordinator, because a
-    # key on disk looks identical whether it was ever presented or has since
-    # been revoked. Re-running the installer on a working box must not demand a
-    # new pin.
-    #
-    # Two things this line has to get right, and it got both wrong first:
-    #
-    #   CAPTURED, NOT PIPED. doctor exits non-zero when anything it checks is
-    #   unhappy, and on a fresh box something usually is — claude not being
-    #   logged in yet, most often. Under `set -o pipefail` that exit code sinks
-    #   the pipeline no matter what grep found.
-    #
-    #   MATCHED ON THE LEADING " ok ". doctor prints the same words on the
-    #   FAILING line, so grepping for the sentence reports every unenrolled box
-    #   as enrolled and skips the one step this function exists to do.
-    DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
-    if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
-      ok "this box is already enrolled at $ENROL_URL"
-      ENROLLED=1
-      return 0
-    fi
-
-    local pin=""
-    # HANDED IN, when somebody already asked. The deb's debconf question is
-    # the one that reaches a person under apt; asking again here would be
-    # a second prompt for the same six digits, on a terminal debconf owns.
-    pin="${FLEETWRIGHT_ENROL_PIN:-}"
-    if [ -z "$pin" ]; then
-      printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
-      printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
-      printf '  Blank is fine — run "fleetwright-sidecar enrol <pin>" whenever you have one.\n'
-      ask pin "Enrolment pin"
-    fi
-    [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
-
-    # Six digits or nothing. A pin is not free text and never was.
-    pin="$(printf '%s' "$pin" | tr -cd '0-9')"
-    if [ ${#pin} -ne 6 ]; then
-      warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
-      return 0
-    fi
-    if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
-      ok "enrolled at $ENROL_URL"
-      ENROLLED=1
-    else
-      warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
-    fi
-  }
-
-  # Run a sidecar subcommand as the service user, with the environment the unit
-  # would have given it. Running it as root would put a root-owned key file
-  # where the service expects its own, and the service would refuse to read it.
-  # $1 is a SUBCOMMAND, $2 an optional argument, and the argument is quoted
-  # before it reaches the shell.
-  #
-  # It used to be one string interpolated raw into `bash -lc`, and the only
-  # thing ever put in it was a pin the operator pasted at a prompt — running as
-  # root. `enrol 123 456` silently enrolled with the code "123"; anything with a
-  # $( ) in it did rather more than that. The pin is checked to be six digits
-  # first, and %q-quoted after, because either alone would be enough and neither
-  # costs anything.
-  sidecar_cli() {
-    local sub="$1" arg="${2:-}" quoted=""
-    [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
-    as_user "FLEETWRIGHT_ENROL_QUIET=1 \
-             FLEETWRIGHT_COORDINATOR_URL='$ENROL_URL' \
-             FLEETWRIGHT_HOST_ID='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)' \
-             FLEETWRIGHT_HOST_KEY='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY)' \
-             '$UNIT_NODE_BIN' '$DIR/bin/fleetwright-sidecar' $sub$quoted"
-  }
-
   # --- start it ------------------------------------------------------------
   if [ "$HAVE_SYSTEMD" = 1 ]; then
     printf '\n'
@@ -2862,6 +2891,16 @@ if [ "$WIZARD" = yes ]; then
   fi
 fi
 
+
+# --- joining, unattended -----------------------------------------------------
+# No terminal, or --yes — and a pin arrived with the command. Everything the
+# wizard would have asked is answered: the address came with the script, the
+# pin came with the command, so the box joins. Services are still yours to
+# start (the Next block says so); enrolment needs only the coordinator.
+if [ "$WIZARD" != yes ] && [ "$CHECK_ONLY" != 1 ] && [ -n "${FLEETWRIGHT_ENROL_PIN:-}" ]; then
+  say "Joining the fleet"
+  enrol_host
+fi
 
 # --- 8. the install this one replaces ---------------------------------------
 #
@@ -3266,8 +3305,13 @@ Next:
   For the fleet: the coordinator is a Cloudflare Worker (docs/coordinator-deploy.md).
      Put its URL in $SIDECAR_ENV as FLEETWRIGHT_COORDINATOR_URL, then:
        systemctl enable --now fleetwright-sidecar
-     Hosts have no token. Mint a pin in the app and spend it on the box:
-       fleetwright-sidecar enrol <pin>
+$( if [ "${ENROLLED:-0}" = 1 ]; then
+     printf '     This box is enrolled — the pin that came with the command was spent.\n'
+   else
+     printf '     Hosts have no token. Mint a pin in the app and spend it on the box:\n'
+     printf '       fleetwright-sidecar enrol <pin>\n'
+     printf '     or re-run the one line the app shows, which carries the pin.\n'
+   fi )
 
   Or re-run this installer with a terminal and it will ask instead — it
   enrols this box and starts the services for you.
