@@ -69,9 +69,9 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
         'It is a bigger grant than the package one — it ends every running session — so it is a ' +
         'separate rule. On the box:\n\n' +
         `  echo '${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl reboot' \\\n` +
-        '    | sudo tee /etc/sudoers.d/agent-hub-reboot\n' +
-        '  sudo chmod 0440 /etc/sudoers.d/agent-hub-reboot\n\n' +
-        'then set AGENT_HUB_SYSTEM_REBOOT=1 in /etc/agent-hub.env and restart.',
+        '    | sudo tee /etc/sudoers.d/fleetwright-reboot\n' +
+        '  sudo chmod 0440 /etc/sudoers.d/fleetwright-reboot\n\n' +
+        'then set FLEETWRIGHT_SYSTEM_REBOOT=1 in /etc/fleetwright.env and restart.',
     };
   }
 
@@ -190,7 +190,7 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
       text:
         `Reboot failed: ${r.stderr.split('\n')[0] || 'unknown error'}\n\n` +
         (/password is required|not allowed/i.test(r.stderr)
-          ? 'That is the sudoers rule missing — /reboot with AGENT_HUB_SYSTEM_REBOOT unset prints the line.'
+          ? 'That is the sudoers rule missing — /reboot with FLEETWRIGHT_SYSTEM_REBOOT unset prints the line.'
           : ''),
     };
   }

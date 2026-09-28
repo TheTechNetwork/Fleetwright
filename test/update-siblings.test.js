@@ -1,5 +1,5 @@
 // `/update --restart` restarts the hub by exiting and letting systemd bring it
-// back. It cannot restart agent-fleet-sidecar or agent-fleet-coordinator —
+// back. It cannot restart fleetwright-sidecar or fleetwright-coordinator —
 // those are system units and the service user has no privilege over them.
 //
 // So on a box running more than one, an update pulls code for all three and
@@ -19,7 +19,7 @@ test('names only units that are actually running', () => {
   const stale = staleSiblings();
   assert.ok(Array.isArray(stale));
   for (const unit of stale) {
-    assert.match(unit, /^agent-fleet-(sidecar|coordinator)$/);
+    assert.match(unit, /^fleetwright-(sidecar|coordinator)$/);
   }
 });
 
@@ -27,5 +27,5 @@ test('a unit systemd has never heard of is not reported', () => {
   // `systemctl is-active` prints "inactive" for an unknown unit rather than
   // failing, so a box without the sidecar installed looks exactly like one
   // where it is stopped. Both mean nothing to restart.
-  assert.ok(!staleSiblings().includes('agent-fleet-definitely-not-real'));
+  assert.ok(!staleSiblings().includes('fleetwright-definitely-not-real'));
 });

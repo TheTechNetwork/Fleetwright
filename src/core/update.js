@@ -32,6 +32,7 @@ import { Connections } from './connectors.js';
 import { refreshSandboxImage, podmanAvailable } from './podman.js';
 import { requestRestart } from './restart-watch.js';
 import { sessionImage } from './sandbox-variant.js';
+import { unitName } from '../fleet/legacy-paths.js';
 
 /** Long enough for a slow network, short enough that chat does not time out. */
 const GIT_TIMEOUT_MS = 60_000;
@@ -66,14 +67,14 @@ export function updateStatus(cfg) {
     // end: it told a packaged host that the thing it never had was missing, and
     // named no way forward. A packaged box updates by fetching a manifest —
     // docs/packaging.md — so say which kind of box this is and what updates it.
-    if (existsSync(path.join(dir, 'lib', 'agent-hub.mjs'))) {
+    if (existsSync(path.join(dir, 'lib', 'fleetwright.mjs'))) {
       return {
         ok: false,
         dir,
         packaged: true,
         message:
           `${dir} is a release, not a checkout, so there is nothing to pull.\n` +
-          'Releases update by manifest: set AGENT_HUB_RELEASE_MANIFEST to the URL of one.',
+          'Releases update by manifest: set FLEETWRIGHT_RELEASE_MANIFEST to the URL of one.',
       };
     }
     return { ok: false, dir, message: `${dir} is not a git checkout, so there is nothing to pull.` };
@@ -289,7 +290,7 @@ const STEPS = [
               'which gives the whole checkout back to the account the service runs as:\n' +
               `  sudo ${dir}/install/install.sh\n\n` +
               'Or fix just the ownership:\n' +
-              `  sudo chown -R $(stat -c %U ${dir}/bin/agent-hub) ${dir}`,
+              `  sudo chown -R $(stat -c %U ${dir}/bin/fleetwright) ${dir}`,
           };
         }
         return { ok: false, changed: false, text: `git pull failed: ${output.slice(0, 400)}` };
@@ -358,7 +359,7 @@ const STEPS = [
           changed: false,
           text:
             'The code is updated, but npm is not installed on this box, so its packages are not.\n' +
-            'agent-hub and the sidecar are fine without them; a coordinator here is not.\n' +
+            'fleetwright and the sidecar are fine without them; a coordinator here is not.\n' +
             `  sudo apt install npm && cd ${dir} && npm ci --omit=dev`,
         };
       }
@@ -495,7 +496,7 @@ const STEPS = [
  * @returns {string[]} unit names that are active and now running stale code
  */
 export function staleSiblings() {
-  const units = ['agent-fleet-sidecar', 'agent-fleet-coordinator'];
+  const units = [unitName('fleetwright-sidecar'), unitName('fleetwright-coordinator')];
   const stale = [];
   for (const unit of units) {
     const r = spawnSync('systemctl', ['is-active', unit], { encoding: 'utf8' });

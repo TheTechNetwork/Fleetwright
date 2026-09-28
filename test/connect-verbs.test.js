@@ -227,7 +227,7 @@ test('scope reaches the host, so the admin gate is not a no-op', () => {
 });
 
 test('a credential cannot be smuggled in as a flag', () => {
-  // agent-hub's parser reads `-word` as a flag, so a secret beginning with a
+  // fleetwright's parser reads `-word` as a flag, so a secret beginning with a
   // dash would stop being an argument — and `--host` specifically would be
   // read as the flag that selects the box's SHARED row, which is the thing the
   // admin gate exists to protect. No provider issues such a token.

@@ -311,8 +311,8 @@ test('a malformed service account falls back to logging rather than throwing', (
   const warned = [];
   const logger = { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) };
 
-  assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
-  assert.ok(pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
+  assert.ok(pusherFromEnv({ FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_FCM_SERVICE_ACCOUNT: 'not json' }, logger));
+  assert.ok(pusherFromEnv({ FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger));
 
   // TWO WARNINGS EACH, and the second one is the point. The first names what is
   // wrong with the service account; the second says the fleet ended up with no
@@ -408,7 +408,7 @@ test('what systemd does to a raw-JSON service account is rejected, not half-read
   /** @type {string[]} */
   const warned = [];
   const pusher = pusherFromEnv(
-    { AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: mangled },
+    { FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_FCM_SERVICE_ACCOUNT: mangled },
     { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) },
   );
   assert.ok(pusher);
@@ -423,7 +423,7 @@ test('a base64 service account configures FCM end to end', () => {
     JSON.stringify({ project_id: 'proj-42', client_email: 'e', private_key: 'k' }),
     'utf8',
   ).toString('base64');
-  pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: encoded }, { info: (/** @type {any} */ m) => infos.push(String(m)), warn() {} });
+  pusherFromEnv({ FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_FCM_SERVICE_ACCOUNT: encoded }, { info: (/** @type {any} */ m) => infos.push(String(m)), warn() {} });
   assert.match(infos.join('\n'), /proj-42/);
 });
 
@@ -690,7 +690,7 @@ test('half a set of APNs credentials is refused rather than half-configured', ()
   /** @type {string[]} */
   const warned = [];
   const logger = { info() {}, warn: (/** @type {any} */ m) => warned.push(String(m)) };
-  const pusher = pusherFromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_APNS_KEY_ID: 'K', AGENT_FLEET_APNS_TEAM_ID: 'T' }, logger);
+  const pusher = pusherFromEnv({ FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_APNS_KEY_ID: 'K', FLEETWRIGHT_APNS_TEAM_ID: 'T' }, logger);
   assert.ok(pusher);
   assert.match(warned.join('\n'), /all three/);
 });
@@ -706,22 +706,22 @@ test('push is off unless it is switched on, credentials or not', async () => {
   const said = [];
   const logger = { info: (/** @type {any} */ m) => said.push(String(m)), warn: (/** @type {any} */ m) => said.push(String(m)) };
 
-  const off = fromEnv({ AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+  const off = fromEnv({ FLEETWRIGHT_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
   assert.ok(off, 'a disabled fleet still gets a sender — it logs rather than sends');
   // SAID OUT LOUD. Silence is how a fleet discovers on the day it matters that
   // push was never wired up.
-  assert.match(said.join('\n'), /disabled \(AGENT_FLEET_PUSH is not set\)/);
+  assert.match(said.join('\n'), /disabled \(FLEETWRIGHT_PUSH is not set\)/);
 
   // "0" and "false" are truthy strings in JavaScript, and a config where
-  // AGENT_FLEET_PUSH = "0" turned push ON would be a config nobody can read.
+  // FLEETWRIGHT_PUSH = "0" turned push ON would be a config nobody can read.
   for (const value of ['0', 'false', 'no', 'off', '']) {
     said.length = 0;
-    fromEnv({ AGENT_FLEET_PUSH: value, AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
-    assert.match(said.join('\n'), /disabled/, `AGENT_FLEET_PUSH=${JSON.stringify(value)} enabled push`);
+    fromEnv({ FLEETWRIGHT_PUSH: value, FLEETWRIGHT_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+    assert.match(said.join('\n'), /disabled/, `FLEETWRIGHT_PUSH=${JSON.stringify(value)} enabled push`);
   }
 
   said.length = 0;
-  fromEnv({ AGENT_FLEET_PUSH: '1', AGENT_FLEET_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
+  fromEnv({ FLEETWRIGHT_PUSH: '1', FLEETWRIGHT_FCM_SERVICE_ACCOUNT: '{"project_id":"p"}' }, logger);
   assert.equal(/disabled/.test(said.join('\n')), false, 'switched on and still disabled');
 });
 
@@ -737,7 +737,7 @@ test('switched on with no provider is the loudest case, not the quietest', async
   const { pusherFromEnv: fromEnv } = await import('../src/fleet/push.js');
   /** @type {string[]} */
   const said = [];
-  fromEnv({ AGENT_FLEET_PUSH: '1' }, {
+  fromEnv({ FLEETWRIGHT_PUSH: '1' }, {
     info: (/** @type {any} */ m) => said.push(String(m)),
     warn: (/** @type {any} */ m) => said.push(String(m)),
   });
@@ -746,11 +746,11 @@ test('switched on with no provider is the loudest case, not the quietest', async
   assert.match(text, /no provider is configured/);
   // NAMES THE VARIABLES, because the person reading this log is the one who can
   // set them, and "push is not configured" sends them to a document.
-  assert.match(text, /AGENT_FLEET_APNS_KEY/);
-  assert.match(text, /AGENT_FLEET_FCM_SERVICE_ACCOUNT/);
+  assert.match(text, /FLEETWRIGHT_APNS_KEY/);
+  assert.match(text, /FLEETWRIGHT_FCM_SERVICE_ACCOUNT/);
   // And says how to make it stop, so a fleet that meant it is not nagged into
   // ignoring the line that will matter later.
-  assert.match(text, /Unset AGENT_FLEET_PUSH if that is deliberate/);
+  assert.match(text, /Unset FLEETWRIGHT_PUSH if that is deliberate/);
 });
 
 test('our deployment switches it on, and the switch is a var rather than a secret', () => {
@@ -761,10 +761,10 @@ test('our deployment switches it on, and the switch is a var rather than a secre
   // sets no vars at all. See test/fork-safe-config.test.js.
   const toml = readFileSync(new URL('../worker/wrangler.production.toml', import.meta.url), 'utf8');
   const settings = toml.replace(/^\s*#.*$/gm, '');
-  assert.match(settings, /AGENT_FLEET_PUSH = "1"/, 'our own deployment has push off');
+  assert.match(settings, /FLEETWRIGHT_PUSH = "1"/, 'our own deployment has push off');
   assert.ok(
-    settings.indexOf('[vars]') < settings.indexOf('AGENT_FLEET_PUSH'),
-    'AGENT_FLEET_PUSH fell out of [vars] — a table header above it moved it out of scope',
+    settings.indexOf('[vars]') < settings.indexOf('FLEETWRIGHT_PUSH'),
+    'FLEETWRIGHT_PUSH fell out of [vars] — a table header above it moved it out of scope',
   );
 });
 

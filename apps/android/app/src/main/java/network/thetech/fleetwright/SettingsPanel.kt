@@ -420,7 +420,7 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     }
                     // THE UPDATE CHANNEL, beside the button it decides the
                     // meaning of: "Apply update" installs whatever this says is
-                    // eligible. It used to be a line in /etc/agent-hub.env,
+                    // eligible. It used to be a line in /etc/fleetwright.env,
                     // which meant SSH — the one thing somebody holding only a
                     // phone does not have.
                     //
@@ -774,7 +774,7 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     )
                 }
                 Text(
-                    "On that box: agent-fleet-sidecar enrol $pin\nGood for ten minutes, once.",
+                    "On that box: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                 )

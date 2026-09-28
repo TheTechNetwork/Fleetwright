@@ -6,7 +6,7 @@
 // binding — only `default` and Durable Object classes may be exported. So the
 // Worker failed to load:
 //
-//   service core:user:agent-fleet-coordinator: Uncaught TypeError:
+//   service core:user:fleetwright-coordinator: Uncaught TypeError:
 //   Incorrect type for map entry 'SPEC_ORIGIN': the provided value is not of
 //   type 'function or ExportedHandler'.
 //

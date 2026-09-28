@@ -35,12 +35,28 @@
 # that gets piped is sh, and it runs the other under bash.
 set -eu
 
+# SETTINGS FROM BEFORE THE RENAME, read under their new names. A coordinator
+# deployed before it serves an /install that exports
+# AGENT_FLEET_COORDINATOR_URL, and somebody's muscle memory types
+# AGENT_HUB_NODE_BIN; both still work. The new name wins when both are set.
+# src/fleet/legacy-names.js is the same rule for the Node code.
+for __legacy in $(env | sed -n -e 's/^\(AGENT_HUB_[A-Za-z0-9_]*\)=.*/\1/p' -e 's/^\(AGENT_FLEET_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  __new="FLEETWRIGHT_${__legacy#AGENT_*_}"
+  if [ -z "$(eval "printf '%s' \"\${$__new:-}\"")" ]; then
+    eval "export $__new=\"\${$__legacy}\""
+  fi
+done
+unset __legacy __new
+
 REPO="${FLEETWRIGHT_REPO:-https://github.com/TheTechNetwork/Fleetwright}"
 REF="${FLEETWRIGHT_REF:-main}"
-DIR="${FLEETWRIGHT_DIR:-/opt/agent-fleet}"
+DIR="${FLEETWRIGHT_DIR:-/opt/fleetwright-src}"
+# A checkout made before the rename is at /opt/agent-fleet, and a box that has
+# one keeps it — the rule below about checkouts applies to it by its old name.
+if [ -z "${FLEETWRIGHT_DIR:-}" ] && [ ! -e "$DIR" ] && [ -d /opt/agent-fleet/.git ]; then DIR=/opt/agent-fleet; fi
 # Where a release goes. The same default install.sh has, so the two agree
 # without either reading the other.
-BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 # WHICH RELEASE. `stable` is the latest GitHub release; `rolling` is the tag
 # that every merge to main republishes. The manifest is the only address a box
 # ever has to know — src/core/release.js derives everything else from it — so
@@ -53,6 +69,20 @@ ok()   { printf '  ok   %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
 say "Fleetwright"
+
+# --- a box apt owns ------------------------------------------------------------
+#
+# Refused, not reinstalled over. The deb put this box's release in place and
+# apt decides the next one; running the one-liner here would lay a second
+# release beside it and move `current`, and the next apt upgrade would move it
+# back. Two updaters taking turns is the thing the package exists to avoid.
+if command -v dpkg-query >/dev/null 2>&1 \
+   && [ "$(dpkg-query -W -f='${Status}' fleetwright 2>/dev/null || true)" = "install ok installed" ]; then
+  die "this box has the fleetwright package, so apt installs and updates it.
+       Update:            sudo apt update && sudo apt upgrade
+       Join a fleet:      sudo fleetwright join <coordinator>
+       Switch to this installer instead:  sudo apt remove fleetwright, then run this again"
+fi
 
 # --- which way in -------------------------------------------------------------
 #
@@ -162,8 +192,8 @@ if [ "$SOURCE" = 0 ]; then
   # come from, and on a checkout it reads that off the git remote. There is no
   # remote here, so it is told outright: this is what `/update` will read from
   # then on, and it is the address this release was just verified against.
-  AGENT_HUB_RELEASE_MANIFEST="$MANIFEST"
-  export AGENT_HUB_RELEASE_MANIFEST
+  FLEETWRIGHT_RELEASE_MANIFEST="$MANIFEST"
+  export FLEETWRIGHT_RELEASE_MANIFEST
   say "Running the installer"
   if (exec < /dev/tty) 2>/dev/null; then
     bash "$WORK/release/install/install.sh" "$@" < /dev/tty && RC=0 || RC=$?

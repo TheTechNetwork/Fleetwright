@@ -6,7 +6,7 @@
 // knows something the person does not, which is exactly why it is the one that
 // makes a phone app worth carrying.
 //
-// It works by polling the session manager, not by being told. agent-hub has no
+// It works by polling the session manager, not by being told. fleetwright has no
 // event stream, and adding one would be a change to a tree we are trying to
 // keep contributable — whereas /api/state is cheap (two tmux calls) and the
 // resume dialog it detects has been sitting in a pane for minutes by the time
@@ -595,7 +595,7 @@ export class SessionWatcher {
         options: shown.options,
         // WHICH OF OUR OWN ANSWERS THIS PANE IS OFFERING, resolved here rather
         // than downstream. `shown.options` may be empty — that is what
-        // AGENT_FLEET_PROMPT_TEXT decides — and these are resolved from the
+        // FLEETWRIGHT_PROMPT_TEXT decides — and these are resolved from the
         // REAL labels, which never leave the box. A slot and a digit do.
         actions: answerActions(prompt),
       },

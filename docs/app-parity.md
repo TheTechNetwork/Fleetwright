@@ -56,7 +56,7 @@ wearing one coat:
 **The middle row is the real one, and it is deliberate.** `PROTOCOL_VERSION` is
 `1`, matched exactly with no negotiation, and there are eight fixed verbs:
 `list status peek health start resume stop forget`. Telegram reaches `logs`,
-`update`, `reboot` and `login` because it talks to `agent-hub` **on that box**,
+`update`, `reboot` and `login` because it talks to `fleetwright` **on that box**,
 not through the fleet. An app talking to a coordinator has no such path, and
 adding one is a coordinated release of coordinator, Worker, host and both apps
 at once.
@@ -112,7 +112,7 @@ version bump — a field an old client ignores costs nothing.
 - session length and context-window usage
 - the Claude plan limits already visible on the host
 - host version, and whether it is behind the branch it tracks
-- `agent-hub` checking for system and app updates **on a schedule**, so the
+- `fleetwright` checking for system and app updates **on a schedule**, so the
   answer is ready when asked rather than computed while somebody waits
 
 **3. Protocol v2, once, for the verbs that genuinely need it.** Designed
@@ -334,7 +334,7 @@ the failure named a thing rather than a remedy.
 The remedy is the awkward part, and saying it out loud is the point: **the verb
 that fixes this is often the one that is unknown.** `update` over the fleet
 cannot update a box too old to have `update`. What works is that box's own
-Telegram bot or a shell on it, both of which reach agent-hub directly rather
+Telegram bot or a shell on it, both of which reach fleetwright directly rather
 than through this protocol. A pull that did not restart looks identical from
 the coordinator, and is at least as common — so both routes say `--restart`.
 

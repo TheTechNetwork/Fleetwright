@@ -3,7 +3,7 @@
 // A pane is a fixed-width grid, not a stream: `capture-pane` returns what is on
 // screen, so any line longer than the pane is already broken across rows by the
 // time anyone sees it. The sidecar gets that text second-hand, through
-// agent-hub's `GET /api/peek`, and has to undo the wrapping itself.
+// fleetwright's `GET /api/peek`, and has to undo the wrapping itself.
 //
 // WHY THE SIDECAR EXTRACTS THE URL RATHER THAN TRUSTING THE ONE IT IS GIVEN
 //
@@ -58,14 +58,14 @@ export function extractRcUrl(text) {
 }
 
 // The markers Claude Code prints once Remote Control is online, across its
-// interactive and server modes. Same set agent-hub matches, tested against
+// interactive and server modes. Same set fleetwright matches, tested against
 // de-wrapped text here because one of the markers IS the URL — on a pane narrow
 // enough to wrap it, "claude.ai/code" is split across two rows and matches
 // nothing.
 //
 // Note the flag matters: launched WITHOUT `--remote-control <name>` the pane
 // shows only "/rc active" in the status line, which matches none of these.
-// agent-hub always passes the flag, so this is not a live gap — but a session
+// fleetwright always passes the flag, so this is not a live gap — but a session
 // started some other way will read as offline here.
 const RC_ONLINE_RE =
   /remote-control is active|claude\.ai\/code|Continue (?:here, on your phone|coding in the Claude mobile app)|·\s*Connected/i;
@@ -87,7 +87,7 @@ export function isRemoteControlOnline(text) {
  */
 
 /**
- * Reconcile the URL agent-hub recorded against the one the live pane actually
+ * Reconcile the URL fleetwright recorded against the one the live pane actually
  * shows, preferring the pane.
  *
  * The pane is the primary source because it is current and because the record

@@ -1,11 +1,11 @@
 // The sidecar: what runs on a fleet host.
 //
 // It dials the coordinator, validates every intent that arrives against the
-// verb allowlist, and drives a STOCK agent-hub through its loopback HTTP API.
-// agent-hub is not modified, not forked, and not aware of any of this — from
+// verb allowlist, and drives a STOCK fleetwright through its loopback HTTP API.
+// fleetwright is not modified, not forked, and not aware of any of this — from
 // its side the sidecar is just another HTTP client holding its token.
 //
-//     coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (agent-hub) ──▶ tmux
+//     coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (fleetwright) ──▶ tmux
 //                          │
 //                          └── validates, translates, repairs
 //
@@ -23,7 +23,7 @@
 // radius is "someone started and stopped some sessions". With command strings
 // it is every box in the fleet.
 //
-// Running out-of-process sharpens that rather than softening it. agent-hub's
+// Running out-of-process sharpens that rather than softening it. fleetwright's
 // `POST /api/command` will run ANY command line it is given, `/login` included,
 // and the sidecar is the only thing holding its token. So the allowlist here is
 // not defence in depth — it is THE defence, and the command line is assembled
@@ -32,14 +32,14 @@
 // --- the trade this makes ---------------------------------------------------
 //
 // One thing genuinely gets worse out-of-process, and it should be stated rather
-// than discovered: agent-hub hardcodes `actor: 'web'` for every HTTP caller, so
+// than discovered: fleetwright hardcodes `actor: 'web'` for every HTTP caller, so
 // `createdBy` on a session the fleet starts will read "web", not who asked. The
 // sidecar knows the real actor and puts it in its own logs and replies, but it
-// cannot make agent-hub record it. That is design.md §1's flat-allowlist gap,
+// cannot make fleetwright record it. That is design.md §1's flat-allowlist gap,
 // and it is fixable upstream or in the coordinator — not from here.
 //
 // One thing gets better: the sidecar re-derives Remote Control URLs from the
-// pane itself (see host/pane.js) instead of trusting the ones agent-hub
+// pane itself (see host/pane.js) instead of trusting the ones fleetwright
 // recorded with its unguarded matcher, which are truncated or missing outright
 // on any pane that is not exactly 80 columns wide.
 
@@ -64,7 +64,7 @@ import { readHouseRules } from '../../core/rules.js';
 /** @typedef {typeof import('../../log.js').log} Logger */
 
 // The sidecar is a library as much as an entrypoint, so it says nothing unless
-// it is given somewhere to say it. bin/agent-fleet-sidecar passes the real
+// it is given somewhere to say it. bin/fleetwright-sidecar passes the real
 // logger; tests pass one that captures.
 /** @type {Logger} */
 const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
@@ -177,17 +177,17 @@ export class Sidecar {
      */
     this.config = new Map();
     this.hostId = hostId || os.hostname();
-    // WHAT THIS BOX WAS GIVEN: AGENT_FLEET_LABELS plus what auto-labels derived
-    // at startup. Kept separate from the composed list below because agent-hub
+    // WHAT THIS BOX WAS GIVEN: FLEETWRIGHT_LABELS plus what auto-labels derived
+    // at startup. Kept separate from the composed list below because fleetwright
     // needs the difference — a label it stores is removable and a fact the
     // machine derives is not, and one flat list cannot say which is which.
     this.givenLabels = labels;
     // Injected rather than read here: the sidecar knows about a coordinator
-    // and an agent-hub, and nothing about git checkouts or package managers.
+    // and an fleetwright, and nothing about git checkouts or package managers.
     /** @type {(() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any })|null} */
     this.updates = updates;
     // Lets a fresh check replace the cached answer health reports. See the
-    // `updates` verb below, and adoptUpdates in bin/agent-fleet-sidecar.
+    // `updates` verb below, and adoptUpdates in bin/fleetwright-sidecar.
     this.adoptUpdates = adoptUpdates;
     this.version = version;
     // Whether a prompt that quotes the session may leave the box.
@@ -200,8 +200,8 @@ export class Sidecar {
     /** @type {any} */
     this.renewTimer = null;
     this.renewIntervalMs = renewIntervalMs;
-    // Enough of agent-hub's config to find its credential store. The sidecar
-    // and agent-hub run as the same user on the same box, which is what lets
+    // Enough of fleetwright's config to find its credential store. The sidecar
+    // and fleetwright run as the same user on the same box, which is what lets
     // the process holding the secret write the result where the sessions will
     // read it.
     this.hubConfig = hubConfig;
@@ -257,9 +257,9 @@ export class Sidecar {
     }
     this.watcher?.start();
 
-    // RENEWING PROVIDER TOKENS BELONGS HERE, not in agent-hub, because the
+    // RENEWING PROVIDER TOKENS BELONGS HERE, not in fleetwright, because the
     // exchange needs the App client secret and this is the process that has it
-    // — in memory, off the config frame, never on disk. agent-hub renews the
+    // — in memory, off the config frame, never on disk. fleetwright renews the
     // CLAUDE credential on its own timer, which is a different mechanism for a
     // different reason: that one renews by being used.
     if (this.renewIntervalMs > 0 && this.hubConfig) {
@@ -479,16 +479,16 @@ export class Sidecar {
       // what this box pinned at enrolment, so a runner is told to join the
       // fleet this machine is actually in rather than one the coordinator
       // names for itself.
-      // WHAT THIS BOX IS ALREADY LABELLED, so agent-hub can tell a label it
+      // WHAT THIS BOX IS ALREADY LABELLED, so fleetwright can tell a label it
       // stores from a fact the machine derives — and refuse a remove with the
       // reason rather than with "this box does not have that" about a label the
-      // app is displaying. AGENT_FLEET_LABELS is in this process's environment
+      // app is displaying. FLEETWRIGHT_LABELS is in this process's environment
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
       if (intent.verb === 'provision') {
         const repo = this.config.get('runnerRepo');
         if (repo) meta.runnerRepo = repo;
-        // Normalised to a bare origin. `AGENT_FLEET_COORDINATOR_URL` is
+        // Normalised to a bare origin. `FLEETWRIGHT_COORDINATOR_URL` is
         // whatever an operator typed — a trailing slash is ordinary — and this
         // becomes a workflow input that a runner puts in its own environment,
         // where `https://fleet.example/` and `https://fleet.example` are two
@@ -584,7 +584,7 @@ export class Sidecar {
         // Kept distinct from a refusal on purpose: the coordinator should retry
         // an unreachable hub and must not retry a rejected command.
         this.log.error(`sidecar: ${intent.verb}: ${e.message}`);
-        return reply({ ok: false, text: `agent-hub is not answering: ${e.message}`, error: { code: e.code } });
+        return reply({ ok: false, text: `fleetwright is not answering: ${e.message}`, error: { code: e.code } });
       }
       const err = /** @type {Error} */ (e);
       this.log.error(`sidecar: ${intent.verb} failed`, err);
@@ -616,7 +616,7 @@ export class Sidecar {
   /**
    * Repair the Remote Control URL on every running session in a reply.
    *
-   * agent-hub's recorded `rcUrl` comes from a matcher that reads the raw pane
+   * fleetwright's recorded `rcUrl` comes from a matcher that reads the raw pane
    * with no de-wrapping, so on any pane that is not exactly 80 columns it is
    * either truncated to something that loads and goes nowhere, or missing
    * entirely while the session reports as online. Reading the pane here and
@@ -646,7 +646,7 @@ export class Sidecar {
       if (r.repaired) {
         this.log.warn(
           `sidecar: ${s.name}: repaired the Remote Control URL from the pane (${r.reason}) — ` +
-            `agent-hub had ${s.rcUrl ? JSON.stringify(s.rcUrl) : 'nothing'}`,
+            `fleetwright had ${s.rcUrl ? JSON.stringify(s.rcUrl) : 'nothing'}`,
         );
       }
       return {
@@ -733,7 +733,7 @@ export class Sidecar {
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for
-      // agent-fleet-coordinator" on a box that never ran one looks like a
+      // fleetwright-coordinator" on a box that never ran one looks like a
       // broken service rather than an absent one — and a phone has no way to
       // ask that question per row. Carried in `base` rather than beside
       // `channel` below on purpose: the logs are most wanted when the hub is
@@ -839,7 +839,7 @@ export class Sidecar {
         claudeAccounts: typeof state.claudeAccounts === 'number' ? state.claudeAccounts : null,
         // The account this box runs on, for the app's settings screen: which
         // plan, which org, which address. Not a secret — it is what
-        // `agent-hub login status` prints on the box — and it is the
+        // `fleetwright login status` prints on the box — and it is the
         // difference between "sessions are failing" and "sessions are failing
         // because this box is on a plan that ran out".
         account: state.auth?.loggedIn
@@ -914,7 +914,7 @@ export class Sidecar {
       };
     } catch (e) {
       const err = /** @type {Error & {code?: string}} */ (e);
-      this.log.warn(`sidecar: health could not reach agent-hub: ${err.message}`);
+      this.log.warn(`sidecar: health could not reach fleetwright: ${err.message}`);
       return {
         ...base,
         hub: { reachable: false, reason: err.message, code: err.code || 'hub_unreachable' },
@@ -1155,12 +1155,12 @@ export class Sidecar {
 }
 
 /**
- * Build the agent-hub command line for a validated intent.
+ * Build the fleetwright command line for a validated intent.
  *
  * Every part is either a literal from this file or a value that has already
  * been charset-checked by validateIntent, so this is assembly, not
  * interpolation. There is no point at which a coordinator-supplied string
- * reaches agent-hub as anything but a single token — which matters more here
+ * reaches fleetwright as anything but a single token — which matters more here
  * than it would in-process, because `/api/command` will run whatever line it is
  * handed.
  *
@@ -1190,7 +1190,7 @@ export function toCommandLine({ verb, params, actor }) {
       // `profile` IS here, and the difference is the whole design. It is a
       // NAME — charset-checked by validateIntent, no whitespace, no quote, no
       // leading dash — so it is a single token that cannot become a second
-      // flag. The words it selects never travel: agent-hub reads them off a
+      // flag. The words it selects never travel: fleetwright reads them off a
       // file on this box. A coordinator that could send the content would be
       // writing the instructions of an agent with root in a container.
       //
@@ -1255,7 +1255,7 @@ export function toCommandLine({ verb, params, actor }) {
     case 'update':
       return p.restart === 'yes' ? '/update --restart' : '/update';
     case 'upgrade':
-      // `--apply`, NOT `apply`. agent-hub's upgrade reads `flags.has('apply')`,
+      // `--apply`, NOT `apply`. fleetwright's upgrade reads `flags.has('apply')`,
       // and parse() only puts a dash-prefixed token in flags — so a positional
       // `apply` was silently the reporting mode. The symptom was exact and
       // misleading: tapping "Apply upgrade" returned the CHECK text, ending in
@@ -1385,7 +1385,7 @@ export function commandMeta(verb, params = {}, actor = '') {
   return {
     // WHO, on every verb, not just start.
     //
-    // agent-hub hardcoded `actor: 'web'` for every HTTP caller, so every
+    // fleetwright hardcoded `actor: 'web'` for every HTTP caller, so every
     // session on every host recorded "web" as its creator — the coordinator
     // knew the verified email, the sidecar knew it, and then it was thrown
     // away one hop from the record that wanted it.

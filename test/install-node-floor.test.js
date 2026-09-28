@@ -97,7 +97,7 @@ test('too old is refused, and the refusal says nothing was changed', () => {
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
   const gate = sh.slice(sh.indexOf('REFUSED, AND NOT HEALED'));
   assert.match(gate, /Nothing has been changed on this box/);
-  assert.match(gate, /AGENT_HUB_NODE_BIN/, 'no way out for somebody who already has a new node');
+  assert.match(gate, /FLEETWRIGHT_NODE_BIN/, 'no way out for somebody who already has a new node');
   // And nothing pipes nodesource into a shell.
   assert.equal(/nodesource[^\n]*\|\s*bash/.test(sh.replace(/^\s*#.*$/gm, '')), false,
     'the installer pipes a third-party script into root bash');
@@ -110,7 +110,7 @@ test('nothing is destroyed before the install is known to be possible', async ()
   // way back except by hand.
   //
   // docs/packaging.md already states the rule, about the packaged path:
-  // "Nothing is removed until the new agent-hub has been SEEN to start.
+  // "Nothing is removed until the new fleetwright has been SEEN to start.
   // Removing first would leave a box with neither." Only that path had been
   // taught it.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
@@ -152,7 +152,7 @@ test('the prerequisite step installs the floor, and nothing else', () => {
   // AS THE RUN USER, NOT ROOT. nvm is per-user and root's home is 0700, so a
   // node in /root/.nvm is unreadable by the service, which runs as somebody
   // else. This is the whole reason the script has to know who that is.
-  assert.match(sh, /RUN_USER="\$\{AGENT_HUB_USER:-\$\{SUDO_USER:-\}\}"/);
+  assert.match(sh, /RUN_USER="\$\{FLEETWRIGHT_USER:-\$\{SUDO_USER:-\}\}"/);
   assert.match(sh, /su - "\$RUN_USER"/);
   assert.match(sh, /= root \]/, 'installing as root would put node where the service cannot read it');
 

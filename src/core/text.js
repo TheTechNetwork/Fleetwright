@@ -2,7 +2,7 @@
 //
 // This lives here rather than in the protocol because there are two doors into
 // the same storage and they must not disagree. The fleet protocol validates a
-// `title` on its way through an intent; agent-hub's HTTP API accepts the same
+// `title` on its way through an intent; fleetwright's HTTP API accepts the same
 // field directly, from the sidecar and from anything else holding its token.
 //
 // Two doors validating separately is the shape of a bug this project has

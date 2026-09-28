@@ -3,9 +3,9 @@
 // subcommand a person types from a shell got nothing, because a shell has
 // never heard of that file.
 //
-// That is how `agent-fleet-sidecar enrol <pin>` came to report
-// "AGENT_FLEET_COORDINATOR_URL is not set" on a box where the URL was in
-// /etc/agent-fleet-sidecar.env, written minutes earlier by the installer that
+// That is how `fleetwright-sidecar enrol <pin>` came to report
+// "FLEETWRIGHT_COORDINATOR_URL is not set" on a box where the URL was in
+// /etc/fleetwright-sidecar.env, written minutes earlier by the installer that
 // printed the command. Every in-project caller passed the values explicitly,
 // so the only path through the environment was the one a human types.
 
@@ -25,23 +25,23 @@ function envFile(body) {
 
 test('reads a plain systemd env file', () => {
   const env = {};
-  const f = envFile('AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network\n');
+  const f = envFile('FLEETWRIGHT_COORDINATOR_URL=https://fleet.thetech.network\n');
   loadEnvFile(f, env);
-  assert.equal(env.AGENT_FLEET_COORDINATOR_URL, 'https://fleet.thetech.network');
+  assert.equal(env.FLEETWRIGHT_COORDINATOR_URL, 'https://fleet.thetech.network');
 });
 
 test('the real environment wins, so systemd is never second-guessed', () => {
-  const env = { AGENT_FLEET_COORDINATOR_URL: 'https://from-systemd' };
-  const f = envFile('AGENT_FLEET_COORDINATOR_URL=https://from-file\n');
+  const env = { FLEETWRIGHT_COORDINATOR_URL: 'https://from-systemd' };
+  const f = envFile('FLEETWRIGHT_COORDINATOR_URL=https://from-file\n');
   loadEnvFile(f, env);
-  assert.equal(env.AGENT_FLEET_COORDINATOR_URL, 'https://from-systemd');
+  assert.equal(env.FLEETWRIGHT_COORDINATOR_URL, 'https://from-systemd');
 });
 
 test('an empty value in the real environment still wins over the file', () => {
   // Distinct from undefined: systemd setting a variable to empty is a choice.
-  const env = { AGENT_FLEET_HUB_TOKEN: '' };
-  loadEnvFile(envFile('AGENT_FLEET_HUB_TOKEN=fromfile\n'), env);
-  assert.equal(env.AGENT_FLEET_HUB_TOKEN, '');
+  const env = { FLEETWRIGHT_HUB_TOKEN: '' };
+  loadEnvFile(envFile('FLEETWRIGHT_HUB_TOKEN=fromfile\n'), env);
+  assert.equal(env.FLEETWRIGHT_HUB_TOKEN, '');
 });
 
 test('strips one layer of quotes, the way systemd does', () => {
@@ -60,18 +60,18 @@ test('ignores comments, blanks, and lines that are not assignments', () => {
 
 test('a value containing = keeps everything after the first one', () => {
   const env = {};
-  loadEnvFile(envFile('AGENT_FLEET_HUB_TOKEN=abc=def==\n'), env);
-  assert.equal(env.AGENT_FLEET_HUB_TOKEN, 'abc=def==');
+  loadEnvFile(envFile('FLEETWRIGHT_HUB_TOKEN=abc=def==\n'), env);
+  assert.equal(env.FLEETWRIGHT_HUB_TOKEN, 'abc=def==');
 });
 
 test('a missing file is not an error — a working tree has no /etc file', () => {
   const env = {};
-  assert.deepEqual(loadEnvFile('/nonexistent/agent-fleet.env', env), []);
+  assert.deepEqual(loadEnvFile('/nonexistent/fleetwright.env', env), []);
   assert.deepEqual(env, {});
 });
 
 test('an unreadable file is not an error either', () => {
-  const f = envFile('AGENT_FLEET_HUB_TOKEN=secret\n');
+  const f = envFile('FLEETWRIGHT_HUB_TOKEN=secret\n');
   chmodSync(f, 0o000);
   const env = {};
   // Root can read a 0000 file, so only assert the call is safe and silent.

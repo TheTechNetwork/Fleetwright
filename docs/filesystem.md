@@ -124,7 +124,7 @@ is the isolation boundary for sessions; trading it for CI convenience would be a
 poor bargain.
 
 **But CI has Docker and no Podman**, which is why the container half went
-untested. `AGENT_HUB_PODMAN_BIN` was always configurable; what stood in the way
+untested. `FLEETWRIGHT_PODMAN_BIN` was always configurable; what stood in the way
 was three podman-only subcommands — `volume exists`, `image exists`,
 `container exists`. Docker has none of them. They are `inspect` now, which both
 engines have and both answer by exit status, so the same code path runs under

@@ -43,7 +43,7 @@ export class TelegramAdapter {
 
     const me = await this.#call('getMe', {});
     if (!me.ok) {
-      log.error(`telegram: getMe failed (${me.error}) — adapter not started. Is AGENT_HUB_TELEGRAM_TOKEN right?`);
+      log.error(`telegram: getMe failed (${me.error}) — adapter not started. Is FLEETWRIGHT_TELEGRAM_TOKEN right?`);
       return false;
     }
     log.info(
@@ -98,7 +98,7 @@ export class TelegramAdapter {
           if (res.status === 409) {
             log.error(
               'telegram: 409 Conflict — another process is polling this bot token. ' +
-                'Only one agent-hub may use a given bot. Sleeping 30s.',
+                'Only one fleetwright may use a given bot. Sleeping 30s.',
             );
             await sleep(30_000);
             continue;
@@ -146,7 +146,7 @@ export class TelegramAdapter {
     if (msg.chat.type !== 'private' && !/^\//.test(text)) return;
 
     // Telegram reserves a bare /start for the bot intro. Honour that, but let
-    // "/start myname" mean what it says everywhere else in agent-hub.
+    // "/start myname" mean what it says everywhere else in fleetwright.
     if (/^\/start(@\S+)?$/.test(text)) text = '/help';
 
     // /whoami is answerable by anyone: it is how a new operator finds the id to
@@ -158,7 +158,7 @@ export class TelegramAdapter {
       await this.#send(
         chatId,
         `Not authorised.\n\nYour Telegram id is ${userId} — an operator can add it to ` +
-          'AGENT_HUB_TELEGRAM_ALLOWED_USERS on the box and restart agent-hub.',
+          'FLEETWRIGHT_TELEGRAM_ALLOWED_USERS on the box and restart fleetwright.',
       );
       return;
     }

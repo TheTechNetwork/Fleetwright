@@ -2,7 +2,7 @@
 //
 //   node --test test/
 //
-// agent-hub's HTTP API was unauthenticated whenever AGENT_HUB_TOKEN was unset —
+// fleetwright's HTTP API was unauthenticated whenever FLEETWRIGHT_TOKEN was unset —
 // the default — justified in one line: it listens on loopback, so reaching it
 // already implies a shell on the machine.
 //
@@ -121,7 +121,7 @@ test('a loosened token file is tightened, loudly, rather than used quietly', asy
 });
 
 test('an explicitly configured token is never written to disk', async (t) => {
-  // Somebody who set AGENT_HUB_TOKEN has their own custody arrangement and does
+  // Somebody who set FLEETWRIGHT_TOKEN has their own custody arrangement and does
   // not need a second copy of it in our state directory.
   const h = await hub(t, { token: 'x'.repeat(40) });
 
@@ -182,7 +182,7 @@ test('a token that was tried and refused is not the same page as no token at all
   // the first visit.
   const byQuery = await (await h.get('/?token=wrong')).text();
   const byHeader = await (await h.get('/', { authorization: 'Bearer wrong' })).text();
-  const byCookie = await (await h.get('/', { cookie: 'agent_hub_token=wrong' })).text();
+  const byCookie = await (await h.get('/', { cookie: 'fleetwright_token=wrong' })).text();
 
   for (const [how, body] of [['?token=', byQuery], ['a header', byHeader], ['a cookie', byCookie]]) {
     assert.match(body, /The token this browser sent was not accepted\./, `${how} was answered as a first visit`);
@@ -197,14 +197,14 @@ test('a token that was tried and refused is not the same page as no token at all
 
 // --- the third client -------------------------------------------------------
 
-test('the agent-hub CLI can reach a service that now requires a token', async (t) => {
+test('the fleetwright CLI can reach a service that now requires a token', async (t) => {
   // THE REGRESSION THIS FILE DID NOT CATCH THE FIRST TIME. Closing the open API
   // gave the service a generated token; the sidecar got a fallback the same
-  // hour and `bin/agent-hub` did not. So on every updated box, every CLI
+  // hour and `bin/fleetwright` did not. So on every updated box, every CLI
   // command answered:
   //
-  //   Could not reach agent-hub at http://127.0.0.1:8790
-  //   (unauthorised — is AGENT_HUB_TOKEN set in this shell?)
+  //   Could not reach fleetwright at http://127.0.0.1:8790
+  //   (unauthorised — is FLEETWRIGHT_TOKEN set in this shell?)
   //
   // asking about a variable that is not the answer. Two clients were in mind
   // and the one driven by a person at a keyboard was not.
@@ -216,17 +216,17 @@ test('the agent-hub CLI can reach a service that now requires a token', async (t
   const port = /** @type {any} */ (h.adapter.server).address().port;
   const env = {
     ...process.env,
-    AGENT_HUB_STATE_DIR: h.stateDir,
-    AGENT_HUB_WORKDIR: h.stateDir,
-    AGENT_HUB_PORT: String(port),
-    AGENT_HUB_BIND: '127.0.0.1',
+    FLEETWRIGHT_STATE_DIR: h.stateDir,
+    FLEETWRIGHT_WORKDIR: h.stateDir,
+    FLEETWRIGHT_PORT: String(port),
+    FLEETWRIGHT_BIND: '127.0.0.1',
     // Explicitly empty: the whole point is that nobody exports this and it
     // still works.
-    AGENT_HUB_TOKEN: '',
-    AGENT_HUB_TELEGRAM_TOKEN: '',
+    FLEETWRIGHT_TOKEN: '',
+    FLEETWRIGHT_TELEGRAM_TOKEN: '',
   };
 
-  const r = spawnSync(process.execPath, ['bin/agent-hub', 'list'], {
+  const r = spawnSync(process.execPath, ['bin/fleetwright', 'list'], {
     encoding: 'utf8', env, cwd: new URL('..', import.meta.url).pathname, timeout: 20_000,
   });
 
@@ -235,7 +235,7 @@ test('the agent-hub CLI can reach a service that now requires a token', async (t
 });
 
 test('and says something useful when it genuinely cannot', () => {
-  // The old message asked whether AGENT_HUB_TOKEN was set in the shell, which
+  // The old message asked whether FLEETWRIGHT_TOKEN was set in the shell, which
   // is the wrong question on almost every box — nobody is expected to export
   // anything. Naming the file, and the usual reason it is missing, is the
   // difference between a remedy and a shrug.
@@ -245,11 +245,11 @@ test('and says something useful when it genuinely cannot', () => {
   // flaky about a MESSAGE is worse than no test: it gets deleted, and the
   // message it was protecting goes with it. The path itself is covered by the
   // spawn above.
-  const cli = readFileSync(new URL('../bin/agent-hub', import.meta.url), 'utf8');
+  const cli = readFileSync(new URL('../bin/fleetwright', import.meta.url), 'utf8');
 
   assert.match(cli, /readApiToken/, 'the CLI does not read the generated token at all');
   assert.match(cli, /no API token found at/, 'and cannot say so when there is none');
-  assert.match(cli, /systemctl status agent-hub/, 'without naming what to do about it');
+  assert.match(cli, /systemctl status fleetwright/, 'without naming what to do about it');
   // The permission case, which is the one that looks like a bug: the file is
   // 0600 and owned by the service user, so running the CLI as somebody else
   // reads nothing and gets a 401.

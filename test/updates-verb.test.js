@@ -34,7 +34,7 @@ function packagedBox(installed = 'v0.2.2') {
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: installed }));
   mkdirSync(path.join(dir, 'lib'), { recursive: true });
-  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
   symlinkSync(dir, path.join(base, 'current'));
   return { base, installDir: path.join(base, 'current') };
 }
@@ -227,7 +227,7 @@ test('a box that cannot swap a release is not told nothing is waiting', async ()
   const dir = path.join(base, 'fleetwright');
   mkdirSync(path.join(dir, 'lib'), { recursive: true });
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: 'v0.2.3' }));
-  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
   try {
     const r = await dispatch(
       /** @type {any} */ ({
@@ -359,7 +359,7 @@ test('the host answers "is there something waiting" itself, in three states', ()
   assert.doesNotMatch(release, /r\.message/, 'the state is being read out of the prose again');
 
   // And the sidecar no longer has an opinion of its own to disagree with.
-  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /function appPending\(/, 'the sidecar computes it again');
 });
 
@@ -413,11 +413,11 @@ test('both apps apply the check the host just ran', () => {
 //
 // Three symptoms, one cause, and it was permanent rather than transient.
 
-test('the sidecar asks agent-hub rather than recomputing with a config it lacks', () => {
+test('the sidecar asks fleetwright rather than recomputing with a config it lacks', () => {
   // THE BUG. The sidecar worked this out itself: loadConfig(), then
-  // checkRelease(). But loadConfig() reads agent-hub's SCHEMA out of the
-  // SIDECAR's environment, and /etc/agent-fleet-sidecar.env carries no
-  // AGENT_HUB_* keys at all — the installer copies exactly three things into
+  // checkRelease(). But loadConfig() reads fleetwright's SCHEMA out of the
+  // SIDECAR's environment, and /etc/fleetwright-sidecar.env carries no
+  // FLEETWRIGHT_* keys at all — the installer copies exactly three things into
   // it: the hub URL, the hub token and the coordinator URL.
   //
   // So `releaseManifest` was the empty default, checkRelease answered
@@ -426,11 +426,11 @@ test('the sidecar asks agent-hub rather than recomputing with a config it lacks'
   // was installed, with no amount of waiting fixing it.
   //
   // Pressing Check worked, which made it look like a refresh problem: that goes
-  // through agent-hub, which reads /etc/agent-hub.env and HAS the manifest. Two
+  // through fleetwright, which reads /etc/fleetwright.env and HAS the manifest. Two
   // processes, two configurations, one question, and the one that could answer
   // it was not the one being asked. The answer then survived only until the
   // timer overwrote it with null again.
-  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   const refresh = src.slice(src.indexOf('async function refreshUpdates()'), src.indexOf('setTimeout(() => void refreshUpdates()'));
 
   assert.match(refresh, /await hub\.command\('\/updates'\)/, 'the sidecar computes this itself again');
@@ -441,16 +441,16 @@ test('the sidecar asks agent-hub rather than recomputing with a config it lacks'
   // test that matched them anywhere would fail because somebody wrote down why
   // they are gone.
   const code = refresh.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-  assert.doesNotMatch(code, /loadConfig\(\)/, 'it is reading agent-hub settings from the sidecar env again');
+  assert.doesNotMatch(code, /loadConfig\(\)/, 'it is reading fleetwright settings from the sidecar env again');
   assert.doesNotMatch(code, /checkRelease|updateAvailable/, 'two processes are answering one question again');
 });
 
 test('the env file the sidecar reads has none of the settings it needed', () => {
   // The fact underneath the bug, asserted so the fix is not undone by somebody
-  // "tidying" the template. If AGENT_HUB_RELEASE_MANIFEST is ever added here,
+  // "tidying" the template. If FLEETWRIGHT_RELEASE_MANIFEST is ever added here,
   // that is a second place for it to be right or wrong.
-  const template = readFileSync(new URL('../install/agent-fleet-sidecar.env.example', import.meta.url), 'utf8');
-  assert.doesNotMatch(template, /AGENT_HUB_RELEASE_MANIFEST|AGENT_HUB_INSTALL_DIR/);
+  const template = readFileSync(new URL('../install/fleetwright-sidecar.env.example', import.meta.url), 'utf8');
+  assert.doesNotMatch(template, /FLEETWRIGHT_RELEASE_MANIFEST|FLEETWRIGHT_INSTALL_DIR/);
 });
 
 test('rebootRequired survives the two paths becoming one', () => {
@@ -460,7 +460,7 @@ test('rebootRequired survives the two paths becoming one', () => {
   const cmds = readFileSync(new URL('../src/adapters/commands.js', import.meta.url), 'utf8');
   assert.match(cmds, /rebootRequired: s\.rebootRequired/);
 
-  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   // Carried over when ABSENT rather than defaulted to false: an older hub not
   // sending it must not be read as an answer.
   assert.match(src, /typeof sys\.rebootRequired === 'boolean'/);

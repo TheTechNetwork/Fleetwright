@@ -1,9 +1,9 @@
 // Config: one place that turns environment variables into a frozen, validated
-// object. Everything else in agent-hub takes the config as an argument, so a
+// object. Everything else in fleetwright takes the config as an argument, so a
 // test can construct one by hand and nothing reads process.env behind your back.
 //
-// Deployment supplies these via the systemd EnvironmentFile (/etc/agent-hub.env)
-// — see install/agent-hub.env.example for the annotated template a new operator
+// Deployment supplies these via the systemd EnvironmentFile (/etc/fleetwright.env)
+// — see install/fleetwright.env.example for the annotated template a new operator
 // actually fills in.
 
 import os from 'node:os';
@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { resolveBin } from './core/which.js';
 import { unsafeSandboxArgs, unsafeSandboxMessage, splitArgs } from './core/sandbox-args.js';
 import { INSTALL_ROOT } from './core/resources.js';
+import { adoptLegacyEnv } from './fleet/legacy-names.js';
+import { preferExisting } from './fleet/legacy-paths.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
 // Derived rather than configured, so it is right by construction even when the
@@ -62,7 +64,7 @@ export function resolveUserns(requested, podmanBin, { uid = typeof process.getui
   if (requested !== 'nomap' && requested !== 'host') {
     return {
       mode: 'nomap',
-      note: `AGENT_HUB_SANDBOX_USERNS=${requested} is not a mode this understands (nomap or host); using nomap.`,
+      note: `FLEETWRIGHT_SANDBOX_USERNS=${requested} is not a mode this understands (nomap or host); using nomap.`,
     };
   }
   if (wanted === 'host') return { mode: 'host', note: '' };
@@ -70,15 +72,15 @@ export function resolveUserns(requested, podmanBin, { uid = typeof process.getui
     return {
       mode: 'host',
       note:
-        'AGENT_HUB_SANDBOX_USERNS=nomap needs a non-root service user — podman refuses it for containers ' +
+        'FLEETWRIGHT_SANDBOX_USERNS=nomap needs a non-root service user — podman refuses it for containers ' +
         'created by root — so sessions run in the host user namespace: container root IS this process\'s uid. ' +
-        'Run agent-hub as a dedicated user (install.sh does this) to get the separation back.',
+        'Run fleetwright as a dedicated user (install.sh does this) to get the separation back.',
     };
   }
   if (path.basename(podmanBin) === 'docker') {
     return {
       mode: 'host',
-      note: 'AGENT_HUB_PODMAN_BIN is docker, which has no --userns=nomap; sessions run in the host user namespace.',
+      note: 'FLEETWRIGHT_PODMAN_BIN is docker, which has no --userns=nomap; sessions run in the host user namespace.',
     };
   }
   return { mode: 'nomap', note: '' };
@@ -94,19 +96,21 @@ function list(name) {
 }
 
 export function loadConfig(env = process.env) {
+  // Settings written before the rename (AGENT_HUB_*) read as FLEETWRIGHT_*.
+  adoptLegacyEnv(env);
   // Kept as a parameter for symmetry with tests, but the helpers above read
   // process.env directly; swap it in so an injected env actually applies.
   if (env !== process.env) process.env = /** @type {any} */ (env);
 
   const home = os.homedir();
-  const stateDir = str('AGENT_HUB_STATE_DIR', '/var/lib/agent-hub');
-  const userns = resolveUserns(str('AGENT_HUB_SANDBOX_USERNS', 'nomap'), str('AGENT_HUB_PODMAN_BIN', 'podman'));
+  const stateDir = str('FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub'));
+  const userns = resolveUserns(str('FLEETWRIGHT_SANDBOX_USERNS', 'nomap'), str('FLEETWRIGHT_PODMAN_BIN', 'podman'));
 
   const cfg = {
     // --- where state lives -------------------------------------------------
     // The deployment itself, which /update pulls into. Overridable for the odd
     // layout where the checkout is not the parent of src/.
-    installDir: str('AGENT_HUB_INSTALL_DIR', INSTALL_DIR),
+    installDir: str('FLEETWRIGHT_INSTALL_DIR', INSTALL_DIR),
     stateDir,
     stateFile: path.join(stateDir, 'state.json'),
     // The SessionStart hook appends here when it cannot reach the HTTP control
@@ -123,7 +127,7 @@ export function loadConfig(env = process.env) {
     //
     // Missing is the normal case and not an error: a host with no profiles
     // starts idle sessions, which is what every host did before this existed.
-    profileDir: str('AGENT_HUB_PROFILE_DIR', path.join(stateDir, 'profiles')),
+    profileDir: str('FLEETWRIGHT_PROFILE_DIR', path.join(stateDir, 'profiles')),
 
     // NAMED SECRETS, one file per name, resolved when a session that was
     // started with `--secret <name>` asks for it over the hook socket. The
@@ -136,7 +140,7 @@ export function loadConfig(env = process.env) {
     // git-diffable ("what are these boxes told"); a secret is the opposite, so
     // it gets its own directory and the operator keeps it out of any repo — or
     // seals it with systemd-creds, which docs/trust.md describes.
-    secretsDir: str('AGENT_HUB_SECRETS_DIR', path.join(stateDir, 'secrets')),
+    secretsDir: str('FLEETWRIGHT_SECRETS_DIR', path.join(stateDir, 'secrets')),
 
     // HOUSE RULES, which are a different thing from a profile and sit here
     // because they are governed by the same sentence.
@@ -153,53 +157,53 @@ export function loadConfig(env = process.env) {
     // cannot write the standing instructions of an agent with root in a
     // container. Putting a file here needs a shell here.
     //
-    // Beside profiles/ on purpose: `git -C /var/lib/agent-hub diff` then
+    // Beside profiles/ on purpose: `git -C /var/lib/fleetwright diff` then
     // answers "what are these boxes being told" for both halves at once.
     //
     // Missing is the normal case and not an error.
-    rulesFile: str('AGENT_HUB_RULES_FILE', path.join(stateDir, 'CLAUDE.md')),
+    rulesFile: str('FLEETWRIGHT_RULES_FILE', path.join(stateDir, 'CLAUDE.md')),
 
     // --- how sessions are launched ----------------------------------------
     // Sessions start here. It MUST be a trusted folder in ~/.claude.json or
     // claude blocks on the interactive "trust this folder?" prompt forever;
     // core/trust.js guarantees that at startup.
-    workdir: path.resolve(str('AGENT_HUB_WORKDIR', path.join(home, 'agent-runs'))),
+    workdir: path.resolve(str('FLEETWRIGHT_WORKDIR', preferExisting(path.join(home, 'fleetwright-runs'), path.join(home, 'agent-runs')))),
     // Resolved to an absolute path so sessions do not depend on how a login
     // shell happens to build PATH — see core/which.js for the specific trap
     // this avoids on a stock Debian box.
-    claudeBin: resolveBin(str('AGENT_HUB_CLAUDE_BIN', 'claude')),
+    claudeBin: resolveBin(str('FLEETWRIGHT_CLAUDE_BIN', 'claude')),
     // Concurrency cap. The box this pattern came from hard-froze under agent
     // load (load ~14 with 4 claude + 6 headless-chrome), which is what the cap
     // exists to prevent. It counts EVERY live tmux session the hub can see, not
     // just ones it launched — a cap that only counts its own launches is not a
     // cap.
-    maxSessions: Math.max(1, int('AGENT_HUB_MAX_SESSIONS', 5)),
+    maxSessions: Math.max(1, int('FLEETWRIGHT_MAX_SESSIONS', 5)),
     // --dangerously-skip-permissions. On by default because an unattended
     // session that stops for a permission prompt is a hung session, which is
     // the entire failure mode this tool exists to avoid. Turn it off and you
     // must drive every session interactively.
-    skipPermissions: bool('AGENT_HUB_SKIP_PERMISSIONS', true),
+    skipPermissions: bool('FLEETWRIGHT_SKIP_PERMISSIONS', true),
     // Ask Claude Code to bring up Remote Control so a session is drivable from
     // claude.ai/code. Requires an account with Remote Control available; if
     // yours does not have it, set this to 0 and drive sessions over SSH/tmux.
-    remoteControl: bool('AGENT_HUB_REMOTE_CONTROL', true),
+    remoteControl: bool('FLEETWRIGHT_REMOTE_CONTROL', true),
     // How long to wait for the Remote Control status line before re-issuing
     // /remote-control once and waiting again.
-    rcTimeoutMs: Math.max(3000, int('AGENT_HUB_RC_TIMEOUT_MS', 10000)),
+    rcTimeoutMs: Math.max(3000, int('FLEETWRIGHT_RC_TIMEOUT_MS', 10000)),
     // If Remote Control never comes online, is the session still useful? When
     // true the hub keeps it (you can still reach it over SSH); when false it
     // kills it so the slot frees and the failure is visible.
-    rcRequired: bool('AGENT_HUB_RC_REQUIRED', false),
+    rcRequired: bool('FLEETWRIGHT_RC_REQUIRED', false),
     // --- the ephemeral root sandbox (design.md §2) --------------------------
     // Off by default: it needs podman and a built image, and a box without
     // either must keep working exactly as before. When on, the pane's process
     // becomes `podman run -it` and the session gets real root inside a
     // container whose filesystem is discarded on every stop, while its
     // conversation and workspace live in named volumes that survive.
-    sandbox: bool('AGENT_HUB_SANDBOX', false),
-    podmanBin: str('AGENT_HUB_PODMAN_BIN', 'podman'),
+    sandbox: bool('FLEETWRIGHT_SANDBOX', false),
+    podmanBin: str('FLEETWRIGHT_PODMAN_BIN', 'podman'),
     // Fully qualified with the `localhost/` prefix on purpose. `podman build -t
-    // agent-session:latest` stores it as localhost/agent-session:latest, and a
+    // fleetwright-session:latest` stores it as localhost/fleetwright-session:latest, and a
     // BARE name at run time goes through short-name resolution — which fails
     // outright on a stock Debian 13, where no unqualified-search-registries are
     // configured. Naming it in full skips that lookup entirely. A remote image
@@ -207,18 +211,18 @@ export function loadConfig(env = process.env) {
     // Applying system packages needs root, which this service deliberately does
     // not have. Turning this on is half the story; the other half is a scoped
     // sudoers rule, and /upgrade prints the exact line when this is off.
-    systemUpgrade: bool('AGENT_HUB_SYSTEM_UPGRADE', false),
+    systemUpgrade: bool('FLEETWRIGHT_SYSTEM_UPGRADE', false),
     // Separate from systemUpgrade, and separately off. Rebooting ends every
     // running session; installing packages does not.
-    systemReboot: bool('AGENT_HUB_SYSTEM_REBOOT', false),
-    runUser: str('AGENT_HUB_USER', process.env.USER || 'agent'),
+    systemReboot: bool('FLEETWRIGHT_SYSTEM_REBOOT', false),
+    runUser: str('FLEETWRIGHT_USER', process.env.USER || 'agent'),
 
     // Pulled, not built. Every host running the same published image is the
     // only way "the sandbox" is one thing: with a local build, what a box got
     // depended on the day it built it, and two hosts on the same commit could
     // disagree about how a session behaves.
     //
-    // Set this to localhost/agent-session:latest to go back to building
+    // Set this to localhost/fleetwright-session:latest to go back to building
     // locally — ensureSandboxImage builds anything localhost/ and pulls
     // anything else, so an offline or air-gapped box has a way out.
     // OWNER FROM THE ENVIRONMENT, because a fork publishes its own.
@@ -232,41 +236,45 @@ export function loadConfig(env = process.env) {
     // registry.
     //
     // The default stays ours, which is right for this repository and for anyone
-    // who has not forked. AGENT_HUB_SANDBOX_IMAGE_OWNER is the short way to say
-    // "the same image, mine"; the full AGENT_HUB_SANDBOX_IMAGE still wins and
+    // who has not forked. FLEETWRIGHT_SANDBOX_IMAGE_OWNER is the short way to say
+    // "the same image, mine"; the full FLEETWRIGHT_SANDBOX_IMAGE still wins and
     // is still how you point at `localhost/` to build.
     sandboxImage: str(
-      'AGENT_HUB_SANDBOX_IMAGE',
-      `ghcr.io/${str('AGENT_HUB_SANDBOX_IMAGE_OWNER', 'thetechnetwork').toLowerCase()}/fleetwright-session:latest`,
+      'FLEETWRIGHT_SANDBOX_IMAGE',
+      `ghcr.io/${str('FLEETWRIGHT_SANDBOX_IMAGE_OWNER', 'thetechnetwork').toLowerCase()}/fleetwright-session:latest`,
     ),
     // WAS THE IMAGE NAMED OUTRIGHT? `sandboxImage` always has a value, so
     // nothing downstream could tell "the operator chose this" from "this is our
     // default" — and the difference decides whether the `sandbox` verb may
     // change it. Recorded here because this is the only place that can still
     // see the environment as it was.
-    sandboxImagePinned: 'AGENT_HUB_SANDBOX_IMAGE' in process.env,
+    sandboxImagePinned: 'FLEETWRIGHT_SANDBOX_IMAGE' in process.env,
     // Build the image on demand if it is missing, rather than refusing to start
     // a session over something we know how to fix. The first session on a fresh
     // box pays a few minutes for it; every one after that is instant.
-    sandboxAutoBuild: bool('AGENT_HUB_SANDBOX_AUTO_BUILD', true),
+    sandboxAutoBuild: bool('FLEETWRIGHT_SANDBOX_AUTO_BUILD', true),
     // The Containerfile to build from, next to the checkout by default.
-    sandboxContainerfile: str('AGENT_HUB_SANDBOX_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'Containerfile')),
+    sandboxContainerfile: str('FLEETWRIGHT_SANDBOX_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'Containerfile')),
     // Resource limits become podman flags — one mechanism rather than a
     // separate cgroup layer. Empty disables the flag entirely.
-    sandboxMemory: str('AGENT_HUB_SANDBOX_MEMORY', '8g'),
-    sandboxCpus: str('AGENT_HUB_SANDBOX_CPUS', '2'),
-    sandboxPidsLimit: str('AGENT_HUB_SANDBOX_PIDS_LIMIT', '512'),
+    sandboxMemory: str('FLEETWRIGHT_SANDBOX_MEMORY', '8g'),
+    sandboxCpus: str('FLEETWRIGHT_SANDBOX_CPUS', '2'),
+    sandboxPidsLimit: str('FLEETWRIGHT_SANDBOX_PIDS_LIMIT', '512'),
     // Anything else to hand podman, space separated. An escape hatch for the
     // deployment-specific (extra mounts, --network, --userns) that does not
     // belong hard-coded here.
-    sandboxExtraArgs: splitArgs(str('AGENT_HUB_SANDBOX_ARGS')),
+    sandboxExtraArgs: splitArgs(str('FLEETWRIGHT_SANDBOX_ARGS')),
     // Typed on purpose, and logged on every start. See core/sandbox-args.js:
     // the refusal has to be escapable or it gets escaped by deleting the check.
-    sandboxAllowUnsafeArgs: bool('AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS', false),
+    sandboxAllowUnsafeArgs: bool('FLEETWRIGHT_SANDBOX_ALLOW_UNSAFE_ARGS', false),
     // Where a packaged host asks what the current release is. Unset on a
     // checkout, which updates by git and always will — see docs/packaging.md,
     // where the fallback is what makes moving one box at a time safe.
-    releaseManifest: str('AGENT_HUB_RELEASE_MANIFEST'),
+    releaseManifest: str('FLEETWRIGHT_RELEASE_MANIFEST'),
+    // `apt` on a box installed from the deb, and empty everywhere else. It
+    // outranks the manifest: such a box has exactly one updater, and it is
+    // apt — see src/core/apt-release.js.
+    releaseSource: str('FLEETWRIGHT_RELEASE_SOURCE'),
     // WHICH RELEASES THIS BOX TAKES. `stable` skips anything marked as a
     // prerelease; `prerelease` takes both. Per host on purpose — the point of
     // marking a release is that it goes to the machines somebody chose to
@@ -284,7 +292,7 @@ export function loadConfig(env = process.env) {
     //
     // Unset means unset. channel.js owns what that falls back to, in one place,
     // and it falls back to stable.
-    releaseChannel: str('AGENT_HUB_RELEASE_CHANNEL', ''),
+    releaseChannel: str('FLEETWRIGHT_RELEASE_CHANNEL', ''),
     // Which user namespace a session runs in. `nomap`: container root is a
     // subordinate uid that owns nothing on the box. `host`: container root is
     // the service user — the account that owns the credential and the sockets,
@@ -296,17 +304,17 @@ export function loadConfig(env = process.env) {
     sandboxUsernsNote: userns.note,
     // WHERE A SESSION MAY REACH. `open` (the default, and what every session
     // has had): anywhere. `allowlist`: only the hosts in core/egress.js plus
-    // AGENT_HUB_SANDBOX_EGRESS_ALLOW, through a proxy container on an
+    // FLEETWRIGHT_SANDBOX_EGRESS_ALLOW, through a proxy container on an
     // internal network — SEC-INJECT-2 in docs/security.md, built and opt-in.
-    sandboxEgress: str('AGENT_HUB_SANDBOX_EGRESS', 'open') === 'allowlist' ? 'allowlist' : 'open',
-    sandboxEgressAllow: list('AGENT_HUB_SANDBOX_EGRESS_ALLOW'),
-    sandboxEgressSubnet: str('AGENT_HUB_SANDBOX_EGRESS_SUBNET', '10.89.201.0/24'),
-    sandboxEgressImage: str('AGENT_HUB_SANDBOX_EGRESS_IMAGE', 'localhost/agent-egress:latest'),
-    sandboxEgressContainerfile: str('AGENT_HUB_SANDBOX_EGRESS_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'egress', 'Containerfile')),
+    sandboxEgress: str('FLEETWRIGHT_SANDBOX_EGRESS', 'open') === 'allowlist' ? 'allowlist' : 'open',
+    sandboxEgressAllow: list('FLEETWRIGHT_SANDBOX_EGRESS_ALLOW'),
+    sandboxEgressSubnet: str('FLEETWRIGHT_SANDBOX_EGRESS_SUBNET', '10.89.201.0/24'),
+    sandboxEgressImage: str('FLEETWRIGHT_SANDBOX_EGRESS_IMAGE', 'localhost/agent-egress:latest'),
+    sandboxEgressContainerfile: str('FLEETWRIGHT_SANDBOX_EGRESS_CONTAINERFILE', path.join(INSTALL_DIR, 'sandbox', 'egress', 'Containerfile')),
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
-    sandboxHookSocket: bool('AGENT_HUB_SANDBOX_HOOK_SOCKET', true),
-    sandboxHookSocketDir: str('AGENT_HUB_SANDBOX_HOOK_SOCKET_DIR', '/run/agent-fleet'),
+    sandboxHookSocket: bool('FLEETWRIGHT_SANDBOX_HOOK_SOCKET', true),
+    sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', preferExisting('/run/fleetwright-sidecar', '/run/agent-fleet')),
     // Copied into each session's fresh conversation volume, or the session
     // comes up unauthenticated and hangs at a login prompt nobody can answer.
     // Set empty to disable and manage credentials yourself.
@@ -315,14 +323,14 @@ export function loadConfig(env = process.env) {
     // adopted into an account row on first run, so a host that has been working
     // for months goes on working under the name of the person it always
     // belonged to.
-    sandboxCredentialsFile: str('AGENT_HUB_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
+    sandboxCredentialsFile: str('FLEETWRIGHT_SANDBOX_CREDENTIALS', path.join(home, '.claude', '.credentials.json')),
 
-    // Whose account local surfaces use — the web console, and `agent-hub new`
+    // Whose account local surfaces use — the web console, and `fleetwright new`
     // typed on the box. (It named the Telegram bot first, which has been
     // archived since docs/telegram.md; the comment outlived the surface.) Needed only when more than one person
     // has linked an account here; with exactly one, that one is the answer.
     // See operatorAccount().
-    operator: str('AGENT_HUB_OPERATOR'),
+    operator: str('FLEETWRIGHT_OPERATOR'),
     // How often a session start may re-pull the registry for a newer sandbox
     // image. OFF BY DEFAULT, and that default is the deliberate one.
     //
@@ -339,7 +347,7 @@ export function loadConfig(env = process.env) {
     // Set this to re-enable the background check (21600000 is the old six
     // hours). /update refreshes regardless; a `localhost/` build is never
     // chased whatever this says.
-    sandboxRefreshMs: int('AGENT_HUB_SANDBOX_REFRESH_MS', 0),
+    sandboxRefreshMs: int('FLEETWRIGHT_SANDBOX_REFRESH_MS', 0),
 
     // COMMIT-CONFIRM for updates, in milliseconds. After a packaged update
     // swaps the release, the box has this long to prove itself — reconnect to
@@ -349,7 +357,7 @@ export function loadConfig(env = process.env) {
     // into. Ten minutes by default; 0 turns it off and an update simply stays,
     // as it did before. Only packaged boxes (a `current` symlink with the
     // previous release kept beside it) can revert; a checkout cannot.
-    updateConfirmMs: int('AGENT_HUB_UPDATE_CONFIRM_MS', 10 * 60 * 1000),
+    updateConfirmMs: int('FLEETWRIGHT_UPDATE_CONFIRM_MS', 10 * 60 * 1000),
 
     // How often to make sure the Claude credentials on this box are still
     // live. 0 turns it off.
@@ -363,23 +371,23 @@ export function loadConfig(env = process.env) {
     // credential with hours left on it costs nothing at all. See
     // src/core/keepalive.js — the expensive step is only reached when the free
     // one did not work, and only when there is something to gain.
-    credentialKeepaliveMs: Math.max(0, int('AGENT_HUB_CREDENTIAL_KEEPALIVE_MS', 3_600_000)),
+    credentialKeepaliveMs: Math.max(0, int('FLEETWRIGHT_CREDENTIAL_KEEPALIVE_MS', 3_600_000)),
 
 
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.
     // Turn it off on a shared box where other tmux sessions are none of the
     // hub's business.
-    adoptUntracked: bool('AGENT_HUB_ADOPT_UNTRACKED', true),
+    adoptUntracked: bool('FLEETWRIGHT_ADOPT_UNTRACKED', true),
 
     // --- Claude account login ----------------------------------------------
     // Run `claude auth login` from chat / the web UI, so a fresh box can be
     // authenticated without SSH. The flow needs a dedicated tmux pane to type
     // the pasted code into; it is kept out of the session list and never
     // counts against the cap.
-    loginEnabled: bool('AGENT_HUB_LOGIN', true),
-    loginSessionName: str('AGENT_HUB_LOGIN_SESSION', 'agent-hub-login'),
-    loginTimeoutMs: Math.max(30_000, int('AGENT_HUB_LOGIN_TIMEOUT_MS', 600_000)),
+    loginEnabled: bool('FLEETWRIGHT_LOGIN', true),
+    loginSessionName: str('FLEETWRIGHT_LOGIN_SESSION', 'fleetwright-login'),
+    loginTimeoutMs: Math.max(30_000, int('FLEETWRIGHT_LOGIN_TIMEOUT_MS', 600_000)),
     // HOW LONG A FORGOTTEN SESSION IS STILL RECOVERABLE.
     //
     // Seven days, because the mistake this exists for is usually noticed the
@@ -390,7 +398,7 @@ export function loadConfig(env = process.env) {
     // stay on the box for the whole window. Zero turns the bin off and
     // restores the old behaviour, deleting immediately, which is the right
     // setting for a box that is tight on space and the wrong default.
-    binTtlMs: Math.max(0, int('AGENT_HUB_BIN_DAYS', 7) * 86_400_000),
+    binTtlMs: Math.max(0, int('FLEETWRIGHT_BIN_DAYS', 7) * 86_400_000),
 
     // --- resume ------------------------------------------------------------
     // `claude --resume <uuid>` on a large or stale conversation shows a blocking
@@ -408,35 +416,35 @@ export function loadConfig(env = process.env) {
     // We deliberately never offer "Don't ask me again", which flips a global
     // preference for every future session, interactive ones included.
     resumeChoice: /** @type {'ask'|'summary'|'full'} */ (
-      ['ask', 'summary', 'full'].includes(str('AGENT_HUB_RESUME_CHOICE', 'ask').toLowerCase())
-        ? str('AGENT_HUB_RESUME_CHOICE', 'ask').toLowerCase()
+      ['ask', 'summary', 'full'].includes(str('FLEETWRIGHT_RESUME_CHOICE', 'ask').toLowerCase())
+        ? str('FLEETWRIGHT_RESUME_CHOICE', 'ask').toLowerCase()
         : 'ask'
     ),
     // Boot restore can never ask — nobody is present at 3am after a reboot —
     // so it always uses a concrete choice. Defaults to the cheap, recommended
     // summary; set 'full' if you would rather pay for complete context.
     resumeChoiceUnattended: /** @type {'summary'|'full'} */ (
-      str('AGENT_HUB_RESUME_CHOICE_UNATTENDED', 'summary').toLowerCase() === 'full' ? 'full' : 'summary'
+      str('FLEETWRIGHT_RESUME_CHOICE_UNATTENDED', 'summary').toLowerCase() === 'full' ? 'full' : 'summary'
     ),
     // How long a session may sit at the dialog waiting for someone to choose.
     // On timeout the summary option is taken, so a forgotten /resume degrades
     // into the safe default instead of a session hung forever.
-    resumeAskTimeoutMs: Math.max(30_000, int('AGENT_HUB_RESUME_ASK_TIMEOUT_MS', 600_000)),
-    resumeDialogWaitMs: Math.max(5000, int('AGENT_HUB_RESUME_DIALOG_WAIT_MS', 45000)),
+    resumeAskTimeoutMs: Math.max(30_000, int('FLEETWRIGHT_RESUME_ASK_TIMEOUT_MS', 600_000)),
+    resumeDialogWaitMs: Math.max(5000, int('FLEETWRIGHT_RESUME_DIALOG_WAIT_MS', 45000)),
     // On hub startup, resume any session that state says was running but whose
     // tmux is gone — i.e. the box rebooted or the tmux server died under it.
-    restoreOnStart: bool('AGENT_HUB_RESTORE_ON_START', true),
+    restoreOnStart: bool('FLEETWRIGHT_RESTORE_ON_START', true),
 
     // --- the HTTP control surface -----------------------------------------
     // ALWAYS bound, because the SessionStart hook posts conversation uuids to
     // it. Default 127.0.0.1: safe with no token. Bind wider (or point a
     // Cloudflare Tunnel at it) and a token becomes mandatory — see validate().
-    bind: str('AGENT_HUB_BIND', '127.0.0.1'),
-    port: int('AGENT_HUB_PORT', 8790),
-    token: str('AGENT_HUB_TOKEN'),
+    bind: str('FLEETWRIGHT_BIND', '127.0.0.1'),
+    port: int('FLEETWRIGHT_PORT', 8790),
+    token: str('FLEETWRIGHT_TOKEN'),
     // Serve the browser UI. Turn off for a Telegram-only deployment; the
     // internal hook endpoint keeps working either way.
-    webEnabled: bool('AGENT_HUB_WEB', true),
+    webEnabled: bool('FLEETWRIGHT_WEB', true),
 
     // --- Telegram, archived --------------------------------------------------
     //
@@ -451,14 +459,14 @@ export function loadConfig(env = process.env) {
     // that is gone, because it reads as a broken bot rather than an absent one.
     // The other two keys are not read by anything and are not pretended to be.
     telegram: {
-      token: str('AGENT_HUB_TELEGRAM_TOKEN'),
+      token: str('FLEETWRIGHT_TELEGRAM_TOKEN'),
     },
 
     // Overridable so a test can point them at a stub rather than the real ones.
-    journalctlBin: str('AGENT_HUB_JOURNALCTL_BIN', 'journalctl'),
-    systemctlBin: str('AGENT_HUB_SYSTEMCTL_BIN', 'systemctl'),
+    journalctlBin: str('FLEETWRIGHT_JOURNALCTL_BIN', 'journalctl'),
+    systemctlBin: str('FLEETWRIGHT_SYSTEMCTL_BIN', 'systemctl'),
 
-    logLevel: str('AGENT_HUB_LOG_LEVEL', 'info'),
+    logLevel: str('FLEETWRIGHT_LOG_LEVEL', 'info'),
     hostname: os.hostname(),
   };
 
@@ -477,7 +485,7 @@ export function validateConfig(cfg) {
   /** @type {string[]} */
   const warnings = [];
 
-  // The sandbox escape hatch, checked. AGENT_HUB_SANDBOX_ARGS is spliced
+  // The sandbox escape hatch, checked. FLEETWRIGHT_SANDBOX_ARGS is spliced
   // straight into `podman run`, and a handful of the things it can say do not
   // extend the sandbox — they remove it, while every document here goes on
   // describing a session as contained. See core/sandbox-args.js.
@@ -500,20 +508,20 @@ export function validateConfig(cfg) {
   const localOnly = cfg.bind === '127.0.0.1' || cfg.bind === 'localhost' || cfg.bind === '::1';
   if (!localOnly && !cfg.token) {
     errors.push(
-      `AGENT_HUB_BIND is ${cfg.bind} (not loopback) but AGENT_HUB_TOKEN is empty. ` +
+      `FLEETWRIGHT_BIND is ${cfg.bind} (not loopback) but FLEETWRIGHT_TOKEN is empty. ` +
         'Set a token, or bind 127.0.0.1 and put a Cloudflare Tunnel in front.',
     );
   }
   if (cfg.token && cfg.token.length < 16) {
-    errors.push('AGENT_HUB_TOKEN is shorter than 16 characters — generate one with `openssl rand -hex 24`.');
+    errors.push('FLEETWRIGHT_TOKEN is shorter than 16 characters — generate one with `openssl rand -hex 24`.');
   }
 
-  // NOT WARNED ABOUT WHEN ABSENT. "No AGENT_HUB_TELEGRAM_TOKEN — the Telegram
+  // NOT WARNED ABOUT WHEN ABSENT. "No FLEETWRIGHT_TELEGRAM_TOKEN — the Telegram
   // adapter is disabled" told every box in the fleet about a feature that no
   // longer exists, every start, for ever.
   if (cfg.telegram.token) {
     warnings.push(
-      'AGENT_HUB_TELEGRAM_TOKEN is set and the Telegram adapter is archived — nothing reads it. ' +
+      'FLEETWRIGHT_TELEGRAM_TOKEN is set and the Telegram adapter is archived — nothing reads it. ' +
         'See docs/telegram.md.',
     );
   }

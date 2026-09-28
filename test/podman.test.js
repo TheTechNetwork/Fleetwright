@@ -34,7 +34,7 @@ import {
  *   rootless /proc not fully visible — via `hidepid` (ProtectProc) or a
  *   /proc/kmsg overmount (ProtectKernelLogs), per `maskKind`. `stillMasked`
  *   keeps it poisoned even after `system migrate`, standing in for a box where
- *   agent-hub itself still masks /proc.
+ *   fleetwright itself still masks /proc.
  */
 function stubPodman(
   t,
@@ -90,7 +90,7 @@ case "$1 $2" in
   # it. A healthy box carries a fully-visible /proc (binfmt_misc is a functional
   # submount, NOT poisoning); a poisoned one masks /proc via hidepid or a
   # /proc/kmsg overmount. \`system migrate\` recreates it clean — unless the box
-  # is stillMasked, standing in for agent-hub itself masking /proc.
+  # is stillMasked, standing in for fleetwright itself masking /proc.
   "unshare cat")
     ${failUnshare ? 'exit 1' : ''}
     printf '%s\\n' '23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw'
@@ -133,7 +133,7 @@ exit 0
     /** @param {Partial<any>} patch @returns {any} */
     cfg: (patch = {}) => ({
       podmanBin: bin,
-      sandboxImage: 'localhost/agent-session:latest',
+      sandboxImage: 'localhost/fleetwright-session:latest',
       sandboxAutoBuild: true,
       sandboxContainerfile: containerfile,
       sandboxCredentialsFile: '',
@@ -148,7 +148,7 @@ exit 0
 // --- getting the image ------------------------------------------------------
 
 test('an image that is already there is not rebuilt', async (t) => {
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
 
   const r = await ensureSandboxImage(s.cfg());
 
@@ -168,7 +168,7 @@ test('a missing local image is BUILT rather than refused', async (t) => {
   assert.equal(r.built, true);
   const build = s.calls().find((c) => c.startsWith('build'));
   assert.ok(build, 'it must actually build');
-  assert.match(build, /-t localhost\/agent-session:latest/);
+  assert.match(build, /-t localhost\/fleetwright-session:latest/);
   assert.match(build, /-f .*Containerfile/);
 });
 
@@ -177,10 +177,10 @@ test('a missing REMOTE image is pulled, not built', async (t) => {
   // be a lie about what the image contains.
   const s = stubPodman(t, { has: [] });
 
-  const r = await ensureSandboxImage(s.cfg({ sandboxImage: 'ghcr.io/someone/agent-session:v2' }));
+  const r = await ensureSandboxImage(s.cfg({ sandboxImage: 'ghcr.io/someone/fleetwright-session:v2' }));
 
   assert.equal(r.ok, true);
-  assert.ok(s.calls().some((c) => c === 'pull ghcr.io/someone/agent-session:v2'));
+  assert.ok(s.calls().some((c) => c === 'pull ghcr.io/someone/fleetwright-session:v2'));
   assert.ok(!s.calls().some((c) => c.startsWith('build')));
 });
 
@@ -235,7 +235,7 @@ test('a digest-pinned image is not mutable, and says it is pinned', async (t) =>
   const ref =
     'ghcr.io/thetechnetwork/fleetwright-session@sha256:' +
     'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
-  // AGENT_HUB_SANDBOX_IMAGE naming an exact digest is a pin: pinnedByEnv is
+  // FLEETWRIGHT_SANDBOX_IMAGE naming an exact digest is a pin: pinnedByEnv is
   // true, sessionImage hands it back verbatim, and nothing here re-pulls it.
   const st = sandboxImageStatus(s.cfg({ sandboxImage: ref, sandboxImagePinned: true }));
 
@@ -250,7 +250,7 @@ test('a localhost image built here does not drift — the other tag was never pu
   // so variantOf answers, but there is no registry to re-pull from.
   const st = sandboxImageStatus(s.cfg());
 
-  assert.equal(st.image, 'localhost/agent-session:latest');
+  assert.equal(st.image, 'localhost/fleetwright-session:latest');
   assert.equal(st.variant, 'minimal');
   assert.equal(st.mutable, false, 'a local build cannot change under us — nothing pulls it');
 });
@@ -291,7 +291,7 @@ test('a box where nobody has linked an account refuses, and names the remedy', a
   // docs/one-account-per-person.md. Starting anyway would produce a session
   // sitting at a login prompt with nobody there to answer it, which is the
   // exact silent hang this tool exists to prevent.
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
 
   const r = await ensureSandboxVolumes(s.cfg(), 'nobody');
 
@@ -330,7 +330,7 @@ test('the credential is seeded over stdin, never bind-mounted', async (t) => {
   // container does not map, so a `cp` inside the container cannot open it.
   // This process can: it reads the bytes and hands them over on stdin, where
   // `ps` never shows them and nothing parses them as a command line.
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
   const email = linkAccount(s.dir);
   const credential = JSON.stringify({ claudeAiOauth: { accessToken: "it's 'quoted'" } });
   writeFileSync(path.join(s.dir, 'accounts', `${email}.json`), credential);
@@ -351,7 +351,7 @@ test('the credential is seeded over stdin, never bind-mounted', async (t) => {
 test('every helper container that touches a volume carries the same userns flag', async (t) => {
   // One flag, every container. A volume written under one mapping and read
   // under another is unreadable on the next resume, silently.
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
   linkAccount(s.dir);
   writeFileSync(path.join(s.dir, 'CLAUDE.md'), '# rules\n');
 
@@ -364,7 +364,7 @@ test('every helper container that touches a volume carries the same userns flag'
 
 test('with the host namespace chosen, no container gets a --userns at all', async (t) => {
   // The exact line every session ran before the setting existed.
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
   linkAccount(s.dir);
 
   await ensureSandboxVolumes(s.cfg({ sandboxUserns: 'host' }), 'bigjob');
@@ -420,7 +420,7 @@ test('podman missing entirely is its own message', async (t) => {
   const r = await ensureSandboxVolumes(s.cfg({ podmanBin: '/nonexistent/podman' }), 'bigjob');
 
   assert.equal(r.ok, false);
-  assert.match(String(r.message), /is not installed, but AGENT_HUB_SANDBOX is on/);
+  assert.match(String(r.message), /is not installed, but FLEETWRIGHT_SANDBOX is on/);
 });
 
 // --- the /proc self-heal ----------------------------------------------------
@@ -496,7 +496,7 @@ test('a failed namespace recreate is reported, not hidden behind a healed=true',
 });
 
 test('a migrate that leaves /proc still masked is reported, not falsely called healed', async (t) => {
-  // The box where agent-hub ITSELF still masks /proc: migrate runs, but the new
+  // The box where fleetwright ITSELF still masks /proc: migrate runs, but the new
   // pause comes back just as poisoned. The self-heal must verify, not assume —
   // this is the failure that made the first version log a reassuring lie.
   const s = stubPodman(t, { poisoned: true, stillMasked: true });
@@ -519,7 +519,7 @@ test('volumes and the container are named per session', async () => {
 });
 
 test('forgetting a session removes both of its volumes', async (t) => {
-  const s = stubPodman(t, { has: ['localhost/agent-session:latest'] });
+  const s = stubPodman(t, { has: ['localhost/fleetwright-session:latest'] });
   // volumeExists says no in the stub, so nothing is removed — which is itself
   // the right behaviour: never try to delete what is not there.
   const r = removeSandboxVolumes(s.cfg(), 'bigjob');

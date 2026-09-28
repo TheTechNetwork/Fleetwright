@@ -1,6 +1,6 @@
 // Whose session is this?
 //
-// It used to be unanswerable. agent-hub hardcoded `actor: web` for every HTTP
+// It used to be unanswerable. fleetwright hardcoded `actor: web` for every HTTP
 // caller, so the coordinator verified an email, handed it to the sidecar, and
 // the record one hop away stored the string "web". Every session on every host
 // had the same creator.

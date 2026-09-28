@@ -29,7 +29,9 @@
 
 set -eu
 
-STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
+# A unit written before the rename sets AGENT_HUB_STATE_DIR.
+STATE_DIR="${FLEETWRIGHT_STATE_DIR:-${AGENT_HUB_STATE_DIR:-/var/lib/fleetwright}}"
+[ -e "$STATE_DIR" ] || [ ! -d /var/lib/agent-hub ] || STATE_DIR=/var/lib/agent-hub
 FLEET_BASE="${FLEET_BASE:-/opt/fleetwright}"
 
 trial="$STATE_DIR/update-confirm"

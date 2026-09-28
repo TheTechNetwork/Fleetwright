@@ -2,7 +2,7 @@
 //
 //   node --test test/
 //
-// `AGENT_FLEET_AUTH_ALLOW` is an environment variable, so adding a person meant
+// `FLEETWRIGHT_AUTH_ALLOW` is an environment variable, so adding a person meant
 // editing wrangler.toml, committing, and waiting for a deploy — a CODE CHANGE
 // PER PERSON, performed by the one person who can already do everything. For a
 // product whose premise is "nothing to ssh into", it was the last thing you had
@@ -295,17 +295,17 @@ test('the email binding is configured, and configuring it did not orphan a var',
     if (kv && table === 'vars') vars.add(kv[1]);
   }
 
-  // AGENT_FLEET_AUTH_ALLOW is NOT in this list any more, and its absence is the
+  // FLEETWRIGHT_AUTH_ALLOW is NOT in this list any more, and its absence is the
   // fix rather than an omission: it is a `wrangler secret` now, because it
   // decides who can reach a fleet and does not belong in a public repository.
   // A `[vars]` entry of that name would CLOBBER the secret on every deploy —
   // Cloudflare keeps the two in one namespace — so it must stay absent.
-  for (const name of ['AGENT_FLEET_AUTH_AUDIENCES', 'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_DOCS_URL']) {
+  for (const name of ['FLEETWRIGHT_AUTH_AUDIENCES', 'FLEETWRIGHT_GITHUB_CLIENT_ID', 'FLEETWRIGHT_DOCS_URL']) {
     assert.ok(vars.has(name), `${name} fell out of [vars] — sign-in or the docs link would break silently`);
   }
-  assert.equal(vars.has('AGENT_FLEET_AUTH_ALLOW'), false,
+  assert.equal(vars.has('FLEETWRIGHT_AUTH_ALLOW'), false,
     'the allowlist is a var again, and a deploy would clobber the secret of the same name');
-  assert.ok(vars.has('AGENT_FLEET_INVITE_FROM'), 'no sender address, so no invitation email can be sent');
+  assert.ok(vars.has('FLEETWRIGHT_INVITE_FROM'), 'no sender address, so no invitation email can be sent');
   assert.match(toml, /\[\[send_email\]\]/, 'the email binding is not declared');
 });
 

@@ -36,13 +36,13 @@ routes = [
 # a check that can only ever pass is a check nobody maintains. The apps keep
 # sending it because a client with no credential is not signed in, and the
 # string being obviously a demo one is worth more in a log than in a comparison.
-AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+FLEETWRIGHT_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 
 # Named here as well as in the route so test/demo-button.test.js can compare it
 # to what the two apps compiled in. Three copies exist; nothing at runtime would
 # notice them drifting apart, and an app pointed at a domain that no longer
 # serves a demo fails in a way that reads as "the app is broken".
-AGENT_FLEET_DEMO_HOST = "fleetdemo.thetech.network"
+FLEETWRIGHT_DEMO_HOST = "fleetdemo.thetech.network"
 
 # 60 requests a minute per client address: far more than a person tapping
 # around an app, far less than anything worth doing with a hundred thousand

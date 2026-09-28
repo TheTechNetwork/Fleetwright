@@ -70,7 +70,7 @@ test('the installer in a release starts at all', (t) => {
     // takes --help down with it. Printing usage proves nothing runs too early.
     const r = spawnSync('bash', [path.join(rel.root, 'install', 'install.sh'), '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, AGENT_FLEET_BASE: path.join(rel.dir, 'base') },
+      env: { ...process.env, FLEETWRIGHT_BASE: path.join(rel.dir, 'base') },
     });
     const out = `${r.stdout}${r.stderr}`;
     assert.doesNotMatch(out, /unbound variable/, out.split('\n').slice(0, 3).join('\n'));
@@ -88,7 +88,7 @@ test('--check from a release changes nothing, including the release layout', (t)
   try {
     const r = spawnSync('bash', [path.join(rel.root, 'install', 'install.sh'), '--check'], {
       encoding: 'utf8',
-      env: { ...process.env, AGENT_FLEET_BASE: base },
+      env: { ...process.env, FLEETWRIGHT_BASE: base },
     });
     const out = `${r.stdout}${r.stderr}`;
     assert.doesNotMatch(out, /unbound variable/, out.split('\n').slice(0, 3).join('\n'));
@@ -134,7 +134,7 @@ test('a half-finished migration is resumed, not declared complete', () => {
   // finally made the rule executable, in migration-end-to-end.test.js, rather
   // than only readable here.
   assert.match(mig, /UNIT_DIR="\$\{FLEETWRIGHT_UNIT_DIR:-\/etc\/systemd\/system\}"/);
-  assert.match(mig, /UNIT="\$UNIT_DIR\/agent-hub\.service"/);
+  assert.match(mig, /UNIT="\$UNIT_DIR\/fleetwright\.service"/);
   // EXECSTART, NOT THE WHOLE FILE. A unit names the tree in WorkingDirectory
   // and EnvironmentFile too, so grepping the file asks "does this mention the
   // release" when the question is "does it RUN from it" — and a box whose
@@ -144,7 +144,7 @@ test('a half-finished migration is resumed, not declared complete', () => {
 
   // And neither of the two wrong questions decides it any more. The symlink is
   // now a reason to CONTINUE; the env-file install dir is gone from the test
-  // entirely, because nothing ever writes AGENT_HUB_INSTALL_DIR.
+  // entirely, because nothing ever writes FLEETWRIGHT_INSTALL_DIR.
   const guard = mig.slice(mig.indexOf('ALREADY DONE IS NOT A FAILURE'), mig.indexOf('CHANNEL='));
   assert.doesNotMatch(guard, /\|\| \[ -L "\$BASE\/current" \]/, 'a leftover symlink still means "done"');
   assert.match(guard, /continuing from there/);
@@ -152,14 +152,14 @@ test('a half-finished migration is resumed, not declared complete', () => {
 
 test('nothing writes the variable the helper used to trust', () => {
   // The quieter half of the same bug, and the reason the symlink was reached
-  // for at all: `env_get AGENT_HUB_INSTALL_DIR` always returns empty, so the
+  // for at all: `env_get FLEETWRIGHT_INSTALL_DIR` always returns empty, so the
   // check it fed was a hardcoded path wearing a variable's clothes — false even
   // after a migration that worked.
   //
   // If somebody teaches the installer to record it, this test fails and the
   // guard above can be reconsidered on purpose rather than by accident.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-  assert.doesNotMatch(sh, /set_env[^\n]*AGENT_HUB_INSTALL_DIR/);
+  assert.doesNotMatch(sh, /set_env[^\n]*FLEETWRIGHT_INSTALL_DIR/);
 });
 
 test('a release that cannot install itself is refused before current moves', () => {
@@ -253,15 +253,15 @@ test('a migration uses the installer the box already has', () => {
   const mig = readFileSync(new URL('../install/fleetwright-migrate', import.meta.url), 'utf8');
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 
-  assert.match(sh, /DIR="\$\{AGENT_FLEET_PAYLOAD:-/, 'install.sh cannot be pointed at a payload');
+  assert.match(sh, /DIR="\$\{FLEETWRIGHT_PAYLOAD:-/, 'install.sh cannot be pointed at a payload');
   // FROM THE VERIFIED COPY, ON BOTH ROUTES. The box's own installer was
   // preferred for a while — refreshed by the one-liner, so an installer fix
   // needed no release — and the cost went unnamed: install.sh chowns the
   // checkout to the service user so /update can pull, so root was executing a
   // script the service user could rewrite. Root now runs only what the
   // manifest's sha256 vouched for, unpacked where only root can reach.
-  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" exec bash "\$WORK\/release\/install\/install\.sh" --upgrade/);
-  assert.match(mig, /AGENT_FLEET_PAYLOAD="\$BASE\/current" bash "\$WORK\/release\/install\/install\.sh" --repair/);
+  assert.match(mig, /FLEETWRIGHT_PAYLOAD="\$BASE\/current" exec bash "\$WORK\/release\/install\/install\.sh" --upgrade/);
+  assert.match(mig, /FLEETWRIGHT_PAYLOAD="\$BASE\/current" bash "\$WORK\/release\/install\/install\.sh" --repair/);
   assert.doesNotMatch(mig, /LOCAL_INSTALLER/, 'the checkout\u2019s installer must not run as root');
   assert.doesNotMatch(mig, /exec bash "\$BASE\/current\/install\/install\.sh"/, 'nor the one under a symlink the service user swaps');
 
@@ -292,8 +292,8 @@ test('a release whose own installer is broken can still be migrated to', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
-        AGENT_FLEET_PAYLOAD: path.join(base, 'current'),
-        AGENT_FLEET_BASE: base,
+        FLEETWRIGHT_PAYLOAD: path.join(base, 'current'),
+        FLEETWRIGHT_BASE: base,
       },
     });
     const out = `${r.stdout}${r.stderr}`;
@@ -345,14 +345,14 @@ test('the entry points a unit names run under node, not just as scripts', async 
   // inside, which works when something RUNS the file — and the systemd unit
   // does not run it:
   //
-  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //     ExecStart=__NODE__ __DIR__/bin/fleetwright serve
   //
   // node strips the `#!` line, meets the `#` on line 2, and every packaged
   // service died at startup in a restart loop:
   //
   //     SyntaxError: Invalid or unexpected token
   //
-  // A checkout's bin/agent-hub is JavaScript with a node shebang, so both forms
+  // A checkout's bin/fleetwright is JavaScript with a node shebang, so both forms
   // work there. The packaged shim was the only artifact where they differed,
   // and it is the one systemd invokes.
   const rel = unpackedRelease();
@@ -361,18 +361,18 @@ test('the entry points a unit names run under node, not just as scripts', async 
     // The unit names __ENTRY__ now, which install.sh resolves to lib/<name>.mjs
     // on a release and bin/<name> on a checkout — see the entry tests below.
     // What matters here is unchanged: whatever it resolves to has to start.
-    const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
+    const unit = readFileSync(new URL('../install/fleetwright.service', import.meta.url), 'utf8');
     assert.match(unit, /ExecStart=__NODE__ __ENTRY__ serve/, 'the unit names no entry point');
 
     // The coordinator is deliberately NOT here: it moved to a Cloudflare
     // Worker, so a release ships none — and the installer must not write a unit
     // for it either, which the next test asserts.
-    for (const entry of ['agent-hub', 'agent-fleet-sidecar', 'agent-fleet-mcp']) {
+    for (const entry of ['fleetwright', 'fleetwright-sidecar', 'fleetwright-mcp']) {
       const file = path.join(rel.root, 'bin', entry);
       assert.equal(existsSync(file), true, `no bin/${entry} in the release`);
 
       // WHAT IS ASSERTED IS THAT IT STARTS, not that it succeeds. Exit codes
-      // belong to each tool: agent-fleet-mcp refuses without a coordinator URL
+      // belong to each tool: fleetwright-mcp refuses without a coordinator URL
       // and a credential, and is right to. A shim that node cannot parse dies
       // before any of that, which is the failure this test is for.
       for (const [how, r] of [
@@ -395,27 +395,27 @@ test('the entry points a unit names run under node, not just as scripts', async 
 
 test('no unit is written for an entry point the payload does not have', () => {
   // The coordinator moved to a Cloudflare Worker, so a release ships no
-  // bin/agent-fleet-coordinator — deliberately. install.sh wrote the unit
+  // bin/fleetwright-coordinator — deliberately. install.sh wrote the unit
   // anyway, so converting a box that ran its own coordinator produced a service
   // pointing at a file that was never in the tarball. It fails at every start,
   // and reads as a broken box rather than as a component that is not supposed
   // to be there.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-  assert.match(sh, /if \[ -f "\$DIR\/bin\/agent-fleet-coordinator" \]; then\n\s+install_unit agent-fleet-coordinator/);
+  assert.match(sh, /if \[ -f "\$DIR\/bin\/fleetwright-coordinator" \]; then\n\s+install_unit fleetwright-coordinator/);
   assert.match(sh, /it runs as a Worker, so no unit is written/);
 
   // And a checkout still gets one, because a box running its own coordinator is
   // a thing --from-source keeps possible on purpose.
-  assert.equal(existsSync(new URL('../bin/agent-fleet-coordinator', import.meta.url).pathname), true);
+  assert.equal(existsSync(new URL('../bin/fleetwright-coordinator', import.meta.url).pathname), true);
 });
 
 test('a unit names the module, so a bad shim in a release cannot stop it', () => {
   // THE SECOND HALF OF THE OUTAGE, and the half a new release could not fix.
   //
   // The shim is part of the PAYLOAD. v0.2.3 shipped a `#!/bin/sh` shim, the
-  // unit said `node __DIR__/bin/agent-hub`, and every packaged service died at
+  // unit said `node __DIR__/bin/fleetwright`, and every packaged service died at
   // startup. Correcting the shim on main does nothing for a release already on
-  // a box — it can only be superseded, which is the trap AGENT_FLEET_PAYLOAD
+  // a box — it can only be superseded, which is the trap FLEETWRIGHT_PAYLOAD
   // was added to escape for the installer.
   //
   // Naming the module takes the shim out of systemd's path entirely, and the
@@ -428,8 +428,8 @@ test('a unit names the module, so a bad shim in a release cannot stop it', () =>
 
   // No unit hardcodes bin/ any more — that is the substitution that could not
   // tell a checkout from a release.
-  for (const f of ['agent-hub.service', 'agent-fleet-sidecar.service', 'agent-fleet-coordinator.service',
-                   'agent-hub.plist', 'agent-fleet-sidecar.plist', 'agent-fleet-coordinator.plist']) {
+  for (const f of ['fleetwright.service', 'fleetwright-sidecar.service', 'fleetwright-coordinator.service',
+                   'fleetwright.plist', 'fleetwright-sidecar.plist', 'fleetwright-coordinator.plist']) {
     const unit = readFileSync(new URL(`../install/${f}`, import.meta.url), 'utf8');
 
     // THE LINES THAT SAY WHAT RUNS, rather than the file with its comments
@@ -459,17 +459,17 @@ test('the entry resolves to something node can run, in both shapes', () => {
     const fn = sh.slice(sh.indexOf('unit_entry() {'), sh.indexOf('\n}\n', sh.indexOf('unit_entry() {')) + 3);
 
     const ask = (/** @type {string} */ dir) =>
-      spawnSync('bash', ['-c', `DIR=${dir}\n${fn}\nunit_entry agent-hub`], { encoding: 'utf8' }).stdout.trim();
+      spawnSync('bash', ['-c', `DIR=${dir}\n${fn}\nunit_entry fleetwright`], { encoding: 'utf8' }).stdout.trim();
 
     // A release: lib/ wins, which is what keeps a broken shim out of the way.
     spawnSync('mkdir', ['-p', path.join(work, 'release', 'lib'), path.join(work, 'release', 'bin')]);
-    spawnSync('bash', ['-c', `touch ${work}/release/lib/agent-hub.mjs ${work}/release/bin/agent-hub`]);
-    assert.equal(ask(path.join(work, 'release')), path.join(work, 'release', 'lib', 'agent-hub.mjs'));
+    spawnSync('bash', ['-c', `touch ${work}/release/lib/fleetwright.mjs ${work}/release/bin/fleetwright`]);
+    assert.equal(ask(path.join(work, 'release')), path.join(work, 'release', 'lib', 'fleetwright.mjs'));
 
     // A checkout: bin/, which is JavaScript there and always has been.
     spawnSync('mkdir', ['-p', path.join(work, 'checkout', 'bin')]);
-    spawnSync('bash', ['-c', `touch ${work}/checkout/bin/agent-hub`]);
-    assert.equal(ask(path.join(work, 'checkout')), path.join(work, 'checkout', 'bin', 'agent-hub'));
+    spawnSync('bash', ['-c', `touch ${work}/checkout/bin/fleetwright`]);
+    assert.equal(ask(path.join(work, 'checkout')), path.join(work, 'checkout', 'bin', 'fleetwright'));
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -519,8 +519,8 @@ test('a release states the protocol it speaks, so the upgrade check is not skipp
 test('a migration keeps the checkout, and does not call that a failure', () => {
   // The same log said, in order:
   //
-  //   warn the new services did not start, so /opt/agent-fleet was left alone.
-  //   ok   agent-hub restarted, on the new code
+  //   warn the new services did not start, so /opt/fleetwright-src was left alone.
+  //   ok   fleetwright restarted, on the new code
   //
   // SERVICES_STARTED is only set inside the wizard's start block, which
   // --upgrade skips — so this warned that the services had failed immediately
@@ -543,7 +543,7 @@ test('re-running the one-liner on a converted box does not un-convert it', () =>
   // REPORTED: "after migrating it still offers at every installer rerun".
   //
   // The repeated offer was the visible half of a REVERT. bootstrap.sh updates
-  // /opt/agent-fleet and runs the install.sh inside it, so PACKAGED is 0 — and
+  // /opt/fleetwright-src and runs the install.sh inside it, so PACKAGED is 0 — and
   // everything downstream then re-pointed the systemd units and the CLI links
   // back at the checkout, undoing a conversion nobody asked to undo, before
   // offering to convert again.
@@ -553,7 +553,7 @@ test('re-running the one-liner on a converted box does not un-convert it', () =>
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 
   assert.match(sh, /CONVERTED=0/);
-  assert.match(sh, /grep -q "\$FLEET_BASE\/current" \/etc\/systemd\/system\/agent-hub\.service/);
+  assert.match(sh, /grep -q "\$FLEET_BASE\/current" \/etc\/systemd\/system\/fleetwright\.service/);
 
   // Units and links are pointed at the release rather than at this checkout —
   // see the next test for why they are REWRITTEN rather than skipped.
@@ -574,7 +574,7 @@ test('a converted box gets its units REWRITTEN for the release, not skipped', ()
   // is GENERATED, and an old one is exactly what needs replacing.
   //
   // deb13-staging was already converted, carrying a unit written before units
-  // named the module: `node .../current/bin/agent-hub`, against a release whose
+  // named the module: `node .../current/bin/fleetwright`, against a release whose
   // bin/ is a shell shim. Thirty-odd restarts deep. The re-run that could have
   // repaired it politely left it broken.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
@@ -582,7 +582,7 @@ test('a converted box gets its units REWRITTEN for the release, not skipped', ()
   // Pointed at the release, and then written — not skipped.
   assert.match(sh, /UNIT_DIR_SAVED="\$DIR"\n\s+DIR="\$FLEET_BASE\/current"/);
   const units = sh.slice(sh.indexOf('UNIT_DIR_SAVED="$DIR"'), sh.indexOf('if [ -n "${UNIT_DIR_SAVED:-}" ]'));
-  assert.match(units, /install_unit agent-hub/, 'the units are still skipped on a converted box');
+  assert.match(units, /install_unit fleetwright/, 'the units are still skipped on a converted box');
 
   // And $DIR is put back, or everything after this writes into the release.
   assert.match(sh, /if \[ -n "\$\{UNIT_DIR_SAVED:-\}" \]; then DIR="\$UNIT_DIR_SAVED"/);
@@ -623,11 +623,11 @@ test('unit templates come from the installer, not from the payload', () => {
   //
   // v0.2.3 ships:
   //
-  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //     ExecStart=__NODE__ __DIR__/bin/fleetwright serve
   //
   // written before __ENTRY__ existed. So the __ENTRY__ substitution found
   // nothing to replace, __DIR__ became the release, and the installer wrote
-  // `current/bin/agent-hub` — the shell shim — every single time, on a box
+  // `current/bin/fleetwright` — the shell shim — every single time, on a box
   // whose installer had been correct for hours.
   //
   // No release built from the current tree can show this: its template is
@@ -635,7 +635,7 @@ test('unit templates come from the installer, not from the payload', () => {
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 
   assert.match(sh, /SELF_DIR="\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)\/\.\." && pwd\)"/);
-  assert.match(sh, /DIR="\$\{AGENT_FLEET_PAYLOAD:-\$SELF_DIR\}"/);
+  assert.match(sh, /DIR="\$\{FLEETWRIGHT_PAYLOAD:-\$SELF_DIR\}"/);
 
   // The template comes from SELF_DIR; the entry path still comes from $DIR, so
   // a converted box gets a current template naming the release it runs.
@@ -733,7 +733,7 @@ test('the converted-box guard is defined after the words it speaks', () => {
 });
 
 test('an existing box keeps its own service user, whoever is running the installer', () => {
-  // THE ORDER USED TO BE AGENT_HUB_USER, SUDO_USER, whoami — right for a first
+  // THE ORDER USED TO BE FLEETWRIGHT_USER, SUDO_USER, whoami — right for a first
   // install and wrong for every later one. On an existing box the service user
   // is a property of the MACHINE, not of the person at the keyboard.
   //
@@ -749,17 +749,17 @@ test('an existing box keeps its own service user, whoever is running the install
   // — a drill that cannot be the wrong user cannot find a permissions bug.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 
-  assert.match(sh, /RUN_USER="\$\{AGENT_HUB_USER:-\$\(unit_user \|\| printf/);
+  assert.match(sh, /RUN_USER="\$\{FLEETWRIGHT_USER:-\$\(unit_user \|\| printf/);
   // Read from the unit's own User= line, which is what systemd actually starts
   // it as — the same rule fleetwright-migrate states about what a box RUNS.
   assert.match(sh, /sed -n 's\/\^User=\[\[:space:\]\]\*\/\/p'/);
   // AND THE NAME HAS TO STILL EXIST. A unit naming a deleted account would hand
   // every chown below a user that cannot own anything.
   assert.match(sh, /id "\$got" >\/dev\/null 2>&1/);
-  // An explicit AGENT_HUB_USER still wins: setting it is deliberately changing
+  // An explicit FLEETWRIGHT_USER still wins: setting it is deliberately changing
   // the answer, and this is an upgrade path, not a lock.
   assert.ok(
-    sh.indexOf('AGENT_HUB_USER:-$(unit_user') < sh.indexOf('SUDO_USER:-$(id -un)'),
+    sh.indexOf('FLEETWRIGHT_USER:-$(unit_user') < sh.indexOf('SUDO_USER:-$(id -un)'),
     'the environment no longer overrides the unit',
   );
 });

@@ -1,0 +1,26 @@
+Template: fleetwright/coordinator-url
+Type: string
+Default:
+Description: Coordinator URL to join:
+ The address of the fleet this box joins, e.g. https://fleet.example.com. It
+ is the same address that follows `curl -fsSL` in the one-line installer.
+ .
+ Leave it blank to install without joining. Join later with:
+ sudo fleetwright join fleet.example.com
+
+Template: fleetwright/pin
+Type: password
+Description: Enrolment pin:
+ Six digits from the app (Fleet, then Add a host), or from anyone who has the
+ admin token. It is spent once and not kept.
+ .
+ Blank is fine: enrol whenever you have one with
+ sudo -u <service user> fleetwright-sidecar enrol <pin>
+
+Template: fleetwright/user
+Type: string
+Default:
+Description: Account the sessions run as:
+ Blank means the account the services already run as, or on a first install
+ the one that ran sudo. Asked only at low priority; preseed it for an
+ unattended install.

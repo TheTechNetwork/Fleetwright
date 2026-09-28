@@ -52,7 +52,7 @@ function deployment(t) {
    */
   const pushUpstream = (message) => {
     mkdirSync(path.join(origin, 'bin'), { recursive: true });
-    writeFileSync(path.join(origin, 'bin', 'agent-hub'), `#!/usr/bin/env node\n// ${message}\n`);
+    writeFileSync(path.join(origin, 'bin', 'fleetwright'), `#!/usr/bin/env node\n// ${message}\n`);
     git(origin, ['add', '-A']);
     git(origin, ['commit', '-qm', message]);
   };
@@ -187,7 +187,7 @@ test("git's \"insufficient permission\" counts as the ownership problem", async 
 
   // The other shapes this takes, all seen on real boxes.
   for (const output of [
-    "fatal: detected dubious ownership in repository at '/opt/agent-fleet'",
+    "fatal: detected dubious ownership in repository at '/opt/fleetwright-src'",
     'error: could not lock config file .git/config: Permission denied',
     'fatal: could not create work tree dir: Read-only file system',
   ]) {

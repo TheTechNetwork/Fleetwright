@@ -153,7 +153,7 @@ test('the credential parameter is not text, and refusals never quote it', () => 
 
 test('no verb accepts a path into the HOST', () => {
   // This used to say "no verb accepts a path", full stop, and the reasoning was
-  // about agent-hub's `/new <name> <path>`: it takes any path with no
+  // about fleetwright's `/new <name> <path>`: it takes any path with no
   // validation, a sandboxed session's workdir is a fixed /work mount anyway, so
   // the parameter simply did not exist and no validator had to be correct.
   //
@@ -559,7 +559,7 @@ test('the protocol is deliberately STRICTER about the first character', () => {
 });
 
 test('a session name can never become a command-line FLAG', () => {
-  // The subtle one. agent-hub's parser treats any token starting with "--" as a
+  // The subtle one. fleetwright's parser treats any token starting with "--" as a
   // flag, so a session called "--dangerous" would turn `/stop --dangerous` into
   // a flag with no argument — and on /start, into a permission override. The
   // name charset is anchored at the first character precisely to make this
@@ -581,7 +581,7 @@ test('enum parameters accept only their listed values', () => {
 
 test('"Don\'t ask me again" is not expressible as a resume choice', () => {
   // Option 3 flips a global preference for every future session, interactive
-  // ones included. agent-hub refuses to offer it; the protocol cannot name it.
+  // ones included. fleetwright refuses to offer it; the protocol cannot name it.
   assert.deepEqual(VERBS.resume.params.choice.values, ['summary', 'full']);
 });
 

@@ -135,7 +135,7 @@ export function standingClaims(snap) {
       ok: null,
       claim: 'No machine has enrolled yet.',
       because: 'There is no fleet to watch, so there is nothing this page could be failing to show you.',
-      remedy: 'Mint an enrolment pin and run agent-fleet-sidecar enrol on a box.',
+      remedy: 'Mint an enrolment pin and run fleetwright-sidecar enrol on a box.',
     });
   } else if (connected.length >= enrolled) {
     out.push({ id: 'coverage', ok: true, claim: `All ${enrolled} enrolled machines are connected.` });
@@ -181,7 +181,7 @@ export function standingClaims(snap) {
       ok: false,
       claim: `${unable.length} connected ${unable.length === 1 ? 'machine cannot' : 'machines cannot'} take work.`,
       because: unable.map((h) => `${h.hostId}: ${h.reason || HOST_STATES[/** @type {keyof typeof HOST_STATES} */ (h.state)]?.word}`).join(' · '),
-      remedy: 'agent-fleet-sidecar doctor on that box says which check failed.',
+      remedy: 'fleetwright-sidecar doctor on that box says which check failed.',
     });
   }
 

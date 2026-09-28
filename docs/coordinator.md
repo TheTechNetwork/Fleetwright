@@ -12,8 +12,8 @@ Both on one port, because a host pins exactly one origin and adding a second
 would mean pinning two.
 
 ```sh
-set -a; . /etc/agent-fleet-coordinator.env; set +a
-agent-fleet-coordinator
+set -a; . /etc/fleetwright-coordinator.env; set +a
+fleetwright-coordinator
 ```
 
 ## There are two of it, and they are one design
@@ -40,7 +40,7 @@ open permanently is a poor trade for ~200 lines of well-specified framing.
 **The registry is a cache with provenance, never the authority.** Each host
 stays the sole authority on its own tmux.
 
-agent-hub's whole simplification was collapsing a two-plane design — a queue,
+fleetwright's whole simplification was collapsing a two-plane design — a queue,
 a heartbeat protocol, a stale-row reaper — into one process that asks tmux
 directly, every time. Multi-host reintroduces that split unavoidably. What is
 avoidable is *believing* the cache. So:

@@ -322,13 +322,13 @@ async function signInFleet(t, allow = '@thetech.network') {
   const p = await provider();
   t.after(p.restore);
   const before = { ...process.env };
-  process.env.AGENT_FLEET_AUTH_ISSUERS = p.issuer;
-  process.env.AGENT_FLEET_AUTH_AUDIENCES = p.audience;
-  process.env.AGENT_FLEET_AUTH_ALLOW = allow;
+  process.env.FLEETWRIGHT_AUTH_ISSUERS = p.issuer;
+  process.env.FLEETWRIGHT_AUTH_AUDIENCES = p.audience;
+  process.env.FLEETWRIGHT_AUTH_ALLOW = allow;
   t.after(() => {
-    process.env.AGENT_FLEET_AUTH_ISSUERS = before.AGENT_FLEET_AUTH_ISSUERS;
-    process.env.AGENT_FLEET_AUTH_AUDIENCES = before.AGENT_FLEET_AUTH_AUDIENCES;
-    process.env.AGENT_FLEET_AUTH_ALLOW = before.AGENT_FLEET_AUTH_ALLOW;
+    process.env.FLEETWRIGHT_AUTH_ISSUERS = before.FLEETWRIGHT_AUTH_ISSUERS;
+    process.env.FLEETWRIGHT_AUTH_AUDIENCES = before.FLEETWRIGHT_AUTH_AUDIENCES;
+    process.env.FLEETWRIGHT_AUTH_ALLOW = before.FLEETWRIGHT_AUTH_ALLOW;
   });
   const { coordinator: c, origin } = await coordinator(t, { apiToken: 'a-token-at-least-16ch' });
   return { provider: p, coordinator: c, origin };
@@ -373,13 +373,13 @@ test('a sign-in token buys one credential, and stays spent across a restart', as
   const p = await provider();
   t.after(p.restore);
   const before = { ...process.env };
-  process.env.AGENT_FLEET_AUTH_ISSUERS = p.issuer;
-  process.env.AGENT_FLEET_AUTH_AUDIENCES = p.audience;
-  process.env.AGENT_FLEET_AUTH_ALLOW = '@thetech.network';
+  process.env.FLEETWRIGHT_AUTH_ISSUERS = p.issuer;
+  process.env.FLEETWRIGHT_AUTH_AUDIENCES = p.audience;
+  process.env.FLEETWRIGHT_AUTH_ALLOW = '@thetech.network';
   t.after(() => {
-    process.env.AGENT_FLEET_AUTH_ISSUERS = before.AGENT_FLEET_AUTH_ISSUERS;
-    process.env.AGENT_FLEET_AUTH_AUDIENCES = before.AGENT_FLEET_AUTH_AUDIENCES;
-    process.env.AGENT_FLEET_AUTH_ALLOW = before.AGENT_FLEET_AUTH_ALLOW;
+    process.env.FLEETWRIGHT_AUTH_ISSUERS = before.FLEETWRIGHT_AUTH_ISSUERS;
+    process.env.FLEETWRIGHT_AUTH_AUDIENCES = before.FLEETWRIGHT_AUTH_AUDIENCES;
+    process.env.FLEETWRIGHT_AUTH_ALLOW = before.FLEETWRIGHT_AUTH_ALLOW;
   });
   const first = new Coordinator({ stateFile: file });
   const port = await first.listen(0, '127.0.0.1');
@@ -467,10 +467,10 @@ test('/enroll spends a pin on the box the bot is running on', async (t) => {
 
   const cfg = sidecarConfig({
     env: {
-      AGENT_FLEET_COORDINATOR_URL: origin,
-      AGENT_FLEET_HOST_ID: 'chatted',
-      AGENT_FLEET_HOST_KEY: keyFile,
-      AGENT_FLEET_SIDECAR_ENV: '/nonexistent',
+      FLEETWRIGHT_COORDINATOR_URL: origin,
+      FLEETWRIGHT_HOST_ID: 'chatted',
+      FLEETWRIGHT_HOST_KEY: keyFile,
+      FLEETWRIGHT_SIDECAR_ENV: '/nonexistent',
     },
   });
 
@@ -489,10 +489,10 @@ test('/enroll says what to do when the box has never joined', async (t) => {
   const { origin } = await coordinator(t);
   const cfg = sidecarConfig({
     env: {
-      AGENT_FLEET_COORDINATOR_URL: origin,
-      AGENT_FLEET_HOST_ID: 'lonely',
-      AGENT_FLEET_HOST_KEY: scratch(),
-      AGENT_FLEET_SIDECAR_ENV: '/nonexistent',
+      FLEETWRIGHT_COORDINATOR_URL: origin,
+      FLEETWRIGHT_HOST_ID: 'lonely',
+      FLEETWRIGHT_HOST_KEY: scratch(),
+      FLEETWRIGHT_SIDECAR_ENV: '/nonexistent',
     },
   });
 
@@ -509,18 +509,18 @@ test('the sidecar env file is read, and the environment still wins', () => {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'fleet-env-')), 'sidecar.env');
   writeFileSync(
     file,
-    'AGENT_FLEET_COORDINATOR_URL=https://from-the-file\nAGENT_FLEET_HOST_ID="boxy"\n',
+    'FLEETWRIGHT_COORDINATOR_URL=https://from-the-file\nFLEETWRIGHT_HOST_ID="boxy"\n',
   );
 
-  // agent-hub is a different unit with a different EnvironmentFile, so these
+  // fleetwright is a different unit with a different EnvironmentFile, so these
   // variables are not in its process — reading the file is the only way it
   // knows which fleet this box belongs to.
-  const cfg = sidecarConfig({ env: { AGENT_FLEET_SIDECAR_ENV: file } });
+  const cfg = sidecarConfig({ env: { FLEETWRIGHT_SIDECAR_ENV: file } });
   assert.equal(cfg.coordinatorUrl, 'https://from-the-file');
   assert.equal(cfg.hostId, 'boxy', 'quotes stripped');
 
   const overridden = sidecarConfig({
-    env: { AGENT_FLEET_SIDECAR_ENV: file, AGENT_FLEET_COORDINATOR_URL: 'https://from-the-environment' },
+    env: { FLEETWRIGHT_SIDECAR_ENV: file, FLEETWRIGHT_COORDINATOR_URL: 'https://from-the-environment' },
   });
   assert.equal(overridden.coordinatorUrl, 'https://from-the-environment');
 });
@@ -616,12 +616,12 @@ async function enrolledProofFor(coordinatorInstance, port, hostId) {
 }
 
 test('a config the hub cannot read is not reported as "no fleet"', async () => {
-  // agent-hub runs as the service user; /etc/agent-fleet-sidecar.env is written
+  // fleetwright runs as the service user; /etc/fleetwright-sidecar.env is written
   // by root. If it cannot be read, the box HAS a coordinator and the bot cannot
   // see it — and "this box is not part of a fleet" would send somebody to
   // configure something that is already configured.
   const cfg = sidecarConfig({
-    env: { AGENT_FLEET_SIDECAR_ENV: '/etc/shadow-does-not-matter-here' },
+    env: { FLEETWRIGHT_SIDECAR_ENV: '/etc/shadow-does-not-matter-here' },
     readFile: () => {
       const e = new Error('EACCES: permission denied');
       /** @type {any} */ (e).code = 'EACCES';
@@ -640,7 +640,7 @@ test('a config the hub cannot read is not reported as "no fleet"', async () => {
 });
 
 test('a missing config file is still just "no fleet"', () => {
-  const cfg = sidecarConfig({ env: { AGENT_FLEET_SIDECAR_ENV: '/nonexistent' } });
+  const cfg = sidecarConfig({ env: { FLEETWRIGHT_SIDECAR_ENV: '/nonexistent' } });
   assert.equal(cfg.unreadable, null, 'a box running from a checkout has these in its environment');
 });
 

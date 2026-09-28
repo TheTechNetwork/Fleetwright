@@ -11,7 +11,7 @@ package network.thetech.fleetwright
  * actions per notification and could put any label on them — and deliberately
  * does not, because two phones offering different words for the same question
  * is the drift `docs/app-parity.md` exists to prevent, and because the labels
- * are exactly what `AGENT_FLEET_PROMPT_TEXT` may refuse to send.
+ * are exactly what `FLEETWRIGHT_PROMPT_TEXT` may refuse to send.
  *
  * So the words are copied from `ANSWER_TITLES` in `src/fleet/host/prompt.js`,
  * `test/notification-answers.test.js` fails the day they disagree, and the

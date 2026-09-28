@@ -14,7 +14,7 @@ and the certificate, so there is nothing to point anywhere by hand).
 
 Whichever hostname you end up on is load-bearing in one specific way: §5 has
 each host PIN the coordinator origin it will talk to, so changing it means
-editing every host's `/etc/agent-fleet-sidecar.env`. Pick one you intend to
+editing every host's `/etc/fleetwright-sidecar.env`. Pick one you intend to
 keep — which is the argument for putting a domain on it before enrolling a
 fleet, not after.
 
@@ -28,7 +28,7 @@ git clone https://github.com/TheTechNetwork/Fleetwright
 cd Fleetwright/worker
 npm install
 npx wrangler deploy                                # opens a browser login the first time
-npx wrangler secret put AGENT_FLEET_API_TOKEN      # openssl rand -hex 24
+npx wrangler secret put FLEETWRIGHT_API_TOKEN      # openssl rand -hex 24
 ```
 
 That deploys `worker/wrangler.toml`, which is **the fork-safe default on
@@ -68,7 +68,7 @@ pre-fill: it installs the Worker's dependencies and deploys from `worker/`,
 with the whole repository present.
 
 **The dialog asks for the two required secrets up front** —
-`AGENT_FLEET_API_TOKEN` and `AGENT_FLEET_AUTH_ALLOW` — because
+`FLEETWRIGHT_API_TOKEN` and `FLEETWRIGHT_AUTH_ALLOW` — because
 `.dev.vars.example` declares them and `package.json`'s `cloudflare` field
 describes them, which is the mechanism Cloudflare's deploy flow reads. So a
 button deploy comes up already holding its admin token rather than refusing
@@ -102,7 +102,7 @@ reading rather than resolving on autopilot.
 **Update the hosts in the same act, and hosts first.** The protocol version
 is exact-match, and the two halves of your fleet track different remotes: a
 box updates from wherever it was installed from — its clone's origin, or
-`AGENT_HUB_RELEASE_MANIFEST` for a packaged host, ours unless you changed
+`FLEETWRIGHT_RELEASE_MANIFEST` for a packaged host, ours unless you changed
 them — while your coordinator updates only when you merge and push your copy. On a protocol bump that means hosts can move and leave
 your coordinator behind, or the reverse; the window is loudly broken rather
 than subtly wrong (`unsupported_version`, both directions), and
@@ -120,8 +120,8 @@ auto-deploy-on-push in exchange for being the one who pushes.
 Three more values. Until they are set, sign-in answers 503 and says so, which
 leaves the admin token as the only way in.
 
-**Two are `[vars]`, not secrets.** `AGENT_FLEET_AUTH_ISSUERS` and
-`AGENT_FLEET_AUTH_AUDIENCES` are public identifiers — who may vouch for a
+**Two are `[vars]`, not secrets.** `FLEETWRIGHT_AUTH_ISSUERS` and
+`FLEETWRIGHT_AUTH_AUDIENCES` are public identifiers — who may vouch for a
 person, and which app the ID token must be for. Copy these two lines into
 `[vars]` in `worker/wrangler.toml` **verbatim** and run `npx wrangler deploy`;
 they are ours, and using them is what lets people sign in to *your* coordinator
@@ -129,8 +129,8 @@ with the App Store and Play builds, with no Apple or Google setup of your own
 (the fork section below explains why that works):
 
 ```toml
-AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
-AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+FLEETWRIGHT_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+FLEETWRIGHT_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
 ```
 
 Vars rather than secrets, deliberately: they deploy with the code, so what a
@@ -141,13 +141,13 @@ a place nobody reviews, and Cloudflare keeps vars and secrets in one
 namespace, so a secret whose name is already a `[vars]` key collides at deploy
 time.
 
-**The third is a secret.** `AGENT_FLEET_AUTH_ALLOW` decides who is allowed in,
+**The third is a secret.** `FLEETWRIGHT_AUTH_ALLOW` decides who is allowed in,
 and a list of the addresses that can reach your fleet does not belong in a
 repository — the fork-safe section below records how it briefly was one, and
 what that cost:
 
 ```sh
-npx wrangler secret put AGENT_FLEET_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
+npx wrangler secret put FLEETWRIGHT_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
 ```
 
 **The audience is two values, and they are not symmetrical.** Apple issues its
@@ -167,7 +167,7 @@ who owns this fleet, whose Google account is a gmail one — and the refusal rea
 Sign in with Apple will present whatever address that Apple ID uses, which may
 be a third address again. Add it once it is known.
 
-`AGENT_FLEET_AUTH_ALLOW` empty allows **nobody**. That is deliberate: a
+`FLEETWRIGHT_AUTH_ALLOW` empty allows **nobody**. That is deliberate: a
 coordinator that has not been told who is allowed should refuse everyone rather
 than everyone.
 
@@ -179,14 +179,14 @@ see [`trust.md`](./trust.md). Mint the first pin with the admin token:
 
 ```sh
 curl -sX POST https://your-coordinator/api/enroll \
-     -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+     -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
      -H 'content-type: application/json' -d '{"kind":"host"}'
 ```
 
 then on the box, as the service user:
 
 ```sh
-agent-fleet-sidecar enrol 123456
+fleetwright-sidecar enrol 123456
 ```
 
 or send `/enroll 123456` to that box's Telegram bot, which does the same thing
@@ -195,7 +195,7 @@ without an SSH session.
 Optionally, for push:
 
 ```sh
-npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
+npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
 ```
 
 Base64 of that file is accepted too, and is what you want if this coordinator
@@ -213,7 +213,7 @@ It serves two things — the invented fleet in `worker/src/demo.js`, and the
 product page at `/docs`. Nothing else.
 
 **It used to be the same Worker on a second domain**, and the argument for that
-was real: `worker.js` matched `AGENT_FLEET_DEMO_HOST` above the host routes, so
+was real: `worker.js` matched `FLEETWRIGHT_DEMO_HOST` above the host routes, so
 a request there never reached enrolment, a websocket, sign-in, or the Durable
 Object. It was tested, and the test asserted the *position* of the check.
 
@@ -242,7 +242,7 @@ Two smaller things fell out of it:
 
 ### `/docs` on the coordinator is a redirect
 
-`AGENT_FLEET_DOCS_URL` in `wrangler.production.toml` points `/docs` at the
+`FLEETWRIGHT_DOCS_URL` in `wrangler.production.toml` points `/docs` at the
 demo Worker with a 302. **Unset means 404**, which is the right answer for a self-hosted
 fleet: somebody else's private coordinator on their own domain has no product
 page to point at. Ours is set; every fork gets nothing.
@@ -260,17 +260,17 @@ shipping both apps fails CI rather than silently leaving installed builds
 pointed at a domain that answers nothing.
 
 Getting back in when sign-in itself is broken is now curl with
-`AGENT_FLEET_API_TOKEN`, not a field on every user's settings screen.
+`FLEETWRIGHT_API_TOKEN`, not a field on every user's settings screen.
 
 ## The demo token, which no longer authorises anything
 
 App Store review needs credentials that work, and no reviewer's address is on
 anybody's allowlist — so signing in cannot be the answer, and
-`AGENT_FLEET_API_TOKEN` can stop every session in the fleet. That is why a
+`FLEETWRIGHT_API_TOKEN` can stop every session in the fleet. That is why a
 third token exists, in `wrangler.demo.toml`, committed rather than kept secret:
 
 ```toml
-AGENT_FLEET_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
+FLEETWRIGHT_DEMO_TOKEN = "demo-3a2ec7773eabcd4e38a9a880296a4e4b"
 ```
 
 **`demo-worker.js` does not check it.** When the demo lived in the coordinator,
@@ -306,8 +306,8 @@ and Apple client IDs; a coordinator only verifies the signature against the
 provider's public keys and then checks issuer, audience and allowlist. The
 identifiers are public — the sign-in section above has them, and they are
 committed in `wrangler.production.toml`. Copy
-`AGENT_FLEET_AUTH_ISSUERS` and `AGENT_FLEET_AUTH_AUDIENCES`, set your own
-`AGENT_FLEET_AUTH_ALLOW`, and people sign in to your fleet with the App Store
+`FLEETWRIGHT_AUTH_ISSUERS` and `FLEETWRIGHT_AUTH_AUDIENCES`, set your own
+`FLEETWRIGHT_AUTH_ALLOW`, and people sign in to your fleet with the App Store
 and Play builds. **No Firebase project. No Apple Developer account.**
 
 **Push cannot be self-hosted, and that is structural.** A device token is
@@ -337,17 +337,17 @@ Both authorize URLs send `redirect_uri` explicitly and the provider matches it
 against the client's registered list — on purpose, so one deployment cannot
 send its users to another's coordinator. Your origin is not on ours, so those
 flows refuse. Register your own GitHub App (free) and set
-`AGENT_FLEET_GITHUB_CLIENT_ID` plus the secret; register your own Cloudflare
-OAuth client and set `AGENT_FLEET_CLOUDFLARE_CLIENT_ID`, the secret, and
-`AGENT_FLEET_CLOUDFLARE_SCOPES` (see connectors.md). Nothing else depends on
+`FLEETWRIGHT_GITHUB_CLIENT_ID` plus the secret; register your own Cloudflare
+OAuth client and set `FLEETWRIGHT_CLOUDFLARE_CLIENT_ID`, the secret, and
+`FLEETWRIGHT_CLOUDFLARE_SCOPES` (see connectors.md). Nothing else depends on
 either: `connect github` and `connect cloudflare` with a pasted token need no
 callback and work on any coordinator anywhere. Both coordinators read the same
 variables — the Node one from its environment, the Worker from its config.
 
 **Two more both coordinators read, with safe defaults, and this document did
-not mention.** `AGENT_FLEET_NAME` is the fleet's own name in invitation emails;
+not mention.** `FLEETWRIGHT_NAME` is the fleet's own name in invitation emails;
 unset, they say "this Fleetwright fleet".
-`AGENT_FLEET_ACTIONS_AUDIENCE` is the `aud` a GitHub Actions job's OIDC token
+`FLEETWRIGHT_ACTIONS_AUDIENCE` is the `aud` a GitHub Actions job's OIDC token
 must carry to enrol as an ephemeral host (see runner-central.md); unset, the
 default audience `verifyActionsToken` expects is used, and a job minted with
 `audience:` set to anything else is refused by name.
@@ -360,17 +360,17 @@ something:
 
 | Setting | Unchanged, a fork gets |
 |---|---|
-| `AGENT_FLEET_AUTH_ALLOW` | **Four of our addresses admitted to their fleet.** `trust.md` has coordinator → host as *trusted absolutely*, so this is the one to change first |
+| `FLEETWRIGHT_AUTH_ALLOW` | **Four of our addresses admitted to their fleet.** `trust.md` has coordinator → host as *trusted absolutely*, so this is the one to change first |
 | `routes` (`custom_domain`) | `wrangler deploy` tries to bind a domain they do not own, and fails |
 | `SENTRY_DSN` | Their errors posted to **our** Sentry project |
-| `AGENT_FLEET_INSTALL_URL` | Their `/install` hands a root shell a script that installs **our** code. Unset is a 404 that says so; this is why it is a variable rather than a constant |
-| `AGENT_FLEET_DOCS_URL` | Their `/docs` redirects to our product page |
-| `AGENT_FLEET_GITHUB_*` | The App flow reaches GitHub and is refused there, because their origin is not on our App's redirect list. Confidently broken, where absent would be honest — register your own App, it is free |
-| `AGENT_FLEET_INVITE_FROM`, `[[send_email]]` | Invitations fail at send time; Cloudflare Email Sending needs a domain they control |
-| `AGENT_FLEET_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
-| `AGENT_FLEET_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
+| `FLEETWRIGHT_INSTALL_URL` | Their `/install` hands a root shell a script that installs **our** code. Unset is a 404 that says so; this is why it is a variable rather than a constant |
+| `FLEETWRIGHT_DOCS_URL` | Their `/docs` redirects to our product page |
+| `FLEETWRIGHT_GITHUB_*` | The App flow reaches GitHub and is refused there, because their origin is not on our App's redirect list. Confidently broken, where absent would be honest — register your own App, it is free |
+| `FLEETWRIGHT_INVITE_FROM`, `[[send_email]]` | Invitations fail at send time; Cloudflare Email Sending needs a domain they control |
+| `FLEETWRIGHT_APP_IOS` / `_ANDROID` | Invitations point at **our** store listings |
+| `FLEETWRIGHT_PUSH` | Set, with no credentials — the coordinator now says so at startup rather than falling silent, but it cannot send |
 
-**`AGENT_FLEET_API_TOKEN` is optional**, for a fork like for us — the Deploy
+**`FLEETWRIGHT_API_TOKEN` is optional**, for a fork like for us — the Deploy
 section above has the rule: what a coordinator refuses to run without is any
 way in at all, an admin token or an issuer-and-audience pair. It used to
 refuse without the token specifically, which was right when the token was the
@@ -409,8 +409,8 @@ Two more, outside `wrangler.toml`:
 - **The sandbox image.** `sandbox.yml` publishes to
   `ghcr.io/<your-org>/fleetwright-session`, and the hub used to pull ours
   regardless — so a fork's CI built an image nothing consumed while its boxes
-  rebuilt locally every time. Set `AGENT_HUB_SANDBOX_IMAGE_OWNER` to your own
-  org, or `AGENT_HUB_SANDBOX_IMAGE` to a full reference.
+  rebuilt locally every time. Set `FLEETWRIGHT_SANDBOX_IMAGE_OWNER` to your own
+  org, or `FLEETWRIGHT_SANDBOX_IMAGE` to a full reference.
 - **The apps.** Both are ours: bundle id, Firebase project, signing certificates
   and store listings. A fork's users install our builds and type their own
   coordinator address, which works and is the best fork-parity property here.
@@ -425,15 +425,15 @@ machines and not something to hold over a stranger's.
 
 ## Point a host at it
 
-In `/etc/agent-fleet-sidecar.env` on each box:
+In `/etc/fleetwright-sidecar.env` on each box:
 
 ```
-AGENT_FLEET_COORDINATOR_URL=https://your-coordinator    # the workers.dev URL, or your domain
-AGENT_FLEET_TRANSPORT=websocket
-AGENT_FLEET_HOST_KEY=/var/lib/agent-fleet/host-key.json
+FLEETWRIGHT_COORDINATOR_URL=https://your-coordinator    # the workers.dev URL, or your domain
+FLEETWRIGHT_TRANSPORT=websocket
+FLEETWRIGHT_HOST_KEY=/var/lib/fleetwright-sidecar/host-key.json
 ```
 
-then `systemctl restart agent-fleet-sidecar`. It dials out, so there is nothing
+then `systemctl restart fleetwright-sidecar`. It dials out, so there is nothing
 to open on the host.
 
 ## The same code runs in both places
@@ -441,7 +441,7 @@ to open on the host.
 `src/fleet/coordinator/core.js`, `registry.js`, `scheduler.js`,
 `protocol/intents.js` and `push.js` import **nothing** from `node:`. That is
 enforced by the fact that the Worker build would break otherwise, and it is why
-`bin/agent-fleet-coordinator` (plain Node, for testing the whole loop on one
+`bin/fleetwright-coordinator` (plain Node, for testing the whole loop on one
 box) and the Worker are not two implementations that drift.
 
 `nodejs_compat` is deliberately not enabled — needing it would mean that

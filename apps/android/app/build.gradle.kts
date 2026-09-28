@@ -60,7 +60,7 @@ if (file("google-services.json").exists()) {
 // there is no resource to strip and no package to resolve.
 //
 // Reading it here removes the lookup. It is the same value the coordinator
-// verifies as the token's `aud` (AGENT_FLEET_AUTH_AUDIENCES), so the two halves
+// verifies as the token's `aud` (FLEETWRIGHT_AUTH_AUDIENCES), so the two halves
 // of sign-in come from one file.
 val googleWebClientId: String? = run {
   val f = file("google-services.json")
@@ -257,7 +257,7 @@ dependencies {
   // A real implementation on the TEST classpath shadows the stub, so the table
   // is actually parsed. The app itself keeps using the platform's.
   testImplementation("org.json:json:20240303")
-  implementation("androidx.core:core-ktx:1.19.0")
+  implementation("androidx.core:core-ktx:1.19.1")
   implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
   implementation("androidx.activity:activity-compose:1.13.0")
   implementation(platform("androidx.compose:compose-bom:2026.09.00"))
@@ -267,7 +267,7 @@ dependencies {
   // Error reporting. Pinned like everything else here — a range is a build that
   // changes without a commit. The version is the one Maven Central actually
   // publishes; the first attempt at this line invented a number.
-  implementation("io.sentry:sentry-android:8.57.0")
+  implementation("io.sentry:sentry-android:8.58.0")
 
   // Firebase Cloud Messaging. The BOM pins every Firebase artifact to one
   // release train, which is the only way a set of libraries that ship
@@ -290,7 +290,7 @@ dependencies {
   // so it should raise the floor for whoever does pull it in rather than
   // claiming to depend on it.
   constraints {
-    implementation("androidx.fragment:fragment:1.9.0") {
+    implementation("androidx.fragment:fragment:1.9.1") {
       because("Firebase brings 1.1.0; registerForActivityResult requires >= 1.3.0")
     }
   }

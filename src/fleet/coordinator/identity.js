@@ -20,9 +20,9 @@ import { verifyIdToken, isAllowed, isPrivateRelay } from './oidc.js';
 /**
  * @param {string} idToken             an ID token from Apple or Google
  * @param {object} against
- * @param {string[]} against.issuers   AGENT_FLEET_AUTH_ISSUERS
- * @param {string[]} against.audiences AGENT_FLEET_AUTH_AUDIENCES
- * @param {string[]} against.allow     AGENT_FLEET_AUTH_ALLOW
+ * @param {string[]} against.issuers   FLEETWRIGHT_AUTH_ISSUERS
+ * @param {string[]} against.audiences FLEETWRIGHT_AUTH_AUDIENCES
+ * @param {string[]} against.allow     FLEETWRIGHT_AUTH_ALLOW
  * @param {{ has: (email: string) => boolean }} against.invites
  * @param {{ spend: (token: string, expiresAt: number) => Promise<boolean> }|null} [against.spent]
  *   where a token that has bought a credential is remembered, so it cannot buy

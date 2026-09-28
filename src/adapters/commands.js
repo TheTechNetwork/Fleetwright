@@ -35,8 +35,8 @@
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
  * @property {string[]} [hostLabels] what the sidecar says this box is already
- *   labelled — AGENT_FLEET_LABELS plus what the machine derived. Carried as a
- *   field because AGENT_FLEET_LABELS is in the SIDECAR's environment and
+ *   labelled — FLEETWRIGHT_LABELS plus what the machine derived. Carried as a
+ *   field because FLEETWRIGHT_LABELS is in the SIDECAR's environment and
  *   nothing here can read it, and `/labels` has to tell a label it stores from
  *   a fact it cannot remove
  * @property {string} [runnerRepo] the fleet's runner repository, as owner/repo.
@@ -378,7 +378,7 @@ function verifyClaude(ctx) {
     lines.push(`A session you start on ${ctx.cfg.hostname} would not get a Claude account: ${picked.why ?? 'none is linked here'}.`);
     // The MACHINE, not a screen. Claude is linked per machine, so a remedy that
     // does not say which one is one somebody can follow and still be stuck.
-    lines.push(`Connect a Claude account for ${ctx.cfg.hostname} from the app, or run \`agent-hub login\` on it.`);
+    lines.push(`Connect a Claude account for ${ctx.cfg.hostname} from the app, or run \`fleetwright login\` on it.`);
     return lines.join('\n');
   }
   const state = readCredentialState(picked.source);
@@ -391,7 +391,7 @@ function verifyClaude(ctx) {
     lines.push(
       'THESE TWO DISAGREE. `claude auth status` reports signed out while the credential file on this box is '
       + 'valid and unexpired. That is a fault in the reporting rather than in the credential — sessions here '
-      + 'will work. Restarting agent-hub clears it.',
+      + 'will work. Restarting fleetwright clears it.',
     );
   }
   lines.push('');
@@ -442,7 +442,7 @@ function verifyClaude(ctx) {
  */
 function renewalPlan(ctx, state) {
   const every = ctx.cfg.credentialKeepaliveMs;
-  if (!every) return 'Automatic renewal is switched off on this box (AGENT_HUB_CREDENTIAL_KEEPALIVE_MS=0).';
+  if (!every) return 'Automatic renewal is switched off on this box (FLEETWRIGHT_CREDENTIAL_KEEPALIVE_MS=0).';
   if (state.state === 'unknown') {
     return 'This box checks hourly, but cannot act on a credential it cannot read.';
   }
@@ -554,7 +554,7 @@ function addressNote(cfg, channel) {
   const target = manifestUrlFor(cfg.releaseManifest, channel);
   if (target.derived) return `\n\nUpdates come from ${target.url}`;
   return (
-    `\n\nAGENT_HUB_RELEASE_MANIFEST is ${cfg.releaseManifest}, which is not one of GitHub's ` +
+    `\n\nFLEETWRIGHT_RELEASE_MANIFEST is ${cfg.releaseManifest}, which is not one of GitHub's ` +
     'two release addresses, so this box fetches the same manifest on either channel. ' +
     "What it installs then depends on that manifest's own prerelease flag."
   );
@@ -729,6 +729,20 @@ export const COMMANDS = {
       'itself — it decides what the next update is allowed to be.',
     run: (ctx, args) => {
       const [wanted] = args;
+      // NO CHANNEL ON AN APT BOX. The apt repository carries stable releases
+      // whose rollout is complete, and nothing else; there is no rolling
+      // address to move to. Pinned, so the picker does not render a choice
+      // that cannot be made.
+      if (ctx.cfg.releaseSource === 'apt') {
+        return {
+          ok: !wanted || wanted === 'stable',
+          text:
+            'This box takes Fleetwright from apt, which carries stable releases only — each one once its rollout is complete.' +
+            (wanted && wanted !== 'stable' ? '\n\nTo take rolling builds, install with the one-line installer instead of the package.' : ''),
+          channel: 'stable',
+          channelPinned: true,
+        };
+      }
       const current = readChannel(ctx.cfg);
       if (!wanted) {
         const pinned = pinnedByEnv(ctx.cfg);
@@ -786,7 +800,7 @@ export const COMMANDS = {
                 // and telling somebody it is would be a screen reporting a state
                 // it does not know.
                 : 'That is not one of the two published variants, so this box is on an image somebody chose.') +
-            (now.pinned ? '\n\nAGENT_HUB_SANDBOX_IMAGE names it outright and it is not one of the published variants, so there is nothing to switch between from here.' : ''),
+            (now.pinned ? '\n\nFLEETWRIGHT_SANDBOX_IMAGE names it outright and it is not one of the published variants, so there is nothing to switch between from here.' : ''),
           sandbox: now,
         };
       }
@@ -811,17 +825,17 @@ export const COMMANDS = {
     help:
       'Labels are how work is aimed: `tag: gpu` on a start, and the scheduler filters before it ranks. ' +
       '`/labels +gpu` adds one, `/labels -gpu` takes it off. Labels the machine derives about itself, and ' +
-      'ones from AGENT_FLEET_LABELS, are listed but cannot be removed from here.',
+      'ones from FLEETWRIGHT_LABELS, are listed but cannot be removed from here.',
     run: (ctx, args) => {
       // WHAT THIS BOX ALREADY CARRIES FROM ELSEWHERE, so an add can decline to
       // shadow a fact and a remove can say where the label actually comes from.
       // The sidecar puts the real list here; without one this is empty, which
-      // is honest — agent-hub on its own does not know the fleet's labels.
+      // is honest — fleetwright on its own does not know the fleet's labels.
       const given = Array.isArray(ctx.hostLabels) ? ctx.hostLabels : [];
       // WHICH OF THOSE THE MACHINE DERIVED. Computed here rather than sent,
-      // because agent-hub owns the configuration auto-labels reads — the two
+      // because fleetwright owns the configuration auto-labels reads — the two
       // agree by construction instead of by both being kept up to date.
-      // Anything given that is not derived came from AGENT_FLEET_LABELS.
+      // Anything given that is not derived came from FLEETWRIGHT_LABELS.
       const auto = autoLabels(ctx.cfg);
       const env = given.filter((l) => !auto.includes(l));
       const known = [...new Set([...given, ...auto])];
@@ -841,7 +855,7 @@ export const COMMANDS = {
           ok: true,
           text: all.length
             ? `This box has ${all.length} ${all.length === 1 ? 'label' : 'labels'}:\n` +
-              all.map((/** @type {{name: string, source: string}} */ l) => `  ${l.name}  (${l.source === 'set' ? 'set here' : l.source === 'env' ? 'AGENT_FLEET_LABELS' : 'from the machine'})`).join('\n')
+              all.map((/** @type {{name: string, source: string}} */ l) => `  ${l.name}  (${l.source === 'set' ? 'set here' : l.source === 'env' ? 'FLEETWRIGHT_LABELS' : 'from the machine'})`).join('\n')
             : 'This box has no labels, so only work that names it by host can land here.',
           setLabels: set,
         };
@@ -975,7 +989,7 @@ export const COMMANDS = {
         return {
           ok: true,
           text: [
-            `agent-hub on ${ctx.cfg.hostname}`,
+            `fleetwright on ${ctx.cfg.hostname}`,
             // CAPACITY, AND NOT A HEADCOUNT. This said "N known" beside the
             // running figure, and the two are not the same kind of fact: how
             // full a box is belongs to the box, and how many sessions exist on
@@ -1195,7 +1209,7 @@ export const COMMANDS = {
           ? `Linked accounts:\n${linked.map((e) => `  ${e}`).join('\n')}\n\n` +
             'A session runs on the account of whoever starts it. Anybody not on this list cannot start one here.'
           : 'Nobody has linked an account on this box, so no session started here can do anything yet.\n' +
-            'Link one with:  /login for <email>   (or `agent-hub login for <email>` on the box itself)',
+            'Link one with:  /login for <email>   (or `fleetwright login for <email>` on the box itself)',
       };
     },
   },
@@ -1441,7 +1455,7 @@ export const COMMANDS = {
           ok: false,
           text:
             'This fleet has no runner repository, so there is nowhere to start a machine. An operator sets '
-            + 'AGENT_FLEET_RUNNER_REPO on the coordinator and every host learns it on the next connect.',
+            + 'FLEETWRIGHT_RUNNER_REPO on the coordinator and every host learns it on the next connect.',
         };
       }
       // The TICKET is minted by the coordinator at the moment somebody asks,
@@ -1583,6 +1597,27 @@ export const COMMANDS = {
     run: async (ctx, _args, flags) => {
       const status = updateStatus(ctx.cfg);
 
+      // A BOX APT OWNS IS UPDATED BY APT. It is packaged like any other, and
+      // the difference is who moves `current`: the deb's postinst, run by an
+      // apt upgrade. Fetching a manifest here would install a release apt has
+      // not been given yet — every stable release reaches apt only once its
+      // rollout is complete — and the next apt upgrade would then move the box
+      // back. So this reports apt's answer and points at the one door that
+      // updates such a box. The image is still refreshed: it is not part of
+      // the package, and nothing else on an apt box pulls it.
+      if (status.packaged && ctx.cfg.releaseSource === 'apt') {
+        const r = await checkRelease(ctx.cfg);
+        const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
+        const imageNote = image?.text ? `\n\n${image.text}` : '';
+        return {
+          ok: r.ok,
+          text: `${status.dir} is installed from apt, so apt is what updates it.\n\n${r.message}${imageNote}`,
+          // Only when there is something to install AND this box may install
+          // it from here: without the grant /upgrade can only explain itself.
+          buttons: r.available && ctx.cfg.systemUpgrade ? [{ label: 'Install system updates', command: '/upgrade' }] : undefined,
+        };
+      }
+
       // A PACKAGED BOX UPDATES BY MANIFEST, not by pull. Branching here rather
       // than inside runUpdate keeps the git path exactly as it was — the
       // fallback docs/packaging.md relies on to move boxes one at a time is
@@ -1593,7 +1628,7 @@ export const COMMANDS = {
             ok: false,
             text:
               `${status.dir} is a release.\n\n` +
-              'Set AGENT_HUB_RELEASE_MANIFEST to the URL of a release manifest and /update will fetch from it.',
+              'Set FLEETWRIGHT_RELEASE_MANIFEST to the URL of a release manifest and /update will fetch from it.',
           };
         }
         // READ NOW, not at startup: the point of the channel verb is that it
@@ -1612,8 +1647,8 @@ export const COMMANDS = {
           manifestUrl: target.url,
           protocol: PROTOCOL_VERSION,
           channel,
-          // THE HOSTNAME, because agent-hub does not read the sidecar's env and
-          // so does not know AGENT_FLEET_HOST_ID. It is the same value in the
+          // THE HOSTNAME, because fleetwright does not read the sidecar's env and
+          // so does not know FLEETWRIGHT_HOST_ID. It is the same value in the
           // ordinary case — that variable defaults to os.hostname() — and what
           // a rollout needs is only that it is stable per machine.
           hostKey: ctx.cfg.hostname,
@@ -2014,7 +2049,7 @@ export function commandMenu(cfg) {
 
 /** @param {Ctx} ctx */
 export function helpText(ctx) {
-  const lines = [`agent-hub on ${ctx.cfg.hostname}`, ''];
+  const lines = [`fleetwright on ${ctx.cfg.hostname}`, ''];
   for (const [name, def] of Object.entries(COMMANDS)) {
     if (name === 'help') continue;
     if (!ctx.cfg.loginEnabled && (name === 'login' || name === 'code')) continue;
@@ -2038,7 +2073,7 @@ export async function dispatch(ctx, line) {
     return { ok: false, text: `Unknown command "${name}". Try /help.` };
   }
   if (!ctx.cfg.loginEnabled && (canonical === 'login' || canonical === 'code')) {
-    return { ok: false, text: 'Login from agent-hub is disabled (AGENT_HUB_LOGIN=0).' };
+    return { ok: false, text: 'Login from fleetwright is disabled (FLEETWRIGHT_LOGIN=0).' };
   }
 
   try {

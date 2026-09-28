@@ -7,7 +7,7 @@
 # running on a shared machine must not do. It is destructive by design: it
 # installs, converts, breaks and cleans up after itself.
 #
-# Run it on a machine you are willing to have agent-hub installed on.
+# Run it on a machine you are willing to have fleetwright installed on.
 #
 #   sudo ./scripts/migration-drill.sh
 #
@@ -26,7 +26,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${DRILL_WORK:-/tmp/fleetwright-drill}"
 BASE="$WORK/opt/fleetwright"
-CHECKOUT="$WORK/opt/agent-fleet"
+CHECKOUT="$WORK/opt/fleetwright-src"
 DIST="$WORK/dist"
 
 # A SERVICE USER THAT IS NOT ROOT, because a drill that cannot be the wrong
@@ -65,7 +65,7 @@ ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; PASS=$((PASS+1)); }
 reset_to_converted() {
   install_from_checkout >/dev/null 2>&1
   if ! convert; then cp "$WORK/migrate.log" "$WORK/reset.log" 2>/dev/null; return 1; fi
-  grep -q "$BASE/current" /etc/systemd/system/agent-hub.service || return 1
+  grep -q "$BASE/current" /etc/systemd/system/fleetwright.service || return 1
   return 0
 }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
@@ -75,7 +75,7 @@ step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 [ -d /run/systemd/system ] || { echo "needs systemd as pid 1 — this asks it to start things"; exit 1; }
 
 # NOTHING OF SOMEBODY ELSE'S. A box with a real install is not a drill ground.
-for f in /etc/systemd/system/agent-hub.service /etc/agent-hub.env /var/lib/agent-hub; do
+for f in /etc/systemd/system/fleetwright.service /etc/fleetwright.env /var/lib/fleetwright; do
   [ -e "$f" ] && { echo "refusing: $f exists — this machine has an install on it"; exit 1; }
 done
 
@@ -95,17 +95,17 @@ fi
 cleanup() {
   step "Cleaning up"
   [ -n "${DRILL_SERVER:-}" ] && kill "$DRILL_SERVER" 2>/dev/null
-  for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+  for u in fleetwright fleetwright-sidecar fleetwright-coordinator; do
     systemctl disable --now "$u" >/dev/null 2>&1
     rm -f "/etc/systemd/system/$u.service"
   done
   systemctl daemon-reload >/dev/null 2>&1
-  rm -rf /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env \
-         /var/lib/agent-hub /var/lib/agent-fleet /var/lib/agent-fleet-coordinator \
-         /usr/local/bin/agent-hub /usr/local/bin/agent-fleet-sidecar \
-         /usr/local/bin/agent-fleet-coordinator /usr/local/sbin/fleetwright-migrate \
-         /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot \
-         /etc/sudoers.d/agent-hub-migrate
+  rm -rf /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env \
+         /var/lib/fleetwright /var/lib/fleetwright-sidecar /var/lib/fleetwright-coordinator \
+         /usr/local/bin/fleetwright /usr/local/bin/fleetwright-sidecar \
+         /usr/local/bin/fleetwright-coordinator /usr/local/sbin/fleetwright-migrate \
+         /etc/sudoers.d/fleetwright-upgrade /etc/sudoers.d/fleetwright-reboot \
+         /etc/sudoers.d/fleetwright-migrate
   # The logs outlive the drill: a failure you cannot read afterwards is a
   # failure you get to reproduce.
   mkdir -p "${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
@@ -122,17 +122,17 @@ trap cleanup EXIT
 
 # --- the assertions ---------------------------------------------------------
 
-unit_names() { grep -o 'ExecStart=.*' /etc/systemd/system/agent-hub.service | head -1; }
+unit_names() { grep -o 'ExecStart=.*' /etc/systemd/system/fleetwright.service | head -1; }
 
 starts() { # starts WHAT — the only question that has ever mattered here
   systemctl daemon-reload
-  systemctl restart agent-hub >/dev/null 2>&1
+  systemctl restart fleetwright >/dev/null 2>&1
   sleep 2
-  if [ "$(systemctl is-active agent-hub)" = active ]; then
-    ok "$1: agent-hub is active"
+  if [ "$(systemctl is-active fleetwright)" = active ]; then
+    ok "$1: fleetwright is active"
   else
-    bad "$1: agent-hub did not start"
-    journalctl -u agent-hub -n 6 --no-pager 2>/dev/null | sed 's/^/       /'
+    bad "$1: fleetwright did not start"
+    journalctl -u fleetwright -n 6 --no-pager 2>/dev/null | sed 's/^/       /'
   fi
 }
 
@@ -178,10 +178,10 @@ MANIFEST="http://127.0.0.1:$(cat "$WORK/port")/manifest.json"
 ok "serving releases at $MANIFEST"
 
 install_from_checkout() { # install_from_checkout [extra args...]
-  # AGENT_HUB_USER, so the units name a real unprivileged account and the
+  # FLEETWRIGHT_USER, so the units name a real unprivileged account and the
   # installer's chowns have something to do. Without it RUN_USER falls back to
   # whoever is running the drill, which is root.
-  AGENT_FLEET_BASE="$BASE" AGENT_HUB_NO_INSTALL_DEPS=1 AGENT_HUB_USER="$DRILL_USER" \
+  FLEETWRIGHT_BASE="$BASE" FLEETWRIGHT_NO_INSTALL_DEPS=1 FLEETWRIGHT_USER="$DRILL_USER" \
     bash "$CHECKOUT/install/install.sh" --no-wizard "$@" >"$WORK/install.log" 2>&1
 }
 
@@ -202,9 +202,9 @@ convert() {
   # and is a different problem entirely.
   [ -f "$CHECKOUT/install/fleetwright-migrate" ] \
     || { echo "no helper at $CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log"; return 1; }
-  [ -f /etc/agent-hub.env ] \
-    || { echo "no /etc/agent-hub.env — nothing says where releases come from" >"$WORK/migrate.log"; return 1; }
-  FLEETWRIGHT_ENV_FILE=/etc/agent-hub.env AGENT_FLEET_BASE="$BASE" \
+  [ -f /etc/fleetwright.env ] \
+    || { echo "no /etc/fleetwright.env — nothing says where releases come from" >"$WORK/migrate.log"; return 1; }
+  FLEETWRIGHT_ENV_FILE=/etc/fleetwright.env FLEETWRIGHT_BASE="$BASE" \
     sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1
 }
 
@@ -255,26 +255,26 @@ git -C "$BOX" rev-parse refs/tags/main >/dev/null 2>&1 && bad "the stale tag sur
 
 step "1. fresh box — nothing installed"
 install_from_checkout
-points_at "units name the checkout" "$CHECKOUT/bin/agent-hub"
+points_at "units name the checkout" "$CHECKOUT/bin/fleetwright"
 starts "fresh"
 
 # The installer has to have recorded where releases come from, or nothing below
 # can happen. On a real box it derives this from the git remote; here there is
 # none, so it is set the way the installer would have.
-sed -i '/AGENT_HUB_RELEASE_MANIFEST/d' /etc/agent-hub.env
+sed -i '/FLEETWRIGHT_RELEASE_MANIFEST/d' /etc/fleetwright.env
 # A LEADING NEWLINE, because the template does not end in one and an appended
-# line would otherwise be glued to the last — `...0AGENT_HUB_RELEASE_MANIFEST=`,
+# line would otherwise be glued to the last — `...0FLEETWRIGHT_RELEASE_MANIFEST=`,
 # which `sed -n 's/^KEY=//p'` does not match. The drill's first run failed on
 # exactly that and blamed the migration.
-{ printf '\n'; printf 'AGENT_HUB_RELEASE_MANIFEST=%s\n' "$MANIFEST"; printf 'AGENT_HUB_INSTALL_DIR=%s\n' "$CHECKOUT"; } >> /etc/agent-hub.env
-grep -q '^AGENT_HUB_RELEASE_MANIFEST=' /etc/agent-hub.env || { echo "the drill could not record the manifest URL"; exit 1; }
+{ printf '\n'; printf 'FLEETWRIGHT_RELEASE_MANIFEST=%s\n' "$MANIFEST"; printf 'FLEETWRIGHT_INSTALL_DIR=%s\n' "$CHECKOUT"; } >> /etc/fleetwright.env
+grep -q '^FLEETWRIGHT_RELEASE_MANIFEST=' /etc/fleetwright.env || { echo "the drill could not record the manifest URL"; exit 1; }
 
 # AN ENROLLED BOX, because that is what converts. `--upgrade` refuses a machine
 # that was never in a fleet — correctly, since enrolling needs a pin somebody
 # mints — and every box this drill is about has been in one for weeks.
-mkdir -p /var/lib/agent-fleet
-printf '{"kty":"EC","crv":"P-256","d":"drill","x":"drill","y":"drill"}\n' > /var/lib/agent-fleet/host-key.json
-chmod 600 /var/lib/agent-fleet/host-key.json
+mkdir -p /var/lib/fleetwright-sidecar
+printf '{"kty":"EC","crv":"P-256","d":"drill","x":"drill","y":"drill"}\n' > /var/lib/fleetwright-sidecar/host-key.json
+chmod 600 /var/lib/fleetwright-sidecar/host-key.json
 
 # --- 2. convert it ----------------------------------------------------------
 
@@ -284,7 +284,7 @@ if convert; then ok "the migration finished"; else
   bad "the migration exited $RC"
   tail -6 "$WORK/migrate.log" | sed 's/^/       /'
 fi
-points_at "units name the release, by module" "$BASE/current/lib/agent-hub.mjs"
+points_at "units name the release, by module" "$BASE/current/lib/fleetwright.mjs"
 [ -L "$BASE/current" ] && ok "current points at $(basename "$(readlink "$BASE/current")")" || bad "no current symlink"
 # THE MOMENT THE BUG APPEARED. fleetwright-migrate runs as root and creates the
 # release tree root-owned, so this is where a converted box quietly lost the
@@ -296,8 +296,8 @@ starts "converted"
 
 step "3. rerun — the one-liner on a converted box"
 install_from_checkout
-points_at "units still name the release" "$BASE/current/lib/agent-hub.mjs"
-grep -q "$CHECKOUT/bin" /etc/systemd/system/agent-hub.service && bad "it reverted to the checkout" || ok "it did not revert"
+points_at "units still name the release" "$BASE/current/lib/fleetwright.mjs"
+grep -q "$CHECKOUT/bin" /etc/systemd/system/fleetwright.service && bad "it reverted to the checkout" || ok "it did not revert"
 # AND THE RERUN IS THE REPAIR for a box already in that state, so it has to
 # leave the tree writable rather than merely not break it further.
 writable_by_service_user "after a rerun"
@@ -308,15 +308,15 @@ starts "after rerun"
 step "4. stale unit — converted, carrying a unit from before units named the module"
 # Exactly what that box had: a unit naming bin/, against a release whose bin/ is
 # the shell shim v0.2.3 shipped.
-printf '#!/bin/sh\n# Shipped by fleetwright-host-v-drill.\nexec node "$(dirname "$(readlink -f "$0")")/../lib/agent-hub.mjs" "$@"\n' \
-  > "$BASE/current/bin/agent-hub"
-sed -i "s|current/lib/agent-hub.mjs|current/bin/agent-hub|" /etc/systemd/system/agent-hub.service
+printf '#!/bin/sh\n# Shipped by fleetwright-host-v-drill.\nexec node "$(dirname "$(readlink -f "$0")")/../lib/fleetwright.mjs" "$@"\n' \
+  > "$BASE/current/bin/fleetwright"
+sed -i "s|current/lib/fleetwright.mjs|current/bin/fleetwright|" /etc/systemd/system/fleetwright.service
 systemctl daemon-reload
-systemctl restart agent-hub >/dev/null 2>&1; sleep 1
-[ "$(systemctl is-active agent-hub)" = active ] && bad "the broken unit started, so this fixture proves nothing" \
+systemctl restart fleetwright >/dev/null 2>&1; sleep 1
+[ "$(systemctl is-active fleetwright)" = active ] && bad "the broken unit started, so this fixture proves nothing" \
   || ok "reproduced: the box is in a restart loop"
 install_from_checkout
-points_at "the unit was repaired" "$BASE/current/lib/agent-hub.mjs"
+points_at "the unit was repaired" "$BASE/current/lib/fleetwright.mjs"
 starts "after repair"
 
 # --- 5. a half-finished migration -------------------------------------------
@@ -331,14 +331,14 @@ install_from_checkout --from-source
 systemctl daemon-reload
 if convert; then ok "it resumed rather than reporting nothing to do"; else bad "the resume failed"; tail -4 "$WORK/migrate.log" | sed 's/^/       /'; fi
 grep -q "nothing to do" "$WORK/migrate.log" && bad "it claimed there was nothing to do" || ok "it did not claim success without acting"
-points_at "units name the release again" "$BASE/current/lib/agent-hub.mjs"
+points_at "units name the release again" "$BASE/current/lib/fleetwright.mjs"
 starts "after resume"
 
 # --- 6. going back ----------------------------------------------------------
 
 step "6. from-source — a converted box asked to return to the checkout"
 install_from_checkout --from-source
-points_at "units name the checkout again" "$CHECKOUT/bin/agent-hub"
+points_at "units name the checkout again" "$CHECKOUT/bin/fleetwright"
 starts "after --from-source"
 
 # --- 7. the update a converted box takes next -------------------------------
@@ -381,7 +381,7 @@ const r = await applyRelease({
 if (!r.ok) { console.error(r.message); process.exit(1); }
 APPLY
 chmod a+r "$WORK/apply.mjs"
-if as_service_user "AGENT_HUB_RELEASE_MANIFEST='$MANIFEST' $(command -v node) '$WORK/apply.mjs'" >"$WORK/update.log" 2>&1; then
+if as_service_user "FLEETWRIGHT_RELEASE_MANIFEST='$MANIFEST' $(command -v node) '$WORK/apply.mjs'" >"$WORK/update.log" 2>&1; then
   ok "the update applied from the path a running service reports"
 else
   bad "the update was refused"; sed 's/^/       /' "$WORK/update.log" | head -3
@@ -458,7 +458,7 @@ esac
 [ -e "$BASE/current" ] && bad "the fixture did not break the symlink" || ok "reproduced: current dangles, nothing behind it"
 
 install_from_checkout
-TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/fleetwright.service | head -1)"
 [ -f "$TARGET" ] && ok "the unit names something that exists: $(basename "$TARGET")" \
   || bad "the unit still names a missing file: $TARGET"
 starts "after healing a missing release"
@@ -469,20 +469,20 @@ starts "after healing a missing release"
 # answers "Start request repeated too quickly" and refuses to start the unit at
 # all — so a box that has been crash-looping cannot be healed by ANY installer,
 # however correct the unit it writes. deb13-staging reached restart counter
-# 6423, and every re-run reported `ok agent-hub running`.
+# 6423, and every re-run reported `ok fleetwright running`.
 
 step "11. rate-limited — systemd has stopped trying"
 install_from_checkout >/dev/null 2>&1
 # Break it the way a bad release does, then let systemd give up.
 BROKEN="$WORK/broken-entry.mjs"
 printf '#!/bin/sh\n# not javascript\n' > "$BROKEN"
-sed -i "s|^ExecStart=.*|ExecStart=$(command -v node) $BROKEN serve|" /etc/systemd/system/agent-hub.service
+sed -i "s|^ExecStart=.*|ExecStart=$(command -v node) $BROKEN serve|" /etc/systemd/system/fleetwright.service
 systemctl daemon-reload
-systemctl restart agent-hub >/dev/null 2>&1
-for _ in 1 2 3 4 5 6 7 8; do systemctl start agent-hub >/dev/null 2>&1; done
+systemctl restart fleetwright >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8; do systemctl start fleetwright >/dev/null 2>&1; done
 sleep 1
-if systemctl status agent-hub 2>&1 | grep -q "repeated too quickly" \
-   || [ "$(systemctl show -p NRestarts --value agent-hub 2>/dev/null || echo 0)" -gt 0 ]; then
+if systemctl status fleetwright 2>&1 | grep -q "repeated too quickly" \
+   || [ "$(systemctl show -p NRestarts --value fleetwright 2>/dev/null || echo 0)" -gt 0 ]; then
   ok "reproduced: systemd is refusing to start it"
 else
   ok "systemd did not rate-limit here; the repair below is still the assertion"
@@ -493,11 +493,11 @@ fi
 # be the drill doing the healing it is supposed to be testing.
 install_from_checkout --upgrade
 sleep 1
-if [ "$(systemctl is-active agent-hub)" = active ]; then
+if [ "$(systemctl is-active fleetwright)" = active ]; then
   ok "the installer cleared the failure and started it"
 else
   bad "the installer left it dead"
-  journalctl -u agent-hub -n 4 --no-pager 2>/dev/null | sed 's/^/       /'
+  journalctl -u fleetwright -n 4 --no-pager 2>/dev/null | sed 's/^/       /'
 fi
 
 # --- 12. a release whose unit TEMPLATES predate the fix ----------------------
@@ -508,7 +508,7 @@ fi
 #
 # install_unit read `$DIR/install/<name>.service`, and $DIR is the PAYLOAD. A
 # box pointing its units at a release therefore read THAT RELEASE's template.
-# v0.2.3's predates __ENTRY__ and hardcodes `__DIR__/bin/agent-hub`, so the
+# v0.2.3's predates __ENTRY__ and hardcodes `__DIR__/bin/fleetwright`, so the
 # substitution found nothing to replace and every repair wrote the same broken
 # unit — on a box whose installer had been correct for hours.
 
@@ -520,15 +520,15 @@ if reset_to_converted; then ok "precondition: the box is converted"
 else bad "precondition: could not get to a converted box"; tail -3 "$WORK/reset.log" | sed 's/^/       /'; fi
 REL="$(readlink -f "$BASE/current")"
 # Exactly what v0.2.3 ships.
-printf 'ExecStart=__NODE__ __DIR__/bin/agent-hub serve\n' > "$REL/install/agent-hub.service"
-printf '#!/bin/sh\n# Shipped by an old release.\nexec node "$(dirname "$0")/../lib/agent-hub.mjs" "$@"\n' > "$REL/bin/agent-hub"
-grep -q '__ENTRY__' "$REL/install/agent-hub.service" && bad "the fixture did not take" \
+printf 'ExecStart=__NODE__ __DIR__/bin/fleetwright serve\n' > "$REL/install/fleetwright.service"
+printf '#!/bin/sh\n# Shipped by an old release.\nexec node "$(dirname "$0")/../lib/fleetwright.mjs" "$@"\n' > "$REL/bin/fleetwright"
+grep -q '__ENTRY__' "$REL/install/fleetwright.service" && bad "the fixture did not take" \
   || ok "reproduced: the release's template hardcodes bin/"
 
 install_from_checkout
-TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/fleetwright.service | head -1)"
 case "$TARGET" in
-  */lib/agent-hub.mjs) ok "the unit names the module, from this installer's template" ;;
+  */lib/fleetwright.mjs) ok "the unit names the module, from this installer's template" ;;
   *) bad "the old template won: $TARGET" ;;
 esac
 starts "after an old release's template"
@@ -552,7 +552,7 @@ case "$REL" in
   "$BASE"/releases/*) rm -rf "${REL:?}/lib" ;;
   *) bad "current does not point into the release tree: $REL" ;;
 esac
-[ -d "$REL" ] && [ ! -e "$REL/lib/agent-hub.mjs" ] \
+[ -d "$REL" ] && [ ! -e "$REL/lib/fleetwright.mjs" ] \
   && ok "reproduced: the release directory is there, the payload is not" \
   || bad "the fixture did not take"
 
@@ -561,7 +561,7 @@ install_from_checkout
 # not the assertion — putting it back on the checkout and re-laying the release
 # are both correct answers. Leaving the units pointed at an empty directory is
 # not, and that is what happened.
-TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/agent-hub.service | head -1)"
+TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' /etc/systemd/system/fleetwright.service | head -1)"
 if [ -f "$TARGET" ]; then ok "the unit names something that exists: $TARGET"
 else bad "the unit names $TARGET, which is not there"; fi
 starts "after a partial release"
@@ -597,11 +597,11 @@ step "14. the manifest cannot be reached"
 # A box with no network is the commonest reason to be here, and the one where
 # leaving it half-converted is least recoverable.
 install_from_checkout --from-source
-ENV_GOOD="$(grep '^AGENT_HUB_RELEASE_MANIFEST=' /etc/agent-hub.env)"
-sed -i 's|^AGENT_HUB_RELEASE_MANIFEST=.*|AGENT_HUB_RELEASE_MANIFEST=http://127.0.0.1:1/manifest.json|' /etc/agent-hub.env
+ENV_GOOD="$(grep '^FLEETWRIGHT_RELEASE_MANIFEST=' /etc/fleetwright.env)"
+sed -i 's|^FLEETWRIGHT_RELEASE_MANIFEST=.*|FLEETWRIGHT_RELEASE_MANIFEST=http://127.0.0.1:1/manifest.json|' /etc/fleetwright.env
 refuses "unreachable manifest" "could not fetch"
 starts "after an unreachable manifest"
-sed -i "s|^AGENT_HUB_RELEASE_MANIFEST=.*|$ENV_GOOD|" /etc/agent-hub.env
+sed -i "s|^FLEETWRIGHT_RELEASE_MANIFEST=.*|$ENV_GOOD|" /etc/fleetwright.env
 
 step "15. the manifest is missing the fields that matter"
 cp "$DIST/manifest.json" "$WORK/manifest.good"
@@ -656,7 +656,7 @@ install_from_checkout --from-source
 # asking. On a real box the cause is a read-only mount or a full disk; the
 # helper cannot tell those apart and does not need to.
 UNWRITABLE=/proc/fleetwright-drill-nope/fleetwright
-if AGENT_FLEET_BASE="$UNWRITABLE" FLEETWRIGHT_ENV_FILE=/etc/agent-hub.env \
+if FLEETWRIGHT_BASE="$UNWRITABLE" FLEETWRIGHT_ENV_FILE=/etc/fleetwright.env \
      sh "$CHECKOUT/install/fleetwright-migrate" >"$WORK/migrate.log" 2>&1; then
   bad "an unwritable base was accepted"
 else

@@ -1,6 +1,6 @@
 // The credential that separates the sidecar from anything else on the box.
 //
-// agent-hub's HTTP API was unauthenticated whenever AGENT_HUB_TOKEN was unset,
+// fleetwright's HTTP API was unauthenticated whenever FLEETWRIGHT_TOKEN was unset,
 // which is the default, and `http.js` justified it in one line: it only listens
 // on loopback, so reaching it already implies a shell on the machine.
 //
@@ -40,7 +40,7 @@ export function apiTokenFile(stateDir) {
 /**
  * The token this box's API requires, generating one the first time.
  *
- * An explicitly configured `AGENT_HUB_TOKEN` always wins and is never written
+ * An explicitly configured `FLEETWRIGHT_TOKEN` always wins and is never written
  * to disk — somebody who set it has their own custody arrangement and does not
  * need a second copy of it in our state directory.
  *

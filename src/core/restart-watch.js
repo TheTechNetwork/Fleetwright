@@ -1,7 +1,7 @@
 // How an update reaches every service, without anybody opening a terminal.
 //
 // THE PROBLEM. `/update --restart` pulls code for all three services shipped
-// from /opt/agent-fleet and restarts exactly one: the hub, by exiting and
+// from /opt/fleetwright-src and restarts exactly one: the hub, by exiting and
 // letting systemd's Restart=always bring it back. The sidecar and the
 // coordinator keep running whatever was on disk before the pull, and the only
 // fix on offer was "ssh in and systemctl restart" — which is the thing this
@@ -34,9 +34,10 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { log } from '../log.js';
+import { preferExisting } from '../fleet/legacy-paths.js';
 
 /** Where the marker lives. Overridable so tests do not need /var/lib. */
-export function markerPath(stateDir = process.env.AGENT_HUB_STATE_DIR || '/var/lib/agent-hub') {
+export function markerPath(stateDir = process.env.FLEETWRIGHT_STATE_DIR || preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub')) {
   return path.join(stateDir, 'restart-marker.json');
 }
 

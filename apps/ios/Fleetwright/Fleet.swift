@@ -517,7 +517,7 @@ struct Fleet {
     /// Which releases a box installs — and, with `to`, change it.
     ///
     /// Bare is a question. This is the whole point of the verb: an update
-    /// channel used to be a line in `/etc/agent-hub.env`, which meant a shell
+    /// channel used to be a line in `/etc/fleetwright.env`, which meant a shell
     /// on the box, which is the one thing somebody with only a phone does not
     /// have.
     func channel(host: String, to: String? = nil) async throws -> Reply {
@@ -530,7 +530,7 @@ struct Fleet {
     ///
     /// `channel`'s sibling, and bare is a question for the same reason. The
     /// browser variant shipped as a second tag and choosing it meant editing
-    /// AGENT_HUB_SANDBOX_IMAGE in a root-owned file and restarting the service.
+    /// FLEETWRIGHT_SANDBOX_IMAGE in a root-owned file and restarting the service.
     func sandbox(host: String, to: String? = nil) async throws -> Reply {
         var params: [String: String] = [:]
         if let to, !to.isEmpty { params["to"] = to }
@@ -1145,7 +1145,7 @@ struct Fleet {
         let sandbox: Sandbox?
         /// What `tag` matches on for this box: os, architecture, distribution,
         /// whether its image has a browser, plus anything set here or in
-        /// AGENT_FLEET_LABELS.
+        /// FLEETWRIGHT_LABELS.
         let labels: [String]?
         /// WHICH OF THOSE CAN BE TAKEN OFF. The flat list cannot say — `arm64`
         /// and `gpu` look identical in it, and the host refuses to drop one of

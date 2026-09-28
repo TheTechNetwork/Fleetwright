@@ -23,13 +23,13 @@ const cfg = (patch = {}) => ({
   skipPermissions: true,
   sandbox: true,
   podmanBin: 'podman',
-  sandboxImage: 'localhost/agent-session:latest',
+  sandboxImage: 'localhost/fleetwright-session:latest',
   sandboxMemory: '8g',
   sandboxCpus: '2',
   sandboxPidsLimit: '512',
   sandboxExtraArgs: [],
   sandboxHookSocket: true,
-  sandboxHookSocketDir: '/run/agent-fleet',
+  sandboxHookSocketDir: '/run/fleetwright-sidecar',
   sandboxUserns: 'nomap',
   ...patch,
 });
@@ -44,13 +44,13 @@ test('the two modes are nomap and host, and nomap is the one that separates', ()
 test('a session runs in its own namespace, and its socket is chowned to it', () => {
   const line = buildCommand(cfg(), { name: 'api' });
   assert.match(line, /'--userns=nomap'/);
-  assert.match(line, /'\/run\/agent-fleet\/api\.sock:\/run\/hub\.sock:U'/, 'one inode, chowned to the session');
+  assert.match(line, /'\/run\/fleetwright-sidecar\/api\.sock:\/run\/hub\.sock:U'/, 'one inode, chowned to the session');
 });
 
 test('the host namespace is exactly the line every session ran before', () => {
   const line = buildCommand(cfg({ sandboxUserns: 'host' }), { name: 'api' });
   assert.ok(!line.includes('--userns'));
-  assert.match(line, /'\/run\/agent-fleet\/api\.sock:\/run\/hub\.sock'/);
+  assert.match(line, /'\/run\/fleetwright-sidecar\/api\.sock:\/run\/hub\.sock'/);
   assert.ok(!line.includes(':U'), 'no chown when the hub already owns what the session connects to');
 });
 
@@ -60,7 +60,7 @@ test('hookSocketMount adds :U only under nomap', () => {
 });
 
 test('the operator refusal of --userns=host still stands beside the default', () => {
-  // sandbox-args.js refuses `--userns=host` typed into AGENT_HUB_SANDBOX_ARGS.
+  // sandbox-args.js refuses `--userns=host` typed into FLEETWRIGHT_SANDBOX_ARGS.
   // That refusal was right against the wrong baseline — the default WAS host —
   // and it stays right now that the default is not: typing it would undo the
   // separation this file exists for.

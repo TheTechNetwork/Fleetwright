@@ -57,6 +57,14 @@ function origin(t) {
  * @param {string[]} [args]
  */
 function pipeIntoSh(where, args = [], env = {}) {
+  // THIS MACHINE'S DPKG IS NOT THE BOX UNDER TEST. bootstrap.sh refuses a box
+  // that has the fleetwright package, and a developer who installed it — or a
+  // runner that ever does — would otherwise fail every test here for a reason
+  // none of them is about. A dpkg-query that knows no packages goes first on
+  // PATH, unless a test brings its own.
+  const stubs = env.DPKG_STUBS ?? noDpkgDir();
+  const { DPKG_STUBS: _ignored, ...rest } = env;
+  env = { ...rest, PATH: `${stubs}:${rest.PATH ?? process.env.PATH}` };
   return spawnSync(
     'sh',
     ['-s', '--', ...args],
@@ -72,6 +80,17 @@ function pipeIntoSh(where, args = [], env = {}) {
       },
     },
   );
+}
+
+let noDpkg = '';
+/** A directory whose dpkg-query knows no packages. Made once per file. */
+function noDpkgDir() {
+  if (noDpkg) return noDpkg;
+  noDpkg = mkdtempSync(path.join(os.tmpdir(), 'no-dpkg-'));
+  writeFileSync(path.join(noDpkg, 'dpkg-query'), '#!/bin/sh\nexit 1\n');
+  chmodSync(path.join(noDpkg, 'dpkg-query'), 0o755);
+  process.on('exit', () => rmSync(noDpkg, { recursive: true, force: true }));
+  return noDpkg;
 }
 
 function readBootstrap() {
@@ -191,7 +210,7 @@ function release(t, { sha, file = 'fleetwright-host-v9.tar.gz', stub } = {}) {
   // where releases come from, which a box with no git remote cannot work out.
   writeFileSync(
     path.join(tree, 'install', 'install.sh'),
-    stub ?? '#!/usr/bin/env bash\nprintf "INSTALLER RAN [%s] from %s\\n" "$*" "${AGENT_HUB_RELEASE_MANIFEST:-nowhere}"\n',
+    stub ?? '#!/usr/bin/env bash\nprintf "INSTALLER RAN [%s] from %s\\n" "$*" "${FLEETWRIGHT_RELEASE_MANIFEST:-nowhere}"\n',
   );
   chmodSync(path.join(tree, 'install', 'install.sh'), 0o755);
   writeFileSync(path.join(tree, 'package.json'), '{ "version": "v9" }\n');
@@ -231,7 +250,7 @@ test('a bare box fetches the release, checks it, and hands over — without git'
   const r = pipeIntoSh(
     { repo: 'https://github.com/example/fleet', target: rel.target },
     ['--check'],
-    { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base, PATH: noGit(t), TMPDIR: rel.root },
+    { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base, PATH: noGit(t), TMPDIR: rel.root },
   );
 
   assert.equal(r.status, 0, r.stderr);
@@ -252,7 +271,7 @@ test('a release that does not match its manifest is refused before it is unpacke
   const r = pipeIntoSh(
     { repo: 'https://github.com/example/fleet', target: rel.target },
     [],
-    { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base, TMPDIR: rel.root },
+    { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base, TMPDIR: rel.root },
   );
 
   assert.notEqual(r.status, 0);
@@ -273,7 +292,7 @@ test('a manifest whose file is a path is refused, because where to write is not 
   const r = pipeIntoSh(
     { repo: 'https://github.com/example/fleet', target: rel.target },
     [],
-    { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base },
+    { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base },
   );
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /not a file beside it/);
@@ -286,12 +305,12 @@ test('--from-source still gets a checkout, and a box that has one keeps it', (t)
   // arguing about one box.
   const rel = release(t);
   const where = origin(t);
-  const asked = pipeIntoSh(where, ['--from-source'], { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base });
+  const asked = pipeIntoSh(where, ['--from-source'], { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base });
   assert.equal(asked.status, 0, asked.stderr);
   assert.match(asked.stdout, /INSTALLER RAN \[--from-source\]/);
   assert.equal(existsSync(path.join(where.target, '.git')), true, '--from-source is a checkout');
 
-  const again = pipeIntoSh(where, [], { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base });
+  const again = pipeIntoSh(where, [], { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base });
   assert.equal(again.status, 0, again.stderr);
   assert.match(again.stdout, /Updating/, 'a box with a checkout is updated, not re-laid as a release');
   assert.doesNotMatch(again.stdout, /Fetching the release/);
@@ -349,7 +368,7 @@ test('the release this repository actually builds installs itself through the on
   const r = pipeIntoSh(
     { repo: 'https://github.com/example/fleet', target: path.join(root, 'target') },
     ['--check'],
-    { FLEETWRIGHT_MANIFEST: `file://${path.join(dist, 'manifest.json')}`, AGENT_FLEET_BASE: base, TMPDIR: root, PATH: noGit(t) },
+    { FLEETWRIGHT_MANIFEST: `file://${path.join(dist, 'manifest.json')}`, FLEETWRIGHT_BASE: base, TMPDIR: root, PATH: noGit(t) },
   );
   const out = `${r.stdout}${r.stderr}`;
   assert.match(out, /v-test, sha256 ok/);
@@ -360,4 +379,22 @@ test('the release this repository actually builds installs itself through the on
   // asserted: it reports on prerequisites this runner has no reason to have.
   assert.equal(existsSync(base), false, `--check created ${base}`);
   assert.deepEqual(readdirSyncSafe(root).filter((f) => f.startsWith('fleetwright-install.')), []);
+});
+
+test('a box the fleetwright package owns is refused, and told how apt does each thing', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'dpkg-has-it-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'dpkg-query'), '#!/bin/sh\nprintf "install ok installed"\n');
+  chmodSync(path.join(dir, 'dpkg-query'), 0o755);
+  const rel = release(t);
+  const r = pipeIntoSh(
+    { repo: 'https://github.com/example/fleet', target: rel.target },
+    ['--check'],
+    { FLEETWRIGHT_MANIFEST: rel.manifest, FLEETWRIGHT_BASE: rel.base, TMPDIR: rel.root, DPKG_STUBS: dir },
+  );
+  // Two updaters taking turns moving `current` is the thing refused here.
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /apt installs and updates it/);
+  assert.match(r.stderr, /fleetwright join/);
+  assert.equal(existsSync(rel.base), false, 'something was laid out before the refusal');
 });

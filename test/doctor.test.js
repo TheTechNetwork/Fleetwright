@@ -32,7 +32,7 @@ async function box({ available = null, unit = null } = {}) {
   mkdirSync(path.join(rel, 'lib'), { recursive: true });
   mkdirSync(path.join(rel, 'install'), { recursive: true });
   writeFileSync(path.join(rel, 'package.json'), JSON.stringify({ version: 'v1.0.0' }));
-  writeFileSync(path.join(rel, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(rel, 'lib', 'fleetwright.mjs'), '');
   symlinkSync(rel, path.join(base, 'current'));
 
   // SERVED OVER HTTP, not file://. Node's fetch does not open file: URLs, so a
@@ -65,7 +65,7 @@ async function box({ available = null, unit = null } = {}) {
   // doctor probes whatever is on PATH. On a box with claude installed and
   // logged in it takes the success branches and prints an account; on a bare CI
   // container it takes the failure branches. Same test, same result, DIFFERENT
-  // LINES EXECUTED — so the coverage number for bin/agent-hub depended on what
+  // LINES EXECUTED — so the coverage number for bin/fleetwright depended on what
   // was installed on the machine running the suite, and a floor recorded on one
   // box read eight points lower on another.
   //
@@ -90,9 +90,9 @@ async function box({ available = null, unit = null } = {}) {
   // A UNIT DIRECTORY AND A systemctl OF ITS OWN.
   //
   // Same story as the binaries, one layer over: doctor's unit block only runs
-  // on a machine that HAS /etc/systemd/system/agent-hub.service, so it ran on
+  // on a machine that HAS /etc/systemd/system/fleetwright.service, so it ran on
   // the box that recorded the coverage floor — which had a leftover from an
-  // earlier drill — and never on CI. Seven points of bin/agent-hub were
+  // earlier drill — and never on CI. Seven points of bin/fleetwright were
   // coverage of whatever happened to be lying around in /etc.
   const unitDir = path.join(work, 'units');
   mkdirSync(unitDir, { recursive: true });
@@ -112,7 +112,7 @@ async function box({ available = null, unit = null } = {}) {
   );
   chmodSync(fakeSystemctl, 0o755);
   if (unit) {
-    writeFileSync(path.join(unitDir, 'agent-hub.service'), '[Service]\nExecStart=/usr/bin/node x serve\n');
+    writeFileSync(path.join(unitDir, 'fleetwright.service'), '[Service]\nExecStart=/usr/bin/node x serve\n');
     writeFileSync(path.join(work, 'unit-state'), `${unit}\n`);
   }
   return {
@@ -145,7 +145,7 @@ async function box({ available = null, unit = null } = {}) {
  */
 function doctor(b, args = []) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['bin/agent-hub', 'doctor', ...args], {
+    const child = spawn(process.execPath, ['bin/fleetwright', 'doctor', ...args], {
       cwd: ROOT,
       env: envFor(b),
     });
@@ -161,20 +161,20 @@ function envFor(b) {
     ...process.env,
     // ONLY the fixture's binaries, so the machine's own are never consulted.
     PATH: `${b.fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-    AGENT_HUB_CLAUDE_BIN: path.join(b.fakeBin, 'claude'),
-    AGENT_HUB_SYSTEMCTL_BIN: path.join(b.fakeBin, 'systemctl'),
+    FLEETWRIGHT_CLAUDE_BIN: path.join(b.fakeBin, 'claude'),
+    FLEETWRIGHT_SYSTEMCTL_BIN: path.join(b.fakeBin, 'systemctl'),
     FLEETWRIGHT_UNIT_DIR: b.unitDir,
-    // Nothing of this machine's: doctor reads /etc/agent-hub.env otherwise,
+    // Nothing of this machine's: doctor reads /etc/fleetwright.env otherwise,
     // and a test that inherits a real box's config tests that box.
-    AGENT_HUB_ENV_FILE: path.join(b.work, 'nonexistent.env'),
-    AGENT_HUB_INSTALL_DIR: b.current,
-    AGENT_HUB_STATE_DIR: b.state,
-    AGENT_HUB_WORKDIR: b.state,
-    AGENT_HUB_RELEASE_MANIFEST: b.manifest,
-    AGENT_FLEET_BASE: b.base,
-    AGENT_HUB_TELEGRAM_TOKEN: '',
+    FLEETWRIGHT_ENV_FILE: path.join(b.work, 'nonexistent.env'),
+    FLEETWRIGHT_INSTALL_DIR: b.current,
+    FLEETWRIGHT_STATE_DIR: b.state,
+    FLEETWRIGHT_WORKDIR: b.state,
+    FLEETWRIGHT_RELEASE_MANIFEST: b.manifest,
+    FLEETWRIGHT_BASE: b.base,
+    FLEETWRIGHT_TELEGRAM_TOKEN: '',
     // A port nothing is on, so "hub reachable" is a stable no.
-    AGENT_HUB_PORT: '59999',
+    FLEETWRIGHT_PORT: '59999',
   };
 }
 
@@ -186,7 +186,7 @@ test('an available update is offered with its command, and not taken', async (t)
   assert.match(out, /an update is waiting: v2\.0\.0/, out.slice(0, 900));
   // THE COMMAND, not "run an update". A remedy somebody has to go and look up
   // is a remedy for people who already knew.
-  assert.match(out, /agent-hub update/, out.slice(0, 900));
+  assert.match(out, /fleetwright update/, out.slice(0, 900));
 });
 
 test('--repair does not apply it, and says so where somebody will read it', async (t) => {
@@ -224,10 +224,10 @@ test('a broken release layout is reported, not discovered during an update', asy
 });
 
 test('one fact is reported once', () => {
-  // "hub unreachable" and "agent-hub.service is inactive" are the same news.
+  // "hub unreachable" and "fleetwright.service is inactive" are the same news.
   // Printing both is how a screen contradicts itself, which is the defect the
   // `updates` verb exists to remove, one tool over.
-  const src = readFileSync(new URL('../bin/agent-hub', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright', import.meta.url), 'utf8');
   assert.match(src, /if \(!unit\.known \|\| hubUp\) \{/);
 });
 
@@ -235,14 +235,14 @@ test('a repair that failed is a failure, not a line of output', () => {
   // "doctor says it fixed it" and "the box is still broken" must not be able to
   // appear in the same sentence. Reporting the ATTEMPT and exiting 0 is how
   // they do.
-  const src = readFileSync(new URL('../bin/agent-hub', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright', import.meta.url), 'utf8');
   // The whole block, not a slice of it: a fixed window silently stops
   // covering the thing it guards the moment a comment grows.
   const block = src.slice(src.indexOf('if (repair) {'), src.indexOf('process.exit(bad'));
   assert.match(block, /if \(!done\) bad\+\+/);
   // AND THE REMEDY TRAVELS WITH THE FAILURE. "FAIL" on its own is a dead end
   // for the one person who can act on it.
-  assert.match(block, /try: sudo agent-hub doctor --repair/);
+  assert.match(block, /try: sudo fleetwright doctor --repair/);
   // NOT PREDICTED FROM uid. This used to skip when `getuid() !== 0`, which is a
   // guess about authority and wrong in both directions — polkit lets a session
   // user start a service on plenty of boxes, and being root is not sufficient
@@ -263,7 +263,7 @@ test('doctor sees the fixture\'s tools, never the machine\'s', async (t) => {
   // doctor probes whatever is on PATH, so on a box with claude installed and
   // logged in it takes the success branches, and on a bare container it takes
   // the failure ones. Same test, same result, DIFFERENT LINES EXECUTED — so
-  // bin/agent-hub's coverage depended on what was installed on the machine
+  // bin/fleetwright's coverage depended on what was installed on the machine
   // running the suite, and a floor recorded on one box read eight points lower
   // on another and reported a regression that had not happened.
   //
@@ -285,14 +285,14 @@ test('a unit systemd has given up on is reported, and repaired in the right orde
   t.after(() => b.close());
 
   const seen = await doctor(b);
-  assert.match(seen.out, /FAIL\s+agent-hub\.service is failed/, seen.out.slice(0, 900));
-  assert.match(seen.out, /journalctl -u agent-hub/, seen.out.slice(0, 900));
+  assert.match(seen.out, /FAIL\s+fleetwright\.service is failed/, seen.out.slice(0, 900));
+  assert.match(seen.out, /journalctl -u fleetwright/, seen.out.slice(0, 900));
   // OFFERED BEFORE IT IS DONE. A tool that only acts when asked has to say what
   // it would do, or --repair is a flag nobody knows to reach for.
-  assert.match(seen.out, /agent-hub doctor --repair/, seen.out.slice(0, 900));
+  assert.match(seen.out, /fleetwright doctor --repair/, seen.out.slice(0, 900));
 
   const fixed = await doctor(b, ['--repair']);
-  assert.match(fixed.out, /ok\s+clear the failure counter and start agent-hub/, fixed.out.slice(0, 900));
+  assert.match(fixed.out, /ok\s+clear the failure counter and start fleetwright/, fixed.out.slice(0, 900));
 
   // RESET-FAILED BEFORE START, and the order is the assertion. systemd stops
   // trying after StartLimitBurst and then answers "Start request repeated too
@@ -310,7 +310,7 @@ test('an active service is not something to fix', async (t) => {
   t.after(() => b.close());
 
   const { out } = await doctor(b);
-  assert.match(out, /ok\s+agent-hub\.service is active/, out.slice(0, 900));
+  assert.match(out, /ok\s+fleetwright\.service is active/, out.slice(0, 900));
   assert.doesNotMatch(out, /can be fixed for you/, out.slice(0, 900));
 
   const repaired = await doctor(b, ['--repair']);
@@ -327,7 +327,7 @@ test('a box with no unit is not a broken box', async (t) => {
   t.after(() => b.close());
 
   const { out } = await doctor(b);
-  assert.doesNotMatch(out, /agent-hub\.service is/, out.slice(0, 900));
+  assert.doesNotMatch(out, /fleetwright\.service is/, out.slice(0, 900));
   // The hub check speaks instead — one fact, once, and this is the half that
   // has something to say when there is no unit to point at.
   assert.match(out, /hub reachable at/, out.slice(0, 900));

@@ -101,7 +101,7 @@ jobs:
           brew untap aws/tap >/dev/null 2>&1 || true
           brew install tmux
           # renovate: datasource=npm depName=@anthropic-ai/claude-code
-          npm install -g @anthropic-ai/claude-code@2.1.282
+          npm install -g @anthropic-ai/claude-code@2.1.283
           tmux -V && claude --version
 
       - name: Run as a host until the clock runs out
@@ -109,27 +109,27 @@ jobs:
           # UNIQUE PER RUN, AND run_attempt IS NOT OPTIONAL. A re-run reuses
           # run_id, and two hosts sharing one identity is the clone bug in a new
           # costume — we have paid for that lesson once already.
-          AGENT_FLEET_HOST_ID: gha-mac-${{ github.run_id }}-${{ github.run_attempt }}
-          AGENT_FLEET_COORDINATOR_URL: ${{ inputs.coordinator }}
-          AGENT_FLEET_LABELS: ${{ inputs.labels }}
+          FLEETWRIGHT_HOST_ID: gha-mac-${{ github.run_id }}-${{ github.run_attempt }}
+          FLEETWRIGHT_COORDINATOR_URL: ${{ inputs.coordinator }}
+          FLEETWRIGHT_LABELS: ${{ inputs.labels }}
           # NO SANDBOX. Rootless podman on a macOS runner means a Linux VM
           # inside a VM, which is slow where it works at all — and the sandbox
           # exists to protect a machine that persists. This one is destroyed in
           # an hour by something more thorough than a container boundary.
-          AGENT_HUB_SANDBOX: '0'
-          AGENT_HUB_WORKDIR: ${{ runner.temp }}/work
-          AGENT_HUB_STATE_DIR: ${{ runner.temp }}/state
+          FLEETWRIGHT_SANDBOX: '0'
+          FLEETWRIGHT_WORKDIR: ${{ runner.temp }}/work
+          FLEETWRIGHT_STATE_DIR: ${{ runner.temp }}/state
           # EVERY ABSOLUTE DEFAULT HAS TO MOVE, not just the obvious one. These
           # default to /var/lib and /run, which on a macOS runner are either
           # unwritable without sudo or simply not there — and the failure is
           # `enrol` dying on EACCES before the host ever appears in the fleet.
           #
-          # The state directory holds agent-hub's generated API token, and the
-          # sidecar finds that token by reading AGENT_HUB_STATE_DIR itself. So
+          # The state directory holds fleetwright's generated API token, and the
+          # sidecar finds that token by reading FLEETWRIGHT_STATE_DIR itself. So
           # both processes must be given the same one, which is why it is here
           # rather than only on the hub.
-          AGENT_FLEET_HOST_KEY: ${{ runner.temp }}/state/host-key.json
-          AGENT_FLEET_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
+          FLEETWRIGHT_HOST_KEY: ${{ runner.temp }}/state/host-key.json
+          FLEETWRIGHT_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
           MINUTES: ${{ inputs.minutes }}
           PIN: ${{ inputs.pin }}
           # REUSABLE, so it can live in a secret and be spent on every run.
@@ -165,12 +165,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p "$AGENT_HUB_WORKDIR" "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
-          chmod 700 "$AGENT_HUB_STATE_DIR" "$AGENT_FLEET_HOOK_SOCKET_DIR"
+          mkdir -p "$FLEETWRIGHT_WORKDIR" "$FLEETWRIGHT_STATE_DIR" "$FLEETWRIGHT_HOOK_SOCKET_DIR"
+          chmod 700 "$FLEETWRIGHT_STATE_DIR" "$FLEETWRIGHT_HOOK_SOCKET_DIR"
 
           # The session manager first: the sidecar talks to it on loopback and
           # is useless without it.
-          node bin/agent-hub serve &
+          node bin/fleetwright serve &
           HUB=$!
           for _ in $(seq 1 30); do
             curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
@@ -189,10 +189,10 @@ jobs:
           # Falls back to plain pin enrolment where the coordinator has no
           # Actions repositories configured, so an older fleet still works.
           if [ -n "${CLAIM:-}" ]; then
-            node bin/agent-fleet-sidecar enrol-actions "$CLAIM"
+            node bin/fleetwright-sidecar enrol-actions "$CLAIM"
           elif [ -n "$PIN" ]; then
             echo "::warning::No FLEETWRIGHT_RUNNER_TOKEN secret — falling back to a one-shot pin."
-            node bin/agent-fleet-sidecar enrol "$PIN"
+            node bin/fleetwright-sidecar enrol "$PIN"
           else
             echo "::error::Set FLEETWRIGHT_RUNNER_TOKEN (Settings → Secrets → Actions, organisation or repository) so the fleet knows whose runner this is."
             exit 1
@@ -203,9 +203,9 @@ jobs:
           # foreground for exactly as long as we mean to be a host, and exiting
           # normally is the cleanup — there is nothing to remember to do.
           set +e
-          node bin/agent-fleet-sidecar &
+          node bin/fleetwright-sidecar &
           SIDECAR=$!
-          echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
+          echo "::notice::Enrolled as $FLEETWRIGHT_HOST_ID for $MINUTES minutes."
           # SAID EITHER WAY, and said differently. A runner with no key is not
           # broken, it is unusable — and those need different sentences, because
           # the second one names something the person can go and fix.

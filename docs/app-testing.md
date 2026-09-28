@@ -33,7 +33,7 @@ FCM's `messages:send`. `push.js` also no longer treats an `INVALID_ARGUMENT`
 as a dead token — that response means the token is not an FCM token at all,
 not that it is gone, so the registration is logged and kept rather than
 deleted. `docs/push.md` documents the live path, including the
-`AGENT_FLEET_APNS_KEY_ID`/`_TEAM_ID`/`_KEY` variables it needs.
+`FLEETWRIGHT_APNS_KEY_ID`/`_TEAM_ID`/`_KEY` variables it needs.
 
 ## The one thing to do first: have a coordinator to point at
 
@@ -45,13 +45,13 @@ misconfigured one. Pick one:
 |---|---|---|
 | **The Worker** | `https://fleet.thetech.network`, already deployed by CI | iOS, and anything realistic — it is HTTPS, which iOS needs |
 | **A box on the LAN** | `http://<box>:8791` after `install.sh` | Android; see the ATS note before trying it on iOS |
-| **Local Node coordinator** | `node bin/agent-fleet-coordinator` on the Mac | fastest loop, no fleet — but with no host connected, `list` is legitimately empty |
+| **Local Node coordinator** | `node bin/fleetwright-coordinator` on the Mac | fastest loop, no fleet — but with no host connected, `list` is legitimately empty |
 
 **Both apps sign in.** There is no token to type: the app hands the coordinator
 an Apple or Google ID token, and gets back a credential issued to that device.
 So the coordinator has to have sign-in configured before either app can get
-past its settings screen — `AGENT_FLEET_AUTH_ISSUERS`,
-`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your own address
+past its settings screen — `FLEETWRIGHT_AUTH_ISSUERS`,
+`FLEETWRIGHT_AUTH_AUDIENCES` and `FLEETWRIGHT_AUTH_ALLOW`, with your own address
 on the allowlist. See [`identity.md`](./identity.md).
 
 Two shortcuts while testing:
@@ -62,8 +62,8 @@ Two shortcuts while testing:
   everything downstream of sign-in without sign-in working yet. The old
   collapsed "use a credential instead" field is gone from both apps.
 - The admin token still works over curl for whatever the demo cannot show:
-  `sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env` on a box;
-  for the Worker it is the `AGENT_FLEET_API_TOKEN` GitHub Actions secret.
+  `sudo grep FLEETWRIGHT_API_TOKEN /etc/fleetwright-coordinator.env` on a box;
+  for the Worker it is the `FLEETWRIGHT_API_TOKEN` GitHub Actions secret.
 
 Two things that will stop a real sign-in, both worth checking before debugging
 the app:
@@ -183,8 +183,8 @@ Every action in both apps is one intent to the coordinator, so this is the list:
 - [ ] **Hide My Email** (iOS) is refused with "choose Share My Email", not "not on the list"
 - [ ] **An address not on the allowlist** is refused, and says so
 - [ ] **Revoking this device** from another signed-in device logs it out on the next call, rather than failing forever
-- [ ] **Mint a pin**, and it enrols a real box — `agent-fleet-sidecar enrol <pin>` or `/enroll <pin>` in Telegram
-- [ ] **The fingerprint** shown for that host matches what `agent-fleet-sidecar identity` prints on the box
+- [ ] **Mint a pin**, and it enrols a real box — `fleetwright-sidecar enrol <pin>` or `/enroll <pin>` in Telegram
+- [ ] **The fingerprint** shown for that host matches what `fleetwright-sidecar identity` prints on the box
 - [ ] **A bad credential** produces a readable refusal, not a crash or a silent empty list
 - [ ] **An unreachable URL** produces a readable error
 - [ ] **list** — sessions appear, each attributed to a host

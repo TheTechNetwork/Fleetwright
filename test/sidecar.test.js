@@ -1,11 +1,11 @@
-// The sidecar, end to end: a fake transport in front, a stub agent-hub behind.
+// The sidecar, end to end: a fake transport in front, a stub fleetwright behind.
 //
 //   node --test test/
 //
-// The stub speaks agent-hub's real HTTP API (test/helpers/stub-hub.js), so
+// The stub speaks fleetwright's real HTTP API (test/helpers/stub-hub.js), so
 // these exercise the actual path an intent takes — validate, translate, POST
 // /api/command, repair the reply — rather than a mock of it. What is faked is
-// the coordinator, which does not exist yet, and tmux, which agent-hub owns.
+// the coordinator, which does not exist yet, and tmux, which fleetwright owns.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -103,7 +103,7 @@ test('login and code cannot be reached through the sidecar', async (t) => {
     assert.equal(r.ok, false, `${verb} must be refused`);
     assert.equal(r.error.code, 'unknown_verb');
   }
-  assert.deepEqual(stub.commands, [], 'nothing may have reached agent-hub');
+  assert.deepEqual(stub.commands, [], 'nothing may have reached fleetwright');
 });
 
 test('a raw command string is not a shape the sidecar accepts', async (t) => {
@@ -133,7 +133,7 @@ test('a session name can never become a flag or a second command', async (t) => 
 
 // --- translation, against the real API --------------------------------------
 
-test('each verb produces the command line agent-hub actually receives', async (t) => {
+test('each verb produces the command line fleetwright actually receives', async (t) => {
   const { sidecar, stub } = await setup(t, { sessions: [sessionRecord('bigjob')] });
 
   await sidecar.handle(intent({ id: 'idem-0000a', verb: 'list' }));
@@ -169,7 +169,7 @@ test('the command-line mapping is pinned', () => {
   assert.throws(() => toCommandLine({ verb: 'health', params: {} }), /no command mapping/);
 });
 
-test("a command agent-hub refuses is reported as refused, not as an error", async (t) => {
+test("a command fleetwright refuses is reported as refused, not as an error", async (t) => {
   const { sidecar } = await setup(t, { onCommand: () => ({ ok: false, text: 'No session named "ghost".' }) });
   const r = await sidecar.handle(intent({ verb: 'stop', params: { name: 'ghost' } }));
 
@@ -180,8 +180,8 @@ test("a command agent-hub refuses is reported as refused, not as an error", asyn
 
 // --- repairing the Remote Control URL ---------------------------------------
 
-test('a URL agent-hub never captured is recovered from the pane', async (t) => {
-  // The width-70 case: agent-hub's unguarded matcher found nothing, so the
+test('a URL fleetwright never captured is recovered from the pane', async (t) => {
+  // The width-70 case: fleetwright's unguarded matcher found nothing, so the
   // session reads as online and unreachable. This is the whole reason `peek`
   // is on the hub API.
   const { sidecar, warnings } = await setup(t, {
@@ -198,7 +198,7 @@ test('a URL agent-hub never captured is recovered from the pane', async (t) => {
 });
 
 test('a truncated URL is repaired and flagged as truncated', async (t) => {
-  // The width-100 case, and the dangerous one: what agent-hub recorded is
+  // The width-100 case, and the dangerous one: what fleetwright recorded is
   // well-formed, loads, and goes nowhere.
   const truncated = 'https://claude.ai/code/session_016zf';
   const { sidecar } = await setup(t, {
@@ -298,7 +298,7 @@ test('a pane that cannot be read does not fail the command that asked', async (t
   const r = await sidecar.handle(intent({ verb: 'list' }));
 
   assert.equal(r.ok, true);
-  assert.equal(r.sessions[0].rcUrl, RC_URL, 'falls back to what agent-hub recorded');
+  assert.equal(r.sessions[0].rcUrl, RC_URL, 'falls back to what fleetwright recorded');
 });
 
 test('several running sessions are all enriched', async (t) => {
@@ -459,7 +459,7 @@ test('a replayed mutating intent is answered from cache, not run twice', async (
   const first = await sidecar.handle(msg);
   const second = await sidecar.handle(msg);
 
-  assert.deepEqual(stub.commands, ['/new api'], 'agent-hub must see it exactly once');
+  assert.deepEqual(stub.commands, ['/new api'], 'fleetwright must see it exactly once');
   assert.equal(first.text, second.text);
   assert.equal(second.replayed, true);
   assert.ok(!first.replayed);
@@ -613,7 +613,7 @@ test('an envelope too broken to correlate is answered with a null id', async (t)
   assert.equal(r.id, null);
 });
 
-test('stopping the sidecar leaves agent-hub and its sessions alone', async (t) => {
+test('stopping the sidecar leaves fleetwright and its sessions alone', async (t) => {
   const { sidecar, stub } = await setup(t);
   await sidecar.start();
   await sidecar.stop();
@@ -631,7 +631,7 @@ test('labels translate to one command that cannot become two', async (t) => {
 });
 
 test('what the box is already labelled travels beside the command', async (t) => {
-  // AGENT_FLEET_LABELS is in the SIDECAR's environment and nothing in agent-hub
+  // FLEETWRIGHT_LABELS is in the SIDECAR's environment and nothing in fleetwright
   // can read it. Without this, `/labels -gpu` answers "this box does not have
   // that" about a label the app is displaying.
   const { sidecar, stub } = await setup(t);
@@ -661,7 +661,7 @@ test('health says which service logs this box can read, and asks the box once', 
   // does not — which is what a box that is a host and not a coordinator says.
   writeFileSync(
     systemctl,
-    `#!/bin/sh\necho "$2" >> ${calls}\ncase "$2" in agent-fleet-coordinator) exit 1;; esac\nexit 0\n`,
+    `#!/bin/sh\necho "$2" >> ${calls}\ncase "$2" in fleetwright-coordinator) exit 1;; esac\nexit 0\n`,
   );
   chmodSync(systemctl, 0o755);
   const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir: dir, systemctlBin: systemctl }) });

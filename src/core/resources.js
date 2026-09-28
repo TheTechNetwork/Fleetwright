@@ -23,7 +23,7 @@
 //   <root>/package.json
 //   <root>/openapi.json
 //   <root>/src/web/…          same path as the checkout, so one expression works
-//   <root>/lib/agent-hub.mjs  the bundle, which is the only thing that moved
+//   <root>/lib/fleetwright.mjs  the bundle, which is the only thing that moved
 //
 // Keeping `src/web` rather than flattening it to `web` costs nothing and means
 // no caller needs to know which of the two shapes it is running in.

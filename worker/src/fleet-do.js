@@ -20,13 +20,14 @@
 
 import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
+import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -55,6 +56,7 @@ export class Fleet {
    * @param {Record<string, string|undefined>} env
    */
   constructor(state, env) {
+    env = withCurrentNames(env);
     this.state = state;
     this.env = env;
     const logger = {
@@ -78,8 +80,8 @@ export class Fleet {
       // App, and is not an error: the paste route is first-class and a fresh
       // clone of this repo must work with no GitHub App at all.
       githubApp: {
-        clientId: env.AGENT_FLEET_GITHUB_CLIENT_ID,
-        clientSecret: env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
+        clientId: env.FLEETWRIGHT_GITHUB_CLIENT_ID,
+        clientSecret: env.FLEETWRIGHT_GITHUB_CLIENT_SECRET,
       },
       // The Cloudflare OAuth client, same rule: absent means the paste route.
       // `scopes` is the client's registered scope list (dot-form names, plus
@@ -87,14 +89,14 @@ export class Fleet {
       // see offerOauth in core.js for why an unscoped authorize is worse than
       // no offer.
       cloudflareOauth: {
-        clientId: env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID,
-        clientSecret: env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET,
-        scopes: env.AGENT_FLEET_CLOUDFLARE_SCOPES,
+        clientId: env.FLEETWRIGHT_CLOUDFLARE_CLIENT_ID,
+        clientSecret: env.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET,
+        scopes: env.FLEETWRIGHT_CLOUDFLARE_SCOPES,
       },
       // Where `provision` dispatches runner workflows, as owner/repo. Absent
       // means this fleet cannot start machines and says so — see
       // docs/runner-central.md.
-      runnerRepo: env.AGENT_FLEET_RUNNER_REPO || null,
+      runnerRepo: env.FLEETWRIGHT_RUNNER_REPO || null,
     });
     // A runner ticket is minted at dispatch and spent by a job that starts
     // minutes later — a gap this object is evicted across as a matter of
@@ -193,9 +195,9 @@ export class Fleet {
    */
   #identify(idToken) {
     return identify(idToken, {
-      issuers: split(this.env.AGENT_FLEET_AUTH_ISSUERS),
-      audiences: split(this.env.AGENT_FLEET_AUTH_AUDIENCES),
-      allow: split(this.env.AGENT_FLEET_AUTH_ALLOW),
+      issuers: split(this.env.FLEETWRIGHT_AUTH_ISSUERS),
+      audiences: split(this.env.FLEETWRIGHT_AUTH_AUDIENCES),
+      allow: split(this.env.FLEETWRIGHT_AUTH_ALLOW),
       invites: this.core.invites,
       spent: this.core.spentTokens,
     });
@@ -212,7 +214,7 @@ export class Fleet {
    * @returns {import('../../src/mcp/routes.js').Deps}
    */
   #mcpDeps(url) {
-    const audiences = split(this.env.AGENT_FLEET_AUTH_AUDIENCES);
+    const audiences = split(this.env.FLEETWRIGHT_AUTH_AUDIENCES);
     return {
       authorizations: this.core.mcpAuthorizations,
       verifyCredential: (token) => this.core.clients.verify(token),
@@ -231,7 +233,7 @@ export class Fleet {
       // configured, so the exposure is far smaller here than on the Node
       // coordinator, but "smaller" is not a reason to keep the shape that was
       // wrong there.
-      selfOrigin: this.env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin,
+      selfOrigin: this.env.FLEETWRIGHT_PUBLIC_ORIGIN || url.origin,
       // REACH THE COORDINATOR WITHOUT LEAVING THE PROCESS.
       //
       // We are already inside the object that answers /api/intent. Going out to
@@ -263,9 +265,9 @@ export class Fleet {
         // A SERVICES ID, which is not the iOS bundle id sitting in the same
         // list. Sign in with Apple JS answers `invalid_client` for a bundle id
         // and says nothing about why, so an unset one shows no Apple button
-        // rather than a broken one. It has to be in AGENT_FLEET_AUTH_AUDIENCES
+        // rather than a broken one. It has to be in FLEETWRIGHT_AUTH_AUDIENCES
         // too, or the token it mints will not verify here.
-        apple: this.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+        apple: this.env.FLEETWRIGHT_AUTH_APPLE_SERVICE || null,
       },
     };
   }
@@ -367,13 +369,13 @@ export class Fleet {
     // and the whole point is that it does not need one.
     if (url.pathname === '/api/enroll/actions' && request.method === 'POST') {
       const body = await readJson(request);
-      const repositories = splitList(this.env.AGENT_FLEET_ACTIONS_REPOS);
+      const repositories = splitList(this.env.FLEETWRIGHT_ACTIONS_REPOS);
       if (!repositories.length) {
         return json(
           {
             ok: false,
             error: { code: 'not_configured' },
-            text: 'This coordinator does not admit CI runners. Set AGENT_FLEET_ACTIONS_REPOS to the repositories that may.',
+            text: 'This coordinator does not admit CI runners. Set FLEETWRIGHT_ACTIONS_REPOS to the repositories that may.',
           },
           503,
         );
@@ -382,13 +384,13 @@ export class Fleet {
       let job;
       try {
         job = await verifyActionsToken(String(body?.token || ''), {
-          audiences: splitList(this.env.AGENT_FLEET_ACTIONS_AUDIENCE).length
-            ? splitList(this.env.AGENT_FLEET_ACTIONS_AUDIENCE)
-            : [DEFAULT_ACTIONS_AUDIENCE],
+          audiences: splitList(this.env.FLEETWRIGHT_ACTIONS_AUDIENCE).length
+            ? splitList(this.env.FLEETWRIGHT_ACTIONS_AUDIENCE)
+            : [...DEFAULT_ACTIONS_AUDIENCES],
           repositories,
           // A LIST: one workflow file per operating system in the runner
           // repository, and a single value still works as a list of one.
-          workflowRef: splitList(this.env.AGENT_FLEET_ACTIONS_WORKFLOW),
+          workflowRef: splitList(this.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
         });
       } catch (e) {
         return json({ ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message }, 403);
@@ -528,7 +530,7 @@ export class Fleet {
     // from making it retry a message we understood and did not act on.
     if (url.pathname === '/apple/notifications' && request.method === 'POST') {
       const body = await readJson(request);
-      const audiences = split(this.env.AGENT_FLEET_AUTH_AUDIENCES);
+      const audiences = split(this.env.FLEETWRIGHT_AUTH_AUDIENCES);
       if (!audiences.length) return json({ ok: false, text: 'no audience configured' }, 503);
       try {
         const note = await verifyAppleNotification(String(body?.payload || ''), { audiences });
@@ -616,17 +618,17 @@ export class Fleet {
       const posted = r.ok
         ? await sendInvite(this.#mailer(), {
           email: r.invite?.email ?? '',
-          fleet: this.env.AGENT_FLEET_NAME || 'this Fleetwright fleet',
+          fleet: this.env.FLEETWRIGHT_NAME || 'this Fleetwright fleet',
           invitedBy: client?.email || 'admin',
           note: r.invite?.note ?? null,
           apps: {
-            ios: this.env.AGENT_FLEET_APP_IOS || null,
-            android: this.env.AGENT_FLEET_APP_ANDROID || null,
+            ios: this.env.FLEETWRIGHT_APP_IOS || null,
+            android: this.env.FLEETWRIGHT_APP_ANDROID || null,
           },
           // Configuration, never the request's Host header: this address is
           // emailed to somebody who has never seen this fleet, and a spoofed
           // one would send them to sign in somewhere else.
-          origin: this.env.AGENT_FLEET_PUBLIC_ORIGIN || null,
+          origin: this.env.FLEETWRIGHT_PUBLIC_ORIGIN || null,
         })
         : { sent: false, why: 'not invited' };
       const text = r.ok
@@ -1132,7 +1134,7 @@ export class Fleet {
    */
   #mailer() {
     const binding = /** @type {any} */ (this.env).EMAIL;
-    const from = this.env.AGENT_FLEET_INVITE_FROM || null;
+    const from = this.env.FLEETWRIGHT_INVITE_FROM || null;
     if (!binding || !from) return { send: null, from };
     return {
       from,

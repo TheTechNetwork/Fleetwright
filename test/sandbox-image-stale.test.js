@@ -4,7 +4,7 @@
 // It is off by default now: a background re-pull changes what sessions run with
 // no changelog and no line a person looks at, and that silent drift is what the
 // `updates` verb and the /update path replace. A box that genuinely wants its
-// image to track a tag on its own sets AGENT_HUB_SANDBOX_REFRESH_MS, and then
+// image to track a tag on its own sets FLEETWRIGHT_SANDBOX_REFRESH_MS, and then
 // the constraints below are the feature: stamped, bounded, never fatal, and only
 // when a NEW volume is about to be seeded. These tests pass the interval
 // explicitly, exercising the mechanism as an opted-in box would.
@@ -88,7 +88,7 @@ test('a failed check is stamped too, so an offline box does not retry every star
 
 test('a locally built image is never chased', async () => {
   const p = scriptedPodman();
-  const r = await refreshSandboxImageIfStale({ ...p.cfg, sandboxImage: 'localhost/agent-session:latest' });
+  const r = await refreshSandboxImageIfStale({ ...p.cfg, sandboxImage: 'localhost/fleetwright-session:latest' });
   assert.equal(r.changed, false);
   assert.equal(p.pulls(), 0, 'a box that builds its own image is saying it wants that one');
 });

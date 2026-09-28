@@ -33,7 +33,7 @@ import { http2Deliver } from '../apns-node.js';
 import { pusherFromEnv } from '../push.js';
 import { PROTOCOL_VERSION } from '../protocol/intents.js';
 import { SPEC_ORIGIN } from './spec.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCE, verifyAppleNotification, isWithdrawal } from './oidc.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from './oidc.js';
 import { sendInvite } from './invite-email.js';
 import { credentialFrom, isClientCredential } from './credential.js';
 import { RunnerTickets } from './runner-tickets.js';
@@ -71,7 +71,7 @@ export class Coordinator {
     // Replaced by listen() with the real bound address. Set here so a
     // coordinator that is constructed and never listened to still has a
     // definite value rather than sending intents to "undefined".
-    this.selfOrigin = process.env.AGENT_FLEET_PUBLIC_ORIGIN || 'http://127.0.0.1:8791';
+    this.selfOrigin = process.env.FLEETWRIGHT_PUBLIC_ORIGIN || 'http://127.0.0.1:8791';
     // Enrolled host keys ARE the authority — the registry is the cache, they
     // are not. Losing them on restart means every box in the fleet is refused
     // until somebody walks round re-enrolling them, so unlike everything else
@@ -89,15 +89,15 @@ export class Coordinator {
       // push.js: that file also runs in a Worker, where node:http2 does not
       // exist and importing it would break the bundle.
       push: pusherFromEnv(process.env, this.log, {
-        apnsDeliver: http2Deliver(process.env.AGENT_FLEET_APNS_SANDBOX === '1' ? 'api.sandbox.push.apple.com' : undefined),
+        apnsDeliver: http2Deliver(process.env.FLEETWRIGHT_APNS_SANDBOX === '1' ? 'api.sandbox.push.apple.com' : undefined),
       }),
       // Where `provision` dispatches runner workflows. An operator decision,
       // sent to every host on the config frame rather than placed on each of
       // them — see docs/runner-central.md.
-      runnerRepo: process.env.AGENT_FLEET_RUNNER_REPO || null,
+      runnerRepo: process.env.FLEETWRIGHT_RUNNER_REPO || null,
       // THE SAME VARIABLES THE WORKER READS, and until now this coordinator
       // read neither. docs/coordinator-deploy.md has said "set
-      // AGENT_FLEET_GITHUB_CLIENT_ID plus the secret" since the App shipped,
+      // FLEETWRIGHT_GITHUB_CLIENT_ID plus the secret" since the App shipped,
       // and setting them here did nothing: the core was constructed without
       // them, so /oauth/github/callback — served below, documented in
       // openapi.json — answered "no GitHub App configured" on every request,
@@ -107,13 +107,13 @@ export class Coordinator {
       // exactly the parity failure openapi.test.js cannot see, because both
       // coordinators SERVED the route; only one could be configured to mean it.
       githubApp: {
-        clientId: process.env.AGENT_FLEET_GITHUB_CLIENT_ID,
-        clientSecret: process.env.AGENT_FLEET_GITHUB_CLIENT_SECRET,
+        clientId: process.env.FLEETWRIGHT_GITHUB_CLIENT_ID,
+        clientSecret: process.env.FLEETWRIGHT_GITHUB_CLIENT_SECRET,
       },
       cloudflareOauth: {
-        clientId: process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID,
-        clientSecret: process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET,
-        scopes: process.env.AGENT_FLEET_CLOUDFLARE_SCOPES,
+        clientId: process.env.FLEETWRIGHT_CLOUDFLARE_CLIENT_ID,
+        clientSecret: process.env.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET,
+        scopes: process.env.FLEETWRIGHT_CLOUDFLARE_SCOPES,
       },
     });
     // A minted runner ticket is spent by a job that starts minutes later, so it
@@ -210,7 +210,7 @@ export class Coordinator {
    * Prove the state file can be written, before anything depends on it.
    *
    * Called once at startup and allowed to throw. An upgraded box is the case
-   * that needs it: the unit gained StateDirectory=agent-fleet-coordinator, but
+   * that needs it: the unit gained StateDirectory=fleetwright-coordinator, but
    * the copy in /etc/systemd/system is only refreshed by the installer, and
    * ProtectSystem=strict makes /var/lib read-only to the service — so the
    * directory does not exist and cannot be created. Everything would then work
@@ -345,9 +345,9 @@ export class Coordinator {
     // somebody's laptop — so served in-process it calls back through its own
     // socket. The address comes from the LISTENER and never from a request, or
     // a caller could choose where the coordinator sends its next outbound
-    // request. AGENT_FLEET_PUBLIC_ORIGIN wins for deployments that terminate
+    // request. FLEETWRIGHT_PUBLIC_ORIGIN wins for deployments that terminate
     // TLS elsewhere and cannot reach themselves on loopback.
-    this.selfOrigin = process.env.AGENT_FLEET_PUBLIC_ORIGIN || `http://${loopbackFor(host)}:${address.port}`;
+    this.selfOrigin = process.env.FLEETWRIGHT_PUBLIC_ORIGIN || `http://${loopbackFor(host)}:${address.port}`;
     this.log.info(`coordinator: listening on ${host}:${address.port} (protocol v${PROTOCOL_VERSION})`);
     return address.port;
   }
@@ -458,9 +458,9 @@ export class Coordinator {
    */
   #identify(idToken) {
     return identify(idToken, {
-      issuers: splitList(process.env.AGENT_FLEET_AUTH_ISSUERS),
-      audiences: splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES),
-      allow: splitList(process.env.AGENT_FLEET_AUTH_ALLOW),
+      issuers: splitList(process.env.FLEETWRIGHT_AUTH_ISSUERS),
+      audiences: splitList(process.env.FLEETWRIGHT_AUTH_AUDIENCES),
+      allow: splitList(process.env.FLEETWRIGHT_AUTH_ALLOW),
       invites: this.core.invites,
       spent: this.core.spentTokens,
     });
@@ -538,13 +538,13 @@ export class Coordinator {
     // would put "clean me up" back in the hands of the thing being cleaned up.
     if (p === '/api/enroll/actions' && req.method === 'POST') {
       const body = await readJson(req);
-      const repositories = splitList(process.env.AGENT_FLEET_ACTIONS_REPOS);
-      const audiences = splitList(process.env.AGENT_FLEET_ACTIONS_AUDIENCE);
+      const repositories = splitList(process.env.FLEETWRIGHT_ACTIONS_REPOS);
+      const audiences = splitList(process.env.FLEETWRIGHT_ACTIONS_AUDIENCE);
       if (!repositories.length) {
         return json(res, 503, {
           ok: false,
           error: { code: 'not_configured' },
-          text: 'This coordinator does not admit CI runners. Set AGENT_FLEET_ACTIONS_REPOS to the repositories that may.',
+          text: 'This coordinator does not admit CI runners. Set FLEETWRIGHT_ACTIONS_REPOS to the repositories that may.',
         });
       }
 
@@ -555,12 +555,12 @@ export class Coordinator {
           // service cannot be replayed here. The workflow asks GitHub for a
           // token with this audience; anything else fails the check before a
           // repository is even looked at.
-          audiences: audiences.length ? audiences : [DEFAULT_ACTIONS_AUDIENCE],
+          audiences: audiences.length ? audiences : [...DEFAULT_ACTIONS_AUDIENCES],
           repositories,
           // A LIST now: a runner repository has one workflow per operating
           // system, and pinning one of them would stop the other three admitting
           // a host. A single value still works and means a list of one.
-          workflowRef: splitList(process.env.AGENT_FLEET_ACTIONS_WORKFLOW),
+          workflowRef: splitList(process.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
         });
       } catch (e) {
         return json(res, 403, { ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message });
@@ -745,7 +745,7 @@ export class Coordinator {
     // from making it retry a message we understood and did not act on.
     if (p === '/apple/notifications' && req.method === 'POST') {
       const body = await readJson(req);
-      const audiences = splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES);
+      const audiences = splitList(process.env.FLEETWRIGHT_AUTH_AUDIENCES);
       if (!audiences.length) return json(res, 503, { ok: false, text: 'no audience configured' });
       try {
         const note = await verifyAppleNotification(String(body?.payload || ''), { audiences });
@@ -1097,7 +1097,7 @@ export class Coordinator {
       // is the app, or break-glass, adding a machine, and mints as it always
       // has — from anywhere, for any host, host pin or device pin. But the
       // entrypoint allows NO admin token on loopback for testing
-      // (bin/agent-fleet-coordinator), and there a credential-less request
+      // (bin/fleetwright-coordinator), and there a credential-less request
       // arrives with `client` null and nothing presented. Left open, anything
       // that could reach the port could mint a pin, and a pin admits a machine
       // to the fleet.
@@ -1446,7 +1446,7 @@ function sendMcp(res, answer) {
 /**
  * The client ids the sign-in page needs, picked out of the audience list.
  *
- * AGENT_FLEET_AUTH_AUDIENCES is already the set of applications this fleet
+ * FLEETWRIGHT_AUTH_AUDIENCES is already the set of applications this fleet
  * accepts tokens for, so the web sign-in has to name one of them or the token
  * it produces will not verify — a separate variable could disagree with it, and
  * would, on the first deployment that set one and not the other.
@@ -1455,13 +1455,13 @@ function sendMcp(res, answer) {
  * Apple's is a SERVICES ID: a bundle id will not work for Sign in with Apple JS
  * and returns `invalid_client` from Apple with no explanation, so the iOS
  * bundle id sitting in the same list is deliberately not used. Set
- * AGENT_FLEET_AUTH_APPLE_SERVICE to the Services ID once it exists; until then
+ * FLEETWRIGHT_AUTH_APPLE_SERVICE to the Services ID once it exists; until then
  * the page shows Google alone rather than an Apple button that cannot work.
  */
 function signInFromEnv() {
   return signInClients({
-    audiences: splitList(process.env.AGENT_FLEET_AUTH_AUDIENCES),
-    appleService: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+    audiences: splitList(process.env.FLEETWRIGHT_AUTH_AUDIENCES),
+    appleService: process.env.FLEETWRIGHT_AUTH_APPLE_SERVICE || null,
   });
 }
 
@@ -1483,13 +1483,13 @@ function loopbackFor(host) {
 
 /** What to call this fleet in an invitation. */
 function inviteFleetName() {
-  return process.env.AGENT_FLEET_NAME || 'this Fleetwright fleet';
+  return process.env.FLEETWRIGHT_NAME || 'this Fleetwright fleet';
 }
 
 /** Where to get the app, per phone. See appLines in invite-email.js. */
 function inviteApps() {
   return {
-    ios: process.env.AGENT_FLEET_APP_IOS || null,
-    android: process.env.AGENT_FLEET_APP_ANDROID || null,
+    ios: process.env.FLEETWRIGHT_APP_IOS || null,
+    android: process.env.FLEETWRIGHT_APP_ANDROID || null,
   };
 }

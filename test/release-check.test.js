@@ -52,7 +52,7 @@ test('a box that does not know where to look says so, rather than nothing', asyn
     const r = await checkRelease(/** @type {any} */ ({ installDir: box.installDir, releaseManifest: '', stateDir: box.base, hostname: 'h' }));
     assert.equal(r.configured, false);
     assert.equal(r.available, null);
-    assert.match(r.message, /AGENT_HUB_RELEASE_MANIFEST/);
+    assert.match(r.message, /FLEETWRIGHT_RELEASE_MANIFEST/);
     assert.match(r.message, /--upgrade/);
   } finally {
     rmSync(box.base, { recursive: true, force: true });
@@ -203,7 +203,7 @@ function handUnpackedBox() {
   const dir = path.join(base, 'fleetwright');
   mkdirSync(path.join(dir, 'lib'), { recursive: true });
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: 'v0.2.3' }));
-  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
   return { base, installDir: dir };
 }
 
@@ -274,7 +274,7 @@ test('the installer records where releases come from', () => {
   // the fork's releases and nobody has to be told about a variable they have
   // never heard of.
   assert.match(sh, /git -C "\$DIR" remote get-url origin/);
-  assert.match(sh, /set_env "\$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST/);
+  assert.match(sh, /set_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST/);
 
   // THE STABLE ADDRESS, and only that one. `releases/latest/download` skips
   // prereleases; the rolling address is derived from it in release.js, so an
@@ -287,7 +287,7 @@ test('the installer records where releases come from', () => {
   assert.match(sh, /could not tell which repository this came from/);
 
   // And it never overwrites an answer somebody already gave.
-  assert.match(sh, /if \[ -z "\$\(get_env "\$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST\)" \]/);
+  assert.match(sh, /if \[ -z "\$\(get_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST\)" \]/);
 });
 
 test('the manifest URL is built only from a remote it recognises', async () => {

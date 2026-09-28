@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Who is allowed into this fleet, and the screen that lets somebody in.
 ///
-/// Adding a person used to mean editing `AGENT_FLEET_AUTH_ALLOW` in
+/// Adding a person used to mean editing `FLEETWRIGHT_AUTH_ALLOW` in
 /// `wrangler.toml`, committing, and waiting for a deploy — a CODE CHANGE PER
 /// PERSON, performed by the one person who could already do everything. For a
 /// product whose premise is "nothing to run, and nothing to ssh into", it was

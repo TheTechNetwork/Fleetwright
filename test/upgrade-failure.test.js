@@ -139,9 +139,9 @@ test('the rule printed by hand is the rule the installer writes', () => {
   // the unit names, so reading the file would test the wrong string.
   const src = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' })).text;
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-  const unit = readFileSync(new URL('../install/agent-hub-upgrade.service', import.meta.url), 'utf8');
+  const unit = readFileSync(new URL('../install/fleetwright-upgrade.service', import.meta.url), 'utf8');
 
-  for (const piece of ['systemctl start agent-hub-upgrade.service', 'systemctl start agent-hub-apt-update.service']) {
+  for (const piece of ['systemctl start fleetwright-upgrade.service', 'systemctl start fleetwright-apt-update.service']) {
     assert.ok(src.includes(piece), `the printed rule is missing ${piece}`);
     assert.ok(sh.includes(piece), `the installer's rule is missing ${piece}`);
   }

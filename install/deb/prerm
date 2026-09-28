@@ -1,0 +1,17 @@
+#!/bin/sh
+# Stop the services before the runtime they run on goes away.
+#
+# On `remove` only. An upgrade replaces the node binary by rename, which a
+# running process survives, and postinst restarts everything onto the new code
+# a moment later — stopping here would only lengthen the gap.
+set -e
+case "$1" in
+  remove|deconfigure)
+    if command -v systemctl >/dev/null 2>&1; then
+      # Disabled as well as stopped: the units stay behind on a remove (purge
+      # takes them), and a unit naming a node that is gone would restart-loop
+      # on every boot until somebody noticed.
+      systemctl disable --now fleetwright-sidecar fleetwright fleetwright-coordinator fleetwright-confirm.timer >/dev/null 2>&1 || true
+    fi ;;
+esac
+exit 0

@@ -17,5 +17,5 @@
 # this one sits beside the wrangler config, where wrangler's tooling looks,
 # and the repository root holds the other, where the deploy button's dialog
 # looks — the button hands Cloudflare the whole repository.
-AGENT_FLEET_API_TOKEN=""
-AGENT_FLEET_AUTH_ALLOW=""
+FLEETWRIGHT_API_TOKEN=""
+FLEETWRIGHT_AUTH_ALLOW=""

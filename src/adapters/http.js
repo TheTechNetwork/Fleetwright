@@ -43,7 +43,7 @@ export class HttpAdapter {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
-    // RESOLVED, NOT READ FROM CONFIG. An unset AGENT_HUB_TOKEN used to mean "no
+    // RESOLVED, NOT READ FROM CONFIG. An unset FLEETWRIGHT_TOKEN used to mean "no
     // gate at all", which stopped being defensible when the credential verbs
     // landed on this endpoint — see src/core/api-token.js. The caller passes
     // the generated one; cfg.token is only the explicitly configured case.
@@ -152,7 +152,7 @@ export class HttpAdapter {
         // "?token= once" would silently stop working on the box itself.
         const tls = req.socket && /** @type {any} */ (req.socket).encrypted
           || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
-        headers['set-cookie'] = `agent_hub_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${tls ? '; Secure' : ''}`;
+        headers['set-cookie'] = `fleetwright_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${tls ? '; Secure' : ''}`;
       }
       res.writeHead(200, headers);
       return res.end(this.html);
@@ -296,8 +296,8 @@ export class HttpAdapter {
         // tells a machine which fleet to join.
         ['coordinator', /^https?:\/\/[A-Za-z0-9._-]{1,253}(:\d{1,5})?$/],
         // WHAT THE SIDECAR ALREADY KNOWS THIS BOX IS LABELLED, comma-joined.
-        // agent-hub can derive the auto labels itself — it owns the config they
-        // come from — but AGENT_FLEET_LABELS is in the SIDECAR's env file and
+        // fleetwright can derive the auto labels itself — it owns the config they
+        // come from — but FLEETWRIGHT_LABELS is in the SIDECAR's env file and
         // nothing here can read it. Without this, `/labels -arm64` would say
         // "this box does not have that" about a label the app is displaying.
         //
@@ -324,7 +324,7 @@ export class HttpAdapter {
       // coordinator had verified an email, the sidecar was holding it, and the
       // record one hop away could not have it.
       //
-      // BE PRECISE ABOUT WHAT THIS IS WORTH. agent-hub does not verify the
+      // BE PRECISE ABOUT WHAT THIS IS WORTH. fleetwright does not verify the
       // actor and cannot: it has one token, and whoever holds that token can
       // already run any command as anyone. So this records what an
       // ALREADY-TRUSTED caller says, and it is exactly as trustworthy as the
@@ -409,7 +409,9 @@ export class HttpAdapter {
 
     const header = req.headers.authorization || '';
     const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const cookie = readCookie(req.headers.cookie || '', 'agent_hub_token');
+    // Or the cookie's name from before the rename, so a browser that signed in
+    // then is not signed out by an update.
+    const cookie = readCookie(req.headers.cookie || '', 'fleetwright_token') || readCookie(req.headers.cookie || '', 'agent_hub_token');
     const query = url.searchParams.get('token') || '';
 
     return [bearer, cookie, query].some((v) => v && safeEqual(v, this.token));
@@ -562,6 +564,7 @@ function borrowedPalette(names) {
 function presentedCredential(req, url) {
   return url.searchParams.has('token')
     || Boolean(req.headers.authorization)
+    || Boolean(readCookie(String(req.headers.cookie || ''), 'fleetwright_token'))
     || Boolean(readCookie(String(req.headers.cookie || ''), 'agent_hub_token'));
 }
 
@@ -582,7 +585,7 @@ function gatePage(refused) {
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agent-hub — a token is required</title>
+<title>fleetwright — a token is required</title>
 <style>
 ${borrowedPalette(GATE_TOKENS)}
 *{box-sizing:border-box}
@@ -704,7 +707,7 @@ code{
 }
 </style>
 <main class="gate">
-  <h1>agent-hub</h1>
+  <h1>fleetwright</h1>
   <p class="lede">This is a host in a fleet, and it has no sign-in — one token opens everything it serves.</p>
 ${refused ? '  <p class="refused"><span class="glyph" aria-hidden="true">x</span> <span>The token this browser sent was not accepted.</span></p>\n' : ''}\
   <form method="get" action="/">

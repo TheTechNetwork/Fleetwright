@@ -1310,7 +1310,7 @@ private struct SettingsView: View {
                                         .fleetType(.micro)
                                         .foregroundStyle(Design.Palette.attention)
                                 }
-                                Text("On that box: agent-fleet-sidecar enrol \(pin)")
+                                Text("On that box: fleetwright-sidecar enrol \(pin)")
                                     .fleetType(.microMono)
                                     .foregroundStyle(Design.Palette.inkDim)
                             }

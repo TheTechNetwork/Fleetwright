@@ -1,9 +1,9 @@
 # Fleetwright — the iOS app
 
-**The app is called Fleetwright; the project is still agent-fleet.** "Agent
-Fleet" is taken on the App Store, where display names are unique across the
-whole store. The CLIs, the services and the repository keep their names — only
-the thing with a listing needed a new one.
+**The app and the project are both Fleetwright.** The app got the name first:
+"Agent Fleet" is taken on the App Store, where display names are unique across
+the whole store. The CLIs, the services and the repository followed later, in
+the rename recorded in [`docs/lineage.md`](../../docs/lineage.md).
 
 Coined on purpose, like shipwright: a made-up compound is far less likely to
 collide, which matters after losing time to one collision already. If you would
@@ -65,10 +65,10 @@ can never match a company domain, so a fleet that allows people by domain can
 never allow it; the coordinator detects it and says so rather than reporting
 "not on the list".
 
-The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
-`AGENT_FLEET_AUTH_AUDIENCES` (which must include this app's bundle id, because
+The coordinator has to have sign-in configured — `FLEETWRIGHT_AUTH_ISSUERS`,
+`FLEETWRIGHT_AUTH_AUDIENCES` (which must include this app's bundle id, because
 that is the audience Apple issues its ID tokens for) and
-`AGENT_FLEET_AUTH_ALLOW`. See [`../../docs/identity.md`](../../docs/identity.md).
+`FLEETWRIGHT_AUTH_ALLOW`. See [`../../docs/identity.md`](../../docs/identity.md).
 
 The collapsed **"use a credential instead"** field takes the public demo
 credential or the admin token, which is how App Review gets in and how you
@@ -103,8 +103,8 @@ produces a registration that silently never delivers.
 Delivery goes over **direct APNs**, and that choice is settled: `apnsPusher`
 in `src/fleet/push.js` signs ES256 with a `.p8` key, and the coordinator
 routes iOS registrations there and everything else to FCM. The secrets are
-`AGENT_FLEET_APNS_KEY`, `AGENT_FLEET_APNS_KEY_ID` and
-`AGENT_FLEET_APNS_TEAM_ID` — `docs/push.md` has the whole path, including why
+`FLEETWRIGHT_APNS_KEY`, `FLEETWRIGHT_APNS_KEY_ID` and
+`FLEETWRIGHT_APNS_TEAM_ID` — `docs/push.md` has the whole path, including why
 the FCM bridge (one integration for both platforms) was the road not taken.
 
 `aps-environment` is `development` in the entitlements. Getting this wrong is

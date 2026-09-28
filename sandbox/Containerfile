@@ -10,7 +10,7 @@
 # is discarded when the container stops, which is the entire point. Baking tools
 # in here trades that away for a faster start.
 #
-#   podman build -t agent-session:latest -f sandbox/Containerfile sandbox/
+#   podman build -t fleetwright-session:latest -f sandbox/Containerfile sandbox/
 
 FROM debian:13-slim
 
@@ -58,7 +58,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # rebuild, which is the point.
 #
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.282
+ARG CLAUDE_VERSION=2.1.283
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     && npm cache clean --force
 
@@ -71,7 +71,7 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
 #    paths, so /work is untrusted and the session stops at "Is this a project
 #    you created or one you trust?". Baking the answer for /work is also what
 #    lets trust.js stop mutating the host's ~/.claude.json entirely.
-# 2. Dangerous-mode confirmation. agent-hub launches with
+# 2. Dangerous-mode confirmation. fleetwright launches with
 #    --dangerously-skip-permissions; without this the first such session stops
 #    at a one-time confirmation prompt.
 #
@@ -90,18 +90,22 @@ RUN printf '%s\n' '{' \
 # settings.json lives inside the per-session volume, which is empty on first
 # run, so this copy in the image is what a fresh session picks up. The volume
 # mount shadows it — see sandbox/README.md for why the seeding step exists.
-RUN mkdir -p /etc/agent-session
+RUN mkdir -p /etc/fleetwright-session
 RUN printf '%s\n' '{' \
     '  "skipDangerousModePermissionPrompt": true,' \
     '  "remoteControlAtStartup": true' \
-    '}' > /etc/agent-session/settings.json
+    '}' > /etc/fleetwright-session/settings.json
 
 # The SessionStart hook, talking to the per-session unix socket rather than a
 # shared HTTP port: the socket the container can reach determines which session
 # it is, so it cannot report against anyone else's. See docs/hook-socket.md.
-COPY hook.mjs /usr/local/lib/agent-session-hook.mjs
-RUN printf '#!/bin/sh\nexec node /usr/local/lib/agent-session-hook.mjs "$@"\n' > /usr/local/bin/agent-session-hook \
-    && chmod +x /usr/local/bin/agent-session-hook
+COPY hook.mjs /usr/local/lib/fleetwright-session-hook.mjs
+# agent-session-hook is the name from before the rename. The entrypoint
+# rewrites a persisted settings.json to the new name when it starts, and this
+# covers a session whose hooks fire before it has.
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/fleetwright-session-hook.mjs "$@"\n' > /usr/local/bin/fleetwright-session-hook \
+    && chmod +x /usr/local/bin/fleetwright-session-hook \
+    && ln -s fleetwright-session-hook /usr/local/bin/agent-session-hook
 
 # The credential broker's client, on the same socket and for the same reason.
 # Tokens are no longer written into this image's environment — a session ASKS,
@@ -150,8 +154,8 @@ RUN set -e; \
 # tag. Nobody pays for a capability they do not use, and the rule above is not
 # quietly rewritten to accommodate one exception.
 #
-#    podman build --build-arg WITH_CHROMIUM=1 -t agent-session:web -f sandbox/Containerfile sandbox/
-#    AGENT_HUB_SANDBOX_IMAGE=ghcr.io/<owner>/fleetwright-session:web
+#    podman build --build-arg WITH_CHROMIUM=1 -t fleetwright-session:web -f sandbox/Containerfile sandbox/
+#    FLEETWRIGHT_SANDBOX_IMAGE=ghcr.io/<owner>/fleetwright-session:web
 ARG WITH_CHROMIUM=0
 RUN if [ "$WITH_CHROMIUM" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \

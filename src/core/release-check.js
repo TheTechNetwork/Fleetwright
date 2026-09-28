@@ -16,6 +16,7 @@
 // mismatch, wrong channel, not yet in the rollout. One path, one answer.
 
 import { applyRelease } from './release-apply.js';
+import { checkAptRelease } from './apt-release.js';
 import { readChannel } from './channel.js';
 import { manifestUrlFor } from './release.js';
 import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
@@ -51,10 +52,15 @@ import { PROTOCOL_VERSION } from '../fleet/protocol/intents.js';
  * into "broken".
  *
  * @param {import('../config.js').Config} cfg
- * @param {{ fetch?: typeof fetch }} [opts]
+ * @param {{ fetch?: typeof fetch, apt?: () => ReleaseCheck }} [opts]  `apt` answers for a
+ *   box apt owns; a test stands in for apt-cache with it
  * @returns {Promise<ReleaseCheck>}
  */
-export async function checkRelease(cfg, { fetch: doFetch = fetch } = {}) {
+export async function checkRelease(cfg, { fetch: doFetch = fetch, apt = checkAptRelease } = {}) {
+  // APT FIRST, and instead. A box installed from the deb takes releases from
+  // apt and nothing else; asking a manifest as well would report a version apt
+  // has not been given yet, and offer a button that would install it past apt.
+  if (cfg.releaseSource === 'apt') return apt();
   if (!cfg.releaseManifest) {
     // NOT SILENCE. Every box installed before the installer learned to write
     // this is in exactly this state, and a screen that shows nothing cannot be
@@ -66,7 +72,7 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch } = {}) {
       ok: false,
       message:
         'This box does not know where its releases come from, so it cannot check for updates.\n' +
-        'Set AGENT_HUB_RELEASE_MANIFEST in /etc/agent-hub.env, or re-run the installer with --upgrade.',
+        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
     };
   }
 

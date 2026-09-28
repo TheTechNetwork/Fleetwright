@@ -77,7 +77,7 @@ test('the Remote Control URL is read off an 80-column pane', () => {
 });
 
 test('the URL survives every pane width that wraps it', () => {
-  // Measured against agent-hub's unguarded matcher, these produce:
+  // Measured against fleetwright's unguarded matcher, these produce:
   //   64 → correct (by luck)   70 → null   80 → null   100 → truncated
   for (const cols of [64, 70, 72, 80, 96, 100, 120]) {
     assert.equal(extractRcUrl(wrapAt(RC_ONE_LINE, cols)), RC_URL, `wrapped at ${cols} columns`);
@@ -138,10 +138,10 @@ test('an ordinary pane is not mistaken for Remote Control being up', () => {
   assert.ok(!isRemoteControlOnline('/rc active'));
 });
 
-// --- repairing what agent-hub recorded --------------------------------------
+// --- repairing what fleetwright recorded --------------------------------------
 
-test('a URL agent-hub failed to capture at all is recovered from the pane', () => {
-  // The width-70 case: agent-hub recorded nothing, and the session looks
+test('a URL fleetwright failed to capture at all is recovered from the pane', () => {
+  // The width-70 case: fleetwright recorded nothing, and the session looks
   // online and unreachable.
   const r = reconcileRcUrl({ recorded: null, pane: wrapAt(RC_ONE_LINE, 70) });
   assert.equal(r.url, RC_URL);

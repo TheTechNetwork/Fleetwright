@@ -45,7 +45,7 @@ function exe(dir, name) {
 }
 
 test('an explicit path always wins, and is not searched for', () => {
-  // AGENT_HUB_CLAUDE_BIN is somebody's own arrangement. A name with a slash in
+  // FLEETWRIGHT_CLAUDE_BIN is somebody's own arrangement. A name with a slash in
   // it is already an answer, and going looking would be this module overruling
   // the operator.
   assert.equal(resolveBin('/opt/weird/claude'), '/opt/weird/claude');

@@ -22,7 +22,7 @@ different trees.
 needs git, npm, a network path to the forge and the registry, and enough disk
 for the whole history. A packaged host needs none of that.
 
-**The tree is writable and therefore drifts.** Everything in `/opt/agent-fleet`
+**The tree is writable and therefore drifts.** Everything in `/opt/fleetwright-src`
 can be edited in place, which is occasionally useful and permanently a source
 of "works on that box only".
 
@@ -87,7 +87,7 @@ once `npm ci` was involved.
    implementation.
 4. **Switch the installer** to fetch a release rather than clone, keeping
    `--from-source` for development boxes. **Done** — `install.sh` detects
-   which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
+   which shape it is running from (`lib/fleetwright.mjs` exists or it does not),
    skips npm entirely when packaged, and removes the install it replaced. The
    **layout** is done — a release is copied to `releases/<version>` and
    `current` is moved onto it atomically, with the units pointing at `current`.
@@ -230,7 +230,7 @@ would change it, and it is not built.
 ### Configuring it
 
 ```sh
-AGENT_HUB_RELEASE_MANIFEST=https://releases.example/fleet/manifest.json
+FLEETWRIGHT_RELEASE_MANIFEST=https://releases.example/fleet/manifest.json
 ```
 
 The tarball is fetched **relative to the manifest's own URL**, so one setting
@@ -248,7 +248,7 @@ without thinking about either behaves exactly as releases always have.
 { "prerelease": true, "rollout": 0.25 }
 ```
 
-**`rolling` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=rolling`
+**`rolling` is opt-in per host.** `FLEETWRIGHT_RELEASE_CHANNEL=rolling`
 takes them; the default `stable` skips them. That is the point of marking a
 release: it reaches the machines somebody chose to expose, so a bad build is
 found before the whole fleet takes it. CI sets the field from GitHub's own
@@ -296,11 +296,11 @@ The channel was renamed with it, for a different reason: GitHub already has a
 field called `prerelease` — the checkbox on a release, which the manifest
 carries — so a channel of the same name meant one word for two questions,
 *which address does this box poll* and *was this release marked as not final*.
-`AGENT_HUB_RELEASE_CHANNEL=prerelease` is still **read** as `rolling`, because
+`FLEETWRIGHT_RELEASE_CHANNEL=prerelease` is still **read** as `rolling`, because
 it was documented briefly and falling back to `stable` would be the silent wrong
 answer. Nothing writes it.
 
-| Channel | `AGENT_HUB_RELEASE_MANIFEST` | What it gets |
+| Channel | `FLEETWRIGHT_RELEASE_MANIFEST` | What it gets |
 |---|---|---|
 | `stable` (default) | `.../releases/latest/download/manifest.json` | Published releases only. GitHub's `latest` pointer skips prereleases, so this address cannot serve a main build even by accident |
 | `rolling` | `.../releases/download/rolling/manifest.json` | The newest build of `main`, replaced on every merge |
@@ -331,6 +331,135 @@ manifest by hand is still refused, because the manifest says `prerelease: true`
 and `decideRelease` checks the channel. Two independent mistakes have to line
 up for a stable box to take an unreleased build.
 
+## Stable releases through apt
+
+A box can also be installed with `apt install fleetwright`, and then apt is
+the only thing that updates it. The repository is `apt.thetech.network`, a
+Cloudflare Worker that serves the signed metadata and streams each package from
+Cloudflare's cache, filled from its GitHub release asset (`apt/`, and
+docs/ci.md for why not Pages). It carries
+**stable releases whose rollout is complete, and nothing else**.
+
+```sh
+curl -fsSL https://apt.thetech.network/fleetwright.gpg \
+  | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://apt.thetech.network stable main" \
+  | sudo tee /etc/apt/sources.list.d/fleetwright.list
+sudo apt update && sudo apt install fleetwright
+```
+
+**Signed, never `[trusted=yes]`.** That option switches off the one check apt
+has, and makes whoever serves the URL root on every box that trusts it: less
+than the manifest, which at least verifies a digest. The key is fetched from
+the same host the first time, which is trust on first use; every update after
+that is checked against it. `tools/build-apt-repo.sh` has no unsigned mode.
+
+### The deb is a courier, not the layout
+
+dpkg owns `/usr/lib/fleetwright` and nothing else: the release tarball, its
+manifest, and the Node that runs it. The postinst checks the tarball against
+the manifest's sha256 (the digest the pipeline built twice to prove), unpacks
+it somewhere temporary, and hands over to the `install.sh` inside, which is the
+same handover `bootstrap.sh` makes. So an apt box has the layout every other
+packaged box has: `releases/<version>`, `current`, run-before-swap, and the
+previous release kept for rollback. dpkg unpacking into `/opt` itself would
+have written over the tree a running process reads, which is the thing the
+symlink exists to prevent.
+
+The postinst prunes `releases/`, keeping the live release and the one it
+replaced, because on a manifest box `/update` does that and here nothing else
+would.
+
+### One updater
+
+A box installed from the package gets `FLEETWRIGHT_RELEASE_SOURCE=apt` in
+`/etc/fleetwright.env`, and every question about releases goes to apt from then
+on (`src/core/apt-release.js`, through `checkRelease`). The manifest is never
+fetched. Asking it as well would report versions apt has not been given yet,
+offer a button that installs past apt, and leave the next `apt upgrade` to move
+`current` back. Two updaters take turns.
+
+So on such a box:
+
+- **`/update`** reports apt's candidate, and offers `/upgrade` (the system
+  updates, which install the package) only when the box has that grant.
+- **`/channel`** is `stable` and pinned. There is no rolling address in apt;
+  a box that wants main builds uses the one-liner.
+- **The one-liner refuses**, and names the apt commands for each thing it
+  would have done.
+- **Removing the package** and re-running the installer clears the source line,
+  but only when dpkg agrees the package is gone, so running the installer by
+  hand on an apt box cannot quietly hand it a second updater.
+
+Staged rollouts still happen: they happen **before** apt. A release published
+at 25% reaches the boxes on the manifest first, and `apt-repo.yml` adds it to
+apt only once its manifest says `rollout: 1`. apt's own phased updates are an
+Ubuntu mechanism and are not used.
+
+### Joining a fleet under apt
+
+**`sudo fleetwright join fleet.example.com`** is the way a person does it, on
+any packaged box, apt or not. It checks the address answers `/healthz` as a
+coordinator before anything is written, then hands over to the installer's
+wizard with the fleet already named, which asks for the pin (or takes
+`--pin`). A bare name means `https://`, because a Worker answers on nothing
+else; `localhost` and `127.x` mean `http://`, because the local coordinator has
+no certificate; a scheme somebody typed is kept. `src/core/join.js`.
+
+debconf asks the same two things during the install itself, on a first install
+and on `dpkg-reconfigure fleetwright`, and never on an upgrade:
+
+| question | priority | |
+|---|---|---|
+| `fleetwright/coordinator-url` | high | blank installs without joining |
+| `fleetwright/pin` | high | spent once, then **cleared from debconf's database** |
+| `fleetwright/user` | low | who the sessions run as; blank is the installer's own rule |
+
+Preseed them for Ansible or cloud-init:
+
+```sh
+echo 'fleetwright fleetwright/coordinator-url string https://fleet.example.com' | sudo debconf-set-selections
+echo 'fleetwright fleetwright/pin password 123456' | sudo debconf-set-selections
+```
+
+With a URL, the installer runs its wizard with those answers and every other
+question at its default: the same as pressing enter through the one-liner.
+That means sandboxing on when podman is there, system updates from chat
+allowed (apt needs that grant to update the box from the app), reboot from
+chat refused, and the services started. The Claude login is skipped, because
+it needs somebody to paste a code; connect an account from the app. A
+**loopback** URL is read as "run the coordinator here", as it is everywhere
+else.
+
+Without a URL the release is laid out and left stopped, and the output says
+`sudo fleetwright join fleet.example.com`.
+
+**No apt-get inside the postinst.** dpkg holds the lock for the whole of it, and
+the installer's habit of installing what is missing would wait on that lock
+forever. What it would reach for is in `Depends` (tmux, curl, sudo) or
+`Recommends` (podman, uidmap), and `FLEETWRIGHT_NO_INSTALL_DEPS=1` tells it so.
+
+### Node comes with it
+
+Debian's nodejs is older than `package.json`'s floor, so the package carries
+Node's own build: `bin/node` and its licence, about 29 MB of the deb.
+`tools/build-host-deb.mjs` checks it against the `SHASUMS256.txt` nodejs.org
+publishes beside it. The version is `install/deb/node.env`, which Renovate
+moves with `versioning=node`: LTS lines only, and a Node security release skips
+the three-day soak like every other advisory.
+
+It lives in `/usr/lib/fleetwright/node`, off `PATH`, so it neither shadows nor
+is shadowed by a distro nodejs. The units name it outright, and the CLIs in
+`/usr/local/bin` are two-line wrappers that name it too, written whenever the
+node on `PATH` is missing or below the floor.
+
+### Remove and purge
+
+`apt remove` stops and disables the services (the node they name is about to
+go) and keeps `/etc` and the box's identity, as removing any Debian package
+keeps its conffiles. `apt purge` runs the release's own `uninstall.sh --purge`:
+units, sudoers rules, the host key, and every release under `/opt/fleetwright`.
+
 ## What this does not solve
 
 **The sandbox image is a second artifact** and stays one. It is versioned by
@@ -343,7 +472,7 @@ This went back and forth, and the reason is worth keeping. A migration first
 ran the installer *inside* the release, so a broken one could not be migrated
 to and could only be **superseded**: one afternoon produced three releases that
 way, each fixing a bug the previous one had hidden, in code that had never
-executed. `AGENT_FLEET_PAYLOAD` was the answer for a while — the helper ran
+executed. `FLEETWRIGHT_PAYLOAD` was the answer for a while — the helper ran
 the installer **the box already had**, refreshed by `curl … | sudo sh`, and
 pointed it at the release as payload. That also meant root executing a script
 out of a checkout the service user owns, which is the grant the helper's own
@@ -375,7 +504,7 @@ against. The temporary copy goes on every exit, refusals included. No git, no
 clone of the monorepo, no writable tree to drift.
 
 Three boxes still get a checkout, on purpose. `--from-source`, for a box
-somebody **edits**. A box that already has one at `/opt/agent-fleet`, which is
+somebody **edits**. A box that already has one at `/opt/fleetwright-src`, which is
 kept the shape it was — laying a release beside a checkout the units still
 point at would be two installs arguing over one box, and the installer's own
 conversion offer remains the way across: a **fresh** checkout defaults to yes,
@@ -427,15 +556,15 @@ update picks one and nobody can tell which is running.
 
 What makes this a directory removal rather than a data migration: **nothing that
 matters lives in the install directory.** The env files are in `/etc`, the
-registry and credentials in `/var/lib/agent-hub`, the host key in
-`/var/lib/agent-fleet`. The units are rewritten with `__DIR__` pointing at the
+registry and credentials in `/var/lib/fleetwright`, the host key in
+`/var/lib/fleetwright-sidecar`. The units are rewritten with `__DIR__` pointing at the
 release, so the switch has already happened before anything is deleted.
 
 Three rules the installer follows, in this order:
 
 1. **The old unit files are copied before they are overwritten.** Their
    `ExecStart` is the only record of where the previous install lived.
-2. **Nothing is removed until the new agent-hub has been SEEN to start.**
+2. **Nothing is removed until the new fleetwright has been SEEN to start.**
    Removing first would leave a box with neither.
 3. **A working tree with uncommitted changes is never deleted.** It is reported
    instead, with the command to remove it. Deleting somebody's unsaved work to

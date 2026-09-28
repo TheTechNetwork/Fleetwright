@@ -1,7 +1,7 @@
 // Which releases this box takes, and where that answer lives.
 //
-// NOT IN /etc/agent-hub.env, and that is the whole design. The env file is
-// installed 0600 and root-owned; agent-hub runs as an unprivileged user and
+// NOT IN /etc/fleetwright.env, and that is the whole design. The env file is
+// installed 0600 and root-owned; fleetwright runs as an unprivileged user and
 // cannot write it. A setting somebody is meant to change from a phone cannot
 // live somewhere only root can edit — that is the shape this project keeps
 // finding, where the product names a fix and only a shell can apply it.
@@ -10,7 +10,7 @@
 // word, and a file somebody can read with `cat` when they are wondering.
 //
 // THE ENVIRONMENT STILL WINS, and refuses rather than being overridden
-// silently. An operator who sets AGENT_HUB_RELEASE_CHANNEL has said something
+// silently. An operator who sets FLEETWRIGHT_RELEASE_CHANNEL has said something
 // deliberate — probably from configuration management — and a phone quietly
 // writing a file that the next process start ignores would be the exact failure
 // this repository has paid for repeatedly: true where it was written, quietly
@@ -37,7 +37,7 @@ export const CHANNELS = Object.freeze(['stable', 'rolling']);
  *
  * Read-only, and deliberately not settable. #366 shipped `prerelease` as the
  * value and the docs said so for a few hours; anybody who copied it into
- * AGENT_HUB_RELEASE_CHANNEL should get the channel they asked for rather than
+ * FLEETWRIGHT_RELEASE_CHANNEL should get the channel they asked for rather than
  * falling back to stable, which is the silent-wrong-answer this file is written
  * against. Nothing writes this value any more.
  */
@@ -111,9 +111,9 @@ export function writeChannel(cfg, value) {
     return {
       ok: false,
       message:
-        `AGENT_HUB_RELEASE_CHANNEL is set to "${cfg.releaseChannel}" in this box's environment, ` +
+        `FLEETWRIGHT_RELEASE_CHANNEL is set to "${cfg.releaseChannel}" in this box's environment, ` +
         'which wins over anything set here.\n' +
-        'Remove it from /etc/agent-hub.env and restart if you want to choose the channel from the app.',
+        'Remove it from /etc/fleetwright.env and restart if you want to choose the channel from the app.',
     };
   }
 

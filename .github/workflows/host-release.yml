@@ -19,6 +19,8 @@ on:
       - 'openapi.json'
       - 'package.json'
       - 'tools/build-host-package.mjs'
+      - 'tools/build-host-deb.mjs'
+      - 'tools/build-apt-repo.sh'
       - '.github/workflows/host-release.yml'
   release:
     types: [published]
@@ -141,10 +143,10 @@ jobs:
       # asserting it here means it cannot come back quietly.
       # RUN THE WAY SYSTEMD RUNS IT, which is not how this used to check.
       #
-      # It ran `node "$root/lib/agent-hub.mjs"` — the library, directly — and so
-      # never executed bin/agent-hub, which is the ONLY file the unit names:
+      # It ran `node "$root/lib/fleetwright.mjs"` — the library, directly — and so
+      # never executed bin/fleetwright, which is the ONLY file the unit names:
       #
-      #     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+      #     ExecStart=__NODE__ __DIR__/bin/fleetwright serve
       #
       # The shim was `#!/bin/sh` with an `exec node …` inside. Fine when
       # something runs the file; a syntax error when node is handed it. Every
@@ -160,9 +162,10 @@ jobs:
           root="$(find /tmp/verify -maxdepth 1 -mindepth 1 -type d)"
           test ! -d "$root/node_modules"
           # THAT IT STARTS, not that it succeeds. Exit codes belong to each
-          # tool — agent-fleet-mcp refuses without a coordinator URL and is
+          # tool — fleetwright-mcp refuses without a coordinator URL and is
           # right to. A shim node cannot parse dies before any of that.
-          for entry in agent-hub agent-fleet-sidecar agent-fleet-mcp; do
+          # The agent-* names are the aliases an unmigrated box's units start.
+          for entry in fleetwright fleetwright-sidecar fleetwright-mcp agent-hub agent-fleet-sidecar agent-fleet-mcp; do
             [ -f "$root/bin/$entry" ] || { echo "::error::no bin/$entry in the release"; exit 1; }
             for how in "node $root/bin/$entry" "$root/bin/$entry"; do
               out="$(cd / && $how --help 2>&1 || true)"
@@ -261,7 +264,7 @@ jobs:
           gh release create rolling \
             --prerelease \
             --title "Rolling build from main" \
-            --notes "The newest build of main. Hosts on AGENT_HUB_RELEASE_CHANNEL=rolling poll this; it is replaced on every merge and is not a published release." \
+            --notes "The newest build of main. Hosts on FLEETWRIGHT_RELEASE_CHANNEL=rolling poll this; it is replaced on every merge and is not a published release." \
             --target main 2>/dev/null || true
 
           # --clobber, because the point is that these files are replaced.
@@ -376,3 +379,99 @@ jobs:
           # that it needs nothing from the tree.
           GH_REPO: ${{ github.repository }}
         run: gh release upload "${{ github.event.release.tag_name }}" dist/*.tar.gz dist/manifest.json --clobber
+
+  # THE DEB, BUILT ON EVERY RUN THE PACKAGE IS, for the reason the header gives
+  # for the tarball: a release pipeline that has never run is one nobody trusts
+  # on the day it matters. It wraps the tarball the job above just proved
+  # reproducible, with the Node install/deb/node.env pins — see
+  # tools/build-host-deb.mjs and docs/packaging.md, "Stable releases through
+  # apt".
+  deb:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.21.0'
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: fleetwright-host
+          path: dist
+
+      - name: Build the debs
+        run: node tools/build-host-deb.mjs --arch amd64 --arch arm64
+
+      # The same proof the tarball gets, for the same reason: a digest that
+      # depends on the machine that made it says nothing about the contents.
+      - name: Build them again and compare
+        run: |
+          (cd dist/deb && sha256sum *.deb) > first.sum
+          rm dist/deb/*.deb
+          node tools/build-host-deb.mjs --arch amd64 --arch arm64 > /dev/null
+          (cd dist/deb && sha256sum -c ../../first.sum)
+
+      # INSTALLED, ON DEBIAN, THE WAY apt WILL. In a container because that is
+      # the distribution this is for and the runner is not; no recommends, so
+      # podman is not pulled in and the session image is not fetched on every
+      # merge. No systemd in there either, so the units are written and not
+      # started — which is exactly what an install with no fleet named does.
+      #
+      # What it proves: the maintainer scripts run under dash, the postinst lays
+      # a release out and records apt as its updater, the bundled Node is the
+      # pinned one and runs the shims, and a remove and purge leave nothing
+      # behind under /opt.
+      - name: Install it on Debian, then remove it
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w debian:bookworm bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends ./dist/deb/fleetwright_*_amd64.deb > /tmp/install.log 2>&1 \
+              || { cat /tmp/install.log; exit 1; }
+            want="v$(sed -n "s/^NODE_VERSION=//p" install/deb/node.env)"
+            have="$(/usr/lib/fleetwright/node/bin/node -v)"
+            [ "$have" = "$want" ] || { echo "::error::bundled node is $have, node.env says $want"; exit 1; }
+            readlink /opt/fleetwright/current
+            grep -q "^FLEETWRIGHT_RELEASE_SOURCE=apt" /etc/fleetwright.env \
+              || { echo "::error::the install did not record apt as its updater"; exit 1; }
+            grep -q "^ExecStart=/usr/lib/fleetwright/node/bin/node " /etc/systemd/system/fleetwright.service \
+              || { echo "::error::the unit does not run the bundled node"; exit 1; }
+            for cmd in fleetwright fw agent-hub agent-fleet-sidecar; do
+              out="$($cmd --help 2>&1 || true)"
+              case "$out" in *"not found"*|*SyntaxError*|"") echo "::error::$cmd from PATH did not start: $out"; exit 1 ;; esac
+            done
+            # join refuses a name that does not resolve, before it changes anything.
+            if fleetwright join nowhere.invalid > /tmp/join.log 2>&1; then
+              echo "::error::join accepted an address that does not answer"; exit 1
+            fi
+            grep -q "Nothing was changed" /tmp/join.log || { cat /tmp/join.log; exit 1; }
+            apt-get purge -y -qq fleetwright > /tmp/purge.log 2>&1 || { cat /tmp/purge.log; exit 1; }
+            [ ! -e /opt/fleetwright ] || { echo "::error::purge left /opt/fleetwright behind"; ls -la /opt/fleetwright; exit 1; }
+            echo "--- installed, ran, purged ---"
+          '
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: fleetwright-deb
+          path: dist/deb/*.deb
+          if-no-files-found: error
+
+  # Beside the tarball on every published release, prereleases included —
+  # a deb is also a thing somebody downloads and `apt install ./`s by hand.
+  # The APT REPOSITORY is narrower, and is apt-repo.yml.
+  attach-deb:
+    needs: deb
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: fleetwright-deb
+          path: dist/deb
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/deb/*.deb --clobber

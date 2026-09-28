@@ -486,9 +486,9 @@ needs and none can be invented here:
 
 | | where |
 |---|---|
-| `AGENT_FLEET_CLOUDFLARE_CLIENT_ID` | `[vars]` — an identifier, in every authorize URL |
-| `AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET` | `wrangler secret` / environment — see docs/ci.md |
-| `AGENT_FLEET_CLOUDFLARE_SCOPES` | `[vars]` — the client's registered scope list, verbatim |
+| `FLEETWRIGHT_CLOUDFLARE_CLIENT_ID` | `[vars]` — an identifier, in every authorize URL |
+| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | `wrangler secret` / environment — see docs/ci.md |
+| `FLEETWRIGHT_CLOUDFLARE_SCOPES` | `[vars]` — the client's registered scope list, verbatim |
 
 The scopes are the one that looks optional and is not. They are **dot-form**
 API-token permission names (`workers-scripts.edit`, `account-settings.read` —

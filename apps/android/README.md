@@ -62,8 +62,8 @@ token to type: §5 is explicit that a credential in an APK is public the moment
 somebody unzips it, and a credential shared between phones is one that cannot be
 revoked for one of them.
 
-The coordinator has to have sign-in configured — `AGENT_FLEET_AUTH_ISSUERS`,
-`AGENT_FLEET_AUTH_AUDIENCES` and `AGENT_FLEET_AUTH_ALLOW`, with your address on
+The coordinator has to have sign-in configured — `FLEETWRIGHT_AUTH_ISSUERS`,
+`FLEETWRIGHT_AUTH_AUDIENCES` and `FLEETWRIGHT_AUTH_ALLOW`, with your address on
 the allowlist. See [`../../docs/identity.md`](../../docs/identity.md).
 
 ### Google sign-in needs a web OAuth client — four steps
@@ -130,14 +130,14 @@ in, and the app signing key so Play installs do.
 every client. With a web client present, the Google Services plugin generates
 the `default_web_client_id` string resource that `SignIn.kt` looks up at runtime.
 
-**4. Put the WEB client id in `AGENT_FLEET_AUTH_AUDIENCES`** on the coordinator
+**4. Put the WEB client id in `FLEETWRIGHT_AUTH_AUDIENCES`** on the coordinator
 — not the Android one. `setServerClientId` names the web client, so the web
 client is what appears as `aud` on the ID token, and the coordinator checks
 `aud`. It sits alongside the iOS bundle id; the list holds both because Apple
 and Google issue for different audiences.
 
 ```sh
-npx wrangler secret put AGENT_FLEET_AUTH_AUDIENCES
+npx wrangler secret put FLEETWRIGHT_AUTH_AUDIENCES
 #   network.thetech.fleetwright  654943059314-....apps.googleusercontent.com
 ```
 

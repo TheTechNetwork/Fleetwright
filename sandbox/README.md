@@ -18,13 +18,13 @@ Containerfile and bumped deliberately.
 podman pull ghcr.io/thetechnetwork/fleetwright-session:latest
 
 # build it yourself instead — offline, or while editing the Containerfile
-AGENT_HUB_SANDBOX_IMAGE=localhost/agent-session:latest sudo -E install/install.sh
+FLEETWRIGHT_SANDBOX_IMAGE=localhost/fleetwright-session:latest sudo -E install/install.sh
 ```
 
 `ensureSandboxImage` builds anything tagged `localhost/` and pulls anything
 else, so switching between the two is one environment variable. A fork that
 publishes the same image under its own org sets just
-`AGENT_HUB_SANDBOX_IMAGE_OWNER` — the short way to say "the same image, mine".
+`FLEETWRIGHT_SANDBOX_IMAGE_OWNER` — the short way to say "the same image, mine".
 
 Every push also publishes a `sha-<commit>` tag, which is what makes "which
 image is that box running" answerable after the fact.
@@ -33,7 +33,7 @@ The container a sandboxed session runs in. design.md §2: give a session full
 root, and delete everything it did afterwards.
 
 ```sh
-podman build -t localhost/agent-session:latest -f sandbox/Containerfile sandbox/
+podman build -t localhost/fleetwright-session:latest -f sandbox/Containerfile sandbox/
 ```
 
 `install/install.sh` does this for you when podman is present.
@@ -92,7 +92,7 @@ deliberate one-line change. Point Renovate at them.
 
 ```sh
 # on the box, as the variant it starts on — the app can still switch it
-AGENT_HUB_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:web
+FLEETWRIGHT_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:web
 ```
 
 Or, without a shell: `sandbox browser` from either phone or the MCP server puts

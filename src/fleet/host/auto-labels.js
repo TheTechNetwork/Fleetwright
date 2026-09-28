@@ -1,7 +1,7 @@
 // What a machine can say about itself without being told.
 //
 // LABELS ARE HOW WORK IS AIMED — `tag: macos` on a start, and the scheduler
-// filters before it ranks. They came only from AGENT_FLEET_LABELS, which means
+// filters before it ranks. They came only from FLEETWRIGHT_LABELS, which means
 // every one of them is somebody having remembered to type it into an env file
 // at install time. The facts that never change and are never wrong — what
 // operating system this is, what architecture, whether its sandbox image has a
@@ -16,7 +16,7 @@
 // something different on its next report without anybody editing anything. A
 // label written into a file is a claim that was true once.
 //
-// AND THEY ARE ADDITIVE. AGENT_FLEET_LABELS still says whatever it says: an
+// AND THEY ARE ADDITIVE. FLEETWRIGHT_LABELS still says whatever it says: an
 // operator's own labels are decisions ("gpu", "prod", "noisy-neighbour") and no
 // amount of introspection produces those. The two sets are unioned, and an
 // operator naming something this file also derives is not a conflict.
@@ -62,7 +62,7 @@ function distroLabels(readFile) {
 /**
  * Everything this machine can say about itself.
  *
- * @param {any} [cfg] agent-hub's config, or the parts of it this reads —
+ * @param {any} [cfg] fleetwright's config, or the parts of it this reads —
  *   `sandboxImage` and `stateDir`. Loosely typed on purpose: callers pass a
  *   fragment, and the alternative was every test constructing 50 unused fields
  * @param {{ platform?: () => string, arch?: () => string, readFile?: (p: string, enc: string) => string }} [io]

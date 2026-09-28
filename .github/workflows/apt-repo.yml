@@ -1,0 +1,133 @@
+name: apt repository
+
+# THE APT REPOSITORY: stable releases whose rollout is complete, and nothing
+# else, at https://apt.thetech.network. docs/packaging.md, "Stable releases
+# through apt", says why apt only ever gets these.
+#
+# A CLOUDFLARE WORKER, NOT PAGES (apt/wrangler.toml). A deb is ~29 MB and both
+# Pages and Workers static assets cap a file at 25 MiB, so the Worker serves
+# the signed metadata as assets and streams each package itself, from
+# Cloudflare's cache or, once per data centre, from the GitHub release asset it
+# was built into. apt checks every deb against the signed Packages file, so the
+# cache carries no trust — and every update and download is a log line in
+# Workers observability.
+#
+# ITS OWN WORKFLOW, AND NOT A JOB IN host-release.yml: host-release.yml needs no
+# secrets (docs/ci.md), and this one needs the signing key and Cloudflare's.
+#
+# STATELESS, DERIVED FROM THE RELEASES. Nothing remembers what was promoted:
+# every run lists the newest published, non-prerelease releases, reads each
+# one's attached manifest.json, and takes the debs of those whose rollout is 1.
+# So a release published at 25% is not in apt, and a run after its rollout
+# reaches 100% — its build re-run, or this workflow run by hand — puts it
+# there. A deploy replaces the whole asset set, which is why "rebuild everything
+# from the source of truth" is the shape rather than "append".
+#
+# A FEW VERSIONS, NOT ONE. apt can only downgrade to a version the repository
+# still lists, and the previous release is the rollback target — the same rule
+# releasesToPrune keeps on a manifest box.
+#
+# SKIPPED WITH A NOTICE without the signing key or the Cloudflare token, like
+# every other secret-dependent job here. A fork gets a note, not a red run.
+on:
+  workflow_run:
+    workflows: ['Host release']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # A release's build that succeeded, or somebody asking. A merge to main
+    # also completes Host release, and changes nothing apt carries.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: production
+    env:
+      APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # How many stable versions the repository keeps. Two is the floor: the
+      # live one and the one to roll back to.
+      APT_KEEP: '3'
+    steps:
+      - name: Is there a key, and somewhere to put it?
+        id: key
+        run: |
+          if [ -z "$APT_SIGNING_KEY" ]; then
+            echo "::notice::APT_SIGNING_KEY is not set, so the apt repository was not published. docs/ci.md says how to make one."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set, so the apt repository was not published. See docs/ci.md."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7.0.1
+        if: steps.key.outputs.present == 'true'
+
+      - name: Collect the stable releases whose rollout is complete
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p debs
+          taken=0
+          for tag in $(gh release list --exclude-drafts --exclude-pre-releases --limit 20 --json tagName --jq '.[].tagName'); do
+            [ "$taken" -lt "$APT_KEEP" ] || break
+            rm -rf rel && mkdir rel
+            gh release download "$tag" -D rel -p manifest.json -p '*.deb' 2>/dev/null || true
+            if [ ! -f rel/manifest.json ] || ! ls rel/*.deb >/dev/null 2>&1; then
+              echo "$tag: no manifest or no debs — skipped"; continue
+            fi
+            rollout="$(jq -r '.rollout // 1' rel/manifest.json)"
+            if [ "$(jq -n --argjson r "$rollout" '$r >= 1')" != "true" ]; then
+              echo "$tag: rollout $rollout — not complete, not in apt yet"; continue
+            fi
+            echo "$tag: rollout complete — in apt"
+            # One directory per tag: the tag is the pool path, and the pool
+            # path is how the Worker finds the release asset to fetch.
+            mkdir -p "debs/$tag"
+            mv rel/*.deb "debs/$tag/"
+            taken=$((taken + 1))
+          done
+          [ "$taken" -gt 0 ] || { echo "::error::no stable release is ready for apt"; exit 1; }
+
+      - name: Build and sign the repository
+        if: steps.key.outputs.present == 'true'
+        run: |
+          command -v apt-ftparchive >/dev/null || sudo apt-get install -y -qq apt-utils
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          key="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')"
+          tools/build-apt-repo.sh debs apt/public "$key"
+          rm -rf "$GNUPGHOME"
+          # Metadata only, by construction: a deb in the asset set would be
+          # refused at 25 MiB; packages are streamed by the Worker instead.
+          if find apt/public -name '*.deb' | grep -q .; then
+            echo "::error::a package ended up in the Worker's assets"; exit 1
+          fi
+
+      - uses: actions/setup-node@v7.0.0
+        if: steps.key.outputs.present == 'true'
+        with:
+          node-version: '26.10.0'
+
+      # The coordinator's wrangler, pinned in worker/package.json, so there is
+      # one wrangler version in this repository and Renovate moves it once.
+      - name: Deploy the Worker
+        if: steps.key.outputs.present == 'true'
+        run: |
+          npm --prefix worker ci --no-audit --no-fund
+          worker/node_modules/.bin/wrangler deploy --config apt/wrangler.toml

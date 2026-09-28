@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '26.9.0'
+          node-version: '26.10.0'
       # The dry-run IS the portability test, so there is no separate lint for
       # it. wrangler resolves every import the Worker actually pulls in: if
       # something in the shared coordinator code starts importing from `node:`
@@ -219,7 +219,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: '26.9.0'
+          node-version: '26.10.0'
 
       # A step's own `env:` is not visible to that step's `if:` — the guard has
       # to be a separate step that writes an output. Doing it the other way is
@@ -289,7 +289,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          AGENT_FLEET_API_TOKEN: ${{ secrets.AGENT_FLEET_API_TOKEN }}
+          FLEETWRIGHT_API_TOKEN: ${{ secrets.FLEETWRIGHT_API_TOKEN || secrets.AGENT_FLEET_API_TOKEN }}
           # WHO IS ALLOWED IN, and it is a secret rather than a var for one
           # reason: it decides who can reach a fleet, and this repository is
           # public. It was BOTH — synced here and also set in the committed
@@ -298,14 +298,14 @@ jobs:
           # has been running and having no effect.
           #
           # ONE HOME PER NAME is the rule the config file states, and
-          # AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are gone from here for the
+          # FLEETWRIGHT_AUTH_ISSUERS and _AUDIENCES are gone from here for the
           # same reason in the other direction: they are public identifiers,
           # they live in wrangler.production.toml as vars, and syncing them here
           # as well made a second home that the first one silently overwrote.
-          AGENT_FLEET_AUTH_ALLOW: ${{ vars.AGENT_FLEET_AUTH_ALLOW }}
-          AGENT_FLEET_FCM_SERVICE_ACCOUNT: ${{ secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
-          AGENT_FLEET_APNS_KEY: ${{ secrets.AGENT_FLEET_APNS_KEY }}
-          AGENT_FLEET_APNS_KEY_ID: ${{ secrets.AGENT_FLEET_APNS_KEY_ID }}
+          FLEETWRIGHT_AUTH_ALLOW: ${{ vars.FLEETWRIGHT_AUTH_ALLOW || vars.AGENT_FLEET_AUTH_ALLOW }}
+          FLEETWRIGHT_FCM_SERVICE_ACCOUNT: ${{ secrets.FLEETWRIGHT_FCM_SERVICE_ACCOUNT || secrets.AGENT_FLEET_FCM_SERVICE_ACCOUNT }}
+          FLEETWRIGHT_APNS_KEY: ${{ secrets.FLEETWRIGHT_APNS_KEY || secrets.AGENT_FLEET_APNS_KEY }}
+          FLEETWRIGHT_APNS_KEY_ID: ${{ secrets.FLEETWRIGHT_APNS_KEY_ID || secrets.AGENT_FLEET_APNS_KEY_ID }}
           # Reused rather than duplicated: the APNs team id is the same team id
           # the iOS build signs with, and two copies of one value is two chances
           # for them to disagree.
@@ -323,23 +323,23 @@ jobs:
           # notification goes to the log instead of to Apple — on a fleet where
           # Android keeps working and everything else looks configured. The very
           # failure src/fleet/push.js spends a page making loud.
-          AGENT_FLEET_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          FLEETWRIGHT_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           # The GitHub App's client secret, for the OAuth code exchange. The
           # App's PRIVATE KEY is deliberately not here and not anywhere — it
           # mints installation tokens for every installation of the App, so it
           # belongs to a broker that does not exist yet. See docs/github-app.md.
-          AGENT_FLEET_GITHUB_CLIENT_SECRET: ${{ secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
+          FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
           # The Cloudflare OAuth client's secret, for the same exchange against
           # the second provider. The client id and scope list are [vars] in
           # wrangler.production.toml; this is the half that must not be.
-          AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET || secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           missing=""
-          for name in AGENT_FLEET_API_TOKEN AGENT_FLEET_FCM_SERVICE_ACCOUNT \
-                      AGENT_FLEET_APNS_KEY AGENT_FLEET_APNS_KEY_ID AGENT_FLEET_APNS_TEAM_ID \
-                      AGENT_FLEET_AUTH_ALLOW \
-                      AGENT_FLEET_GITHUB_CLIENT_SECRET AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET; do
+          for name in FLEETWRIGHT_API_TOKEN FLEETWRIGHT_FCM_SERVICE_ACCOUNT \
+                      FLEETWRIGHT_APNS_KEY FLEETWRIGHT_APNS_KEY_ID FLEETWRIGHT_APNS_TEAM_ID \
+                      FLEETWRIGHT_AUTH_ALLOW \
+                      FLEETWRIGHT_GITHUB_CLIENT_SECRET FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET; do
             value="$(printenv "$name" || true)"
             if [ -z "$value" ]; then
               missing="$missing $name"
@@ -352,16 +352,16 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "::warning::Not set as repository secrets, so left as they are in Cloudflare:$missing"
-            echo "The coordinator answers 503 to everything until AGENT_FLEET_API_TOKEN exists, and 503 to"
-            echo "sign-in until AGENT_FLEET_AUTH_ISSUERS and AGENT_FLEET_AUTH_AUDIENCES are set — those are"
-            echo "[vars] in the config rather than secrets. AGENT_FLEET_AUTH_ALLOW is a secret, and an EMPTY"
+            echo "The coordinator answers 503 to everything until FLEETWRIGHT_API_TOKEN exists, and 503 to"
+            echo "sign-in until FLEETWRIGHT_AUTH_ISSUERS and FLEETWRIGHT_AUTH_AUDIENCES are set — those are"
+            echo "[vars] in the config rather than secrets. FLEETWRIGHT_AUTH_ALLOW is a secret, and an EMPTY"
             echo "one admits nobody: the safe default, and also a fleet nobody can sign in to."
             echo "Hosts need none of it: they enrol with a pin and authenticate by signature."
           fi
 
       - name: Where it landed
         if: steps.creds.outputs.have == 'true'
-        run: echo "::notice::Deployed. Point a host at it with AGENT_FLEET_COORDINATOR_URL — see docs/coordinator-deploy.md."
+        run: echo "::notice::Deployed. Point a host at it with FLEETWRIGHT_COORDINATOR_URL — see docs/coordinator-deploy.md."
 
   # The one required check for this workflow, for the same reason ci.yml has
   # one: `check` is skipped on a change that is not in the bundle, and a

@@ -8,9 +8,9 @@
 // shell gets nothing: their shell has never heard of that file.
 //
 // So every CLI subcommand — enrol, doctor, identity — has to load it for
-// itself, and until now only bin/agent-hub did. `agent-fleet-sidecar enrol`
-// therefore reported "AGENT_FLEET_COORDINATOR_URL is not set" on a box where
-// the URL was sitting in /etc/agent-fleet-sidecar.env, correctly, having just
+// itself, and until now only bin/fleetwright did. `fleetwright-sidecar enrol`
+// therefore reported "FLEETWRIGHT_COORDINATOR_URL is not set" on a box where
+// the URL was sitting in /etc/fleetwright-sidecar.env, correctly, having just
 // been written by the installer that printed the command to run.
 //
 // It stayed hidden because every caller inside the project already passed the
@@ -18,11 +18,12 @@
 // command line. The only path that went through the environment was the one a
 // human types, which no test covers and no install exercises.
 //
-// Real environment variables win, so `AGENT_FLEET_HOST_ID=x agent-fleet-sidecar
+// Real environment variables win, so `FLEETWRIGHT_HOST_ID=x fleetwright-sidecar
 // identity` still overrides the file, and systemd's own values are never
 // second-guessed.
 
 import { readFileSync } from 'node:fs';
+import { adoptLegacyEnv } from '../fleet/legacy-names.js';
 
 /**
  * @param {string} file  the EnvironmentFile to read
@@ -58,5 +59,8 @@ export function loadEnvFile(file, env = process.env) {
       .replace(/^(['"])(.*)\1$/, '$2');
     set.push(key);
   }
+  // A file written before the rename says AGENT_HUB_X; the code reads
+  // FLEETWRIGHT_X. See src/fleet/legacy-names.js.
+  adoptLegacyEnv(env);
   return set;
 }

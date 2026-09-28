@@ -107,7 +107,7 @@ agrees with them.
 ### 6. Say what is wrong AND what to do about it
 
 Half the error messages in this codebase are two sentences where one would do,
-and that is deliberate. `agent-fleet-sidecar doctor` does not say
+and that is deliberate. `fleetwright-sidecar doctor` does not say
 `unauthorised`; it says the host is not enrolled and prints the command that
 enrols it. The registry works to make *"we don't know"* unrepresentable as a
 benign value — it produces `claude is not logged in on this host`, not a blank.

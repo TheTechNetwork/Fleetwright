@@ -1,6 +1,6 @@
 // Every setting the Worker reads is written down where a fork would look.
 //
-// From #353: `AGENT_FLEET_ACTIONS_AUDIENCE` is read by `fleet-do.js` and
+// From #353: `FLEETWRIGHT_ACTIONS_AUDIENCE` is read by `fleet-do.js` and
 // appeared in NO file — not wrangler.toml, not wrangler.production.toml, not
 // docs/. Four more were in prose but absent from the config a fork actually
 // edits, which is nearly as bad: a fork operator configures the file in front
@@ -26,7 +26,7 @@ function readsFromEnv() {
   const names = new Set();
   for (const f of readdirSync(dir).filter((n) => n.endsWith('.js'))) {
     const src = readFileSync(path.join(dir, f), 'utf8');
-    for (const m of src.matchAll(/\benv\.((?:AGENT_FLEET|SENTRY)_[A-Z0-9_]+)/g)) names.add(m[1]);
+    for (const m of src.matchAll(/\benv\.((?:FLEETWRIGHT|SENTRY)_[A-Z0-9_]+)/g)) names.add(m[1]);
   }
   return [...names].sort();
 }
@@ -35,19 +35,19 @@ function readsFromEnv() {
  * Whether the config's prose names a variable.
  *
  * WILDCARDS COUNT, because the list uses them where a family shares one
- * behaviour — `AGENT_FLEET_GITHUB_*` covers the client id, the secret and the
+ * behaviour — `FLEETWRIGHT_GITHUB_*` covers the client id, the secret and the
  * app slug, and all three are unset together or not at all. Requiring the
  * literal string would push somebody to expand a group that reads better as
  * one line, which is a worse document in the name of a passing test.
  */
 function documented(name) {
   if (WRANGLER.includes(name)) return true;
-  // `AGENT_FLEET_GITHUB_*` and the like.
-  for (const m of WRANGLER.matchAll(/((?:AGENT_FLEET|SENTRY)_[A-Z0-9_]*)\*/g)) {
+  // `FLEETWRIGHT_GITHUB_*` and the like.
+  for (const m of WRANGLER.matchAll(/((?:FLEETWRIGHT|SENTRY)_[A-Z0-9_]*)\*/g)) {
     if (name.startsWith(m[1])) return true;
   }
-  // `AGENT_FLEET_APP_IOS/_ANDROID` — one entry, two variables sharing a stem.
-  for (const m of WRANGLER.matchAll(/((?:AGENT_FLEET|SENTRY)_[A-Z0-9_]+)\/(_[A-Z0-9_]+)/g)) {
+  // `FLEETWRIGHT_APP_IOS/_ANDROID` — one entry, two variables sharing a stem.
+  for (const m of WRANGLER.matchAll(/((?:FLEETWRIGHT|SENTRY)_[A-Z0-9_]+)\/(_[A-Z0-9_]+)/g)) {
     const stem = m[1].slice(0, m[1].lastIndexOf('_'));
     if (name === `${stem}${m[2]}`) return true;
   }
@@ -65,8 +65,8 @@ test('every setting the Worker reads is named in the fork-safe config', () => {
 
 test('the one that was in no file at all is in this one', () => {
   // Named on its own, because a wildcard could swallow it back into
-  // `AGENT_FLEET_ACTIONS_*` and this is the variable the finding was about.
-  assert.match(WRANGLER, /AGENT_FLEET_ACTIONS_AUDIENCE/);
+  // `FLEETWRIGHT_ACTIONS_*` and this is the variable the finding was about.
+  assert.match(WRANGLER, /FLEETWRIGHT_ACTIONS_AUDIENCE/);
   // AND WHAT ITS ABSENCE DOES, which is the column that makes this list worth
   // reading: unset is not "any audience", it is this coordinator's own origin.
   assert.match(WRANGLER, /UNSET IS NOT/);

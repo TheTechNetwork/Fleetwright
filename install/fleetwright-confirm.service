@@ -1,6 +1,6 @@
 [Unit]
 Description=Fleetwright commit-confirm watchdog — reverts an update that cannot prove itself
-Documentation=https://github.com/ambersecurityinc/agent-hub
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 
 [Service]
 Type=oneshot
@@ -10,7 +10,7 @@ Type=oneshot
 # no privilege the services themselves lack. That is the same reasoning that
 # lets an update restart the services by exiting rather than by `systemctl`.
 User=__USER__
-Environment=AGENT_HUB_STATE_DIR=__STATE_DIR__
+Environment=FLEETWRIGHT_STATE_DIR=__STATE_DIR__
 Environment=FLEET_BASE=__FLEET_BASE__
 ExecStart=/usr/local/sbin/fleetwright-confirm
 

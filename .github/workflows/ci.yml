@@ -155,7 +155,7 @@ jobs:
           # The current release, not the floor. These checks are about this
           # repository rather than about the range it supports, and the floor is
           # exercised by the matrix above.
-          node-version: '26.9.0'
+          node-version: '26.10.0'
           cache: npm
       - run: npm install --no-audit --no-fund
       # The Worker's, because verify.sh bundles it and the bundle resolves its
@@ -214,7 +214,7 @@ jobs:
       # test/files-container.test.js is the workspace browser running inside a
       # real container — where the confinement actually lives. It was asserted
       # by reading the source, because CI had no engine. It has Docker, and
-      # AGENT_HUB_PODMAN_BIN has always been configurable; what stood in the way
+      # FLEETWRIGHT_PODMAN_BIN has always been configurable; what stood in the way
       # was three podman-only subcommands, now `inspect` on both.
       #
       # THE FLEET STILL RUNS PODMAN. docs/hardening.md is built on rootless —
@@ -230,8 +230,8 @@ jobs:
       - name: The workspace, inside a real container
         run: node --test test/files-container.test.js
         env:
-          AGENT_HUB_PODMAN_BIN: docker
-          AGENT_HUB_SANDBOX_IMAGE: debian:13-slim
+          FLEETWRIGHT_PODMAN_BIN: docker
+          FLEETWRIGHT_SANDBOX_IMAGE: debian:13-slim
 
       # The installer is the thing a new operator runs first, so a syntax error
       # in it is a worse bug than one in the service.

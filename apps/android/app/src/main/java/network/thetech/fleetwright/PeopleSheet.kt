@@ -29,7 +29,7 @@ import java.util.Date
 /**
  * Who is allowed into this fleet, and the screen that lets somebody in.
  *
- * Adding a person used to mean editing `AGENT_FLEET_AUTH_ALLOW` in
+ * Adding a person used to mean editing `FLEETWRIGHT_AUTH_ALLOW` in
  * `wrangler.toml`, committing, and waiting for a deploy — a CODE CHANGE PER
  * PERSON, by the one person who could already do everything. The iOS app has
  * had this screen since invitations shipped; this app rendered the same fleet

@@ -2,7 +2,7 @@
 //
 // A host keeps a P-256 private key in a file only it can read, and the
 // coordinator keeps the public half. Connecting is signing a nonce; nothing
-// reusable ever leaves the box. That replaces AGENT_FLEET_HOST_TOKEN, which
+// reusable ever leaves the box. That replaces FLEETWRIGHT_HOST_TOKEN, which
 // was the same string on every machine — unable to distinguish two hosts,
 // unable to revoke one, and replayable by anything that saw a single
 // connection.
@@ -34,7 +34,7 @@ export async function loadOrCreateKey(file) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     } catch (e) {
       // The usual cause is a box upgraded in place: the unit file gained
-      // StateDirectory=agent-fleet, but the copy in /etc/systemd/system is only
+      // StateDirectory=fleetwright-sidecar, but the copy in /etc/systemd/system is only
       // refreshed by the installer, so nothing has created the directory and an
       // unprivileged service cannot create it under /var/lib itself. EACCES on
       // a path nobody mentioned is a crash loop with an obscure message

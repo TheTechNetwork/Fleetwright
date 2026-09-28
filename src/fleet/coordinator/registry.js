@@ -6,7 +6,7 @@
 //   The coordinator's registry is a CACHE WITH PROVENANCE, never the authority.
 //   Each host stays the sole authority on its own tmux.
 //
-// agent-hub's whole simplification was collapsing a two-plane design — a queue
+// fleetwright's whole simplification was collapsing a two-plane design — a queue
 // plus a heartbeat protocol plus a stale-row reaper — into one process that
 // asks tmux directly, every time. Multi-host reintroduces that split
 // unavoidably. What is avoidable is *believing* the cache: the moment this
@@ -153,7 +153,7 @@ export class HostRegistry {
     const beforeReason = host.reason;
     host.health = health;
     host.healthAt = this.now();
-    // A host whose own agent-hub is unreachable is NOT healthy, even though its
+    // A host whose own fleetwright is unreachable is NOT healthy, even though its
     // socket is fine. It cannot start anything, and saying "healthy" because we
     // can reach the sidecar is exactly the benign-looking lie §3 warns about.
     // FIRST, BECAUSE IT IS THE ONLY FAULT THAT MAKES THE OTHERS UNSAYABLE.
@@ -246,7 +246,7 @@ export class HostRegistry {
         // message a beta tester's first run ended at — the one the comment
         // above calls "a reason without a remedy is half of it" — and half of
         // the remedy it gave was a surface the product no longer has.
-        'Link one from the app, or on the box with `agent-hub login for <email>`';
+        'Link one from the app, or on the box with `fleetwright login for <email>`';
     } else if (health.credential?.state === 'expired' && health.credential.refreshable === false) {
       // A DIFFERENT FAILURE FROM `loggedIn === false`, and the one that was
       // invisible. `loggedIn` reports on the box's own home directory; this
@@ -319,7 +319,7 @@ export class HostRegistry {
   /**
    * Hosts that could accept NEW WORK right now.
    *
-   * Healthy, because placing a session on a box whose agent-hub is unreachable
+   * Healthy, because placing a session on a box whose fleetwright is unreachable
    * or whose claude is logged out is placing it nowhere.
    */
   schedulable() {

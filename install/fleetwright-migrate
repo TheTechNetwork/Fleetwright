@@ -3,7 +3,7 @@
 #
 #   sudo -n /usr/local/sbin/fleetwright-migrate
 #
-# WHY THIS FILE EXISTS AT ALL, rather than the work happening in agent-hub.
+# WHY THIS FILE EXISTS AT ALL, rather than the work happening in fleetwright.
 # Switching layouts means rewriting systemd units and reloading the daemon, and
 # the service is unprivileged on purpose. Everything else about updating is
 # already unprivileged — fetch, verify, unpack, swap a symlink — and stays that
@@ -18,7 +18,7 @@
 #
 # NO ARGUMENTS, for the same reason the apt rule spells out its whole command
 # line: sudoers matches argv, and every argument is a widening. Everything this
-# needs it reads from /etc/agent-hub.env, which is root-owned and 0600.
+# needs it reads from /etc/fleetwright.env, which is root-owned and 0600.
 #
 # WHAT THE SERVICE USER CAN INFLUENCE, stated plainly because a grant nobody
 # has bounded is a grant nobody can review:
@@ -37,7 +37,10 @@ set -eu
 # override exists so the whole migration can be driven end to end by a test
 # against temporary directories — the path this file takes on a real box is the
 # one nothing ever ran until a machine ran it, five times, badly.
-ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/agent-hub.env}"
+# The old name on a box the installer has not migrated yet — this helper is
+# what runs the installer that migrates it. src/fleet/legacy-names.js.
+ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/fleetwright.env}"
+[ -f "$ENV_FILE" ] || [ ! -f /etc/agent-hub.env ] || ENV_FILE=/etc/agent-hub.env
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 
@@ -49,21 +52,26 @@ die()  { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 # install.sh does its own check for the units, which is where root is genuinely
 # needed. Refusing here on a privilege rather than on an ability made the whole
 # path untestable, and untestable is how it got to a fifth attempt.
-BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 mkdir -p "$BASE" 2>/dev/null || true
-[ -w "$BASE" ] || die "cannot write $BASE — this needs to be run as root, or with AGENT_FLEET_BASE somewhere you own"
+[ -w "$BASE" ] || die "cannot write $BASE — this needs to be run as root, or with FLEETWRIGHT_BASE somewhere you own"
 
 # Read the env file the way systemd does, and take only what is needed. Sourcing
 # it would execute whatever is in there, in a root shell.
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/'; }
+# A setting written before the rename is AGENT_HUB_X; the new name wins.
+env_get_named() { v="$(env_get "$1")"; [ -n "$v" ] || v="$(env_get "AGENT_HUB_${1#FLEETWRIGHT_}")"; printf '%s' "$v"; }
 
-MANIFEST_URL="$(env_get AGENT_HUB_RELEASE_MANIFEST)"
-[ -n "$MANIFEST_URL" ] || die "AGENT_HUB_RELEASE_MANIFEST is not set in $ENV_FILE, so there is nothing to migrate to."
+MANIFEST_URL="$(env_get_named FLEETWRIGHT_RELEASE_MANIFEST)"
+[ -n "$MANIFEST_URL" ] || die "FLEETWRIGHT_RELEASE_MANIFEST is not set in $ENV_FILE, so there is nothing to migrate to."
 
-INSTALL_DIR="$(env_get AGENT_HUB_INSTALL_DIR)"
-[ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/agent-fleet
-STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
-[ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/agent-hub
+INSTALL_DIR="$(env_get_named FLEETWRIGHT_INSTALL_DIR)"
+[ -n "$INSTALL_DIR" ] || INSTALL_DIR=/opt/fleetwright-src
+# Checkouts made before the rename live at /opt/agent-fleet.
+[ -e "$INSTALL_DIR" ] || [ ! -d /opt/agent-fleet ] || INSTALL_DIR=/opt/agent-fleet
+STATE_DIR="$(env_get_named FLEETWRIGHT_STATE_DIR)"
+[ -n "$STATE_DIR" ] || STATE_DIR=/var/lib/fleetwright
+[ -e "$STATE_DIR" ] || [ ! -d /var/lib/agent-hub ] || STATE_DIR=/var/lib/agent-hub
 
 # ALREADY DONE IS NOT A FAILURE, BUT A LEFTOVER IS NOT DONE.
 #
@@ -75,9 +83,9 @@ STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 #     packaged layout — nothing to do", changed nothing, and left a box that had
 #     been told it converted and had not.
 #
-#   [ -f "$INSTALL_DIR/lib/..." ]  reads AGENT_HUB_INSTALL_DIR out of the env
+#   [ -f "$INSTALL_DIR/lib/..." ]  reads FLEETWRIGHT_INSTALL_DIR out of the env
 #     file, and NOTHING EVER WRITES IT — src/config.js has a default and the
-#     installer never records one. So this is really a hardcoded /opt/agent-fleet
+#     installer never records one. So this is really a hardcoded /opt/fleetwright-src
 #     wearing a variable's clothes, and it stays false even after a successful
 #     migration.
 #
@@ -104,7 +112,8 @@ STATE_DIR="$(env_get AGENT_HUB_STATE_DIR)"
 # still checked against the manifest's sha256, the manifest URL still comes from
 # the root-owned env file, and the units still run as the service user.
 UNIT_DIR="${FLEETWRIGHT_UNIT_DIR:-/etc/systemd/system}"
-UNIT="$UNIT_DIR/agent-hub.service"
+UNIT="$UNIT_DIR/fleetwright.service"
+[ -f "$UNIT" ] || [ ! -f "$UNIT_DIR/agent-hub.service" ] || UNIT="$UNIT_DIR/agent-hub.service"
 CONVERTED=no
 if [ -f "$UNIT" ] && grep '^ExecStart=' "$UNIT" | grep -q "$BASE/current"; then
   CONVERTED=yes
@@ -149,7 +158,7 @@ fi
 
 # The channel picks the address, exactly as src/core/release.js does it. Two
 # paths under the operator's own URL — this cannot be pointed somewhere else.
-CHANNEL="$(env_get AGENT_HUB_RELEASE_CHANNEL)"
+CHANNEL="$(env_get_named FLEETWRIGHT_RELEASE_CHANNEL)"
 [ -n "$CHANNEL" ] || CHANNEL="$(cat "$STATE_DIR/release-channel" 2>/dev/null || echo stable)"
 case "$CHANNEL" in
   rolling|prerelease)
@@ -264,11 +273,11 @@ fi
 # the directories; --repair also re-applies the sudoers rules from the answers
 # already in the env file, which is the drift a shell used to be the only cure
 # for. Neither asks a question. The installer restarts the services itself,
-# agent-hub included, and KillMode=process is what lets this helper outlive the
+# fleetwright included, and KillMode=process is what lets this helper outlive the
 # process that called it.
 if [ "$HEAL" = yes ]; then
   say "running the installer from the verified release, with --repair"
-  AGENT_FLEET_PAYLOAD="$BASE/current" bash "$WORK/release/install/install.sh" --repair
+  FLEETWRIGHT_PAYLOAD="$BASE/current" bash "$WORK/release/install/install.sh" --repair
   exit $?
 fi
 
@@ -314,4 +323,4 @@ say "laid out $BASE/releases/$VERSION"
 # heals a box anyway — a release has to carry a correct installer now, and CI
 # runs it (test/packaged-installer.test.js) so one that does not never ships.
 say "running the installer from the verified release"
-AGENT_FLEET_PAYLOAD="$BASE/current" exec bash "$WORK/release/install/install.sh" --upgrade
+FLEETWRIGHT_PAYLOAD="$BASE/current" exec bash "$WORK/release/install/install.sh" --upgrade

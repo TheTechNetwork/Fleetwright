@@ -28,18 +28,19 @@
 # the root-owned env file, exactly as fleetwright-migrate reads its manifest URL.
 set -eu
 
-ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/agent-hub.env}"
+ENV_FILE="${FLEETWRIGHT_ENV_FILE:-/etc/fleetwright.env}"
+[ -f "$ENV_FILE" ] || [ ! -f /etc/agent-hub.env ] || ENV_FILE=/etc/agent-hub.env
 log() { printf '%s\n' "$*"; }
 
 # BEING ABLE TO WRITE IS THE REQUIREMENT, NOT BEING ROOT — the same rule
 # fleetwright-migrate and bootstrap.sh state, so the whole path is testable
 # against a temporary tree instead of only ever on a real box.
-BASE="${AGENT_FLEET_BASE:-}"
+BASE="${FLEETWRIGHT_BASE:-}"
 if [ -z "$BASE" ]; then
   # Read it the way systemd does — take the value, never source the file, which
   # would execute whatever is in it in a root shell.
-  BASE="$(sed -n 's/^AGENT_HUB_INSTALL_DIR=//p' "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
-  # AGENT_HUB_INSTALL_DIR points at `<base>/current`; the releases live one level
+  BASE="$(sed -n 's/^FLEETWRIGHT_INSTALL_DIR=//p' "$ENV_FILE" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+  # FLEETWRIGHT_INSTALL_DIR points at `<base>/current`; the releases live one level
   # up. Absent, the default layout is /opt/fleetwright.
   case "$BASE" in
     */current) BASE="${BASE%/current}" ;;

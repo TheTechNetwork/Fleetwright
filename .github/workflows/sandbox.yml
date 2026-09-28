@@ -72,7 +72,7 @@ jobs:
 
       # THE SAME IMAGE WITH A BROWSER IN IT, as a separate tag rather than a
       # bigger default. Nobody pays for a capability they are not using: a box
-      # that wants one is pointed at `:web` with AGENT_HUB_SANDBOX_IMAGE, and
+      # that wants one is pointed at `:web` with FLEETWRIGHT_SANDBOX_IMAGE, and
       # every other box keeps the minimal image the Containerfile argues for.
       #
       # Built from the same file with one build-arg, so the two cannot drift —
@@ -127,7 +127,7 @@ jobs:
           file: sandbox/Containerfile
           platforms: linux/amd64
           load: true
-          tags: agent-session:smoke
+          tags: fleetwright-session:smoke
           cache-from: type=gha
 
       # --entrypoint is overridden deliberately: tini + entrypoint.sh ends by
@@ -136,8 +136,8 @@ jobs:
       - name: Everything a session expects to find on PATH
         run: |
           set -eu
-          docker run --rm --entrypoint sh agent-session:smoke -euc '
-            for tool in node npm git rg gh claude fleet-cred git-credential-fleet agent-session-hook; do
+          docker run --rm --entrypoint sh fleetwright-session:smoke -euc '
+            for tool in node npm git rg gh claude fleet-cred git-credential-fleet fleetwright-session-hook; do
               command -v "$tool" >/dev/null || { echo "MISSING: $tool"; exit 1; }
             done
             node --version
@@ -160,8 +160,8 @@ jobs:
       - name: The browser variant starts, and says whether it keeps its sandbox
         run: |
           set -eu
-          docker build --build-arg WITH_CHROMIUM=1 -t agent-session:web -f sandbox/Containerfile sandbox/
-          docker run --rm --entrypoint sh agent-session:web -euc '
+          docker build --build-arg WITH_CHROMIUM=1 -t fleetwright-session:web -f sandbox/Containerfile sandbox/
+          docker run --rm --entrypoint sh fleetwright-session:web -euc '
             command -v chromium >/dev/null || { echo "MISSING: chromium"; exit 1; }
             chromium --version
             page="data:text/html,<h1>fleetwright</h1>"
@@ -211,7 +211,7 @@ jobs:
         timeout-minutes: 2
         run: |
           set -eu
-          docker run --rm --entrypoint sh agent-session:smoke -euc '
+          docker run --rm --entrypoint sh fleetwright-session:smoke -euc '
             gh --version
             set +e
             out=$(wrangler --version 2>&1); rc=$?
@@ -230,12 +230,12 @@ jobs:
       - name: The dialogs nobody is there to answer are pre-answered
         run: |
           set -eu
-          docker run --rm --entrypoint node agent-session:smoke -e '
+          docker run --rm --entrypoint node fleetwright-session:smoke -e '
             const state = require("/root/.claude.json");
             const work = state.projects?.["/work"] ?? {};
             if (!work.hasTrustDialogAccepted) throw new Error("folder trust is not pre-accepted for /work");
             if (!state.hasCompletedOnboarding) throw new Error("onboarding is not pre-completed");
-            const settings = require("/etc/agent-session/settings.json");
+            const settings = require("/etc/fleetwright-session/settings.json");
             if (!settings.skipDangerousModePermissionPrompt) throw new Error("the dangerous-mode prompt is not skipped");
             console.log("--- both dialogs answered ---");
           '
@@ -247,8 +247,8 @@ jobs:
       - name: The entrypoint seeds a first session
         run: |
           set -eu
-          docker run --rm --tmpfs /root/.claude:rw agent-session:smoke true
-          docker run --rm --tmpfs /root/.claude:rw --entrypoint sh agent-session:smoke -euc '
+          docker run --rm --tmpfs /root/.claude:rw fleetwright-session:smoke true
+          docker run --rm --tmpfs /root/.claude:rw --entrypoint sh fleetwright-session:smoke -euc '
             /usr/local/bin/entrypoint true
             test -f /root/.claude/settings.json || { echo "the entrypoint did not seed settings.json"; exit 1; }
             grep -q skipDangerousModePermissionPrompt /root/.claude/settings.json

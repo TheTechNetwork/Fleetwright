@@ -2,7 +2,7 @@
 //
 //   node --test test/
 //
-// docs/recommendations-review.md §7: agent-hub.service could not keep
+// docs/recommendations-review.md §7: fleetwright.service could not keep
 // ProtectSystem while its grant was `apt-get -y upgrade`, because sudo does
 // not escape the hub's mount namespace and an upgrade cannot live inside one.
 // The way out the unit named — a oneshot with no sandboxing, and a grant to
@@ -23,7 +23,7 @@ const here = (/** @type {string} */ p) => new URL(`../${p}`, import.meta.url).pa
 const has = (/** @type {string} */ bin) => spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).status === 0;
 
 test('both units are ones systemd will load, and neither takes an argument', (t) => {
-  for (const unit of ['install/agent-hub-upgrade.service', 'install/agent-hub-apt-update.service']) {
+  for (const unit of ['install/fleetwright-upgrade.service', 'install/fleetwright-apt-update.service']) {
     const text = readFileSync(here(unit), 'utf8');
     assert.match(text, /^Type=oneshot$/m, unit);
     assert.match(text, /^User=root$/m, unit);
@@ -33,14 +33,14 @@ test('both units are ones systemd will load, and neither takes an argument', (t)
     // apply to it.
     assert.doesNotMatch(text, /^Protect|^Private|^NoNewPrivileges|^Restrict/m, `${unit} sandboxes the thing that must not be sandboxed`);
     // The noninteractive flags live here now, not in a sudoers env_keep.
-    if (unit.includes('agent-hub-upgrade')) {
+    if (unit.includes('fleetwright-upgrade')) {
       assert.match(text, /--force-confold/);
       assert.match(text, /--force-confdef/);
       assert.match(text, /^Environment=DEBIAN_FRONTEND=noninteractive$/m);
     }
   }
   if (!has('systemd-analyze')) return t.skip('no systemd-analyze on this box');
-  const r = spawnSync('systemd-analyze', ['verify', here('install/agent-hub-upgrade.service'), here('install/agent-hub-apt-update.service')], { encoding: 'utf8' });
+  const r = spawnSync('systemd-analyze', ['verify', here('install/fleetwright-upgrade.service'), here('install/fleetwright-apt-update.service')], { encoding: 'utf8' });
   assert.equal(r.status, 0, `systemd-analyze verify: ${r.stderr}${r.stdout}`);
 });
 
@@ -48,8 +48,8 @@ test('the grant the installer writes is one visudo accepts, and names only the t
   const installer = readFileSync(here('install/install.sh'), 'utf8');
   const fn = /write_upgrade_sudoers\(\) \{[\s\S]*?\n\}/.exec(installer)?.[0] ?? '';
   assert.ok(fn, 'write_upgrade_sudoers is gone');
-  assert.match(fn, /systemctl start agent-hub-upgrade\.service/);
-  assert.match(fn, /systemctl start agent-hub-apt-update\.service/);
+  assert.match(fn, /systemctl start fleetwright-upgrade\.service/);
+  assert.match(fn, /systemctl start fleetwright-apt-update\.service/);
   assert.doesNotMatch(fn, /printf '[^']*apt-get/, 'an apt-get line is back in the grant');
   assert.doesNotMatch(fn, /env_keep/, 'DEBIAN_FRONTEND rides in the unit now, not through sudo');
 
@@ -57,7 +57,7 @@ test('the grant the installer writes is one visudo accepts, and names only the t
   // The exact line the installer prints, with a real user name substituted.
   const dir = mkdtempSync(path.join(tmpdir(), 'sudoers-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 'agent-hub-upgrade');
+  const file = path.join(dir, 'fleetwright-upgrade');
   writeFileSync(
     file,
     `agent ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}\n`,
@@ -101,21 +101,21 @@ test('a box whose grant predates the unit falls back to the apt-get lines it is 
   // a clean signal that this box has the old rule — and refusing to upgrade
   // at all would be worse than upgrading the way it always has.
   const { exec, calls } = fakeExec([
-    { match: /systemctl start/, status: 1, stderr: 'Sorry, user agent is not allowed to execute \'/usr/bin/systemctl start agent-hub-upgrade.service\' as root' },
+    { match: /systemctl start/, status: 1, stderr: 'Sorry, user agent is not allowed to execute \'/usr/bin/systemctl start fleetwright-upgrade.service\' as root' },
     { match: /force-confold/, status: 1, stderr: 'Sorry, user agent is not allowed to execute' },
   ]);
   let n = 0;
   const r = runUpgrade(cfg, { exec, updates: () => (n++ === 0 ? waiting() : done()) });
   assert.equal(r.ok, true, r.text);
   assert.equal(calls.length, 3);
-  assert.match(calls[0], /systemctl start agent-hub-upgrade\.service$/);
+  assert.match(calls[0], /systemctl start fleetwright-upgrade\.service$/);
   assert.match(calls[1], /apt-get -y -o Dpkg::Options::=--force-confold/);
   assert.equal(calls[2], 'sudo -n /usr/bin/apt-get -y upgrade');
 });
 
 test('a failed unit reports what apt said, read from the journal', () => {
   const { exec, calls } = fakeExec([
-    { match: /systemctl start/, status: 1, stderr: 'Job for agent-hub-upgrade.service failed because the control process exited with error code.' },
+    { match: /systemctl start/, status: 1, stderr: 'Job for fleetwright-upgrade.service failed because the control process exited with error code.' },
     { match: /^journalctl/, status: 0, stdout: "dpkg: error processing archive\nunable to create '/etc/debian_version.dpkg-new': Read-only file system" },
   ]);
   const r = runUpgrade(cfg, { exec, updates: waiting });

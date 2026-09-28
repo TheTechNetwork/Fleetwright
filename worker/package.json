@@ -1,5 +1,5 @@
 {
-  "name": "agent-fleet-worker",
+  "name": "fleetwright-worker",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,13 +9,13 @@
     "test": "node --test test/"
   },
   "devDependencies": {
-    "wrangler": "4.134.0"
+    "wrangler": "4.141.0"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
-    "@sentry/cloudflare": "10.75.0"
+    "@sentry/cloudflare": "11.0.0"
   },
   "overrides": {
     "sharp": "0.35.4"

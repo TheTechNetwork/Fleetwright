@@ -261,7 +261,7 @@ export function promptId(name, prompt) {
  * question than the one on its own button. So the app holds only the words, and
  * the number is resolved HERE, against the labels this pane actually rendered.
  *
- * IT DOES NOT DEPEND ON AGENT_FLEET_PROMPT_TEXT, which is the property that
+ * IT DOES NOT DEPEND ON FLEETWRIGHT_PROMPT_TEXT, which is the property that
  * makes this worth having at all. The labels are matched on the box and never
  * leave it; what travels is a slot and a digit. A fleet that has decided its
  * notifications may not quote a session still gets answerable ones, because the
