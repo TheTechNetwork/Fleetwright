@@ -332,7 +332,7 @@ test('the shorthand route is not a way around any of this', async () => {
   // credential to reach, and "the check is skipped because nobody passed a
   // requester" is invisible in any test that passes one.
   const { readFileSync } = await import('node:fs');
-  for (const file of ['../src/fleet/coordinator/server.js', '../worker/src/fleet-do.js']) {
+  for (const file of ['./helpers/node-coordinator.js', '../worker/src/fleet-do.js']) {
     const src = readFileSync(new URL(file, import.meta.url), 'utf8');
     // Every dispatch call carries a requester. A missing one reads as
     // "do not filter", so forgetting it is the fail-OPEN direction.

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import { HostRegistry, HEALTH_STALE_MS } from '../src/fleet/coordinator/registry.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
@@ -341,7 +341,7 @@ test('list fans out to every host', () => {
  * Going through the actual endpoint rather than poking core.hostIds keeps the
  * enrolment path itself under test in every end-to-end case.
  *
- * @param {import('../src/fleet/coordinator/server.js').Coordinator} coordinator
+ * @param {import('./helpers/node-coordinator.js').Coordinator} coordinator
  * @param {number} port
  * @param {string} hostId
  */

@@ -21,7 +21,7 @@ import { checkParams } from '../src/fleet/protocol/intents.js';
 
 const sources = () => ({
   worker: readFileSync(new URL('../worker/src/fleet-do.js', import.meta.url), 'utf8'),
-  node: readFileSync(new URL('../src/fleet/coordinator/server.js', import.meta.url), 'utf8'),
+  node: readFileSync(new URL('./helpers/node-coordinator.js', import.meta.url), 'utf8'),
 });
 
 test('checkParams already refuses a non-object, which is why the coercion hid it', () => {

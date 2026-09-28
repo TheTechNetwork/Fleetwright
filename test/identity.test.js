@@ -11,7 +11,7 @@ import { mkdtempSync, writeFileSync, chmodSync, statSync, readFileSync } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import { Enrollment } from '../src/fleet/coordinator/enrollment.js';
 import { loadOrCreateKey, enrol, checkEnrolled, proveIdentity } from '../src/fleet/host/identity.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';

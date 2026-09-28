@@ -20,7 +20,7 @@ import http2 from 'node:http2';
  * both slow and something they will eventually throttle.
  *
  * @param {string} [host]
- * @returns {import('./push.js').Deliver}
+ * @returns {import('../../src/fleet/push.js').Deliver}
  */
 export function http2Deliver(host = 'api.push.apple.com') {
   /** @type {import('node:http2').ClientHttp2Session|null} */

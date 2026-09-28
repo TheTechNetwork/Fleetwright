@@ -155,7 +155,7 @@ jobs:
       # here, with the offending import named.
       #
       # A grep was tried first and was worse in both directions. It failed on
-      # src/fleet/coordinator/server.js, which is the NODE-ONLY transport
+      # test/helpers/node-coordinator.js, which is the NODE-ONLY transport
       # wrapper and is supposed to import node:http — while the file that
       # actually matters, core.js, is imported by both and was already clean.
       # The bundler knows which files are reachable; a grep is guessing.

@@ -31,7 +31,7 @@ import path from 'node:path';
 
 import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
 import { connectWebSocket } from '../../src/fleet/ws.js';
-import { Coordinator } from '../../src/fleet/coordinator/server.js';
+import { Coordinator } from '../../test/helpers/node-coordinator.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 
 const requireWorker = createRequire(new URL('../package.json', import.meta.url));

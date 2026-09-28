@@ -106,7 +106,7 @@ test('both coordinators gate invites the same way, in every direction', () => {
   // rule, both files, asserted here rather than hoped for.
   const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
   for (const [name, file] of [
-    ['Node', 'src/fleet/coordinator/server.js'],
+    ['Node', 'test/helpers/node-coordinator.js'],
     ['Worker', 'worker/src/fleet-do.js'],
   ]) {
     const src = read(file);

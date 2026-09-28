@@ -14,10 +14,10 @@
 // the real runtime saw it — which is the job this repository added after an
 // outage that existed only in workerd, and it has now paid for itself twice.
 //
-// It cannot live in coordinator/server.js either, which is where the Node
-// coordinator would naturally keep it: worker.js importing that would drag
-// `node:http` into the Worker bundle, which is what worker.yml's dry-run
-// exists to refuse.
+// It cannot live with the Node coordinator either (test/helpers/
+// node-coordinator.js now, a test harness rather than the product): worker.js
+// importing that would drag `node:http` into the Worker bundle, which is what
+// worker.yml's dry-run exists to refuse.
 //
 // Substituted at serve time by both coordinators, so the document names
 // whoever is serving it rather than whoever wrote it — a fork's /openapi.json

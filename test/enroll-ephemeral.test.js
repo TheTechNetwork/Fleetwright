@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 //
 // Source-level, because the failure was structural rather than behavioural:
 // nothing was wrong with any function, and no test of a function could see it.
-const SERVER = readFileSync(new URL('../src/fleet/coordinator/server.js', import.meta.url), 'utf8');
+const SERVER = readFileSync(new URL('./helpers/node-coordinator.js', import.meta.url), 'utf8');
 const DO = readFileSync(new URL('../worker/src/fleet-do.js', import.meta.url), 'utf8');
 const OPENAPI = JSON.parse(readFileSync(new URL('../openapi.json', import.meta.url), 'utf8'));
 const IOS = readFileSync(new URL('../apps/ios/Fleetwright/Fleet.swift', import.meta.url), 'utf8');

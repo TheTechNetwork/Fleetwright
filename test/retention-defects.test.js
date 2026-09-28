@@ -21,7 +21,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { ClientRegistry } from '../src/fleet/coordinator/clients.js';
 import { emailOf } from '../src/fleet/coordinator/enrollment.js';

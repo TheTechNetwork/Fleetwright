@@ -282,7 +282,7 @@ person. The direct path needs no app change at all — the hex encoding in
 ### HTTP/2
 
 APNs requires it. A Worker's `fetch` negotiates HTTP/2; Node's does not. Rather
-than add undici, the transport is injected: `src/fleet/apns-node.js` uses
+than add undici, the transport is injected: `test/helpers/apns-node.js` (a Node-only sender the Worker never ran, kept beside the Node coordinator it served) uses
 `node:http2`, which is already in the runtime, and the Worker keeps the default
 `fetch`. That is also why the import lives outside `push.js` — `node:http2` does
 not exist in a Worker and importing it would break the bundle.

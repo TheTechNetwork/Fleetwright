@@ -28,7 +28,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 

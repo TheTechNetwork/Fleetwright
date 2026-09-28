@@ -156,7 +156,7 @@ test('both coordinators serve it, and serve the same bytes', async () => {
   // because what drifts is the WIRING: one of them forgetting the route, or
   // putting it below the credential gate where an invited person cannot reach
   // it.
-  const { Coordinator } = await import('../src/fleet/coordinator/server.js');
+  const { Coordinator } = await import('./helpers/node-coordinator.js');
   const worker = (await import('../worker/src/worker.js')).default;
 
   const env = {
