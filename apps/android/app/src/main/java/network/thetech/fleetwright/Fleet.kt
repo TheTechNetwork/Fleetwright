@@ -1093,16 +1093,29 @@ class Fleet(
         ephemeral: Boolean = false,
         hostId: String? = null,
         readmit: Boolean = false,
-    ): String = withContext(Dispatchers.IO) {
+    ): MintedPin = withContext(Dispatchers.IO) {
         val body = JSONObject().put("kind", "host").put("ephemeral", ephemeral)
         // OMITTED WHEN ABSENT rather than sent as null: a null hostId binds the
         // pin to nothing and reads, on the wire, as somebody having meant to.
         if (!hostId.isNullOrBlank()) body.put("hostId", hostId).put("readmit", readmit)
         val json = post("/api/enroll", body)
-        json.optString("code").ifBlank {
+        val code = json.optString("code").ifBlank {
             throw IllegalStateException(json.optString("text").ifBlank { "Could not mint a pin." })
         }
+        // `isNull` first: org.json's optString renders a JSON null as the
+        // string "null", which would be shown as a command to paste.
+        val install = if (json.isNull("install")) null else json.optString("install").ifBlank { null }
+        MintedPin(code, install)
     }
+
+    /**
+     * A pin, and — when the coordinator publishes an installer — the one line
+     * that installs a fresh box and joins it with that pin. `install` is null
+     * on a coordinator that does not (its /install answers 404, so the line
+     * would too) and on an older coordinator that omits the field; the screen
+     * then shows the two-step form and nothing that would fail. C-5.
+     */
+    data class MintedPin(val code: String, val install: String?)
 
     /** Remove a machine from the fleet. It is disconnected as well as revoked. */
     suspend fun revokeHost(hostId: String): Reply = withContext(Dispatchers.IO) {
