@@ -1,0 +1,120 @@
+name: apt repository
+
+# THE APT REPOSITORY: stable releases whose rollout is complete, and nothing
+# else. Published to GitHub Pages at <pages>/apt. docs/packaging.md, "Stable
+# releases through apt", says why apt only ever gets these.
+#
+# ITS OWN WORKFLOW, AND NOT A JOB IN host-release.yml, for two reasons:
+#
+#   The github-pages environment deploys from the default branch. A job in a
+#   release run is on the TAG's ref, and the environment refuses it — so the
+#   publish would fail on exactly the event it exists for. `workflow_run` runs
+#   in main's context.
+#
+#   host-release.yml needs no secrets (docs/ci.md), and this one does.
+#
+# STATELESS, DERIVED FROM THE RELEASES. Nothing remembers what was promoted:
+# every run lists the newest published, non-prerelease releases, reads each
+# one's attached manifest.json, and takes the debs of those whose rollout is 1.
+# So a release published at 25% is not in apt, and a run after its rollout
+# reaches 100% — its build re-run, or this workflow run by hand — puts it
+# there. Pages replaces the whole site on every deploy, which is why "rebuild
+# everything from the source of truth" is the shape rather than "append".
+#
+# A FEW VERSIONS, NOT ONE. apt can only downgrade to a version the repository
+# still has, and the previous release is the rollback target — the same rule
+# releasesToPrune keeps on a manifest box.
+#
+# SKIPPED WITH A NOTICE WITHOUT THE KEY, like every other secret-dependent job
+# here. A fork, or this repository before somebody makes the key, gets a note
+# rather than a red run.
+on:
+  workflow_run:
+    workflows: ['Host release']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # A release's build that succeeded, or somebody asking. A merge to main
+    # also completes Host release, and changes nothing apt carries.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+      # How many stable versions the repository keeps. Two is the floor: the
+      # live one and the one to roll back to.
+      APT_KEEP: '3'
+    steps:
+      - name: Is there a key?
+        id: key
+        run: |
+          if [ -z "$APT_SIGNING_KEY" ]; then
+            echo "::notice::APT_SIGNING_KEY is not set, so the apt repository was not published. docs/ci.md says how to make one."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7.0.1
+        if: steps.key.outputs.present == 'true'
+
+      - name: Collect the stable releases whose rollout is complete
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p debs
+          taken=0
+          for tag in $(gh release list --exclude-drafts --exclude-pre-releases --limit 20 --json tagName --jq '.[].tagName'); do
+            [ "$taken" -lt "$APT_KEEP" ] || break
+            rm -rf rel && mkdir rel
+            gh release download "$tag" -D rel -p manifest.json -p '*.deb' 2>/dev/null || true
+            if [ ! -f rel/manifest.json ] || ! ls rel/*.deb >/dev/null 2>&1; then
+              echo "$tag: no manifest or no debs — skipped"; continue
+            fi
+            rollout="$(jq -r '.rollout // 1' rel/manifest.json)"
+            if [ "$(jq -n --argjson r "$rollout" '$r >= 1')" != "true" ]; then
+              echo "$tag: rollout $rollout — not complete, not in apt yet"; continue
+            fi
+            echo "$tag: rollout complete — in apt"
+            mv rel/*.deb debs/
+            taken=$((taken + 1))
+          done
+          [ "$taken" -gt 0 ] || { echo "::error::no stable release is ready for apt"; exit 1; }
+
+      - name: Build and sign the repository
+        if: steps.key.outputs.present == 'true'
+        run: |
+          command -v apt-ftparchive >/dev/null || sudo apt-get install -y -qq apt-utils
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          key="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')"
+          tools/build-apt-repo.sh debs site/apt "$key"
+          rm -rf "$GNUPGHOME"
+
+      - uses: actions/upload-pages-artifact@v5.0.0
+        if: steps.key.outputs.present == 'true'
+        with:
+          path: site
+
+      - name: Publish
+        id: deploy
+        if: steps.key.outputs.present == 'true'
+        uses: actions/deploy-pages@v5.0.1

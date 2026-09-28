@@ -54,6 +54,20 @@ die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 
 say "Fleetwright"
 
+# --- a box apt owns ------------------------------------------------------------
+#
+# Refused, not reinstalled over. The deb put this box's release in place and
+# apt decides the next one; running the one-liner here would lay a second
+# release beside it and move `current`, and the next apt upgrade would move it
+# back. Two updaters taking turns is the thing the package exists to avoid.
+if command -v dpkg-query >/dev/null 2>&1 \
+   && [ "$(dpkg-query -W -f='${Status}' fleetwright 2>/dev/null || true)" = "install ok installed" ]; then
+  die "this box has the fleetwright package, so apt installs and updates it.
+       Update:            sudo apt update && sudo apt upgrade
+       Join a fleet:      sudo dpkg-reconfigure fleetwright
+       Switch to this installer instead:  sudo apt remove fleetwright, then run this again"
+fi
+
 # --- which way in -------------------------------------------------------------
 #
 # Decided before anything is touched, because the two routes check different

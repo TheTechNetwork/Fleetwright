@@ -1,0 +1,29 @@
+#!/bin/sh
+# debconf's half of joining a fleet: the questions, asked where apt asks them.
+#
+# ASKED ON A FRESH INSTALL AND ON dpkg-reconfigure, NEVER ON AN UPGRADE. An
+# upgrade is a box that already knows its fleet, and a prompt in the middle of
+# `apt upgrade` for something it already answered is the kind of question that
+# gets answered wrong at 2am. Preseed both for an unattended install:
+#
+#   echo 'fleetwright fleetwright/coordinator-url string https://fleet.example.com' | debconf-set-selections
+#   echo 'fleetwright fleetwright/pin password 123456' | debconf-set-selections
+set -e
+. /usr/share/debconf/confmodule
+
+case "$1" in
+  configure)
+    # $2 is the version being upgraded from; empty means this is the first.
+    [ -z "${2:-}" ] || exit 0 ;;
+  reconfigure) ;;
+  *) exit 0 ;;
+esac
+
+db_input low fleetwright/user || true
+db_input high fleetwright/coordinator-url || true
+db_go || true
+db_get fleetwright/coordinator-url
+if [ -n "$RET" ]; then
+  db_input high fleetwright/pin || true
+  db_go || true
+fi

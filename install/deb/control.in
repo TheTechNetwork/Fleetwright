@@ -1,0 +1,17 @@
+Package: fleetwright
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Installed-Size: @SIZE@
+Depends: debconf (>= 0.5) | debconf-2.0, tmux, curl, ca-certificates, sudo, tar, gzip
+Recommends: podman, uidmap
+Section: admin
+Priority: optional
+Homepage: https://github.com/TheTechNetwork/Fleetwright
+Description: Fleetwright host: Claude Code sessions a fleet can reach
+ The session manager (agent-hub), the fleet sidecar and the MCP server, laid
+ out under /opt/fleetwright exactly as the one-line installer lays them out,
+ with the Node runtime they need carried in /usr/lib/fleetwright/node.
+ .
+ Only stable releases whose rollout is complete are published here. A box
+ installed from this package takes its updates from apt.

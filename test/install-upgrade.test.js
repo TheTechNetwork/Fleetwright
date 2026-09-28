@@ -441,7 +441,11 @@ test('the installer records the manifest the one-liner verified against, before 
   // hands the address down in the environment, and the installer writes that
   // one — the address the tarball was just checked against — ahead of the one
   // it would derive from a checkout's origin.
-  const block = SH.slice(SH.indexOf('if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then'));
+  // Anchored on the start of the condition: it continues on a second line
+  // now, which skips the manifest entirely on a box apt owns.
+  const start = SH.indexOf('if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]');
+  assert.ok(start > 0, 'the manifest block is not where this test looks for it');
+  const block = SH.slice(start);
   const told = block.indexOf('if [ -n "${AGENT_HUB_RELEASE_MANIFEST:-}" ]; then');
   const guessed = block.indexOf('elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then');
   assert.ok(told > 0 && guessed > told, 'the environment is consulted before the git remote');
