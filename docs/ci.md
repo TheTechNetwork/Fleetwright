@@ -829,7 +829,7 @@ worse than a red one.
 ## apt — a signed repository on a Worker
 
 `apt-repo.yml` publishes the stable releases whose rollout is complete to
-`https://apt.thetech.network`, signed. `docs/packaging.md`, "Stable releases
+`https://fleet-apt.thetech.network`, signed. `docs/packaging.md`, "Stable releases
 through apt", says why only those. Without the signing key or the Cloudflare
 token it skips with a notice, like every other secret-dependent job here.
 
@@ -863,7 +863,7 @@ hand. Running it again is always safe.
 
 1. **Cloudflare**: nothing new. It deploys with the `CLOUDFLARE_API_TOKEN` and
    `CLOUDFLARE_ACCOUNT_ID` the coordinator already uses, and `custom_domain`
-   creates `apt.thetech.network` on the same zone as `fleet.thetech.network`.
+   creates `fleet-apt.thetech.network` on the same zone as `fleet.thetech.network`.
    To serve it somewhere else, change the one `pattern` in `apt/wrangler.toml`
    and the address in the README.
 2. **The key.** Ed25519, signing only, no passphrase, because CI cannot type

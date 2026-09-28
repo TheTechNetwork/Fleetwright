@@ -1,4 +1,4 @@
-# The apt repository: https://apt.thetech.network
+# The apt repository: https://fleet-apt.thetech.network
 #
 # A WORKER, NOT PAGES, and not only for the logs. A deb is ~29 MB and both
 # Pages and Workers static assets cap a file at 25 MiB, so the packages cannot
@@ -19,7 +19,7 @@ main = "src/index.js"
 compatibility_date = "2026-01-15"
 
 routes = [
-  { pattern = "apt.thetech.network", custom_domain = true }
+  { pattern = "fleet-apt.thetech.network", custom_domain = true }
 ]
 
 [assets]

@@ -28,9 +28,9 @@ const POOL = /^\/pool\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(fleetwright_[0-9][A-Z
 
 const FRONT = `Fleetwright apt repository — stable releases whose rollout is complete.
 
-  curl -fsSL https://apt.thetech.network/fleetwright.gpg \\
+  curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \\
     | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
-  echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://apt.thetech.network stable main" \\
+  echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \\
     | sudo tee /etc/apt/sources.list.d/fleetwright.list
   sudo apt update && sudo apt install fleetwright
   sudo fleetwright join fleet.example.com
