@@ -1,4 +1,5 @@
 {
+  "apt/src/index.js": 100,
   "bin/agent-fleet-mcp": 98,
   "bin/agent-hub": 50,
   "bin/fleetwright": 87,
