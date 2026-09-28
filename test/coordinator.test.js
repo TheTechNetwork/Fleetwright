@@ -679,8 +679,14 @@ test('a revoked host is disconnected and stays out', async (t) => {
 
   // It will retry — that is what the transport does — and every retry must be
   // refused. A revocation that only holds until the host reconnects is not one.
+  //
+  // AND IT IS GONE, NOT OFFLINE. This used to assert `connected === false` on
+  // an entry the registry kept, which is the bug test/retention-defects.test.js
+  // names: a removed host listed as offline until the next restart. Revoking
+  // takes the entry out in the same act, and the retries must not put it back.
   await new Promise((r) => setTimeout(r, 400));
-  assert.equal(coordinator.registry.hosts.get('condemned')?.connected, false);
+  assert.equal(coordinator.registry.hosts.get('condemned'), undefined);
+  assert.equal(coordinator.registry.list().length, 0);
 });
 
 test('a host that drops is marked offline and its work is refused, not misrouted', async (t) => {

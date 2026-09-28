@@ -193,8 +193,12 @@ export class Authorizations {
     if (entry.clientId !== clientId || entry.redirectUri !== redirectUri) return { ok: false, error: 'invalid_grant' };
     // PKCE. The verifier proves the caller is the one that started the flow,
     // which is what stops a stolen code being spent by whoever stole it.
+    // Compared in constant time like every other secret in this repository.
+    // The challenge is a hash the client chose and the verifier is the secret
+    // behind it; a compare that returns early on the first differing byte
+    // leaks how much of a guess was right.
     const expected = await s256(verifier);
-    if (expected !== entry.challenge) return { ok: false, error: 'invalid_grant' };
+    if (!constantTimeEqual(expected, entry.challenge)) return { ok: false, error: 'invalid_grant' };
     return { ok: true, email: entry.email, name: entry.name };
   }
 
@@ -314,6 +318,14 @@ const NEVER_NAVIGATE = new Set([
 export async function s256(verifier) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(verifier || '')));
   return base64url(new Uint8Array(digest));
+}
+
+/** @param {string} a @param {string} b */
+function constantTimeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 /** @param {Uint8Array} bytes */

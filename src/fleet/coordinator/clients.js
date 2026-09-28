@@ -178,6 +178,15 @@ export class ClientRegistry {
   #sweep() {
     const cutoff = this.now() - REVOKED_RETENTION_MS;
     for (const [id, c] of this.clients) {
+      // ADMIN ROWS ARE NEVER SWEPT, revoked or not. everHadAdmin() and
+      // emailHasAdmin() read revoked rows on purpose — the founding of a fleet
+      // happens once, and a person whose every phone was revoked is still the
+      // person. Both were true only for thirty days: the sweep then deleted the
+      // rows they read, the next sign-in became a second founding admin, and
+      // the owner coming back after a month was demoted to member. A fleet has
+      // a handful of admin rows in its whole life; keeping them costs nothing
+      // the 128 KiB ceiling notices.
+      if (c.admin) continue;
       if (c.revokedAt && c.revokedAt < cutoff) this.clients.delete(id);
     }
   }

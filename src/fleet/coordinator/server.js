@@ -42,6 +42,7 @@ import { resource } from '../../core/resources.js';
 import { identify } from './identity.js';
 import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
 import { memberRoutes, isMemberPath, signInClients } from './member-page.js';
+import { emailOf } from './enrollment.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -680,6 +681,12 @@ export class Coordinator {
         owner: spent.entry.ephemeral ? emailOf(spent.entry.actor) : null,
         readmit: spent.entry.readmit,
         boundToThisHost: Boolean(spent.entry.hostId),
+        // EPHEMERAL WAS DROPPED HERE TOO. The mint kept it, hostConnected read it
+        // back off the record, and this call in between never wrote it — so
+        // every pin-minted runner was enrolled permanent, and the retirement
+        // that fires on disconnect never fired. test/enroll-ephemeral.test.js
+        // now enrols one and reads the record.
+        ephemeral: Boolean(spent.entry.ephemeral),
       });
       // Saved either way: the code was spent above whether or not the key that
       // arrived with it was any good, and a spent code that comes back after a
@@ -999,12 +1006,11 @@ export class Coordinator {
       if (existing?.revokedAt) {
         return json(res, 200, { ok: true, text: `${hostId} was already revoked.` });
       }
-      const gone = this.core.hostIds.revoke(hostId);
+      const gone = this.core.revokeHost(hostId);
       if (gone) {
         // Revoked AND disconnected. A revoked host holding a live socket is
         // still in the fleet until something closes it.
         this.connections.get(hostId)?.close(1008, 'revoked');
-        this.core.record({ event: 'host.revoked', hostId });
         this.saveState();
       }
       return json(res, gone ? 200 : 404, {
@@ -1295,10 +1301,6 @@ const DESTRUCTIVE = /^\/api\/(hosts|clients)\//;
  *
  * @param {string|null|undefined} actor
  */
-function emailOf(actor) {
-  const s = String(actor || '');
-  return s.startsWith('fleet:') ? s.slice('fleet:'.length).toLowerCase() || null : null;
-}
 
 
 

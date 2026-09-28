@@ -107,6 +107,21 @@ export class HostRegistry {
     });
   }
 
+  /**
+   * A host that is no longer in the fleet, as opposed to one that dropped.
+   *
+   * `disconnect` keeps the entry as `offline` because a real box may come back.
+   * A REVOKED box may not — its key is refused at the door — so keeping it
+   * meant the app listed a host somebody had just removed as "offline" until
+   * the coordinator restarted, which reads exactly like the removal not taking.
+   * C-5: a screen may not report a state the system knows to be false.
+   *
+   * @param {string} hostId
+   */
+  remove(hostId) {
+    return this.hosts.delete(hostId);
+  }
+
   /** @param {string} hostId @param {string} reason */
   disconnect(hostId, reason = 'socket closed') {
     const host = this.hosts.get(hostId);

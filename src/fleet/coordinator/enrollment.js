@@ -235,3 +235,24 @@ export class Enrollment {
     for (const [code, entry] of this.pending) if (entry.expiresAt <= now) this.pending.delete(code);
   }
 }
+
+/**
+ * The email inside a pin's actor, or null.
+ *
+ * A pin's actor is written by `mint()`'s callers as the VERIFIED EMAIL of the
+ * device credential that minted it — bare, `someone@example.com` — or as
+ * whatever string an admin-token caller chose, which names nobody. Elsewhere
+ * the same person is written `fleet:<email>` (that is what a sidecar records as
+ * `createdBy`), and this function used to accept only that form: so a runner's
+ * owner, computed from a pin actor that never carried the prefix, was always
+ * null, and `ephemeral-ownership` hid every pin-enrolled runner from the
+ * person who minted it. Both spellings name the same person; both are read.
+ *
+ * Lived in server.js until the Worker needed the same answer for the same pin.
+ *
+ * @param {string|null|undefined} actor
+ */
+export function emailOf(actor) {
+  const s = String(actor || '').replace(/^fleet:/, '').trim().toLowerCase();
+  return s.includes('@') ? s : null;
+}

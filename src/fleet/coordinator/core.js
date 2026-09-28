@@ -246,6 +246,27 @@ export class CoordinatorCore {
     }
   }
 
+  /**
+   * Take a host out of the fleet: its key stops being accepted and it leaves
+   * the live picture in the same act.
+   *
+   * Both coordinators used to revoke the key and then treat the socket closing
+   * as an ordinary disconnect, which left the entry in `registry` as `offline`
+   * — still listed, still in `snapshot()`, until a restart. The two halves
+   * belong together, so they are one method, and the event is recorded here
+   * rather than by whichever coordinator remembered to.
+   *
+   * @param {string} hostId
+   * @returns {boolean} false when there was nothing live to revoke
+   */
+  revokeHost(hostId) {
+    const gone = this.hostIds.revoke(hostId);
+    if (!gone) return false;
+    this.registry.remove(hostId);
+    this.record({ event: 'host.revoked', hostId });
+    return true;
+  }
+
   /** @param {string} hostId @param {string} reason */
   hostDisconnected(hostId, reason) {
     this.registry.disconnect(hostId, reason);
