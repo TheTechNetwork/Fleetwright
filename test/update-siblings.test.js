@@ -1,10 +1,11 @@
 // `/update --restart` restarts the hub by exiting and letting systemd bring it
-// back. It cannot restart fleetwright-sidecar or fleetwright-coordinator —
-// those are system units and the service user has no privilege over them.
+// back. It cannot restart fleetwright-sidecar — a system unit the service user
+// has no privilege over. (The coordinator was on this list while a box could run
+// one; it runs as a Worker now.)
 //
-// So on a box running more than one, an update pulls code for all three and
-// applies it to one, while the message said "Restarting now" as though it were
-// finished. That is a false report of completion, which is the failure mode
+// So on a box running both, an update pulls code for both and applies it to
+// one, while the message said "Restarting now" as though it were finished.
+// That is a false report of completion, which is the failure mode
 // this project keeps paying for.
 
 import { test } from 'node:test';
@@ -19,7 +20,7 @@ test('names only units that are actually running', () => {
   const stale = staleSiblings();
   assert.ok(Array.isArray(stale));
   for (const unit of stale) {
-    assert.match(unit, /^fleetwright-(sidecar|coordinator)$/);
+    assert.match(unit, /^fleetwright-sidecar$/);
   }
 });
 

@@ -201,6 +201,50 @@ npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
 Base64 of that file is accepted too, and is what you want if this coordinator
 ever moves to a box — see [`push.md`](./push.md).
 
+## In a container: the same Worker, on a box you own
+
+For whoever will not have a Cloudflare account. This is **not** a second
+implementation and must never become one: `worker/Containerfile` builds the
+bundle `wrangler deploy` would ship and runs it under `workerd`, the runtime
+Cloudflare runs it on, with the Durable Object's SQLite on a volume.
+`worker/workerd.capnp` is the whole configuration; every variable the Worker
+reads arrives as an environment variable.
+
+```sh
+# from the repository root, not worker/ — the Worker imports ../src
+podman build -f worker/Containerfile -t fleetwright-coordinator .
+podman run -d --name coordinator -p 8787:8787 -v coordinator-state:/data \
+  -e FLEETWRIGHT_API_TOKEN=$(openssl rand -hex 24) \
+  -e FLEETWRIGHT_AUTH_ISSUERS=https://accounts.google.com,https://appleid.apple.com \
+  -e FLEETWRIGHT_AUTH_AUDIENCES=network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com \
+  -e FLEETWRIGHT_AUTH_ALLOW=you@example.com \
+  -e FLEETWRIGHT_PUBLIC_ORIGIN=https://fleet.example.com \
+  fleetwright-coordinator
+```
+
+**Put TLS in front of it.** It listens on plain HTTP on 8787; hosts pin the
+origin and phones speak HTTPS, so `FLEETWRIGHT_PUBLIC_ORIGIN` is the `https://`
+address your proxy answers on, and every URL the coordinator hands out is built
+from it.
+
+**What is proven, and what is not**, stated because the decision in
+[`auth-and-join.md`](./auth-and-join.md) was to put this in the install guide
+only after a week under real hosts. From a clean tree the bundle has been
+started under raw `workerd` with disk-backed storage and driven through
+`/healthz`, `/api/hosts` and pin minting; the SQLite landed under `/data` and
+the pin was still pending after a restart. It has **not** carried a real host's
+socket for a week. Three Cloudflare bindings have no counterpart here and are
+absent rather than emulated:
+
+| binding | on Cloudflare | here |
+|---|---|---|
+| `SIGNIN_RATE_LIMIT` | ten sign-ins a minute per address | unmetered — `worker.js` guards every use; rate-limit at your proxy |
+| `EMAIL` | invitations are sent | an invite says no mailer is configured, and carries no email |
+| Sentry | reports to the project's DSN | silent unless you set `SENTRY_DSN` |
+
+So this page still says Cloudflare, and the container is a
+[`ROADMAP.md`](../ROADMAP.md) row until the week exists.
+
 ## A demo fleet, on its own Worker
 
 **`fleetdemo.thetech.network`**, a separate script:
@@ -441,8 +485,9 @@ to open on the host.
 `src/fleet/coordinator/core.js`, `registry.js`, `scheduler.js`,
 `protocol/intents.js` and `push.js` import **nothing** from `node:`. That is
 enforced by the fact that the Worker build would break otherwise, and it is why
-`bin/fleetwright-coordinator` (plain Node, for testing the whole loop on one
-box) and the Worker are not two implementations that drift.
+the container image above and the Worker are not two implementations that
+drift: they are one bundle. (A plain-Node coordinator used to be the second
+runtime; it left the package in [`auth-and-join.md`](./auth-and-join.md).)
 
 `nodejs_compat` is deliberately not enabled — needing it would mean that
 property had quietly stopped being true.

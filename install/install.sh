@@ -1849,58 +1849,53 @@ fi
 
 install_unit fleetwright
 install_unit fleetwright-sidecar
-# ONLY IF THE PAYLOAD HAS ONE. A release deliberately ships no coordinator —
-# that moved to a Cloudflare Worker — so writing this unit on a packaged box
-# produces a service pointing at a file that was never in the tarball, which
-# fails at every start and is reported as a broken box rather than as a
-# component that is not supposed to be here.
-#
-# A checkout still has it, so a box running its own coordinator keeps working
-# and `--from-source` keeps that possible on purpose.
-if [ -f "$DIR/bin/fleetwright-coordinator" ]; then
-  install_unit fleetwright-coordinator
-else
-  ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
+# NO COORDINATOR UNIT, ON ANY BOX. The coordinator runs as a Cloudflare Worker
+# (docs/coordinator-deploy.md) — or as that same Worker under workerd in a
+# container — and is no longer part of what a host installs. A release never
+# shipped one; a checkout used to, and offering it here is what this installer
+# stopped doing (docs/auth-and-join.md). Nothing is written for it.
+ok "no coordinator unit — it runs as a Worker, not on this box"
 
-  # AND RETIRE A LEFTOVER LOCAL ONE. A release ships no coordinator, so a
-  # packaged box that still has an fleetwright-coordinator unit is carrying a
-  # checkout artifact from before it was packaged: a loopback coordinator with no
-  # hosts, drifting on old code that no update here touches — the coordinator is
-  # not in the payload, so applyRelease and this installer both pass it by, and
-  # it sits on whatever protocol it was last built at. If the sidecar on this box
-  # talks to a REMOTE coordinator, the local one serves nothing; disable it so
-  # the box stops running a service it migrated away from. This rides root's half
-  # of every packaged update (install.sh --repair), so it needs no shell.
-  #
-  # ONLY WHEN REMOTE IS CONFIRMED. A box that genuinely runs its own coordinator
-  # points its sidecar at it over stdio or loopback, and that one is in use — so
-  # an unset, `stdio:`, or 127.0.0.1/localhost URL leaves the unit alone. Only a
-  # non-loopback URL is proof the fleet meets elsewhere.
-  #
-  # REMOVE THE UNIT, DO NOT JUST DISABLE IT. `disable --now` stops the service
-  # and clears its boot symlinks but LEAVES THE UNIT FILE — and section 9 below
-  # restarts every unit `list-unit-files` still reports, so a disable here was
-  # undone by a restart in the same run, and the leftover reappeared on the next
-  # update besides. Deleting the file and reloading is what makes the retirement
-  # stick: nothing can find it to restart, this run or any later one.
-  if [ "$PLATFORM" != macos ] && [ -f /etc/systemd/system/fleetwright-coordinator.service ]; then
-    COORD_URL="$(sed -n 's/^FLEETWRIGHT_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
-    case "$COORD_URL" in
-      ''|stdio:*|*127.0.0.1*|*localhost*)
-        : ;;  # local, loopback, or unset — the local coordinator may be in use
-      *://*)
-        systemctl disable --now fleetwright-coordinator >/dev/null 2>&1 || true
-        stop_legacy_unit fleetwright-coordinator
-        rm -f /etc/systemd/system/fleetwright-coordinator.service
-        systemctl daemon-reload >/dev/null 2>&1 || true
-        ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
-        # The env and state stay: harmless, and removing them is a bigger
-        # decision than "stop running a service you migrated away from".
-        ;;
-      *)
-        : ;;  # not a URL shape we recognise — leave it rather than guess
-    esac
-  fi
+# AND RETIRE A LEFTOVER ONE. A box that ran its own coordinator from a checkout
+# still has the unit — under its new name, since migrate_legacy_names moved it
+# — pointing at a binary this tree no longer contains, so it would crash-loop
+# under Restart=always from the next restart on. Two cases:
+#
+#   REMOTE URL — the sidecar already talks to a coordinator elsewhere, so the
+#   local one served nothing. Retired silently; this rides root's half of every
+#   packaged update (install.sh --repair), so it needs no shell.
+#
+#   LOOPBACK, STDIO OR UNSET — this box WAS its own fleet. The unit is still
+#   retired, because there is nothing left for it to run, and the box is told
+#   in so many words what to do next: deploy the Worker and point the sidecar
+#   at it. Its membership list stays in /var/lib/fleetwright-coordinator, and
+#   the env file stays too; removing either is a bigger decision than "stop
+#   running a service that no longer exists".
+#
+# REMOVE THE UNIT, DO NOT JUST DISABLE IT. `disable --now` stops the service
+# and clears its boot symlinks but LEAVES THE UNIT FILE — and section 9 below
+# restarts every unit `list-unit-files` still reports, so a disable here was
+# undone by a restart in the same run, and the leftover reappeared on the next
+# update besides. Deleting the file and reloading is what makes the retirement
+# stick: nothing can find it to restart, this run or any later one.
+if [ "$PLATFORM" != macos ] && { [ -f /etc/systemd/system/fleetwright-coordinator.service ] \
+     || [ -f /etc/systemd/system/agent-fleet-coordinator.service ]; }; then
+  COORD_URL="$(sed -n 's/^FLEETWRIGHT_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+  systemctl disable --now fleetwright-coordinator >/dev/null 2>&1 || true
+  systemctl disable --now agent-fleet-coordinator >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/fleetwright-coordinator.service /etc/systemd/system/agent-fleet-coordinator.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  case "$COORD_URL" in
+    ''|stdio:*|*127.0.0.1*|*localhost*)
+      warn "this box ran its own coordinator, and that is no longer shipped: the unit is retired.
+       The fleet now meets at a Cloudflare Worker — docs/coordinator-deploy.md is five
+       commands — then point this box at it in $SIDECAR_ENV:
+           FLEETWRIGHT_COORDINATOR_URL=https://your-coordinator
+       and enrol it there with a pin from the app. Its old membership list is kept at
+       /var/lib/fleetwright-coordinator for reference; nothing reads it any more." ;;
+    *)
+      ok "retired the leftover local coordinator — this box uses the remote one ($COORD_URL)" ;;
+  esac
 fi
 
 if [ -n "${UNIT_DIR_SAVED:-}" ]; then DIR="$UNIT_DIR_SAVED"; unset UNIT_DIR_SAVED; fi
@@ -2195,21 +2190,13 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
   fi
 fi
 
-# --- 5c. coordinator configuration ------------------------------------------
-say "Configuring the coordinator"
-if [ -f "$COORD_ENV" ]; then
-  ok "$COORD_ENV already exists — left untouched"
-else
-  install -m 0600 "$DIR/install/fleetwright-coordinator.env.example" "$COORD_ENV"
-  ok "wrote $COORD_ENV from the template"
-fi
-
 # The three env files hold tokens, so they stay 0600 — but they are read by the
 # CLI as well as by systemd, and the CLI runs as the service user. Root-owned
 # 0600 means `fleetwright doctor` silently sees no config at all and reports
 # things like "a control surface is configured — web only" on a box with
 # Telegram plainly working.
 for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
+  # $COORD_ENV only on a box from before the coordinator left, which still has one.
   [ -f "$f" ] || continue
   chown "$RUN_USER" "$f" 2>/dev/null || true
   chmod 0600 "$f"
@@ -2217,14 +2204,14 @@ done
 ok "config readable by $RUN_USER"
 
 # --- 5b. runtime dependencies ------------------------------------------------
-# There is exactly ONE, and until recently there were none: `jose`, for
-# verifying the ID tokens the apps sign in with. node_modules is gitignored, so
-# a fresh checkout has no way to get it — and the Node coordinator does not
-# start without it. It dies with ERR_MODULE_NOT_FOUND, which names a package
-# nobody asked for and no fix at all.
-#
-# The sidecar and fleetwright are unaffected: neither imports it. That is why this
-# was invisible until a box tried to run its own coordinator.
+# package.json's `dependencies` are what a checkout host runs with, and
+# node_modules is gitignored, so a fresh checkout has no way to get them but
+# this. A missing one dies at startup with ERR_MODULE_NOT_FOUND naming a package
+# nobody asked for and no fix at all — which is how `jose` was first noticed,
+# on the day a box tried to run the coordinator that has since left for the
+# Worker (docs/auth-and-join.md). Today the host code imports none of them and
+# this is a no-op that finishes in a second; the day it imports one, this is
+# what makes it start.
 say "Runtime dependencies"
 if [ "$PACKAGED" = 1 ]; then
   # NOTHING TO INSTALL, and that is the point of the release rather than a
@@ -2245,7 +2232,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   [ -n "$NPM_BIN" ] && ok "npm at $NPM_BIN" || warn "npm is not installed — the installer would install it"
 elif [ -z "$NPM_BIN" ]; then
   warn "npm is not installed and could not be installed automatically ($(pkg_why)).
-       The sidecar and fleetwright are fine without it. A coordinator on this box is not:
+       Fine while nothing on a host imports a runtime dependency; the day one does:
          cd $DIR && npm install --omit=dev"
 else
   # ci first: it installs exactly the lockfile and is the reproducible one. It
@@ -2260,8 +2247,8 @@ else
     chown -R "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
     ok "installed $(cd "$DIR" && "$NPM_BIN" ls --omit=dev --depth=0 2>/dev/null | grep -c '^[├└]' || echo '?') runtime dependencies"
   else
-    warn "npm install failed in $DIR — a coordinator on this box will not start.
-       Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
+    warn "npm install failed in $DIR — fine while nothing on a host imports a
+       runtime dependency. Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
   fi
 fi
 fi
@@ -2358,8 +2345,8 @@ fi
 # keep in step. `fleetwright` is the name a person is told; the agent-* names
 # stay for every box, runbook and muscle memory that already uses them.
 for pair in fleetwright:fleetwright fw:fleetwright \
-            fleetwright-sidecar:fleetwright-sidecar fleetwright-coordinator:fleetwright-coordinator \
-            agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar agent-fleet-coordinator:agent-fleet-coordinator; do
+            fleetwright-sidecar:fleetwright-sidecar \
+            agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar; do
   link="${pair%%:*}"; cli="${pair#*:}"
   [ -f "$DIR/bin/$cli" ] || continue
   if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
@@ -2377,6 +2364,14 @@ for pair in fleetwright:fleetwright fw:fleetwright \
   [ -x "$DIR/bin/$cli" ] || chmod +x "$DIR/bin/$cli" 2>/dev/null || \
     warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
   ok "$BIN_DIR/$link -> $DIR/bin/$cli"
+done
+# A command from before the coordinator left points at nothing now, under either
+# name; a command that exists and fails to run is worse than one that does not.
+for stale in fleetwright-coordinator agent-fleet-coordinator; do
+  if [ -L "$BIN_DIR/$stale" ] || [ -f "$BIN_DIR/$stale" ]; then
+    rm -f "$BIN_DIR/$stale"
+    ok "removed the old $stale command — it runs as a Worker now"
+  fi
 done
 if [ -n "${LINK_DIR_SAVED:-}" ]; then DIR="$LINK_DIR_SAVED"; unset LINK_DIR_SAVED; fi
 
@@ -2421,7 +2416,6 @@ case "$JOINING" in
   ''|stdio:*|http://127.0.0.1*|http://localhost*) JOINING="" ;;
 esac
 
-FLEET_LOCAL=0
 if [ "$WIZARD" = yes ]; then
   say "Setup"
   printf '  Answers go into the /etc files. Anything you have already edited there is\n'
@@ -2437,13 +2431,17 @@ if [ "$WIZARD" = yes ]; then
   # The env key is still READ, once, so that a box that has one gets told. It is
   # never written here again.
 
-  # --- is this box the coordinator too? ------------------------------------
+  # --- which fleet? ----------------------------------------------------------
   #
   # NOT ASKED WHEN THE ANSWER ARRIVED WITH THE SCRIPT. `curl .../install | sudo
   # sh` off a coordinator sets FLEETWRIGHT_COORDINATOR_URL, and the address in
   # what somebody typed IS the answer to "which fleet" — asking again is asking
-  # them to repeat themselves, and offering to run a second coordinator here is
-  # offering the opposite of what they asked for.
+  # them to repeat themselves.
+  #
+  # NOT OFFERED: running the coordinator here. It runs as a Cloudflare Worker
+  # (or that Worker under workerd in a container), never as a Node service on a
+  # host — docs/auth-and-join.md. A box that has no fleet yet is told where to
+  # get one rather than handed a second implementation to run.
   if [ -n "$JOINING" ]; then
     set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "$JOINING"
     "$NODE_BIN" -e '
@@ -2456,56 +2454,41 @@ if [ "$WIZARD" = yes ]; then
     ok "joining $JOINING"
   elif [ -z "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" ] \
      || [ "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" = "stdio:local" ]; then
-    printf '\n  A fleet needs a coordinator somewhere. For one machine, this box can be\n'
-    printf '  both — the coordinator and a host.\n'
-    if confirm "Run the coordinator on this box?" Y; then
-      set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "http://127.0.0.1:8791"
+    printf '\n  A fleet needs a coordinator, and it runs as a Cloudflare Worker — five commands\n'
+    printf '  on a free account, in docs/coordinator-deploy.md. Give its URL here, or leave\n'
+    printf '  it blank and set FLEETWRIGHT_COORDINATOR_URL in %s later.\n' "$SIDECAR_ENV"
+    ask COORD_URL "Coordinator URL to join (e.g. https://fleet.example.com)"
+    if [ -n "$COORD_URL" ]; then
       "$NODE_BIN" -e '
         const fs = require("fs");
-        const f = process.argv[1];
+        const [f, url] = process.argv.slice(1);
         fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-          .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, "FLEETWRIGHT_COORDINATOR_URL=http://127.0.0.1:8791")
+          .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
           .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
-      ' "$SIDECAR_ENV"
-      FLEET_LOCAL=1
-      ok "this box will run the coordinator, and join its own fleet"
-    else
-      ask COORD_URL "Coordinator URL to join (e.g. https://coord.example.com)"
-      if [ -n "$COORD_URL" ]; then
-        "$NODE_BIN" -e '
-          const fs = require("fs");
-          const [f, url] = process.argv.slice(1);
-          fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-            .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
-            .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
-        ' "$SIDECAR_ENV" "$COORD_URL"
-        ok "this host will join $COORD_URL"
-      fi
+      ' "$SIDECAR_ENV" "$COORD_URL"
+      ok "this host will join $COORD_URL"
     fi
   else
-    [ "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
+    case "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" in
+      *127.0.0.1*|*localhost*)
+        # The box was its own fleet. The unit was retired above; the URL is left
+        # for the operator to change, because guessing a fleet address is worse
+        # than a sidecar that says it cannot connect and to what.
+        warn "FLEETWRIGHT_COORDINATOR_URL in $SIDECAR_ENV points at this box, and this box no longer
+       runs a coordinator. Deploy the Worker (docs/coordinator-deploy.md) and set the URL." ;;
+    esac
   fi
 
   # --- fleet identity ------------------------------------------------------
-  # AFTER the coordinator question, because the answer changes what happens.
+  # AFTER the fleet question, because the answer decides where this box enrols.
   #
   # There is no host token to generate or to ask for any more. This box makes a
   # keypair, keeps the private half 0600, and presents the public half once with
   # a six-digit pin. What that removes: a shared secret that had to be typed
   # identically on every machine, could not tell two boxes apart, and could not
-  # be revoked for one of them.
-  #
-  # On the box that RUNS the coordinator, none of that needs a human: this
-  # script already holds the admin token, so it mints a pin and spends it. On a
-  # box joining somebody else's coordinator the pin comes from a person, so it
-  # is asked for — and blank is fine, because `fleetwright-sidecar enrol` works
-  # perfectly well tomorrow.
-  if [ "$FLEET_LOCAL" = 1 ]; then
-    if [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)" ]; then
-      set_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN "$(gen_secret)"
-      ok "generated an admin token for the coordinator"
-    fi
-  fi
+  # be revoked for one of them. The pin comes from a person — the app, Fleet ->
+  # Add a host, or the install command it prints — and blank is fine, because
+  # `fleetwright-sidecar enrol` works perfectly well tomorrow.
 
   # The key file, and the directory systemd will also create. Made here as well
   # so `enrol` below can run before the service has ever started.
@@ -2578,56 +2561,6 @@ if [ "$WIZARD" = yes ]; then
   done
 
   ENROL_URL="$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)"
-
-  # --- push notifications --------------------------------------------------
-  # Only worth asking on the box that actually runs the coordinator: it is the
-  # process that sends, and the credential is useless on a host that does not.
-  #
-  # A PATH is asked for rather than the JSON itself, and the encoding is done
-  # here. That is the whole point of this step. The file is multi-line, and
-  # systemd's EnvironmentFile has no multi-line values AND expands C escapes
-  # inside quoted ones — so pasting the JSON turns the \n in private_key into
-  # real newlines and JSON.parse fails. The result is a coordinator that starts
-  # cleanly and silently never notifies anybody. Base64 has nothing in it for
-  # either systemd or a shell to touch.
-  if [ "$FLEET_LOCAL" = 1 ] && [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_FCM_SERVICE_ACCOUNT)" ]; then
-    printf '\n  Push notifications are how a phone finds out a session is waiting for an\n'
-    printf '  answer. Without them the fleet works, and nothing tells you.\n'
-    printf '  Firebase console -> Project settings -> Service accounts -> Generate new\n'
-    printf '  private key. Leave blank to skip; push is logged instead of sent.\n'
-    ask FCM_PATH "Path to the Firebase service-account JSON"
-    while [ -n "$FCM_PATH" ]; do
-      # ~ is not expanded by read, and typing it is the obvious thing to do.
-      case "$FCM_PATH" in "~/"*) FCM_PATH="$HOME/${FCM_PATH#\~/}" ;; esac
-      if [ ! -r "$FCM_PATH" ]; then
-        warn "cannot read $FCM_PATH"
-      elif ! FCM_PROJECT="$("$NODE_BIN" -e '
-        const fs = require("fs");
-        try {
-          const a = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-          if (!a.project_id || !a.client_email || !a.private_key) {
-            console.error("missing project_id, client_email or private_key");
-            process.exit(1);
-          }
-          process.stdout.write(a.project_id);
-        } catch (e) {
-          console.error(e.message);
-          process.exit(1);
-        }
-      ' "$FCM_PATH" 2>&1)"; then
-        warn "not a usable service account: $FCM_PROJECT"
-      else
-        set_env "$COORD_ENV" FLEETWRIGHT_FCM_SERVICE_ACCOUNT "$(base64 -w0 < "$FCM_PATH")"
-        ok "push configured for Firebase project $FCM_PROJECT"
-        break
-      fi
-      # Re-asking rather than giving up: the value is a path somebody just
-      # typed, and a typo should not cost a whole re-run of the installer.
-      ask FCM_PATH "Path to the Firebase service-account JSON (blank to skip)"
-    done
-    [ -z "$FCM_PATH" ] && ok "skipping push — it will be logged instead of sent"
-    printf '\n'
-  fi
 
   # --- system updates from chat --------------------------------------------
   # A NOPASSWD rule for ONE exact command, which is a much narrower grant than
@@ -2707,12 +2640,9 @@ if [ "$WIZARD" = yes ]; then
   fi
 
   # --- joining the fleet ---------------------------------------------------
-  # A pin, spent once, in exchange for this box's public key being known.
-  #
-  # On the box that runs its own coordinator this is silent: the admin token is
-  # right here, so minting the pin and spending it is bookkeeping, not a
-  # decision, and making somebody copy six digits from one terminal into the
-  # same terminal would be theatre.
+  # A pin, spent once, in exchange for this box's public key being known. The
+  # pin comes from a person: this installer holds no credential that could mint
+  # one, and that is the property — see docs/identity.md.
   enrol_host() {
     [ -n "$ENROL_URL" ] || return 0
 
@@ -2739,46 +2669,17 @@ if [ "$WIZARD" = yes ]; then
     fi
 
     local pin=""
-    if [ "$FLEET_LOCAL" = 1 ]; then
-      local admin
-      admin="$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)"
-      # Wait for the port. The coordinator was started seconds ago and binding
-      # is not instant; without this the first install on a slow box asks for a
-      # pin it could have minted itself.
-      local i=0
-      while [ "$i" -lt 20 ]; do
-        curl -fsS "$ENROL_URL/healthz" >/dev/null 2>&1 && break
-        i=$((i + 1))
-        sleep 0.5
-      done
-      # `|| true`, and it is load-bearing. Under `set -euo pipefail` a failing
-      # command substitution ABORTS THE SCRIPT — so when the coordinator did not
-      # answer, the installer exited 7 partway through rather than reaching the
-      # warning three lines below, which was therefore unreachable. The
-      # coordinator not answering is the ordinary case on a box where it failed
-      # to start, which is exactly when the operator needs the rest of the
-      # install to finish and tell them so.
-      pin="$(curl -fsS -X POST "$ENROL_URL/api/enroll" \
-               -H "authorization: Bearer $admin" -H 'content-type: application/json' \
-               -d '{"kind":"host","label":"installed on this box"}' 2>/dev/null \
-             | sed -n 's/.*"code":"\([0-9]*\)".*/\1/p' || true)"
-      if [ -z "$pin" ]; then
-        warn "could not mint an enrolment pin from the local coordinator — enrol by hand later"
-        return 0
-      fi
-    else
-      # HANDED IN, when somebody already asked. The deb's debconf question is
-      # the one that reaches a person under apt; asking again here would be
-      # a second prompt for the same six digits, on a terminal debconf owns.
-      pin="${FLEETWRIGHT_ENROL_PIN:-}"
-      if [ -z "$pin" ]; then
-        printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
-        printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
-        printf '  Blank is fine — run "fleetwright-sidecar enrol <pin>" whenever you have one.\n'
-        ask pin "Enrolment pin"
-      fi
-      [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
+    # HANDED IN, when somebody already asked. The deb's debconf question is
+    # the one that reaches a person under apt; asking again here would be
+    # a second prompt for the same six digits, on a terminal debconf owns.
+    pin="${FLEETWRIGHT_ENROL_PIN:-}"
+    if [ -z "$pin" ]; then
+      printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
+      printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
+      printf '  Blank is fine — run "fleetwright-sidecar enrol <pin>" whenever you have one.\n'
+      ask pin "Enrolment pin"
     fi
+    [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
 
     # Six digits or nothing. A pin is not free text and never was.
     pin="$(printf '%s' "$pin" | tr -cd '0-9')"
@@ -2882,7 +2783,6 @@ if [ "$WIZARD" = yes ]; then
       # do that on a box where the replacement never came up. Seen-to-start is
       # the only evidence worth acting on.
       if start_service fleetwright; then SERVICES_STARTED=1; fi
-      [ "$FLEET_LOCAL" = 1 ] && { start_service fleetwright-coordinator || true; }
 
       # Arm the commit-confirm watchdog. A timer, not a service: `enable --now`
       # starts its clock, and it is a no-op on a box with nothing on trial.
@@ -2906,14 +2806,15 @@ if [ "$WIZARD" = yes ]; then
     fi
   fi
 
-  # A REMOTE COORDINATOR IS UP WHETHER OR NOT THIS BOX'S SERVICES ARE. Enrolment
+  # THE COORDINATOR IS UP WHETHER OR NOT THIS BOX'S SERVICES ARE. Enrolment
   # used to happen only on the started path above, on the reasoning that it is
-  # the only path with a coordinator to enrol with — which is true of the local
-  # one, and not of a Worker. So `fleetwright join fleet.example.com --pin`
+  # the only path with a coordinator to enrol with — which was true of a
+  # coordinator on this box, and is not of a Worker, which is the only kind
+  # left (docs/auth-and-join.md). So `fleetwright join fleet.example.com --pin`
   # on a box without systemd (a container, WSL) wrote the address, printed
   # "has not joined yet", and dropped the pin it was given. The same for a
   # box whose operator declined the start: the pin is the thing they typed.
-  if [ "${STARTED:-0}" != 1 ] && [ -n "$ENROL_URL" ] && [ "$FLEET_LOCAL" != 1 ]; then
+  if [ "${STARTED:-0}" != 1 ] && [ -n "$ENROL_URL" ]; then
     enrol_host
   fi
 
@@ -3101,10 +3002,9 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
            fleetwright-sidecar enrol <pin>"
   fi
 
-  # Only what is actually installed. A box with no local coordinator has no
-  # unit to restart, and trying is a failure message about a thing that is
-  # absent on purpose.
-  for unit in fleetwright fleetwright-coordinator fleetwright-sidecar; do
+  # Only what is actually installed, so a unit an older install wrote and this
+  # one retired is not a failure about something absent on purpose.
+  for unit in fleetwright fleetwright-sidecar; do
     if [ "$PLATFORM" = macos ]; then
       label="system/network.thetech.$unit"
       plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
@@ -3279,18 +3179,14 @@ if [ "$WIZARD" = yes ]; then
   [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_TELEGRAM_TOKEN)" ] \
     && printf '  Telegram : archived — the token in %s is not read. See docs/telegram.md\n' "$ENV_FILE"
   [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SANDBOX)" = "1" ] && printf '  Sandbox  : on\n'
-  [ "$FLEET_LOCAL" = 1 ] && printf '  Fleet    : coordinator and host, both on this box\n'
 
   if [ "$HAVE_SYSTEMD" != 1 ]; then
     printf '\n  systemd is not running here, so nothing was started. Run them directly:\n'
     printf '      %s %s/bin/fleetwright serve\n' "$UNIT_NODE_BIN" "$DIR"
-    [ "$FLEET_LOCAL" = 1 ] && printf '      %s %s/bin/fleetwright-coordinator\n' "$UNIT_NODE_BIN" "$DIR"
     printf '      %s %s/bin/fleetwright-sidecar\n' "$UNIT_NODE_BIN" "$DIR"
   elif [ "${STARTED:-0}" != 1 ]; then
     printf '\n  Start them when you are ready:\n'
-    printf '      systemctl enable --now fleetwright'
-    [ "$FLEET_LOCAL" = 1 ] && printf ' fleetwright-coordinator'
-    printf ' fleetwright-sidecar\n'
+    printf '      systemctl enable --now fleetwright fleetwright-sidecar\n'
   fi
 
   # Said when this box is still not enrolled — a local coordinator that was not
@@ -3310,34 +3206,6 @@ if [ "$WIZARD" = yes ]; then
     printf '      or connect an account from the app, once this box has joined a fleet\n'
   fi
 
-  # The API token is what a phone or a Shortcut presents, and it was generated
-  # rather than chosen — so if it is not printed here, the install finishes with
-  # the operator having no idea what to type into the app, and goes looking in a
-  # 0600 file owned by root to find out.
-  if [ "$FLEET_LOCAL" = 1 ] && [ -n "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)" ]; then
-    printf '\n  The coordinator on this box:\n'
-    printf '      URL          http://%s:8791   (or your Worker, if you deploy one)\n' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
-    printf '      Admin token  %s\n' "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)"
-    printf '\n  That token is break-glass, not the everyday credential: it can stop every\n'
-    printf '  session and revoke every host. The app signs in instead and gets its own.\n'
-    printf '\n  To add another box, mint it a pin:\n'
-    printf "      curl -sX POST -H 'authorization: Bearer <admin token>' \\\n"
-    printf "           -H 'content-type: application/json' -d '{\"kind\":\"host\"}' \\\n"
-    printf '           http://127.0.0.1:8791/api/enroll\n'
-    printf '  then on that box:  sudo -u %s fleetwright-sidecar enrol <pin>\n' "$RUN_USER"
-    # The app does not want the admin token. It signs in — which this box can
-    # only accept if it has been told who is allowed, so say so here rather than
-    # letting somebody discover it from a 503 on a phone.
-    if [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_AUTH_ALLOW)" ]; then
-      printf '\n  For the app to SIGN IN to this coordinator, add to %s:\n' "$COORD_ENV"
-      printf '      FLEETWRIGHT_AUTH_ISSUERS=https://appleid.apple.com https://accounts.google.com\n'
-      printf '      FLEETWRIGHT_AUTH_AUDIENCES=<the iOS bundle id> <the Android web client id>\n'
-      printf '      FLEETWRIGHT_AUTH_ALLOW=@yourdomain.com\n'
-      printf '  Empty ALLOW lets nobody in, on purpose. Until then the app can use the admin\n'
-      printf '  token above, under "use a credential instead".\n'
-    fi
-  fi
-
   # This box's own identity, printed because it is the thing to compare against
   # /hosts when something does not line up.
   if [ -n "$ENROL_URL" ]; then
@@ -3353,12 +3221,8 @@ if [ "$WIZARD" = yes ]; then
       fleetwright list
       journalctl -u fleetwright -f
 
-  Read the admin token again any time:
-      sudo grep FLEETWRIGHT_API_TOKEN $COORD_ENV
-
   Config: $ENV_FILE
           $SIDECAR_ENV
-          $COORD_ENV
 
 EOF
 elif [ "$UPGRADE" = 1 ] || [ "$HAD_PREVIOUS" = 1 ]; then
@@ -3399,14 +3263,14 @@ Next:
   If claude is not logged in yet, run 'fleetwright login' and follow the link,
   or connect an account from the app once this box has joined a fleet.
 
-  For the fleet: put an FLEETWRIGHT_API_TOKEN in $COORD_ENV (break-glass
-     admin; phones sign in and get their own), then:
-       systemctl enable --now fleetwright-coordinator fleetwright-sidecar
-     Hosts have no token. Mint a pin and spend it on the box:
+  For the fleet: the coordinator is a Cloudflare Worker (docs/coordinator-deploy.md).
+     Put its URL in $SIDECAR_ENV as FLEETWRIGHT_COORDINATOR_URL, then:
+       systemctl enable --now fleetwright-sidecar
+     Hosts have no token. Mint a pin in the app and spend it on the box:
        fleetwright-sidecar enrol <pin>
 
   Or re-run this installer with a terminal and it will ask instead — it
-  generates the admin token, enrols this box and starts the services for you.
+  enrols this box and starts the services for you.
 
 EOF
 fi

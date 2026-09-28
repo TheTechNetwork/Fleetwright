@@ -200,8 +200,9 @@ export function looksLikeOwnershipProblem(output) {
  * away.
  *
  * `worker/` is deliberately absent: it is deployed by CI to Cloudflare and no
- * host runs it. `src/fleet/coordinator` IS present, because a box can run the
- * Node coordinator.
+ * host runs it. `src/fleet/coordinator` is still present because `src` is
+ * copied whole and the sidecar shares files with it (the protocol, the
+ * crypto); no host runs a coordinator any more (docs/auth-and-join.md).
  */
 export const HOST_PATHS = Object.freeze([
   'bin',
@@ -329,7 +330,7 @@ const STEPS = [
      * A pull can change what the code needs, and until this step existed it
      * did not change what is installed. The failure that produces is the worst
      * shape available: /update reports success, the service restarts, and the
-     * coordinator dies with ERR_MODULE_NOT_FOUND naming a package nobody has
+     * sidecar dies with ERR_MODULE_NOT_FOUND naming a package nobody has
      * heard of — after the operator has been told it worked.
      *
      * @param {import('../config.js').Config} cfg
@@ -359,7 +360,7 @@ const STEPS = [
           changed: false,
           text:
             'The code is updated, but npm is not installed on this box, so its packages are not.\n' +
-            'fleetwright and the sidecar are fine without them; a coordinator here is not.\n' +
+            'fleetwright and the sidecar are fine without them.\n' +
             `  sudo apt install npm && cd ${dir} && npm ci --omit=dev`,
         };
       }
@@ -484,11 +485,12 @@ const STEPS = [
  * code that was on disk before this pull.
  *
  * `/update --restart` restarts THIS process — the hub exits and systemd's
- * Restart=always brings it back. It cannot restart the sidecar or the
- * coordinator: those are system units, and the service user has no privilege
- * over them. So on a box running more than one of them, an update applies to
- * one service and quietly does not apply to the others, and the message said
- * "Restarting now" as though it had covered everything.
+ * Restart=always brings it back. It cannot restart the sidecar: that is a
+ * system unit, and the service user has no privilege over it. So on a box
+ * running both, an update applies to one service and quietly does not apply
+ * to the other, and the message said "Restarting now" as though it had
+ * covered everything. (The coordinator was in this list while a box could run
+ * one; it runs as a Worker now and no box has the unit.)
  *
  * Says nothing when there is nothing to say — a single-service box, or one
  * where the siblings are already stopped.
@@ -496,7 +498,7 @@ const STEPS = [
  * @returns {string[]} unit names that are active and now running stale code
  */
 export function staleSiblings() {
-  const units = [unitName('fleetwright-sidecar'), unitName('fleetwright-coordinator')];
+  const units = [unitName('fleetwright-sidecar')];
   const stale = [];
   for (const unit of units) {
     const r = spawnSync('systemctl', ['is-active', unit], { encoding: 'utf8' });

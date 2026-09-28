@@ -1,0 +1,111 @@
+# The coordinator, as a container: the SAME Worker that runs on Cloudflare,
+# under workerd, with its Durable Object storage on a volume.
+#
+# WHY THIS EXISTS. docs/auth-and-join.md decided the coordinator runs on
+# Cloudflare and nowhere else — and kept one door open, for whoever will not
+# have a Cloudflare account: the same bundle under the same runtime, on a box
+# they own. This is that door. It is NOT a second implementation: the bundle
+# built here is byte-for-byte what `wrangler deploy` ships, and workerd is the
+# runtime Cloudflare runs it on.
+#
+# WHAT IS PROVEN, and what is not. From a clean tree this has been built,
+# started, and driven through /healthz, /api/hosts and pin minting, and the
+# Durable Object's SQLite landed under /data and survived a restart. It has NOT
+# run for a week under real hosts, and three things on Cloudflare have no
+# counterpart here and are simply absent:
+#
+#   SIGNIN_RATE_LIMIT   the ratelimit binding. worker.js guards every use, so
+#                       sign-in is unmetered here rather than broken. Put a
+#                       reverse proxy with a rate limit in front.
+#   EMAIL               send_email. fleet-do.js says "no mailer configured"
+#                       and an invite carries no email.
+#   Sentry              instrumented, with no DSN unless you set SENTRY_DSN.
+#
+# So: coordinator-deploy.md says Cloudflare, and this is a roadmap row until
+# the week exists. Build it from the repository root, not from worker/, because
+# the Worker imports the shared coordinator code from ../src:
+#
+#   podman build -f worker/Containerfile -t fleetwright-coordinator .
+#   podman run -d --name coordinator -p 8787:8787 -v coordinator-state:/data \
+#     -e FLEETWRIGHT_API_TOKEN=$(openssl rand -hex 24) \
+#     -e FLEETWRIGHT_AUTH_ISSUERS=https://accounts.google.com,https://appleid.apple.com \
+#     -e FLEETWRIGHT_AUTH_AUDIENCES=network.thetech.fleetwright,<web client id> \
+#     -e FLEETWRIGHT_AUTH_ALLOW=you@example.com \
+#     -e FLEETWRIGHT_PUBLIC_ORIGIN=https://fleet.example.com \
+#     fleetwright-coordinator
+#
+# PUT TLS IN FRONT OF IT. Hosts pin the origin and phones speak HTTPS; workerd
+# here listens on plain HTTP on 8787, and FLEETWRIGHT_PUBLIC_ORIGIN has to be
+# the https:// address the proxy answers on, or every URL the coordinator hands
+# out points at the wrong place.
+
+# --- build: the bundle wrangler would deploy ---------------------------------
+FROM docker.io/library/node:24-bookworm-slim AS build
+WORKDIR /src
+# Both dependency trees, for the same reason worker.yml installs both: the
+# Worker imports from ../src, and that code resolves `jose` from the ROOT
+# node_modules, not the Worker's.
+COPY package.json package-lock.json ./
+COPY worker/package.json worker/package-lock.json ./worker/
+RUN npm ci --no-audit --no-fund --ignore-scripts \
+ && npm ci --prefix worker --no-audit --no-fund --ignore-scripts \
+ && (cd node_modules/esbuild && node install.js) \
+ && (cd worker/node_modules/workerd && node install.js) \
+ && (cd worker/node_modules/esbuild && node install.js)
+COPY src ./src
+COPY openapi.json ./
+COPY worker/src ./worker/src
+COPY worker/workerd.capnp ./worker/
+# The same flags scripts/verify.sh bundles with, so it is the same graph the
+# deploy ships. `node:async_hooks` stays external: workerd provides it under
+# the nodejs_als compatibility flag the config names.
+RUN cd worker && ./node_modules/.bin/esbuild src/worker.js --bundle --format=esm --platform=neutral \
+      --external:node:* --external:cloudflare:* --outfile=dist/worker.mjs
+
+# --- run: workerd, the bundle, a volume ---------------------------------------
+FROM docker.io/library/debian:bookworm-slim
+# The workerd binary the npm package ships for this platform is the runtime;
+# it is a static glibc binary and needs nothing else installed.
+COPY --from=build /src/worker/node_modules/workerd/bin/workerd /usr/local/bin/workerd
+COPY --from=build /src/worker/dist/worker.mjs /opt/coordinator/worker.mjs
+COPY --from=build /src/worker/workerd.capnp /opt/coordinator/config.capnp
+RUN useradd --system --home /opt/coordinator --shell /usr/sbin/nologin coordinator \
+ && mkdir -p /data && chown coordinator:coordinator /data
+USER coordinator
+WORKDIR /opt/coordinator
+VOLUME /data
+EXPOSE 8787
+# Everything the Worker reads from `env` arrives as an environment variable;
+# workerd.capnp maps each one with `fromEnvironment`. Unset means unset, which
+# the code already handles: no admin token AND no sign-in pair is the 503 that
+# names both remedies, exactly as on Cloudflare.
+ENV FLEETWRIGHT_ACTIONS_AUDIENCE="" \
+    FLEETWRIGHT_ACTIONS_REPOS="" \
+    FLEETWRIGHT_ACTIONS_WORKFLOW="" \
+    FLEETWRIGHT_API_TOKEN="" \
+    FLEETWRIGHT_APNS_BUNDLE_ID="" \
+    FLEETWRIGHT_APNS_SANDBOX="" \
+    FLEETWRIGHT_APP_ANDROID="" \
+    FLEETWRIGHT_APP_IOS="" \
+    FLEETWRIGHT_AUTH_ALLOW="" \
+    FLEETWRIGHT_AUTH_APPLE_SERVICE="" \
+    FLEETWRIGHT_AUTH_AUDIENCES="" \
+    FLEETWRIGHT_AUTH_ISSUERS="" \
+    FLEETWRIGHT_CLOUDFLARE_CLIENT_ID="" \
+    FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET="" \
+    FLEETWRIGHT_CLOUDFLARE_SCOPES="" \
+    FLEETWRIGHT_DOCS_URL="" \
+    FLEETWRIGHT_FCM_SERVICE_ACCOUNT="" \
+    FLEETWRIGHT_GITHUB_CLIENT_ID="" \
+    FLEETWRIGHT_GITHUB_CLIENT_SECRET="" \
+    FLEETWRIGHT_INSTALL_URL="" \
+    FLEETWRIGHT_INVITE_FROM="" \
+    FLEETWRIGHT_NAME="" \
+    FLEETWRIGHT_PUBLIC_ORIGIN="" \
+    FLEETWRIGHT_PUSH="" \
+    FLEETWRIGHT_RUNNER_REPO="" \
+    SENTRY_DSN="" \
+    SENTRY_ENVIRONMENT="" \
+    SENTRY_TRACES_SAMPLE_RATE=""
+HEALTHCHECK --interval=30s --timeout=5s CMD ["/usr/bin/env", "sh", "-c", "exec 3<>/dev/tcp/127.0.0.1/8787 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && head -c 64 <&3 | grep -q ' 200 '"]
+ENTRYPOINT ["/usr/local/bin/workerd", "serve", "/opt/coordinator/config.capnp"]

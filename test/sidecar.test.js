@@ -657,11 +657,11 @@ test('health says which service logs this box can read, and asks the box once', 
   const dir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-logs-'));
   const calls = nodePath.join(dir, 'calls');
   const systemctl = nodePath.join(dir, 'systemctl');
-  // `cat` succeeds for the two units this box has and fails for the one it
-  // does not — which is what a box that is a host and not a coordinator says.
+  // `cat` succeeds for both units this box has. (It used to fail for a third,
+  // the coordinator's, which no box has any more — docs/auth-and-join.md.)
   writeFileSync(
     systemctl,
-    `#!/bin/sh\necho "$2" >> ${calls}\ncase "$2" in fleetwright-coordinator) exit 1;; esac\nexit 0\n`,
+    `#!/bin/sh\necho "$2" >> ${calls}\nexit 0\n`,
   );
   chmodSync(systemctl, 0o755);
   const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir: dir, systemctlBin: systemctl }) });
@@ -670,10 +670,10 @@ test('health says which service logs this box can read, and asks the box once', 
   assert.deepEqual(first.health.logs, ['hub', 'sidecar']);
 
   // ASKED ONCE. A unit comes and goes with an install, which restarts this
-  // process; three spawns every fifteen seconds would be paying for a fact that
-  // cannot change underneath it.
+  // process; a spawn per unit every fifteen seconds would be paying for a fact
+  // that cannot change underneath it.
   await sidecar.handle(intent({ verb: 'health', id: 'idem-logs-0002' }));
-  assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 3, 'systemctl was asked again');
+  assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 2, 'systemctl was asked again');
 });
 
 test('a host with no hub config does not guess which logs it has', async (t) => {
