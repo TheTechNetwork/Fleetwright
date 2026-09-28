@@ -335,8 +335,9 @@ up for a stable box to take an unreleased build.
 
 A box can also be installed with `apt install fleetwright`, and then apt is
 the only thing that updates it. The repository is `apt.thetech.network`, a
-Cloudflare Worker that serves the signed metadata and redirects each package to
-its GitHub release asset (`apt/`, and docs/ci.md for why not Pages). It carries
+Cloudflare Worker that serves the signed metadata and streams each package from
+Cloudflare's cache, filled from its GitHub release asset (`apt/`, and
+docs/ci.md for why not Pages). It carries
 **stable releases whose rollout is complete, and nothing else**.
 
 ```sh

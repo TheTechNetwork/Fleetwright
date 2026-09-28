@@ -8,8 +8,8 @@
 #
 # <out-dir> gets ONLY what is served — dists/ and the public key — and never a
 # package. The packages stay GitHub release assets, and the apt Worker
-# (apt/src/index.js) answers pool/<tag>/<file> with a redirect to
-# releases/download/<tag>/<file>. That is why the tag is in the pool path: it is
+# (apt/src/index.js) serves pool/<tag>/<file> from Cloudflare's cache, filling
+# it from releases/download/<tag>/<file>. That is why the tag is in the pool path: it is
 # the one thing the Worker needs to find the asset, and putting it in the
 # Filename apt already requests means there is no map to keep in step.
 #
@@ -21,7 +21,7 @@
 # and makes whoever serves the URL root on every box that trusts it; a
 # repository that only works that way is worse than the manifest it would
 # replace, which at least checks a digest. So there is no unsigned mode: no key
-# id, no repository. The signature is also what makes the redirect safe — apt
+# id, no repository. The signature is also what makes the cache safe — apt
 # checks each deb against the sha256 in the signed Packages file, wherever the
 # bytes came from.
 #

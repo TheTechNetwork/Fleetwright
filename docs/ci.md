@@ -835,13 +835,17 @@ token it skips with a notice, like every other secret-dependent job here.
 
 **A Worker, `fleetwright-apt` (`apt/`), not Pages.** A deb is about 29 MB,
 and both Pages and Workers static assets cap a file at 25 MiB. So the Worker
-serves only the signed metadata (`dists/`, the public key) as assets, and
-answers `pool/<tag>/<file>.deb` with a redirect to that release's GitHub asset.
-apt checks each deb against the sha256 in the signed `Packages` file, so the
-redirect carries no trust: a tampered file behind it is refused as a hash
-mismatch. The redirect only matches the exact shape the builder writes, so it
-cannot be pointed anywhere else. Every `apt update` and every download is a log
-line in Workers observability, which is what Pages would not have given.
+serves the signed metadata (`dists/`, the public key) as assets, and streams
+`pool/<tag>/<file>.deb` itself: from Cloudflare's cache when it has it, and
+otherwise from that release's GitHub asset, storing it on the way through. A
+streamed response has no 25 MiB cap, and the cache is what keeps a fleet
+updating at once from being a fleet of downloads from GitHub. Each data centre
+asks GitHub once; a tag's deb is reproducible, so it is cached for good, and a
+failure is never cached. apt checks each deb against the sha256 in the signed
+`Packages` file, so the cache carries no trust: a tampered file is refused as a
+hash mismatch. Only the exact shape the builder writes is fetched, so the
+Worker is not a proxy for anything else. Every `apt update` and every download
+(hit or miss) is a log line in Workers observability.
 
 **It is its own workflow, and not a job in `host-release.yml`**, because
 `host-release.yml` needs no secrets, which this table promises, and this one

@@ -6,10 +6,11 @@ name: apt repository
 #
 # A CLOUDFLARE WORKER, NOT PAGES (apt/wrangler.toml). A deb is ~29 MB and both
 # Pages and Workers static assets cap a file at 25 MiB, so the Worker serves
-# only the signed metadata and redirects each package request to the GitHub
-# release asset it was built into. apt checks every deb against the signed
-# Packages file, so the redirect carries no trust — and every update and
-# download is a log line in Workers observability.
+# the signed metadata as assets and streams each package itself, from
+# Cloudflare's cache or, once per data centre, from the GitHub release asset it
+# was built into. apt checks every deb against the signed Packages file, so the
+# cache carries no trust — and every update and download is a log line in
+# Workers observability.
 #
 # ITS OWN WORKFLOW, AND NOT A JOB IN host-release.yml: host-release.yml needs no
 # secrets (docs/ci.md), and this one needs the signing key and Cloudflare's.
@@ -96,7 +97,7 @@ jobs:
             fi
             echo "$tag: rollout complete — in apt"
             # One directory per tag: the tag is the pool path, and the pool
-            # path is how the Worker finds the release asset to redirect to.
+            # path is how the Worker finds the release asset to fetch.
             mkdir -p "debs/$tag"
             mv rel/*.deb "debs/$tag/"
             taken=$((taken + 1))
@@ -113,7 +114,7 @@ jobs:
           tools/build-apt-repo.sh debs apt/public "$key"
           rm -rf "$GNUPGHOME"
           # Metadata only, by construction: a deb in the asset set would be
-          # refused at 25 MiB and would mean the redirect was not being used.
+          # refused at 25 MiB; packages are streamed by the Worker instead.
           if find apt/public -name '*.deb' | grep -q .; then
             echo "::error::a package ended up in the Worker's assets"; exit 1
           fi
