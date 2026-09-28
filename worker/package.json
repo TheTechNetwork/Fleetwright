@@ -15,7 +15,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@sentry/cloudflare": "10.75.1"
+    "@sentry/cloudflare": "11.0.0"
   },
   "overrides": {
     "sharp": "0.35.4"
