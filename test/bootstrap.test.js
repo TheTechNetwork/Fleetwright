@@ -57,6 +57,14 @@ function origin(t) {
  * @param {string[]} [args]
  */
 function pipeIntoSh(where, args = [], env = {}) {
+  // THIS MACHINE'S DPKG IS NOT THE BOX UNDER TEST. bootstrap.sh refuses a box
+  // that has the fleetwright package, and a developer who installed it — or a
+  // runner that ever does — would otherwise fail every test here for a reason
+  // none of them is about. A dpkg-query that knows no packages goes first on
+  // PATH, unless a test brings its own.
+  const stubs = env.DPKG_STUBS ?? noDpkgDir();
+  const { DPKG_STUBS: _ignored, ...rest } = env;
+  env = { ...rest, PATH: `${stubs}:${rest.PATH ?? process.env.PATH}` };
   return spawnSync(
     'sh',
     ['-s', '--', ...args],
@@ -72,6 +80,17 @@ function pipeIntoSh(where, args = [], env = {}) {
       },
     },
   );
+}
+
+let noDpkg = '';
+/** A directory whose dpkg-query knows no packages. Made once per file. */
+function noDpkgDir() {
+  if (noDpkg) return noDpkg;
+  noDpkg = mkdtempSync(path.join(os.tmpdir(), 'no-dpkg-'));
+  writeFileSync(path.join(noDpkg, 'dpkg-query'), '#!/bin/sh\nexit 1\n');
+  chmodSync(path.join(noDpkg, 'dpkg-query'), 0o755);
+  process.on('exit', () => rmSync(noDpkg, { recursive: true, force: true }));
+  return noDpkg;
 }
 
 function readBootstrap() {
@@ -360,4 +379,22 @@ test('the release this repository actually builds installs itself through the on
   // asserted: it reports on prerequisites this runner has no reason to have.
   assert.equal(existsSync(base), false, `--check created ${base}`);
   assert.deepEqual(readdirSyncSafe(root).filter((f) => f.startsWith('fleetwright-install.')), []);
+});
+
+test('a box the fleetwright package owns is refused, and told how apt does each thing', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'dpkg-has-it-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'dpkg-query'), '#!/bin/sh\nprintf "install ok installed"\n');
+  chmodSync(path.join(dir, 'dpkg-query'), 0o755);
+  const rel = release(t);
+  const r = pipeIntoSh(
+    { repo: 'https://github.com/example/fleet', target: rel.target },
+    ['--check'],
+    { FLEETWRIGHT_MANIFEST: rel.manifest, AGENT_FLEET_BASE: rel.base, TMPDIR: rel.root, DPKG_STUBS: dir },
+  );
+  // Two updaters taking turns moving `current` is the thing refused here.
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /apt installs and updates it/);
+  assert.match(r.stderr, /dpkg-reconfigure fleetwright/);
+  assert.equal(existsSync(rel.base), false, 'something was laid out before the refusal');
 });

@@ -1,0 +1,120 @@
+#!/bin/sh
+# Lay the release this package carries out under /opt/fleetwright, the same
+# way bootstrap.sh does for the one-liner, and hand over to its installer.
+#
+# THE PACKAGE IS A COURIER, NOT THE LAYOUT. dpkg owns /usr/lib/fleetwright —
+# the verified tarball and the Node that runs it — and nothing under /opt. The
+# release's own install.sh copies it into releases/<version> and moves
+# `current`, so a box installed from apt has the same shape, the same rollback
+# and the same run-before-swap as every other packaged box. What dpkg would
+# have done instead is unpack over the running tree.
+#
+# NO apt-get IN HERE. dpkg holds the lock for the whole of this script, and the
+# installer's habit of installing what is missing would wait on that lock for
+# ever. Everything it would reach for is in Depends or Recommends instead, and
+# AGENT_HUB_NO_INSTALL_DEPS tells it so.
+set -e
+
+case "$1" in
+  configure|reconfigure) ;;
+  abort-upgrade|abort-remove|abort-deconfigure) exit 0 ;;
+  *) exit 0 ;;
+esac
+
+. /usr/share/debconf/confmodule
+
+LIB=/usr/lib/fleetwright
+NODE="$LIB/node/bin/node"
+BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+PREVIOUS_VERSION="${2:-}"
+
+db_get fleetwright/coordinator-url
+URL="$RET"
+db_get fleetwright/pin
+PIN="$RET"
+db_get fleetwright/user
+RUN_AS="$RET"
+# Spent once, and not kept: debconf's database is a file on disk, and a pin
+# that sits in it after it has been used is a secret with no purpose.
+db_set fleetwright/pin ""
+# Everything below prints, and debconf reads this script's stdout as its
+# protocol until told otherwise.
+db_stop
+
+MANIFEST="$LIB/release/manifest.json"
+TARBALL="$(find "$LIB/release" -maxdepth 1 -name '*.tar.gz' | head -1)"
+[ -n "$TARBALL" ] || { echo "fleetwright: no release in $LIB/release" >&2; exit 1; }
+
+# THE DIGEST, CHECKED AGAIN. dpkg has already compared its own md5sums, but the
+# sha256 in the manifest is the one the release pipeline published and built
+# twice to prove — the same number bootstrap.sh and /update check.
+want="$(sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$MANIFEST" | head -1)"
+have="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+if [ -z "$want" ] || [ "$want" != "$have" ]; then
+  echo "fleetwright: $TARBALL does not match the sha256 in $MANIFEST — refusing to install it" >&2
+  exit 1
+fi
+
+WORK="$(mktemp -d /tmp/fleetwright-deb.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+tar -xzf "$TARBALL" -C "$WORK"
+ROOT="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -1)"
+[ -x "$ROOT/install/install.sh" ] || { echo "fleetwright: the release has no install/install.sh" >&2; exit 1; }
+
+# Read BEFORE the installer moves it: the release to keep as the rollback.
+BEFORE="$(readlink "$BASE/current" 2>/dev/null || true)"
+
+export AGENT_HUB_NODE_BIN="$NODE"
+export AGENT_HUB_NO_INSTALL_DEPS=1
+export AGENT_HUB_ASK_NONE=1
+export AGENT_HUB_RELEASE_SOURCE=apt
+# Blank is the installer's own rule: the user the units already name, else the
+# person who ran sudo. Worth preseeding under Ansible or cloud-init, where the
+# person who ran sudo is a deploy account rather than whoever will own the
+# sessions.
+[ -n "$RUN_AS" ] && export AGENT_HUB_USER="$RUN_AS"
+
+# dpkg-reconfigure runs this with `configure`, like any other configure, and
+# says which it is only in the environment.
+RECONFIGURE=0
+[ "$1" = reconfigure ] || [ -n "${DEBCONF_RECONFIGURE:-}" ] && RECONFIGURE=1
+
+# WHICH RUN THIS IS.
+#
+#   joining     somebody gave a coordinator URL — on a first install, or by
+#               dpkg-reconfigure. The wizard runs with debconf's answers and
+#               every other question at its default, which is what the
+#               one-liner does when you press enter through it.
+#   upgrading   the box is already in a fleet, installed by this package or
+#               any other way. --repair: no questions, every generated file
+#               put back, the services restarted onto the new code.
+#   installing  anything else — a first install with no fleet named, or an
+#               upgrade of a box that never joined one (--repair refuses
+#               those, by design: it will not guess at enrolment). Laid out
+#               and left stopped, with the one command that joins it.
+if [ -n "$URL" ] && { [ -z "$PREVIOUS_VERSION" ] || [ "$RECONFIGURE" = 1 ]; }; then
+  AGENT_FLEET_COORDINATOR_URL="$URL" AGENT_FLEET_ENROL_PIN="$PIN" \
+    bash "$ROOT/install/install.sh" --wizard </dev/null
+elif [ -f /etc/systemd/system/agent-hub.service ] && [ -f /var/lib/agent-fleet/host-key.json ]; then
+  bash "$ROOT/install/install.sh" --repair </dev/null
+else
+  bash "$ROOT/install/install.sh" --no-wizard </dev/null
+  printf '\n  Installed, not joined to a fleet. To join one:\n      sudo dpkg-reconfigure fleetwright\n\n'
+fi
+
+# KEEP THE ONE BEFORE, TIDY THE REST. /update prunes on a manifest box
+# (releasesToPrune in src/core/release.js); here nothing else would, and every
+# apt upgrade would leave another release under /opt for ever. The live one and
+# the one it replaced stay, because a rollback target that was tidied away is
+# not a rollback target.
+if [ -d "$BASE/releases" ]; then
+  LIVE="$(readlink -f "$BASE/current" 2>/dev/null || true)"
+  KEEP="$(readlink -f "$BEFORE" 2>/dev/null || true)"
+  for r in "$BASE"/releases/*; do
+    [ -d "$r" ] || continue
+    rr="$(readlink -f "$r")"
+    [ "$rr" = "$LIVE" ] || [ "$rr" = "$KEEP" ] || rm -rf "$r"
+  done
+fi
+
+exit 0

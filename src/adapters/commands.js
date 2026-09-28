@@ -729,6 +729,20 @@ export const COMMANDS = {
       'itself — it decides what the next update is allowed to be.',
     run: (ctx, args) => {
       const [wanted] = args;
+      // NO CHANNEL ON AN APT BOX. The apt repository carries stable releases
+      // whose rollout is complete, and nothing else; there is no rolling
+      // address to move to. Pinned, so the picker does not render a choice
+      // that cannot be made.
+      if (ctx.cfg.releaseSource === 'apt') {
+        return {
+          ok: !wanted || wanted === 'stable',
+          text:
+            'This box takes Fleetwright from apt, which carries stable releases only — each one once its rollout is complete.' +
+            (wanted && wanted !== 'stable' ? '\n\nTo take rolling builds, install with the one-line installer instead of the package.' : ''),
+          channel: 'stable',
+          channelPinned: true,
+        };
+      }
       const current = readChannel(ctx.cfg);
       if (!wanted) {
         const pinned = pinnedByEnv(ctx.cfg);
@@ -1582,6 +1596,27 @@ export const COMMANDS = {
       '(sessions are left running).',
     run: async (ctx, _args, flags) => {
       const status = updateStatus(ctx.cfg);
+
+      // A BOX APT OWNS IS UPDATED BY APT. It is packaged like any other, and
+      // the difference is who moves `current`: the deb's postinst, run by an
+      // apt upgrade. Fetching a manifest here would install a release apt has
+      // not been given yet — every stable release reaches apt only once its
+      // rollout is complete — and the next apt upgrade would then move the box
+      // back. So this reports apt's answer and points at the one door that
+      // updates such a box. The image is still refreshed: it is not part of
+      // the package, and nothing else on an apt box pulls it.
+      if (status.packaged && ctx.cfg.releaseSource === 'apt') {
+        const r = await checkRelease(ctx.cfg);
+        const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
+        const imageNote = image?.text ? `\n\n${image.text}` : '';
+        return {
+          ok: r.ok,
+          text: `${status.dir} is installed from apt, so apt is what updates it.\n\n${r.message}${imageNote}`,
+          // Only when there is something to install AND this box may install
+          // it from here: without the grant /upgrade can only explain itself.
+          buttons: r.available && ctx.cfg.systemUpgrade ? [{ label: 'Install system updates', command: '/upgrade' }] : undefined,
+        };
+      }
 
       // A PACKAGED BOX UPDATES BY MANIFEST, not by pull. Branching here rather
       // than inside runUpdate keeps the git path exactly as it was — the

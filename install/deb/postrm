@@ -1,0 +1,22 @@
+#!/bin/sh
+# Remove leaves the box's identity and config where they are, the way removing
+# any Debian package keeps its conffiles; purge is the uninstaller.
+#
+# `purge` runs the release's own uninstall.sh, which already knows what this
+# box was given: units, sudoers rules, the host key (a clone carrying it would
+# be one host to the coordinator), and with --purge every release under
+# /opt/fleetwright. It is taken from `current` because /usr/lib/fleetwright is
+# gone by the time postrm runs.
+set -e
+BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+case "$1" in
+  purge)
+    if [ -x "$BASE/current/install/uninstall.sh" ]; then
+      bash "$BASE/current/install/uninstall.sh" --purge --yes </dev/null || true
+    fi
+    if [ -e /usr/share/debconf/confmodule ]; then
+      . /usr/share/debconf/confmodule
+      db_purge || true
+    fi ;;
+esac
+exit 0

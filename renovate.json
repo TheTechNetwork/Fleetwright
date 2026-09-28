@@ -189,6 +189,25 @@
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG CLAUDE_VERSION=(?<currentValue>\\S+)",
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+npm install -g @anthropic-ai/claude-code@(?<currentValue>\\S+)"
       ]
+    },
+    {
+      "description": [
+        "The Node the deb carries in /usr/lib/fleetwright/node. Shipping a runtime",
+        "is only better than nvm or NodeSource if it moves, and this is what moves",
+        "it: a Node security release arrives as a PR like any other dependency,",
+        "and vulnerabilityAlerts above means it does not wait out the soak.",
+        "",
+        "versioning=node, so it follows LTS lines only. A Current release is not",
+        "stable by Renovate's definition until its line reaches LTS, which is the",
+        "right bar for a runtime shipped to machines nobody is watching."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^install/deb/node\\.env$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+NODE_VERSION=(?<currentValue>\\S+)"
+      ]
     }
   ]
 }

@@ -273,11 +273,11 @@ async function doctor({ repair = false } = {}) {
   // silently moving a machine onto new code is a surprise nobody asked for. It
   // is also the one remedy that is genuinely a decision: a box mid-session has
   // a reason to wait.
-  if (cfg.releaseManifest) {
+  if (cfg.releaseManifest || cfg.releaseSource === 'apt') {
     const rel = await checkRelease(cfg);
     if (rel.available) {
       console.log(`note  an update is waiting: ${rel.available}`);
-      console.log('      to take it:  agent-hub update');
+      console.log(cfg.releaseSource === 'apt' ? '      to take it:  apt upgrade' : '      to take it:  agent-hub update');
       console.log('      not applied by --repair, on purpose — this changes what the box runs');
     } else if (rel.configured === false) {
       ok('this box knows where its releases come from', false, rel.message);

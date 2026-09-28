@@ -267,6 +267,10 @@ export function loadConfig(env = process.env) {
     // checkout, which updates by git and always will — see docs/packaging.md,
     // where the fallback is what makes moving one box at a time safe.
     releaseManifest: str('AGENT_HUB_RELEASE_MANIFEST'),
+    // `apt` on a box installed from the deb, and empty everywhere else. It
+    // outranks the manifest: such a box has exactly one updater, and it is
+    // apt — see src/core/apt-release.js.
+    releaseSource: str('AGENT_HUB_RELEASE_SOURCE'),
     // WHICH RELEASES THIS BOX TAKES. `stable` skips anything marked as a
     // prerelease; `prerelease` takes both. Per host on purpose — the point of
     // marking a release is that it goes to the machines somebody chose to

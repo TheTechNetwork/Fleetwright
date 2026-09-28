@@ -122,6 +122,10 @@ done
 if [ "$PLATFORM" = linux ]; then
   systemctl disable --now agent-fleet-confirm.timer >/dev/null 2>&1 && ok "commit-confirm watchdog stopped and disabled" || true
   rm -f /etc/systemd/system/agent-fleet-confirm.timer /etc/systemd/system/agent-fleet-confirm.service
+  # The two oneshots the system-updates grant names. Its sudoers rule goes
+  # below; the units it permitted starting stayed, and a purged package left
+  # them in /etc/systemd/system naming an apt run nobody had asked for.
+  rm -f /etc/systemd/system/agent-hub-upgrade.service /etc/systemd/system/agent-hub-apt-update.service
 fi
 [ "$PLATFORM" = linux ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
 ok "service definitions removed"

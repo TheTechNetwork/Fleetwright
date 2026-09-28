@@ -354,6 +354,13 @@ done
 if [ -t 0 ]; then ASK_IN=/dev/stdin
 elif [ -r /dev/tty ]; then ASK_IN=/dev/tty
 else ASK_IN=""; fi
+# NOBODY TO ASK, EVEN WITH A TERMINAL IN THE ROOM. A deb's postinst runs with
+# apt's terminal attached and debconf holding it: the questions have already
+# been asked THERE, and the answers arrive in the environment. Reading /dev/tty
+# underneath debconf fights its frontend for the screen, and under Ansible or
+# unattended-upgrades there is nobody at all. So the package says so, and every
+# question takes its default or the answer it was handed.
+[ "${AGENT_HUB_ASK_NONE:-0}" = "1" ] && ASK_IN=""
 
 REPAIR="${REPAIR:-0}"
 [ "${AGENT_HUB_REPAIR:-0}" = "1" ] && { REPAIR=1; UPGRADE=1; WIZARD=no; }
@@ -1283,7 +1290,37 @@ release_manifest_url() { # release_manifest_url REMOTE
   printf 'https://github.com/%s/releases/latest/download/manifest.json' "$slug"
 }
 
-if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
+# A BOX THAT APT OWNS says so, and that is the whole of its update config.
+#
+# The deb lays a release out exactly as bootstrap.sh does, but apt decides when
+# the next one arrives: a stable release is promoted to the apt repository once
+# its rollout is complete, and `apt-get upgrade` (from a shell, from
+# unattended-upgrades, or from /upgrade in the app) runs this installer again
+# from the package's postinst. A manifest check on the same box would be a
+# second updater with its own opinion of which version is current, and the two
+# would take turns moving `current`. src/core/release-check.js reads this and
+# asks apt instead. See docs/packaging.md, "Stable releases through apt".
+if [ "${AGENT_HUB_RELEASE_SOURCE:-}" = "apt" ] && [ "$CHECK_ONLY" != 1 ]; then
+  set_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE apt
+  ok "releases come from apt — the fleetwright package"
+elif [ "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE)" = "apt" ] && [ "$CHECK_ONLY" != 1 ] \
+     && [ "$(dpkg-query -W -f='${Status}' fleetwright 2>/dev/null || true)" != "install ok installed" ]; then
+  # THE PACKAGE WENT AND THE LINE STAYED. `apt remove` keeps /etc, so a box
+  # moved back to the one-liner would go on asking apt about a package it no
+  # longer has. Cleared only when dpkg agrees the package is gone: somebody
+  # running this installer by hand on a box that still has it must not quietly
+  # hand the box a second updater.
+  # Not set_env, which never overwrites a value that is already there.
+  ENVFILE="$ENV_FILE" "$NODE_BIN" -e '
+    const fs = require("fs");
+    const f = process.env.ENVFILE;
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^AGENT_HUB_RELEASE_SOURCE=.*$/m, "AGENT_HUB_RELEASE_SOURCE="));
+  '
+  ok "the fleetwright package is gone — releases come from the manifest again"
+fi
+
+if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ] \
+   && [ "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE)" != "apt" ]; then
   ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
   # TOLD, BEFORE IT IS GUESSED. A fresh box installed from a release has no
   # remote to read: bootstrap.sh fetched the manifest, verified the tarball
@@ -1537,9 +1574,11 @@ install_unit() { # install_unit NAME
   # systemd will not tell you either: it reports "Failed with result exit-code"
   # and the reason is in the journal, on a box somebody has to log in to.
   UNIT_TARGET="$(sed -n 's/^ExecStart=[^ ]* \([^ ]*\).*/\1/p' "$dest" | head -1)"
-  # A PATH, not an option: the oneshot units run `apt-get -y ...`, and `-y`
-  # is not a file that should exist.
-  case "$UNIT_TARGET" in -*) UNIT_TARGET="" ;; esac
+  # A PATH, not an option or a subcommand: the oneshot units run
+  # `apt-get -y ...` and `apt-get update`, and neither `-y` nor `update` is a
+  # file that should exist. Warning about `update` on every box that allowed
+  # system updates taught people to skim past this line.
+  case "$UNIT_TARGET" in /*) ;; *) UNIT_TARGET="" ;; esac
   if [ -n "$UNIT_TARGET" ] && [ ! -f "$UNIT_TARGET" ]; then
     warn "$dest names $UNIT_TARGET, which does not exist — this service cannot start"
     warn "  the install continued; fix the payload and re-run, or use --from-source"
@@ -2021,9 +2060,35 @@ if [ ! -d "$BIN_DIR" ]; then
   ok "created $BIN_DIR"
 fi
 
+# A WRAPPER, NOT A LINK, WHEN `node` IS NOT ON THE PATH. The shims start with
+# `#!/usr/bin/env node`, which is right on every box that has node where a
+# shell looks for it — and the deb is the box that does not: its node lives in
+# /usr/lib/fleetwright/node, on purpose, so that it neither shadows nor is
+# shadowed by a distro nodejs. Linked there, `agent-hub doctor` from a shell
+# ends in "env: 'node': No such file or directory". The wrapper names the node
+# the units run, so the command a person types and the service agree on which
+# runtime this is.
+# Also when the node a shell finds is too old: a distro nodejs below the floor
+# on PATH would run the shim and fail on the first modern line, which is the
+# same box — the deb on a machine that happens to have Debian's node — with a
+# stranger error.
+CLI_NEEDS_WRAPPER=0
+PATH_NODE="$(command -v node 2>/dev/null || true)"
+if [ -z "$PATH_NODE" ]; then
+  CLI_NEEDS_WRAPPER=1
+elif ! PATH_NODE_MAJOR="$(node_major "$PATH_NODE")" || [ "$PATH_NODE_MAJOR" -lt "$NODE_FLOOR" ]; then
+  CLI_NEEDS_WRAPPER=1
+fi
 for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   [ -f "$DIR/bin/$cli" ] || continue
-  ln -sf "$DIR/bin/$cli" "$BIN_DIR/$cli"
+  if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
+    rm -f "$BIN_DIR/$cli"
+    printf '#!/bin/sh\n# Written by install.sh: the node on PATH is missing or older than this needs.\nexec %s %s "$@"\n' \
+      "'$UNIT_NODE_BIN'" "'$DIR/bin/$cli'" > "$BIN_DIR/$cli"
+    chmod 0755 "$BIN_DIR/$cli"
+  else
+    ln -sf "$DIR/bin/$cli" "$BIN_DIR/$cli"
+  fi
   # Belt-and-braces: git already records the executable bit, so this only
   # matters for a checkout that lost it. Never fatal — the repo may legitimately
   # be on a read-only mount, or owned by someone else, and the symlink above is
@@ -2406,10 +2471,16 @@ if [ "$WIZARD" = yes ]; then
         return 0
       fi
     else
-      printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
-      printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
-      printf '  Blank is fine — run "agent-fleet-sidecar enrol <pin>" whenever you have one.\n'
-      ask pin "Enrolment pin"
+      # HANDED IN, when somebody already asked. The deb's debconf question is
+      # the one that reaches a person under apt; asking again here would be
+      # a second prompt for the same six digits, on a terminal debconf owns.
+      pin="${AGENT_FLEET_ENROL_PIN:-}"
+      if [ -z "$pin" ]; then
+        printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
+        printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
+        printf '  Blank is fine — run "agent-fleet-sidecar enrol <pin>" whenever you have one.\n'
+        ask pin "Enrolment pin"
+      fi
       [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
     fi
 
@@ -2544,7 +2615,10 @@ if [ "$WIZARD" = yes ]; then
   # The login state lives in the RUN_USER's home, and this script runs under
   # sudo — so asking root whether claude is logged in gets the wrong answer on
   # a box that is perfectly well logged in. Same bug as `doctor` had, same fix.
-  if [ "${STARTED:-0}" = 1 ] && [ -n "$CLAUDE_BIN" ] \
+  # Not without somebody to paste a code: the login prints a link and waits
+  # for what the page gives back, and a default of "yes" with nobody there
+  # prints a URL into apt's output and then gives up on it.
+  if [ "${STARTED:-0}" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ -n "$ASK_IN" ] \
      && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     printf '\n'
     if confirm "Log this box into a Claude account now?" Y; then
@@ -2839,7 +2913,7 @@ if [ "$WIZARD" = yes ]; then
     # As the RUN USER, not as root. doctor resolves paths relative to $HOME, so
     # running it under sudo answers a question nobody asked — it reports on
     # root's box while the service runs as somebody else.
-    as_user "'$DIR/bin/agent-hub' doctor" 2>&1 | sed 's/^/  /' || true
+    as_user "'$UNIT_NODE_BIN' '$DIR/bin/agent-hub' doctor" 2>&1 | sed 's/^/  /' || true
   fi
 
   printf '\n'
@@ -2967,7 +3041,7 @@ Next:
   2. Check the box is ready:
        agent-hub doctor
 
-  If claude is not logged in yet, run `agent-hub login` and follow the link,
+  If claude is not logged in yet, run 'agent-hub login' and follow the link,
   or connect an account from the app once this box has joined a fleet.
 
   For the fleet: put an AGENT_FLEET_API_TOKEN in $COORD_ENV (break-glass
