@@ -115,7 +115,7 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                 connections.linked(came.provider) != null -> "Connected with $name."
                 else ->
                     "Checked with $name — it did not connect, so nothing is stored. Try again, and " +
-                        "if it keeps coming back like this the authorisation is not reaching the fleet."
+                        "if it keeps coming back like this the authorization is not reaching the fleet."
             }
         }
     }

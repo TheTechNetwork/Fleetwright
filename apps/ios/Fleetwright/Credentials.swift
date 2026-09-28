@@ -485,7 +485,7 @@ struct CredentialsView: View {
                 result = "Connected with \(provider.label)."
             } else {
                 result = "Checked with \(provider.label) — it did not connect, so nothing is stored. "
-                    + "Try again, and if it keeps coming back like this the authorisation is not "
+                    + "Try again, and if it keeps coming back like this the authorization is not "
                     + "reaching the fleet."
             }
         } catch {
