@@ -86,9 +86,9 @@ releases only, each one once its staged rollout is complete. apt is then what
 updates the box:
 
 ```sh
-curl -fsSL https://thetechnetwork.github.io/Fleetwright/apt/fleetwright.gpg \
+curl -fsSL https://apt.thetech.network/fleetwright.gpg \
   | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://thetechnetwork.github.io/Fleetwright/apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://apt.thetech.network stable main" \
   | sudo tee /etc/apt/sources.list.d/fleetwright.list
 sudo apt update && sudo apt install fleetwright
 ```

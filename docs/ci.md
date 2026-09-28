@@ -24,7 +24,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `host-release.yml` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
 | `host-release.yml` — `deb` | every run the host package builds | none — builds amd64 and arm64 debs twice and compares, installs and purges one on `debian:bookworm` |
 | `host-release.yml` — `attach-deb` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the debs |
-| `apt-repo.yml` | a release's build finishing, or manual | `APT_SIGNING_KEY` — skips with a notice without it. See [apt](#apt--a-signed-repository-on-pages) |
+| `apt-repo.yml` | a release's build finishing, or manual | `APT_SIGNING_KEY`, Cloudflare — skips with a notice without either. See [apt](#apt--a-signed-repository-on-a-worker) |
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
 | `renovate-config.yml` | PRs touching `renovate.json` | none |
@@ -826,18 +826,27 @@ attached to; `--no-build-cache`, because a restored cache entry makes
 nothing. Both mistakes produce a **green run with an empty database**, which is
 worse than a red one.
 
-## apt — a signed repository on Pages
+## apt — a signed repository on a Worker
 
 `apt-repo.yml` publishes the stable releases whose rollout is complete to
-`https://<owner>.github.io/<repo>/apt`, signed. `docs/packaging.md`, "Stable
-releases through apt", says why only those. Without the key it skips with a
-notice, like every other secret-dependent job here.
+`https://apt.thetech.network`, signed. `docs/packaging.md`, "Stable releases
+through apt", says why only those. Without the signing key or the Cloudflare
+token it skips with a notice, like every other secret-dependent job here.
 
-**It is its own workflow, and not a job in `host-release.yml`**, for two
-reasons. The `github-pages` environment deploys from the default branch, and a
-job inside a release run is on the tag's ref, so the environment would refuse
-it on the one event it exists for; `workflow_run` runs in main's context. And
-`host-release.yml` needs no secrets, which this table promises.
+**A Worker, `fleetwright-apt` (`apt/`), not Pages.** A deb is about 29 MB,
+and both Pages and Workers static assets cap a file at 25 MiB. So the Worker
+serves only the signed metadata (`dists/`, the public key) as assets, and
+answers `pool/<tag>/<file>.deb` with a redirect to that release's GitHub asset.
+apt checks each deb against the sha256 in the signed `Packages` file, so the
+redirect carries no trust: a tampered file behind it is refused as a hash
+mismatch. The redirect only matches the exact shape the builder writes, so it
+cannot be pointed anywhere else. Every `apt update` and every download is a log
+line in Workers observability, which is what Pages would not have given.
+
+**It is its own workflow, and not a job in `host-release.yml`**, because
+`host-release.yml` needs no secrets, which this table promises, and this one
+needs two. It runs on `workflow_run`, so it deploys from main's context and
+the `production` environment's secrets are available.
 
 **It keeps no state.** Every run lists the newest published, non-prerelease
 releases, reads each one's attached `manifest.json`, and takes the debs of the
@@ -848,10 +857,11 @@ hand. Running it again is always safe.
 
 ### Once, by hand
 
-1. **Pages**: Settings → Pages → Source: **GitHub Actions**. Nothing else on
-   the site is replaced by this, because there is nothing else on it; if Pages
-   is ever used for something more, this workflow has to build that too,
-   because a Pages deploy replaces the whole site.
+1. **Cloudflare**: nothing new. It deploys with the `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID` the coordinator already uses, and `custom_domain`
+   creates `apt.thetech.network` on the same zone as `fleet.thetech.network`.
+   To serve it somewhere else, change the one `pattern` in `apt/wrangler.toml`
+   and the address in the README.
 2. **The key.** Ed25519, signing only, no passphrase, because CI cannot type
    one. Made on a machine you trust, and the secret half goes straight into the
    repository secret and nowhere else:
@@ -872,7 +882,7 @@ hand. Running it again is always safe.
    stable release has debs attached yet. The first release after this change
    is the first one that will have them.
 
-**Publish the fingerprint** somewhere that is not the Pages site, such as the
+**Publish the fingerprint** somewhere that is not the apt domain, such as the
 README or the release notes. The key a box first fetches comes from the same
 host as the packages, and the fingerprint is how somebody checks it.
 
@@ -899,7 +909,7 @@ The floor is `contents: read`. The jobs that raise their own:
 | `codeql.yml` — all three | `security-events: write` | uploading results is the point of the workflow |
 | `host-release.yml` — attach | `contents: write` | uploads the host tarball and manifest to the release |
 | `host-release.yml` — attach-deb | `contents: write` | uploads the debs to the release |
-| `apt-repo.yml` — publish | `pages: write`, `id-token: write` | deploys the apt repository to GitHub Pages |
+| `apt-repo.yml` — publish | `contents: read` | reads releases; deploys the apt Worker with the Cloudflare token |
 | `sandbox.yml` | `packages: write` | pushes the session image to GHCR |
 
 ## What to set up first
