@@ -272,7 +272,7 @@ async function doctor({ repair = false } = {}) {
 
   // --- the service -----------------------------------------------------------
   if (unit.known) {
-    ok(`fleetwright.service is ${unit.state}`, unit.state === 'active', unit.detail);
+    ok(`${unit.name}.service is ${unit.state}`, unit.state === 'active', unit.detail);
     if (unit.state !== 'active') {
       repairs.push({
         // RESET-FAILED FIRST. systemd stops trying after StartLimitBurst and
@@ -280,7 +280,7 @@ async function doctor({ repair = false } = {}) {
         // so a plain restart on a box in that state does nothing and says
         // almost nothing, which is how a counter reached 6423.
         what: 'clear the failure counter and start fleetwright',
-        run: () => systemctl(['reset-failed', unitName('fleetwright')]) && systemctl(['start', unitName('fleetwright')]),
+        run: () => systemctl(['reset-failed', unit.name]) && systemctl(['start', unit.name]),
       });
     }
   }
@@ -390,15 +390,18 @@ function unitState() {
   // leftover from an earlier drill, and never on CI. Seven points of
   // bin/fleetwright were "coverage" of whatever was lying around in /etc.
   const unitDir = process.env.FLEETWRIGHT_UNIT_DIR || '/etc/systemd/system';
-  if (!existsSync(`${unitDir}/fleetwright.service`)) return { known: false };
-  const r = spawnSync(cfg.systemctlBin, ['is-active', unitName('fleetwright')], { encoding: 'utf8' });
+  // By whichever name this box has it (agent-hub.service until the installer
+  // has migrated it), looked up in the same directory the gate checks.
+  const unit = unitName('fleetwright', { dir: unitDir });
+  if (!existsSync(`${unitDir}/${unit}.service`)) return { known: false };
+  const r = spawnSync(cfg.systemctlBin, ['is-active', unit], { encoding: 'utf8' });
   const state = (r.stdout || '').trim() || 'unknown';
   let detail = '';
   if (state !== 'active') {
-    const j = spawnSync(cfg.systemctlBin, ['is-failed', unitName('fleetwright')], { encoding: 'utf8' });
-    detail = (j.stdout || '').trim() === 'failed' ? 'failed — journalctl -u fleetwright' : '';
+    const j = spawnSync(cfg.systemctlBin, ['is-failed', unit], { encoding: 'utf8' });
+    detail = (j.stdout || '').trim() === 'failed' ? `failed — journalctl -u ${unit}` : '';
   }
-  return { known: true, state, detail };
+  return { known: true, state, detail, name: unit };
 }
 
 // --- helpers ---------------------------------------------------------------

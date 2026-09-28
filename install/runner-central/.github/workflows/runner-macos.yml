@@ -83,7 +83,7 @@ jobs:
       - uses: ./.github/actions/fleet-host
         with:
           ticket: ${{ inputs.ticket }}
-          claim: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN || secrets.AGENT_FLEET_RUNNER_TOKEN }}
+          claim: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
           minutes: ${{ inputs.minutes }}
           coordinator: ${{ inputs.coordinator }}
           source: ${{ inputs.source }}

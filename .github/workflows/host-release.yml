@@ -164,7 +164,8 @@ jobs:
           # THAT IT STARTS, not that it succeeds. Exit codes belong to each
           # tool — fleetwright-mcp refuses without a coordinator URL and is
           # right to. A shim node cannot parse dies before any of that.
-          for entry in fleetwright fleetwright-sidecar fleetwright-mcp fleetwright; do
+          # The agent-* names are the aliases an unmigrated box's units start.
+          for entry in fleetwright fleetwright-sidecar fleetwright-mcp agent-hub agent-fleet-sidecar agent-fleet-mcp; do
             [ -f "$root/bin/$entry" ] || { echo "::error::no bin/$entry in the release"; exit 1; }
             for how in "node $root/bin/$entry" "$root/bin/$entry"; do
               out="$(cd / && $how --help 2>&1 || true)"
@@ -435,7 +436,7 @@ jobs:
               || { echo "::error::the install did not record apt as its updater"; exit 1; }
             grep -q "^ExecStart=/usr/lib/fleetwright/node/bin/node " /etc/systemd/system/fleetwright.service \
               || { echo "::error::the unit does not run the bundled node"; exit 1; }
-            for cmd in fleetwright fleetwright fw; do
+            for cmd in fleetwright fw agent-hub agent-fleet-sidecar; do
               out="$($cmd --help 2>&1 || true)"
               case "$out" in *"not found"*|*SyntaxError*|"") echo "::error::$cmd from PATH did not start: $out"; exit 1 ;; esac
             done

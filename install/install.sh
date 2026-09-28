@@ -74,7 +74,7 @@ set -euo pipefail
 # AGENT_FLEET_COORDINATOR_URL, and somebody's muscle memory types
 # AGENT_HUB_NODE_BIN; both still work. The new name wins when both are set.
 # src/fleet/legacy-names.js is the same rule for the Node code.
-for __legacy in $(env | sed -n 's/^\(AGENT_\(HUB\|FLEET\)_[A-Za-z0-9_]*\)=.*/\1/p'); do
+for __legacy in $(env | sed -n -e 's/^\(AGENT_HUB_[A-Za-z0-9_]*\)=.*/\1/p' -e 's/^\(AGENT_FLEET_[A-Za-z0-9_]*\)=.*/\1/p'); do
   __new="FLEETWRIGHT_${__legacy#AGENT_*_}"
   if [ -z "$(eval "printf '%s' \"\${$__new:-}\"")" ]; then
     eval "export $__new=\"\${$__legacy}\""
@@ -178,6 +178,7 @@ die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 # exists is left alone and said, never merged.
 LEGACY_RUNNING=""   # new unit names whose old unit was active
 LEGACY_UNITS=""     # old unit names to stop before their replacement starts
+LEGACY_CONFIRM=0    # the commit-confirm watchdog was removed under its old name
 legacy_unit_for() { # legacy_unit_for NEW → OLD, or nothing
   case "$1" in
     fleetwright) echo agent-hub ;;
@@ -195,7 +196,18 @@ stop_legacy_unit() { # stop_legacy_unit NEW
   local old; old="$(legacy_unit_for "$1")"
   [ -n "$old" ] || return 0
   case " $LEGACY_UNITS " in *" $old "*) ;; *) return 0 ;; esac
+  if [ "$PLATFORM" = macos ]; then
+    launchctl bootout "system/network.thetech.$old" >/dev/null 2>&1 || true
+    return 0
+  fi
   systemctl stop "$old" >/dev/null 2>&1 || true
+  # ENABLED UNDER ITS NEW NAME, HERE, because the old one was disabled by the
+  # migration and this is the one call every route to a restart goes through.
+  # The --upgrade loop restarts without enabling — it never had to, when unit
+  # names did not change — and a box that came back from a reboot with nothing
+  # running is the failure that found this.
+  [ -f "/etc/systemd/system/$1.service" ] && { systemctl enable "$1" >/dev/null 2>&1 || true; }
+  return 0
 }
 migrate_legacy_names() {
   [ "$(id -u)" = 0 ] || return 0
@@ -222,10 +234,13 @@ migrate_legacy_names() {
       ok "unit $old → $new"
     fi
     if [ -f "/Library/LaunchDaemons/network.thetech.$old.plist" ]; then
-      launchctl bootout "system/network.thetech.$old" >/dev/null 2>&1 && LEGACY_RUNNING="$LEGACY_RUNNING $new" || true
+      # Not booted out here — the same rule as systemd: the old daemon keeps
+      # running until stop_legacy_unit, the moment before its replacement.
+      if launchctl print "system/network.thetech.$old" >/dev/null 2>&1; then LEGACY_RUNNING="$LEGACY_RUNNING $new"; fi
       [ -e "/Library/LaunchDaemons/network.thetech.$new.plist" ] \
         || mv "/Library/LaunchDaemons/network.thetech.$old.plist" "/Library/LaunchDaemons/network.thetech.$new.plist"
       rm -f "/Library/LaunchDaemons/network.thetech.$old.plist"
+      LEGACY_UNITS="$LEGACY_UNITS $old"
       ok "launchd $old → $new"
     fi
   done
@@ -235,14 +250,45 @@ migrate_legacy_names() {
     if [ -f "/etc/systemd/system/agent-fleet-confirm.$f" ]; then
       systemctl disable --now "agent-fleet-confirm.$f" >/dev/null 2>&1 || true
       rm -f "/etc/systemd/system/agent-fleet-confirm.$f"
+      LEGACY_CONFIRM=1
       ok "unit agent-fleet-confirm.$f removed — fleetwright-confirm replaces it"
     fi
   done
   [ -n "$LEGACY_UNITS" ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
 
+  # STATE: moved whole, the old path a symlink, so an open file, a running
+  # sidecar reading its key, and any absolute path recorded anywhere still
+  # resolve. The host key in particular IS this box's identity in the fleet.
+  for pair in /var/lib/agent-hub:/var/lib/fleetwright \
+              /var/lib/agent-fleet:/var/lib/fleetwright-sidecar \
+              /var/lib/agent-fleet-coordinator:/var/lib/fleetwright-coordinator; do
+    old="${pair%%:*}"; new="${pair#*:}"
+    [ -d "$old" ] && [ ! -L "$old" ] || continue
+    if [ -e "$new" ]; then warn "$new already exists — leaving $old where it is"; continue; fi
+    mv "$old" "$new"
+    ln -s "$new" "$old"
+    ok "$old → $new"
+  done
+
   # ENV FILES: moved, keys renamed, the old path left as a symlink. A key that
   # would collide with one already renamed in the same file is commented out
   # with a note rather than silently overriding it.
+  #
+  # A PATH IS REWRITTEN ONLY IF ITS DIRECTORY MOVED. The state moves above
+  # refuse when the new name already exists; an env file then pointing at the
+  # new name would name a directory without the host key, and the sidecar
+  # would mint a fresh identity. So each rewrite is on the list only when the
+  # old path is now a symlink or gone.
+  PATH_SEDS=(-e 's#/run/agent-fleet#/run/fleetwright-sidecar#g'
+             -e 's#/etc/agent-fleet-sidecar\.env#/etc/fleetwright-sidecar.env#g'
+             -e 's#/etc/agent-fleet-coordinator\.env#/etc/fleetwright-coordinator.env#g'
+             -e 's#/etc/agent-hub\.env#/etc/fleetwright.env#g')
+  moved() { [ -L "$1" ] || [ ! -e "$1" ]; }
+  moved /var/lib/agent-fleet-coordinator && PATH_SEDS+=(-e 's#/var/lib/agent-fleet-coordinator#/var/lib/fleetwright-coordinator#g')
+  moved /var/lib/agent-fleet && PATH_SEDS+=(-e 's#/var/lib/agent-fleet/#/var/lib/fleetwright-sidecar/#g' -e 's#/var/lib/agent-fleet$#/var/lib/fleetwright-sidecar#')
+  moved /var/lib/agent-hub && PATH_SEDS+=(-e 's#/var/lib/agent-hub#/var/lib/fleetwright#g')
+  # 0600 from the first byte: this is a copy of a file holding tokens.
+  umask 077
   for pair in /etc/agent-hub.env:/etc/fleetwright.env \
               /etc/agent-fleet-sidecar.env:/etc/fleetwright-sidecar.env \
               /etc/agent-fleet-coordinator.env:/etc/fleetwright-coordinator.env; do
@@ -260,31 +306,11 @@ migrate_legacy_names() {
       /^FLEETWRIGHT_[A-Z0-9_]*=/ { key = $0; sub(/=.*/, "", key); seen[key] = 1 }
       { print }
     ' "$new" \
-      | sed -e 's#/var/lib/agent-fleet-coordinator#/var/lib/fleetwright-coordinator#g' \
-            -e 's#/var/lib/agent-fleet/#/var/lib/fleetwright-sidecar/#g' \
-            -e 's#/var/lib/agent-fleet$#/var/lib/fleetwright-sidecar#' \
-            -e 's#/var/lib/agent-hub#/var/lib/fleetwright#g' \
-            -e 's#/run/agent-fleet#/run/fleetwright-sidecar#g' \
-            -e 's#/etc/agent-fleet-sidecar\.env#/etc/fleetwright-sidecar.env#g' \
-            -e 's#/etc/agent-fleet-coordinator\.env#/etc/fleetwright-coordinator.env#g' \
-            -e 's#/etc/agent-hub\.env#/etc/fleetwright.env#g' \
+      | sed "${PATH_SEDS[@]}" \
       > "$new.renaming" && cat "$new.renaming" > "$new" && rm -f "$new.renaming"
     ok "$old → $new, settings renamed to FLEETWRIGHT_*"
   done
-
-  # STATE: moved whole, the old path a symlink, so an open file, a running
-  # sidecar reading its key, and any absolute path recorded anywhere still
-  # resolve. The host key in particular IS this box's identity in the fleet.
-  for pair in /var/lib/agent-hub:/var/lib/fleetwright \
-              /var/lib/agent-fleet:/var/lib/fleetwright-sidecar \
-              /var/lib/agent-fleet-coordinator:/var/lib/fleetwright-coordinator; do
-    old="${pair%%:*}"; new="${pair#*:}"
-    [ -d "$old" ] && [ ! -L "$old" ] || continue
-    if [ -e "$new" ]; then warn "$new already exists — leaving $old where it is"; continue; fi
-    mv "$old" "$new"
-    ln -s "$new" "$old"
-    ok "$old → $new"
-  done
+  umask 022
 
   # SUDOERS: the rules this box already agreed to, rewritten for the new unit
   # names and validated before the old ones go. A rule that does not validate
@@ -345,7 +371,11 @@ if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/fleetwright.service ] \
   # A box whose payload is missing is not converted. It is broken, and the
   # checkout beside it works — so it goes back to that, says so, and offers the
   # conversion again.
-  if [ -f "$FLEET_BASE/current/lib/fleetwright.mjs" ]; then
+  # EITHER NAME: a release built before the rename has lib/agent-hub.mjs and
+  # nothing else, and it is exactly what a converted box has under `current`
+  # until the refresh below replaces it. Checking only the new name un-converted
+  # every such box the one-liner touched.
+  if [ -f "$FLEET_BASE/current/lib/fleetwright.mjs" ] || [ -f "$FLEET_BASE/current/lib/agent-hub.mjs" ]; then
     CONVERTED=1
   else
     warn "$FLEET_BASE/current does not contain a usable release"
@@ -449,7 +479,7 @@ USER_HOME="$(user_home "$RUN_USER")"
 if [ "$(id -u)" = 0 ] && [ -n "$USER_HOME" ] && [ -d "$USER_HOME/agent-runs" ] && [ ! -L "$USER_HOME/agent-runs" ] \
    && [ ! -e "$USER_HOME/fleetwright-runs" ] \
    && ! grep -qE '^(FLEETWRIGHT|AGENT_HUB)_WORKDIR=.' "$ENV_FILE" 2>/dev/null; then
-  case " $* " in *" --check "*|*" -n "*) ;; *)
+  case " $* " in *" --check "*|*" -n "*|*" --help "*|*" -h "*) ;; *)
     mv "$USER_HOME/agent-runs" "$USER_HOME/fleetwright-runs"
     ln -s fleetwright-runs "$USER_HOME/agent-runs"
     chown -h "$RUN_USER" "$USER_HOME/agent-runs" 2>/dev/null || true
@@ -1853,6 +1883,7 @@ else
         : ;;  # local, loopback, or unset — the local coordinator may be in use
       *://*)
         systemctl disable --now fleetwright-coordinator >/dev/null 2>&1 || true
+        stop_legacy_unit fleetwright-coordinator
         rm -f /etc/systemd/system/fleetwright-coordinator.service
         systemctl daemon-reload >/dev/null 2>&1 || true
         ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
@@ -2298,9 +2329,9 @@ fi
 # shorter, and a second copy of the entry point would be a second thing to
 # keep in step. `fleetwright` is the name a person is told; the agent-* names
 # stay for every box, runbook and muscle memory that already uses them.
-for pair in fleetwright:fleetwright fleetwright-sidecar:fleetwright-sidecar \
-            fleetwright-coordinator:fleetwright-coordinator \
-            fleetwright:fleetwright fw:fleetwright; do
+for pair in fleetwright:fleetwright fw:fleetwright \
+            fleetwright-sidecar:fleetwright-sidecar fleetwright-coordinator:fleetwright-coordinator \
+            agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar agent-fleet-coordinator:agent-fleet-coordinator; do
   link="${pair%%:*}"; cli="${pair#*:}"
   [ -f "$DIR/bin/$cli" ] || continue
   if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
@@ -3131,8 +3162,20 @@ fi
 # restarted — the one-liner re-run with no terminal, say, which writes files
 # and starts nothing — is started under its new one. The migration must never
 # be the thing that leaves a working box stopped.
-if [ -n "$LEGACY_RUNNING" ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ]; then
+if [ -n "$LEGACY_RUNNING" ] && [ "$CHECK_ONLY" != 1 ]; then
   for unit in $LEGACY_RUNNING; do
+    if [ "$PLATFORM" = macos ]; then
+      plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
+      launchctl print "system/network.thetech.$unit" >/dev/null 2>&1 && continue
+      [ -f "$plist" ] || continue
+      stop_legacy_unit "$unit"
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+        ok "$unit running — it was running before the rename"
+      else
+        warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — tail /var/log/$unit.log"
+      fi
+      continue
+    fi
     systemctl is-active --quiet "$unit" 2>/dev/null && continue
     [ -f "/etc/systemd/system/$unit.service" ] || continue
     stop_legacy_unit "$unit"
@@ -3144,6 +3187,19 @@ if [ -n "$LEGACY_RUNNING" ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ]
       journalctl -u "$unit" -n 12 --no-pager 2>/dev/null | sed 's/^/       /' || true
     fi
   done
+fi
+# THE WATCHDOG, RE-ARMED. The migration removed agent-fleet-confirm.timer; the
+# new timer is written above but only the wizard arms it, and an update runs
+# no wizard. Left here, every pre-rename box would stop reverting bad updates
+# the day it took this one.
+if [ "$LEGACY_CONFIRM" = 1 ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ] \
+   && [ -f /etc/systemd/system/fleetwright-confirm.timer ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl enable --now fleetwright-confirm.timer >/dev/null 2>&1; then
+    ok "commit-confirm watchdog re-armed under its new name"
+  else
+    warn "could not arm fleetwright-confirm.timer — updates will not auto-revert"
+  fi
 fi
 
 say "Installed."

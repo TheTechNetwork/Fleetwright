@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { isValidName } from './names.js';
 import { hasSession, capturePane } from './tmux.js';
 import { podman, sandboxNames } from './podman.js';
+import { unitName } from '../fleet/legacy-paths.js';
 
 /**
  * The services this can read, by the name someone would actually type.
@@ -241,6 +242,9 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
  * @param {string} unit
  */
 export function unitInstalled(cfg, unit) {
-  const r = spawnSync(cfg.systemctlBin, ['cat', unit], { encoding: 'utf8', timeout: 10_000 });
+  // By whichever name this box has it: a checkout updated by git pull, or a
+  // packaged box between the release swap and the installer renaming its
+  // units, still has agent-hub.service — and its log buttons went missing.
+  const r = spawnSync(cfg.systemctlBin, ['cat', unitName(unit)], { encoding: 'utf8', timeout: 10_000 });
   return r.status === 0;
 }

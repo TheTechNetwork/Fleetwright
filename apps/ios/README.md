@@ -1,9 +1,9 @@
 # Fleetwright — the iOS app
 
-**The app is called Fleetwright; the project is still fleetwright.** "Agent
-Fleet" is taken on the App Store, where display names are unique across the
-whole store. The CLIs, the services and the repository keep their names — only
-the thing with a listing needed a new one.
+**The app and the project are both Fleetwright.** The app got the name first:
+"Agent Fleet" is taken on the App Store, where display names are unique across
+the whole store. The CLIs, the services and the repository followed later, in
+the rename recorded in [`docs/lineage.md`](../../docs/lineage.md).
 
 Coined on purpose, like shipwright: a made-up compound is far less likely to
 collide, which matters after losing time to one collision already. If you would

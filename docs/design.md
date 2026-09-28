@@ -145,7 +145,7 @@ tie-break round robin. Hosts report `maxSessions`, current count, load average, 
 never `healthy`. A session whose host is offline is `unreachable`, not `stopped`. This is recon's
 principle — make "we don't know" unrepresentable as a benign value — and it applies directly.
 
-**The warning:** multi-host reintroduces the two-plane split fleetwright's README explicitly
+**The warning:** multi-host reintroduces the two-plane split agent-hub's README explicitly
 celebrates having removed (a Worker + D1 request queue that needed a heartbeat protocol and a
 stale-row reaper). Unavoidable with more than one box, but it means **the coordinator's registry is
 a cache with provenance, never the authority.** Each host stays the sole authority on its own tmux.
@@ -250,14 +250,14 @@ upstream.
 ## 6. Host-side code structure
 
 > **Superseded 2026-08-17 — see §8.5.** The host side is a **sidecar process in fleetwright**
-> driving fleetwright over its loopback HTTP API, not an adapter inside fleetwright. The
+> driving the hub over its loopback HTTP API, not an adapter inside it. The
 > reasoning below still holds and is why the sidecar translates intents into the same command
 > lines `dispatch()` takes; what changed is that it reaches that seam through `POST /api/command`
 > instead of by being loaded into the process. `docs/sidecar.md` has the detail, including the two
 > things the HTTP boundary costs.
 
 **The coordinator client is just another adapter.** `dispatch()` already takes
-`{sessions, login, cfg, actor}` plus a command line, and fleetwright's README advertises exactly this
+`{sessions, login, cfg, actor}` plus a command line, and agent-hub's README advertises exactly this
 seam: "Slack and WhatsApp are each one file; nothing in `src/core/` needs to change."
 
 So the host side is `src/adapters/fleet.js` — roughly 200 lines that dial the coordinator,

@@ -234,7 +234,7 @@ struct FleetView: View {
             .scrollContentBackground(.hidden)
             .background(Design.Palette.bg)
             .refreshable { await refresh() }
-            // The product is called Fleetwright; this said "fleetwright",
+            // The product is called Fleetwright; this said "agent-fleet",
             // which is the repository. A person who installed one app and is
             // looking at another name has to work out whether they are the
             // same thing, and the answer being yes does not make the question

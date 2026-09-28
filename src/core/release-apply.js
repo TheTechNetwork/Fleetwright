@@ -220,8 +220,10 @@ export async function applyRelease({ installDir, manifestUrl, protocol, channel 
   // Node, or truncated in a way the digest somehow survived, or simply broken,
   // fails here — where the running box is still untouched — instead of after
   // the swap, where systemd restarts the corpse every three seconds.
-  const entry = path.join(staging, 'lib', 'fleetwright.mjs');
-  if (!existsSync(entry)) {
+  // Either name: a release built before the rename ships lib/agent-hub.mjs
+  // and nothing else, and rolling back across the rename has to stay possible.
+  const entry = [path.join(staging, 'lib', 'fleetwright.mjs'), path.join(staging, 'lib', 'agent-hub.mjs')].find((f) => existsSync(f));
+  if (!entry) {
     rmSync(staging, { recursive: true, force: true });
     return { ok: false, changed: false, message: 'the release has no lib/fleetwright.mjs — refusing it' };
   }

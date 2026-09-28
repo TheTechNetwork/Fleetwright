@@ -56,7 +56,7 @@ else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
 else await run();
 
 function usage() {
-  console.log(`fleetwright-sidecar — drives a stock fleetwright on behalf of the fleet coordinator
+  console.log(`fleetwright-sidecar — drives this box's session manager (the hub) on behalf of the fleet coordinator
 
   fleetwright-sidecar            run
   fleetwright-sidecar enrol PIN  present this box to the coordinator (six-digit pin from /enroll)
@@ -64,12 +64,12 @@ function usage() {
                                  enrol from inside a GitHub Actions job. GitHub's own
                                  token admits the machine; CLAIM says whose runner it is.
   fleetwright-sidecar identity   print this box's key fingerprint
-  fleetwright-sidecar doctor     check this box can drive its fleetwright
+  fleetwright-sidecar doctor     check this box can drive its hub
 
 Environment:
   FLEETWRIGHT_COORDINATOR_URL    required — the origin this sidecar pins
   FLEETWRIGHT_HUB_URL            default http://127.0.0.1:8790
-  FLEETWRIGHT_HUB_TOKEN          fleetwright's FLEETWRIGHT_TOKEN, if it has one
+  FLEETWRIGHT_HUB_TOKEN          the hub's FLEETWRIGHT_TOKEN, if it has one
   FLEETWRIGHT_HOST_ID            default: this hostname
   FLEETWRIGHT_LABELS             comma-separated scheduler constraints
   FLEETWRIGHT_TRANSPORT          websocket (default) or stdio

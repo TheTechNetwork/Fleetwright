@@ -40,7 +40,7 @@ set -eu
 # AGENT_FLEET_COORDINATOR_URL, and somebody's muscle memory types
 # AGENT_HUB_NODE_BIN; both still work. The new name wins when both are set.
 # src/fleet/legacy-names.js is the same rule for the Node code.
-for __legacy in $(env | sed -n 's/^\(AGENT_\(HUB\|FLEET\)_[A-Za-z0-9_]*\)=.*/\1/p'); do
+for __legacy in $(env | sed -n -e 's/^\(AGENT_HUB_[A-Za-z0-9_]*\)=.*/\1/p' -e 's/^\(AGENT_FLEET_[A-Za-z0-9_]*\)=.*/\1/p'); do
   __new="FLEETWRIGHT_${__legacy#AGENT_*_}"
   if [ -z "$(eval "printf '%s' \"\${$__new:-}\"")" ]; then
     eval "export $__new=\"\${$__legacy}\""

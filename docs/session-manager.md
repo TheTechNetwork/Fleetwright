@@ -330,8 +330,10 @@ fleetwright list
 cgroup, and with systemd's default a plain `systemctl restart` reaps the whole
 cgroup and kills every live session at once. Do not remove that line.
 
-To upgrade: `git -C /opt/fleetwright pull && sudo /opt/fleetwright/install/install.sh
-&& systemctl restart fleetwright`. Sessions keep running throughout.
+To upgrade a checkout: `git -C /opt/fleetwright-src pull && sudo
+/opt/fleetwright-src/install/install.sh --upgrade`. A packaged box updates from
+the app or with `apt upgrade` — see [`packaging.md`](./packaging.md). Sessions
+keep running throughout.
 
 ---
 

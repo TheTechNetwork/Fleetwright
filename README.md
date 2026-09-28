@@ -4,14 +4,13 @@ A self-hosted Claude Code session manager, and the multi-host control plane
 around it: ephemeral root-capable sandboxes, session wake, and a phone that can
 reach any of it from a cold radio.
 
-> **On the two names.** The repository and the phone app are called
-> **Fleetwright**; the software inside it is `fleetwright` — the package, the
-> binaries (`fleetwright-sidecar`, `fleetwright-coordinator`), the systemd
-> units, the `FLEETWRIGHT_*` environment variables and `/opt/fleetwright-src`.
-> That is deliberate, not drift. Those names are load-bearing on machines that
-> are already running: renaming them would mean reinstalling every host and
-> re-entering every secret. The App Store needed a unique name, so it got one.
-> See [docs/naming.md](docs/naming.md).
+> **One name now.** The repository, the phone app, the package, the binaries
+> (`fleetwright`, `fleetwright-sidecar`, `fleetwright-coordinator`), the systemd
+> units, the `FLEETWRIGHT_*` environment variables and `/opt/fleetwright` are
+> all Fleetwright. They were `agent-hub` and `agent-fleet` until the rename; a
+> box installed before it moves itself onto the new names on its next update,
+> and the old command names and settings keep working. Where the code came
+> from, and what deliberately kept its old name: [docs/lineage.md](docs/lineage.md).
 
 **New box?** [docs/first-session.md](docs/first-session.md) is ten steps from
 clone to a running session, with no digressions. The essays are linked at the
