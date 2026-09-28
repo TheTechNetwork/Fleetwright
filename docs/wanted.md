@@ -15,7 +15,7 @@ inside, and everything outside the two volumes discarded on stop
 of these a decision rather than an `apt install` line.
 
 The shape that probably fits all four: a **second image**, not a fatter default.
-`AGENT_HUB_SANDBOX_IMAGE` already selects it per box, and a session that needs a
+`FLEETWRIGHT_SANDBOX_IMAGE` already selects it per box, and a session that needs a
 browser should not make every session pay for one.
 
 ### A browser
@@ -66,7 +66,7 @@ just a box that dials in.** The scheduler already filters on labels before it
 ranks by capacity, so `macos` or `windows` is most of the routing. What differs
 is how much of a host each platform can be:
 
-| | agent-hub | sidecar | sandbox | what it is for |
+| | fleetwright | sidecar | sandbox | what it is for |
 |---|---|---|---|---|
 | **Linux** | works | works | podman, works | everything today |
 | **macOS** | needs checking — tmux is fine, the systemd units are not | should work: Node, tmux and HTTP, nothing Linux-specific | no. podman on a Mac is a Linux VM, which gets you Linux containers on Apple hardware and still no Xcode | Xcode, `xcodebuild`, signing, the iOS simulator |
@@ -90,7 +90,7 @@ Two real pieces of work fall out of that table:
   chown-ing by the installer instead of by the service manager. Untested on real
   hardware. Sessions on a Mac run unsandboxed, which should be said in the UI
   rather than assumed.
-- **Windows is really WSL2.** agent-hub drives sessions through tmux
+- **Windows is really WSL2.** fleetwright drives sessions through tmux
   `capture-pane` and `send-keys`; there is no tmux on Windows and no obvious
   substitute that keeps resume-dialog detection and `peek` working. A WSL2 host
   is a Linux host that happens to live on a Windows machine, and reaching
@@ -132,9 +132,9 @@ Three things this repository already has that the package should not reinvent:
   interesting half of Inkbox is that a person is the SAME actor whether they
   text, mail or call, and that is a question about the identity model rather
   than about Telnyx.
-- **An allowlist.** `AGENT_FLEET_AUTH_ALLOW` and the invitations beside it are
+- **An allowlist.** `FLEETWRIGHT_AUTH_ALLOW` and the invitations beside it are
   the existing answer to "who gets through".
-  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` was the other one and is archived, which
+  `FLEETWRIGHT_TELEGRAM_ALLOWED_USERS` was the other one and is archived, which
   is worth knowing here: the surface it guarded is the closest thing this
   project has built to the one below, and it was retired rather than kept.
 
@@ -161,7 +161,7 @@ design.
 ### Session configuration from the app and Telegram
 
 Today a session is started with a name, a path and a permission flag, and
-everything else about how it runs is decided by `/etc/agent-hub.env` on the box
+everything else about how it runs is decided by `/etc/fleetwright.env` on the box
 — which means changing it is an SSH session, which is the errand this project
 exists to remove.
 
@@ -233,7 +233,7 @@ let that decide what goes in one. The argument about which rules help is not
 settled by argument.
 
 **The `CLAUDE.md` half of the seed now exists too**, on the same terms. A box
-with a file at `AGENT_HUB_RULES_FILE` writes it into every new session's
+with a file at `FLEETWRIGHT_RULES_FILE` writes it into every new session's
 `~/.claude/CLAUDE.md`, and the health frame reports its size (`houseRules`)
 because the size is the cost. Nothing about it crosses the wire — no verb, no
 field, not even a name — so it needs even less of the argument above than a
@@ -329,7 +329,7 @@ Same capability as the apps, from a PC. **Explicitly after identity lands**,
 which is what makes it possible to build honestly.
 
 There is already a browser UI — `src/adapters/http.js` serves one — but it is
-per-host, it talks to one agent-hub on `127.0.0.1:8790`, and its idea of who is
+per-host, it talks to one fleetwright on `127.0.0.1:8790`, and its idea of who is
 asking is the string `web`. What is wanted is different: a **fleet-level** UI
 against the coordinator, signed in the way the apps sign in, holding a
 credential of its own like any other device.

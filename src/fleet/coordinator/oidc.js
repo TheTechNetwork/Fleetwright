@@ -41,6 +41,17 @@ export const ACTIONS_ISSUER = 'https://token.actions.githubusercontent.com';
  */
 export const DEFAULT_ACTIONS_AUDIENCE = 'fleetwright';
 
+/**
+ * What a coordinator accepts when nobody configured an audience: the current
+ * name, and `agent-fleet`, which every runner workflow asked for before the
+ * rename. A runner repository copied from install/runner-central before then
+ * still asks for it, and refusing it would take every one of those runners
+ * out of the fleet on the day the coordinator updated. Both are this
+ * project's own names, so accepting both widens nothing a token minted for
+ * some OTHER audience could use.
+ */
+export const DEFAULT_ACTIONS_AUDIENCES = Object.freeze([DEFAULT_ACTIONS_AUDIENCE, 'agent-fleet']);
+
 /** @type {Map<string, any>} */
 const jwks = new Map();
 

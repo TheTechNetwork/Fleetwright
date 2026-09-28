@@ -134,7 +134,7 @@ test('a dialog we do not recognise offers nothing, as it always did', () => {
 // --- the setting that decides what may be quoted does not decide this --------
 
 test('a fleet that forbids quoting the session still gets answerable notifications', () => {
-  // AGENT_FLEET_PROMPT_TEXT is about what may LEAVE THE BOX. The labels are
+  // FLEETWRIGHT_PROMPT_TEXT is about what may LEAVE THE BOX. The labels are
   // matched here and never travel; what travels is a slot and a digit, and the
   // words on the buttons were ours before the pane was ever read.
   //

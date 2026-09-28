@@ -4,7 +4,7 @@
 // This checks what happens inside one — which is where the confinement actually
 // lives, and which was asserted by reading the source because CI had no engine.
 //
-// IT HAS ONE. CI has Docker, and `AGENT_HUB_PODMAN_BIN` has always been
+// IT HAS ONE. CI has Docker, and `FLEETWRIGHT_PODMAN_BIN` has always been
 // configurable; the only thing in the way was three podman-only subcommands
 // (`volume exists`, `image exists`, `container exists`). Those are `inspect`
 // now, which both engines have and both answer the same way. So this runs
@@ -27,14 +27,14 @@ import { spawnSync } from 'node:child_process';
 
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../src/core/files.js';
 
-const BIN = process.env.AGENT_HUB_PODMAN_BIN || 'podman';
+const BIN = process.env.FLEETWRIGHT_PODMAN_BIN || 'podman';
 const HAVE_ENGINE = spawnSync(BIN, ['--version'], { encoding: 'utf8' }).status === 0;
 // debian:13-slim is what sandbox/Containerfile is built from, and the scripts
 // use GNU find's -printf and realpath. Any image with coreutils will do; this
 // one is small and is what production runs.
-const IMAGE = process.env.AGENT_HUB_SANDBOX_IMAGE || 'debian:13-slim';
+const IMAGE = process.env.FLEETWRIGHT_SANDBOX_IMAGE || 'debian:13-slim';
 
-const skip = HAVE_ENGINE ? false : `no container engine (${BIN} not runnable) — set AGENT_HUB_PODMAN_BIN`;
+const skip = HAVE_ENGINE ? false : `no container engine (${BIN} not runnable) — set FLEETWRIGHT_PODMAN_BIN`;
 
 /** A session name unique to this run, so a rerun never inherits a volume. */
 const NAME = `filetest-${process.pid}`;

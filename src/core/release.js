@@ -200,7 +200,7 @@ export function decideRelease({ manifest, installed, protocol, channel = 'stable
       message:
         `${m.version} is a prerelease and this host is on the stable channel.\n` +
         'Move it with `/channel rolling` from the app, or set ' +
-        'AGENT_HUB_RELEASE_CHANNEL=rolling in this box\'s environment.',
+        'FLEETWRIGHT_RELEASE_CHANNEL=rolling in this box\'s environment.',
     };
   }
 

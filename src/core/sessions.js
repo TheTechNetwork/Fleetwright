@@ -204,7 +204,7 @@ export class SessionManager {
   /**
    * Start a brand-new session.
    * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null }} opts
-   *   skipPermissions overrides AGENT_HUB_SKIP_PERMISSIONS for this session
+   *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
    *   title is prose a PERSON wrote; supplying it pins the title so nothing
    *   derived later — the transcript hook, the cwd guess — overwrites it.
@@ -286,7 +286,7 @@ export class SessionManager {
         ok: false,
         message:
           `At the concurrency cap (${active}/${this.cfg.maxSessions}). Stop a session first, ` +
-          'or raise AGENT_HUB_MAX_SESSIONS if this box can take the load.',
+          'or raise FLEETWRIGHT_MAX_SESSIONS if this box can take the load.',
       };
     }
 
@@ -343,7 +343,7 @@ export class SessionManager {
    *
    * @param {{ name: string, actor?: string|null, choice?: 'summary'|'full'|null }} opts
    *   choice picks how to answer the "resume from summary or in full?" dialog.
-   *   Omit it to use AGENT_HUB_RESUME_CHOICE, which defaults to showing you the
+   *   Omit it to use FLEETWRIGHT_RESUME_CHOICE, which defaults to showing you the
    *   dialog and waiting.
    * @returns {Promise<Result>}
    */
@@ -688,7 +688,7 @@ export class SessionManager {
     if (this.cfg.rcRequired) {
       killSession(name);
       this.registry.upsert(name, { status: 'error', resumeOnBoot: false, detail: rc.detail, stoppedAt: Date.now() });
-      log.warn(`${name}: ${rc.detail}; killed (AGENT_HUB_RC_REQUIRED=1)`);
+      log.warn(`${name}: ${rc.detail}; killed (FLEETWRIGHT_RC_REQUIRED=1)`);
       return { ...rc, killed: true };
     }
     this.registry.upsert(name, { detail: `${verb} · ${rc.detail}` });

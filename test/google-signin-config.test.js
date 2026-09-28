@@ -74,16 +74,16 @@ test('the gradle build reads it and turns buildConfig on', () => {
 
 test('the app and the coordinator agree on the audience', () => {
   // `aud` in the ID token is the web client id, and the coordinator verifies
-  // it against AGENT_FLEET_AUTH_AUDIENCES. These are two files nobody edits
+  // it against FLEETWRIGHT_AUTH_AUDIENCES. These are two files nobody edits
   // together — a re-downloaded google-services.json with a new client id would
   // leave every Google sign-in refused, with a message about audiences and no
   // hint that a JSON file moved underneath it.
   const id = webClientId();
-  const configured = /AGENT_FLEET_AUTH_AUDIENCES\s*=\s*"([^"]*)"/.exec(WRANGLER)?.[1] ?? '';
+  const configured = /FLEETWRIGHT_AUTH_AUDIENCES\s*=\s*"([^"]*)"/.exec(WRANGLER)?.[1] ?? '';
   assert.equal(
     configured.split(',').map((s) => s.trim()).includes(id),
     true,
-    `google-services.json's web client (${id}) is not in AGENT_FLEET_AUTH_AUDIENCES`,
+    `google-services.json's web client (${id}) is not in FLEETWRIGHT_AUTH_AUDIENCES`,
   );
 });
 

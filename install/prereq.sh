@@ -55,11 +55,11 @@ say "Fleetwright prerequisites"
 # WHO THE SERVICES WILL RUN AS. install.sh derives this the same way; here it is
 # SUDO_USER, because `curl … | sudo sh` is the documented way to arrive and that
 # is the one variable which survives it.
-RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-}}"
+RUN_USER="${FLEETWRIGHT_USER:-${SUDO_USER:-}}"
 if [ -z "$RUN_USER" ] || [ "$RUN_USER" = root ]; then
   die "cannot tell which user the fleet will run as.
        Run this with sudo from that user's shell, or name them:
-           curl -fsSL https://fleet.thetech.network/prereq | sudo AGENT_HUB_USER=someone sh"
+           curl -fsSL https://fleet.thetech.network/prereq | sudo FLEETWRIGHT_USER=someone sh"
 fi
 USER_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
 [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ] || die "$RUN_USER has no home directory to install into."

@@ -132,7 +132,7 @@ time, and WebCrypto catches it on import.
 
 ## Push is off unless switched on
 
-`AGENT_FLEET_PUSH` in your `wrangler.toml`'s `[vars]` (ours is set in
+`FLEETWRIGHT_PUSH` in your `wrangler.toml`'s `[vars]` (ours is set in
 `wrangler.production.toml`), or the environment for a Node coordinator. **Unset is off, and it says so in the log** rather than being
 silent — silence is how a fleet discovers on the day it matters that push was
 never wired up.
@@ -148,7 +148,7 @@ something an account pays for, what changes is the value here and whatever
 issues it — not the plumbing underneath.
 
 `"0"` and `"false"` are truthy strings in JavaScript; a config where
-`AGENT_FLEET_PUSH = "0"` turned push on would be a config nobody can read, so
+`FLEETWRIGHT_PUSH = "0"` turned push on would be a config nobody can read, so
 the check is an allowlist of `1`, `true`, `yes`, `on`.
 
 ## What is done and what is not

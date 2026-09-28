@@ -113,11 +113,11 @@ test('with upgrades off, the refusal is the instructions', () => {
   // see it.
   const r = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/systemctl start agent-hub-upgrade\.service, \/usr\/bin\/systemctl start agent-hub-apt-update\.service/);
-  assert.match(r.text, /AGENT_HUB_SYSTEM_UPGRADE=1/);
+  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/systemctl start fleetwright-upgrade\.service, \/usr\/bin\/systemctl start fleetwright-apt-update\.service/);
+  assert.match(r.text, /FLEETWRIGHT_SYSTEM_UPGRADE=1/);
   assert.match(r.text, /cannot install, remove or run anything else/);
   assert.match(r.text, /apt-get update/, 'the refresh is in the grant, because this box never does it itself');
-  assert.match(r.text, /install -m 0644 install\/agent-hub-upgrade\.service/, 'a grant to start a unit that is not installed permits nothing');
+  assert.match(r.text, /install -m 0644 install\/fleetwright-upgrade\.service/, 'a grant to start a unit that is not installed permits nothing');
 });
 
 test('stale package lists are reported, because "no updates" would be a lie', () => {
@@ -163,7 +163,7 @@ test('the advice matches the failure, or says nothing clever', async () => {
   // is. The first version blamed the image and said nothing typed on the box
   // would help — told to somebody whose filesystem was perfectly writable.
   //
-  // It is agent-hub.service's own `ProtectSystem=full`, which makes /etc
+  // It is fleetwright.service's own `ProtectSystem=full`, which makes /etc
   // read-only for the service AND every child of it. `sudo` does not escape a
   // mount namespace, so the sanctioned apt-get inherited it. The box was fine;
   // we were the read-only part.
@@ -203,11 +203,11 @@ test('the advice matches the failure, or says nothing clever', async () => {
   };
   const OLD_UNIT = systemd([
     'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const CURRENT = systemd([
     'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
 
   // OURS: a read-only layer stacked over a perfectly good disk.
@@ -255,7 +255,7 @@ test('the unit lets dpkg write the one directory it must', () => {
   // package carrying a conffile — which is most of them.
   //
   // The unit's own comment said "Nothing here writes to /etc". True of
-  // agent-hub's code, false of the thing agent-hub exists to launch.
+  // fleetwright's code, false of the thing fleetwright exists to launch.
   //
   // AND THE FIRST FIX FOR IT DID NOT WORK, which is why the assertion changed.
   // `full` plus `ReadWritePaths=/etc` was measured on the box that reported it,
@@ -271,7 +271,7 @@ test('the unit lets dpkg write the one directory it must', () => {
   // no setting of ProtectSystem that lets an upgrade work: the sudoers grant is
   // `apt-get -y upgrade`, and rewriting /usr, /etc and /boot is what that
   // command IS.
-  const unit = readFileSync(new URL('../install/agent-hub.service', import.meta.url), 'utf8');
+  const unit = readFileSync(new URL('../install/fleetwright.service', import.meta.url), 'utf8');
   assert.match(unit, /^ProtectSystem=no$/m, 'a setting that forbids part of what apt does is back');
   assert.doesNotMatch(unit, /^ProtectSystem=(full|true|strict|yes)$/m);
   // AND THE WAY BACK IS WRITTEN DOWN. Giving up the hardening without naming

@@ -226,7 +226,7 @@ test('a colleague cannot revoke machines on the Worker either', async () => {
 });
 
 test('the Worker refuses to unregister somebody else’s phone, in the same words as the Node coordinator', async () => {
-  const { fleet: f } = fleet({ AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' });
+  const { fleet: f } = fleet({ FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' });
   const alice = await f.core.clients.issue('alice phone');
   alice.client.email = 'alice@example.com';
   const bob = await f.core.clients.issue('bob phone');

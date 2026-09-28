@@ -26,10 +26,10 @@
 //
 // Two things `nomap` cannot do, and config.js downgrades to `host` for both,
 // loudly: it "is not allowed for containers created by the root user", and
-// docker has no such option at all (AGENT_HUB_PODMAN_BIN=docker is a test
+// docker has no such option at all (FLEETWRIGHT_PODMAN_BIN=docker is a test
 // arrangement, not a deployment — see podman.js).
 
-/** The two answers `AGENT_HUB_SANDBOX_USERNS` may hold. */
+/** The two answers `FLEETWRIGHT_SANDBOX_USERNS` may hold. */
 export const USERNS_MODES = Object.freeze(['nomap', 'host']);
 
 /**

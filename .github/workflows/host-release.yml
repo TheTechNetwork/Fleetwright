@@ -143,10 +143,10 @@ jobs:
       # asserting it here means it cannot come back quietly.
       # RUN THE WAY SYSTEMD RUNS IT, which is not how this used to check.
       #
-      # It ran `node "$root/lib/agent-hub.mjs"` — the library, directly — and so
-      # never executed bin/agent-hub, which is the ONLY file the unit names:
+      # It ran `node "$root/lib/fleetwright.mjs"` — the library, directly — and so
+      # never executed bin/fleetwright, which is the ONLY file the unit names:
       #
-      #     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+      #     ExecStart=__NODE__ __DIR__/bin/fleetwright serve
       #
       # The shim was `#!/bin/sh` with an `exec node …` inside. Fine when
       # something runs the file; a syntax error when node is handed it. Every
@@ -162,9 +162,10 @@ jobs:
           root="$(find /tmp/verify -maxdepth 1 -mindepth 1 -type d)"
           test ! -d "$root/node_modules"
           # THAT IT STARTS, not that it succeeds. Exit codes belong to each
-          # tool — agent-fleet-mcp refuses without a coordinator URL and is
+          # tool — fleetwright-mcp refuses without a coordinator URL and is
           # right to. A shim node cannot parse dies before any of that.
-          for entry in agent-hub agent-fleet-sidecar agent-fleet-mcp fleetwright; do
+          # The agent-* names are the aliases an unmigrated box's units start.
+          for entry in fleetwright fleetwright-sidecar fleetwright-mcp agent-hub agent-fleet-sidecar agent-fleet-mcp; do
             [ -f "$root/bin/$entry" ] || { echo "::error::no bin/$entry in the release"; exit 1; }
             for how in "node $root/bin/$entry" "$root/bin/$entry"; do
               out="$(cd / && $how --help 2>&1 || true)"
@@ -263,7 +264,7 @@ jobs:
           gh release create rolling \
             --prerelease \
             --title "Rolling build from main" \
-            --notes "The newest build of main. Hosts on AGENT_HUB_RELEASE_CHANNEL=rolling poll this; it is replaced on every merge and is not a published release." \
+            --notes "The newest build of main. Hosts on FLEETWRIGHT_RELEASE_CHANNEL=rolling poll this; it is replaced on every merge and is not a published release." \
             --target main 2>/dev/null || true
 
           # --clobber, because the point is that these files are replaced.
@@ -431,11 +432,11 @@ jobs:
             have="$(/usr/lib/fleetwright/node/bin/node -v)"
             [ "$have" = "$want" ] || { echo "::error::bundled node is $have, node.env says $want"; exit 1; }
             readlink /opt/fleetwright/current
-            grep -q "^AGENT_HUB_RELEASE_SOURCE=apt" /etc/agent-hub.env \
+            grep -q "^FLEETWRIGHT_RELEASE_SOURCE=apt" /etc/fleetwright.env \
               || { echo "::error::the install did not record apt as its updater"; exit 1; }
-            grep -q "^ExecStart=/usr/lib/fleetwright/node/bin/node " /etc/systemd/system/agent-hub.service \
+            grep -q "^ExecStart=/usr/lib/fleetwright/node/bin/node " /etc/systemd/system/fleetwright.service \
               || { echo "::error::the unit does not run the bundled node"; exit 1; }
-            for cmd in agent-hub fleetwright fw; do
+            for cmd in fleetwright fw agent-hub agent-fleet-sidecar; do
               out="$($cmd --help 2>&1 || true)"
               case "$out" in *"not found"*|*SyntaxError*|"") echo "::error::$cmd from PATH did not start: $out"; exit 1 ;; esac
             done

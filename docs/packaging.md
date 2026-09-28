@@ -22,7 +22,7 @@ different trees.
 needs git, npm, a network path to the forge and the registry, and enough disk
 for the whole history. A packaged host needs none of that.
 
-**The tree is writable and therefore drifts.** Everything in `/opt/agent-fleet`
+**The tree is writable and therefore drifts.** Everything in `/opt/fleetwright-src`
 can be edited in place, which is occasionally useful and permanently a source
 of "works on that box only".
 
@@ -87,7 +87,7 @@ once `npm ci` was involved.
    implementation.
 4. **Switch the installer** to fetch a release rather than clone, keeping
    `--from-source` for development boxes. **Done** — `install.sh` detects
-   which shape it is running from (`lib/agent-hub.mjs` exists or it does not),
+   which shape it is running from (`lib/fleetwright.mjs` exists or it does not),
    skips npm entirely when packaged, and removes the install it replaced. The
    **layout** is done — a release is copied to `releases/<version>` and
    `current` is moved onto it atomically, with the units pointing at `current`.
@@ -230,7 +230,7 @@ would change it, and it is not built.
 ### Configuring it
 
 ```sh
-AGENT_HUB_RELEASE_MANIFEST=https://releases.example/fleet/manifest.json
+FLEETWRIGHT_RELEASE_MANIFEST=https://releases.example/fleet/manifest.json
 ```
 
 The tarball is fetched **relative to the manifest's own URL**, so one setting
@@ -248,7 +248,7 @@ without thinking about either behaves exactly as releases always have.
 { "prerelease": true, "rollout": 0.25 }
 ```
 
-**`rolling` is opt-in per host.** `AGENT_HUB_RELEASE_CHANNEL=rolling`
+**`rolling` is opt-in per host.** `FLEETWRIGHT_RELEASE_CHANNEL=rolling`
 takes them; the default `stable` skips them. That is the point of marking a
 release: it reaches the machines somebody chose to expose, so a bad build is
 found before the whole fleet takes it. CI sets the field from GitHub's own
@@ -296,11 +296,11 @@ The channel was renamed with it, for a different reason: GitHub already has a
 field called `prerelease` — the checkbox on a release, which the manifest
 carries — so a channel of the same name meant one word for two questions,
 *which address does this box poll* and *was this release marked as not final*.
-`AGENT_HUB_RELEASE_CHANNEL=prerelease` is still **read** as `rolling`, because
+`FLEETWRIGHT_RELEASE_CHANNEL=prerelease` is still **read** as `rolling`, because
 it was documented briefly and falling back to `stable` would be the silent wrong
 answer. Nothing writes it.
 
-| Channel | `AGENT_HUB_RELEASE_MANIFEST` | What it gets |
+| Channel | `FLEETWRIGHT_RELEASE_MANIFEST` | What it gets |
 |---|---|---|
 | `stable` (default) | `.../releases/latest/download/manifest.json` | Published releases only. GitHub's `latest` pointer skips prereleases, so this address cannot serve a main build even by accident |
 | `rolling` | `.../releases/download/rolling/manifest.json` | The newest build of `main`, replaced on every merge |
@@ -372,8 +372,8 @@ would.
 
 ### One updater
 
-A box installed from the package gets `AGENT_HUB_RELEASE_SOURCE=apt` in
-`/etc/agent-hub.env`, and every question about releases goes to apt from then
+A box installed from the package gets `FLEETWRIGHT_RELEASE_SOURCE=apt` in
+`/etc/fleetwright.env`, and every question about releases goes to apt from then
 on (`src/core/apt-release.js`, through `checkRelease`). The manifest is never
 fetched. Asking it as well would report versions apt has not been given yet,
 offer a button that installs past apt, and leave the next `apt upgrade` to move
@@ -437,7 +437,7 @@ Without a URL the release is laid out and left stopped, and the output says
 **No apt-get inside the postinst.** dpkg holds the lock for the whole of it, and
 the installer's habit of installing what is missing would wait on that lock
 forever. What it would reach for is in `Depends` (tmux, curl, sudo) or
-`Recommends` (podman, uidmap), and `AGENT_HUB_NO_INSTALL_DEPS=1` tells it so.
+`Recommends` (podman, uidmap), and `FLEETWRIGHT_NO_INSTALL_DEPS=1` tells it so.
 
 ### Node comes with it
 
@@ -472,7 +472,7 @@ This went back and forth, and the reason is worth keeping. A migration first
 ran the installer *inside* the release, so a broken one could not be migrated
 to and could only be **superseded**: one afternoon produced three releases that
 way, each fixing a bug the previous one had hidden, in code that had never
-executed. `AGENT_FLEET_PAYLOAD` was the answer for a while — the helper ran
+executed. `FLEETWRIGHT_PAYLOAD` was the answer for a while — the helper ran
 the installer **the box already had**, refreshed by `curl … | sudo sh`, and
 pointed it at the release as payload. That also meant root executing a script
 out of a checkout the service user owns, which is the grant the helper's own
@@ -504,7 +504,7 @@ against. The temporary copy goes on every exit, refusals included. No git, no
 clone of the monorepo, no writable tree to drift.
 
 Three boxes still get a checkout, on purpose. `--from-source`, for a box
-somebody **edits**. A box that already has one at `/opt/agent-fleet`, which is
+somebody **edits**. A box that already has one at `/opt/fleetwright-src`, which is
 kept the shape it was — laying a release beside a checkout the units still
 point at would be two installs arguing over one box, and the installer's own
 conversion offer remains the way across: a **fresh** checkout defaults to yes,
@@ -556,15 +556,15 @@ update picks one and nobody can tell which is running.
 
 What makes this a directory removal rather than a data migration: **nothing that
 matters lives in the install directory.** The env files are in `/etc`, the
-registry and credentials in `/var/lib/agent-hub`, the host key in
-`/var/lib/agent-fleet`. The units are rewritten with `__DIR__` pointing at the
+registry and credentials in `/var/lib/fleetwright`, the host key in
+`/var/lib/fleetwright-sidecar`. The units are rewritten with `__DIR__` pointing at the
 release, so the switch has already happened before anything is deleted.
 
 Three rules the installer follows, in this order:
 
 1. **The old unit files are copied before they are overwritten.** Their
    `ExecStart` is the only record of where the previous install lived.
-2. **Nothing is removed until the new agent-hub has been SEEN to start.**
+2. **Nothing is removed until the new fleetwright has been SEEN to start.**
    Removing first would leave a box with neither.
 3. **A working tree with uncommitted changes is never deleted.** It is reported
    instead, with the command to remove it. Deleting somebody's unsaved work to

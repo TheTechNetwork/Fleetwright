@@ -44,7 +44,7 @@ export function migrationState(cfg, status, release, { exists = existsSync } = {
       reason: 'unconfigured',
       message:
         'This box does not know where its releases come from, so there is nothing to move it to.\n' +
-        'Set AGENT_HUB_RELEASE_MANIFEST in /etc/agent-hub.env, or re-run the installer with --upgrade.',
+        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
     };
   }
   // THE GRANT IS CHECKED BEFORE IT IS OFFERED. A button that fails with "sudo:
@@ -181,7 +181,7 @@ export function ranInstaller(out) {
  * runs as root, and the installer is the only thing that writes it — so a
  * helper that the installer never refreshed is a box whose updates restart
  * the services and refresh nothing root owns, and the only place that said
- * so was a warning in agent-hub's journal, on a box whose owner does not
+ * so was a warning in fleetwright's journal, on a box whose owner does not
  * want to open a shell to read it. This is the same fact as a value the
  * health frame can carry.
  *
@@ -267,7 +267,7 @@ export function describeHelper(state, installRoot) {
  * it unpacks a verified copy and runs that release's installer with --repair.
  *
  * DEFERRED, NOT AWAITED, and the reason is the reply. The installer restarts
- * agent-hub — this process — so a verb that waited for it would never answer
+ * fleetwright — this process — so a verb that waited for it would never answer
  * the phone that asked. The reply goes out first; the heal starts after the
  * same delay a restart waits for the reply to leave. If the heal cannot run,
  * the process still restarts itself so the new code applies either way: the

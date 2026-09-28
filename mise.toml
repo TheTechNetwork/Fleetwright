@@ -3,7 +3,7 @@
 #   curl https://mise.run | sh     # once
 #   mise install                   # in this directory
 #
-# This is for DEVELOPING agent-fleet. It is deliberately not what a deployment
+# This is for DEVELOPING fleetwright. It is deliberately not what a deployment
 # uses: install/install.sh finds or installs a system node precisely because a
 # service must not depend on a version manager living in somebody's home
 # directory. That distinction is the whole of the nvm bug this project already
@@ -52,11 +52,11 @@ run = "node src/index.js"
 
 [tasks.coordinator]
 description = "Run the coordinator locally"
-run = "node bin/agent-fleet-coordinator"
+run = "node bin/fleetwright-coordinator"
 
 [tasks.sidecar]
-description = "Check this box can drive its agent-hub"
-run = "node bin/agent-fleet-sidecar doctor"
+description = "Check this box can drive its fleetwright"
+run = "node bin/fleetwright-sidecar doctor"
 
 [tasks.android-sdk]
 description = "Install the Android SDK pieces the app needs"
@@ -79,7 +79,7 @@ echo "Android SDK ready at $ANDROID_HOME"
 description = "Generate the Android release signing key"
 run = """
 set -eu
-# $HOME rather than $PWD: the deployed checkout is /opt/agent-fleet, which is
+# $HOME rather than $PWD: the deployed checkout is /opt/fleetwright-src, which is
 # root-owned, and a signing key does not belong in a git tree anyway.
 out="${KEYSTORE_OUT:-$HOME/fleetwright-release.jks}"
 alias_name="${KEY_ALIAS:-fleetwright}"

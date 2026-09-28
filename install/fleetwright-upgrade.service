@@ -1,15 +1,15 @@
 [Unit]
-Description=agent-hub — apply system updates, on request from the hub
-Documentation=https://github.com/ambersecurityinc/agent-hub
+Description=fleetwright — apply system updates, on request from the hub
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 
 [Service]
 # ONESHOT, AS ROOT, WITH NO SANDBOXING — and that is the whole design.
 #
-# agent-hub's own unit could not keep ProtectSystem while its sudoers grant
+# fleetwright's own unit could not keep ProtectSystem while its sudoers grant
 # was `apt-get -y upgrade`: a mount namespace is not something sudo escapes,
 # so the upgrade inherited the hub's read-only /usr and /etc and dpkg failed
 # on the first conffile. Three rounds of that are written up in
-# install/agent-hub.service. This unit is the way out it names: the upgrade
+# install/fleetwright.service. This unit is the way out it names: the upgrade
 # gets a namespace of its own with nothing protected, because rewriting /usr,
 # /etc and /boot is what an upgrade IS, and the hub's grant narrows from "run
 # apt as root" to "start this one named unit" — which cannot be given other
@@ -30,4 +30,4 @@ TimeoutStartSec=900
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agent-hub-upgrade
+SyslogIdentifier=fleetwright-upgrade

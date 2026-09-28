@@ -11,8 +11,8 @@ mkdir -p /root/.claude
 # settings.json: only if the session has not got its own. An operator who edits
 # it inside a session keeps their edit across every later resume, because the
 # volume survives stop.
-if [ ! -f /root/.claude/settings.json ] && [ -f /etc/agent-session/settings.json ]; then
-  cp /etc/agent-session/settings.json /root/.claude/settings.json
+if [ ! -f /root/.claude/settings.json ] && [ -f /etc/fleetwright-session/settings.json ]; then
+  cp /etc/fleetwright-session/settings.json /root/.claude/settings.json
 fi
 
 # The seeded account identity, merged into the container's state file on EVERY
@@ -89,7 +89,7 @@ if [ -S /run/hub.sock ]; then
   node <<'NODE'
 const fs = require('fs');
 const file = '/root/.claude/settings.json';
-const cmd = 'agent-session-hook';
+const cmd = 'fleetwright-session-hook';
 let settings = {};
 try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first run */ }
 settings.hooks ||= {};
@@ -107,6 +107,19 @@ const wanted = [
   ['SessionEnd', null, 'SessionEnd'],
 ];
 let changed = false;
+// A session whose ~/.claude outlived an image from before the rename has
+// every hook registered as `agent-session-hook …`. Rewritten in place rather
+// than added beside, or each event would be reported twice.
+for (const groups of Object.values(settings.hooks)) {
+  for (const entry of Array.isArray(groups) ? groups : []) {
+    for (const h of Array.isArray(entry?.hooks) ? entry.hooks : []) {
+      if (typeof h?.command === 'string' && /^agent-session-hook(\s|$)/.test(h.command)) {
+        h.command = h.command.replace(/^agent-session-hook/, cmd);
+        changed = true;
+      }
+    }
+  }
+}
 for (const [event, matcher, words] of wanted) {
   const command = words ? `${cmd} ${words}` : cmd;
   settings.hooks[event] ||= [];

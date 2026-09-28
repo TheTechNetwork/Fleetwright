@@ -25,7 +25,7 @@ test('a prerelease reaches only the hosts that asked for it', () => {
   // one comes first: it is the one that does not need a shell on the box, which
   // is the whole reason the verb exists.
   assert.match(stable.message, /\/channel rolling/);
-  assert.match(stable.message, /AGENT_HUB_RELEASE_CHANNEL=rolling/);
+  assert.match(stable.message, /FLEETWRIGHT_RELEASE_CHANNEL=rolling/);
 
   assert.equal(ask({ manifest: { prerelease: true }, channel: 'rolling', hostKey: 'box' }).act, true);
   // And an ordinary release still reaches a host that opted in — the channel

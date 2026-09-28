@@ -2,7 +2,7 @@
 //
 // Labels are how work is aimed: `tag: gpu` on a start, and the scheduler
 // filters before it ranks. They came from two places, and neither of them was
-// reachable from a phone — AGENT_FLEET_LABELS in a root-owned env file, and
+// reachable from a phone — FLEETWRIGHT_LABELS in a root-owned env file, and
 // auto-labels.js deriving what the machine knows about itself. So "this box is
 // on the noisy switch, keep the long jobs off it" was a decision somebody could
 // make and not express, which is the shape this repository keeps finding.
@@ -21,7 +21,7 @@
 // So the three sources compose, and each one is answerable:
 //
 //   auto  the machine's own facts, from auto-labels.js
-//   env   AGENT_FLEET_LABELS, set at install time
+//   env   FLEETWRIGHT_LABELS, set at install time
 //   set   this file — added from an app, removable from the same app
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
@@ -119,7 +119,7 @@ export function addLabel(cfg, value, known = []) {
   if (known.includes(wanted)) {
     // NOT AN ERROR AND NOT A WRITE. The box has the label; storing a second
     // copy would make removing it later look like it worked and change nothing.
-    return { ok: true, label: wanted, labels: current, message: `This box already has "${wanted}", from the machine itself or from AGENT_FLEET_LABELS.` };
+    return { ok: true, label: wanted, labels: current, message: `This box already has "${wanted}", from the machine itself or from FLEETWRIGHT_LABELS.` };
   }
   if (current.length >= MAX) {
     return { ok: false, labels: current, message: `This box already has ${MAX} labels set here, which is the limit.` };
@@ -150,9 +150,9 @@ export function removeLabel(cfg, value, known = []) {
         ok: false,
         labels: current,
         message:
-          `"${wanted}" is not set here — it comes from the machine itself or from AGENT_FLEET_LABELS.\n` +
+          `"${wanted}" is not set here — it comes from the machine itself or from FLEETWRIGHT_LABELS.\n` +
           'A label the box derives is a fact about it, and a fact that can be switched off from a phone ' +
-          'is not one. Change what it describes, or edit AGENT_FLEET_LABELS and restart.',
+          'is not one. Change what it describes, or edit FLEETWRIGHT_LABELS and restart.',
       };
     }
     return { ok: false, labels: current, message: `This box does not have "${String(value).slice(0, 40)}".` };

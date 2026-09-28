@@ -1,6 +1,6 @@
 // The real transport: a persistent outbound WebSocket to the coordinator.
 //
-// This is the property that makes agent-hub deployable at all, preserved into
+// This is the property that makes fleetwright deployable at all, preserved into
 // the fleet (design.md §3): the host DIALS OUT and nothing you own ever listens.
 // No inbound firewall rule, no port forward, no tunnel daemon, works behind NAT
 // on a Pi — and wake comes for free, because the coordinator already has a

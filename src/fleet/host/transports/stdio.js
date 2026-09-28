@@ -2,14 +2,14 @@
 //
 // The coordinator does not exist yet. Rather than ship a sidecar that cannot be
 // run until it does, this lets the whole path be driven by hand and in tests
-// against a real agent-hub:
+// against a real fleetwright:
 //
 //     echo '{"v":1,"kind":"intent","id":"idem-0000001","verb":"list","issuedAt":0}' \
-//       | agent-fleet-sidecar --transport stdio
+//       | fleetwright-sidecar --transport stdio
 //
 // It is also the shape the WebSocket transport will have: dial, hand messages
 // to a handler, send replies, stop. Swapping one for the other is a constructor
-// argument in bin/agent-fleet-sidecar and nothing else — which is the point of
+// argument in bin/fleetwright-sidecar and nothing else — which is the point of
 // §4's "build the host agent so transport is one swappable module".
 //
 // `origin` is a label here rather than a pinned TLS origin, because there is no

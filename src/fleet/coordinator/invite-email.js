@@ -169,7 +169,7 @@ export async function sendInvite(mailer, about) {
   // and an invitation that reports an error because a courtesy was unavailable
   // would send somebody looking for a problem they do not have.
   if (!mailer?.send) return { sent: false, why: 'no email is configured for this fleet' };
-  if (!mailer.from) return { sent: false, why: 'no sender address is configured (AGENT_FLEET_INVITE_FROM)' };
+  if (!mailer.from) return { sent: false, why: 'no sender address is configured (FLEETWRIGHT_INVITE_FROM)' };
   try {
     const { subject, text } = composeInvite(about);
     await mailer.send({ to: about.email, subject, text });

@@ -140,7 +140,7 @@ export async function dispatchRunner({
     authorization: `Bearer ${token}`,
     accept: 'application/vnd.github+json',
     'x-github-api-version': '2022-11-28',
-    'user-agent': 'agent-hub',
+    'user-agent': 'fleetwright',
   };
 
   /** @type {any} */

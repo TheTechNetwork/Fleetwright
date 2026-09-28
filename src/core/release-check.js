@@ -72,7 +72,7 @@ export async function checkRelease(cfg, { fetch: doFetch = fetch, apt = checkApt
       ok: false,
       message:
         'This box does not know where its releases come from, so it cannot check for updates.\n' +
-        'Set AGENT_HUB_RELEASE_MANIFEST in /etc/agent-hub.env, or re-run the installer with --upgrade.',
+        'Set FLEETWRIGHT_RELEASE_MANIFEST in /etc/fleetwright.env, or re-run the installer with --upgrade.',
     };
   }
 

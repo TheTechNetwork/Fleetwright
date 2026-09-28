@@ -27,18 +27,19 @@ import {
   keyFingerprint,
 } from '../fleet/host/identity.js';
 import { loadSidecarConfig } from '../fleet/host/config.js';
+import { preferExisting } from '../fleet/legacy-paths.js';
 
 /**
  * Read the sidecar's configuration the way the sidecar does.
  *
- * From the environment, which under systemd is /etc/agent-fleet-sidecar.env —
- * except that agent-hub is a DIFFERENT unit with a different EnvironmentFile,
+ * From the environment, which under systemd is /etc/fleetwright-sidecar.env —
+ * except that fleetwright is a DIFFERENT unit with a different EnvironmentFile,
  * so those variables are not in this process. Read the file.
  *
  * @param {{ env?: NodeJS.ProcessEnv, readFile?: (p: string) => string }} [opts]
  */
 export function sidecarConfig({ env = process.env, readFile } = {}) {
-  const file = env.AGENT_FLEET_SIDECAR_ENV || '/etc/agent-fleet-sidecar.env';
+  const file = env.FLEETWRIGHT_SIDECAR_ENV || preferExisting('/etc/fleetwright-sidecar.env', '/etc/agent-fleet-sidecar.env');
   /** @type {Record<string, string>} */
   const fromFile = {};
   /** @type {string|null} */
@@ -74,11 +75,11 @@ export async function identity({ config } = {}) {
         ok: false,
         text:
           `Cannot read this box's fleet configuration.\n${cfg.unreadable}\n\n` +
-          'The hub has to be able to read /etc/agent-fleet-sidecar.env to know which coordinator ' +
+          'The hub has to be able to read /etc/fleetwright-sidecar.env to know which coordinator ' +
           'this box belongs to. Re-running install.sh fixes the permissions.',
       };
     }
-    return { ok: false, text: 'This box is not part of a fleet — AGENT_FLEET_COORDINATOR_URL is not set.' };
+    return { ok: false, text: 'This box is not part of a fleet — FLEETWRIGHT_COORDINATOR_URL is not set.' };
   }
 
   let key;

@@ -43,7 +43,7 @@ export const DEFAULT_DENY = ([
   // `update` USED TO BE HERE AND IS NOT ANY MORE, and the reason is a design
   // decision this project already made and wrote down. The refusal lumped it
   // in as "restarts machines", which is true of reboot and false of this:
-  // agent-hub.service sets KillMode=process specifically so restarting the
+  // fleetwright.service sets KillMode=process specifically so restarting the
   // service does NOT reap the tmux server holding every session. That comment
   // calls itself load-bearing and names the outage that taught it.
   //
@@ -69,7 +69,7 @@ export const DEFAULT_DENY = ([
   // collecting what a job produced is the case this server exists for. Writing,
   // copying and deleting are not, by the same rule as the rest of this list:
   // it is a policy about what an agent reaches for unasked, not a lock. An
-  // operator who wants them says so with AGENT_FLEET_MCP_ALLOW.
+  // operator who wants them says so with FLEETWRIGHT_MCP_ALLOW.
   //
   // `deletefile` is the sharpest of the three and the reason the line is drawn
   // here rather than after it: `forget` is recoverable for seven days and this
@@ -92,7 +92,7 @@ export const DEFAULT_DENY = ([
   // deciding where to aim its own work can still see what each box carries —
   // it just cannot change what everybody else's work matches.
   //
-  // An operator who wants it says so with AGENT_FLEET_MCP_ALLOW, like the three
+  // An operator who wants it says so with FLEETWRIGHT_MCP_ALLOW, like the three
   // above.
   'labels',
 
@@ -323,7 +323,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const notes = {
         start: `You own what you start. Stop it when you have what you came for, or after about ${budgetMinutes} minutes — nothing here will tell you it has finished.`,
         resume: 'Resuming makes the session yours to stop in this conversation, the same as starting one.',
-        update: 'Pulls this project\'s code on one host and can restart its services. Sessions SURVIVE that restart — agent-hub keeps the tmux server outside its own cgroup for exactly this reason. Use it when a host refuses a verb because it is behind.',
+        update: 'Pulls this project\'s code on one host and can restart its services. Sessions SURVIVE that restart — fleetwright keeps the tmux server outside its own cgroup for exactly this reason. Use it when a host refuses a verb because it is behind.',
         forget: 'Only sessions you started here. Recoverable for seven days — `restore` brings one back — which is why this is offered and `purge` is not.',
         stop: 'Only sessions you started here. Anything else belongs to somebody who is probably still using it. Collect the output with fleet_read_log FIRST — stopping a session throws its console output away.',
         peek: 'How you find out whether work is done. There is no completion signal; reading the pane is the signal.',

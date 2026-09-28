@@ -1,7 +1,7 @@
 // What a machine can say about itself without being told.
 //
 // Labels are how work is aimed — `tag: macos` on a start, and the scheduler
-// filters before it ranks by capacity. They came only from AGENT_FLEET_LABELS,
+// filters before it ranks by capacity. They came only from FLEETWRIGHT_LABELS,
 // which means every one was somebody having remembered to type it into an env
 // file at install time.
 //
@@ -92,6 +92,6 @@ test('the operator keeps their own labels', () => {
   // "gpu", "prod", "noisy-neighbour" are decisions, and no amount of
   // introspection produces them. The two sets are unioned; an operator naming
   // something this file also derives is not a conflict.
-  const src = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   assert.match(src, /labels: \[\.\.\.new Set\(\[\.\.\.cfg\.labels, \.\.\.autoLabels\(loadConfig\(\)\)\]\)\]\.sort\(\)/);
 });

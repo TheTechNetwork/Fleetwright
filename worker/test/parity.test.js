@@ -61,7 +61,7 @@ before(async () => {
     local: true,
     logLevel: 'error',
     persistTo,
-    vars: { AGENT_FLEET_API_TOKEN: ADMIN },
+    vars: { FLEETWRIGHT_API_TOKEN: ADMIN },
     experimental: { disableExperimentalWarning: true },
   });
 

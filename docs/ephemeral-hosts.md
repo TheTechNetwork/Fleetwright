@@ -53,7 +53,7 @@ OIDC token to prove which repository the run belongs to, and the stored token
 only *names the owner*; it cannot admit a machine on its own.
 
 **A pin is the fallback, not the path.** The optional pin input exists for a
-coordinator with no Actions repositories configured (`AGENT_FLEET_ACTIONS_REPOS`
+coordinator with no Actions repositories configured (`FLEETWRIGHT_ACTIONS_REPOS`
 unset): mint one in the app (Fleet → Add a host, marked ephemeral) and type it
 into the dispatch. It lasts ten minutes, is single-use, and is minted by a
 person looking at what they are doing. There is still no credential in this
@@ -106,7 +106,7 @@ exiting normally IS the cleanup.
 
 ## Enrolling with no pin: the job proves what it is
 
-`agent-fleet-sidecar enrol-actions`, and the workflow needs one line:
+`fleetwright-sidecar enrol-actions`, and the workflow needs one line:
 
 ```yaml
 permissions:
@@ -125,16 +125,16 @@ minutes, names the run, and cannot be exported from the job that asked for it.
 
 `job_workflow_ref` is the claim people skip. `repository` alone means *any*
 workflow there can admit a host, including one added by a pull request — so
-`AGENT_FLEET_ACTIONS_WORKFLOW` pins the file that is allowed to.
+`FLEETWRIGHT_ACTIONS_WORKFLOW` pins the file that is allowed to.
 
 **The host id is derived, never accepted.** A job that could choose its own name
 could choose a permanent host's, and re-enrolment replaces a key.
 
 ```
-AGENT_FLEET_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
-AGENT_FLEET_ACTIONS_WORKFLOW  owner/repo/.github/workflows/runner-macos.yml@,
+FLEETWRIGHT_ACTIONS_REPOS     owner/repo,owner/other   (empty means nobody)
+FLEETWRIGHT_ACTIONS_WORKFLOW  owner/repo/.github/workflows/runner-macos.yml@,
                               owner/repo/.github/workflows/runner-linux.yml@
-AGENT_FLEET_RUNNER_REPO       owner/repo               where `provision` dispatches
+FLEETWRIGHT_RUNNER_REPO       owner/repo               where `provision` dispatches
 ```
 
 **The workflow pin is a LIST**, and became one when a runner repository grew
@@ -204,7 +204,7 @@ person owning it would mean nobody else could work.
 - **A unique host id per run.** Two jobs sharing one identity is the clone bug
   in a new costume, and we have paid for that lesson once already. `run_id` and
   `run_attempt` are both needed — a re-run reuses the id. **Done:**
-  `AGENT_FLEET_HOST_ID: gha-mac-<run_id>-<run_attempt>`.
+  `FLEETWRIGHT_HOST_ID: gha-mac-<run_id>-<run_attempt>`.
 - **A credential that admits, or one that only names.** The question was which
   credential CI holds, because admitting a machine is not something a workflow
   edit should be able to do. **Answered by OIDC:** GitHub's own job token

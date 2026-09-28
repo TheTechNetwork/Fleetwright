@@ -1,8 +1,8 @@
-// A client for a STOCK agent-hub's loopback HTTP API.
+// A client for a STOCK fleetwright's loopback HTTP API.
 //
-// The sidecar drives agent-hub the same way its own CLI does — over
-// 127.0.0.1:8790 — rather than by being loaded into it. Nothing in agent-hub
-// changes, and nothing here depends on agent-hub's internals beyond the four
+// The sidecar drives fleetwright the same way its own CLI does — over
+// 127.0.0.1:8790 — rather than by being loaded into it. Nothing in fleetwright
+// changes, and nothing here depends on fleetwright's internals beyond the four
 // routes it publishes:
 //
 //   POST /api/command              {command}  → {ok, text, sessions?, buttons?}
@@ -19,9 +19,9 @@
 //     only ever narrow what comes back, never widen it.
 //
 //  2. **/api/command hardcodes `actor: 'web'`.** Every HTTP token holder is
-//     anonymous and indistinguishable to agent-hub, so the sidecar CANNOT make
+//     anonymous and indistinguishable to fleetwright, so the sidecar CANNOT make
 //     `createdBy` reflect who actually asked. It records the real actor in its
-//     own logs and replies; agent-hub's own record will say "web". This is the
+//     own logs and replies; fleetwright's own record will say "web". This is the
 //     flat-allowlist gap design.md §1 lists, and it is not fixable from out
 //     here — only upstream, or in the coordinator.
 //
@@ -30,9 +30,9 @@
 //     giving it the operator token would mean writing that token into a
 //     world-readable hook script. The sidecar runs on that same box, so it can
 //     forward hook reports there — which is what lets the per-session hook
-//     socket work without modifying agent-hub at all.
+//     socket work without modifying fleetwright at all.
 //
-// The credential: whatever AGENT_HUB_TOKEN the hub was configured with. A hub
+// The credential: whatever FLEETWRIGHT_TOKEN the hub was configured with. A hub
 // bound to loopback may have none, in which case there is nothing to send.
 // Holding that token is the sidecar's real privilege — /api/command will run
 // ANY command line, including /login. The verb allowlist in the sidecar is the
@@ -94,7 +94,7 @@ export class HubClient {
   constructor({
     baseUrl = 'http://127.0.0.1:8790',
     token = null,
-    // Generous on purpose, and matching agent-hub's own CLI. Several commands
+    // Generous on purpose, and matching fleetwright's own CLI. Several commands
     // legitimately take a while: a start waits out the Remote Control check
     // (up to ~2×10s), a resume waits for the dialog to render, and a login
     // waits up to 45s for an authorization URL. A short timeout here reports a
@@ -111,7 +111,7 @@ export class HubClient {
   }
 
   /**
-   * Run one command line through agent-hub's command registry — the same
+   * Run one command line through fleetwright's command registry — the same
    * registry Telegram, the web UI and the CLI all go through, so a fleet
    * command can never behave differently from the same command typed in chat.
    *
@@ -135,7 +135,7 @@ export class HubClient {
   /**
    * The last lines of a session's pane, or null when it is not running.
    *
-   * agent-hub serves a fixed 60 lines, so `lines` can only trim. Trimming
+   * fleetwright serves a fixed 60 lines, so `lines` can only trim. Trimming
    * client-side rather than pretending the parameter reached the hub keeps the
    * limitation visible instead of silently ignored.
    *
@@ -158,10 +158,10 @@ export class HubClient {
   /**
    * Hand a conversation uuid to the hub, as the SessionStart hook would.
    *
-   * This is how the per-session hook socket reaches a stock agent-hub: the
+   * This is how the per-session hook socket reaches a stock fleetwright: the
    * sidecar owns the socket, so it knows which session a report came from, and
    * forwards it here with that name attached. The container never gets to name
-   * a session, and agent-hub is unchanged.
+   * a session, and fleetwright is unchanged.
    *
    * @param {{ name: string, cwd?: string|null, uuid: string }} rec
    * @returns {Promise<{ ok: boolean, message?: string }>}
@@ -221,7 +221,7 @@ export class HubClient {
     }
 
     if (res.status === 401) {
-      throw new HubError('hub_unauthorised', `${method} ${path}: rejected the token — check AGENT_HUB_TOKEN`, 401);
+      throw new HubError('hub_unauthorised', `${method} ${path}: rejected the token — check FLEETWRIGHT_TOKEN`, 401);
     }
     if (!res.ok && !allowStatus.includes(res.status)) {
       throw new HubError('hub_error', `${method} ${path}: HTTP ${res.status}`, res.status);

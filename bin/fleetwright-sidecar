@@ -1,0 +1,592 @@
+#!/usr/bin/env node
+// The sidecar entrypoint.
+//
+//   fleetwright-sidecar            run it (systemd calls this)
+//   fleetwright-sidecar enrol 123456   present this box to a coordinator, once
+//   fleetwright-sidecar identity   show this box's key fingerprint
+//   fleetwright-sidecar doctor     check this box can actually drive its fleetwright
+//
+// Config comes from the environment — see src/fleet/host/config.js. This process
+// does not touch the session manager's state directly: it is an HTTP client of it.
+
+import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
+import { HubClient } from '../src/fleet/host/hub-client.js';
+import { loadConfig } from '../src/config.js';
+import { autoLabels } from '../src/fleet/host/auto-labels.js';
+import { updateStatus } from '../src/core/update.js';
+import { installedVersion, currentVersion } from '../src/core/release-apply.js';
+import { helperState } from '../src/core/migrate.js';
+import { Sidecar } from '../src/fleet/host/sidecar.js';
+import { HookSocketServer } from '../src/core/hook-socket.js';
+import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint } from '../src/fleet/host/identity.js';
+import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
+import { WebSocketTransport, MAX_BACKOFF_MS } from '../src/fleet/host/transports/websocket.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import * as readline from 'node:readline/promises';
+import { log, setLogLevel, setLogStream } from '../src/log.js';
+import { loadEnvFile } from '../src/core/env-file.js';
+import { watchForRestart } from '../src/core/restart-watch.js';
+import { noteHealth } from '../src/core/update-confirm.js';
+import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
+import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
+import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
+
+// Before loadSidecarConfig, so the CLI sees exactly what the service sees.
+// systemd supplies this file with EnvironmentFile=; a shell does not, which is
+// why `fleetwright-sidecar enrol <pin>` used to insist the coordinator URL was
+// unset while it sat in that file.
+// The old path on a box the installer has not migrated yet. The override is
+// read after adopting legacy names, so the old variable still works too.
+adoptLegacyEnv(process.env);
+loadEnvFile(process.env.FLEETWRIGHT_SIDECAR_ENV_FILE || preferExisting('/etc/fleetwright-sidecar.env', '/etc/agent-fleet-sidecar.env'));
+
+const cfg = loadSidecarConfig();
+setLogLevel(cfg.logLevel);
+// stdout is the stdio transport's data channel, so every log line goes to
+// stderr — an info line landing on stdout is a corrupted message, not noise.
+setLogStream(process.stderr);
+
+const sub = process.argv[2] || 'run';
+if (sub === 'doctor') await doctor();
+else if (sub === 'enrol' || sub === 'enroll') await doEnrol(process.argv[3]);
+else if (sub === 'enrol-actions' || sub === 'enroll-actions') await doEnrolActions(process.argv[3]);
+else if (sub === 'identity') await identity();
+else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
+else await run();
+
+function usage() {
+  console.log(`fleetwright-sidecar — drives this box's session manager (the hub) on behalf of the fleet coordinator
+
+  fleetwright-sidecar            run
+  fleetwright-sidecar enrol PIN  present this box to the coordinator (six-digit pin from /enroll)
+  fleetwright-sidecar enrol-actions CLAIM
+                                 enrol from inside a GitHub Actions job. GitHub's own
+                                 token admits the machine; CLAIM says whose runner it is.
+  fleetwright-sidecar identity   print this box's key fingerprint
+  fleetwright-sidecar doctor     check this box can drive its hub
+
+Environment:
+  FLEETWRIGHT_COORDINATOR_URL    required — the origin this sidecar pins
+  FLEETWRIGHT_HUB_URL            default http://127.0.0.1:8790
+  FLEETWRIGHT_HUB_TOKEN          the hub's FLEETWRIGHT_TOKEN, if it has one
+  FLEETWRIGHT_HOST_ID            default: this hostname
+  FLEETWRIGHT_LABELS             comma-separated scheduler constraints
+  FLEETWRIGHT_TRANSPORT          websocket (default) or stdio
+  FLEETWRIGHT_HOST_KEY           this host's private key file (default /var/lib/fleetwright-sidecar/host-key.json)
+  FLEETWRIGHT_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip`);
+}
+
+async function run() {
+  // Pick up an update without anybody opening a terminal.
+  //
+  // `/update --restart` restarts the hub by exiting; this does the same when
+  // the updater says a complete new tree is on disk. Only in `run` — the
+  // one-shot subcommands finish in under a second and have nothing to pick up.
+  watchForRestart({ name: 'sidecar' });
+
+  // COMMIT-CONFIRM, THE SIDECAR'S HALF. When a release is on trial, reaching the
+  // coordinator is this box's proof that the update did not sever it from the
+  // fleet — the exact capability a bad update takes away. The sidecar does NOT
+  // decide anything: it records that half of the evidence, and the standing
+  // watchdog (install/fleetwright-confirm, on a systemd timer) confirms or
+  // reverts. That separation is deliberate — a watchdog inside this process
+  // could not catch this process failing to start.
+  const hubCfg = loadConfig();
+  const onCoordinatorConnect = () => {
+    const r = noteHealth(hubCfg, 'coord');
+    if (r.noted) log.info('update: recorded that this box reached its coordinator');
+  };
+
+  const { errors, warnings } = validateSidecarConfig(cfg);
+  for (const w of warnings) log.warn(`config: ${w}`);
+  if (errors.length) {
+    for (const e of errors) log.error(`config: ${e}`);
+    process.exit(1);
+  }
+
+  const hub = new HubClient({
+    baseUrl: cfg.hubUrl,
+    token: cfg.hubToken,
+    commandTimeoutMs: cfg.hubCommandTimeoutMs,
+    readTimeoutMs: cfg.hubReadTimeoutMs,
+  });
+
+  // Not fatal. fleetwright may be starting alongside this, and the sidecar's job
+  // is to keep answering the coordinator either way — a host that reports
+  // "hub unreachable" is far more useful than one that exited.
+  if (!(await hub.alive())) {
+    log.warn(`fleetwright at ${cfg.hubUrl} is not answering yet — carrying on, health will report it`);
+  }
+
+  // The key is loaded once and stays in this process's memory. If the file is
+  // missing we make one — a box that has never enrolled still needs a key to
+  // enrol with, and generating it here means `enrol` and `run` cannot disagree
+  // about which key this host has.
+  let key = null;
+  if (cfg.transport === 'websocket') {
+    try {
+      key = await loadOrCreateKey(cfg.hostKeyFile);
+      log.info(`host identity ${await keyFingerprint(key.publicJwk)}`);
+      if (key.created) {
+        log.warn('this box has no identity at the coordinator yet — run: fleetwright-sidecar enrol <pin>');
+      }
+    } catch (e) {
+      log.error(`host key: ${/** @type {Error} */ (e).message}`);
+      process.exit(1);
+    }
+  }
+
+  const transport =
+    cfg.transport === 'websocket'
+      ? new WebSocketTransport({
+          origin: cfg.coordinatorUrl,
+          hostId: cfg.hostId,
+          proof: () =>
+            proveIdentity({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk }),
+          logger: log,
+          // Reaching the coordinator confirms an update on trial. A no-op when
+          // nothing is on trial, so it costs a connected box nothing.
+          onConnect: onCoordinatorConnect,
+        })
+      : new StdioTransport({ origin: cfg.coordinatorUrl });
+  /**
+ * What the last update check found. Read by every health frame; written only
+ * by the timer below.
+ * @type {{ appBehind: number|null, system: any, rebootRequired: boolean, release: import('../src/core/release-check.js').ReleaseCheck|null }|null}
+ */
+let lastUpdates = null;
+
+const sidecar = new Sidecar({
+    hub,
+    transport,
+    hostId: cfg.hostId,
+    // WHAT THE OPERATOR SAID, PLUS WHAT THE MACHINE KNOWS. Labels are how work
+    // is aimed — `tag: macos` on a start, filtered before ranking — and they
+    // came only from FLEETWRIGHT_LABELS, so every one was somebody having
+    // remembered to type it at install time. The facts that never change and
+    // are never wrong were the ones most likely to be missing.
+    //
+    // Derived at startup from the machine rather than stored, and unioned with
+    // the operator's own: "gpu", "prod", "noisy-neighbour" are decisions no
+    // amount of introspection produces.
+    labels: [...new Set([...cfg.labels, ...autoLabels(loadConfig())])].sort(),
+    maxSkewMs: cfg.maxSkewMs,
+    promptText: cfg.promptText,
+    idleRestartMs: cfg.idleRestartMs,
+    // fleetwright's own config, so the sidecar can reach the credential store it
+    // writes renewed tokens into. Same user, same box — see
+    // src/fleet/protocol/config-frame.js for why the renewal lives here.
+    hubConfig: loadConfig(),
+    logger: log,
+    // Reported with health, so a phone can say "this box is 3 commits behind
+    // and has 12 packages waiting" without anybody logging in to look.
+    // COMPUTED ON A TIMER, READ FROM MEMORY. This used to do the work inline,
+    // which meant a health frame — sent every fifteen seconds, and what the
+    // coordinator ranks hosts on — occasionally did a `git fetch` and an apt
+    // list refresh before it could be sent. Most frames were instant and the
+    // one after a cache expiry was not, so the symptom was a host that went
+    // quiet for a moment every so often and nothing that pointed at why.
+    //
+    // ROADMAP asked for exactly this and said why: "so the answer is ready
+    // when asked rather than computed while somebody waits".
+    //
+    // Null until the first pass finishes, which the health frame already
+    // treats as CANNOT TELL rather than as "no updates" — the distinction that
+    // stops a fleet reporting every host as current while it is still looking.
+    updates: () => lastUpdates,
+    // How a fresh check gets to be the cached answer. See adoptUpdates.
+    adoptUpdates,
+    // The commit on disk right now. From updateStatus rather than a constant
+    // baked at build time: the restart watcher can put this process on new
+    // code without anything rebuilding, and what a person reading the app
+    // wants is what is running, not what was compiled.
+    version: () => {
+      const hub = loadConfig();
+      const st = updateStatus(hub);
+      if (st.ok) return { head: st.head ?? null, branch: st.branch ?? null };
+      // A PACKAGED BOX HAS A VERSION TOO, and it reported none. updateStatus
+      // answers `ok: false` for a release — correctly, there is no checkout to
+      // read — and this returned null, which the apps render as "version not
+      // reported" on a machine that knows exactly what it is running.
+      //
+      // The release version is the honest answer to the same question. `branch`
+      // stays null: a release is not on one, and inventing "release" there
+      // would be a word the app might one day try to use.
+      if (st.packaged) {
+        const v = installedVersion(hub.installDir);
+        // AND WHAT `current` POINTS AT, which is a different question once an
+        // update has landed and this process has not restarted. `head` is
+        // what this sidecar is running, read from its own directory;
+        // `installed` is what the box would run after a restart. The apps
+        // draw the gap, because "up to date" about a service running an old
+        // release out of a box whose disk holds a newer one was the exact
+        // sentence a fleet showed for fourteen releases.
+        // AND WHETHER ROOT'S HALF IS THIS RELEASE'S. The helper is what every
+        // update runs as root and the installer is the only thing that writes
+        // it; a box whose helper the installer never refreshed restarts its
+        // services on every update and refreshes nothing else, and the only
+        // place that said so was the hub's journal. Compared against the
+        // tree this sidecar runs, for the reason helperState gives.
+        return v === 'unknown'
+          ? null
+          : { head: v, branch: null, installed: currentVersion(hub.installDir), helper: helperState({ installRoot: hub.installDir }) };
+      }
+      return null;
+    },
+  });
+
+  // --- the update check, off the health path -------------------------------
+  //
+  // Started AFTER the sidecar is constructed and never awaited: a box that
+  // cannot reach its git remote or its package mirror still runs sessions
+  // perfectly well, and holding startup on either would make an offline box
+  // look broken rather than offline.
+  const UPDATE_EVERY_MS = 15 * 60_000;
+
+  // One at a time. The release half does network I/O, so a slow or hanging
+  // fetch would otherwise have two checks in flight and the later one writing
+  // the older answer.
+  let refreshing = false;
+
+  async function refreshUpdates() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      // ASKED, NOT RECOMPUTED — and the bug this fixes was permanent and on
+      // every box.
+      //
+      // This used to work it out here: loadConfig(), updateAvailable(),
+      // checkRelease(). But loadConfig() reads fleetwright's SCHEMA out of the
+      // SIDECAR's environment, and /etc/fleetwright-sidecar.env carries no
+      // FLEETWRIGHT_* keys at all — the installer copies exactly three things
+      // into it, the hub URL, the hub token and the coordinator URL.
+      //
+      // So `cfg.releaseManifest` was the empty default, checkRelease answered
+      // `configured: false` — "this box does not know where its releases come
+      // from" — and appPending was null. For ever. Every packaged host in the
+      // fleet reported "update status unknown" from the day it was installed,
+      // and no amount of waiting fixed it because nothing about it was
+      // transient.
+      //
+      // Pressing Check worked, which is what made it look like a refresh
+      // problem: that goes through fleetwright, which reads /etc/fleetwright.env
+      // and HAS the manifest URL. Two processes, two configurations, one
+      // question — and the one that could answer it was not the one being
+      // asked. The answer then survived until this timer overwrote it with
+      // null again, which is why it also "came back" after a while.
+      //
+      // fleetwright already answers this: `/updates` returns `{ app, system }`,
+      // computed against the real configuration, and the `updates` VERB has
+      // been forwarding it to the apps all along. So the sidecar asks the same
+      // question through the same door and adopts the same answer. One
+      // computation, in the process that has the configuration, and the health
+      // frame can no longer disagree with the button.
+      const reply = await hub.command('/updates');
+      if (reply?.waiting) adoptUpdates(reply.waiting);
+      else log.warn('sidecar: fleetwright answered /updates without a waiting block');
+    } catch (e) {
+      // Left at whatever it was. A failed check is not news — the previous
+      // answer is stale rather than wrong, and replacing it with null would
+      // report "cannot tell" to a fleet that could tell five minutes ago.
+      log.warn(`sidecar: could not refresh the update check: ${e?.message || e}`);
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  /**
+   * Take the answer a check just produced as this box's cached truth.
+   *
+   * THE CACHE AND THE BUTTON DISAGREED BECAUSE THEY WERE TWO COMPUTATIONS. A
+   * health frame reports from a cache refreshed every fifteen minutes; the
+   * `updates` verb computes fresh, because somebody is standing there having
+   * pressed Check. So the reply said an update was waiting and the row it was
+   * rendered next to went on saying "up to date" — and the Apply button, which
+   * is gated on the row's data and not on the reply, never appeared. There was
+   * no way to apply the update the box had just told you about.
+   *
+   * The fresh answer is strictly better than the cached one, so it becomes the
+   * cached one. Called by the sidecar with the reply's `waiting` block.
+   */
+  function adoptUpdates(waiting) {
+    if (!waiting || typeof waiting !== 'object') return;
+    const app = waiting.app ?? {};
+    const sys = waiting.system ?? {};
+    lastUpdates = {
+      // Only a checkout counts commits; the other kinds have none, and writing
+      // 0 here would be the same lie by another route.
+      appBehind: app.kind === 'checkout' ? (app.behind ?? null) : null,
+      // `sys.text` carries a SENTENCE either way — "No system packages are
+      // waiting." is a perfectly good answer and a perfectly bad value for a
+      // field whose emptiness is what hides the Apply upgrade button.
+      system: sys.pending ? sys.text : null,
+      // NOW IN THE REPLY, and it had to be: this used to be the one field only
+      // the sidecar's own computation produced, so folding the two paths into
+      // one would have made a box needing a reboot quietly stop saying so.
+      // Carried over when absent, because `false` would CLEAR the flag on a box
+      // that still needs one — an older hub not sending it must not be read as
+      // an answer.
+      rebootRequired: typeof sys.rebootRequired === 'boolean'
+        ? sys.rebootRequired
+        : (lastUpdates?.rebootRequired ?? false),
+      release:
+        app.kind === 'release'
+          ? {
+              available: app.available ?? null,
+              configured: app.configured ?? true,
+              // Whether the check itself got an answer. Absent from an older
+              // hub, which is CANNOT TELL rather than a claim either way.
+              ok: typeof app.ok === 'boolean' ? app.ok : null,
+              message: app.text ?? null,
+            }
+          : null,
+      // A MIGRATABLE CHECKOUT HAS SOMETHING WAITING TOO — it is offered the move
+      // onto packaged releases. It counts no commits and has no release
+      // version, so both of the old signals were null on it and it rendered as
+      // up to date with nothing to press.
+      appPending: typeof app.pending === 'boolean' ? app.pending : null,
+    };
+  }
+
+  setTimeout(() => void refreshUpdates(), 0).unref?.();
+  setInterval(() => void refreshUpdates(), UPDATE_EVERY_MS).unref?.();
+
+  // The per-session hook sockets. The sidecar owns them, so it knows which
+  // session a report came from and forwards it to fleetwright's loopback hook
+  // endpoint with that name attached — which is how a container gets a
+  // conversation uuid recorded without ever being able to name a session, and
+  // without fleetwright changing at all.
+  const hooks = cfg.hookSocketsEnabled
+    ? new HookSocketServer({
+        dir: cfg.hookSocketDir,
+        onSessionStart: (r) => hub.recordSessionStart(r),
+        logger: log,
+      })
+    : null;
+
+  await sidecar.start();
+
+  const shutdown = async (/** @type {string} */ signal) => {
+    // Deliberately does NOT stop anything on the hub. The sessions are the
+    // work; the sidecar is a remote control for them, and it restarting must
+    // not disturb them — the same reasoning as fleetwright's own shutdown.
+    log.info(`${signal} — shutting down (fleetwright and its sessions are left alone)`);
+    try {
+      await sidecar.stop();
+      await hooks?.closeAll();
+    } catch { /* best effort */ }
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
+
+  // stdio mode ends when its input does. The websocket transport never ends on
+  // its own — that is the point of it — so the process stays up until signalled.
+  if (transport instanceof StdioTransport) {
+    await transport.closed;
+    await hooks?.closeAll();
+  }
+}
+
+/**
+ * Spend a six-digit pin to register this box's public key.
+ *
+ * Deliberately separate from `run`: enrolling is a thing an operator does once,
+ * with a code that lives ten minutes, and a service that could enrol itself on
+ * restart would be a service that could be tricked into re-enrolling elsewhere.
+ *
+ * @param {string|undefined} pin
+ */
+/**
+ * Enrol from inside a GitHub Actions job.
+ *
+ * A runner has nobody to read a pin to. The alternative everybody reaches for
+ * is a long-lived secret in CI that can admit a host — readable by every
+ * workflow in the repository, surviving the job, and unable to say WHICH job
+ * used it.
+ *
+ * GitHub will instead mint a token for this job on request, naming the
+ * repository, the workflow file and the run. It expires in minutes and cannot
+ * be exported from the job that asked for it. The coordinator verifies it the
+ * same way it verifies a sign-in and derives the host id from the run, so a job
+ * cannot name itself something else.
+ *
+ * Needs `permissions: id-token: write` on the job. Without it the request
+ * variables are simply absent, which is the common failure and is worth naming
+ * rather than reporting as a network error.
+ */
+async function doEnrolActions(claim) {
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !token) {
+    console.error(
+      'This is not a GitHub Actions job with id-token permission.\n' +
+        'Add `permissions: { id-token: write }` to the job — without it GitHub does not\n' +
+        'expose the request variables at all, which is why nothing here failed loudly.',
+    );
+    process.exit(2);
+  }
+  if (!cfg.coordinatorUrl) {
+    console.error('FLEETWRIGHT_COORDINATOR_URL is not set — there is nothing to enrol with.');
+    process.exit(2);
+  }
+  try {
+    // The audience is a constant both sides agree on, so a token minted for
+    // some other service cannot be replayed at this coordinator.
+    const res = await fetch(`${url}&audience=fleetwright`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`GitHub refused to mint a job token: ${res.status}`);
+    const idToken = (await res.json()).value;
+
+    const key = await loadOrCreateKey(cfg.hostKeyFile);
+    const fp = await keyFingerprint(key.publicJwk);
+    const reply = await fetch(new URL('/api/enroll/actions', cfg.coordinatorUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // The OIDC token admits the machine. The claim says whose it is — see
+      // the route. Two different questions, answered by two different things.
+      body: JSON.stringify({ token: idToken, claim: claim || '', publicJwk: key.publicJwk }),
+    });
+    const body = await reply.json().catch(() => ({}));
+    if (!reply.ok || !body?.ok) {
+      // The coordinator's own sentence, not a status code. Every refusal it can
+      // give here names something specific — the repository is not on the list,
+      // the workflow file is not the one allowed, the audience is wrong.
+      throw new Error(body?.text || `the coordinator refused this job (${reply.status})`);
+    }
+    console.log(`enrolled ${body.hostId} at ${cfg.coordinatorUrl}`);
+    console.log(`  fingerprint ${fp}`);
+    console.log('  ephemeral: retired and its key revoked when this job ends');
+    // THE HOST ID CAME FROM THE COORDINATOR, derived from the run. The sidecar
+    // must run under that name or it will connect as somebody else — or as
+    // nobody.
+    process.env.FLEETWRIGHT_HOST_ID = body.hostId;
+    await afterEnrol();
+  } catch (e) {
+    console.error(String(/** @type {Error} */ (e).message));
+    process.exit(1);
+  }
+}
+
+async function doEnrol(pin) {
+  if (!pin) {
+    console.error('usage: fleetwright-sidecar enrol <six-digit pin>\n\nGet a pin with /enroll in Telegram or from the app.');
+    process.exit(2);
+  }
+  if (!cfg.coordinatorUrl) {
+    console.error('FLEETWRIGHT_COORDINATOR_URL is not set — there is nothing to enrol with.');
+    process.exit(2);
+  }
+  try {
+    const key = await loadOrCreateKey(cfg.hostKeyFile);
+    const fp = await keyFingerprint(key.publicJwk);
+    const res = await enrol({
+      origin: cfg.coordinatorUrl,
+      code: pin,
+      hostId: cfg.hostId,
+      publicJwk: key.publicJwk,
+    });
+    console.log(`enrolled ${cfg.hostId} at ${cfg.coordinatorUrl}`);
+    console.log(`  fingerprint ${fp}`);
+    if (res.replaced) console.log('  (replaced the key this host had registered before)');
+    await afterEnrol();
+  } catch (e) {
+    console.error(`enrolment failed: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
+}
+
+/** Print what actually needs doing, and do it if asked. See enrol-next.js. */
+async function afterEnrol() {
+  const unit = unitName('fleetwright-sidecar');
+  const unitInstalled = ['/etc/systemd/system', '/lib/systemd/system', '/usr/lib/systemd/system']
+    .some((d) => existsSync(`${d}/${unit}.service`));
+  const probe = spawnSync('systemctl', ['is-active', unit], { encoding: 'utf8' });
+  const step = enrolNextStep({
+    unitInstalled: unitInstalled && !probe.error,
+    state: (probe.stdout || '').trim(),
+    tty: Boolean(process.stdin.isTTY),
+    quiet: process.env.FLEETWRIGHT_ENROL_QUIET === '1',
+    maxBackoffMs: MAX_BACKOFF_MS,
+  });
+
+  console.log(`\n${step.text}`);
+  if (step.kind === 'connects-itself') console.log(`Watch it:  journalctl -u ${unit} -f`);
+  if (step.kind !== 'offer-start') return;
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let answer = '';
+  try {
+    answer = (await rl.question('[Y/n]: ')).trim().toLowerCase();
+  } finally {
+    rl.close();
+  }
+  if (answer && !['y', 'yes'].includes(answer)) {
+    console.log(`Left alone.  sudo systemctl start ${unit}  when you want it.`);
+    return;
+  }
+
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  // inherit, so a sudo password prompt is visible and answerable.
+  const started = asRoot
+    ? spawnSync('systemctl', ['start', unit], { stdio: 'inherit' })
+    : spawnSync('sudo', ['systemctl', 'start', unit], { stdio: 'inherit' });
+  console.log(started.status === 0 ? `started — journalctl -u ${unit} -f` : `could not start it.  sudo systemctl start ${unit}`);
+}
+
+async function identity() {
+  const key = await loadOrCreateKey(cfg.hostKeyFile);
+  console.log(`host id      ${cfg.hostId}`);
+  console.log(`key file     ${cfg.hostKeyFile}`);
+  console.log(`fingerprint  ${await keyFingerprint(key.publicJwk)}`);
+  console.log(`coordinator  ${cfg.coordinatorUrl || '(unset)'}`);
+}
+
+async function doctor() {
+  let bad = 0;
+  /** @param {string} label @param {boolean} good @param {string} [detail] */
+  const ok = (label, good, detail = '') => {
+    if (!good) bad++;
+    console.log(`${good ? ' ok ' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
+  };
+
+  const { errors, warnings } = validateSidecarConfig(cfg);
+  ok('configuration', errors.length === 0, errors.join('; '));
+  for (const w of warnings) console.log(`warn  ${w}`);
+
+  const hub = new HubClient({ baseUrl: cfg.hubUrl, token: cfg.hubToken, readTimeoutMs: cfg.hubReadTimeoutMs });
+  const alive = await hub.alive();
+  ok(`fleetwright reachable at ${cfg.hubUrl}`, alive, alive ? '' : 'systemctl status fleetwright');
+
+  if (alive) {
+    try {
+      const state = await hub.state();
+      ok('fleetwright accepts the token', true, `${state.running}/${state.maxSessions} running on ${state.host}`);
+      ok('claude is logged in on the hub', state.auth?.loggedIn === true, state.auth?.summary || '');
+    } catch (e) {
+      ok('fleetwright accepts the token', false, /** @type {Error} */ (e).message);
+    }
+  }
+
+  ok(`host id ${cfg.hostId}`, true, cfg.labels.length ? `labels: ${cfg.labels.join(', ')}` : 'no labels');
+
+  if (cfg.transport === 'websocket') {
+    try {
+      const key = await loadOrCreateKey(cfg.hostKeyFile);
+      ok(`host key ${cfg.hostKeyFile}`, true, `fingerprint ${await keyFingerprint(key.publicJwk)}`);
+      // Enrolment is the coordinator's opinion, not ours — so ask it. A key that
+      // exists locally but was never presented, or was revoked, looks identical
+      // on disk and completely different on the wire.
+      try {
+        const known = await checkEnrolled({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk });
+        ok('coordinator knows this host', known.ok, known.ok ? cfg.coordinatorUrl : `${known.reason} — fleetwright-sidecar enrol <pin>`);
+      } catch (e) {
+        ok('coordinator knows this host', false, /** @type {Error} */ (e).message);
+      }
+    } catch (e) {
+      ok('host key', false, /** @type {Error} */ (e).message);
+    }
+  }
+  process.exit(bad ? 1 : 0);
+}

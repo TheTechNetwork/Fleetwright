@@ -154,7 +154,7 @@ test('two sessions have independent sockets', async (t) => {
 });
 
 test('a body naming its own session is accepted', async (t) => {
-  // Tolerated so a caller built against agent-hub's existing HTTP payload —
+  // Tolerated so a caller built against fleetwright's existing HTTP payload —
   // which does carry a name — is not a hard failure. It just cannot LIE.
   const { server, reports } = harness(t);
   const sock = await server.open('bigjob');

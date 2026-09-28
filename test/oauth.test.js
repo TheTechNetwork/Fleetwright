@@ -555,7 +555,7 @@ test('the installed page does not bounce back into the app', () => {
 });
 
 test('the Node coordinator reads the same OAuth variables the Worker does', async () => {
-  // docs/coordinator-deploy.md has said "set AGENT_FLEET_GITHUB_CLIENT_ID plus
+  // docs/coordinator-deploy.md has said "set FLEETWRIGHT_GITHUB_CLIENT_ID plus
   // the secret" since the App shipped, and setting them did NOTHING on this
   // coordinator: the core was constructed without them, so its
   // /oauth/github/callback — served, and documented in openapi.json — answered
@@ -565,16 +565,16 @@ test('the Node coordinator reads the same OAuth variables the Worker does', asyn
   // of routes, divergence of configuration.
   const { Coordinator } = await import('../src/fleet/coordinator/server.js');
   const names = [
-    'AGENT_FLEET_GITHUB_CLIENT_ID', 'AGENT_FLEET_GITHUB_CLIENT_SECRET',
-    'AGENT_FLEET_CLOUDFLARE_CLIENT_ID', 'AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET', 'AGENT_FLEET_CLOUDFLARE_SCOPES',
+    'FLEETWRIGHT_GITHUB_CLIENT_ID', 'FLEETWRIGHT_GITHUB_CLIENT_SECRET',
+    'FLEETWRIGHT_CLOUDFLARE_CLIENT_ID', 'FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET', 'FLEETWRIGHT_CLOUDFLARE_SCOPES',
   ];
   const saved = names.map((n) => [n, process.env[n]]);
   try {
-    process.env.AGENT_FLEET_GITHUB_CLIENT_ID = 'Iv23liTEST';
-    process.env.AGENT_FLEET_GITHUB_CLIENT_SECRET = 'shh';
-    process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_ID = 'cf-id';
-    process.env.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET = 'cf-shh';
-    process.env.AGENT_FLEET_CLOUDFLARE_SCOPES = 'account-settings.read offline_access';
+    process.env.FLEETWRIGHT_GITHUB_CLIENT_ID = 'Iv23liTEST';
+    process.env.FLEETWRIGHT_GITHUB_CLIENT_SECRET = 'shh';
+    process.env.FLEETWRIGHT_CLOUDFLARE_CLIENT_ID = 'cf-id';
+    process.env.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET = 'cf-shh';
+    process.env.FLEETWRIGHT_CLOUDFLARE_SCOPES = 'account-settings.read offline_access';
     const c = new Coordinator({ logger: quiet });
     assert.equal(c.core.githubApp?.clientId, 'Iv23liTEST');
     assert.equal(c.core.githubApp?.clientSecret, 'shh');

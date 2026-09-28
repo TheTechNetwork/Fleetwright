@@ -5,7 +5,7 @@
 // somebody's time, which no smoke test notices.
 //
 // The instruction it replaces was "Start the sidecar: sudo systemctl restart
-// agent-fleet-sidecar", printed unconditionally. On the common path that is
+// fleetwright-sidecar", printed unconditionally. On the common path that is
 // wrong: enrolment registers the public half of a key the running sidecar is
 // ALREADY signing with, it re-signs a fresh nonce on every dial, and the
 // transport retries for ever with a backoff capped at MAX_BACKOFF_MS. A sidecar
@@ -41,7 +41,7 @@ export function enrolNextStep({ unitInstalled, state, tty, quiet, maxBackoffMs }
 
   // Not running. The verb is `start`, never `restart`.
   if (quiet || !tty) {
-    return { kind: 'tell-start', text: 'The sidecar is not running.  sudo systemctl start agent-fleet-sidecar' };
+    return { kind: 'tell-start', text: 'The sidecar is not running.  sudo systemctl start fleetwright-sidecar' };
   }
   return { kind: 'offer-start', text: 'The sidecar is not running. Start it now?' };
 }

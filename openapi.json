@@ -646,7 +646,7 @@
         ],
         "security": [],
         "summary": "The same check /host/connect makes, without the socket",
-        "description": "So `agent-fleet-sidecar doctor` can tell an operator that the key on disk was never enrolled, or has been revoked, instead of leaving them to read a reconnect loop out of the journal.",
+        "description": "So `fleetwright-sidecar doctor` can tell an operator that the key on disk was never enrolled, or has been revoked, instead of leaving them to read a reconnect loop out of the journal.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1456,7 +1456,7 @@
         ],
         "security": [],
         "summary": "Admit a GitHub Actions job as an ephemeral host",
-        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
+        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in FLEETWRIGHT_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1488,7 +1488,7 @@
             "description": "the token did not verify, or names a repository this fleet does not admit \u2014 `error.code` is `bad_token`"
           },
           "503": {
-            "description": "AGENT_FLEET_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
+            "description": "FLEETWRIGHT_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
           }
         }
       }

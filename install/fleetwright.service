@@ -1,6 +1,6 @@
 [Unit]
-Description=agent-hub — Claude Code session manager
-Documentation=https://github.com/ambersecurityinc/agent-hub
+Description=fleetwright — Claude Code session manager
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 After=network-online.target
 Wants=network-online.target
 
@@ -17,7 +17,7 @@ Type=simple
 # shim from the path systemd takes at all.
 User=__USER__
 WorkingDirectory=__DIR__
-EnvironmentFile=/etc/agent-hub.env
+EnvironmentFile=/etc/fleetwright.env
 ExecStart=__NODE__ __ENTRY__ serve
 
 Restart=always
@@ -27,14 +27,14 @@ RestartSec=3
 #
 # The tmux server that holds every Claude session is started by this service,
 # so it lands in this unit's cgroup. With the default KillMode=control-group, a
-# plain `systemctl restart agent-hub` reaps the entire cgroup — including the
+# plain `systemctl restart fleetwright` reaps the entire cgroup — including the
 # tmux server — and takes down every live session at once. That is exactly what
 # happened on the fleet this was extracted from: one routine restart, every
 # agent gone.
 #
 # With KillMode=process, systemd signals only the main process, so restarting
 # the hub leaves the sessions alone and they are re-adopted on the next
-# reconcile. Restarting agent-hub must never cost anyone their work.
+# reconcile. Restarting fleetwright must never cost anyone their work.
 KillMode=process
 TimeoutStopSec=15
 
@@ -82,7 +82,7 @@ ProtectKernelModules=yes
 # on purpose.
 #
 # THE HARDENING CAN COME BACK, AND HALF OF THE WAY IS NOW BUILT. The upgrade
-# has its own oneshot unit with no sandboxing — install/agent-hub-upgrade.service
+# has its own oneshot unit with no sandboxing — install/fleetwright-upgrade.service
 # — and the sudoers grant has narrowed from "run apt as root" to `systemctl
 # start` of that unit and its apt-update sibling, and nothing else. dpkg gets a
 # clean namespace, the output lands in the journal under the unit's name, and
@@ -107,9 +107,9 @@ RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
-StateDirectory=agent-hub
+StateDirectory=fleetwright
 StateDirectoryMode=0700
-RuntimeDirectory=agent-hub
+RuntimeDirectory=fleetwright
 RuntimeDirectoryMode=0700
 #
 # REJECTED, each with what actually happened:
@@ -125,7 +125,7 @@ RuntimeDirectoryMode=0700
 #   PrivateTmp            tmux's socket lives in /tmp/tmux-<uid>. Measured: a
 #                         tmux server started under this is invisible to
 #                         `tmux ls` from the user's own shell, so every
-#                         `agent-hub attach` stops working.
+#                         `fleetwright attach` stops working.
 #   ProtectHome           rootless podman keeps its storage in
 #                         ~/.local/share/containers, and the Claude credential
 #                         is in ~/.claude.
@@ -156,7 +156,7 @@ RuntimeDirectoryMode=0700
 #                         box's next session-start created a poisoned pause.
 #                         REMOVING IT IS NOT ENOUGH ON A BROKEN BOX: the poisoned
 #                         pause outlives a restart (KillMode=process leaves the
-#                         user's pause alone), so agent-hub recreates it on the
+#                         user's pause alone), so fleetwright recreates it on the
 #                         way up — see healRootlessSandbox — which is what makes
 #                         an in-app update recover the box. The sidecar keeps
 #                         this directive: it spawns nothing, so it has no pause.
@@ -182,7 +182,7 @@ RuntimeDirectoryMode=0700
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agent-hub
+SyslogIdentifier=fleetwright
 
 [Install]
 WantedBy=multi-user.target

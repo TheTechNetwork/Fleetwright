@@ -6,7 +6,7 @@
 // exist at all, it is written only by enrolment and revocation, and nothing a
 // host says can change it.
 //
-// Before this, every host presented the same AGENT_FLEET_HOST_TOKEN. That one
+// Before this, every host presented the same FLEETWRIGHT_HOST_TOKEN. That one
 // string meant the fleet could not tell two machines apart, could not remove
 // one without re-keying all of them, and had nothing to encrypt a secret to.
 // Three separate problems with one cause: hosts had no identity.

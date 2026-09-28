@@ -33,11 +33,11 @@ test('the release carries every file the code reaches for at runtime', () => {
     'src/web/index.html',  // the local web UI
     'install/install.sh',  // so a release can install and migrate itself
     'sandbox/entrypoint.sh',
-    'lib/agent-hub.mjs',
-    'lib/agent-fleet-sidecar.mjs',
-    'lib/agent-fleet-mcp.mjs',
     'lib/fleetwright.mjs',
-    'bin/agent-hub',
+    'lib/fleetwright-sidecar.mjs',
+    'lib/fleetwright-mcp.mjs',
+    'lib/fleetwright.mjs',
+    'bin/fleetwright',
     'bin/fleetwright',
   ]) {
     assert.equal(existsSync(path.join(r, f)), true, `release is missing ${f}`);
@@ -66,7 +66,7 @@ test('there is no node_modules and nothing declares a dependency', () => {
   assert.equal(pkg.dependencies, undefined);
   // jose is the one runtime dependency, so it has to be INSIDE the bundle —
   // absent from both places would mean it was simply dropped.
-  const bundle = readFileSync(path.join(r, 'lib/agent-fleet-sidecar.mjs'), 'utf8');
+  const bundle = readFileSync(path.join(r, 'lib/fleetwright-sidecar.mjs'), 'utf8');
   assert.equal(/from ["']jose["']/.test(bundle), false, 'jose is still an external import');
 });
 
@@ -76,11 +76,11 @@ test('the bundle runs with no dependencies present, from an unrelated cwd', () =
   const r = release();
   const elsewhere = mkdtempSync(path.join(tmpdir(), 'cwd-'));
   try {
-    const out = execFileSync(process.execPath, [path.join(r, 'lib/agent-hub.mjs'), '--help'], {
+    const out = execFileSync(process.execPath, [path.join(r, 'lib/fleetwright.mjs'), '--help'], {
       cwd: elsewhere,
       encoding: 'utf8',
     });
-    assert.match(out, /agent-hub/);
+    assert.match(out, /fleetwright/);
   } finally {
     rmSync(elsewhere, { recursive: true, force: true });
   }

@@ -8,12 +8,12 @@ import path from 'node:path';
 import { applyRelease, releaseLayout, installedVersion } from '../src/core/release-apply.js';
 
 /** A release tarball with a real bundle in it, built by hand — no CI needed. */
-function makeRelease(version, { entry = 'process.stdout.write("agent-hub help\\n");' } = {}) {
+function makeRelease(version, { entry = 'process.stdout.write("fleetwright help\\n");' } = {}) {
   const work = mkdtempSync(path.join(tmpdir(), 'mk-'));
   const stage = path.join(work, `fleetwright-host-${version}`);
   mkdirSync(path.join(stage, 'lib'), { recursive: true });
-  writeFileSync(path.join(stage, 'lib', 'agent-hub.mjs'), entry);
-  writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'agent-fleet', version }));
+  writeFileSync(path.join(stage, 'lib', 'fleetwright.mjs'), entry);
+  writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'fleetwright', version }));
   execFileSync('tar', ['-czf', path.join(work, 'r.tar.gz'), '-C', work, `fleetwright-host-${version}`]);
   const bytes = readFileSync(path.join(work, 'r.tar.gz'));
   return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), work };
@@ -25,7 +25,7 @@ function makeBox(version) {
   const dir = path.join(base, 'releases', version);
   mkdirSync(path.join(dir, 'lib'), { recursive: true });
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version }));
-  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
   symlinkSync(dir, path.join(base, 'current'));
   return { base, current: path.join(base, 'current') };
 }
@@ -220,7 +220,7 @@ test('a release it cannot delete is quarantined, not failed on', { skip: asRoot 
 });
 
 test('a box that is not laid out for releases is told which it is', async () => {
-  const r = releaseLayout('/opt/agent-fleet');
+  const r = releaseLayout('/opt/fleetwright-src');
   assert.equal(r.ok, false);
   assert.match(r.message, /Re-run install\.sh/);
   assert.equal(releaseLayout('/opt/fleetwright/current').ok, true);

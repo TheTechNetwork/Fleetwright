@@ -317,7 +317,7 @@ class Fleet(
         /**
          * What `tag` matches on for this box: os, architecture, distribution,
          * whether its image has a browser, plus anything set from an app or in
-         * AGENT_FLEET_LABELS.
+         * FLEETWRIGHT_LABELS.
          */
         val labels: List<String> = emptyList(),
         /**
@@ -818,7 +818,7 @@ class Fleet(
      * Which releases a box installs — and, with [to], change it.
      *
      * Bare is a question. The verb exists because the channel used to be a line
-     * in `/etc/agent-hub.env`, which meant a shell on the box — the one thing
+     * in `/etc/fleetwright.env`, which meant a shell on the box — the one thing
      * somebody holding only a phone does not have.
      */
     suspend fun channel(host: String, to: String? = null): Reply =
@@ -829,7 +829,7 @@ class Fleet(
      *
      * [channel]'s sibling, and bare is a question for the same reason. The
      * browser variant shipped as a second tag and choosing it meant editing
-     * AGENT_HUB_SANDBOX_IMAGE in a root-owned file and restarting the service.
+     * FLEETWRIGHT_SANDBOX_IMAGE in a root-owned file and restarting the service.
      */
     suspend fun sandbox(host: String, to: String? = null): Reply =
         intent("sandbox", buildMap { if (!to.isNullOrBlank()) put("to", to) }, host = host)
@@ -1720,6 +1720,34 @@ class Fleet(
     }
 }
 
+private const val SETTINGS_PREFS = "fleetwright-settings"
+private const val LEGACY_SETTINGS_PREFS = "agent-fleet"
+
+/**
+ * The settings file, carried over from its name before the rename the first
+ * time it is opened. Every type SharedPreferences can hold is copied; the old
+ * file is cleared only after the copy has been committed, so a crash between
+ * the two leaves the settings in both places rather than in neither.
+ */
+private fun migrated(context: Context): android.content.SharedPreferences {
+    val prefs = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+    val legacy = context.getSharedPreferences(LEGACY_SETTINGS_PREFS, Context.MODE_PRIVATE)
+    if (prefs.all.isNotEmpty() || legacy.all.isEmpty()) return prefs
+    val edit = prefs.edit()
+    for ((key, value) in legacy.all) {
+        when (value) {
+            is String -> edit.putString(key, value)
+            is Boolean -> edit.putBoolean(key, value)
+            is Int -> edit.putInt(key, value)
+            is Long -> edit.putLong(key, value)
+            is Float -> edit.putFloat(key, value)
+            is Set<*> -> edit.putStringSet(key, value.filterIsInstance<String>().toSet())
+        }
+    }
+    if (edit.commit()) legacy.edit().clear().apply()
+    return prefs
+}
+
 /**
  * Where the coordinator is and how to authenticate to it.
  *
@@ -1728,10 +1756,14 @@ class Fleet(
  * kept on the device.
  */
 class Settings(context: Context) {
-    // The file name, NOT a label. Renaming it would orphan the settings on
-    // every phone that already has the app — a stored URL and credential
-    // silently gone, on the one screen where losing input costs the most.
-    private val prefs = context.getSharedPreferences("agent-fleet", Context.MODE_PRIVATE)
+    // The file name, NOT a label. Renaming it orphans the settings on every
+    // phone that already has the app — a stored URL and credential silently
+    // gone, on the one screen where losing input costs the most. So when it
+    // WAS renamed (it was "agent-fleet" before the project was Fleetwright
+    // everywhere), the old file is copied across once, the first time this
+    // runs, and only then emptied. Not "fleetwright": SessionKind already has
+    // that file, and two owners of one file is how a key gets overwritten.
+    private val prefs = migrated(context)
 
     /** Not sensitive: an origin, and the app talks to no other. */
     /**

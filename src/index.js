@@ -1,4 +1,4 @@
-// agent-hub entrypoint. Wires config → core → adapters, restores anything that
+// fleetwright entrypoint. Wires config → core → adapters, restores anything that
 // was running before the last shutdown, and stays up.
 
 import { mkdirSync } from 'node:fs';
@@ -147,7 +147,7 @@ export async function main() {
   const sessions = new SessionManager(cfg, registry, hooks);
   const login = new LoginFlow(cfg);
 
-  log.info(`agent-hub starting on ${cfg.hostname} · workdir ${cfg.workdir} · cap ${cfg.maxSessions}`);
+  log.info(`fleetwright starting on ${cfg.hostname} · workdir ${cfg.workdir} · cap ${cfg.maxSessions}`);
 
   // THE BOX'S OWN ACCOUNT BECOMES SOMEBODY'S, once, on the way up. See
   // docs/one-account-per-person.md — sessions no longer run as the machine, so
@@ -192,7 +192,7 @@ export async function main() {
   // and sends whoever set it looking at Telegram.
   if (cfg.telegram.token) {
     log.warn(
-      'AGENT_HUB_TELEGRAM_TOKEN is set, and the Telegram adapter is archived — nothing will read it. ' +
+      'FLEETWRIGHT_TELEGRAM_TOKEN is set, and the Telegram adapter is archived — nothing will read it. ' +
         'The app and the MCP server are the surfaces now; see docs/telegram.md.',
     );
   }

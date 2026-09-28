@@ -1,4 +1,4 @@
-// Everything agent-hub knows about driving the `claude` CLI unattended.
+// Everything fleetwright knows about driving the `claude` CLI unattended.
 //
 // Three hard-won behaviours live here. Each cost a real outage on the fleet
 // this tool was extracted from; none of them are obvious from the CLI's help
@@ -297,7 +297,7 @@ export async function verifyRemoteControl(cfg, name) {
 //
 // The default is a bare Enter = the highlighted "Resume from summary", which
 // is the product's own recommendation and the cheapest in usage.
-// AGENT_HUB_RESUME_CHOICE=2 resumes full sessions instead. Option 3 is
+// FLEETWRIGHT_RESUME_CHOICE=2 resumes full sessions instead. Option 3 is
 // deliberately unreachable: it flips a global preference for every future
 // session, interactive ones included.
 
@@ -437,6 +437,6 @@ export async function dismissResumeDialogs(cfg, names, choice = 'summary') {
 // caller is told to start a fresh one.
 export const RESUME_REQUIRES_UUID =
   'No recorded conversation for this session, so it cannot be resumed. ' +
-  '(agent-hub deliberately will not use --continue: in a shared workdir that resumes the ' +
+  '(fleetwright deliberately will not use --continue: in a shared workdir that resumes the ' +
   "directory's latest conversation, so every unknown session would collide on the same one.) " +
   'Start a new session instead.';

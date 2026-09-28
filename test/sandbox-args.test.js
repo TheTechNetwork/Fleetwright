@@ -78,17 +78,17 @@ test('a refusal names the option and how to proceed anyway', () => {
   // A refusal somebody cannot act on gets worked around by deleting the check.
   const msg = unsafeSandboxMessage(unsafeSandboxArgs(['--privileged']));
   assert.match(msg, /--privileged/);
-  assert.match(msg, /AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS=1/);
+  assert.match(msg, /FLEETWRIGHT_SANDBOX_ALLOW_UNSAFE_ARGS=1/);
 });
 
 test('the config refuses to start, and the override downgrades it to a warning', async () => {
   const { loadConfig, validateConfig } = await import('../src/config.js');
-  const base = { AGENT_HUB_SANDBOX: '1', AGENT_HUB_SANDBOX_ARGS: '--privileged' };
+  const base = { FLEETWRIGHT_SANDBOX: '1', FLEETWRIGHT_SANDBOX_ARGS: '--privileged' };
 
   const refused = validateConfig(loadConfig({ ...base }));
   assert.equal(refused.errors.some((e) => /--privileged/.test(e)), true);
 
-  const allowed = validateConfig(loadConfig({ ...base, AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS: '1' }));
+  const allowed = validateConfig(loadConfig({ ...base, FLEETWRIGHT_SANDBOX_ALLOW_UNSAFE_ARGS: '1' }));
   assert.equal(allowed.errors.some((e) => /--privileged/.test(e)), false);
   // STILL SAID. Somebody who typed the override knows; somebody who inherited
   // the box does not, and this is the line that tells them.
@@ -145,7 +145,7 @@ test('whether the browser keeps its own sandbox is measured, not assumed', () =>
   // browser's sandbox is inside the session container, with the session's
   // credentials, and somebody should know that before pointing a fleet at it.
   // AND IT NAMES THE RUNTIME. This job runs under docker; a session runs under
-  // rootless podman (`AGENT_HUB_PODMAN_BIN`), and the two differ on exactly the
+  // rootless podman (`FLEETWRIGHT_PODMAN_BIN`), and the two differ on exactly the
   // thing being measured — seccomp defaults and user namespaces. Left unnamed,
   // this was a true answer about a container we do not ship into, presented as
   // the answer about the one we do.

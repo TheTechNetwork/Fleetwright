@@ -2,8 +2,8 @@
 #
 # tinyproxy on Alpine, and nothing else. It answers CONNECT to port 443 for
 # the hostnames in /etc/tinyproxy/allow.list and refuses everything else —
-# both files are bind-mounted from the host, written by agent-hub from
-# AGENT_HUB_SANDBOX_EGRESS_ALLOW, so this image carries no policy of its own
+# both files are bind-mounted from the host, written by fleetwright from
+# FLEETWRIGHT_SANDBOX_EGRESS_ALLOW, so this image carries no policy of its own
 # and a changed allowlist is a restart of the container, not a rebuild. See
 # src/core/egress.js.
 #

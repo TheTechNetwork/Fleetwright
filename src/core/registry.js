@@ -2,7 +2,7 @@
 // written atomically (temp + rename).
 //
 // Why not SQLite: the entire dataset is a few dozen small records that only
-// this process writes. A JSON file keeps agent-hub at zero runtime
+// this process writes. A JSON file keeps fleetwright at zero runtime
 // dependencies and zero build step, which is the whole portability promise —
 // a coworker clones the repo and runs it. If this ever needs concurrent
 // writers or history, every access already goes through this module, so

@@ -71,7 +71,7 @@ export function podman(cfg, args, { timeout, input } = {}) {
  *
  * `inspect` exists on both and answers the same question the same way: zero if
  * it is there, non-zero if it is not. Output is discarded; only the status is
- * read. So `AGENT_HUB_PODMAN_BIN=docker` now runs this code path unchanged.
+ * read. So `FLEETWRIGHT_PODMAN_BIN=docker` now runs this code path unchanged.
  *
  * THE PRODUCT STILL WANTS PODMAN, and that is not a preference. docs/hardening.md
  * is built on rootless: NoNewPrivileges against setuid newuidmap, ProtectHome
@@ -176,7 +176,7 @@ export function podmanAvailable(cfg) {
  * /proc is mounted `hidepid` — and a hidepid /proc is not "fully visible", so
  * the kernel refuses an unprivileged container a fresh proc mount and EVERY
  * session dies at start with `crun: mount \`proc\` to \`proc\`: Operation not
- * permitted`. The error blames crun; the cause is the unit. install/agent-hub.service
+ * permitted`. The error blames crun; the cause is the unit. install/fleetwright.service
  * no longer sets ProtectProc, so a NEW pause comes up clean — but the already
  * poisoned one SURVIVES A SERVICE RESTART (KillMode=process leaves the user's
  * pause alone), so removing the directive and restarting is not enough on a box
@@ -210,19 +210,19 @@ export function healRootlessSandbox(cfg) {
     return { healed: false, why };
   }
   // VERIFY, do not assume. The first version of this logged success straight
-  // after `migrate` and was wrong on a box where agent-hub ITSELF still ran
+  // after `migrate` and was wrong on a box where fleetwright ITSELF still ran
   // under a /proc-masking directive: `migrate` recreated the pause from that
   // same masked namespace, so it came back just as poisoned, and the reassuring
   // log line sent everyone looking elsewhere. If the pause is still not fully
-  // visible, the fault is agent-hub's own unit, not something migrate can fix.
+  // visible, the fault is fleetwright's own unit, not something migrate can fix.
   const after = podman(cfg, ['unshare', 'cat', '/proc/self/mountinfo']);
   if (after.status === 0 && procNotFullyVisible(after.stdout)) {
     log.warn(
       'sandbox: recreated the rootless namespace but its /proc is STILL not fully visible — ' +
-        'agent-hub itself is running under a /proc-masking directive (ProtectProc/ProtectKernelLogs). ' +
-        'See the REJECTED list in install/agent-hub.service.',
+        'fleetwright itself is running under a /proc-masking directive (ProtectProc/ProtectKernelLogs). ' +
+        'See the REJECTED list in install/fleetwright.service.',
     );
-    return { healed: false, why: 'agent-hub is still masking /proc' };
+    return { healed: false, why: 'fleetwright is still masking /proc' };
   }
   log.info('sandbox: recreated the rootless namespace with a fully-visible /proc — sessions can start again');
   return { healed: true };
@@ -299,7 +299,7 @@ export function sandboxImageExists(cfg) {
  *
  * Refusing to start a session over a missing image is refusing over something
  * we know exactly how to fix. The first session on a fresh box waits a few
- * minutes; every one after it is instant. AGENT_HUB_SANDBOX_AUTO_BUILD=0 turns
+ * minutes; every one after it is instant. FLEETWRIGHT_SANDBOX_AUTO_BUILD=0 turns
  * this off for a deployment that manages its images elsewhere.
  *
  * A `localhost/` image is ours and gets built from the Containerfile. Anything
@@ -587,7 +587,7 @@ export async function canStartSession(cfg, { timeout = 30_000 } = {}) {
  */
 export async function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
   if (!podmanAvailable(cfg)) {
-    return { ok: false, message: `${cfg.podmanBin} is not installed, but AGENT_HUB_SANDBOX is on` };
+    return { ok: false, message: `${cfg.podmanBin} is not installed, but FLEETWRIGHT_SANDBOX is on` };
   }
   // Only when a volume is missing — that is when the image's contents get
   // baked into a session. A resume finds both volumes present, skips this
@@ -872,7 +872,7 @@ function seedCredentials(cfg, volume, picked, actor = null) {
         // credentials in the app", which on iOS hid Claude and on Android does
         // not exist. A remedy pointing at a surface that cannot perform it is
         // worse than one that just says what is needed.
-        + `Connect a Claude account for ${cfg.hostname} from the app, or run \`agent-hub login\` on that box.`,
+        + `Connect a Claude account for ${cfg.hostname} from the app, or run \`fleetwright login\` on that box.`,
     };
   }
   // The identity rides with the credential when there is one. The entrypoint

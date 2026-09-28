@@ -51,7 +51,7 @@ test('an unset property is an empty value, not a missing line', () => {
     'ProtectSystem=full',
     'ReadWritePaths=',
     'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service',
+    'FragmentPath=/etc/systemd/system/fleetwright.service',
     'NeedDaemonReload=no',
   ]));
   assert.equal(u.ok, true);
@@ -63,10 +63,10 @@ test('a value containing = survives, because the FIRST = is the separator', () =
   // `=` is legal in a path, and `split('=')` truncates the value at the first
   // one — so a drop-in under a directory with an `=` in its name would be
   // reported half-named, in the one message whose job is to name the file.
-  const odd = '/etc/systemd/system/agent-hub.service.d/10-ProtectSystem=off.conf';
+  const odd = '/etc/systemd/system/fleetwright.service.d/10-ProtectSystem=off.conf';
   const lines = [
     'ProtectSystem=no', 'ReadWritePaths=', `DropInPaths=${odd}`,
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ];
   assert.equal(unitProtection(fakeSystemctl(lines)).dropIns, odd);
   assert.match(adviseOnFailure(said, mounts(RO_ETC), fakeSystemctl(lines)), /10-ProtectSystem=off\.conf/);
@@ -93,7 +93,7 @@ test('the path in the error is the path measured, not /etc', () => {
   ];
   const cfg = fakeSystemctl([
     'ProtectSystem=true', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(usrFailure, mounts(etcWritableUsrNot), cfg);
   assert.match(advice, /READ-ONLY/, 'it measured somewhere the failure was not');
@@ -114,7 +114,7 @@ test('any ProtectSystem at all is itself the diagnosis now', () => {
   for (const [ps, rwp] of [['full', 'ReadWritePaths='], ['full', 'ReadWritePaths=/etc'], ['true', 'ReadWritePaths='], ['strict', 'ReadWritePaths=']]) {
     const cfg = fakeSystemctl([
       `ProtectSystem=${ps}`, rwp, 'DropInPaths=',
-      'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+      'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
     ]);
     const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
     assert.match(advice, /READ-ONLY/);
@@ -133,7 +133,7 @@ test('a current unit is NOT told to re-run the installer', () => {
   // exact wrong answer this whole function was rewritten to stop giving.
   const cfg = fakeSystemctl([
     'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
   assert.match(advice, /This unit is current/);
@@ -148,7 +148,7 @@ test('a unit with the carve-out is NOT read as correctly configured', () => {
   // a file that does not exist. This is the exact state the box reported.
   const cfg = fakeSystemctl([
     'ProtectSystem=full', 'ReadWritePaths=/etc', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
   assert.doesNotMatch(advice, /This unit is current/);
@@ -158,8 +158,8 @@ test('a unit with the carve-out is NOT read as correctly configured', () => {
 test('a drop-in over a current unit is named, not guessed at', () => {
   const cfg = fakeSystemctl([
     'ProtectSystem=no', 'ReadWritePaths=',
-    'DropInPaths=/etc/systemd/system/agent-hub.service.d/override.conf',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'DropInPaths=/etc/systemd/system/fleetwright.service.d/override.conf',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
   assert.match(advice, /This unit is current/);
@@ -173,7 +173,7 @@ test('a drop-in over a current unit is named, not guessed at', () => {
 test('a unit that asks for it with no drop-in is reported as a disagreement', () => {
   const cfg = fakeSystemctl([
     'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
   assert.match(advice, /neither the\nunit nor this service/);
@@ -189,7 +189,7 @@ test('a service still running the old unit is told to reload, not reinstall', ()
   // been fixed would otherwise be told to re-run the installer it just ran.
   const cfg = fakeSystemctl([
     'ProtectSystem=full', 'ReadWritePaths=', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=yes',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=yes',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
   assert.match(advice, /daemon-reload/);
@@ -207,7 +207,7 @@ test('a unit systemd has never heard of is not read as an old unit', () => {
     'ProtectSystem=no', 'ReadWritePaths=', 'DropInPaths=', 'FragmentPath=', 'NeedDaemonReload=no',
   ]);
   const advice = adviseOnFailure(said, mounts(RO_ETC), cfg);
-  assert.match(advice, /no unit called agent-hub loaded/);
+  assert.match(advice, /no unit called fleetwright loaded/);
   assert.doesNotMatch(advice, /curl -fsSL/);
 });
 
@@ -220,7 +220,7 @@ test('a box with no systemd says so instead of guessing', () => {
   assert.match(advice, /could not ask systemd why/);
   // Falls back to naming the commands, which is the honest answer when the
   // service genuinely cannot find out.
-  assert.match(advice, /systemctl show agent-hub/);
+  assert.match(advice, /systemctl show fleetwright/);
 });
 
 test('a systemctl that is not there does not throw out of the advice', () => {
@@ -235,7 +235,7 @@ test('a multi-entry ReadWritePaths survives whole', () => {
   // the fix as applied on a box that never asked for it.
   const cfg = fakeSystemctl([
     'ProtectSystem=no', 'ReadWritePaths=/etcetera /var/tmp', 'DropInPaths=',
-    'FragmentPath=/etc/systemd/system/agent-hub.service', 'NeedDaemonReload=no',
+    'FragmentPath=/etc/systemd/system/fleetwright.service', 'NeedDaemonReload=no',
   ]);
   assert.equal(unitProtection(cfg).readWritePaths, '/etcetera /var/tmp');
 });

@@ -292,7 +292,7 @@ export class CoordinatorCore {
       // A BOX THAT CANNOT START SESSIONS IS AT LEAST AS WORTH SAYING AS A
       // SESSION THAT NEEDS AN ANSWER, and until now it was said only in a
       // journal. deb132's shared credential expired on a Saturday afternoon;
-      // agent-hub warned about it hourly for thirty hours, the coordinator
+      // fleetwright warned about it hourly for thirty hours, the coordinator
       // marked the host degraded, the app showed it — three storeys down in
       // Settings — and nobody was told. docs/psychology.md §7 is exactly this:
       // silence has to be trustworthy before it is comfortable, and a warning
@@ -1115,7 +1115,7 @@ export class CoordinatorCore {
           error: { code: 'not_configured' },
           text:
             'This fleet has no runner repository, so there is nowhere to start a machine. ' +
-            'An operator sets AGENT_FLEET_RUNNER_REPO to the owner/repo holding the runner workflows — ' +
+            'An operator sets FLEETWRIGHT_RUNNER_REPO to the owner/repo holding the runner workflows — ' +
             'see docs/runner-central.md.',
         };
       }
@@ -1683,7 +1683,7 @@ export class CoordinatorCore {
       // on exactly the fleets where it does something. `provision` refuses
       // with a sentence when no runner repository is configured, and that
       // sentence is right for an agent that just asked — but a button that
-      // answers "an operator sets AGENT_FLEET_RUNNER_REPO" is a dead control
+      // answers "an operator sets FLEETWRIGHT_RUNNER_REPO" is a dead control
       // on every fleet that has not, which is most of them. The repository
       // name is not a secret: it is where the runner workflows live, and the
       // host it dispatches from names it in every refusal already.
@@ -1713,7 +1713,7 @@ export class CoordinatorCore {
  *
  * The bare code reached a phone as one word — `unsupported_version` — while the
  * verb existed on the coordinator, so the request looked perfectly valid.
- * Finding D2 says the drift error "names `agent-hub update --restart`". It does
+ * Finding D2 says the drift error "names `fleetwright update --restart`". It does
  * not: that is the OTHER error, and this one named nothing at all.
  *
  * WHAT CHANGED SINCE THAT PARAGRAPH WAS WRITTEN is the sentence in capitals it
@@ -1772,7 +1772,7 @@ function explainUnsupportedVersion(reply, host) {
  * point: THE VERB THAT FIXES THIS IS OFTEN THE ONE THAT IS UNKNOWN. `update`
  * over the fleet cannot update a box too old to have `update`. What works is
  * that box's own Telegram bot, or a shell on it — both of which talk to
- * agent-hub directly rather than through this protocol.
+ * fleetwright directly rather than through this protocol.
  *
  * A pull that did not restart looks identical from here, and is at least as
  * common: the files are new and the running process still holds the old verb
@@ -1793,7 +1793,7 @@ function explainUnknownVerb(reply, host) {
       'This is the protocol refusing cleanly rather than guessing, and unlike a version mismatch it is\n' +
       'fixable from here, because everything EXCEPT the new verb still gets through:\n' +
       `  Apply update, on ${host.hostId}, from the app or \`fleet_update\`\n` +
-      `  agent-hub update --restart      (or a shell on ${host.hostId})\n` +
+      `  fleetwright update --restart      (or a shell on ${host.hostId})\n` +
       'A pull without a restart looks the same from here — the files are new and the running ' +
       'service still holds the old command list, which is why the shell line says --restart.',
   };

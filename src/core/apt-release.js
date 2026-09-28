@@ -6,7 +6,7 @@
 // its rollout is complete — and the package's postinst is what moves `current`.
 // A manifest check on the same box would be a second updater with its own idea
 // of which version is current, and the two would take turns moving the
-// symlink. So on such a box (AGENT_HUB_RELEASE_SOURCE=apt, written by the
+// symlink. So on such a box (FLEETWRIGHT_RELEASE_SOURCE=apt, written by the
 // installer when the postinst runs it) the question "is a release waiting" is
 // put to apt, and the answer is apt's candidate.
 //
@@ -85,7 +85,7 @@ export function checkAptRelease({ exec = run } = {}) {
       reason: 'apt',
       message:
         `This box is set to take Fleetwright from apt, but the ${APT_PACKAGE} package is not installed.\n` +
-        'Install it (apt install fleetwright), or remove AGENT_HUB_RELEASE_SOURCE from /etc/agent-hub.env.',
+        'Install it (apt install fleetwright), or remove FLEETWRIGHT_RELEASE_SOURCE from /etc/fleetwright.env.',
     };
   }
   if (candidate && candidate !== installed) {

@@ -29,7 +29,7 @@ test('choosing the browser variant swaps the tag and nothing else', () => {
 });
 
 test('the repository is preserved, so a fork stays on its own registry', () => {
-  // AGENT_HUB_SANDBOX_IMAGE_OWNER exists because a fork's CI published an image
+  // FLEETWRIGHT_SANDBOX_IMAGE_OWNER exists because a fork's CI published an image
   // nothing pulled. Hard-coding our repository in the browser tag would have
   // reintroduced that exact bug in one line, and only for the browser variant —
   // so a fork's minimal sessions would be theirs and its browser sessions ours.
@@ -41,12 +41,12 @@ test('a registry port is not mistaken for a tag', () => {
   // `localhost:5000/img` has a colon that is a PORT. Splitting on the last
   // colon without checking for a following slash would rewrite the registry
   // host and pull from somewhere that does not exist.
-  assert.equal(imageFor(box({ sandboxImage: 'localhost:5000/agent-session:latest' }), 'browser'),
-    'localhost:5000/agent-session:web');
+  assert.equal(imageFor(box({ sandboxImage: 'localhost:5000/fleetwright-session:latest' }), 'browser'),
+    'localhost:5000/fleetwright-session:web');
   // And an image with no tag at all cannot be re-tagged blind: `repo` means
   // `repo:latest` to podman, but writing `repo:web` for a box that never said
   // it had a web image is inventing one.
-  assert.equal(imageFor(box({ sandboxImage: 'localhost:5000/agent-session' }), 'browser'), null);
+  assert.equal(imageFor(box({ sandboxImage: 'localhost:5000/fleetwright-session' }), 'browser'), null);
 });
 
 test('a digest is left exactly alone', () => {
@@ -67,16 +67,16 @@ test('an image in the environment that is not one of ours refuses rather than be
   assert.equal(pinnedByEnv(cfg), true);
   const r = writeVariant(cfg, 'browser');
   assert.equal(r.ok, false);
-  assert.match(r.message, /AGENT_HUB_SANDBOX_IMAGE names/);
-  assert.match(r.message, /\/etc\/agent-hub\.env/);
+  assert.match(r.message, /FLEETWRIGHT_SANDBOX_IMAGE names/);
+  assert.match(r.message, /\/etc\/fleetwright\.env/);
   assert.equal(sessionImage(cfg), 'localhost/mine:latest');
 });
 
 test('an image in the environment that IS one of ours is a starting point, not a pin', () => {
-  // THE BUG A PERSON HIT. install.sh wrote AGENT_HUB_SANDBOX_IMAGE on every
+  // THE BUG A PERSON HIT. install.sh wrote FLEETWRIGHT_SANDBOX_IMAGE on every
   // install, set to the default, and the old rule read any named image as a
   // decision — so the picker on both phones answered "set on the box, remove
-  // it from /etc/agent-hub.env" on every box the installer had ever made. A
+  // it from /etc/fleetwright.env" on every box the installer had ever made. A
   // named image that is one of our tags is the variant the box starts on;
   // the stored word wins once somebody chooses.
   const cfg = box({ sandboxImage: GHCR, sandboxImagePinned: true });
@@ -95,7 +95,7 @@ test('an image in the environment that IS one of ours is a starting point, not a
 
   // A localhost build off our Containerfile is minimal, and still not
   // switchable: the other tag was never built.
-  const local = box({ sandboxImage: 'localhost/agent-session:latest', sandboxImagePinned: true });
+  const local = box({ sandboxImage: 'localhost/fleetwright-session:latest', sandboxImagePinned: true });
   assert.equal(readVariant(local), 'minimal');
   assert.equal(pinnedByEnv(local), true);
   assert.equal(writeVariant(local, 'browser').ok, false);
@@ -107,12 +107,12 @@ test('the installer does not write the default image into the env file', () => {
   // as something somebody chose.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
   const pulled = sh.slice(sh.indexOf('ok "pulled $IMAGE"'), sh.indexOf('IMAGE=""', sh.indexOf('ok "pulled $IMAGE"')));
-  assert.match(pulled, /if \[ -n "\$\{AGENT_HUB_SANDBOX_IMAGE:-\}" \]; then\s+set_env "\$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE/, 'a named image is kept');
-  assert.match(pulled, /AGENT_HUB_SANDBOX_IMAGE_OWNER "\$IMAGE_OWNER"/, 'an owner is kept as the owner');
+  assert.match(pulled, /if \[ -n "\$\{FLEETWRIGHT_SANDBOX_IMAGE:-\}" \]; then\s+set_env "\$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE/, 'a named image is kept');
+  assert.match(pulled, /FLEETWRIGHT_SANDBOX_IMAGE_OWNER "\$IMAGE_OWNER"/, 'an owner is kept as the owner');
   const lines = pulled.split('\n');
-  const writes = lines.map((l, i) => [l, i]).filter(([l]) => /set_env "\$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "\$IMAGE"/.test(String(l)));
+  const writes = lines.map((l, i) => [l, i]).filter(([l]) => /set_env "\$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE "\$IMAGE"/.test(String(l)));
   assert.equal(writes.length, 1, 'one write of the full image, and only one');
-  assert.match(String(lines[Number(writes[0][1]) - 1]), /if \[ -n "\$\{AGENT_HUB_SANDBOX_IMAGE:-\}" \]/, 'and it is guarded by whether a person named one');
+  assert.match(String(lines[Number(writes[0][1]) - 1]), /if \[ -n "\$\{FLEETWRIGHT_SANDBOX_IMAGE:-\}" \]/, 'and it is guarded by whether a person named one');
 });
 
 test('an image that is neither variant is reported as neither', () => {
@@ -122,10 +122,10 @@ test('an image that is neither variant is reported as neither', () => {
   assert.equal(variantOf('localhost/mine:dev'), null);
   assert.equal(readVariant(box({ sandboxImage: 'localhost/mine:dev', sandboxImagePinned: true })), 'custom');
   // `:latest` IS a claim we make, and it is the one this convention exists for
-  // — `podman build -t localhost/agent-session:latest` off our Containerfile
+  // — `podman build -t localhost/fleetwright-session:latest` off our Containerfile
   // with the browser layer off is exactly the minimal variant, and that is the
   // documented way to build locally.
-  assert.equal(variantOf('localhost/agent-session:latest'), 'minimal');
+  assert.equal(variantOf('localhost/fleetwright-session:latest'), 'minimal');
 });
 
 test('webhooks-runner is not a browser', () => {

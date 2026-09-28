@@ -74,7 +74,7 @@ test('checkRelease asks apt, and never the manifest, on an apt box', async () =>
 function aptBox(policy) {
   const dir = mkdtempSync(path.join(tmpdir(), 'apt-box-'));
   mkdirSync(path.join(dir, 'lib'));
-  writeFileSync(path.join(dir, 'lib', 'agent-hub.mjs'), '');
+  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(path.join(bin, 'apt-cache'), `#!/bin/sh\ncat <<'EOF'\n${policy}EOF\n`);

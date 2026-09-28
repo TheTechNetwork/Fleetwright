@@ -154,14 +154,14 @@ on its host has not been tested here.
 
 ## The cheapest experiment, which needs no code
 
-`AGENT_HUB_SANDBOX_ARGS` is spliced into `podman run` and its refusal list
+`FLEETWRIGHT_SANDBOX_ARGS` is spliced into `podman run` and its refusal list
 (`src/core/sandbox-args.js`) names sandbox-defeating options only — `--env` is
 not among them, and should not be. So a single box can be pointed at a collector
 today, by an operator with a shell, without a line of code or a protocol
 version:
 
 ```
-AGENT_HUB_SANDBOX_ARGS="--env CLAUDE_CODE_ENABLE_TELEMETRY=1 --env OTEL_METRICS_EXPORTER=otlp --env OTEL_EXPORTER_OTLP_ENDPOINT=..."
+FLEETWRIGHT_SANDBOX_ARGS="--env CLAUDE_CODE_ENABLE_TELEMETRY=1 --env OTEL_METRICS_EXPORTER=otlp --env OTEL_EXPORTER_OTLP_ENDPOINT=..."
 ```
 
 That answers the reachability question above and produces a real sample of what

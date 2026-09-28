@@ -2,7 +2,7 @@
 //
 // There are two published images and the difference is Chromium: the default is
 // small and has no browser, and `:web` is the same thing with one. Choosing
-// between them used to mean editing AGENT_HUB_SANDBOX_IMAGE in a root-owned
+// between them used to mean editing FLEETWRIGHT_SANDBOX_IMAGE in a root-owned
 // file and restarting the service — which is to say it was not a choice anybody
 // with a phone could make, which is the same shape src/core/channel.js exists
 // to fix. This file is that file's sibling, deliberately: same storage, same
@@ -129,7 +129,7 @@ export function switchable(ref) {
  *
  * NOT "whether the environment names an image". That was the rule, and it
  * made the picker dead on every installed box: install.sh wrote
- * AGENT_HUB_SANDBOX_IMAGE into /etc/agent-hub.env on every install, set to the
+ * FLEETWRIGHT_SANDBOX_IMAGE into /etc/fleetwright.env on every install, set to the
  * same default the code derives on its own, and the first person to tap the
  * picker was told to edit a root-owned file that the installer had written for
  * them. An env value naming one of OUR tags is a starting point — the variant a
@@ -210,9 +210,9 @@ export function writeVariant(cfg, value) {
     return {
       ok: false,
       message:
-        `AGENT_HUB_SANDBOX_IMAGE names "${cfg.sandboxImage}" outright, and that is not one of the two ` +
+        `FLEETWRIGHT_SANDBOX_IMAGE names "${cfg.sandboxImage}" outright, and that is not one of the two ` +
         'published variants, so there is nothing here to switch between.\n' +
-        'Point it at a fleetwright-session image on a registry, or remove the line, in /etc/agent-hub.env ' +
+        'Point it at a fleetwright-session image on a registry, or remove the line, in /etc/fleetwright.env ' +
         'and restart — then choose here.',
     };
   }

@@ -13,7 +13,7 @@
 // sidecar — and a watchdog that has to start in order to run cannot catch its
 // own failure to start. Any of the three services can be the one an update
 // breaks, so the arbiter cannot be app code at all. It is a standing systemd
-// timer (install/agent-fleet-confirm.*) running install/fleetwright-confirm as
+// timer (install/fleetwright-confirm.*) running install/fleetwright-confirm as
 // the service user: the one thing on the box that is always up and never part
 // of an update. This module is only the app's HALF — it arms the trial and
 // records health evidence; the script decides.

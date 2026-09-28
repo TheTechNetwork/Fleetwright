@@ -7,7 +7,7 @@ standable-up yet.
 
 | | status |
 |---|---|
-| **Session manager** (`agent-hub`) — sessions from the app, web UI, CLI | ✅ installer, systemd unit, hook |
+| **Session manager** (`fleetwright`) — sessions from the app, web UI, CLI | ✅ installer, systemd unit, hook |
 | **Sidecar** — validates intents, drives the session manager | ✅ websocket + stdio, systemd unit, `doctor` |
 | **Coordinator** — hosts dial in, scheduler places work, HTTP API out | ✅ as a Node process **or** a Cloudflare Worker |
 | **Sandboxes** — real root per session, discarded on stop | ✅ image, launch path, `/forget` deletes volumes |
@@ -37,7 +37,7 @@ than it looks like it does.
 
 The installer installs what is missing — tmux, podman, git, curl — from the
 distribution's own repositories. It does not pipe a remote script into a shell.
-`AGENT_HUB_NO_INSTALL_DEPS=1` turns that off for a box where package management
+`FLEETWRIGHT_NO_INSTALL_DEPS=1` turns that off for a box where package management
 is somebody else's job, and then it tells you what to install instead.
 
 **Node (>= 24, which `package.json` requires) is the one thing it refuses to
@@ -88,20 +88,20 @@ The same thing by hand, from a checkout — which is also what `--from-source`
 asks the one-liner for, on a box somebody edits:
 
 ```sh
-git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
-sudo /opt/agent-fleet/install/install.sh --check    # prerequisites only, changes nothing
-sudo /opt/agent-fleet/install/install.sh
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/fleetwright-src
+sudo /opt/fleetwright-src/install/install.sh --check    # prerequisites only, changes nothing
+sudo /opt/fleetwright-src/install/install.sh
 
 sudo /opt/fleetwright/current/install/uninstall.sh         # take this box out of the fleet
 sudo /opt/fleetwright/current/install/uninstall.sh --purge # and remove the releases
 ```
 
-On a checkout install the last two live under `/opt/agent-fleet/install/`
+On a checkout install the last two live under `/opt/fleetwright-src/install/`
 instead.
 
 ### Updating
 
-`/update --restart` from chat or the app, or `agent-hub update --restart` on the
+`/update --restart` from chat or the app, or `fleetwright update --restart` on the
 box. **It restarts all three services, and none of it needs a terminal.**
 
 The hub restarts itself by exiting — systemd's `Restart=always` brings it back
@@ -136,7 +136,7 @@ the transport already has.
 ### Commit-confirm: an update that undoes itself
 
 A packaged update puts the new release **on trial**. When it lands, the box has
-a window — `AGENT_HUB_UPDATE_CONFIRM_MS`, ten minutes by default — to prove two
+a window — `FLEETWRIGHT_UPDATE_CONFIRM_MS`, ten minutes by default — to prove two
 things: that it can **start a session** (the hub runs a real throwaway
 container), and that it can **reach its coordinator** (the sidecar connects).
 Both, and the trial is confirmed and the update kept. Not both within the
@@ -154,7 +154,7 @@ outage* — the box was online, the sessions were dead — which is why health i
 sidecar, and a watchdog that has to start in order to run cannot catch its own
 failure to start — and any of the three services can be the one an update
 breaks. So the arbiter is **not app code**: a standing systemd timer
-(`agent-fleet-confirm.timer`) runs a small POSIX-shell script
+(`fleetwright-confirm.timer`) runs a small POSIX-shell script
 (`/usr/local/sbin/fleetwright-confirm`) as the service user, on a schedule,
 independent of whether the hub or sidecar can start. It is the one thing on the
 box always up and never part of an update. The hub and sidecar only *record*
@@ -176,7 +176,7 @@ Two things worth knowing:
   only one that was up and could not prove itself.
 - **Only packaged boxes revert.** A checkout has no `current` symlink and no
   kept-previous release to move back to, so the timer is installed on packaged
-  Linux boxes only; `AGENT_HUB_UPDATE_CONFIRM_MS=0` turns the trial off, and an
+  Linux boxes only; `FLEETWRIGHT_UPDATE_CONFIRM_MS=0` turns the trial off, and an
   update then simply stays as it did before.
 
 ### Reclaiming a release the update could not delete
@@ -245,10 +245,10 @@ app and the OS, and `updates` shows when the tag it is on could still drift
 under one.
 
 A box that genuinely wants its image to track a tag on its own sets
-`AGENT_HUB_SANDBOX_REFRESH_MS` (`21600000` is the old six hours). When it opts
+`FLEETWRIGHT_SANDBOX_REFRESH_MS` (`21600000` is the old six hours). When it opts
 in, four constraints keep that off the critical path:
 
-- **stamped** — at most once every `AGENT_HUB_SANDBOX_REFRESH_MS`, read off a
+- **stamped** — at most once every `FLEETWRIGHT_SANDBOX_REFRESH_MS`, read off a
   file mtime
 - **bounded** — a 60s timeout, so a slow registry costs seconds and a hung one
   costs nothing
@@ -262,7 +262,7 @@ day does not retry on every single start.
 
 ### Cloning a box that is already installed
 
-**Do not, without reading this.** `/var/lib/agent-fleet/host-key.json` is the
+**Do not, without reading this.** `/var/lib/fleetwright-sidecar/host-key.json` is the
 machine's identity in the fleet — whoever holds it *is* that host. Clone the
 disk and two machines hold the same private key, so the coordinator sees one
 host: they take turns proving the same identity and disconnecting each other,
@@ -285,7 +285,7 @@ curl -sX DELETE -H "Authorization: Bearer $TOKEN" https://COORDINATOR/api/hosts/
 
 To take a box out properly, `install/uninstall.sh` removes the services, the
 config, the sudoers rules, the CLIs, the `SessionStart` hook and the identity —
-and deliberately leaves `~/agent-runs`, running tmux sessions, and
+and deliberately leaves `~/fleetwright-runs`, running tmux sessions, and
 node/tmux/podman/claude alone. Those are work and dependencies, not this.
 
 Three environment variables change where it comes from and where it goes, which
@@ -295,7 +295,7 @@ is what you want for a fork or a branch under test:
 |---|---|
 | `FLEETWRIGHT_REPO` | default `https://github.com/TheTechNetwork/Fleetwright` |
 | `FLEETWRIGHT_REF` | default `main` |
-| `FLEETWRIGHT_DIR` | default `/opt/agent-fleet` |
+| `FLEETWRIGHT_DIR` | default `/opt/fleetwright-src` |
 
 > **If it says node was not found but `node -v` works for you**, that is `sudo`.
 > It replaces `PATH` with sudoers' `secure_path` — usually just `/usr/*` and
@@ -305,7 +305,7 @@ is what you want for a fork or a branch under test:
 > find it, point at it directly:
 >
 > ```sh
-> sudo AGENT_HUB_NODE_BIN=$(command -v node) /opt/agent-fleet/install/install.sh
+> sudo FLEETWRIGHT_NODE_BIN=$(command -v node) /opt/fleetwright-src/install/install.sh
 > ```
 >
 > Note that the systemd unit records whichever node it finds. If that is a
@@ -316,17 +316,17 @@ is what you want for a fork or a branch under test:
 One script does everything:
 
 - checks prerequisites (node, tmux, claude, podman)
-- creates `/etc/agent-hub.env`, `/etc/agent-fleet-sidecar.env` and
-  `/etc/agent-fleet-coordinator.env`, all `0600`
+- creates `/etc/fleetwright.env`, `/etc/fleetwright-sidecar.env` and
+  `/etc/fleetwright-coordinator.env`, all `0600`
 - **copies the hub URL and token into the sidecar's config**, so there is no
   secret to hand-copy between files — the step people get wrong
 - installs the systemd unit and registers the Claude Code **SessionStart hook**
-- builds the sandbox image (`localhost/agent-session:latest`) if podman is present
-- links `agent-hub`, `agent-fleet-sidecar` and `agent-fleet-coordinator`
+- builds the sandbox image (`localhost/fleetwright-session:latest`) if podman is present
+- links `fleetwright`, `fleetwright-sidecar` and `fleetwright-coordinator`
 
 It is idempotent — re-run it after `git pull` and it will never overwrite a
-config that already exists. `AGENT_FLEET_REBUILD_IMAGE=1` forces an image
-rebuild; `AGENT_FLEET_BUILD_IMAGE=0` skips it.
+config that already exists. `FLEETWRIGHT_REBUILD_IMAGE=1` forces an image
+rebuild; `FLEETWRIGHT_BUILD_IMAGE=0` skips it.
 
 ### What the wizard asks
 
@@ -336,7 +336,7 @@ order:
 | it asks | what to have ready | blank means |
 |---|---|---|
 | Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
-| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `agent-fleet-sidecar enrol <pin>` later |
+| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
 | Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
@@ -355,14 +355,14 @@ One of those is worth planning for before you start:
 ### Credentials
 
 **Hosts do not have a token.** This box generates a keypair on first run, keeps
-the private half at `/var/lib/agent-fleet/host-key.json` (0600), and signs a
+the private half at `/var/lib/fleetwright-sidecar/host-key.json` (0600), and signs a
 nonce on every connection. Joining is a six-digit pin, spent once.
 
 On the box that **runs the coordinator**, that enrolment is silent: the
 installer holds the admin token, so it mints a pin and spends it rather than
 making you copy six digits from one terminal into the same terminal.
 
-`AGENT_FLEET_API_TOKEN` is generated rather than asked, and **printed when the
+`FLEETWRIGHT_API_TOKEN` is generated rather than asked, and **printed when the
 install finishes** — it is break-glass, not the everyday credential:
 
 ```
@@ -374,8 +374,8 @@ install finishes** — it is break-glass, not the everyday credential:
 The app does not want that token. It signs in — Sign in with Apple, or the
 system account picker on Android — and is issued a credential of its own, which
 can be revoked without disturbing any other device. Sign-in needs
-`AGENT_FLEET_AUTH_ISSUERS`, `AGENT_FLEET_AUTH_AUDIENCES` and
-`AGENT_FLEET_AUTH_ALLOW`; see [`identity.md`](./identity.md).
+`FLEETWRIGHT_AUTH_ISSUERS`, `FLEETWRIGHT_AUTH_AUDIENCES` and
+`FLEETWRIGHT_AUTH_ALLOW`; see [`identity.md`](./identity.md).
 
 On a box **joining a coordinator that already exists** — the Worker, or another
 machine — the enrolment pin is *asked for*, because it has to come from that
@@ -389,7 +389,7 @@ coordinator:
 
 ```sh
 curl -sX POST https://your-coordinator/api/enroll \
-  -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+  -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
   -H 'content-type: application/json' -d '{"kind":"host"}'
 # {"ok":true,"pin":"...","expiresAt":...}
 ```
@@ -397,27 +397,27 @@ curl -sX POST https://your-coordinator/api/enroll \
 The pin is short-lived and single-use, so mint it when the box is ready to
 take it rather than in advance. Leave it blank and the box
 stays unenrolled — the sidecar keeps connecting and getting refused until
-someone runs `agent-fleet-sidecar enrol <pin>`, as the service user.
+someone runs `fleetwright-sidecar enrol <pin>`, as the service user.
 
 Either way, to read one back later:
 
 ```sh
-sudo grep AGENT_FLEET_API_TOKEN /etc/agent-fleet-coordinator.env
+sudo grep FLEETWRIGHT_API_TOKEN /etc/fleetwright-coordinator.env
 ```
 
 It is idempotent. Re-run it after `git pull` and it will never overwrite a value
 that is already set — which also means the way to *change* an answer is to edit
 the env file, not to re-run.
 
-`docs/agent-hub.md` is the full session-manager manual: commands, permission
+`docs/session-manager.md` is the full session-manager manual: commands, permission
 modes, resume behaviour, exposing the web UI.
 
 ### The one thing not to change in the unit
 
-`KillMode=process` in `install/agent-hub.service` is load-bearing. The tmux
+`KillMode=process` in `install/fleetwright.service` is load-bearing. The tmux
 server that holds every session is started by that service, so it lands in the
 unit's cgroup. With the default `KillMode=control-group` a plain
-`systemctl restart agent-hub` reaps the whole cgroup — including tmux — and
+`systemctl restart fleetwright` reaps the whole cgroup — including tmux — and
 takes down every live session at once. That is not hypothetical; it is why the
 comment is there.
 
@@ -425,19 +425,19 @@ comment is there.
 
 If you answered the wizard, this is already done: both env files are written,
 the admin token is generated, this box is enrolled, and the services are
-running as `agent-fleet-coordinator` and `agent-fleet-sidecar`. Skip to the
+running as `fleetwright-coordinator` and `fleetwright-sidecar`. Skip to the
 check below.
 
 ```sh
-systemctl status agent-fleet-coordinator agent-fleet-sidecar
+systemctl status fleetwright-coordinator fleetwright-sidecar
 ```
 
 To do it by hand, or to point this host at a coordinator somewhere else, the
-whole configuration is two lines in `/etc/agent-fleet-sidecar.env`:
+whole configuration is two lines in `/etc/fleetwright-sidecar.env`:
 
 ```
-AGENT_FLEET_COORDINATOR_URL=https://fleet.thetech.network   # or http://127.0.0.1:8791
-AGENT_FLEET_TRANSPORT=websocket
+FLEETWRIGHT_COORDINATOR_URL=https://fleet.thetech.network   # or http://127.0.0.1:8791
+FLEETWRIGHT_TRANSPORT=websocket
 ```
 
 There is no token to add. The sidecar refuses to start without a pinned origin
@@ -446,8 +446,8 @@ coordinator cannot redirect it — and it refuses to *connect* until it has been
 enrolled:
 
 ```sh
-agent-fleet-sidecar enrol 123456     # a pin from the app
-agent-fleet-sidecar doctor           # says whether the coordinator accepts it
+fleetwright-sidecar enrol 123456     # a pin from the app
+fleetwright-sidecar doctor           # says whether the coordinator accepts it
 ```
 
 The pin comes from the app — Fleet → Add a host — or from the curl above;
@@ -463,13 +463,13 @@ the box is the only place it can be spent.
 The same code runs in both. Check the host either way:
 
 ```sh
-agent-fleet-sidecar doctor
+fleetwright-sidecar doctor
 ```
 
 ```
  ok   configuration
- ok   agent-hub reachable at http://127.0.0.1:8790
- ok   agent-hub accepts the token  — 0/5 running on unabandoned
+ ok   fleetwright reachable at http://127.0.0.1:8790
+ ok   fleetwright accepts the token  — 0/5 running on unabandoned
  ok   claude is logged in on the hub  — you@example.com (max)
  ok   host id unabandoned  — labels: gpu, debian13
 ```
@@ -485,12 +485,12 @@ curl -s -X POST localhost:8791/api/intent \
   -d '{"verb":"start","params":{"name":"api"}}'
 ```
 
-`AGENT_FLEET_TRANSPORT=stdio` speaks the same protocol over stdin/stdout instead,
+`FLEETWRIGHT_TRANSPORT=stdio` speaks the same protocol over stdin/stdout instead,
 for driving one sidecar by hand with no coordinator:
 
 ```sh
 echo '{"v":3,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
-  | agent-fleet-sidecar
+  | fleetwright-sidecar
 ```
 
 Replies come back on **stdout** as newline-delimited JSON; logs go to
@@ -499,23 +499,23 @@ stdout would not be noise, it would be a corrupted message.
 
 ### The units
 
-`install/agent-fleet-sidecar.service` and
-`install/agent-fleet-coordinator.service`, installed and started by the
+`install/fleetwright-sidecar.service` and
+`install/fleetwright-coordinator.service`, installed and started by the
 installer. The sidecar's unit only became possible with the websocket transport:
 under `stdio` the process ends when stdin does, so a unit would have
 crash-looped.
 
-The sidecar's unit carries `StateDirectory=agent-fleet`, which is what creates
-`/var/lib/agent-fleet` 0700 owned by the service user before the process
+The sidecar's unit carries `StateDirectory=fleetwright-sidecar`, which is what creates
+`/var/lib/fleetwright-sidecar` 0700 owned by the service user before the process
 starts. That is where this box's private key lives — the whole of its identity
 in the fleet. Deliberately not under `/etc` with the env file: an env file is a
 config file people copy between boxes, and this must never be copied.
 
 ### Hook socket directory
 
-When `AGENT_FLEET_HOOK_SOCKETS=1`, the sidecar serves one unix socket per
-sandboxed session under `AGENT_FLEET_HOOK_SOCKET_DIR` (default
-`/run/agent-fleet`). It creates the directory `0700` on demand and each socket
+When `FLEETWRIGHT_HOOK_SOCKETS=1`, the sidecar serves one unix socket per
+sandboxed session under `FLEETWRIGHT_HOOK_SOCKET_DIR` (default
+`/run/fleetwright-sidecar`). It creates the directory `0700` on demand and each socket
 `0600` — see [`hook-socket.md`](./hook-socket.md) for why both layers matter.
 
 `/run` is tmpfs, so the directory does not survive a reboot and does not need
@@ -524,7 +524,7 @@ as an unprivileged user cannot create a directory in `/run`, so when the unit
 arrives it will want:
 
 ```ini
-RuntimeDirectory=agent-fleet
+RuntimeDirectory=fleetwright-sidecar
 RuntimeDirectoryMode=0700
 ```
 
@@ -538,13 +538,13 @@ conversation uuid gets out of the container at all.
 ## 3. Sandbox the sessions
 
 Off by default, because it needs podman and a built image and a box without
-either must keep working exactly as before. Turn it on in `/etc/agent-hub.env`:
+either must keep working exactly as before. Turn it on in `/etc/fleetwright.env`:
 
 ```
-AGENT_HUB_SANDBOX=1
+FLEETWRIGHT_SANDBOX=1
 ```
 
-and `systemctl restart agent-hub`. Every new session's pane process becomes
+and `systemctl restart fleetwright`. Every new session's pane process becomes
 `podman run -it` instead of `claude`, which is the whole of design.md §2:
 
 | state | where | lifetime |
@@ -566,17 +566,17 @@ Two things to know:
 - **Credentials are seeded once per session.** A fresh `claude-<name>` volume is
   empty, so the first launch copies `.credentials.json` in — without it the
   session comes up unauthenticated and hangs at a login prompt nobody can
-  answer. `AGENT_HUB_SANDBOX_CREDENTIALS` points at the source; set it empty to
+  answer. `FLEETWRIGHT_SANDBOX_CREDENTIALS` points at the source; set it empty to
   manage credentials yourself.
 - **Run the sidecar too, or sessions are not resumable.** The conversation uuid
-  arrives over the per-session hook socket, which the sidecar owns. agent-hub
+  arrives over the per-session hook socket, which the sidecar owns. fleetwright
   warns loudly and starts anyway if the socket is missing, because a session you
   can use now beats no session — but it will have no uuid, and `/resume` will
   refuse it.
 
-Resource limits are podman flags — `AGENT_HUB_SANDBOX_MEMORY` (8g),
-`AGENT_HUB_SANDBOX_CPUS` (2), `AGENT_HUB_SANDBOX_PIDS_LIMIT` (512), and
-`AGENT_HUB_SANDBOX_ARGS` for anything else.
+Resource limits are podman flags — `FLEETWRIGHT_SANDBOX_MEMORY` (8g),
+`FLEETWRIGHT_SANDBOX_CPUS` (2), `FLEETWRIGHT_SANDBOX_PIDS_LIMIT` (512), and
+`FLEETWRIGHT_SANDBOX_ARGS` for anything else.
 
 ### Still to do here
 
@@ -605,8 +605,8 @@ means the Worker, since a phone on mobile data cannot see a box on your LAN.
    moment somebody unzips it — and nothing is shared between phones either, so
    losing one is a single revocation.
 
-   This needs `AGENT_FLEET_AUTH_ISSUERS`, `AGENT_FLEET_AUTH_AUDIENCES` and
-   `AGENT_FLEET_AUTH_ALLOW` set on the coordinator, with your address on the
+   This needs `FLEETWRIGHT_AUTH_ISSUERS`, `FLEETWRIGHT_AUTH_AUDIENCES` and
+   `FLEETWRIGHT_AUTH_ALLOW` set on the coordinator, with your address on the
    allowlist. See [`identity.md`](./identity.md).
 4. **Push** needs a Firebase project and, on Android, `google-services.json`.
    [`push.md`](./push.md) and the app READMEs have the steps.
@@ -617,14 +617,14 @@ Shortcut could call it directly.
 ## 5. Verify the whole path
 
 ```sh
-agent-hub doctor                      # can this box run sessions at all
-SVC="$(stat -c %U /opt/agent-fleet/bin/agent-hub)"
-sudo -u "$SVC" agent-fleet-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
-agent-hub list                        # the session manager answers
-sudo -u "$SVC" agent-fleet-sidecar identity  # this box's key and fingerprint
+fleetwright doctor                      # can this box run sessions at all
+SVC="$(stat -c %U /opt/fleetwright-src/bin/fleetwright)"
+sudo -u "$SVC" fleetwright-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
+fleetwright list                        # the session manager answers
+sudo -u "$SVC" fleetwright-sidecar identity  # this box's key and fingerprint
 curl -s localhost:8791/api/hosts      # the coordinator sees this box
-systemctl status agent-hub
-journalctl -u agent-hub -f
+systemctl status fleetwright
+journalctl -u fleetwright -f
 ```
 
 A host that has connected but not yet reported reads as `unknown` with a
@@ -637,15 +637,15 @@ From chat or the CLI, which is what `/update` is for — it fast-forwards, refus
 a dirty tree, and restarts by exiting under systemd:
 
 ```sh
-agent-hub update
+fleetwright update
 ```
 
 By hand — and **not with `sudo git pull`**, which is the one way to break this:
 
 ```sh
-sudo -u "$(stat -c %U /opt/agent-fleet/bin/agent-hub)" git -C /opt/agent-fleet pull
-sudo /opt/agent-fleet/install/install.sh   # idempotent; never overwrites config
-sudo systemctl restart agent-hub
+sudo -u "$(stat -c %U /opt/fleetwright-src/bin/fleetwright)" git -C /opt/fleetwright-src pull
+sudo /opt/fleetwright-src/install/install.sh   # idempotent; never overwrites config
+sudo systemctl restart fleetwright
 ```
 
 ### Recovering a fleet stranded by a protocol bump
@@ -697,7 +697,7 @@ RELEASE_RECOVERY=1 node tools/build-host-package.mjs
 
 ### Why the pull is not sudo, when everything else is
 
-Creating `/opt/agent-fleet` needs root. Living in it does not: the installer
+Creating `/opt/fleetwright-src` needs root. Living in it does not: the installer
 ends with `chown -R $RUN_USER` over the whole checkout, precisely so the service
 can fast-forward itself without being given sudo — `/update` from a phone is the
 whole point, and a service that can run `sudo git` is a service that can run
@@ -715,9 +715,9 @@ fatal: failed to write object
 Either fix puts it right — the installer, because it re-chowns every run:
 
 ```sh
-sudo /opt/agent-fleet/install/install.sh
+sudo /opt/fleetwright-src/install/install.sh
 # or just the ownership:
-sudo chown -R "$(stat -c %U /opt/agent-fleet/bin/agent-hub)" /opt/agent-fleet
+sudo chown -R "$(stat -c %U /opt/fleetwright-src/bin/fleetwright)" /opt/fleetwright-src
 ```
 
 Re-running the installer is worth doing after a pull rather than just
@@ -736,14 +736,14 @@ anything on shutdown.
 
 **Anyone who can start a session has unsupervised shell on this box.** That is
 what a session is, and it is why every way in is an allowlist: a fleet member
-is an address on `AGENT_FLEET_AUTH_ALLOW` or an invitation, and a device is a
+is an address on `FLEETWRIGHT_AUTH_ALLOW` or an invitation, and a device is a
 credential the coordinator issued to one phone. There is deliberately no "open
 to everyone" mode. (This paragraph used to say the same thing about
-`AGENT_HUB_TELEGRAM_ALLOWED_USERS`, which is archived and read by nothing —
+`FLEETWRIGHT_TELEGRAM_ALLOWED_USERS`, which is archived and read by nothing —
 see [`telegram.md`](./telegram.md). The property outlived the surface.)
 
 **The HTTP port is loopback by default and needs no token there** — reaching it
-already implies shell access. Bind it wider and `AGENT_HUB_TOKEN` becomes
+already implies shell access. Bind it wider and `FLEETWRIGHT_TOKEN` becomes
 mandatory; the process refuses to start otherwise. To publish the web UI, keep
 the bind on `127.0.0.1` and put a Cloudflare Tunnel in front, so the port never
 listens on a routable interface.
@@ -755,13 +755,13 @@ endpoint — which is why the command line is assembled from literals and
 charset-checked values and never received from the wire. See
 [`sidecar.md`](./sidecar.md).
 
-**Two env files, two modes `0600`, on purpose.** `/etc/agent-hub.env` holds the
+**Two env files, two modes `0600`, on purpose.** `/etc/fleetwright.env` holds the
 hub token and everything about how sessions run on this box;
-`/etc/agent-fleet-sidecar.env` holds the hub token and which coordinator this
+`/etc/fleetwright-sidecar.env` holds the hub token and which coordinator this
 box belongs to. Merging them would put the
 fleet's configuration in the session manager's environment for no reason.
 
-**The host key is in neither of them.** It lives in `/var/lib/agent-fleet`,
+**The host key is in neither of them.** It lives in `/var/lib/fleetwright-sidecar`,
 because an env file is a thing people copy to the next box and an identity is
 the one thing that must not be copied.
 

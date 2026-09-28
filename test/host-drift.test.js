@@ -147,7 +147,7 @@ function drifted(protocol) {
 test('unsupported_version explains itself, and names the command that still lands', async () => {
   // It had NO explanation at all — `unknown_verb` had one and this did not, so
   // the more serious of the two failures was the one that reached a phone as a
-  // single word. Finding D2 says the drift error "names `agent-hub update
+  // single word. Finding D2 says the drift error "names `fleetwright update
   // --restart`"; that is the other error, and this one named nothing.
   const reply = await drifted(BELOW_FLOOR).dispatch({ verb: 'upgrade', params: {}, preferHost: 'old' });
   assert.equal(reply.ok, false);

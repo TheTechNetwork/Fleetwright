@@ -1,17 +1,16 @@
-# agent-fleet
+# fleetwright
 
 A self-hosted Claude Code session manager, and the multi-host control plane
 around it: ephemeral root-capable sandboxes, session wake, and a phone that can
 reach any of it from a cold radio.
 
-> **On the two names.** The repository and the phone app are called
-> **Fleetwright**; the software inside it is `agent-fleet` — the package, the
-> binaries (`agent-fleet-sidecar`, `agent-fleet-coordinator`), the systemd
-> units, the `AGENT_FLEET_*` environment variables and `/opt/agent-fleet`.
-> That is deliberate, not drift. Those names are load-bearing on machines that
-> are already running: renaming them would mean reinstalling every host and
-> re-entering every secret. The App Store needed a unique name, so it got one.
-> See [docs/naming.md](docs/naming.md).
+> **One name now.** The repository, the phone app, the package, the binaries
+> (`fleetwright`, `fleetwright-sidecar`, `fleetwright-coordinator`), the systemd
+> units, the `FLEETWRIGHT_*` environment variables and `/opt/fleetwright` are
+> all Fleetwright. They were `agent-hub` and `agent-fleet` until the rename; a
+> box installed before it moves itself onto the new names on its next update,
+> and the old command names and settings keep working. Where the code came
+> from, and what deliberately kept its old name: [docs/lineage.md](docs/lineage.md).
 
 **New box?** [docs/first-session.md](docs/first-session.md) is ten steps from
 clone to a running session, with no digressions. The essays are linked at the
@@ -34,7 +33,7 @@ as yourself with Apple or Google, and the fleet recognises the address. See
 [docs/accounts.md](docs/accounts.md).
 
 These same two links are what an invitation email carries, set as
-`AGENT_FLEET_APP_IOS` and `AGENT_FLEET_APP_ANDROID`.
+`FLEETWRIGHT_APP_IOS` and `FLEETWRIGHT_APP_ANDROID`.
 
 One project, two processes:
 
@@ -43,11 +42,11 @@ coordinator ──ws──▶ sidecar ──http──▶ session manager ──
                   (src/fleet/)      (src/core, src/adapters)
 ```
 
-The **session manager** is `agent-hub` — start, resume and stop tmux-backed
-Claude Code sessions from the app, an MCP server, a web UI or a CLI. It came from
-[`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub),
-sits at its upstream paths, and is code we intend to contribute back to. See
-[`docs/upstream-agent-hub.md`](./docs/upstream-agent-hub.md).
+The **session manager** is `fleetwright` — start, resume and stop tmux-backed
+Claude Code sessions from the app, an MCP server, a web UI or a CLI. It began
+from [`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub),
+and Fleetwright is a spin-off of it, not a fork that tracks it. See
+[`docs/lineage.md`](./docs/lineage.md).
 
 The **fleet** is everything that makes a group of those boxes one system:
 the sidecar that speaks to a coordinator, the intent protocol between them, and
@@ -117,7 +116,7 @@ box, or — for a coordinator a phone on mobile data can reach — deploy it to
 your own Cloudflare account first:
 [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md). (A fresh
 coordinator's own `/install` answers 404 until you point
-`AGENT_FLEET_INSTALL_URL` at your copy of the repository, which is deliberate:
+`FLEETWRIGHT_INSTALL_URL` at your copy of the repository, which is deliberate:
 a coordinator never hands root a script its operator did not name.)
 
 Already installed and joined? `install.sh --upgrade` brings a box onto new code
@@ -139,15 +138,15 @@ migrate helper follow the release rather than waiting for a shell. A checkout
 cannot do that soundly — root would be running a script the service user can
 rewrite — so there the update says so and names the command.
 
-The one-liner fetches the repository to `/opt/agent-fleet` and runs the
+The one-liner fetches the repository to `/opt/fleetwright-src` and runs the
 installer from there, so the clone is still what ends up on the box and
-`git -C /opt/agent-fleet log` still answers "what is this running". To do those
+`git -C /opt/fleetwright-src log` still answers "what is this running". To do those
 two steps yourself, or to see what the prerequisites are first:
 
 ```sh
-git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
-sudo /opt/agent-fleet/install/install.sh --check    # changes nothing
-sudo /opt/agent-fleet/install/install.sh
+git clone https://github.com/TheTechNetwork/Fleetwright /opt/fleetwright-src
+sudo /opt/fleetwright-src/install/install.sh --check    # changes nothing
+sudo /opt/fleetwright-src/install/install.sh
 ```
 
 [`docs/design.md`](./docs/design.md) is the complete design and the record of
@@ -165,20 +164,20 @@ never be built.
 
 | | |
 |---|---|
-| `src/core/`, `src/adapters/`, `src/index.js` | the session manager — at upstream paths, on purpose |
+| `src/core/`, `src/adapters/`, `src/index.js` | the session manager |
 | `src/fleet/protocol/` | the intent protocol: built by the coordinator, enforced by the sidecar |
 | `src/fleet/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
 | `src/fleet/coordinator/` | the coordinator: host registry, scheduler, HTTP + WebSocket |
 | `src/fleet/ws.js` | a hand-rolled RFC 6455 WebSocket, because zero dependencies |
 | `sandbox/` | the container image a sandboxed session runs in |
-| `bin/agent-hub` | the session manager's CLI and SessionStart hook |
-| `bin/agent-fleet-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
-| `bin/agent-fleet-coordinator` | the coordinator |
+| `bin/fleetwright` | the session manager's CLI and SessionStart hook |
+| `bin/fleetwright-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
+| `bin/fleetwright-coordinator` | the coordinator |
 | `install/` | one installer for all of it, plus the systemd unit |
 | `.github/workflows/` | CI: tests, the iOS build, the Android APK, the Worker deploy — see [`docs/ci.md`](./docs/ci.md) |
 | `apps/` | [Android](./apps/android/README.md) and [iOS](./apps/ios/README.md) clients — [testing handoff](./docs/app-testing.md) |
 | `worker/` | the coordinator on Cloudflare — see [`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) |
-| `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/agent-hub.md), [naming](./docs/naming.md), [upstream lineage](./docs/upstream-agent-hub.md) |
+| `docs/` | [deployment](./docs/deployment.md), [coordinator on Cloudflare](./docs/coordinator-deploy.md), [ci](./docs/ci.md), [push](./docs/push.md), [design](./docs/design.md), [protocol](./docs/intents.md), [sidecar](./docs/sidecar.md), [coordinator](./docs/coordinator.md), [hook socket](./docs/hook-socket.md), [session manager manual](./docs/session-manager.md), [naming](./docs/naming.md), [lineage](./docs/lineage.md) |
 
 Still to come: verifying the rootless mapping (the fleet runs rootless podman;
 that an escape lands unprivileged is asserted, not yet tested — `security.md`
@@ -204,7 +203,7 @@ npm run typecheck
 
 npm start                          # the session manager
 npm run sidecar -- doctor          # check this box can drive it
-node bin/agent-fleet-coordinator   # the coordinator
+node bin/fleetwright-coordinator   # the coordinator
 ```
 
 `mise` pins the dev environment and carries the tasks that need more than node —
@@ -240,6 +239,6 @@ reads as healthy.
 ## Licence
 
 MIT. The session manager portions listed in
-[`docs/upstream-agent-hub.md`](./docs/upstream-agent-hub.md) are MIT © Amber
+[`docs/lineage.md`](./docs/lineage.md) are MIT © Amber
 Security Inc — see [`LICENSE-agent-hub`](./LICENSE-agent-hub); everything else is
 [`LICENSE`](./LICENSE).

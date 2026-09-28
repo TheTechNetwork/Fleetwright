@@ -102,7 +102,7 @@ test('two linked accounts is a question, not a guess', () => {
 
   const picked = pickCredentialSource({ stateDir, sandboxCredentialsFile: '' }, 'cli');
   assert.equal(picked.source, null);
-  assert.match(String(picked.why), /AGENT_HUB_OPERATOR/);
+  assert.match(String(picked.why), /FLEETWRIGHT_OPERATOR/);
 
   // And naming one settles it.
   const named = pickCredentialSource({ stateDir, operator: 'two@example.com', sandboxCredentialsFile: '' }, 'cli');

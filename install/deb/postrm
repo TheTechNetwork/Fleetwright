@@ -8,7 +8,7 @@
 # /opt/fleetwright. It is taken from `current` because /usr/lib/fleetwright is
 # gone by the time postrm runs.
 set -e
-BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 case "$1" in
   purge)
     if [ -x "$BASE/current/install/uninstall.sh" ]; then

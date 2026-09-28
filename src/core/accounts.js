@@ -101,7 +101,7 @@ export function adoptBoxAccount(cfg) {
  * answerable by a person in one step, which is more than the old behaviour
  * offered — it silently picked the machine's account and told nobody.
  *
- * `AGENT_HUB_OPERATOR` settles the ambiguous case and is needed only there.
+ * `FLEETWRIGHT_OPERATOR` settles the ambiguous case and is needed only there.
  *
  * This is NOT the shared account renamed. It is a named person's credential,
  * attributed to them and revocable by them, which is every property the box
@@ -115,19 +115,19 @@ export function operatorAccount(cfg) {
   const linked = new Accounts(cfg.stateDir).list();
   if (configured) {
     return linked.includes(configured)
-      ? { email: configured, why: `AGENT_HUB_OPERATOR is ${configured}` }
-      : { email: null, why: `AGENT_HUB_OPERATOR names ${configured}, who has not linked a Claude account on this box` };
+      ? { email: configured, why: `FLEETWRIGHT_OPERATOR is ${configured}` }
+      : { email: null, why: `FLEETWRIGHT_OPERATOR names ${configured}, who has not linked a Claude account on this box` };
   }
   if (linked.length === 1) return { email: linked[0], why: `${linked[0]} is the only linked account here` };
   if (linked.length === 0) {
     return {
       email: null,
-      why: 'nobody has linked a Claude account on this box yet — connect one from the app, or run `agent-hub login`',
+      why: 'nobody has linked a Claude account on this box yet — connect one from the app, or run `fleetwright login`',
     };
   }
   return {
     email: null,
-    why: `${linked.length} people have linked accounts here, so set AGENT_HUB_OPERATOR to say which one local sessions use`,
+    why: `${linked.length} people have linked accounts here, so set FLEETWRIGHT_OPERATOR to say which one local sessions use`,
   };
 }
 

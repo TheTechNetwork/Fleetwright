@@ -27,9 +27,9 @@ Do these **in order**, before merging a change like
 | Name | Value | Why |
 |---|---|---|
 | `WRANGLER_CONFIG` | `wrangler.production.toml` | Which config the deploy job uses. **Absent means `wrangler.toml`**, the fork-safe one — so a fork running this workflow cannot deploy ours, and so *we* cannot deploy ours by forgetting |
-| `AGENT_FLEET_AUTH_ALLOW` | `@thetech.network,elibrody2@gmail.com,reservedjyumi@gmail.com,e6591050@gmail.com` | Synced to Cloudflare as a **secret**. Copy it out of the current `wrangler.toml` before it is gone |
+| `FLEETWRIGHT_AUTH_ALLOW` | `@thetech.network,elibrody2@gmail.com,reservedjyumi@gmail.com,e6591050@gmail.com` | Synced to Cloudflare as a **secret**. Copy it out of the current `wrangler.toml` before it is gone |
 
-**Check `AGENT_FLEET_AUTH_ALLOW` first.** The sync step has been pushing it for
+**Check `FLEETWRIGHT_AUTH_ALLOW` first.** The sync step has been pushing it for
 a while and it has never taken effect: the committed `[vars]` entry clobbered
 the secret on every deploy, because Cloudflare keeps vars and secrets in one
 namespace. So the variable may exist and be **stale or empty**, and nothing
@@ -45,7 +45,7 @@ Before merging, from the `worker/` directory:
 npx wrangler secret list
 ```
 
-`AGENT_FLEET_AUTH_ALLOW` must be listed. `secret list` shows names and not
+`FLEETWRIGHT_AUTH_ALLOW` must be listed. `secret list` shows names and not
 values, so this confirms it exists and not that it is right — which is why
 step 1 says to read the variable.
 
@@ -60,7 +60,7 @@ Watch the `Worker → deploy` job. Two lines to check:
 - `npx wrangler deploy --config wrangler.production.toml` — if it says
   `wrangler.toml`, `WRANGLER_CONFIG` is not set and step 1 was missed. **Stop
   and set it**, because that deploy has just removed the custom domain.
-- `synced AGENT_FLEET_AUTH_ALLOW`. If it appears under `::warning::Not set as
+- `synced FLEETWRIGHT_AUTH_ALLOW`. If it appears under `::warning::Not set as
   repository secrets`, the variable is empty.
 
 ## 3b. Bring the two hosts to v3, immediately after the deploy
@@ -94,11 +94,11 @@ choice is how long the window is.
 On each box, back to back, as soon as the deploy finishes:
 
 ```sh
-sudo /opt/agent-fleet/install/install.sh --upgrade
+sudo /opt/fleetwright-src/install/install.sh --upgrade
 ```
 
 **Not a reinstall, and not `uninstall.sh`.** `--upgrade` keeps
-`/etc/agent-fleet-sidecar.env` and the host keypair, so the box comes back as
+`/etc/fleetwright-sidecar.env` and the host keypair, so the box comes back as
 the same enrolled host with no new pin. A true uninstall destroys the host
 identity and costs a fresh pin per box for no benefit.
 
@@ -140,7 +140,7 @@ survived; the curl cannot.
 - `https://fleet.thetech.network/docs` → 302 to the demo Worker.
 - `https://fleet.thetech.network/install` → 302 to
   `raw.githubusercontent.com/TheTechNetwork/…/bootstrap.sh`. **A 404 here means
-  `AGENT_FLEET_INSTALL_URL` is missing**, and the one-liner in the README is
+  `FLEETWRIGHT_INSTALL_URL` is missing**, and the one-liner in the README is
   dead.
 - `https://fleet.thetech.network/openapi.json` → `servers[0].url` should be
   `https://fleet.thetech.network`. It is substituted at serve time now, so this
@@ -162,10 +162,10 @@ the certificate.
 repository variable and re-run, or set it directly:
 
 ```sh
-cd worker && printf '%s' '@thetech.network,…' | npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
+cd worker && printf '%s' '@thetech.network,…' | npx wrangler secret put FLEETWRIGHT_AUTH_ALLOW
 ```
 
-**Everything answers 503** — `AGENT_FLEET_API_TOKEN` is missing, which is
+**Everything answers 503** — `FLEETWRIGHT_API_TOKEN` is missing, which is
 unrelated to this change but is what a 503 always means.
 
 **Full revert:** `git revert` the merge and re-run the Worker workflow. The old

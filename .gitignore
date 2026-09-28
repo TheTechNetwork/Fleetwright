@@ -39,7 +39,7 @@ apps/ios/Fleetwright/Fleetwright.entitlements
 # A signing key must never be committed — but the reason it is ignored rather
 # than merely not-added is /update: it refuses to pull into a dirty tree, and
 # `git status --porcelain` counts untracked files. A stray release.jks in
-# /opt/agent-fleet would silently stop that host updating.
+# /opt/fleetwright-src would silently stop that host updating.
 *.jks
 
 # IDE state, not project configuration. Android Studio rewrites .idea on
@@ -63,7 +63,7 @@ build/
 #
 # Ignored rather than merely deleted, for the reason *.jks is above: /update
 # refuses to pull into a dirty tree and `git status --porcelain` counts
-# untracked files, so a coverage run left behind in /opt/agent-fleet would
+# untracked files, so a coverage run left behind in /opt/fleetwright-src would
 # silently stop that host updating.
 coverage/
 

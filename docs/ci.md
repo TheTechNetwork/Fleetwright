@@ -320,21 +320,21 @@ unset:
 
 | secret | |
 |---|---|
-| `AGENT_FLEET_API_TOKEN` | break-glass admin. `openssl rand -hex 24`. Not what phones use |
-| `AGENT_FLEET_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
-| `AGENT_FLEET_APNS_KEY` / `_KEY_ID` / `_TEAM_ID` | the `.p8` and its identifiers, for push to iOS. Optional, same fallback |
-| `AGENT_FLEET_GITHUB_CLIENT_SECRET` | the GitHub App's client secret, for the OAuth code exchange. Optional; without it `connect github` offers the paste route |
-| `AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET` | the Cloudflare OAuth client's secret, same exchange, second provider. Optional; the client id and scope list are `[vars]` in the wrangler config |
+| `FLEETWRIGHT_API_TOKEN` | break-glass admin. `openssl rand -hex 24`. Not what phones use |
+| `FLEETWRIGHT_FCM_SERVICE_ACCOUNT` | the Firebase service-account JSON, or base64 of it. Optional; without it push is logged rather than sent |
+| `FLEETWRIGHT_APNS_KEY` / `_KEY_ID` / `_TEAM_ID` | the `.p8` and its identifiers, for push to iOS. Optional, same fallback |
+| `FLEETWRIGHT_GITHUB_CLIENT_SECRET` | the GitHub App's client secret, for the OAuth code exchange. Optional; without it `connect github` offers the paste route |
+| `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | the Cloudflare OAuth client's secret, same exchange, second provider. Optional; the client id and scope list are `[vars]` in the wrangler config |
 
 And two repository **variables**:
 
 | variable | |
 |---|---|
 | `WRANGLER_CONFIG` | which config the deploy uses. Ours sets `wrangler.production.toml`; unset falls back to the fork-safe `wrangler.toml` — no routes, empty `[vars]` — so a fork running this workflow can never deploy our config by accident |
-| `AGENT_FLEET_AUTH_ALLOW` | who may sign in: `@yourdomain.com`, or whole addresses. **Empty allows nobody.** A repository variable here, synced to the Worker **as a secret** — it decides who can reach a fleet and must not be a committed var, because Cloudflare keeps vars and secrets in one namespace and a committed var clobbers the synced secret on every deploy |
+| `FLEETWRIGHT_AUTH_ALLOW` | who may sign in: `@yourdomain.com`, or whole addresses. **Empty allows nobody.** A repository variable here, synced to the Worker **as a secret** — it decides who can reach a fleet and must not be a committed var, because Cloudflare keeps vars and secrets in one namespace and a committed var clobbers the synced secret on every deploy |
 
-The other two sign-in settings — `AGENT_FLEET_AUTH_ISSUERS` and
-`AGENT_FLEET_AUTH_AUDIENCES` — are **not** synced from GitHub: they are public
+The other two sign-in settings — `FLEETWRIGHT_AUTH_ISSUERS` and
+`FLEETWRIGHT_AUTH_AUDIENCES` — are **not** synced from GitHub: they are public
 identifiers and live as `[vars]` in the wrangler config itself (ours in
 `wrangler.production.toml`), so changing who a coordinator will accept is a
 reviewable diff. One home per name; see
@@ -344,9 +344,9 @@ reviewable diff. One home per name; see
 
 ```sh
 cd worker
-npx wrangler secret put AGENT_FLEET_API_TOKEN
-npx wrangler secret put AGENT_FLEET_AUTH_ALLOW
-npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT
+npx wrangler secret put FLEETWRIGHT_API_TOKEN
+npx wrangler secret put FLEETWRIGHT_AUTH_ALLOW
+npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT
 ```
 
 **Hosts need none of this.** There is no shared host token to keep in step any
@@ -765,11 +765,11 @@ Not a CI secret. It goes to whichever coordinator is running:
 
 ```sh
 # on Cloudflare — JSON or base64, either works
-cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
+cd worker && npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
 
 # on a box — base64, because a systemd EnvironmentFile mangles the JSON
-base64 -w0 service-account.json     # into /etc/agent-fleet-coordinator.env as
-AGENT_FLEET_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
+base64 -w0 service-account.json     # into /etc/fleetwright-coordinator.env as
+FLEETWRIGHT_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
 ```
 
 Firebase console → Project settings → Service accounts → Generate new private

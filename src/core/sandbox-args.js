@@ -1,4 +1,4 @@
-// AGENT_HUB_SANDBOX_ARGS, checked.
+// FLEETWRIGHT_SANDBOX_ARGS, checked.
 //
 // The escape hatch is real and worth keeping: extra mounts, --device=/dev/kvm
 // for an emulator, a --network somebody's deployment needs. But it is spliced
@@ -34,7 +34,7 @@ const UNSAFE = [
     (a, next) => /^--(net|network)(=|$)/.test(a) && val(a, next) === 'host',
     'puts the session on the host network: it can reach 127.0.0.1:8790, the hub\'s own loopback API — tokened, but a session should not have a route to it at all',
   ],
-  [(a, next) => /^--pid(=|$)/.test(a) && val(a, next) === 'host', 'lets the session see and signal every process on the box, including agent-hub'],
+  [(a, next) => /^--pid(=|$)/.test(a) && val(a, next) === 'host', 'lets the session see and signal every process on the box, including fleetwright'],
   [(a, next) => /^--ipc(=|$)/.test(a) && val(a, next) === 'host', 'shares the host IPC namespace with the session'],
   [(a, next) => /^--uts(=|$)/.test(a) && val(a, next) === 'host', 'shares the host UTS namespace with the session'],
   [
@@ -167,20 +167,20 @@ export function unsafeSandboxArgs(args) {
  */
 export function unsafeSandboxMessage(found) {
   return [
-    `AGENT_HUB_SANDBOX_ARGS contains ${found.length === 1 ? 'an option that removes' : 'options that remove'} the sandbox:`,
+    `FLEETWRIGHT_SANDBOX_ARGS contains ${found.length === 1 ? 'an option that removes' : 'options that remove'} the sandbox:`,
     ...found.map((f) => `  ${f.arg}\n    ${f.why}`),
     '',
     'Sessions run root-capable code, and every document here describes them as contained.',
     'Refusing to start rather than describing a box that way while it is not.',
     '',
     'If this is deliberate, say so explicitly:',
-    '  AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS=1',
+    '  FLEETWRIGHT_SANDBOX_ALLOW_UNSAFE_ARGS=1',
     'It stays in the log on every start, so nobody inherits it by accident.',
   ].join('\n');
 }
 
 /**
- * Split AGENT_HUB_SANDBOX_ARGS the way a shell would, minus the shell.
+ * Split FLEETWRIGHT_SANDBOX_ARGS the way a shell would, minus the shell.
  *
  * It was `split(/\s+/)`, which is right until a mount path has a space in it
  * or somebody writes `--label="my session"`. The naive split handed podman

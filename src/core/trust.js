@@ -47,7 +47,7 @@ function editClaudeConfig(mutate, what) {
       if (/** @type {NodeJS.ErrnoException} */ (e).code !== 'ENOENT') throw e;
     }
     if (!mutate(cfg)) return true; // nothing to change
-    const tmp = `${file}.tmp-agent-hub`;
+    const tmp = `${file}.tmp-fleetwright`;
     writeFileSync(tmp, JSON.stringify(cfg, null, 2));
     renameSync(tmp, file);
     log.info(`claude config: ${what}`);
@@ -133,7 +133,7 @@ function claudeVersion(bin) {
  * Worth being strict about: tmux does NOT fail when `-c` points at a
  * non-existent directory — it silently starts the session in the tmux server's
  * own cwd instead. A typo therefore produced a session that reported "Started
- * in 1" while actually running in /opt/agent-hub, untrusted, hanging on a trust
+ * in 1" while actually running in /opt/fleetwright, untrusted, hanging on a trust
  * prompt. Better to refuse than to launch somewhere nobody asked for.
  *
  * @param {string} dir

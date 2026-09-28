@@ -19,15 +19,16 @@ import { spawnSync } from 'node:child_process';
 import { isValidName } from './names.js';
 import { hasSession, capturePane } from './tmux.js';
 import { podman, sandboxNames } from './podman.js';
+import { unitName } from '../fleet/legacy-paths.js';
 
 /**
  * The services this can read, by the name someone would actually type.
  * A fixed list, not a pattern.
  */
 export const LOG_SOURCES = Object.freeze({
-  hub: { unit: 'agent-hub', what: 'the session manager' },
-  coordinator: { unit: 'agent-fleet-coordinator', what: 'the fleet coordinator' },
-  sidecar: { unit: 'agent-fleet-sidecar', what: 'this box as a fleet host' },
+  hub: { unit: 'fleetwright', legacy: 'agent-hub', what: 'the session manager' },
+  coordinator: { unit: 'fleetwright-coordinator', legacy: 'agent-fleet-coordinator', what: 'the fleet coordinator' },
+  sidecar: { unit: 'fleetwright-sidecar', legacy: 'agent-fleet-sidecar', what: 'this box as a fleet host' },
 });
 
 /**
@@ -137,15 +138,19 @@ export function readSessionLogs(cfg, name, lines = 60) {
 
 /** Aliases people reach for. @type {Record<string, keyof typeof LOG_SOURCES>} */
 const ALIASES = {
-  'agent-hub': 'hub',
+  'fleetwright': 'hub',
   hub: 'hub',
   service: 'hub',
   main: 'hub',
   coord: 'coordinator',
-  'agent-fleet-coordinator': 'coordinator',
+  'fleetwright-coordinator': 'coordinator',
   coordinator: 'coordinator',
-  'agent-fleet-sidecar': 'sidecar',
+  'fleetwright-sidecar': 'sidecar',
   sidecar: 'sidecar',
+  // The unit names from before the rename, which is what a runbook says.
+  'agent-hub': 'hub',
+  'agent-fleet-coordinator': 'coordinator',
+  'agent-fleet-sidecar': 'sidecar',
   fleet: 'sidecar',
 };
 
@@ -173,12 +178,15 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
       text: `"${source}" is not a service I can read. Try: ${Object.keys(LOG_SOURCES).join(', ')}.`,
     };
   }
-  const { unit, what } = LOG_SOURCES[key];
+  const { unit, legacy, what } = LOG_SOURCES[key];
   const count = Math.min(MAX_LINES, Math.max(1, Number(lines) || DEFAULT_LINES));
 
   const r = spawnSync(
     cfg.journalctlBin,
-    ['-u', unit, '-n', String(count), '--no-pager', '--output', 'short-iso'],
+    // BOTH NAMES, interleaved by time: a box renamed this week has its history
+    // under the old unit and its present under the new one, and the lines
+    // somebody is looking for are usually the ones either side of the change.
+    ['-u', unit, '-u', legacy, '-n', String(count), '--no-pager', '--output', 'short-iso'],
     { encoding: 'utf8', timeout: 15_000 },
   );
 
@@ -234,6 +242,9 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
  * @param {string} unit
  */
 export function unitInstalled(cfg, unit) {
-  const r = spawnSync(cfg.systemctlBin, ['cat', unit], { encoding: 'utf8', timeout: 10_000 });
+  // By whichever name this box has it: a checkout updated by git pull, or a
+  // packaged box between the release swap and the installer renaming its
+  // units, still has agent-hub.service — and its log buttons went missing.
+  const r = spawnSync(cfg.systemctlBin, ['cat', unitName(unit)], { encoding: 'utf8', timeout: 10_000 });
   return r.status === 0;
 }

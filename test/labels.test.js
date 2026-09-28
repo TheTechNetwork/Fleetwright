@@ -37,10 +37,10 @@ test('a fact the machine derives cannot be removed, and says where it comes from
   const cfg = box();
   const r = removeLabel(cfg, 'arm64', ['arm64', 'linux']);
   assert.equal(r.ok, false);
-  assert.match(r.message, /comes from the machine itself or from AGENT_FLEET_LABELS/);
+  assert.match(r.message, /comes from the machine itself or from FLEETWRIGHT_LABELS/);
   // AND IT SAYS WHAT TO DO INSTEAD. "no such label" about a label the app is
   // displaying is the least useful true sentence available.
-  assert.match(r.message, /edit AGENT_FLEET_LABELS/);
+  assert.match(r.message, /edit FLEETWRIGHT_LABELS/);
 });
 
 test('adding a label the box already derives changes nothing and says so', () => {
@@ -65,7 +65,7 @@ test('a string that could never be matched is refused', () => {
 });
 
 test('a leading dash cannot be stored, because it would become a flag', () => {
-  // The same property session names have, and for the same reason: agent-hub's
+  // The same property session names have, and for the same reason: fleetwright's
   // parser treats a token starting with `--` as a flag.
   assert.equal(addLabel(box(), '--dangerous').ok, false);
 });

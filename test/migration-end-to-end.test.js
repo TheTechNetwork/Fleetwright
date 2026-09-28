@@ -36,7 +36,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
  * value of it.
  */
 const UNITS_AT_START = new Map(
-  ['/etc/systemd/system/agent-hub.service', '/etc/systemd/system/agent-fleet-sidecar.service']
+  ['/etc/systemd/system/fleetwright.service', '/etc/systemd/system/fleetwright-sidecar.service']
     .map((p) => [p, existsSync(p)]),
 );
 const HELPER = path.join(ROOT, 'install', 'fleetwright-migrate');
@@ -100,8 +100,8 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
   // checkout takes the fallback — and the fallback was the real install.sh.
   //
   // On a machine that is root with systemd, which is every CI container and was
-  // this sandbox, that RAN. It wrote /etc/systemd/system/agent-hub.service and
-  // agent-fleet-sidecar.service, /etc/agent-hub.env and /var/lib/agent-hub,
+  // this sandbox, that RAN. It wrote /etc/systemd/system/fleetwright.service and
+  // fleetwright-sidecar.service, /etc/fleetwright.env and /var/lib/fleetwright,
   // enabled the units, and pointed them at the fixture's temp directory — which
   // `t.after` then deleted. The machine was left with two enabled services
   // aimed at a path that no longer existed, by a test suite.
@@ -121,11 +121,11 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
       // testing the check.
       ? '#!/bin/bash\nexit 3\n'
       : '#!/bin/bash\n# The release\'s installer, stubbed. See rewriteReleaseInstaller.\n' +
-        `printf 'HANDOFF-FROM-RELEASE payload=%s args=%s\\n' "$AGENT_FLEET_PAYLOAD" "$*" > ${JSON.stringify(path.join(work, 'handoff-release'))}\n`,
+        `printf 'HANDOFF-FROM-RELEASE payload=%s args=%s\\n' "$FLEETWRIGHT_PAYLOAD" "$*" > ${JSON.stringify(path.join(work, 'handoff-release'))}\n`,
   );
 
   // The box: a checkout, an env file, and a state directory.
-  const checkout = path.join(work, 'opt', 'agent-fleet');
+  const checkout = path.join(work, 'opt', 'fleetwright');
   mkdirSync(path.join(checkout, '.git'), { recursive: true });
   mkdirSync(path.join(checkout, 'install'), { recursive: true });
   if (localInstaller) {
@@ -135,20 +135,20 @@ function fixture({ brokenReleaseInstaller = false, localInstaller = true } = {})
     // in test/packaged-installer.test.js.
     writeFileSync(
       path.join(checkout, 'install', 'install.sh'),
-      '#!/bin/bash\n# AGENT_FLEET_PAYLOAD is named so the helper recognises this as new enough.\n' +
-        `printf 'HANDOFF payload=%s args=%s\\n' "$AGENT_FLEET_PAYLOAD" "$*" > ${JSON.stringify(path.join(work, 'handoff'))}\n`,
+      '#!/bin/bash\n# FLEETWRIGHT_PAYLOAD is named so the helper recognises this as new enough.\n' +
+        `printf 'HANDOFF payload=%s args=%s\\n' "$FLEETWRIGHT_PAYLOAD" "$*" > ${JSON.stringify(path.join(work, 'handoff'))}\n`,
     );
     chmodSync(path.join(checkout, 'install', 'install.sh'), 0o755);
   }
 
-  const state = path.join(work, 'var', 'lib', 'agent-hub');
+  const state = path.join(work, 'var', 'lib', 'fleetwright');
   mkdirSync(state, { recursive: true });
-  const envFile = path.join(work, 'agent-hub.env');
+  const envFile = path.join(work, 'fleetwright.env');
   writeFileSync(
     envFile,
-    `AGENT_HUB_RELEASE_MANIFEST=file://${path.join(dist, 'manifest.json')}\n` +
-      `AGENT_HUB_INSTALL_DIR=${checkout}\n` +
-      `AGENT_HUB_STATE_DIR=${state}\n`,
+    `FLEETWRIGHT_RELEASE_MANIFEST=file://${path.join(dist, 'manifest.json')}\n` +
+      `FLEETWRIGHT_INSTALL_DIR=${checkout}\n` +
+      `FLEETWRIGHT_STATE_DIR=${state}\n`,
   );
 
   return { work, dist, checkout, state, envFile, base: path.join(work, 'opt', 'fleetwright') };
@@ -161,7 +161,7 @@ function migrate(f, extraEnv = {}) {
     env: {
       ...process.env,
       FLEETWRIGHT_ENV_FILE: f.envFile,
-      AGENT_FLEET_BASE: f.base,
+      FLEETWRIGHT_BASE: f.base,
       // A UNIT DIRECTORY OF ITS OWN, so "is this box converted" can be posed at
       // all. It was a literal /etc/systemd/system, which meant every converted
       // path in the helper could only be tested by writing units onto the
@@ -174,11 +174,11 @@ function migrate(f, extraEnv = {}) {
 }
 
 /** Write the unit a converted box has: ExecStart naming `<base>/current`. */
-function declareConverted(f, entry = 'lib/agent-hub.mjs') {
+function declareConverted(f, entry = 'lib/fleetwright.mjs') {
   const dir = path.join(f.work, 'etc', 'systemd', 'system');
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    path.join(dir, 'agent-hub.service'),
+    path.join(dir, 'fleetwright.service'),
     // WorkingDirectory names the tree too, on purpose: the helper must read
     // ExecStart and not the whole file, which is a distinction a real box has
     // already been misjudged on.
@@ -197,7 +197,7 @@ test('a box converts: fetched, verified, laid out, handed off', (t) => {
     // THE SEQUENCE, in order, each step asserted by its effect rather than by
     // its message — a log line is what the last five attempts all had.
     assert.match(out, /sha256 ok/, out.slice(0, 400));
-    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true,
+    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'fleetwright.mjs')), true,
       'the release was not laid out');
     assert.equal(
       readFileSync(path.join(f.base, 'current', 'package.json'), 'utf8').includes('v9.9.9'), true,
@@ -305,7 +305,7 @@ test('a half-finished migration resumes instead of reporting success', (t) => {
     // And it must have actually converted: the handoff happened, and the
     // half-unpacked directory was replaced by a real release.
     assert.equal(existsSync(path.join(f.work, 'handoff-release')), true, 'the migration never handed off');
-    assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'agent-hub.mjs')), true,
+    assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'fleetwright.mjs')), true,
       'the release from the failed attempt was left in place');
   } finally {
     rmSync(f.work, { recursive: true, force: true });
@@ -362,7 +362,7 @@ test('a converted box on an older release is brought forward, not refused', (t) 
     const old = path.join(f.base, 'releases', 'v0.0.1');
     mkdirSync(path.join(old, 'lib'), { recursive: true });
     writeFileSync(path.join(old, 'package.json'), JSON.stringify({ version: 'v0.0.1' }));
-    writeFileSync(path.join(old, 'lib', 'agent-hub.mjs'), '// the release that cannot update itself');
+    writeFileSync(path.join(old, 'lib', 'fleetwright.mjs'), '// the release that cannot update itself');
     symlinkSync(old, path.join(f.base, 'current'));
     declareConverted(f);
 
@@ -373,7 +373,7 @@ test('a converted box on an older release is brought forward, not refused', (t) 
 
     // And it actually moved: `current` points at the new release, the old one
     // is still on disk, and the handoff happened.
-    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true,
+    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'fleetwright.mjs')), true,
       'the newer release was never laid out');
     assert.equal(
       readFileSync(path.join(f.base, 'current', 'package.json'), 'utf8').includes('v9.9.9'),
@@ -425,7 +425,7 @@ test('a heal from a release whose installer cannot start changes nothing', (t) =
     // path taken is the heal.
     const dir = path.join(f.base, 'releases', 'v9.9.9');
     mkdirSync(path.join(dir, 'lib'), { recursive: true });
-    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'agent-fleet', version: 'v9.9.9' }));
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'fleetwright', version: 'v9.9.9' }));
     symlinkSync(dir, path.join(f.base, 'current'));
     declareConverted(f);
 
@@ -457,7 +457,7 @@ test('a converted box whose current is unreadable is repaired, not called curren
     const out = `${r.stdout}${r.stderr}`;
     assert.equal(r.status, 0, out.slice(0, 500));
     assert.doesNotMatch(out, /nothing to do/, out.slice(0, 500));
-    assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'agent-hub.mjs')), true,
+    assert.equal(existsSync(path.join(f.base, 'current', 'lib', 'fleetwright.mjs')), true,
       'the partial release was left in place');
   } finally {
     rmSync(f.work, { recursive: true, force: true });
@@ -493,7 +493,7 @@ test('a converted box needs no checkout to be brought forward', (t) => {
     assert.equal(existsSync(path.join(f.work, 'handoff-release')), true,
       'the release\'s own installer was never reached');
     assert.match(out, /laid out .*releases\/v9\.9\.9/, out.slice(0, 500));
-    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'agent-hub.mjs')), true);
+    assert.equal(existsSync(path.join(f.base, 'releases', 'v9.9.9', 'lib', 'fleetwright.mjs')), true);
     // No fallback message, because there is no fallback any more: the verified
     // release's installer is the only one either route runs.
     assert.match(out, /running the installer from the verified release/, out.slice(0, 800));
@@ -508,9 +508,9 @@ test('the installer brings a converted box forward before it writes units', (t) 
   // the repair. Ordering is the whole point, so it is asserted.
   const src = readFileSync(path.join(ROOT, 'install', 'install.sh'), 'utf8');
   const call = src.indexOf('\nrefresh_release_if_converted\n');
-  // THE SERVICE UNIT, exactly: `install_unit agent-hub-upgrade` is the oneshot
+  // THE SERVICE UNIT, exactly: `install_unit fleetwright-upgrade` is the oneshot
   // helper's, defined further up, and is not the write this ordering is about.
-  const units = src.search(/^\s*install_unit agent-hub$/m);
+  const units = src.search(/^\s*install_unit fleetwright$/m);
   assert.ok(call > 0, 'the installer never refreshes a converted box');
   assert.ok(call < units, 'the release is refreshed after the units are written');
   // And it must not loop: the helper re-runs the installer.

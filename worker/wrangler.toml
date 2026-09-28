@@ -19,6 +19,12 @@
 # needs that same flag, and the root deploy script prints which config it is
 # about to send for exactly this reason.
 
+# THE ONE NAME THE RENAME LEFT ALONE, and it is not an oversight. A Durable
+# Object namespace belongs to the script that declares it, so `Fleet` — every
+# host, device and person this coordinator knows — lives under this name. A
+# Worker deployed as `fleetwright-coordinator` would start with an empty fleet
+# and leave the real one running, unreachable, beside it. The script name is a
+# storage key, not a label; nobody types it, and the domain is what they see.
 name = "agent-fleet-coordinator"
 main = "src/worker.js"
 compatibility_date = "2026-01-15"
@@ -65,7 +71,7 @@ compatibility_flags = ["nodejs_als"]
 #
 # The hostname matters more here than it looks: §5 has the host agent PIN the
 # coordinator origin, so changing it means editing every host's
-# /etc/agent-fleet-sidecar.env. It is not a value to churn.
+# /etc/fleetwright-sidecar.env. It is not a value to churn.
 #
 # NO ROUTES, WHICH MEANS THIS FILE IS SAFE TO DEPLOY AND DOES NOT REACH ANYBODY.
 #
@@ -110,42 +116,42 @@ compatibility_flags = ["nodejs_als"]
 # WHAT TO SET, AND WHAT HAPPENS IF YOU DO NOT. Every one of these is absent
 # here on purpose, and every absence has a defined, honest behaviour:
 #
-#   AGENT_FLEET_AUTH_ISSUERS      who may vouch for a person. Unset → sign-in
-#   AGENT_FLEET_AUTH_AUDIENCES    and which app the ID token is for.  answers
+#   FLEETWRIGHT_AUTH_ISSUERS      who may vouch for a person. Unset → sign-in
+#   FLEETWRIGHT_AUTH_AUDIENCES    and which app the ID token is for.  answers
 #                                 503 and says so. Copy ours verbatim if you
 #                                 want the App Store and Play builds to sign in
 #                                 to your coordinator — they are public
 #                                 identifiers and this needs no Apple or Google
 #                                 account of your own. See
 #                                 docs/coordinator-deploy.md.
-#   AGENT_FLEET_DOCS_URL          /docs. Unset → 404
-#   AGENT_FLEET_INSTALL_URL       /install. Unset → 404 naming this variable.
+#   FLEETWRIGHT_DOCS_URL          /docs. Unset → 404
+#   FLEETWRIGHT_INSTALL_URL       /install. Unset → 404 naming this variable.
 #                                 bootstrap.sh clones the repository it is
 #                                 served from, so pointing this at somebody
 #                                 else's installs THEIR code on your machines
-#   AGENT_FLEET_PUSH              unset → notifications are logged, not sent,
+#   FLEETWRIGHT_PUSH              unset → notifications are logged, not sent,
 #                                 and the coordinator says so at startup
-#   AGENT_FLEET_GITHUB_*          unset → the paste route, which is a
-#   AGENT_FLEET_CLOUDFLARE_*      first-class answer rather than a fallback
-#   AGENT_FLEET_NAME              unset → invitations are not sent, and the
-#   AGENT_FLEET_INVITE_FROM       reply says which happened
-#   AGENT_FLEET_APP_IOS/_ANDROID  unset → an invitation with no app links
+#   FLEETWRIGHT_GITHUB_*          unset → the paste route, which is a
+#   FLEETWRIGHT_CLOUDFLARE_*      first-class answer rather than a fallback
+#   FLEETWRIGHT_NAME              unset → invitations are not sent, and the
+#   FLEETWRIGHT_INVITE_FROM       reply says which happened
+#   FLEETWRIGHT_APP_IOS/_ANDROID  unset → an invitation with no app links
 #   SENTRY_DSN                    unset → no error reporting at all
 #   SENTRY_ENVIRONMENT            unset → "production" in the report. Only read
 #   SENTRY_TRACES_SAMPLE_RATE     when SENTRY_DSN is set; unset → no tracing
-#   AGENT_FLEET_PUBLIC_ORIGIN     the origin this coordinator is reached on,
+#   FLEETWRIGHT_PUBLIC_ORIGIN     the origin this coordinator is reached on,
 #                                 for the MCP server's OAuth metadata. Unset →
 #                                 derived from the request, which is right until
 #                                 something sits in front of it
-#   AGENT_FLEET_AUTH_APPLE_SERVICE  the Services ID "Sign in with Apple" issues
+#   FLEETWRIGHT_AUTH_APPLE_SERVICE  the Services ID "Sign in with Apple" issues
 #                                 the token to. Unset → Apple sign-in is not
 #                                 offered; the other issuers are unaffected
-#   AGENT_FLEET_APNS_BUNDLE_ID    which iOS app a push is addressed to, and
-#   AGENT_FLEET_APNS_SANDBOX      whether to use Apple's sandbox gateway.
+#   FLEETWRIGHT_APNS_BUNDLE_ID    which iOS app a push is addressed to, and
+#   FLEETWRIGHT_APNS_SANDBOX      whether to use Apple's sandbox gateway.
 #                                 Unset → the bundle id defaults to ours and
 #                                 the production gateway is used, so a fork
 #                                 shipping its own app must set the first
-#   AGENT_FLEET_ACTIONS_AUDIENCE  which audience a GitHub Actions OIDC token
+#   FLEETWRIGHT_ACTIONS_AUDIENCE  which audience a GitHub Actions OIDC token
 #                                 must carry to enrol a runner. UNSET IS NOT
 #                                 "ANYTHING": the code falls back to this
 #                                 coordinator's own origin, which is the
@@ -155,7 +161,7 @@ compatibility_flags = ["nodejs_als"]
 #                                 all — not here, not in the production
 #                                 config, not in docs/
 #
-# AGENT_FLEET_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
+# FLEETWRIGHT_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
 # rather than a var. It decides who can reach a fleet; it does not belong in a
 # public repository, and the secret block at the bottom of this file has listed
 # it as a secret all along. The `[vars]` entry was the bug.
@@ -165,22 +171,22 @@ compatibility_flags = ["nodejs_als"]
 # operator decisions rather than secrets, so they belong here — see
 # docs/runner-central.md and install/runner-central/README.md.
 #
-#   AGENT_FLEET_RUNNER_REPO       where `provision` dispatches, as owner/repo.
+#   FLEETWRIGHT_RUNNER_REPO       where `provision` dispatches, as owner/repo.
 #                                 Hosts learn it on the config frame, so no box
 #                                 is configured with it.
-#   AGENT_FLEET_ACTIONS_REPOS     which repositories may enrol a host at all.
+#   FLEETWRIGHT_ACTIONS_REPOS     which repositories may enrol a host at all.
 #                                 EMPTY MEANS NOBODY, deliberately: a deployment
 #                                 that has not said has not opted in.
-#   AGENT_FLEET_ACTIONS_WORKFLOW  which FILES in them may. Without it any
+#   FLEETWRIGHT_ACTIONS_WORKFLOW  which FILES in them may. Without it any
 #                                 workflow there can admit a machine, including
 #                                 one a pull request adds. A comma-separated
 #                                 list, one entry per operating system, each
 #                                 ending at the `@` so it pins the file and
 #                                 allows any ref.
 #
-# AGENT_FLEET_RUNNER_REPO = "you/your-runners"
-# AGENT_FLEET_ACTIONS_REPOS = "you/your-runners"
-# AGENT_FLEET_ACTIONS_WORKFLOW = "you/your-runners/.github/workflows/runner-macos.yml@,you/your-runners/.github/workflows/runner-linux.yml@,you/your-runners/.github/workflows/runner-windows.yml@,you/your-runners/.github/workflows/runner-android.yml@"
+# FLEETWRIGHT_RUNNER_REPO = "you/your-runners"
+# FLEETWRIGHT_ACTIONS_REPOS = "you/your-runners"
+# FLEETWRIGHT_ACTIONS_WORKFLOW = "you/your-runners/.github/workflows/runner-macos.yml@,you/your-runners/.github/workflows/runner-linux.yml@,you/your-runners/.github/workflows/runner-windows.yml@,you/your-runners/.github/workflows/runner-android.yml@"
 
 [[send_email]]
 name = "EMAIL"
@@ -220,7 +226,7 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_API_TOKEN             break-glass admin, and OPTIONAL. Phones do
+#   FLEETWRIGHT_API_TOKEN             break-glass admin, and OPTIONAL. Phones do
 #                                     not use it, hosts do not use it, and a
 #                                     coordinator with sign-in configured and no
 #                                     admin token is not open — it simply has no
@@ -228,7 +234,7 @@ enabled = true
 #                                     Set it or do not; what the coordinator
 #                                     refuses to run without is ANY way in at
 #                                     all, which means this or the AUTH_ pair
-#   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
+#   FLEETWRIGHT_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
 #
 # Those two are also declared in .dev.vars.example, which is what makes the
@@ -236,7 +242,7 @@ enabled = true
 # starts life with a way in, before its owner has touched [vars]. The push
 # secrets below stay out of it: optional.
 #
-# AGENT_FLEET_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
+# FLEETWRIGHT_AUTH_ISSUERS and _AUDIENCES are NOT in this list: they are public
 # identifiers and belong in [vars] above, where changing who a coordinator will
 # accept is a reviewable diff. This block briefly listed them as secrets, and
 # because Cloudflare keeps vars and secrets in one namespace, following both
@@ -244,14 +250,14 @@ enabled = true
 # place per name, and for these the [vars] table is the place.
 #
 # THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
-# they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
+# they enrol with a six-digit pin minted by somebody already in. FLEETWRIGHT_HOST_TOKEN
 # was one string every machine presented — indistinguishable hosts, no way to
 # revoke one, replayable by anything that saw a single connection.
-#   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
+#   FLEETWRIGHT_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
 #                                     base64 of it), for push
-#   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
-#   AGENT_FLEET_APNS_KEY_ID           which key that is
-#   AGENT_FLEET_APNS_TEAM_ID          the team it belongs to
+#   FLEETWRIGHT_APNS_KEY              the .p8, for push to iOS
+#   FLEETWRIGHT_APNS_KEY_ID           which key that is
+#   FLEETWRIGHT_APNS_TEAM_ID          the team it belongs to
 #
 # The key id and team id are identifiers rather than credentials, and were
 # briefly a [vars] entry for that reason. They are secrets now because a name
@@ -259,7 +265,7 @@ enabled = true
 # deploy carrying a var CLOBBERS the secret of the same name. One place per
 # name, and for these the useful place is beside the .p8 they describe.
 #
-# AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
+# FLEETWRIGHT_DEMO_TOKEN is not here and is not in this file at all any more:
 # it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
 # With NEITHER the admin token NOR the AUTH_ pair, the Worker refuses every

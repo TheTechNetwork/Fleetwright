@@ -106,7 +106,7 @@ test('an old host’s refusal explains itself, and names the way out', () => {
     assert.equal(reply.ok, false);
     assert.equal(reply.error.code, 'unknown_verb', 'the code stays machine-readable');
     assert.match(reply.text, /older code/);
-    assert.match(reply.text, /agent-hub update --restart/);
+    assert.match(reply.text, /fleetwright update --restart/);
     assert.match(reply.text, /abc1234/, 'says which commit it is on');
     assert.match(reply.text, /12 behind/);
     // NOT TELEGRAM ANY MORE. That adapter is archived, so the remedy pointed
@@ -124,7 +124,7 @@ test('an old host’s refusal explains itself, and names the way out', () => {
     // identical from the coordinator — new files, a running service still
     // holding the old command list — and is at least as common as being
     // genuinely behind.
-    assert.match(reply.text, /agent-hub update --restart/);
+    assert.match(reply.text, /fleetwright update --restart/);
   });
 });
 

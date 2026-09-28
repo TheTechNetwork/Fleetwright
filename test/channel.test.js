@@ -46,8 +46,8 @@ test('an ordinary box is NOT pinned, so the picker appears', async () => {
 
   // And a box whose operator did set it is still pinned, which is the whole
   // point of the field.
-  assert.equal(pinnedByEnv(loadConfig({ AGENT_HUB_RELEASE_CHANNEL: 'rolling' })), true);
-  assert.equal(readChannel(loadConfig({ AGENT_HUB_RELEASE_CHANNEL: 'rolling' })), 'rolling');
+  assert.equal(pinnedByEnv(loadConfig({ FLEETWRIGHT_RELEASE_CHANNEL: 'rolling' })), true);
+  assert.equal(readChannel(loadConfig({ FLEETWRIGHT_RELEASE_CHANNEL: 'rolling' })), 'rolling');
 });
 
 test('a box nobody has asked is on stable', () => {
@@ -102,8 +102,8 @@ test('the environment wins, and setting the channel says so rather than lying', 
     // ignores would leave the app showing `stable` while the box kept taking
     // prereleases, with nothing anywhere saying which was true.
     assert.equal(r.ok, false);
-    assert.match(r.message, /AGENT_HUB_RELEASE_CHANNEL/);
-    assert.match(r.message, /agent-hub\.env/);
+    assert.match(r.message, /FLEETWRIGHT_RELEASE_CHANNEL/);
+    assert.match(r.message, /fleetwright\.env/);
     assert.equal(readChannel(cfg), 'rolling');
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
@@ -218,7 +218,7 @@ test('nothing still tells somebody to set the name that was renamed', () => {
   // setting a value that is only understood by a compatibility shim.
   for (const f of ['../src/core/release.js', '../src/core/channel.js', '../src/adapters/commands.js']) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8');
-    assert.doesNotMatch(src, /AGENT_HUB_RELEASE_CHANNEL=prerelease/, `${f} still tells somebody to set the old value`);
+    assert.doesNotMatch(src, /FLEETWRIGHT_RELEASE_CHANNEL=prerelease/, `${f} still tells somebody to set the old value`);
   }
 });
 
@@ -260,7 +260,7 @@ test('the two channels are two addresses, and a mirror is left alone', () => {
   // A mirror matches neither shape. Returned UNCHANGED and flagged, because
   // inventing a path inside somebody else's release host would produce a 404
   // on every update and blame the channel for it.
-  const mirror = 'https://releases.example.com/agent-hub/manifest.json';
+  const mirror = 'https://releases.example.com/fleetwright/manifest.json';
   assert.deepEqual(manifestUrlFor(mirror, 'rolling'), { url: mirror, derived: false });
 });
 

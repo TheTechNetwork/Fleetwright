@@ -19,13 +19,13 @@ const cfg = (patch = {}) => ({
   skipPermissions: true,
   sandbox: false,
   podmanBin: 'podman',
-  sandboxImage: 'localhost/agent-session:latest',
+  sandboxImage: 'localhost/fleetwright-session:latest',
   sandboxMemory: '8g',
   sandboxCpus: '2',
   sandboxPidsLimit: '512',
   sandboxExtraArgs: [],
   sandboxHookSocket: true,
-  sandboxHookSocketDir: '/run/agent-fleet',
+  sandboxHookSocketDir: '/run/fleetwright-sidecar',
   sandboxCredentialsFile: '/root/.claude/.credentials.json',
   ...patch,
 });
@@ -67,7 +67,7 @@ test('the hook socket is mounted per session, at a fixed path inside', () => {
   const line = buildCommand(cfg({ sandbox: true }), { name: 'bigjob' });
   // Per-session outside, always the same inside — which is what lets the
   // container report without knowing its own name.
-  assert.match(line, /'-v' '\/run\/agent-fleet\/bigjob\.sock:\/run\/hub\.sock'/);
+  assert.match(line, /'-v' '\/run\/fleetwright-sidecar\/bigjob\.sock:\/run\/hub\.sock'/);
 });
 
 test('the hook socket mount can be turned off', () => {
@@ -94,7 +94,7 @@ test('the claude arguments follow the image, not podman', () => {
     name: 'bigjob',
     resumeUuid: '11111111-2222-3333-4444-555555555555',
   });
-  const image = line.indexOf("'localhost/agent-session:latest'");
+  const image = line.indexOf("'localhost/fleetwright-session:latest'");
   assert.ok(image > 0);
   // Everything claude-facing must land after the image name, or podman eats it.
   assert.ok(line.indexOf("'--remote-control'") > image);
@@ -102,7 +102,7 @@ test('the claude arguments follow the image, not podman', () => {
   assert.ok(line.indexOf("'--dangerously-skip-permissions'") > image);
   // And the host's claude path is irrelevant inside the container.
   assert.ok(!line.includes('/usr/local/bin/claude'));
-  assert.match(line, /'localhost\/agent-session:latest' 'claude'/);
+  assert.match(line, /'localhost\/fleetwright-session:latest' 'claude'/);
 });
 
 test('per-session permission and resume settings survive the sandbox path', () => {
@@ -117,23 +117,23 @@ test('extra podman arguments are passed through before the image', () => {
   const line = buildCommand(cfg({ sandbox: true, sandboxExtraArgs: ['--network=none', '--userns=keep-id'] }), {
     name: 'api',
   });
-  assert.ok(line.indexOf("'--network=none'") < line.indexOf("'localhost/agent-session:latest'"));
+  assert.ok(line.indexOf("'--network=none'") < line.indexOf("'localhost/fleetwright-session:latest'"));
   assert.match(line, /'--userns=keep-id'/);
 });
 
 test('the image is named in full, because a bare name may not resolve', () => {
-  // `podman build -t agent-session:latest` stores it as
-  // localhost/agent-session:latest, and a BARE name at run time goes through
+  // `podman build -t fleetwright-session:latest` stores it as
+  // localhost/fleetwright-session:latest, and a BARE name at run time goes through
   // short-name resolution — which fails outright on a stock Debian 13, where no
   // unqualified-search-registries are configured:
   //
-  //   short-name "agent-session:latest" did not resolve to an alias and no
+  //   short-name "fleetwright-session:latest" did not resolve to an alias and no
   //   unqualified-search registries are defined in /etc/containers/registries.conf
   //
   // Observed on a real box. Dropping the prefix brings it straight back.
   const { sandboxImage } = cfg({ sandbox: true });
   assert.match(sandboxImage, /^[a-z0-9.-]+\//, 'the default image must carry a registry prefix');
-  assert.match(buildCommand(cfg({ sandbox: true }), { name: 'api' }), /'localhost\/agent-session:latest'/);
+  assert.match(buildCommand(cfg({ sandbox: true }), { name: 'api' }), /'localhost\/fleetwright-session:latest'/);
 });
 
 test('a session name cannot escape the quoting', () => {

@@ -230,7 +230,7 @@ function intent(verb, name) {
       return {
         ok: true,
         text:
-          `$ npm test\n\n> agent-fleet@0.1.0 test\n\n# tests 274\n# pass 274\n# fail 0\n\n` +
+          `$ npm test\n\n> fleetwright@0.1.0 test\n\n# tests 274\n# pass 274\n# fail 0\n\n` +
           (found?.status === 'awaiting-input' ? '\nDo you want to proceed? (y/n) ' : ''),
       };
     case 'health':

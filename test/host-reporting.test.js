@@ -21,11 +21,11 @@ test('a session carries where, when, and whose account', () => {
   const entry = withHealth({
     sessions: [{
       name: 'job', status: 'running', createdBy: 'fleet:a@b.com',
-      cwd: '/home/user/agent-runs/job', startedAt: 1_700_000_000_000, account: 'a@b.com',
+      cwd: '/home/user/fleetwright-runs/job', startedAt: 1_700_000_000_000, account: 'a@b.com',
     }],
   });
   const s = entry.health.sessions[0];
-  assert.equal(s.cwd, '/home/user/agent-runs/job');
+  assert.equal(s.cwd, '/home/user/fleetwright-runs/job');
   assert.equal(s.startedAt, 1_700_000_000_000);
   assert.equal(s.account, 'a@b.com');
 });
@@ -75,7 +75,7 @@ test('health never blocks on git or apt', async () => {
   // ROADMAP asked for this and said why: "so the answer is ready when asked
   // rather than computed while somebody waits".
   const { readFileSync } = await import('node:fs');
-  const bin = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
 
   // The injected function reads a variable. It does not call anything.
   assert.match(bin, /updates: \(\) => lastUpdates,/);
@@ -103,7 +103,7 @@ test('a failed update check keeps the last answer rather than erasing it', async
   // network failure would report "cannot tell" to a fleet that could tell five
   // minutes ago — worse than being slightly stale.
   const { readFileSync } = await import('node:fs');
-  const bin = readFileSync(new URL('../bin/agent-fleet-sidecar', import.meta.url), 'utf8');
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   const refresh = bin.slice(bin.indexOf('function refreshUpdates'), bin.indexOf('setTimeout(refreshUpdates'));
   assert.match(refresh, /catch/);
   assert.equal(/lastUpdates = null/.test(refresh), false, 'a failed check erases the previous answer');

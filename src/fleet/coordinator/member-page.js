@@ -376,7 +376,7 @@ ${signIn.apple ? '<script src="https://appleid.cdn-apple.com/appleauth/static/js
       <div class="step">
         ${signIn.google ? '<div id="g"></div>' : ''}
         ${signIn.apple ? '<div id="appleid-signin" data-color="black" data-border="true" data-type="sign in" style="height:44px"></div>' : ''}
-        ${configured ? '' : '<p class="say bad">This fleet has no sign-in configured, so there is nothing here to sign in with. Whoever runs it sets AGENT_FLEET_AUTH_ISSUERS and AGENT_FLEET_AUTH_AUDIENCES.</p>'}
+        ${configured ? '' : '<p class="say bad">This fleet has no sign-in configured, so there is nothing here to sign in with. Whoever runs it sets FLEETWRIGHT_AUTH_ISSUERS and FLEETWRIGHT_AUTH_AUDIENCES.</p>'}
       </div>
       <p class="say" id="out-say" role="status"></p>
     </div>
