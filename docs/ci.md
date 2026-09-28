@@ -22,6 +22,9 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `codeql.yml` | every push and PR, plus weekly | none |
 | `sandbox.yml` | pushes touching `sandbox/` | none — `GITHUB_TOKEN` with `packages: write`, publishing the session image to GHCR |
 | `host-release.yml` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
+| `host-release.yml` — `deb` | every run the host package builds | none — builds amd64 and arm64 debs twice and compares, installs and purges one on `debian:bookworm` |
+| `host-release.yml` — `attach-deb` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the debs |
+| `apt-repo.yml` | a release's build finishing, or manual | `APT_SIGNING_KEY` — skips with a notice without it. See [apt](#apt--a-signed-repository-on-pages) |
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
 | `renovate-config.yml` | PRs touching `renovate.json` | none |
@@ -823,6 +826,64 @@ attached to; `--no-build-cache`, because a restored cache entry makes
 nothing. Both mistakes produce a **green run with an empty database**, which is
 worse than a red one.
 
+## apt — a signed repository on Pages
+
+`apt-repo.yml` publishes the stable releases whose rollout is complete to
+`https://<owner>.github.io/<repo>/apt`, signed. `docs/packaging.md`, "Stable
+releases through apt", says why only those. Without the key it skips with a
+notice, like every other secret-dependent job here.
+
+**It is its own workflow, and not a job in `host-release.yml`**, for two
+reasons. The `github-pages` environment deploys from the default branch, and a
+job inside a release run is on the tag's ref, so the environment would refuse
+it on the one event it exists for; `workflow_run` runs in main's context. And
+`host-release.yml` needs no secrets, which this table promises.
+
+**It keeps no state.** Every run lists the newest published, non-prerelease
+releases, reads each one's attached `manifest.json`, and takes the debs of the
+three newest whose `rollout` is 1. Widening a rollout to 100% therefore needs a
+run *after* the manifest says so: re-run that release's Host release build,
+which re-attaches the manifest and then triggers this, or run this workflow by
+hand. Running it again is always safe.
+
+### Once, by hand
+
+1. **Pages**: Settings → Pages → Source: **GitHub Actions**. Nothing else on
+   the site is replaced by this, because there is nothing else on it; if Pages
+   is ever used for something more, this workflow has to build that too,
+   because a Pages deploy replaces the whole site.
+2. **The key.** Ed25519, signing only, no passphrase, because CI cannot type
+   one. Made on a machine you trust, and the secret half goes straight into the
+   repository secret and nowhere else:
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"
+   gpg --batch --passphrase '' --quick-gen-key "Fleetwright apt <you@example.com>" ed25519 sign never
+   gpg --list-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}'   # the fingerprint: publish it
+   gpg --armor --export-secret-keys > apt-signing-key.asc
+   ```
+
+   Paste `apt-signing-key.asc` as the secret **`APT_SIGNING_KEY`**, then
+   `rm -rf "$GNUPGHOME" apt-signing-key.asc`. Keep a copy offline if you want
+   to be able to re-sign after the secret is lost: a new key means every box
+   has to fetch the new public half by hand, which is the one thing apt
+   cannot tell them about.
+3. **Run it**: Actions → apt repository → Run workflow. It fails loudly if no
+   stable release has debs attached yet. The first release after this change
+   is the first one that will have them.
+
+**Publish the fingerprint** somewhere that is not the Pages site, such as the
+README or the release notes. The key a box first fetches comes from the same
+host as the packages, and the fingerprint is how somebody checks it.
+
+**No expiry, on purpose.** apt checks a signature against the copy of the key
+in each box's own keyring, and that copy carries the expiry it was fetched
+with. So extending a key later does not reach a single box: every one of them
+would stop updating on the old date until somebody fetched the key again by
+hand, which is the exact failure a remote fleet cannot recover from on its
+own. A key that leaks is revoked and replaced, which needs every box touched
+either way.
+
 ## Permissions
 
 Every workflow declares a top-level `permissions:` block, and `ci.yml` fails the
@@ -837,6 +898,8 @@ The floor is `contents: read`. The jobs that raise their own:
 | `android.yml` — `release` | `contents: write` | `gh release upload` attaches the APK to the release |
 | `codeql.yml` — all three | `security-events: write` | uploading results is the point of the workflow |
 | `host-release.yml` — attach | `contents: write` | uploads the host tarball and manifest to the release |
+| `host-release.yml` — attach-deb | `contents: write` | uploads the debs to the release |
+| `apt-repo.yml` — publish | `pages: write`, `id-token: write` | deploys the apt repository to GitHub Pages |
 | `sandbox.yml` | `packages: write` | pushes the session image to GHCR |
 
 ## What to set up first
@@ -848,6 +911,7 @@ The floor is `contents: read`. The jobs that raise their own:
    the phone has something to talk to.
 3. **Firebase**, when you want notifications to actually arrive.
 4. **Apple and Android signing**, when you want TestFlight and a signed APK.
+5. **The apt signing key**, when you want `apt install fleetwright` to work.
 
 ## iOS signing: nothing is minted at build time
 

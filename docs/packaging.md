@@ -331,6 +331,124 @@ manifest by hand is still refused, because the manifest says `prerelease: true`
 and `decideRelease` checks the channel. Two independent mistakes have to line
 up for a stable box to take an unreleased build.
 
+## Stable releases through apt
+
+A box can also be installed with `apt install fleetwright`, and then apt is
+the only thing that updates it. The repository is on GitHub Pages and carries
+**stable releases whose rollout is complete, and nothing else**.
+
+```sh
+curl -fsSL https://thetechnetwork.github.io/Fleetwright/apt/fleetwright.gpg \
+  | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://thetechnetwork.github.io/Fleetwright/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/fleetwright.list
+sudo apt update && sudo apt install fleetwright
+```
+
+**Signed, never `[trusted=yes]`.** That option switches off the one check apt
+has, and makes whoever serves the URL root on every box that trusts it: less
+than the manifest, which at least verifies a digest. The key is fetched from
+the same host the first time, which is trust on first use; every update after
+that is checked against it. `tools/build-apt-repo.sh` has no unsigned mode.
+
+### The deb is a courier, not the layout
+
+dpkg owns `/usr/lib/fleetwright` and nothing else: the release tarball, its
+manifest, and the Node that runs it. The postinst checks the tarball against
+the manifest's sha256 (the digest the pipeline built twice to prove), unpacks
+it somewhere temporary, and hands over to the `install.sh` inside, which is the
+same handover `bootstrap.sh` makes. So an apt box has the layout every other
+packaged box has: `releases/<version>`, `current`, run-before-swap, and the
+previous release kept for rollback. dpkg unpacking into `/opt` itself would
+have written over the tree a running process reads, which is the thing the
+symlink exists to prevent.
+
+The postinst prunes `releases/`, keeping the live release and the one it
+replaced, because on a manifest box `/update` does that and here nothing else
+would.
+
+### One updater
+
+A box installed from the package gets `AGENT_HUB_RELEASE_SOURCE=apt` in
+`/etc/agent-hub.env`, and every question about releases goes to apt from then
+on (`src/core/apt-release.js`, through `checkRelease`). The manifest is never
+fetched. Asking it as well would report versions apt has not been given yet,
+offer a button that installs past apt, and leave the next `apt upgrade` to move
+`current` back. Two updaters take turns.
+
+So on such a box:
+
+- **`/update`** reports apt's candidate, and offers `/upgrade` (the system
+  updates, which install the package) only when the box has that grant.
+- **`/channel`** is `stable` and pinned. There is no rolling address in apt;
+  a box that wants main builds uses the one-liner.
+- **The one-liner refuses**, and names the apt commands for each thing it
+  would have done.
+- **Removing the package** and re-running the installer clears the source line,
+  but only when dpkg agrees the package is gone, so running the installer by
+  hand on an apt box cannot quietly hand it a second updater.
+
+Staged rollouts still happen: they happen **before** apt. A release published
+at 25% reaches the boxes on the manifest first, and `apt-repo.yml` adds it to
+apt only once its manifest says `rollout: 1`. apt's own phased updates are an
+Ubuntu mechanism and are not used.
+
+### Joining a fleet under apt
+
+debconf asks what the one-liner's URL and pin prompt ask, on a first install
+and on `dpkg-reconfigure fleetwright`, and never on an upgrade:
+
+| question | priority | |
+|---|---|---|
+| `fleetwright/coordinator-url` | high | blank installs without joining |
+| `fleetwright/pin` | high | spent once, then **cleared from debconf's database** |
+| `fleetwright/user` | low | who the sessions run as; blank is the installer's own rule |
+
+Preseed them for Ansible or cloud-init:
+
+```sh
+echo 'fleetwright fleetwright/coordinator-url string https://fleet.example.com' | sudo debconf-set-selections
+echo 'fleetwright fleetwright/pin password 123456' | sudo debconf-set-selections
+```
+
+With a URL, the installer runs its wizard with those answers and every other
+question at its default: the same as pressing enter through the one-liner.
+That means sandboxing on when podman is there, system updates from chat
+allowed (apt needs that grant to update the box from the app), reboot from
+chat refused, and the services started. The Claude login is skipped, because
+it needs somebody to paste a code; connect an account from the app. A
+**loopback** URL is read as "run the coordinator here", as it is everywhere
+else.
+
+Without a URL the release is laid out and left stopped, and the output says
+`sudo dpkg-reconfigure fleetwright`.
+
+**No apt-get inside the postinst.** dpkg holds the lock for the whole of it, and
+the installer's habit of installing what is missing would wait on that lock
+forever. What it would reach for is in `Depends` (tmux, curl, sudo) or
+`Recommends` (podman, uidmap), and `AGENT_HUB_NO_INSTALL_DEPS=1` tells it so.
+
+### Node comes with it
+
+Debian's nodejs is older than `package.json`'s floor, so the package carries
+Node's own build: `bin/node` and its licence, about 29 MB of the deb.
+`tools/build-host-deb.mjs` checks it against the `SHASUMS256.txt` nodejs.org
+publishes beside it. The version is `install/deb/node.env`, which Renovate
+moves with `versioning=node`: LTS lines only, and a Node security release skips
+the three-day soak like every other advisory.
+
+It lives in `/usr/lib/fleetwright/node`, off `PATH`, so it neither shadows nor
+is shadowed by a distro nodejs. The units name it outright, and the CLIs in
+`/usr/local/bin` are two-line wrappers that name it too, written whenever the
+node on `PATH` is missing or below the floor.
+
+### Remove and purge
+
+`apt remove` stops and disables the services (the node they name is about to
+go) and keeps `/etc` and the box's identity, as removing any Debian package
+keeps its conffiles. `apt purge` runs the release's own `uninstall.sh --purge`:
+units, sudoers rules, the host key, and every release under `/opt/fleetwright`.
+
 ## What this does not solve
 
 **The sandbox image is a second artifact** and stays one. It is versioned by

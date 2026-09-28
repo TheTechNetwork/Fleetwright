@@ -77,6 +77,24 @@ node path, so nothing needs to be on `PATH` and no shell profile is touched.
 The cost is that nothing patches it afterwards: re-run that line to move to a
 newer Node.
 
+**Or through apt**, on Debian or Ubuntu, amd64 or arm64. It is the same release
+with Node inside it, so there is no prerequisite line, and it takes stable
+releases only, each one once its staged rollout is complete. apt is then what
+updates the box:
+
+```sh
+curl -fsSL https://thetechnetwork.github.io/Fleetwright/apt/fleetwright.gpg \
+  | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://thetechnetwork.github.io/Fleetwright/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/fleetwright.list
+sudo apt update && sudo apt install fleetwright
+```
+
+It asks for the coordinator URL and the pin; `sudo dpkg-reconfigure fleetwright`
+asks again later. Unattended, preseed both. [`docs/packaging.md`](./docs/packaging.md),
+"Stable releases through apt", has the details, and why this is signed and not
+`[trusted=yes]`.
+
 **Curling a coordinator is how you join it.** That URL is a fleet's address, and
 `/install` serves a script that carries it through — so the installer never asks
 which fleet, because you already said. It installs what is missing, asks for the
