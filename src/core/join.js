@@ -40,15 +40,25 @@ export function coordinatorUrl(input) {
   if (!raw) return { ok: false, message: 'Which fleet? Give the coordinator\'s address: fleetwright join fleet.example.com' };
   let withScheme = raw;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
-    const host = raw.split(/[/:]/)[0].replace(/^\[|\]$/g, '');
-    const loopback = host === 'localhost' || /^127\./.test(host) || host === '::1' || raw.startsWith('[::1]');
-    withScheme = `${loopback ? 'http' : 'https'}://${raw}`;
+    // A bare IPv6 literal has colons where a port would be; bracket it the way
+    // a URL needs, so `::1` and `2001:db8::1` are addresses, not a syntax error.
+    let bare = raw;
+    if (!bare.startsWith('[') && (bare.match(/:/g) || []).length >= 2 && !/[/]/.test(bare)) bare = `[${bare}]`;
+    const host = bare.startsWith('[') ? bare.slice(1, bare.indexOf(']')) : bare.split(/[/:]/)[0];
+    const loopback = host === 'localhost' || /^127\./.test(host) || host === '::1';
+    withScheme = `${loopback ? 'http' : 'https'}://${bare}`;
   }
   let u;
   try {
     u = new URL(withScheme);
   } catch {
     return { ok: false, message: `"${raw}" is not an address a box can dial.` };
+  }
+  // A password in the address would be dropped by `origin` below, silently,
+  // after the person typed it. There is no credential to give a coordinator
+  // here — the pin is the credential — so say so instead.
+  if (u.username || u.password) {
+    return { ok: false, message: 'A coordinator address carries no user or password; the pin is what joins a box.' };
   }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') {
     return { ok: false, message: `A coordinator is reached over https (or http), not ${u.protocol.replace(/:$/, '')}.` };

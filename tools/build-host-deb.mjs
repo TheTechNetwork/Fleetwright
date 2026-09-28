@@ -55,8 +55,17 @@ export function pinnedNodeVersion(text = readFileSync(path.join(DEB_SRC, 'node.e
  * revision to dpkg and a prerelease to semver, so it becomes `~`, which sorts
  * BEFORE the release — `0.3.0~rc1` < `0.3.0`, the order semver means. Only
  * stable releases are published through apt, so this is a guard, not a feature.
+ *
+ * A BUILD OF MAIN IS `main-<run>`, and the deb job builds on every push to
+ * main — that is what makes the pipeline one that has run before the day it
+ * matters. `0.0.0~main.<run>` starts with a digit and sorts below every real
+ * release, so a rolling deb somebody installs by hand is upgraded by the first
+ * stable one. It is never in the apt repository: apt-repo.yml takes only
+ * published, non-prerelease releases.
  */
 export function debVersion(version) {
+  const rolling = /^main-(\d+)$/.exec(String(version));
+  if (rolling) return `0.0.0~main.${rolling[1]}`;
   const v = String(version).replace(/^v/, '').replace(/-/g, '~').replace(/[^0-9A-Za-z.+~]/g, '.');
   if (!/^[0-9]/.test(v)) throw new Error(`"${version}" cannot be a Debian version — it has to start with a digit`);
   return v;

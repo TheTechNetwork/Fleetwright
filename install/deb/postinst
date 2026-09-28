@@ -45,9 +45,11 @@ MANIFEST="$LIB/release/manifest.json"
 TARBALL="$(find "$LIB/release" -maxdepth 1 -name '*.tar.gz' | head -1)"
 [ -n "$TARBALL" ] || { echo "fleetwright: no release in $LIB/release" >&2; exit 1; }
 
-# THE DIGEST, CHECKED AGAIN. dpkg has already compared its own md5sums, but the
-# sha256 in the manifest is the one the release pipeline published and built
-# twice to prove — the same number bootstrap.sh and /update check.
+# THE DIGEST, CHECKED. Both files came out of one deb, so this is a sanity
+# check on the package, not a trust boundary — the trust is apt's signature
+# check on the repository. The sha256 is still the one the release pipeline
+# published and built twice to prove, the same number bootstrap.sh and /update
+# check, so a deb assembled from mismatched parts is refused here.
 want="$(sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$MANIFEST" | head -1)"
 have="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
 if [ -z "$want" ] || [ "$want" != "$have" ]; then
@@ -110,8 +112,11 @@ fi
 if [ -d "$BASE/releases" ]; then
   LIVE="$(readlink -f "$BASE/current" 2>/dev/null || true)"
   KEEP="$(readlink -f "$BEFORE" 2>/dev/null || true)"
+  # `*` skips dotfiles, and that is load-bearing: `.incoming-<version>` is a
+  # release the manifest updater is unpacking right now.
   for r in "$BASE"/releases/*; do
     [ -d "$r" ] || continue
+    case "$(basename "$r")" in .*) continue ;; esac
     rr="$(readlink -f "$r")"
     [ "$rr" = "$LIVE" ] || [ "$rr" = "$KEEP" ] || rm -rf "$r"
   done
