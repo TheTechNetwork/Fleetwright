@@ -77,7 +77,10 @@ node path, so nothing needs to be on `PATH` and no shell profile is touched.
 The cost is that nothing patches it afterwards: re-run that line to move to a
 newer Node.
 
-**Or through apt**, on Debian or Ubuntu, amd64 or arm64. It is the same release
+**Or through apt**, on Debian or Ubuntu, amd64 or arm64. With a coordinator
+already deployed, that is the whole setup: install, then
+`sudo fleetwright join fleet.example.com` (a bare name means `https://`; `fw` is
+the same command, shorter). It is the same release
 with Node inside it, so there is no prerequisite line, and it takes stable
 releases only, each one once its staged rollout is complete. apt is then what
 updates the box:
@@ -90,8 +93,9 @@ echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://thetechnetwork
 sudo apt update && sudo apt install fleetwright
 ```
 
-It asks for the coordinator URL and the pin; `sudo dpkg-reconfigure fleetwright`
-asks again later. Unattended, preseed both. [`docs/packaging.md`](./docs/packaging.md),
+apt asks for the coordinator and the pin during the install; leave them blank
+and `sudo fleetwright join fleet.example.com` does it later, asking for the pin
+from the app (or `--pin 123456`). Unattended, preseed both. [`docs/packaging.md`](./docs/packaging.md),
 "Stable releases through apt", has the details, and why this is signed and not
 `[trusted=yes]`.
 

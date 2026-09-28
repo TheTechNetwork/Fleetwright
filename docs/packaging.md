@@ -395,7 +395,15 @@ Ubuntu mechanism and are not used.
 
 ### Joining a fleet under apt
 
-debconf asks what the one-liner's URL and pin prompt ask, on a first install
+**`sudo fleetwright join fleet.example.com`** is the way a person does it, on
+any packaged box, apt or not. It checks the address answers `/healthz` as a
+coordinator before anything is written, then hands over to the installer's
+wizard with the fleet already named, which asks for the pin (or takes
+`--pin`). A bare name means `https://`, because a Worker answers on nothing
+else; `localhost` and `127.x` mean `http://`, because the local coordinator has
+no certificate; a scheme somebody typed is kept. `src/core/join.js`.
+
+debconf asks the same two things during the install itself, on a first install
 and on `dpkg-reconfigure fleetwright`, and never on an upgrade:
 
 | question | priority | |
@@ -421,7 +429,7 @@ it needs somebody to paste a code; connect an account from the app. A
 else.
 
 Without a URL the release is laid out and left stopped, and the output says
-`sudo dpkg-reconfigure fleetwright`.
+`sudo fleetwright join fleet.example.com`.
 
 **No apt-get inside the postinst.** dpkg holds the lock for the whole of it, and
 the installer's habit of installing what is missing would wait on that lock

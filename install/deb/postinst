@@ -99,7 +99,7 @@ elif [ -f /etc/systemd/system/agent-hub.service ] && [ -f /var/lib/agent-fleet/h
   bash "$ROOT/install/install.sh" --repair </dev/null
 else
   bash "$ROOT/install/install.sh" --no-wizard </dev/null
-  printf '\n  Installed, not joined to a fleet. To join one:\n      sudo dpkg-reconfigure fleetwright\n\n'
+  printf '\n  Installed, not joined to a fleet. To join one:\n      sudo fleetwright join fleet.example.com\n\n'
 fi
 
 # KEEP THE ONE BEFORE, TIDY THE REST. /update prunes on a manifest box

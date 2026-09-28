@@ -169,7 +169,7 @@ if [ -f /usr/local/sbin/fleetwright-reclaim ]; then
 fi
 
 say "Removing the CLIs"
-for c in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+for c in agent-hub agent-fleet-sidecar agent-fleet-coordinator fleetwright fw; do
   [ -L "/usr/local/bin/$c" ] || [ -f "/usr/local/bin/$c" ] && { rm -f "/usr/local/bin/$c"; ok "/usr/local/bin/$c"; }
 done
 

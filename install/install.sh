@@ -2079,15 +2079,22 @@ if [ -z "$PATH_NODE" ]; then
 elif ! PATH_NODE_MAJOR="$(node_major "$PATH_NODE")" || [ "$PATH_NODE_MAJOR" -lt "$NODE_FLOOR" ]; then
   CLI_NEEDS_WRAPPER=1
 fi
-for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
+# NAME:FILE, because `fw` is not a file of its own: it is `fleetwright`,
+# shorter, and a second copy of the entry point would be a second thing to
+# keep in step. `fleetwright` is the name a person is told; the agent-* names
+# stay for every box, runbook and muscle memory that already uses them.
+for pair in agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar \
+            agent-fleet-coordinator:agent-fleet-coordinator \
+            fleetwright:fleetwright fw:fleetwright; do
+  link="${pair%%:*}"; cli="${pair#*:}"
   [ -f "$DIR/bin/$cli" ] || continue
   if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
-    rm -f "$BIN_DIR/$cli"
+    rm -f "$BIN_DIR/$link"
     printf '#!/bin/sh\n# Written by install.sh: the node on PATH is missing or older than this needs.\nexec %s %s "$@"\n' \
-      "'$UNIT_NODE_BIN'" "'$DIR/bin/$cli'" > "$BIN_DIR/$cli"
-    chmod 0755 "$BIN_DIR/$cli"
+      "'$UNIT_NODE_BIN'" "'$DIR/bin/$cli'" > "$BIN_DIR/$link"
+    chmod 0755 "$BIN_DIR/$link"
   else
-    ln -sf "$DIR/bin/$cli" "$BIN_DIR/$cli"
+    ln -sf "$DIR/bin/$cli" "$BIN_DIR/$link"
   fi
   # Belt-and-braces: git already records the executable bit, so this only
   # matters for a checkout that lost it. Never fatal — the repo may legitimately
@@ -2095,7 +2102,7 @@ for cli in agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   # the part that matters.
   [ -x "$DIR/bin/$cli" ] || chmod +x "$DIR/bin/$cli" 2>/dev/null || \
     warn "$DIR/bin/$cli is not executable and could not be made so — check the checkout"
-  ok "$BIN_DIR/$cli -> $DIR/bin/$cli"
+  ok "$BIN_DIR/$link -> $DIR/bin/$cli"
 done
 if [ -n "${LINK_DIR_SAVED:-}" ]; then DIR="$LINK_DIR_SAVED"; unset LINK_DIR_SAVED; fi
 

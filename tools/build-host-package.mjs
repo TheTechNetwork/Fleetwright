@@ -60,6 +60,8 @@ const ENTRIES = [
   ['bin/agent-hub', 'lib/agent-hub.mjs'],
   ['bin/agent-fleet-sidecar', 'lib/agent-fleet-sidecar.mjs'],
   ['bin/agent-fleet-mcp', 'lib/agent-fleet-mcp.mjs'],
+  // The front door: `join`, and everything else handed to agent-hub.
+  ['bin/fleetwright', 'lib/fleetwright.mjs'],
 ];
 
 rmSync(OUT, { recursive: true, force: true });
