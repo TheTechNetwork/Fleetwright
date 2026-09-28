@@ -3,8 +3,11 @@
 Written after the question "are we doing this backwards, and would some of it
 be better done with dependencies". The answer to the first is *mostly no, and
 the part that is backwards is not the part it looks like*; the answer to the
-second is *yes, in four specific places, and no in three others*. This note
-says which, with the evidence, and ends with an order to do it in.
+second is *yes, in two places, one option held open, and no in the rest*, and
+the reason the list is shorter than a first reading suggests is a decision
+recorded partway down: **the coordinator runs on Cloudflare, or in a container
+of the same Worker, and nowhere else.** This note says which, with the
+evidence, and ends with an order to do it in.
 
 It is an assessment before a rework, in the same spirit as
 [`identity.md`](./identity.md) and [`trust.md`](./trust.md): a decision written
@@ -35,7 +38,7 @@ edge that relays but never reads. Nothing below argues with it.
 
 | piece | lines | what a library would normally do here |
 |---|---|---|
-| two route tables, `server.js` + `fleet-do.js` (+ `worker.js` front door) | ~1500 + ~1250 + ~600 | one router that runs on both runtimes |
+| two route tables, `server.js` + `fleet-do.js` (+ `worker.js` front door) | ~1500 + ~1250 + ~600 | nothing: the answer is one coordinator, not a shared router (see the decision below) |
 | MCP OAuth 2.1 authorization server: `mcp/oauth.js`, `mcp/routes.js`, `authorize-page.js` | ~760 | RFC 7591 / 8414 / 9728 / 7636 |
 | outbound OAuth client for GitHub and Cloudflare: `coordinator/oauth.js`, `host/pkce.js` | ~500 | RFC 6749 + PKCE + token-response validation |
 | ID-token verification: `oidc.js` | ~340 | already `jose`; discovery still by hand |
@@ -98,11 +101,58 @@ its auth gate twice, its body parsing twice, its error shape twice, and the
 tests are what keep them from drifting.
 
 This is not what "transport swap" was meant to mean. `core.js` is shared; the
-HTTP layer around it is duplicated. The fix is a router that is itself the
-same code on Node and on Workers, so the route table is written once and the
-two entry points become a `node:http` listener and a `fetch` handler around
-it. That is what Hono is for (§ below), and it is the one dependency here that
-deletes more code than it adds.
+HTTP layer around it is duplicated. The first draft of this note reached for a
+router that runs identically on Node and Workers so the table would be written
+once. The decision below makes that unnecessary: there is going to be one
+coordinator, so there is going to be one table.
+
+## Decision: the coordinator runs on Cloudflare, or in a container of the same thing
+
+**The Node coordinator stops being part of the package.** A fleet's coordinator
+is the Worker, deployed to Cloudflare per
+[`coordinator-deploy.md`](./coordinator-deploy.md); the one alternative worth
+allowing is the *same Worker* run under `workerd` in a container, for whoever
+cannot or will not have a Cloudflare account. What is not offered any more is
+"run the coordinator on this box" as a plain Node service.
+
+The repository is already most of the way there and says so in its own
+comments: a release ships no coordinator (`host-release.yml`, and `install.sh`
+retires a leftover local unit on a packaged box), the Worker is what production
+runs, and `server.js` describes itself as the design "running somewhere you can
+put a breakpoint in". What remains is to stop *offering* it, and then to stop
+carrying it.
+
+What goes with it, in order of how much it is used:
+
+| thing | today | after |
+|---|---|---|
+| `bin/agent-fleet-coordinator`, `install/agent-fleet-coordinator.*`, installer step 5c and the "Run the coordinator on this box?" question | offered on every checkout install | removed; the installer asks for a coordinator URL, full stop |
+| `src/fleet/coordinator/server.js` (~1500 lines) | shipped, and the in-process harness for 13 test files | test helper only, then deleted once those tests drive the Worker under workerd the way `live.test.js` and `parity.test.js` already do |
+| `src/fleet/ws.js` server half, `src/fleet/apns-node.js` | Node coordinator only | deleted with it |
+| `src/fleet/ws.js` client half | the sidecar's dial | Node ≥ 22 ships `WebSocket` with a `headers` option; the file goes entirely, with no dependency |
+| `openapi.test.js`, `parity.test.js` | drift detectors between two implementations | conformance tests of one |
+| `docs/coordinator.md` "there are two of it" | the design | history, kept as such |
+
+**The container option needs one proof before it is promised.** `workerd`'s
+own config supports disk-backed Durable Object storage (`durableObjectStorage
+= localDisk`) and is published as a binary, so a `Containerfile` holding
+`workerd` plus the bundled Worker plus a volume is a small thing to write. What
+nobody here has done is run this Worker that way for a week: the DO eviction
+behaviour `worker.js` works around, the KV-shaped rate limiter bindings, and
+Sentry are all Cloudflare-shaped assumptions to check. Until that run exists,
+`coordinator-deploy.md` says Cloudflare, and the container is a row on the
+roadmap rather than a sentence in the install guide.
+
+**What it costs, stated:** a single-box operator now needs a Cloudflare account
+(free tier suffices) or Docker. The deployment story stops having a "Y for a
+single-machine setup" row. That is the trade being made on purpose, because the
+alternative is two implementations of the most security-sensitive component in
+the system held together by tests that exist to catch them disagreeing.
+
+**What it changes in the dependency table below:** the router dependency loses
+its reason and is not taken; the Workers-only OAuth provider library stops
+being disqualified on parity grounds and becomes a real option, with a
+different trade to weigh.
 
 ### The MCP authorization server is the JWT argument again
 
@@ -173,18 +223,23 @@ lands in `package.json`, exact, like `jose`.
 
 | package | version | deps | take? | for |
 |---|---|---|---|---|
-| **hono** | 4.13.10 | 0 | **yes** | one route table for both coordinators. Same code under `node:http` (`@hono/node-server` is optional; a ten-line adapter over `Request`/`Response` does it) and as a Worker `fetch`. MIT. It is also what the MCP SDK itself routes with now, which is a fair sign it is the neutral choice |
 | **oauth4webapi** | 3.8.8 | 0 | **yes** | the outbound OAuth client: authorization URL, PKCE, code exchange, token-response validation, for GitHub and Cloudflare in one shape instead of "two functions wearing a trench coat". Also OIDC **discovery**, which `oidc.js` promises ("provider-agnostic") and does not do: it hard-codes three JWKS URLs and guesses the rest. Same author as `jose`, same WebCrypto-only constraint, same audit already done |
 | **@modelcontextprotocol/sdk** | 1.31.0 | ~15 | **devDependency only** | the conformance oracle. Its *client* speaks RFC 9728 → 8414 → 7591 → PKCE → token against our authorization server in a test, and speaks Streamable HTTP against our transport. That is the test we do not have. Too heavy (express, zod, ajv) to ship in the coordinator, and it does not need to |
-| **@hono/mcp** | 0.3.2 | 1 | **if hono is taken** | the Streamable HTTP transport, including the SSE leg `mcp/http.js` says it has nowhere to put. Tools stay generated from `VERBS`; only the wire changes |
-| **ws** | 8.22.0 | 0 | **later, server half only** | the Node coordinator's accept side. The sidecar's *client* half of `ws.js` is already in Node ≥ 22 as `globalThis.WebSocket` with a `headers` option, so half of the 470 lines can go without any dependency. Low priority: framing is stable and the parity test drives it |
-| @cloudflare/workers-oauth-provider | 1.2.1 | 0 | **no** | the obvious pick for an MCP authorization server on Workers, and it is Workers-only and wants KV. Taking it makes the MCP surface the one place the two coordinators are two implementations, which is the drift the whole parity apparatus exists to prevent |
+| **@cloudflare/workers-oauth-provider** | 1.2.1 | 0 | **option, decide after the oracle runs** | Cloudflare's own OAuth 2.1 server for Workers, written for exactly this MCP case: registration, PKCE, codes, tokens, all in a library that the platform's authors maintain. Once there is one coordinator it is no longer disqualified. What it costs is a KV binding and **a second credential list**: it issues its own opaque tokens, where today an MCP client's access token *is* a `fwk_` device credential revocable from the People screen like any phone. That property is worth keeping. So: run the SDK's client against the hand-rolled server first; if conformance turns up holes that are protocol rather than typo, take this and map its grants onto `clients.js`; if it turns up typos, fix them and keep the ~600 lines |
+| hono | 4.13.10 | 0 | **not now** | the case for it was one route table across two runtimes. With one coordinator the table is already written once, in `fleet-do.js`. Worth revisiting only if the Worker's own routing grows past what an `if` chain reads well as |
+| @hono/mcp | 0.3.2 | 1 | **not now** | goes with hono. The SSE leg `mcp/http.js` lacks is a known gap, and the SDK-as-oracle test is what will say whether it matters to a real client |
+| ws | 8.22.0 | 0 | **no** | the server half of `ws.js` leaves with the Node coordinator, and the client half is `globalThis.WebSocket` in Node ≥ 22. Nothing left to replace |
 | @simplewebauthn/server | 14.0.3 | 8+ | **not yet** | passkeys are `trust.md`'s stated end state for device authentication. CBOR and COSE are exactly "a protocol with a silent failure mode", so when passkeys come this is a take, not a hand-roll. They are not this round |
 
 **And keep owning:** `crypto.js` (one primitive, two calls), the HMAC nonce in
 `hosts.js` (there is no standard for "a stateless challenge for a machine that
 dials out"), `spent-tokens.js`, `clients.js`, `enrollment.js`. A dependency for
 any of those would be carried for a loop and a hash.
+
+The net of it is smaller than the first draft: one new runtime dependency
+(`oauth4webapi`), one dev dependency (the MCP SDK), one option held open, and
+about two thousand lines deleted by retiring a second implementation rather
+than by importing a framework to hold it up.
 
 ## The order
 
@@ -194,14 +249,17 @@ otherwise have to touch twice.
 
 | round | what | deletes | adds |
 |---|---|---|---|
-| **0** | the four retention defects above, and the PKCE compare | | four tests |
-| **1** | **hono**: one route module under `src/fleet/coordinator/routes/`, imported by `server.js` (Node adapter) and `fleet-do.js` (Worker). `openapi.test.js` keeps executing the spec against both, now as a regression test rather than a drift detector | most of the route bodies in two files | one dependency |
+| **0** | the four retention defects above, and the PKCE compare. Both coordinators while both exist | | four tests |
+| **1** | **stop offering the Node coordinator**: remove the binary, the units, installer step 5c and the "run it here?" question; `deployment.md` and `coordinator.md` say Cloudflare; `server.js` moves under `test/helpers/` as the in-process harness it already is. A `workerd` `Containerfile` is written and *tried*, and lands in the docs only if it survives a week | the shipped second implementation, `ws.js`, `apns-node.js` | nothing |
 | **2** | **oauth4webapi**: `coordinator/oauth.js` becomes configuration for two providers; `host/pkce.js` goes; `oidc.js` gains discovery for any issuer and the `nonce` `identity.md` deferred, once the apps send one | ~500 lines | one dependency |
-| **3** | **MCP conformance**: the SDK as a devDependency, a test that registers, authorizes and exchanges against our authorization server, and one that drives `/mcp` with the real client. `@hono/mcp` for the transport if the SSE leg is wanted | the hand-written form-body parsers, if `@hono/mcp` | dev-only |
+| **3** | **MCP conformance**: the SDK as a devDependency, a test that registers, authorizes and exchanges against our authorization server, and one that drives `/mcp` with the real client. Its verdict decides whether `@cloudflare/workers-oauth-provider` is taken | | dev-only |
 | **4** | **bootstrap ergonomics**: the app mints a pin and shows `curl …/install?pin=123456 \| sh`; the installer spends it unattended; `coordinator-deploy.md` moves the admin token to a break-glass section. Closes #332 | the curl-with-admin-token tutorial | app layers, both phones |
+| **5** | **one implementation**: the 13 test files that drive `server.js` in-process move to the Worker under workerd, and `server.js` is deleted. `openapi.test.js` and `parity.test.js` stay as conformance tests of the one that is left | ~1500 lines | |
 | later | passkeys with `@simplewebauthn/server`; signed intents, once the trust root question in `trust.md` is answered | | |
 
 What this does not change: who may join (the allowlist and the pin), what a
 host proves (its key), what the coordinator may hold (nothing it can spend),
-and the rejection of device flow. Those were the decisions. The rest was
-plumbing, and plumbing is what dependencies are for.
+and the rejection of device flow. Those were the decisions. What changed
+between the first draft of this note and this one is where the coordinator is
+allowed to run, and that one decision removed the largest dependency from the
+list by removing the code it was going to hold up.
