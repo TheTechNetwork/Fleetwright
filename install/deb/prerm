@@ -11,7 +11,7 @@ case "$1" in
       # Disabled as well as stopped: the units stay behind on a remove (purge
       # takes them), and a unit naming a node that is gone would restart-loop
       # on every boot until somebody noticed.
-      systemctl disable --now agent-fleet-sidecar agent-hub agent-fleet-coordinator agent-fleet-confirm.timer >/dev/null 2>&1 || true
+      systemctl disable --now fleetwright-sidecar fleetwright fleetwright-coordinator fleetwright-confirm.timer >/dev/null 2>&1 || true
     fi ;;
 esac
 exit 0

@@ -8,7 +8,7 @@
 // about a box laid out exactly as intended. The check required
 // `basename === 'current'`, which a RUNNING box can never satisfy: INSTALL_ROOT
 // is derived from import.meta.url and node resolves symlinks, so a service
-// started as `<base>/current/lib/agent-hub.mjs` reports its root as
+// started as `<base>/current/lib/fleetwright.mjs` reports its root as
 // `<base>/releases/<version>`.
 //
 // The check was written about the path the units name. The code reads the path
@@ -37,7 +37,7 @@ test('both names for the same directory resolve to the same base', () => {
 test('a checkout is still refused, and says what to do', () => {
   // The refusal has to survive, or a git box would be told to swap a symlink
   // it does not have. It is the message that sends somebody to the installer.
-  const r = releaseLayout('/opt/agent-fleet');
+  const r = releaseLayout('/opt/fleetwright-src');
   assert.equal(r.ok, false);
   assert.match(r.message, /not a release layout/);
   assert.match(r.message, /<base>\/current -> releases\/<version>/);

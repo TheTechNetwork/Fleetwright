@@ -145,7 +145,7 @@ export const PROVIDERS = Object.freeze({
           authorization: `Bearer ${secret}`,
           accept: 'application/vnd.github+json',
           'x-github-api-version': '2022-11-28',
-          'user-agent': 'agent-hub',
+          'user-agent': 'fleetwright',
         },
         signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
       });
@@ -440,7 +440,7 @@ export async function verifyToken(provider, secret) {
 /** @param {unknown} secret */
 export function looksLikeToken(secret) {
   const s = String(secret ?? '');
-  // The leading-dash rule mirrors src/fleet/protocol/intents.js: agent-hub's
+  // The leading-dash rule mirrors src/fleet/protocol/intents.js: fleetwright's
   // parser reads `-word` as a flag, so a token starting with one would be read
   // as an option rather than a value — `--host` most dangerously of all.
   return (
@@ -894,7 +894,7 @@ export class Connections {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileSync(
       envFile,
-      `# Written by agent-hub. One line per credential; sourced into sessions.\n` +
+      `# Written by fleetwright. One line per credential; sourced into sessions.\n` +
         Object.entries(secrets)
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([k, v]) => assignment(k, v))
@@ -961,7 +961,7 @@ export class Connections {
     if (rest.length) {
       writeFileSync(
         envFile,
-        `# Written by agent-hub. One line per credential; sourced into sessions.\n` +
+        `# Written by fleetwright. One line per credential; sourced into sessions.\n` +
           rest.map(([k, v]) => assignment(k, v)).join('\n') +
           '\n',
         { mode: 0o600 },

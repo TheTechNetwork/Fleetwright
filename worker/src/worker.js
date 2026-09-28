@@ -21,6 +21,7 @@ import { sentryOptions } from './sentry.js';
 import { PRIVACY } from './pages.js';
 import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
 import { normaliseOrigin } from '../../src/fleet/coordinator/oauth.js';
+import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 
 // THE DURABLE OBJECT REPORTS TOO, and it is where the interesting failures
 // live: the socket handling, the intent routing, the storage. An unhandled
@@ -134,7 +135,7 @@ function isObjectReset(e) {
 const handler = {
   /**
    * @param {Request} request
-   * @param {{ FLEET: DurableObjectNamespace, AGENT_FLEET_API_TOKEN?: string, AGENT_FLEET_DOCS_URL?: string, AGENT_FLEET_INSTALL_URL?: string, AGENT_FLEET_PUBLIC_ORIGIN?: string, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
+   * @param {{ FLEET: DurableObjectNamespace, FLEETWRIGHT_API_TOKEN?: string, FLEETWRIGHT_DOCS_URL?: string, FLEETWRIGHT_INSTALL_URL?: string, FLEETWRIGHT_PUBLIC_ORIGIN?: string, SIGNIN_RATE_LIMIT?: { limit: (o: {key: string}) => Promise<{success: boolean}> } }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -173,10 +174,10 @@ const handler = {
     // object exactly as they do from a phone.
     if (isMemberPath(url.pathname)) {
       const answer = memberRoutes({ method: request.method, path: url.pathname }, {
-        fleet: env.AGENT_FLEET_NAME || 'this Fleetwright fleet',
+        fleet: env.FLEETWRIGHT_NAME || 'this Fleetwright fleet',
         signIn: signInClients({
-          audiences: String(env.AGENT_FLEET_AUTH_AUDIENCES || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean),
-          appleService: env.AGENT_FLEET_AUTH_APPLE_SERVICE || null,
+          audiences: String(env.FLEETWRIGHT_AUTH_AUDIENCES || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean),
+          appleService: env.FLEETWRIGHT_AUTH_APPLE_SERVICE || null,
         }),
       });
       if (answer) {
@@ -196,15 +197,15 @@ const handler = {
     // on its own Worker (`wrangler.demo.toml`), which has neither.
     //
     // So this route hands out an address and no bytes. It is OFF unless
-    // AGENT_FLEET_DOCS_URL is set, because a self-hosted fleet is somebody's
+    // FLEETWRIGHT_DOCS_URL is set, because a self-hosted fleet is somebody's
     // private coordinator on their own domain and has no product page to point
     // at; ours sets it in wrangler.toml and every fork gets a 404.
     //
     // 302 rather than 301: a permanent redirect is cached by browsers in a way
     // that outlives the deploy that set it, and this value is one line of
     // configuration away from changing.
-    if (url.pathname === '/docs' && env.AGENT_FLEET_DOCS_URL) {
-      return Response.redirect(String(env.AGENT_FLEET_DOCS_URL), 302);
+    if (url.pathname === '/docs' && env.FLEETWRIGHT_DOCS_URL) {
+      return Response.redirect(String(env.FLEETWRIGHT_DOCS_URL), 302);
     }
 
     // The third, and the reason it is a redirect rather than a copy: the thing
@@ -227,11 +228,11 @@ const handler = {
     // from one repository at one ref, which is a property worth having: you
     // cannot end up running one fork's prerequisites and another's installer.
     if (url.pathname === '/prereq' || url.pathname === '/prereq.sh') {
-      const installer = String(env.AGENT_FLEET_INSTALL_URL || '').trim();
+      const installer = String(env.FLEETWRIGHT_INSTALL_URL || '').trim();
       if (!installer) {
         return new Response(
           'This coordinator does not publish an installer, so it has no prerequisites either.\n' +
-            'Set AGENT_FLEET_INSTALL_URL in wrangler.toml.\n',
+            'Set FLEETWRIGHT_INSTALL_URL in wrangler.toml.\n',
           { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
         );
       }
@@ -254,11 +255,11 @@ const handler = {
     // and a fork that has not thought about this should get an error rather
     // than a working command that does the wrong thing.
     if (url.pathname === '/install' || url.pathname === '/install.sh') {
-      const target = String(env.AGENT_FLEET_INSTALL_URL || '').trim();
+      const target = String(env.FLEETWRIGHT_INSTALL_URL || '').trim();
       if (!target) {
         return new Response(
           'This coordinator does not publish an installer.\n\n' +
-            'Set AGENT_FLEET_INSTALL_URL in wrangler.toml to the raw URL of YOUR install/bootstrap.sh —\n' +
+            'Set FLEETWRIGHT_INSTALL_URL in wrangler.toml to the raw URL of YOUR install/bootstrap.sh —\n' +
             'the script installs the releases of the repository it is served from, so pointing it at\n' +
             "somebody else's would install their code on your machines.\n",
           { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } },
@@ -288,14 +289,14 @@ const handler = {
       // coordinator chooses what you run as root" — it could send you
       // anywhere. Serving six lines that fetch the same script is the same
       // authority, spent more usefully.
-      const origin = normaliseOrigin(env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin);
+      const origin = normaliseOrigin(env.FLEETWRIGHT_PUBLIC_ORIGIN || url.origin);
       // A HOST HEADER IS THE CLIENT'S TEXT. Without a configured public origin
       // this is whatever was sent, and it is about to be interpolated into a
       // shell script running as root. normaliseOrigin returns scheme://host:port
       // and nothing else — no path, no userinfo, no query — and the charset
       // check is the second lock on the same door.
       if (!origin || !/^https?:\/\/[A-Za-z0-9.:\-]+$/.test(origin)) {
-        return new Response('This coordinator cannot work out its own address. Set AGENT_FLEET_PUBLIC_ORIGIN.\n', {
+        return new Response('This coordinator cannot work out its own address. Set FLEETWRIGHT_PUBLIC_ORIGIN.\n', {
           status: 500,
           headers: { 'content-type': 'text/plain; charset=utf-8' },
         });
@@ -307,8 +308,8 @@ const handler = {
 # Six lines, so that the address you typed survives into the installer. The
 # installer itself is fetched from the repository, below, and is not held here.
 set -eu
-AGENT_FLEET_COORDINATOR_URL='${origin}'
-export AGENT_FLEET_COORDINATOR_URL
+FLEETWRIGHT_COORDINATOR_URL='${origin}'
+export FLEETWRIGHT_COORDINATOR_URL
 curl -fsSL '${target}' | sh
 `,
         {
@@ -341,7 +342,7 @@ curl -fsSL '${target}' | sh
     // document on a hot path, and the string it replaces is asserted to appear
     // exactly once by test/openapi.test.js.
     if (url.pathname === '/openapi.json') {
-      return new Response(OPENAPI.replace(SPEC_ORIGIN, String(env.AGENT_FLEET_PUBLIC_ORIGIN || url.origin)), {
+      return new Response(OPENAPI.replace(SPEC_ORIGIN, String(env.FLEETWRIGHT_PUBLIC_ORIGIN || url.origin)), {
         headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300' },
       });
     }
@@ -397,7 +398,7 @@ curl -fsSL '${target}' | sh
     // that can mint the first enrolment code, and nothing else.
     // THE QUESTION IS "IS THERE ANY WAY IN", NOT "IS THERE AN ADMIN TOKEN".
     //
-    // This refused to run without AGENT_FLEET_API_TOKEN, on the reasoning that
+    // This refused to run without FLEETWRIGHT_API_TOKEN, on the reasoning that
     // a coordinator with no credentials is remote control of every box for
     // whoever finds the URL. That was true when the admin token was the only
     // credential. It stopped being true when sign-in shipped: phones hold
@@ -415,9 +416,9 @@ curl -fsSL '${target}' | sh
     // instead: an admin token, or an issuer and an audience to verify a sign-in
     // against. Neither means nobody can ever get in, which is worth saying at
     // boot rather than discovering per request.
-    const hasSignIn = Boolean(String(env.AGENT_FLEET_AUTH_ISSUERS || '').trim())
-      && Boolean(String(env.AGENT_FLEET_AUTH_AUDIENCES || '').trim());
-    if (!env.AGENT_FLEET_API_TOKEN && !hasSignIn) {
+    const hasSignIn = Boolean(String(env.FLEETWRIGHT_AUTH_ISSUERS || '').trim())
+      && Boolean(String(env.FLEETWRIGHT_AUTH_AUDIENCES || '').trim());
+    if (!env.FLEETWRIGHT_API_TOKEN && !hasSignIn) {
       return json(
         {
           ok: false,
@@ -425,9 +426,9 @@ curl -fsSL '${target}' | sh
           text:
             'This coordinator has no way for anybody to authenticate.\n\n' +
             'Either configure sign-in, which is what phones use:\n' +
-            '  AGENT_FLEET_AUTH_ISSUERS, AGENT_FLEET_AUTH_AUDIENCES and AGENT_FLEET_AUTH_ALLOW\n\n' +
+            '  FLEETWRIGHT_AUTH_ISSUERS, FLEETWRIGHT_AUTH_AUDIENCES and FLEETWRIGHT_AUTH_ALLOW\n\n' +
             'or set a break-glass admin token:\n' +
-            '  wrangler secret put AGENT_FLEET_API_TOKEN\n\n' +
+            '  wrangler secret put FLEETWRIGHT_API_TOKEN\n\n' +
             'Both is usual. Hosts need neither — they enrol with a pin and authenticate by signature.',
         },
         503,
@@ -436,7 +437,7 @@ curl -fsSL '${target}' | sh
 
     // A host authenticates by SIGNATURE, inside the Durable Object, which is
     // the only thing holding the enrolled keys. There is no shared host token
-    // any more: AGENT_FLEET_HOST_TOKEN was one string that every machine
+    // any more: FLEETWRIGHT_HOST_TOKEN was one string that every machine
     // presented, so it could not distinguish two hosts, could not revoke one,
     // and was replayable by anything that saw a single connection.
     if (
@@ -484,12 +485,12 @@ curl -fsSL '${target}' | sh
     // rather than comparing against '' and letting a blank Authorization
     // header through.
     //
-    // This was `isHost ? env.AGENT_FLEET_HOST_TOKEN : env.AGENT_FLEET_API_TOKEN`
+    // This was `isHost ? env.FLEETWRIGHT_HOST_TOKEN : env.FLEETWRIGHT_API_TOKEN`
     // and the declaration went out with the host token while the reference
     // below stayed. Every authenticated request threw ReferenceError. Bundling
     // does not catch that, and neither does anything else that never executes
     // the file — which was everything, until test/worker-routes.test.js.
-    const expected = env.AGENT_FLEET_API_TOKEN || '';
+    const expected = env.FLEETWRIGHT_API_TOKEN || '';
 
     // NEITHER MAY BE EMPTY, and this is now load-bearing rather than belt.
     //
@@ -563,6 +564,10 @@ const guarded = {
    * @param {any} ctx
    */
   async fetch(request, env, ctx) {
+    // Secrets put before the rename are named AGENT_FLEET_*; the code reads
+    // FLEETWRIGHT_*. CI now syncs the new names, and this covers a
+    // deployment whose secrets have not been re-put. src/fleet/legacy-names.js.
+    env = withCurrentNames(env);
     try {
       return await handler.fetch(request, env, ctx);
     } catch (e) {
@@ -1272,7 +1277,7 @@ const OPENAPI = JSON.stringify({
         ],
         "security": [],
         "summary": "The same check /host/connect makes, without the socket",
-        "description": "So `agent-fleet-sidecar doctor` can tell an operator that the key on disk was never enrolled, or has been revoked, instead of leaving them to read a reconnect loop out of the journal.",
+        "description": "So `fleetwright-sidecar doctor` can tell an operator that the key on disk was never enrolled, or has been revoked, instead of leaving them to read a reconnect loop out of the journal.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2082,7 +2087,7 @@ const OPENAPI = JSON.stringify({
         ],
         "security": [],
         "summary": "Admit a GitHub Actions job as an ephemeral host",
-        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in AGENT_FLEET_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
+        "description": "Reachable without a credential BECAUSE the job\u2019s OIDC token is the credential: verified against GitHub\u2019s keys, bound to the repositories in FLEETWRIGHT_ACTIONS_REPOS, and single-use. Returns a pin the runner spends at /api/enroll/host \u2014 see docs/ephemeral-hosts.md.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2114,7 +2119,7 @@ const OPENAPI = JSON.stringify({
             "description": "the token did not verify, or names a repository this fleet does not admit \u2014 `error.code` is `bad_token`"
           },
           "503": {
-            "description": "AGENT_FLEET_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
+            "description": "FLEETWRIGHT_ACTIONS_REPOS is unset \u2014 this coordinator admits no runners"
           }
         }
       }

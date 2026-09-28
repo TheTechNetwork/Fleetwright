@@ -79,8 +79,8 @@ test('the launch line carries the egress arguments under an allowlist and none w
   /** @param {Partial<any>} patch @returns {any} */
   const cfg = (patch = {}) => ({
     claudeBin: 'claude', remoteControl: true, skipPermissions: true, sandbox: true, podmanBin: 'podman',
-    sandboxImage: 'localhost/agent-session:latest', sandboxMemory: '8g', sandboxCpus: '2', sandboxPidsLimit: '512',
-    sandboxExtraArgs: [], sandboxHookSocket: false, sandboxHookSocketDir: '/run/agent-fleet', sandboxUserns: 'nomap',
+    sandboxImage: 'localhost/fleetwright-session:latest', sandboxMemory: '8g', sandboxCpus: '2', sandboxPidsLimit: '512',
+    sandboxExtraArgs: [], sandboxHookSocket: false, sandboxHookSocketDir: '/run/fleetwright-sidecar', sandboxUserns: 'nomap',
     sandboxEgress: 'open', ...patch,
   });
   assert.ok(!buildCommand(cfg(), { name: 'api' }).includes('--network'));

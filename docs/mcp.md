@@ -1,7 +1,7 @@
 # The fleet as an MCP server
 
 ```
-Claude  ──stdio──▶  agent-fleet-mcp  ──https──▶  coordinator  ──ws──▶  host
+Claude  ──stdio──▶  fleetwright-mcp  ──https──▶  coordinator  ──ws──▶  host
                     (one device credential)
 ```
 
@@ -103,7 +103,7 @@ true by default.
 Allow one explicitly when you mean it:
 
 ```sh
-AGENT_FLEET_MCP_ALLOW=answer
+FLEETWRIGHT_MCP_ALLOW=answer
 ```
 
 Allowing one does not open the rest, and a withheld verb says it was **withheld**
@@ -116,10 +116,10 @@ only "no" tries again differently instead of stopping.
 {
   "mcpServers": {
     "fleetwright": {
-      "command": "agent-fleet-mcp",
+      "command": "fleetwright-mcp",
       "env": {
-        "AGENT_FLEET_COORDINATOR_URL": "https://fleet.example",
-        "AGENT_FLEET_CREDENTIAL": "fwk_…"
+        "FLEETWRIGHT_COORDINATOR_URL": "https://fleet.example",
+        "FLEETWRIGHT_CREDENTIAL": "fwk_…"
       }
     }
   }
@@ -152,7 +152,7 @@ There is no token to paste. The first call gets a 401 carrying
 `WWW-Authenticate`, the client follows it to the discovery documents, registers
 itself, and opens a browser at a page with two buttons on it — **Apple and
 Google, the same sign-in as the app**. Nothing new decides who you are: the same
-issuers, the same audiences, the same two allowlists (`AGENT_FLEET_AUTH_ALLOW`
+issuers, the same audiences, the same two allowlists (`FLEETWRIGHT_AUTH_ALLOW`
 and the invite list), checked by the same function `/api/session` calls.
 
 | route | what it is |
@@ -197,7 +197,7 @@ against.
 - **Where this coordinator sends intents** — never from a request. The Node
   coordinator uses its own listener address; the Worker uses its public URL.
 
-Set `AGENT_FLEET_PUBLIC_ORIGIN` when the coordinator cannot reach itself on the
+Set `FLEETWRIGHT_PUBLIC_ORIGIN` when the coordinator cannot reach itself on the
 address it bound to — TLS terminated elsewhere, a container with a different
 internal address. Everywhere else it needs nothing.
 
@@ -220,16 +220,16 @@ not, until the status reply was being read correctly; see above.
 
 ### Configuring it
 
-`AGENT_FLEET_AUTH_AUDIENCES` already lists the applications this fleet accepts
+`FLEETWRIGHT_AUTH_AUDIENCES` already lists the applications this fleet accepts
 tokens for, and the web sign-in uses entries from it rather than a second
 variable that could disagree:
 
 - **Google** — the entry ending `.apps.googleusercontent.com`, picked out
   automatically. Nothing to set.
-- **Apple** — needs `AGENT_FLEET_AUTH_APPLE_SERVICE`, and it must be a
+- **Apple** — needs `FLEETWRIGHT_AUTH_APPLE_SERVICE`, and it must be a
   **Services ID**, not the iOS bundle ID sitting in the same list. Sign in with
   Apple JS answers `invalid_client` for a bundle ID and explains nothing. The
-  Services ID also has to be added to `AGENT_FLEET_AUTH_AUDIENCES`, or the token
+  Services ID also has to be added to `FLEETWRIGHT_AUTH_AUDIENCES`, or the token
   it mints will not verify here. Until it is set the page shows Google alone —
   an Apple button that cannot work is worse than no Apple button.
 
@@ -342,7 +342,7 @@ function is the source; a profile is a file on the host, listed by
 without one produces an idle REPL and an empty log, which is the silent failure
 v3 was spent removing.)
 
-`AGENT_FLEET_MCP_BUDGET_MINUTES` sets the number, and it is **stated rather than
+`FLEETWRIGHT_MCP_BUDGET_MINUTES` sets the number, and it is **stated rather than
 enforced**. A timer the agent cannot see produces a session that dies mid-answer
 with no explanation; a number it was given produces one that stops on purpose.
 
@@ -380,7 +380,7 @@ agent with no business in it. The watcher stops when the last one ends: a timer
 alive after that is a stdio server that will not exit, which a client reads as a
 hung process.
 
-`AGENT_FLEET_MCP_WATCH_SECONDS=0` turns it off. For a client that shows
+`FLEETWRIGHT_MCP_WATCH_SECONDS=0` turns it off. For a client that shows
 notifications to the **person** rather than the model, a session finishing is a
 line they did not ask for.
 

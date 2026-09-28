@@ -64,7 +64,7 @@ test('a page served before the token gate gives away nothing', () => {
   // name or an internal address would not be.
   const body = get(MEMBER_PATH).body;
   assert.equal(/fwk_/.test(body), false, 'a fleet credential is on the page');
-  assert.equal(/AGENT_FLEET_API_TOKEN|AGENT_FLEET_HOST_TOKEN/.test(body), false, 'a break-glass token is named');
+  assert.equal(/FLEETWRIGHT_API_TOKEN|FLEETWRIGHT_HOST_TOKEN/.test(body), false, 'a break-glass token is named');
   // The two routes it posts to, and no third — both relative, so the page
   // cannot be made to send a credential anywhere but the coordinator that
   // served it.
@@ -160,23 +160,23 @@ test('both coordinators serve it, and serve the same bytes', async () => {
   const worker = (await import('../worker/src/worker.js')).default;
 
   const env = {
-    AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch',
-    AGENT_FLEET_NAME: 'the test fleet',
-    AGENT_FLEET_AUTH_AUDIENCES: '1234-abc.apps.googleusercontent.com',
-    AGENT_FLEET_AUTH_APPLE_SERVICE: 'network.thetech.fleetwright.signin',
+    FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch',
+    FLEETWRIGHT_NAME: 'the test fleet',
+    FLEETWRIGHT_AUTH_AUDIENCES: '1234-abc.apps.googleusercontent.com',
+    FLEETWRIGHT_AUTH_APPLE_SERVICE: 'network.thetech.fleetwright.signin',
     // No FLEET binding: a request that reached the Durable Object would throw,
     // which is the assertion — this page must never need it.
   };
   const before = {
-    name: process.env.AGENT_FLEET_NAME,
-    aud: process.env.AGENT_FLEET_AUTH_AUDIENCES,
-    apple: process.env.AGENT_FLEET_AUTH_APPLE_SERVICE,
+    name: process.env.FLEETWRIGHT_NAME,
+    aud: process.env.FLEETWRIGHT_AUTH_AUDIENCES,
+    apple: process.env.FLEETWRIGHT_AUTH_APPLE_SERVICE,
   };
-  process.env.AGENT_FLEET_NAME = env.AGENT_FLEET_NAME;
-  process.env.AGENT_FLEET_AUTH_AUDIENCES = env.AGENT_FLEET_AUTH_AUDIENCES;
-  process.env.AGENT_FLEET_AUTH_APPLE_SERVICE = env.AGENT_FLEET_AUTH_APPLE_SERVICE;
+  process.env.FLEETWRIGHT_NAME = env.FLEETWRIGHT_NAME;
+  process.env.FLEETWRIGHT_AUTH_AUDIENCES = env.FLEETWRIGHT_AUTH_AUDIENCES;
+  process.env.FLEETWRIGHT_AUTH_APPLE_SERVICE = env.FLEETWRIGHT_AUTH_APPLE_SERVICE;
 
-  const node = new Coordinator({ apiToken: env.AGENT_FLEET_API_TOKEN, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  const node = new Coordinator({ apiToken: env.FLEETWRIGHT_API_TOKEN, logger: { info() {}, warn() {}, error() {}, debug() {} } });
   const port = await node.listen(0, '127.0.0.1');
   try {
     for (const path of [MEMBER_PATH, `${MEMBER_PATH}/manifest.webmanifest`, `${MEMBER_PATH}/icon.svg`, `${MEMBER_PATH}/sw.js`]) {
@@ -199,7 +199,7 @@ test('both coordinators serve it, and serve the same bytes', async () => {
     assert.equal(swWorker.headers.get('service-worker-allowed'), MEMBER_PATH);
   } finally {
     await node.close();
-    for (const [k, v] of Object.entries({ AGENT_FLEET_NAME: before.name, AGENT_FLEET_AUTH_AUDIENCES: before.aud, AGENT_FLEET_AUTH_APPLE_SERVICE: before.apple })) {
+    for (const [k, v] of Object.entries({ FLEETWRIGHT_NAME: before.name, FLEETWRIGHT_AUTH_AUDIENCES: before.aud, FLEETWRIGHT_AUTH_APPLE_SERVICE: before.apple })) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }

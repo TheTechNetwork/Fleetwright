@@ -3,7 +3,7 @@
 //
 // WHAT THIS REPLACES
 //
-// agent-hub's SessionStart hook posts a conversation uuid to the hub's loopback
+// fleetwright's SessionStart hook posts a conversation uuid to the hub's loopback
 // HTTP port, at /internal/session-start. That endpoint is deliberately not
 // token-gated — the hook runs as a child of a claude process on the same box,
 // and making it carry the operator token would mean writing that token into a
@@ -21,12 +21,12 @@
 // Instead the isolation supplies the authentication. Each session gets its own
 // socket on the host:
 //
-//     /run/agent-fleet/<name>.sock
+//     /run/fleetwright-sidecar/<name>.sock
 //
 // and podman mounts exactly that one into exactly that one container, always at
 // the same path inside:
 //
-//     -v /run/agent-fleet/<name>.sock:/run/hub.sock
+//     -v /run/fleetwright-sidecar/<name>.sock:/run/hub.sock
 //
 // So the session name is a property of WHICH SOCKET the request arrived on, not
 // of anything in the request. The container cannot name another session because
@@ -56,8 +56,9 @@ import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { chmodSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { preferExisting } from '../fleet/legacy-paths.js';
 
-/** The one route a session socket answers. Same path agent-hub's HTTP adapter
+/** The one route a session socket answers. Same path fleetwright's HTTP adapter
  * uses, so the hook payload and the hub's handler are unchanged. */
 export const HOOK_PATH = '/internal/session-start';
 
@@ -77,12 +78,12 @@ export const SECRET_PATH = '/internal/secret';
 export const CONTAINER_SOCKET_PATH = '/run/hub.sock';
 
 /** Default host-side directory holding one socket per live session. */
-export const DEFAULT_SOCKET_DIR = '/run/agent-fleet';
+export const DEFAULT_SOCKET_DIR = preferExisting('/run/fleetwright-sidecar', '/run/agent-fleet');
 
-/** A conversation uuid, in the shape agent-hub already validates. */
+/** A conversation uuid, in the shape fleetwright already validates. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f-]{27}$/;
 
-/** Session names, matching agent-hub's charset (core/names.js). A name becomes
+/** Session names, matching fleetwright's charset (core/names.js). A name becomes
  * a filename here, so this is also what keeps `../../etc/passwd` out of it. */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
@@ -392,7 +393,7 @@ export class HookSocketServer {
 /**
  * The container side of the transport.
  *
- * This is what agent-hub's `agent-hub hook` runs instead of its HTTP post when
+ * This is what fleetwright's `fleetwright hook` runs instead of its HTTP post when
  * it finds itself inside a sandbox. It sends NO session name: the socket it is
  * writing to already determines that, and a name in the body would only ever be
  * a claim the host has to decide whether to believe.

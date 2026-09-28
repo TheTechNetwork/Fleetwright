@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
 
 import { log } from '../log.js';
+import { unitName } from '../fleet/legacy-paths.js';
 
 const CHECK_TIMEOUT_MS = 20_000;
 
@@ -58,7 +59,7 @@ function run(argv, timeout = CHECK_TIMEOUT_MS) {
  *
  * `sudo -n systemctl start <unit>` is the whole privilege: the unit is owned
  * by root, its ExecStart carries the apt-get flags, and `start` takes no
- * argument anybody could widen. install/agent-hub-upgrade.service says why
+ * argument anybody could widen. install/fleetwright-upgrade.service says why
  * this shape and not a sudoers line naming apt-get — in one sentence, the
  * hub's own mount namespace, which sudo does not escape and an upgrade
  * cannot live inside.
@@ -67,8 +68,8 @@ function run(argv, timeout = CHECK_TIMEOUT_MS) {
  * to run, tried when the unit start is refused. sudo matches the whole
  * command line, so a refusal is a clean signal and not a mystery.
  */
-export const UPGRADE_UNIT = 'agent-hub-upgrade.service';
-export const APT_UPDATE_UNIT = 'agent-hub-apt-update.service';
+export const UPGRADE_UNIT = 'fleetwright-upgrade.service';
+export const APT_UPDATE_UNIT = 'fleetwright-apt-update.service';
 const SYSTEMCTL = '/usr/bin/systemctl';
 const REFUSED_RE = /not allowed to execute|sorry, user|a password is required/i;
 
@@ -205,7 +206,7 @@ export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours =
 
   lastRefreshAttempt = now();
   // The unit first; the apt-get line only for a box whose grant predates it.
-  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', APT_UPDATE_UNIT], 120_000);
+  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', unitName(APT_UPDATE_UNIT)], 120_000);
   if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
     r = exec(['sudo', '-n', '/usr/bin/apt-get', 'update'], 120_000);
   }
@@ -353,13 +354,13 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
         // visudo rejects the line without them.
         // THE UNITS FIRST: a grant to start a unit that is not installed
         // permits nothing. Both live in install/ and take no arguments.
-        '  sudo install -m 0644 install/agent-hub-upgrade.service install/agent-hub-apt-update.service /etc/systemd/system/\n' +
+        '  sudo install -m 0644 install/fleetwright-upgrade.service install/fleetwright-apt-update.service /etc/systemd/system/\n' +
         '  sudo systemctl daemon-reload\n' +
-        '  sudo tee /etc/sudoers.d/agent-hub-upgrade >/dev/null <<\'EOF\'\n' +
+        '  sudo tee /etc/sudoers.d/fleetwright-upgrade >/dev/null <<\'EOF\'\n' +
         `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}\n` +
         '  EOF\n' +
-        '  sudo chmod 0440 /etc/sudoers.d/agent-hub-upgrade\n\n' +
-        'then set AGENT_HUB_SYSTEM_UPGRADE=1 in /etc/agent-hub.env and restart.\n' +
+        '  sudo chmod 0440 /etc/sudoers.d/fleetwright-upgrade\n\n' +
+        'then set FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env and restart.\n' +
         `Scoped to starting those two units — one runs \`apt-get -y upgrade\` with conffile prompts answered, the other \`apt-get update\` — ` +
         'it cannot install, remove or run anything else.',
     };
@@ -392,7 +393,7 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
   // replace a file somebody edited.
   //
   // TRIED, THEN FALLEN BACK, because sudo matches the WHOLE command line. A box
-  // whose /etc/sudoers.d/agent-hub-upgrade predates this rule permits only the
+  // whose /etc/sudoers.d/fleetwright-upgrade predates this rule permits only the
   // bare form, so the safe one is refused — and refusing to upgrade at all
   // would be worse than upgrading the way it always has. Re-running the
   // installer is what moves a box onto the new rule.
@@ -403,11 +404,11 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
   // /logs). A refusal from sudo means the grant predates the unit — the
   // remedy is `install.sh --repair`, and until then the old line still works.
   const startedAt = Date.now();
-  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', UPGRADE_UNIT], 15 * 60_000);
+  let r = exec(['sudo', '-n', SYSTEMCTL, 'start', unitName(UPGRADE_UNIT)], 15 * 60_000);
   if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
     log.warn(
       "upgrade: this box's sudoers rule predates the upgrade unit. " +
-        'Fix it without a full reinstall: sudo /opt/agent-fleet/install/install.sh --repair',
+        'Fix it without a full reinstall: sudo /opt/fleetwright-src/install/install.sh --repair',
     );
     r = exec(['sudo', '-n', ...APT_SAFE], 15 * 60_000);
     if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
@@ -417,7 +418,7 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
     // What apt said, from the journal: `systemctl start` reports only that
     // the job failed, and the dpkg line is what adviseOnFailure reads.
     const since = `-${Math.ceil((Date.now() - startedAt) / 1000) + 5}s`;
-    const said = exec(['journalctl', '-u', UPGRADE_UNIT, '--since', since, '--no-pager', '-o', 'cat'], 10_000);
+    const said = exec(['journalctl', '-u', unitName(UPGRADE_UNIT), '--since', since, '--no-pager', '-o', 'cat'], 10_000);
     if (said.status === 0 && said.stdout.trim()) r = { ...r, stderr: `${said.stdout.trim()}\n${r.stderr}`.trim() };
   }
   if (r.status !== 0) {
@@ -427,7 +428,7 @@ export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpda
       // cfg IS THREADED THROUGH, so the advice can ask systemd rather than
       // print the command that would. Without it the read-only branch falls
       // back to a plain `systemctl` on PATH, which is right on an ordinary box
-      // and wrong on one that set AGENT_HUB_SYSTEMCTL_BIN — and being wrong
+      // and wrong on one that set FLEETWRIGHT_SYSTEMCTL_BIN — and being wrong
       // there is silent.
       text: `apt-get upgrade failed:\n${detail}\n\n${adviseOnFailure(detail, '/proc/self/mountinfo', cfg)}`,
     };
@@ -560,7 +561,7 @@ export function mountFor(target = '/etc', path = '/proc/self/mountinfo') {
  * @param {string} [unit]
  * @returns {{ ok: boolean, protectSystem: string, readWritePaths: string, dropIns: string, fragment: string, needsReload: string, why: string }}
  */
-export function unitProtection(cfg, unit = 'agent-hub') {
+export function unitProtection(cfg, unit = unitName('fleetwright')) {
   const blank = { ok: false, protectSystem: '', readWritePaths: '', dropIns: '', fragment: '', needsReload: '', why: '' };
   const props = ['ProtectSystem', 'ReadWritePaths', 'DropInPaths', 'FragmentPath', 'NeedDaemonReload'];
   let r;
@@ -608,7 +609,7 @@ function adviseOnProtectedEtc(u) {
   if (!u.ok) {
     return (
       `This service could not ask systemd why (${u.why || 'no reason given'}), so the two possibilities are:\n` +
-      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p DropInPaths -p NeedDaemonReload\n' +
+      '  systemctl show fleetwright -p ProtectSystem -p ReadWritePaths -p DropInPaths -p NeedDaemonReload\n' +
       '    ReadWritePaths empty  → the unit predates the fix; re-running the installer writes it.\n' +
       '    ReadWritePaths=/etc   → a drop-in is overriding it, and DropInPaths names the file.'
     );
@@ -620,7 +621,7 @@ function adviseOnProtectedEtc(u) {
   // is confining them. An empty FragmentPath is how systemd says "no such unit".
   if (!u.fragment) {
     return (
-      'systemd has no unit called agent-hub loaded, so this service was not started by the unit\n' +
+      'systemd has no unit called fleetwright loaded, so this service was not started by the unit\n' +
       'this advice is about — something else made /etc read-only for it. Worth checking what\n' +
       'actually launched it, and whether that carries ProtectSystem= or ReadOnlyPaths=.'
     );
@@ -640,7 +641,7 @@ function adviseOnProtectedEtc(u) {
       `systemd says the unit on disk has changed since this service started (NeedDaemonReload=yes),\n` +
       `so it is still running the OLD one — which is why the file looks correct and /etc is not.\n\n` +
       'On the box:\n' +
-      '  sudo systemctl daemon-reload && sudo systemctl restart agent-hub'
+      '  sudo systemctl daemon-reload && sudo systemctl restart fleetwright'
     );
   }
 
@@ -691,7 +692,7 @@ function adviseOnProtectedEtc(u) {
   return (
     `This unit is current (ProtectSystem=${u.protectSystem || 'unset'}) with no drop-ins, so neither the\n` +
     'unit nor this service is what made /etc read-only. Somewhere else did:\n' +
-    '  systemctl show agent-hub -p ReadOnlyPaths -p InaccessiblePaths -p TemporaryFileSystem\n' +
+    '  systemctl show fleetwright -p ReadOnlyPaths -p InaccessiblePaths -p TemporaryFileSystem\n' +
     '  findmnt -o TARGET,SOURCE,OPTIONS /etc      # a read-only mount over /etc\n' +
     '  dmesg | tail                               # a filesystem remounted read-only after an error\n\n' +
     'That last one is the case that matters: a disk that hit an I/O error goes read-only by itself, ' +
@@ -737,19 +738,19 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg 
   const said = String(detail || '');
 
   if (/password is required|not allowed/i.test(said)) {
-    return 'That is the sudoers rule missing — see /upgrade with AGENT_HUB_SYSTEM_UPGRADE unset for the exact line.';
+    return 'That is the sudoers rule missing — see /upgrade with FLEETWRIGHT_SYSTEM_UPGRADE unset for the exact line.';
   }
   if (/read-only file system/i.test(said)) {
     // ALMOST ALWAYS OURS, AND I GOT THIS WRONG ONCE ALREADY. The first version
     // of this blamed the image and said nothing typed on the box would help —
     // told to somebody whose filesystem was perfectly writable.
     //
-    // agent-hub.service used to set `ProtectSystem=full`, which makes /usr,
+    // fleetwright.service used to set `ProtectSystem=full`, which makes /usr,
     // /boot AND /etc read-only for the service and every child of it. A mount
     // namespace is not something `sudo` escapes, so the sanctioned
     // `sudo -n apt-get` inherited it and dpkg could not write
     // /etc/debian_version. The upgrade now runs in its own oneshot unit
-    // (install/agent-hub-upgrade.service) with no such protection, so a box
+    // (install/fleetwright-upgrade.service) with no such protection, so a box
     // that still shows this is on the old grant and the old unit — a re-run
     // of the installer, not a new image. Naming the unit is what makes that
     // findable; "your filesystem is read-only" sent somebody to look at a
@@ -794,7 +795,7 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg 
         're-running the installer will not change anything.\n\n' +
         'Something else made that one path read-only. Worth looking at, in this order:\n' +
         '  findmnt -o TARGET,SOURCE,OPTIONS /etc      # a separate read-only mount over /etc\n' +
-        '  systemctl show agent-hub -p ReadOnlyPaths -p DropInPaths\n' +
+        '  systemctl show fleetwright -p ReadOnlyPaths -p DropInPaths\n' +
         '  dmesg | tail                               # a filesystem remounted read-only after an error\n\n' +
         'That last one is the case that matters: a disk that hit an I/O error goes read-only by itself, ' +
         'and it will keep failing until it is checked.'
@@ -807,7 +808,7 @@ export function adviseOnFailure(detail, mountInfo = '/proc/self/mountinfo', cfg 
     return (
       'dpkg could not write to /etc. This service could not read its own mounts to say whether that\n' +
       `is ours (${mount.evidence}), so both are still open:\n\n` +
-      '  systemctl show agent-hub -p ProtectSystem -p ReadWritePaths -p DropInPaths\n' +
+      '  systemctl show fleetwright -p ProtectSystem -p ReadWritePaths -p DropInPaths\n' +
       '    ProtectSystem=full with no ReadWritePaths=/etc is ours, and re-running the installer fixes it.\n' +
       '  findmnt -o TARGET,SOURCE,OPTIONS /etc\n' +
       '    a read-only mount there is the box, and re-running the installer will not help.'

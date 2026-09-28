@@ -56,5 +56,5 @@ test('asked through the link, both answers are the link', (t) => {
 test('a checkout has no second answer', () => {
   // Not a release layout: no `current`, nothing to compare, and null rather
   // than 'unknown' so a caller cannot mistake it for a version to draw.
-  assert.equal(currentVersion('/home/somebody/agent-fleet'), null);
+  assert.equal(currentVersion('/home/somebody/fleetwright'), null);
 });

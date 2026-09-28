@@ -1,6 +1,6 @@
 // People an admin has let in, without a deploy.
 //
-// `AGENT_FLEET_AUTH_ALLOW` is an environment variable, so adding somebody to
+// `FLEETWRIGHT_AUTH_ALLOW` is an environment variable, so adding somebody to
 // the fleet meant editing wrangler.toml, committing, and waiting for a deploy —
 // a CODE CHANGE PER PERSON, performed by the one person who can already do
 // everything. For a fleet whose whole premise is "nothing to ssh into", that is

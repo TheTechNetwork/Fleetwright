@@ -1,4 +1,4 @@
-// The only place in agent-hub that shells out to tmux. Everything is argv-array
+// The only place in fleetwright that shells out to tmux. Everything is argv-array
 // spawnSync — no shell string interpolation anywhere, so a session name can
 // never become a command. (Names are validated separately in names.js; this is
 // the second layer.)

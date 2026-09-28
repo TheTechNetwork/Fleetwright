@@ -86,7 +86,7 @@ container                         host
 fleet-secret github-deploy ─▶ /run/hub.sock ─▶ /internal/secret
                                   (this session's socket)     │
                                                               ▼
-                                          AGENT_HUB_SECRETS_DIR/github-deploy
+                                          FLEETWRIGHT_SECRETS_DIR/github-deploy
                                                     read now, if GRANTED
 ```
 

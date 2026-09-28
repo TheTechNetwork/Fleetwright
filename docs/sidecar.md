@@ -1,16 +1,16 @@
 # The host sidecar
 
 What runs on a fleet host. It dials the coordinator, validates every intent that
-arrives against the verb allowlist, and drives **agent-hub** through its loopback
+arrives against the verb allowlist, and drives **fleetwright** through its loopback
 HTTP API.
 
 ```
-coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (agent-hub) ──▶ tmux ──▶ claude
+coordinator ──ws──▶ sidecar ──http──▶ 127.0.0.1:8790 (fleetwright) ──▶ tmux ──▶ claude
                       │
                       └── validates · translates · repairs
 ```
 
-agent-hub carries no fleet code and is not aware of any of this. From its side
+fleetwright carries no fleet code and is not aware of any of this. From its side
 the sidecar is one more HTTP client holding its token — the same interface its
 own CLI uses.
 
@@ -22,15 +22,14 @@ Bringing both into one project removes the original argument for the sidecar —
 no PR has to land for either approach now — but the one that remains is the one
 that matters:
 
-**The session manager is upstream code we intend to contribute back to.** Every
-line of fleet logic added to `src/core/` or `src/adapters/` is a line that has to
-be untangled before any of it can go upstream, and a tree that accumulates them
-becomes a fork by default rather than by decision. The HTTP boundary is what keeps
-[`upstream-agent-hub.md`](./upstream-agent-hub.md)'s diff small enough to
-actually contribute.
+**The session manager is one process and the fleet another.** It began as
+upstream code meant to go back to agent-hub, and that is no longer the plan —
+Fleetwright is a spin-off ([`lineage.md`](./lineage.md)) — but the boundary
+stays: the sidecar restarts without disturbing a session, and a box that is not
+in a fleet runs the session manager alone.
 
 Two smaller things it buys: the sidecar restarts without disturbing sessions
-(agent-hub's own shutdown deliberately leaves tmux alone, and this preserves
+(fleetwright's own shutdown deliberately leaves tmux alone, and this preserves
 that), and a host can run a session manager other than the one in this tree.
 
 The cost is one round trip of latency per action on loopback, which is nothing
@@ -46,21 +45,21 @@ Running out-of-process *sharpens* that rather than softening it, and this is the
 single most important thing to understand about the sidecar:
 
 > `POST /api/command` will run **any** command line it is handed, `/login`
-> included, and the sidecar is the only thing holding agent-hub's token.
+> included, and the sidecar is the only thing holding fleetwright's token.
 
 So the verb allowlist here is not defence in depth — it is the defence. That is
 why `toCommandLine()` assembles the line from literals in its own source plus
 values already charset-checked, and why nothing from the wire is ever
 concatenated into it.
 
-## The three things agent-hub's API imposes
+## The three things fleetwright's API imposes
 
 Each shows up as a deliberate compromise, and each is worth knowing before
 reading the code.
 
 ### 1. `createdBy` used to be unattributable — fixed, and worth keeping the shape of
 
-agent-hub used to hardcode `actor: 'web'` for every HTTP caller, so a session
+fleetwright used to hardcode `actor: 'web'` for every HTTP caller, so a session
 the fleet started was recorded as started by "web", not by the person who
 asked. It accepts a claimed actor now — charset-validated, falling back to
 `web` only when none is claimed (`src/adapters/http.js`) — and the sidecar
@@ -96,22 +95,22 @@ given. The container posts `{uuid, cwd}` to `/run/hub.sock` and can name nothing
 ## What it fixes
 
 The sidecar re-derives Remote Control URLs from the pane itself rather than
-trusting the ones agent-hub recorded.
+trusting the ones fleetwright recorded.
 
-agent-hub's `extractRcUrl` matched the raw `capture-pane` output with no
+fleetwright's `extractRcUrl` matched the raw `capture-pane` output with no
 de-wrapping — unlike its own login flow, which has `dewrapPane` for exactly this
 failure. A pane is a fixed-width grid, and the RC URL is one long token.
 Measured against the verbatim CLI 2.1.233 capture in `design.md` §10, and
 confirmed on a real 70-column tmux pane:
 
-| pane width | agent-hub recorded |
+| pane width | fleetwright recorded |
 |---|---|
 | 80 | correct — which is why this was never noticed |
 | 100 | `https://claude.ai/code/session_016zf` — truncated, well-formed, and dead |
 | 70 | **`null`** — the `https://` prefix straddles the break, so the session is reported online with no URL to reach it by |
 
 **The session manager now carries the fix** (`src/core/pane.js` — see
-[`upstream-agent-hub.md`](./upstream-agent-hub.md)), so all three widths are
+[`lineage.md`](./lineage.md)), so all three widths are
 correct at source. The sidecar's own
 layer stays anyway, for two reasons:
 
@@ -119,7 +118,7 @@ layer stays anyway, for two reasons:
   costs a `peek` it would already be doing.
 - It turns a silent failure into a loud one. With both layers in place
   `reconcileRcUrl()` should report `repaired: false` in normal operation, so a
-  `truncated` or `missing` in the logs now means agent-hub's extraction has
+  `truncated` or `missing` in the logs now means fleetwright's extraction has
   regressed — which is precisely the failure that went unnoticed the first time,
   because nothing was checking.
 
@@ -135,9 +134,9 @@ Any reply carrying sessions gets running ones enriched, and single-session
 replies hoist the URL to the top level, because §7 asks for flat JSON and one
 round trip per action — the consumer is a Shortcut as often as it is an app.
 
-## Validated against a real agent-hub — 2026-08-17
+## Validated against a real fleetwright — 2026-08-17
 
-Not just against the stub. A real `agent-hub serve` on a scratch state dir, real
+Not just against the stub. A real `fleetwright serve` on a scratch state dir, real
 tmux, this box.
 
 | | |
@@ -147,7 +146,7 @@ tmux, this box.
 | `login` intent refused (`unknown_verb`), never reaches the hub | ✅ |
 | A session named `--dangerous` refused (`bad_params`), never reaches the hub | ✅ |
 | An `issuedAt` outside the freshness window refused (`stale`) | ✅ caught a real test invocation using `issuedAt: 0` |
-| Hook socket → `/internal/session-start` → uuid recorded by a stock hub | ✅ `hook: demo → a1b2c3d4-…` in agent-hub's own log |
+| Hook socket → `/internal/session-start` → uuid recorded by a stock hub | ✅ `hook: demo → a1b2c3d4-…` in fleetwright's own log |
 | A container posting a *different* session's name refused 403, never forwarded | ✅ |
 
 The RC-URL repair was confirmed on real `capture-pane` output rather than a
@@ -158,35 +157,35 @@ fixture. A tmux session 70 columns wide showing the §10 banner wraps as:
 //claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M
 ```
 
-agent-hub's unguarded matcher returns `null` on that. The sidecar returns
+fleetwright's unguarded matcher returns `null` on that. The sidecar returns
 `https://claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M` with
 `remoteControl: true`.
 
 ## Running it
 
 ```sh
-export AGENT_FLEET_COORDINATOR_URL=https://coord.example.workers.dev
-export AGENT_FLEET_HUB_URL=http://127.0.0.1:8790
-export AGENT_FLEET_HUB_TOKEN=…            # agent-hub's AGENT_HUB_TOKEN, if it has one
-export AGENT_FLEET_LABELS=gpu,debian13
+export FLEETWRIGHT_COORDINATOR_URL=https://coord.example.workers.dev
+export FLEETWRIGHT_HUB_URL=http://127.0.0.1:8790
+export FLEETWRIGHT_HUB_TOKEN=…            # fleetwright's FLEETWRIGHT_TOKEN, if it has one
+export FLEETWRIGHT_LABELS=gpu,debian13
 
-node bin/agent-fleet-sidecar doctor       # check this box can drive its agent-hub
-node bin/agent-fleet-sidecar              # run
+node bin/fleetwright-sidecar doctor       # check this box can drive its fleetwright
+node bin/fleetwright-sidecar              # run
 ```
 
 Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
 
-- **`AGENT_FLEET_COORDINATOR_URL` is required.** §5: the agent pins the origin
+- **`FLEETWRIGHT_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same
   shape of mistake as accepting command strings, so the sidecar refuses to start
   without one.
-- **`AGENT_FLEET_MAX_SKEW_MS` must stay below the replay cache TTL** (10
+- **`FLEETWRIGHT_MAX_SKEW_MS` must stay below the replay cache TTL** (10
   minutes), and the constructor throws if it does not. Otherwise there is a band
   — older than the cache, younger than the skew limit — where a replayed `start`
   passes the freshness check against a cache that has already forgotten it, and
   runs a second time. That is the exact failure the idempotency key exists to
   prevent, reintroduced by two constants drifting apart.
-- **`AGENT_FLEET_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
+- **`FLEETWRIGHT_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
   session whose pane has not changed at all for that long is stopped and
   resumed. The useful case is one that wedged overnight, where the fix is
   mechanical and nobody was awake to do it.
@@ -251,8 +250,8 @@ Every setting is in `src/fleet/host/config.js`. Three are worth calling out:
 
 ## Transport
 
-Two, selected by `AGENT_FLEET_TRANSPORT`, and swapping them is a constructor
-argument in `bin/agent-fleet-sidecar` and nothing else — §4's "build the host
+Two, selected by `FLEETWRIGHT_TRANSPORT`, and swapping them is a constructor
+argument in `bin/fleetwright-sidecar` and nothing else — §4's "build the host
 agent so transport is one swappable module".
 
 `websocket` is what a deployed host uses: it dials the coordinator and holds the
@@ -263,7 +262,7 @@ the whole path drivable by hand with no coordinator at all:
 
 ```sh
 echo '{"v":3,"kind":"intent","id":"idem-0000001","verb":"health","issuedAt":'$(date +%s000)'}' \
-  | node bin/agent-fleet-sidecar
+  | node bin/fleetwright-sidecar
 ```
 
 Replies go to **stdout**, logs to **stderr**. That split is enforced: an `info`
@@ -272,7 +271,7 @@ line landing on stdout would not be noise, it would be a corrupted message.
 ## Identity
 
 This box has a **keypair**, not a token. The private half lives at
-`/var/lib/agent-fleet/host-key.json` — 0600, in a directory systemd creates
+`/var/lib/fleetwright-sidecar/host-key.json` — 0600, in a directory systemd creates
 0700 for this service — and is generated the first time anything needs it, not
 only by `run`. Connecting means asking the coordinator for a nonce and signing
 it:
@@ -300,9 +299,9 @@ which happens on the order of minutes at worst.
 Joining, once:
 
 ```sh
-agent-fleet-sidecar enrol 123456     # a pin from the app, or /enroll in Telegram
-agent-fleet-sidecar identity         # host id, key fingerprint, coordinator
-agent-fleet-sidecar doctor           # ...and whether the coordinator accepts it
+fleetwright-sidecar enrol 123456     # a pin from the app, or /enroll in Telegram
+fleetwright-sidecar identity         # host id, key fingerprint, coordinator
+fleetwright-sidecar doctor           # ...and whether the coordinator accepts it
 ```
 
 `doctor` asks the coordinator rather than reading the file, because a key that

@@ -367,8 +367,8 @@ produces exactly the same silence as everything being fine.
 claude is not logged in on this host
 New sessions will not be scheduled here. The 2 sessions already on it
 are still listed, and can still be answered.
-Log in on the box: agent-hub's own page on that machine, or
-`agent-fleet login` over SSH.
+Log in on the box: fleetwright's own page on that machine, or
+`fleetwright login` over SSH.
 —
 2 of 4 running · load 0.31 · 9.1 GB free of 16 · up 3d 4h · labels: arm64
 ```
@@ -380,8 +380,8 @@ authored by the console and mapped from `state` in exactly one place:
 | state | consequence | remedy |
 |---|---|---|
 | `healthy` | Accepting new sessions. | — |
-| `degraded` | New sessions will not be scheduled here. Sessions already on it are still listed, and can still be answered. | Depends on `reason`: log in on the box, or restart `agent-hub` on it. |
-| `unknown` | We have not heard from it recently. Everything shown for it may be out of date. | If it stays unknown, check `systemctl status agent-fleet-sidecar` on that box. |
+| `degraded` | New sessions will not be scheduled here. Sessions already on it are still listed, and can still be answered. | Depends on `reason`: log in on the box, or restart `fleetwright` on it. |
+| `unknown` | We have not heard from it recently. Everything shown for it may be out of date. | If it stays unknown, check `systemctl status fleetwright-sidecar` on that box. |
 | `offline` | Its socket is closed. Its sessions are unreachable, not stopped. | It will reappear here on its own when it dials back in. Nothing here needs re-enrolling. |
 
 The last consequence is `design.md` §3's sentence, and it is load-bearing: a

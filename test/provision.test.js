@@ -260,7 +260,7 @@ test('a fleet with no runner repository says so instead of failing at GitHub', a
   });
   assert.equal(r.ok, false);
   assert.equal(r.error?.code, 'not_configured');
-  assert.match(r.text || '', /AGENT_FLEET_RUNNER_REPO/);
+  assert.match(r.text || '', /FLEETWRIGHT_RUNNER_REPO/);
 });
 
 test('the coordinator mints the ticket and overwrites whatever the caller sent', async () => {
@@ -480,7 +480,7 @@ test('the command refuses each missing piece separately', async () => {
 
   assert.match((await run({}, ['sparc'])).text, /Usage/);
   assert.match((await run({}, ['linux', '3'])).text, /between 5 and/);
-  assert.match((await run({}, ['linux'])).text, /AGENT_FLEET_RUNNER_REPO/);
+  assert.match((await run({}, ['linux'])).text, /FLEETWRIGHT_RUNNER_REPO/);
   assert.match((await run({ runnerRepo: 'me/runners' }, ['linux'])).text, /minted by\nthe coordinator|minted by the coordinator/);
   assert.match(
     (await run({ runnerRepo: 'me/runners', ticket: 'fwt_a_b' }, ['linux'])).text,
@@ -705,11 +705,11 @@ test('a job that presents a ticket enrols as that person’s runner, once', asyn
   forgetJwks();
   const { sign, restore } = await actionsIssuer();
   t.after(restore);
-  const repos = process.env.AGENT_FLEET_ACTIONS_REPOS;
-  process.env.AGENT_FLEET_ACTIONS_REPOS = 'me/runners';
+  const repos = process.env.FLEETWRIGHT_ACTIONS_REPOS;
+  process.env.FLEETWRIGHT_ACTIONS_REPOS = 'me/runners';
   t.after(() => {
-    if (repos === undefined) delete process.env.AGENT_FLEET_ACTIONS_REPOS;
-    else process.env.AGENT_FLEET_ACTIONS_REPOS = repos;
+    if (repos === undefined) delete process.env.FLEETWRIGHT_ACTIONS_REPOS;
+    else process.env.FLEETWRIGHT_ACTIONS_REPOS = repos;
   });
 
   const c = new Coordinator({});
@@ -870,7 +870,7 @@ test('the Worker coordinator does the same, and writes the spent ticket down', a
     getWebSockets: () => [],
     setAlarm: () => {},
   });
-  const fleet = new Fleet(state, { AGENT_FLEET_ACTIONS_REPOS: 'me/runners' });
+  const fleet = new Fleet(state, { FLEETWRIGHT_ACTIONS_REPOS: 'me/runners' });
 
   const { token } = await fleet.core.runnerTickets.mint({ owner: 'eli@example.com', platform: 'macos' });
   const key = await generateKeyPair();

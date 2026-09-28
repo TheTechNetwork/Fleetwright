@@ -59,7 +59,7 @@ phase('Index')
 // Tier 1. Mechanical: run the commands, write the file. No judgment is asked
 // for and none should be offered.
 await agent(
-  `Repository /root/work/agent-fleet. Build the shared briefing that every other reviewer in this run will read, so that none of them has to re-derive it.
+  `Repository /root/work/fleetwright. Build the shared briefing that every other reviewer in this run will read, so that none of them has to re-derive it.
 
 Run these and put the output in the file:
   mkdir -p ${SCRATCH}
@@ -117,7 +117,7 @@ const FINDING = {
 
 const FIND_BASE = `Read ${BRIEF} FIRST. It is the shared context — the diff, the file list, the routes, the exports — and it exists so you do not spend your budget rediscovering what every other reviewer is also rediscovering.
 
-Repository /root/work/agent-fleet, compared against ${BASE_REF}.
+Repository /root/work/fleetwright, compared against ${BASE_REF}.
 
 Find what will BREAK or be INSECURE. Not style, not naming, not missing tests unless the gap hides a bug you can name. Every finding must give the file, the line, the exact trigger, and the consequence. If you cannot give all four, do not report it — a claim nobody can act on costs more to refute than it was worth raising.`
 

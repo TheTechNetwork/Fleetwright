@@ -234,7 +234,7 @@ struct FleetView: View {
             .scrollContentBackground(.hidden)
             .background(Design.Palette.bg)
             .refreshable { await refresh() }
-            // The product is called Fleetwright; this said "agent-fleet",
+            // The product is called Fleetwright; this said "fleetwright",
             // which is the repository. A person who installed one app and is
             // looking at another name has to work out whether they are the
             // same thing, and the answer being yes does not make the question
@@ -1310,7 +1310,7 @@ private struct SettingsView: View {
                                         .fleetType(.micro)
                                         .foregroundStyle(Design.Palette.attention)
                                 }
-                                Text("On that box: agent-fleet-sidecar enrol \(pin)")
+                                Text("On that box: fleetwright-sidecar enrol \(pin)")
                                     .fleetType(.microMono)
                                     .foregroundStyle(Design.Palette.inkDim)
                             }

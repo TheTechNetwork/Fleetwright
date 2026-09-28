@@ -1,5 +1,5 @@
 // Logging: line-per-event to stdout/stderr, which is all systemd needs
-// (journalctl -u agent-hub). No dependency, no log file to rotate.
+// (journalctl -u fleetwright). No dependency, no log file to rotate.
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 

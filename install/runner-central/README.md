@@ -75,19 +75,19 @@ a reason not to make it.
 ## 3. Three settings on the coordinator
 
 ```
-AGENT_FLEET_RUNNER_REPO       you/your-runners
-AGENT_FLEET_ACTIONS_REPOS     you/your-runners
-AGENT_FLEET_ACTIONS_WORKFLOW  you/your-runners/.github/workflows/runner-macos.yml@,
+FLEETWRIGHT_RUNNER_REPO       you/your-runners
+FLEETWRIGHT_ACTIONS_REPOS     you/your-runners
+FLEETWRIGHT_ACTIONS_WORKFLOW  you/your-runners/.github/workflows/runner-macos.yml@,
                               you/your-runners/.github/workflows/runner-linux.yml@,
                               you/your-runners/.github/workflows/runner-windows.yml@,
                               you/your-runners/.github/workflows/runner-android.yml@
 ```
 
-- **`AGENT_FLEET_RUNNER_REPO`** is where `provision` dispatches. Hosts learn it
+- **`FLEETWRIGHT_RUNNER_REPO`** is where `provision` dispatches. Hosts learn it
   on the config frame when they connect, so no box is configured.
-- **`AGENT_FLEET_ACTIONS_REPOS`** is which repositories may enrol a host at all.
+- **`FLEETWRIGHT_ACTIONS_REPOS`** is which repositories may enrol a host at all.
   Empty means nobody, deliberately.
-- **`AGENT_FLEET_ACTIONS_WORKFLOW`** pins *which files* in that repository may.
+- **`FLEETWRIGHT_ACTIONS_WORKFLOW`** pins *which files* in that repository may.
   Without it, any workflow there can admit a machine — including one a pull
   request adds. With one entry only that file can, which is why this is a list:
   four operating systems, four files.

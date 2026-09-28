@@ -60,7 +60,7 @@ if (file("google-services.json").exists()) {
 // there is no resource to strip and no package to resolve.
 //
 // Reading it here removes the lookup. It is the same value the coordinator
-// verifies as the token's `aud` (AGENT_FLEET_AUTH_AUDIENCES), so the two halves
+// verifies as the token's `aud` (FLEETWRIGHT_AUTH_AUDIENCES), so the two halves
 // of sign-in come from one file.
 val googleWebClientId: String? = run {
   val f = file("google-services.json")

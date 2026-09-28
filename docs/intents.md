@@ -10,7 +10,7 @@ One module, `src/fleet/protocol/intents.js`, imported by both ends:
 | Side | Role |
 |---|---|
 | Coordinator | builds intents and catches its own mistakes before they reach the wire |
-| [Sidecar](./sidecar.md) (`src/fleet/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives agent-hub |
+| [Sidecar](./sidecar.md) (`src/fleet/host/sidecar.js`) | **enforces** — re-validates everything on arrival, then drives fleetwright |
 
 ## The principle
 
@@ -56,11 +56,11 @@ re-validates every field rather than trusting a flag or a signature over a
 payload it did not itself parse. Sharing a source file across that boundary is
 fine; sharing trust across it is not.
 
-Behind the sidecar there is a second allowlist — agent-hub's own command
+Behind the sidecar there is a second allowlist — fleetwright's own command
 registry — but **do not lean on it**:
 
 > `POST /api/command` runs whatever line it is handed, `/login` included, and
-> the sidecar holds agent-hub's token.
+> the sidecar holds fleetwright's token.
 
 So the verb set below is what stands between a compromised coordinator and that
 endpoint. It is not defence in depth; it is the defence. `v` is how the two ends
@@ -191,7 +191,7 @@ the destructive half — which it does, by default.
 | `deletefile` | `name`, `path` | ✅ | `/deletefile <name> <path>` |
 
 **`path` is the one exception to "no verb accepts a path", and a narrow one.**
-The original rule was about `start`: agent-hub's `/new <name> <path>` takes any
+The original rule was about `start`: fleetwright's `/new <name> <path>` takes any
 path with no validation, so the parameter simply does not exist here and no
 validator has to be correct about it. That is unchanged — `start` still takes
 none. A workspace path is a different animal: relative by construction, confined
@@ -319,13 +319,13 @@ every fifteen seconds and wrong for somebody who just pressed a button.
 box is eligible for: `stable` takes published releases, `rolling` takes the
 newest build of `main` on every merge. Changing it installs nothing by itself.
 
-It exists because the answer used to live in `/etc/agent-hub.env`, which is
+It exists because the answer used to live in `/etc/fleetwright.env`, which is
 root-owned and installed `0600` — so changing an update channel meant SSH, on a
 product whose premise is that nothing should. The stored answer is one word in
 the state directory, which the service owns and can write.
 
 **The environment still wins, and setting it refuses rather than being
-overridden.** `AGENT_HUB_RELEASE_CHANNEL` is what configuration management sets,
+overridden.** `FLEETWRIGHT_RELEASE_CHANNEL` is what configuration management sets,
 and a phone quietly writing a file the next read ignores would be this
 repository's recurring failure exactly: true where it was written, quietly false
 one layer up. The refusal names the file to edit instead, and health carries
@@ -343,11 +343,11 @@ default, `browser` is the same image with Chromium. Same storage, same
 `null` meaning *cannot tell*.
 
 **Not the same environment rule, and the difference was a bug somebody hit.**
-The installer writes `AGENT_HUB_SANDBOX_IMAGE` into `/etc/agent-hub.env` and
+The installer writes `FLEETWRIGHT_SANDBOX_IMAGE` into `/etc/fleetwright.env` and
 never writes the channel's variable — and until it stopped, it wrote the
 default, the same value the hub derives when the variable is absent. Under
 "the environment wins" that made the picker dead on every installed box: the
-first tap answered "set on the box, remove it from /etc/agent-hub.env" about a
+first tap answered "set on the box, remove it from /etc/fleetwright.env" about a
 choice nobody had made. So for `sandbox` the rule is: an environment value
 naming one of our tags is the variant the box **starts on**, and the stored
 word wins once somebody chooses; an environment value naming anything else — a
@@ -409,7 +409,7 @@ to answer a phone would block the reply past every timeout on the way.
 
 **`labels` is the third sibling, and the one the other two aim through.** A
 label is what `tag` matches on, so it decides which boxes a fan-out reaches.
-They came from `AGENT_FLEET_LABELS` in a root-owned env file and from
+They came from `FLEETWRIGHT_LABELS` in a root-owned env file and from
 `auto-labels.js`, so "this box is on the noisy switch, keep long jobs off it"
 was a decision somebody could make and not express.
 
@@ -418,7 +418,7 @@ Three sources, and the source travels as data:
 | Source | Where from | Removable from an app |
 |---|---|---|
 | `auto` | the machine's own facts — os, arch, distribution, browser | no |
-| `env` | `AGENT_FLEET_LABELS`, set at install | no |
+| `env` | `FLEETWRIGHT_LABELS`, set at install | no |
 | `set` | added from an app | yes |
 
 **An auto label cannot be switched off from a phone,** and the refusal says
@@ -432,7 +432,7 @@ place it is easiest to get wrong.
 two people editing labels from two phones a last-write-wins race over a value
 neither of them read.
 
-`AGENT_FLEET_LABELS` lives in the **sidecar's** environment, which agent-hub
+`FLEETWRIGHT_LABELS` lives in the **sidecar's** environment, which fleetwright
 cannot read — so the sidecar carries what the box is already labelled beside the
 command, the same way `provision` carries the runner repository. Without it,
 `/labels -arm64` would answer "this box does not have that" about a label the
@@ -451,14 +451,14 @@ iteration order.
 `peek` and `health` are the only two that do not go through `POST /api/command`:
 they read host state rather than acting on a session, so they use `GET /api/peek`
 and `GET /api/state` instead. Everything else goes through the same command
-registry Telegram, the web UI and agent-hub's own CLI use, so a fleet command
+registry Telegram, the web UI and fleetwright's own CLI use, so a fleet command
 cannot work differently from the same command typed into chat — or exist when
 that one does not.
 
 One limit the host imposes on this table, covered in
-[`sidecar.md`](./sidecar.md): `lines` can only ever narrow a peek (agent-hub
+[`sidecar.md`](./sidecar.md): `lines` can only ever narrow a peek (fleetwright
 serves a fixed 60). The `actor`, once verified, does travel: the sidecar posts
-`fleet:<email>` and agent-hub records it as `createdBy` — an attribution as
+`fleet:<email>` and fleetwright records it as `createdBy` — an attribution as
 trustworthy as the hub token that carried it, which is to say a label for
 honest surfaces, not an audit trail.
 
@@ -489,7 +489,7 @@ thing the second one buys is not writing down that the protocol changed.
 **Upgrade hosts first, then the coordinator.** A v3 host answers
 `unsupported_version` to a v2 coordinator and a v2 host answers it to a v3 one,
 so the fleet is visibly down either way rather than subtly wrong. The window is
-loud, which is the property to preserve; `agent-fleet update --restart` from
+loud, which is the property to preserve; `fleetwright update --restart` from
 the app is how a host crosses it without a shell.
 
 ### The rescue envelope
@@ -534,7 +534,7 @@ still needs somebody on the machine, and the drift message says so rather than
 promising the update will work.
 
 **The content never travels.** A profile is a file on the host —
-`/var/lib/agent-hub/profiles/<name>.md` — and the intent carries its name. That
+`/var/lib/fleetwright/profiles/<name>.md` — and the intent carries its name. That
 is [`wanted.md`](./wanted.md)'s rule kept rather than bent: *the coordinator may
 NAME a profile; it may never CARRY one.* Injected text is instructions to an
 agent with root in a container, so a coordinator that chose the words would be
@@ -593,7 +593,7 @@ removes this, and it has not been built.
 
 The original text follows.
 
-**No `login` / `code`, yet.** agent-hub can authenticate its own box from chat, which
+**No `login` / `code`, yet.** fleetwright can authenticate its own box from chat, which
 is genuinely useful there — it is what lets a coworker stand up an instance
 without SSH. Reachable from the coordinator, it means a compromised coordinator
 can point a box at an attacker's Claude account, or harvest an authorization
@@ -610,7 +610,7 @@ box that minted the request, and a coordinator that never sees either cannot
 redirect the flow. That is a design pass, not a table row, which is why it is
 last.
 
-**No path parameter anywhere.** agent-hub's `/new <name> <path>` accepts any path
+**No path parameter anywhere.** fleetwright's `/new <name> <path>` accepts any path
 with no validation (a known gap, §1), and a sandboxed session's working
 directory is a fixed `/work` mount anyway (§2). Leaving the parameter out
 *removes the question* rather than answering it: the coordinator has no way to
@@ -619,7 +619,7 @@ correct about it.
 
 Also not expressible: the resume dialog's third option, "Don't ask me again".
 It flips a global preference for every future session, interactive ones
-included. agent-hub refuses to offer it; the protocol cannot name it.
+included. fleetwright refuses to offer it; the protocol cannot name it.
 
 ## Rules worth stating
 
@@ -630,7 +630,7 @@ verb set exists precisely so that they cannot.
 
 **A name can never become a flag.** The name charset is anchored at the first
 character (`[A-Za-z0-9]`), which is load-bearing rather than cosmetic:
-agent-hub's `parse()` treats any whitespace-separated token beginning with `--`
+fleetwright's `parse()` treats any whitespace-separated token beginning with `--`
 as a flag, so a session named `--dangerous` would turn `/stop --dangerous` into
 a flag with no argument, and `/new --dangerous` into a permission override.
 Anchoring makes this impossible by construction instead of by careful quoting
@@ -639,7 +639,7 @@ downstream. The same anchor is what stops `../escape` being a name.
 **The command line is built, never received.** `toCommandLine()` assembles it
 from literals in the sidecar's own source plus values that have already been
 charset-checked. There is no point at which a coordinator-supplied string
-reaches a shell, a tmux argv, or even agent-hub's command parser as anything but
+reaches a shell, a tmux argv, or even fleetwright's command parser as anything but
 a single token. This matters more out-of-process than it would in: the endpoint
 on the other side of it will run any line at all.
 

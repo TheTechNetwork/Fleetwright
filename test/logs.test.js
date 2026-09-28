@@ -56,7 +56,7 @@ test('the services are a fixed list, not a pattern', () => {
 
 test('the names people actually reach for all resolve', () => {
   assert.equal(resolveSource('hub'), 'hub');
-  assert.equal(resolveSource('agent-hub'), 'hub');
+  assert.equal(resolveSource('fleetwright'), 'hub');
   assert.equal(resolveSource('coord'), 'coordinator');
   assert.equal(resolveSource('COORDINATOR'), 'coordinator');
   assert.equal(resolveSource('fleet'), 'sidecar');
@@ -87,7 +87,7 @@ test('the hub is the default, and the tail is what is asked for', (t) => {
 
   assert.equal(r.ok, true);
   assert.equal(r.source, 'hub');
-  assert.match(s.args(), /-u agent-hub/);
+  assert.match(s.args(), /-u fleetwright/);
   assert.match(s.args(), /-n 40/);
   assert.match(s.args(), /--no-pager/);
   assert.match(r.text, /line two/);
@@ -109,9 +109,9 @@ test('a line count is honoured and clamped', (t) => {
 test('each service maps to its own unit', (t) => {
   const s = stubJournal(t, { stdout: 'x' });
   readLogs(s.cfg(), { source: 'coordinator' });
-  assert.match(s.args(), /-u agent-fleet-coordinator/);
+  assert.match(s.args(), /-u fleetwright-coordinator/);
   readLogs(s.cfg(), { source: 'sidecar' });
-  assert.match(s.args(), /-u agent-fleet-sidecar/);
+  assert.match(s.args(), /-u fleetwright-sidecar/);
 });
 
 test('a log too long for chat keeps the END of it', (t) => {
@@ -148,7 +148,7 @@ test('a service that has never run says so plainly', (t) => {
   const r = readLogs(s.cfg(), { source: 'coordinator' });
 
   assert.equal(r.ok, true, 'nothing is wrong; there is just nothing to show');
-  assert.match(r.text, /No log entries for agent-fleet-coordinator/);
+  assert.match(r.text, /No log entries for fleetwright-coordinator/);
   assert.match(r.text, /may never have been started/);
 });
 

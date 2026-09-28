@@ -4,7 +4,7 @@
 // today, and SEC-INJECT-2 says the fix is a default-deny egress through a
 // named allowlist — and that it is not built. This is it, opt-in:
 //
-//   AGENT_HUB_SANDBOX_EGRESS=allowlist
+//   FLEETWRIGHT_SANDBOX_EGRESS=allowlist
 //
 // THE SHAPE, from docs/recommendations-review.md §3, and the precision it
 // insists on: podman's `--internal` network is a ROUTING control, not a
@@ -31,7 +31,7 @@
 // WHAT IS ADDED BY DEFAULT is a coding agent's working set — GitHub and the
 // npm registry — because a session that cannot clone or install is a session
 // that cannot do the work it was started for, and refusing those by default
-// would make the feature one nobody turns on. AGENT_HUB_SANDBOX_EGRESS_ALLOW
+// would make the feature one nobody turns on. FLEETWRIGHT_SANDBOX_EGRESS_ALLOW
 // extends it; nothing removes the required four.
 //
 // NOT MEASURED ON HARDWARE. Every podman call below is one the manual
@@ -68,7 +68,7 @@ export const REQUIRED_HOSTS = Object.freeze([
   'claude.com',
 ]);
 
-/** A coding agent's working set. Extended by AGENT_HUB_SANDBOX_EGRESS_ALLOW. */
+/** A coding agent's working set. Extended by FLEETWRIGHT_SANDBOX_EGRESS_ALLOW. */
 export const DEFAULT_HOSTS = Object.freeze([
   'github.com',
   'api.github.com',
@@ -128,7 +128,7 @@ export function allowlistFor(cfg) {
  */
 export function proxyConfig(hosts, { port = PROXY_PORT } = {}) {
   return [
-    '# Written by agent-hub. Edit AGENT_HUB_SANDBOX_EGRESS_ALLOW instead; this file is regenerated.',
+    '# Written by fleetwright. Edit FLEETWRIGHT_SANDBOX_EGRESS_ALLOW instead; this file is regenerated.',
     `Port ${port}`,
     'Listen 0.0.0.0',
     'Timeout 600',
@@ -196,7 +196,7 @@ export async function ensureEgress(cfg) {
   if (cfg.sandboxEgress !== 'allowlist') return { ok: true };
   const subnet = cfg.sandboxEgressSubnet || DEFAULT_SUBNET;
   const { hosts, refused } = allowlistFor(cfg);
-  for (const r of refused) log.warn(`egress: ignoring "${r}" in AGENT_HUB_SANDBOX_EGRESS_ALLOW — not a hostname`);
+  for (const r of refused) log.warn(`egress: ignoring "${r}" in FLEETWRIGHT_SANDBOX_EGRESS_ALLOW — not a hostname`);
 
   // The network, once.
   if (podman(cfg, ['network', 'inspect', EGRESS_NETWORK]).status !== 0) {

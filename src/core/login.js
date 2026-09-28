@@ -1,6 +1,6 @@
 // Authenticating this box's Claude account, driven from chat or the web UI.
 //
-// Why this is here at all: agent-hub's promise is that a coworker can stand up
+// Why this is here at all: fleetwright's promise is that a coworker can stand up
 // their own instance. Without this, the very first step of that — logging
 // Claude in — is the one thing that still forces them onto SSH with a terminal.
 //
@@ -296,7 +296,7 @@ export class LoginFlow {
    */
   async start({ actor = null, mode = 'claudeai', email = null, sso = false, linkFor = null } = {}) {
     if (!this.cfg.loginEnabled) {
-      return { ok: false, message: 'Login from agent-hub is disabled (AGENT_HUB_LOGIN=0).' };
+      return { ok: false, message: 'Login from fleetwright is disabled (FLEETWRIGHT_LOGIN=0).' };
     }
     if (this.isPending()) {
       // THE URL GOES BACK ONLY TO WHOEVER STARTED THE FLOW.

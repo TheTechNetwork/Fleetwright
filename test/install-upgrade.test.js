@@ -1,7 +1,7 @@
 // `--upgrade`: an already-enrolled box brought onto new code, unattended.
 //
 // THE GAP IT FILLS IS THAT THE OLD UNATTENDED MODE DID NOT APPLY THE CODE.
-// `AGENT_HUB_NONINTERACTIVE=1` has existed all along and skips the wizard —
+// `FLEETWRIGHT_NONINTERACTIVE=1` has existed all along and skips the wizard —
 // and the wizard is also where the services get restarted. So an unattended
 // run put new code on disk and left the OLD CODE RUNNING while reporting
 // success, which is the failure src/core/update.js is written around ("the new
@@ -29,7 +29,7 @@ test('--upgrade exists, is documented, and turns the wizard off', () => {
   assert.match(SH, /--upgrade\s+an already-enrolled box onto new code/, '--help does not mention it');
   // Both spellings, because a flag is what somebody types and an environment
   // variable is what a configuration-management tool sets.
-  assert.match(SH, /AGENT_HUB_UPGRADE/);
+  assert.match(SH, /FLEETWRIGHT_UPGRADE/);
   // It must not ask anything: the wizard with no stdin takes every default
   // silently, on a machine nobody is watching.
   assert.match(SH, /UPGRADE=1; WIZARD=no/);
@@ -49,12 +49,12 @@ test('it refuses a box that is not already in a fleet, and names what is missing
   assert.ok(block, 'the upgrade section is gone');
   assert.match(block[0], /host-key\.json/, 'it does not check that the box is enrolled');
   assert.match(block[0], /\$SIDECAR_ENV/);
-  assert.match(block[0], /agent-fleet-sidecar enrol <pin>/, 'the refusal does not say how to fix it');
+  assert.match(block[0], /fleetwright-sidecar enrol <pin>/, 'the refusal does not say how to fix it');
 });
 
 test('it restarts the services, which is the whole point', () => {
   const section = SH.slice(SH.indexOf('# --- 9.'));
-  for (const unit of ['agent-hub', 'agent-fleet-coordinator', 'agent-fleet-sidecar']) {
+  for (const unit of ['fleetwright', 'fleetwright-coordinator', 'fleetwright-sidecar']) {
     assert.ok(section.includes(unit), `${unit} is never restarted`);
   }
   // Only units that exist. A box with no local coordinator has nothing to
@@ -126,7 +126,7 @@ test('curling a coordinator means joining that coordinator, without being asked 
   // The address is in what somebody typed. Asking for it again is asking them
   // to repeat themselves, and offering to run a second coordinator on the box
   // is offering the opposite of what they asked for.
-  assert.match(SH, /JOINING="\$\{AGENT_FLEET_COORDINATOR_URL:-\}"/);
+  assert.match(SH, /JOINING="\$\{FLEETWRIGHT_COORDINATOR_URL:-\}"/);
   assert.match(SH, /if \[ -n "\$JOINING" \]; then/);
   assert.match(SH, /ok "joining \$JOINING"/);
 
@@ -135,7 +135,7 @@ test('curling a coordinator means joining that coordinator, without being asked 
   // offering it: somebody answers it, is told "Telegram bot configured", and
   // messages a bot that will never reply. See docs/telegram.md.
   assert.doesNotMatch(SH, /ask TG_TOKEN/);
-  assert.doesNotMatch(SH, /set_env "\$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN/);
+  assert.doesNotMatch(SH, /set_env "\$ENV_FILE" FLEETWRIGHT_TELEGRAM_TOKEN/);
   // The key is still READ once, so a box that has one is told it is inert.
   assert.match(SH, /Telegram : archived/);
 
@@ -170,15 +170,15 @@ test('joining a fleet still costs a pin, and the one-liner changes nothing about
   // Matched on EXPANSION rather than on the name, because the name appears
   // twice for good reasons — see below — and a fuzzy absence test that fires on
   // the cleanup code is a test somebody deletes.
-  assert.equal(/enrol[^\n]*\$\{?AGENT_FLEET_[A-Z_]*(TOKEN|SECRET|KEY)/i.test(SH), false,
+  assert.equal(/enrol[^\n]*\$\{?FLEETWRIGHT_[A-Z_]*(TOKEN|SECRET|KEY)/i.test(SH), false,
     'enrolment reads a credential out of the environment');
 
   // AND THE DEAD ONE IS REMOVED RATHER THAN HONOURED. A box installed before
-  // per-host keypairs has AGENT_FLEET_HOST_TOKEN in its env file — one string
+  // per-host keypairs has FLEETWRIGHT_HOST_TOKEN in its env file — one string
   // every machine presented, indistinguishable hosts, no way to revoke one.
   // The installer strips it on upgrade, which is the migrate-and-clean-up half
   // of what a re-install is for.
-  assert.match(SH, /replace\(\/\^AGENT_FLEET_HOST_TOKEN=\.\*/);
+  assert.match(SH, /replace\(\/\^FLEETWRIGHT_HOST_TOKEN=\.\*/);
 });
 
 test('an existing install is offered a clean, even from the one-liner', () => {
@@ -195,7 +195,7 @@ test('an existing install is offered a clean, even from the one-liner', () => {
   // return key. It was behind `[ -t 0 ]` as well, so a piped install that chose
   // Clean would have skipped the confirmation for the one irreversible action
   // in the script.
-  assert.match(SH, /if \[ -n "\$ASK_IN" \]; then\n        if \[ -f \/var\/lib\/agent-fleet\/host-key\.json \]/);
+  assert.match(SH, /if \[ -n "\$ASK_IN" \]; then\n        if \[ -f \/var\/lib\/fleetwright-sidecar\/host-key\.json \]/);
   assert.match(SH, /Are you sure you want to delete\? Type YES/);
 
   // And genuinely nobody still means update, never destroy.
@@ -209,7 +209,7 @@ test('--repair puts back what the installer generates, and nothing it was told',
   // the wizard, and the wizard does not run when nobody is there to answer.
   assert.match(SH, /^\s*--repair\)/m, 'there is no --repair flag');
   assert.match(SH, /REPAIR=1; UPGRADE=1; WIZARD=no/, 'repair should imply upgrade and ask nothing');
-  assert.match(SH, /AGENT_HUB_REPAIR/, 'no environment form for configuration management');
+  assert.match(SH, /FLEETWRIGHT_REPAIR/, 'no environment form for configuration management');
   assert.match(SH, /--repair      --upgrade, and put back/, '--help does not mention it');
 });
 
@@ -219,8 +219,8 @@ test('a repair reads the recorded answers and never writes one', () => {
   // because a repair happened to run would be making it for them.
   const section = SH.slice(SH.indexOf('# --- 8b.'), SH.indexOf('# --- 9.'));
 
-  assert.match(section, /get_env "\$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE\)" = 1/);
-  assert.match(section, /get_env "\$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT\)" = 1/);
+  assert.match(section, /get_env "\$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE\)" = 1/);
+  assert.match(section, /get_env "\$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT\)" = 1/);
   assert.equal(/set_env/.test(section), false, 'the repair writes a setting — it must only read them');
 
   // And says so when it leaves one alone, or a repair that silently did less
@@ -387,8 +387,8 @@ test('an upgraded box is told what changed, not how to set itself up', () => {
   //
   //   Next:
   //     1. Create a Telegram bot — message @BotFather ...
-  //     2. Start the session manager: systemctl enable --now agent-hub
-  //     ... put an AGENT_FLEET_API_TOKEN in /etc/agent-fleet-coordinator.env
+  //     2. Start the session manager: systemctl enable --now fleetwright
+  //     ... put an FLEETWRIGHT_API_TOKEN in /etc/fleetwright-coordinator.env
   //
   // on a machine that had been enrolled and running for weeks, with all of it
   // already done. The closing block branches on `WIZARD = yes`, and --upgrade
@@ -409,7 +409,7 @@ test('an upgraded box is told what changed, not how to set itself up', () => {
   assert.match(upgraded, /Running from/);
 
   // And none of the fresh-box setup appears in it.
-  for (const wrong of [/BotFather/, /Create a Telegram bot/, /enable --now agent-hub/, /AGENT_FLEET_API_TOKEN in/]) {
+  for (const wrong of [/BotFather/, /Create a Telegram bot/, /enable --now fleetwright/, /FLEETWRIGHT_API_TOKEN in/]) {
     assert.doesNotMatch(upgraded, wrong, 'an upgraded box is still told to set itself up');
   }
 
@@ -443,18 +443,18 @@ test('the installer records the manifest the one-liner verified against, before 
   // it would derive from a checkout's origin.
   // Anchored on the start of the condition: it continues on a second line
   // now, which skips the manifest entirely on a box apt owns.
-  const start = SH.indexOf('if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]');
+  const start = SH.indexOf('if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ]');
   assert.ok(start > 0, 'the manifest block is not where this test looks for it');
   const block = SH.slice(start);
-  const told = block.indexOf('if [ -n "${AGENT_HUB_RELEASE_MANIFEST:-}" ]; then');
+  const told = block.indexOf('if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then');
   const guessed = block.indexOf('elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then');
   assert.ok(told > 0 && guessed > told, 'the environment is consulted before the git remote');
-  assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "\$AGENT_HUB_RELEASE_MANIFEST"/);
+  assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "\$FLEETWRIGHT_RELEASE_MANIFEST"/);
 });
 
 test('a packaged box retires a leftover local coordinator, but only when it uses a remote one', () => {
   // A release ships no coordinator — the fleet meets at the Worker — so a
-  // packaged box that still has an agent-fleet-coordinator unit is a checkout
+  // packaged box that still has an fleetwright-coordinator unit is a checkout
   // artifact from before it was packaged: loopback, no hosts, drifting on old
   // code no update touches. It should retire itself through root's half of an
   // update rather than needing a shell. But only when the sidecar here points at
@@ -469,8 +469,8 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
 
   // It reads the coordinator URL from the sidecar env, and retires only under a
   // real (non-loopback) URL.
-  assert.match(block, /AGENT_FLEET_COORDINATOR_URL=/, 'the remote-coordinator signal is not consulted');
-  assert.match(block, /systemctl disable --now agent-fleet-coordinator/, 'the leftover unit is never disabled');
+  assert.match(block, /FLEETWRIGHT_COORDINATOR_URL=/, 'the remote-coordinator signal is not consulted');
+  assert.match(block, /systemctl disable --now fleetwright-coordinator/, 'the leftover unit is never disabled');
   assert.match(block, /\*:\/\/\*\)/, 'the retire is not gated on a URL shape');
 
   // DISABLE IS NOT ENOUGH — it leaves the unit file, and section 9 restarts
@@ -479,7 +479,7 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
   // does not stick.
   assert.match(
     block,
-    /rm -f \/etc\/systemd\/system\/agent-fleet-coordinator\.service/,
+    /rm -f \/etc\/systemd\/system\/fleetwright-coordinator\.service/,
     'the unit file is left on disk, so the restart step resurrects it',
   );
   assert.match(block, /systemctl daemon-reload/, 'systemd is not told the unit is gone');

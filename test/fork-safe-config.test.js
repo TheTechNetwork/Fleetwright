@@ -103,7 +103,7 @@ test('the default config names nobody, and could be deployed by anybody', () => 
 
   // THE ONE THAT MATTERS. An allowlist in the default config is a fork
   // admitting strangers to their own fleet.
-  assert.equal(/AGENT_FLEET_AUTH_ALLOW\s*=/.test(bare), false,
+  assert.equal(/FLEETWRIGHT_AUTH_ALLOW\s*=/.test(bare), false,
     'the default config sets an allowlist — a fork deploying it admits whoever is on it');
 
   // Our identifiers, none of which mean anything useful to somebody else and
@@ -150,7 +150,7 @@ test('the production config is ours, says so, and is never the default', () => {
   // wrangler.toml has listed it as a secret all along, and the [vars] entry was
   // the bug. Cloudflare keeps vars and secrets in ONE namespace, so a var of
   // that name would clobber the secret on every deploy.
-  assert.equal(/AGENT_FLEET_AUTH_ALLOW\s*=/.test(mine), false,
+  assert.equal(/FLEETWRIGHT_AUTH_ALLOW\s*=/.test(mine), false,
     'the allowlist is a var again — a deploy would clobber the secret');
 });
 
@@ -211,7 +211,7 @@ test('the deploy button asks for the two required secrets, and every copy agrees
   assert.equal(root, worker, 'the two .dev.vars.example copies have drifted');
 
   const declared = [...root.matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]).sort();
-  assert.deepEqual(declared, ['AGENT_FLEET_API_TOKEN', 'AGENT_FLEET_AUTH_ALLOW'],
+  assert.deepEqual(declared, ['FLEETWRIGHT_API_TOKEN', 'FLEETWRIGHT_AUTH_ALLOW'],
     'the dialog would ask for a different set of secrets than the two every coordinator needs');
 
   // Every prompted secret carries a description, and no description names a

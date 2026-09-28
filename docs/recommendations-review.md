@@ -44,7 +44,7 @@ The installer already allocates the range a real mapping needs
 (`install/install.sh`, the `usermod --add-subuids` block near line 1787), and
 `RUN_USER` defaults through the unit's `User=` to `SUDO_USER`
 (`install/install.sh:243`), so on a box installed by a person the service user
-is that person unless `AGENT_HUB_USER` says otherwise.
+is that person unless `FLEETWRIGHT_USER` says otherwise.
 
 `docs/security.md` records this as **SEC-SESSION-5, unverified**, and gap
 **G4** as "asserted, tested only as root". This check sharpens that: the
@@ -178,7 +178,7 @@ design today", and the proxy shape is **SEC-INJECT-2**, marked
 `--network none` (`src/core/files.js`, the house-rules write, the image
 probe), so they are unaffected. `src/core/sandbox-args.js` refuses
 `--network=host`; an operator adding `--network=<internal>` through
-`AGENT_HUB_SANDBOX_ARGS` passes that check, which is correct.
+`FLEETWRIGHT_SANDBOX_ARGS` passes that check, which is correct.
 
 One thing the review's precision implies and the code will need: the session
 has to be told about the proxy. That is `HTTPS_PROXY` in the session
@@ -307,7 +307,7 @@ Source: [Hooks reference](https://code.claude.com/docs/en/hooks).
 
 **Claim, downgraded.** `APT_CONFIG` was the attack, but sudoers' default
 `env_reset` never lets it reach apt. What remains is that
-`install/agent-hub.service` sets `ProtectSystem=no` because the sudo'd
+`install/fleetwright.service` sets `ProtectSystem=no` because the sudo'd
 upgrade inherits the unit's mount namespace.
 
 **In the code.** The unit says so at length: `ProtectSystem=no` at line 91,
@@ -390,11 +390,11 @@ has no podman and no systemd unit running under it, so the boundary between
 |---|---|---|---|
 | 1 | `--userns=nomap` on every container that touches a session volume; the credential seeded over stdin; `:U` on the socket; the stale-socket probe reads `EACCES` as live; legacy volumes adopted once (`src/core/sandbox-userns.js`, `podman.js`, `hook-socket.js`) | the argv, the seed script's shape, the probe, the adoption against a stub podman | `/proc/self/uid_map` inside a session on a box; the 0→1 mapping `podman unshare` shows, which the adoption relies on |
 | 2 | nothing: an experiment, and its parts were already built | — | a Remote Control session, seeded with no `refreshToken`, surviving one rotation |
-| 3 | `AGENT_HUB_SANDBOX_EGRESS=allowlist`: an `--internal` network, one CONNECT-only tinyproxy at a fixed address, `HTTPS_PROXY` and nothing else, the four required hosts on every list (`src/core/egress.js`, `sandbox/egress/Containerfile`) | what podman is asked for, the config, the list, the launch line | `curl https://example.com` refused and `claude` signing in, from a session on a real box; off by default until then |
+| 3 | `FLEETWRIGHT_SANDBOX_EGRESS=allowlist`: an `--internal` network, one CONNECT-only tinyproxy at a fixed address, `HTTPS_PROXY` and nothing else, the four required hosts on every list (`src/core/egress.js`, `sandbox/egress/Containerfile`) | what podman is asked for, the config, the list, the launch line | `curl https://example.com` refused and `claude` signing in, from a session on a real box; off by default until then |
 | 4 | the `exchange` verb; the host mints the verifier on `connect`, the coordinator carries the challenge and relays the code, the host exchanges and stores by its own `/link` and `/renew` (`src/fleet/host/pkce.js`, `sidecar.js`, `coordinator/core.js`, `oauth.js`) | both ends, against a stub hub and a scripted GitHub; RFC 7636's own vector | a real GitHub App round trip; nothing in the design depends on anything this box could not exercise |
 | 5 | already narrower than the review knew (G6); two stale comments corrected | — | — |
 | 6 | lifecycle hooks over the socket; `activity` on every running record; the watcher reads it and keeps the pane for the resume dialog (`src/core/activity.js`, `sandbox/hook.mjs`, `entrypoint.sh`, `watcher.js`) | the route over real sockets, the phase table, the watcher's decisions | the CLI actually firing each hook with the fields the reference names, on an image built from this tree |
-| 7 | the oneshot units and a grant to start them; `upgrades.js` tries the unit first and reads the journal; the old lines stay as the fallback (`install/agent-hub-upgrade.service`, `agent-hub-apt-update.service`) | `systemd-analyze verify` on both units, `visudo -cf` on the grant, the attempt order against a scripted sudo | `ProtectSystem=full` against `podman run` under `agent-hub.service`, which is why that line is still `no`; the command that decides it is in the unit |
+| 7 | the oneshot units and a grant to start them; `upgrades.js` tries the unit first and reads the journal; the old lines stay as the fallback (`install/fleetwright-upgrade.service`, `fleetwright-apt-update.service`) | `systemd-analyze verify` on both units, `visudo -cf` on the grant, the attempt order against a scripted sudo | `ProtectSystem=full` against `podman run` under `fleetwright.service`, which is why that line is still `no`; the command that decides it is in the unit |
 | 8 | build, pull, refresh and the start probe off the event loop; a timeout that kills the process group | a timer keeps firing through a build; kill, ENOENT, stdin | — |
 | 9 | the Containerfile's sentence corrected; nothing to build | — | — |
 
@@ -402,6 +402,6 @@ has no podman and no systemd unit running under it, so the boundary between
 call sites of local IPC that answers in milliseconds, whose conversion is a
 refactor of `sessions.js` and everything above it, with its own risk and
 nothing in the health frame waiting on it. `ProtectSystem=full` on
-`agent-hub.service` waits for one measurement, named in the unit, because
+`fleetwright.service` waits for one measurement, named in the unit, because
 this fleet has been taken down once by a directive that was reasoned rather
 than run. Item 2 stays an experiment with its pass condition written down.

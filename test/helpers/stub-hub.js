@@ -1,4 +1,4 @@
-// A stub that speaks agent-hub's HTTP API exactly as src/adapters/http.js does.
+// A stub that speaks fleetwright's HTTP API exactly as src/adapters/http.js does.
 //
 // Every route, status code and body shape here was taken from that file rather
 // than from memory, including the parts that are easy to get wrong and would
@@ -96,7 +96,7 @@ export async function startStubHub({
       const line = String(body.command || '');
       commands.push(line);
       bodies.push(body);
-      // agent-hub answers 200 even for a failed command; ok lives in the body.
+      // fleetwright answers 200 even for a failed command; ok lives in the body.
       //
       // AWAITED, so a test can hold a command open. The watcher's restart is a
       // stop and then a resume with tens of seconds between them on a real box,
@@ -110,7 +110,7 @@ export async function startStubHub({
       const name = url.searchParams.get('name') || '';
       const text = panes[name];
       if (text === undefined) return json(404, { error: 'not running' });
-      // Fixed at 60 lines, exactly as agent-hub does. There is no `lines`
+      // Fixed at 60 lines, exactly as fleetwright does. There is no `lines`
       // parameter on the wire.
       return json(200, { name, text: text.split('\n').slice(-60).join('\n') });
     }
@@ -156,7 +156,7 @@ function readBody(req) {
   });
 }
 
-/** A session record in the shape agent-hub's registry produces. */
+/** A session record in the shape fleetwright's registry produces. */
 export function sessionRecord(name, patch = {}) {
   return {
     name,

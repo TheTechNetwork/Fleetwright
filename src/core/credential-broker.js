@@ -141,7 +141,7 @@ export function answerCredentialRequest({ provider, secrets, expiredAt = null, n
       message:
         `${p.label}'s token expired about ${hours} hour${hours === 1 ? '' : 's'} ago and this host could not renew it. ` +
         'Anything needing authentication will get a 401 until it is replaced — reconnect it in the app, ' +
-        'or check `agent-hub keepalive` on this box for why the renewal failed.',
+        'or check `fleetwright keepalive` on this box for why the renewal failed.',
     };
   }
   return { ok: true, provider, env };

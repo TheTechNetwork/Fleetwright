@@ -1,7 +1,7 @@
 // A remedy may not name a surface this product no longer has.
 //
 // Telegram was archived — `src/adapters/telegram.js` is gone and config.js
-// warns that AGENT_HUB_TELEGRAM_TOKEN is read by nothing. Three user-facing
+// warns that FLEETWRIGHT_TELEGRAM_TOKEN is read by nothing. Three user-facing
 // strings went on telling people to use it, and all three were REMEDIES: the
 // sentence printed when a host has no linked account (twice, in two renderers)
 // and the one printed when a host is too old to know a verb.
@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Surfaces that have been archived, and what should be offered instead. */
-const ARCHIVED = [{ name: 'Telegram', instead: 'the app, or `agent-hub` on the box' }];
+const ARCHIVED = [{ name: 'Telegram', instead: 'the app, or `fleetwright` on the box' }];
 
 /** Every .js under a root, recursively. */
 function sources(root) {
@@ -91,7 +91,7 @@ test('no remedy points at a surface that was archived', () => {
       for (const line of body.split('\n')) {
         if (!line.includes(name)) continue;
         // THE ONE THING IT MAY STILL SAY is that the surface is archived. Both
-        // config.js and index.js warn when AGENT_HUB_TELEGRAM_TOKEN is set,
+        // config.js and index.js warn when FLEETWRIGHT_TELEGRAM_TOKEN is set,
         // which is the opposite of the bug — it tells somebody their
         // configuration is now inert, which they need to know.
         if (/archived/i.test(line)) continue;
@@ -109,16 +109,16 @@ test('no remedy points at a surface that was archived', () => {
  * The installer stopped telling a fresh box to configure Telegram; the prose
  * that tells an OPERATOR to did not. `deployment.md` still listed a Telegram id
  * as one of two things "worth planning for before you start", still explained
- * how to put one in `AGENT_HUB_TELEGRAM_ALLOWED_USERS`, still said
- * `/etc/agent-hub.env` holds a Telegram token, and still filed "Telegram on the
+ * how to put one in `FLEETWRIGHT_TELEGRAM_ALLOWED_USERS`, still said
+ * `/etc/fleetwright.env` holds a Telegram token, and still filed "Telegram on the
  * Worker" under not-done with the words "Telegram works against a box today".
  * `security.md` carried the bot token as a live row in the credential
  * inventory, which is the one table where a dead secret is worst.
  *
  * SO THE RULE IS ABOUT THE VARIABLES, not the word. A document may discuss
  * Telegram all it likes — telegram.md IS the archive record, and beta-findings
- * and agent-hub.md describe corrections that have to name what was corrected.
- * What it may not do is put `AGENT_HUB_TELEGRAM_*` in front of a reader
+ * and session-manager.md describe corrections that have to name what was corrected.
+ * What it may not do is put `FLEETWRIGHT_TELEGRAM_*` in front of a reader
  * without saying it is archived, because that is the form the reader acts on.
  */
 function docs() {
@@ -132,7 +132,7 @@ test('no document names an archived surface\'s settings without saying so', () =
   /** @type {string[]} */
   const offenders = [];
   for (const { file, body } of docs()) {
-    if (!/AGENT_HUB_TELEGRAM/.test(body)) continue;
+    if (!/FLEETWRIGHT_TELEGRAM/.test(body)) continue;
     // Said ANYWHERE in the file, not on the line: these are paragraphs, and the
     // sentence that marks the surface dead is usually the one before or after
     // rather than the one carrying the variable.
@@ -142,7 +142,7 @@ test('no document names an archived surface\'s settings without saying so', () =
   assert.deepEqual(
     offenders,
     [],
-    `these name AGENT_HUB_TELEGRAM_* and never say it is archived:\n${offenders.join('\n')}`,
+    `these name FLEETWRIGHT_TELEGRAM_* and never say it is archived:\n${offenders.join('\n')}`,
   );
 });
 
@@ -154,6 +154,6 @@ test('the account remedy still names two live ways to do it', () => {
   const mcp = readFileSync(new URL('../src/mcp/server.js', import.meta.url), 'utf8');
   for (const [name, src] of [['the registry', code(registry)], ['the MCP renderer', code(mcp)]]) {
     assert.match(src, /Link one from the app/, `${name} no longer offers the app`);
-    assert.match(src, /agent-hub login for/, `${name} no longer offers the box`);
+    assert.match(src, /fleetwright login for/, `${name} no longer offers the box`);
   }
 });

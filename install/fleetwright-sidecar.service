@@ -1,12 +1,12 @@
 [Unit]
-Description=agent-fleet sidecar — this box, as a fleet host
+Description=fleetwright sidecar — this box, as a fleet host
 Documentation=https://github.com/TheTechNetwork/Fleetwright
-After=network-online.target agent-hub.service
+After=network-online.target fleetwright.service
 Wants=network-online.target
-# Not Requires=: the sidecar deliberately stays up when agent-hub is down, and
+# Not Requires=: the sidecar deliberately stays up when fleetwright is down, and
 # reports "hub unreachable" rather than disappearing from the fleet. A host that
 # can tell you it is broken is worth more than one that is silently absent.
-After=agent-hub.service
+After=fleetwright.service
 
 [Service]
 Type=simple
@@ -21,7 +21,7 @@ Type=simple
 # shim from the path systemd takes at all.
 User=__USER__
 WorkingDirectory=__DIR__
-EnvironmentFile=/etc/agent-fleet-sidecar.env
+EnvironmentFile=/etc/fleetwright-sidecar.env
 ExecStart=__NODE__ __ENTRY__
 
 Restart=always
@@ -31,26 +31,26 @@ RestartSec=3
 # user, which is what lets an unprivileged sidecar serve them at all — /run is
 # not writable by a normal user. It is removed when the service stops, and /run
 # is tmpfs, so there is nothing to clean up.
-RuntimeDirectory=agent-fleet
+RuntimeDirectory=fleetwright-sidecar
 RuntimeDirectoryMode=0700
 
-# This box's private key lives here — /var/lib/agent-fleet, created 0700 owned
+# This box's private key lives here — /var/lib/fleetwright-sidecar, created 0700 owned
 # by this user before the service starts. It is the whole of this host's
 # identity in the fleet: whoever can read it can be this machine, and nothing
 # else can. Deliberately NOT under /etc with the env file, because the env file
 # is a config file people copy between boxes and this must never be copied.
-StateDirectory=agent-fleet
+StateDirectory=fleetwright-sidecar
 StateDirectoryMode=0700
 
 # It holds no session state and stopping it must never disturb a session — the
-# same reasoning as agent-hub's own shutdown.
+# same reasoning as fleetwright's own shutdown.
 KillMode=control-group
 TimeoutStopSec=10
 
 
 # --- Hardening ---------------------------------------------------------------
 #
-# MUCH HARDER THAN agent-hub.service, and that is not an inconsistency — it is
+# MUCH HARDER THAN fleetwright.service, and that is not an inconsistency — it is
 # the difference between the two processes. This one spawns nothing: it is a
 # single Node process that talks WebSocket to the coordinator and HTTP to
 # 127.0.0.1:8790, and every directive rejected next door was rejected because
@@ -88,11 +88,11 @@ SystemCallErrorNumber=EPERM
 #
 # ProtectHome is READ-ONLY rather than yes: the sidecar reads the account and
 # connection files that live under the hub's state directory, which may be in
-# $HOME on a box installed from a checkout. Writing them is agent-hub's job.
+# $HOME on a box installed from a checkout. Writing them is fleetwright's job.
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agent-fleet-sidecar
+SyslogIdentifier=fleetwright-sidecar
 
 [Install]
 WantedBy=multi-user.target

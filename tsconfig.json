@@ -18,8 +18,8 @@
   },
   "include": [
     "src/**/*.js",
-    "bin/agent-hub",
-    "bin/agent-fleet-sidecar"
+    "bin/fleetwright",
+    "bin/fleetwright-sidecar"
   ],
   "exclude": [
     "src/web/console.js",

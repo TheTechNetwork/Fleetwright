@@ -3,7 +3,7 @@
 //   node --test test/
 //
 // The end-to-end tests run a real coordinator, a real sidecar over a real
-// WebSocket, and a stub speaking agent-hub's HTTP API — so an intent travels
+// WebSocket, and a stub speaking fleetwright's HTTP API — so an intent travels
 // the same path it will in production, minus tmux.
 
 import test from 'node:test';
@@ -367,7 +367,7 @@ async function enrolledProof(coordinator, port, hostId) {
 }
 
 /**
- * A coordinator, a stub agent-hub, and a sidecar joined over a real WebSocket.
+ * A coordinator, a stub fleetwright, and a sidecar joined over a real WebSocket.
  * @param {import('node:test').TestContext} t
  * @param {object} [hubOpts]
  */
@@ -431,7 +431,7 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
   }
 });
 
-test('an intent travels coordinator → websocket → sidecar → agent-hub and back', async (t) => {
+test('an intent travels coordinator → websocket → sidecar → fleetwright and back', async (t) => {
   // The host must already report holding `bigjob`, because `stop` is pinned —
   // a fleet where no host claims the session refuses rather than picking one.
   const { coordinator, stub } = await fleet(t, {
@@ -469,7 +469,7 @@ test('a verb the protocol does not have is refused at the coordinator', async (t
 
   assert.equal(reply.ok, false);
   assert.equal(reply.error.code, 'unknown_verb');
-  assert.deepEqual(stub.commands, [], 'it must not reach the host, let alone agent-hub');
+  assert.deepEqual(stub.commands, [], 'it must not reach the host, let alone fleetwright');
 });
 
 test('the HTTP API routes an intent and answers flat JSON', async (t) => {
@@ -725,7 +725,7 @@ test('losing the coordinator makes the sidecar reconnect, not exit', async (t) =
 
 test('a box that is degraded is still asked what it has', async (t) => {
   // `list` fanned out over schedulable(), which requires state === 'healthy'.
-  // So a degraded box — agent-hub answering, sessions running — dropped out of
+  // So a degraded box — fleetwright answering, sessions running — dropped out of
   // the answer entirely. Not greyed out, not flagged: absent. The phone showed
   // a shorter list and said nothing, and the sessions it hid were the ones on
   // the box that needed attention.
@@ -768,7 +768,7 @@ test('a degraded host is still refused new work', async (t) => {
 });
 
 test('a host that goes degraded says so once, not every fifteen seconds', async () => {
-  // deb132's shared credential expired on a Saturday afternoon. agent-hub
+  // deb132's shared credential expired on a Saturday afternoon. fleetwright
   // warned hourly for THIRTY HOURS, the coordinator marked the host degraded,
   // the app showed it three storeys down in Settings — and nobody was told.
   // docs/psychology.md §7 is exactly this: silence has to be trustworthy before

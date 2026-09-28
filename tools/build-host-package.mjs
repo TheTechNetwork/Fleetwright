@@ -25,8 +25,8 @@
 //   <root>/src/web/…
 //   <root>/install/…             so a release can reinstall and migrate itself
 //   <root>/sandbox/…             the image build context
-//   <root>/lib/agent-hub.mjs     the bundle
-//   <root>/lib/agent-fleet-sidecar.mjs
+//   <root>/lib/fleetwright.mjs     the bundle
+//   <root>/lib/fleetwright-sidecar.mjs
 //   <root>/bin/…                 thin shims, so PATH entries do not change
 
 import { build } from 'esbuild';
@@ -57,11 +57,22 @@ const stage = path.join(OUT, stageName);
 const VERBATIM = ['openapi.json', 'install', 'sandbox', 'src/web'];
 
 const ENTRIES = [
-  ['bin/agent-hub', 'lib/agent-hub.mjs'],
-  ['bin/agent-fleet-sidecar', 'lib/agent-fleet-sidecar.mjs'],
-  ['bin/agent-fleet-mcp', 'lib/agent-fleet-mcp.mjs'],
-  // The front door: `join`, and everything else handed to agent-hub.
   ['bin/fleetwright', 'lib/fleetwright.mjs'],
+  ['bin/fleetwright-sidecar', 'lib/fleetwright-sidecar.mjs'],
+  ['bin/fleetwright-mcp', 'lib/fleetwright-mcp.mjs'],
+];
+
+// THE NAMES FROM BEFORE THE RENAME, as one-line aliases of the bundles above.
+// Not for people — for boxes. A box that has not yet run this release's
+// installer has units whose ExecStart names lib/agent-hub.mjs, and the release
+// swap happens BEFORE the installer rewrites them: without these the first
+// restart after an update is a unit pointing at a file that is gone. An old
+// fleetwright-migrate also checks for lib/agent-hub.mjs to recognise a release.
+// See src/fleet/legacy-names.js; these go when that does.
+const LEGACY = [
+  ['agent-hub', 'fleetwright'],
+  ['agent-fleet-sidecar', 'fleetwright-sidecar'],
+  ['agent-fleet-mcp', 'fleetwright-mcp'],
 ];
 
 rmSync(OUT, { recursive: true, force: true });
@@ -110,7 +121,7 @@ writeFileSync(
   `${JSON.stringify({ name: pkg.name, version, protocol: PROTOCOL_VERSION, type: 'module', bin: pkg.bin, private: true }, null, 2)}\n`,
 );
 
-// Thin shims, so `/usr/local/bin/agent-hub` keeps pointing at a path that
+// Thin shims, so `/usr/local/bin/fleetwright` keeps pointing at a path that
 // exists and nobody's muscle memory changes.
 for (const [entry, out] of ENTRIES) {
   const name = path.basename(entry);
@@ -118,13 +129,13 @@ for (const [entry, out] of ENTRIES) {
   // `exec node …` inside, which works when something RUNS the file — and the
   // systemd unit does not run it:
   //
-  //     ExecStart=__NODE__ __DIR__/bin/agent-hub serve
+  //     ExecStart=__NODE__ __DIR__/bin/fleetwright serve
   //
   // node strips the `#!` line, meets the `#` on line 2, and every packaged
   // service died at startup with `SyntaxError: Invalid or unexpected token`, in
   // a restart loop, on the first host ever converted.
   //
-  // A checkout's bin/agent-hub is JS with a node shebang, so `node bin/x` and
+  // A checkout's bin/fleetwright is JS with a node shebang, so `node bin/x` and
   // `./bin/x` both work there. The packaged shim was the only artifact where
   // those two differed, and it is the one systemd invokes.
   const shim =
@@ -139,6 +150,16 @@ for (const [entry, out] of ENTRIES) {
   const file = path.join(stage, 'bin', name);
   writeFileSync(file, shim);
   chmodSync(file, 0o755);
+}
+
+for (const [old, current] of LEGACY) {
+  writeFileSync(
+    path.join(stage, 'lib', `${old}.mjs`),
+    `// ${old} is ${current} since the rename; kept so a box mid-update still starts.\nimport './${current}.mjs';\n`,
+  );
+  const shim = path.join(stage, 'bin', old);
+  writeFileSync(shim, `#!/usr/bin/env node\n// ${old} is ${current} since the rename.\nimport '../lib/${current}.mjs';\n`);
+  chmodSync(shim, 0o755);
 }
 
 const tarball = path.join(OUT, `${stageName}.tar.gz`);

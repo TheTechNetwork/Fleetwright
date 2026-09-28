@@ -64,7 +64,7 @@ shared credential:
 |---|---|
 | `telegram:<id>` | the box's Telegram bot |
 | `web` | the local web UI |
-| `cli` | `agent-hub new` on the box |
+| `cli` | `fleetwright new` on the box |
 
 These are all **somebody operating the box**, and the honest fix is to say who
 rather than to invent a machine identity for them.
@@ -72,7 +72,7 @@ rather than to invent a machine identity for them.
 **The operator is the single linked account, when there is exactly one.** Zero
 configuration, unambiguous, and it degrades into a clear question rather than a
 wrong answer: with none linked, a local session refuses and says to link one;
-with two or more, it refuses and says to name one. `AGENT_HUB_OPERATOR=<email>`
+with two or more, it refuses and says to name one. `FLEETWRIGHT_OPERATOR=<email>`
 settles the ambiguous case and is needed only there.
 
 That is not the shared account under a new name. It is a **named person's**

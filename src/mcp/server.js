@@ -207,7 +207,7 @@ function describeHealth(h) {
         // A remedy pointing at a surface the product does not have is worse
         // than no remedy: it costs a search before it costs a shell.
         : 'claude: NOBODY HAS LINKED AN ACCOUNT — a session started here cannot do anything. ' +
-            'Link one from the app, or on the box with `agent-hub login for <email>`',
+            'Link one from the app, or on the box with `fleetwright login for <email>`',
     );
   } else if (h.loggedIn === true) {
     // An older host with no claudeAccounts field. Its own login is all we know.
@@ -238,7 +238,7 @@ function describeHealth(h) {
   if (Number(h.updates?.appBehind) > 0) {
     lines.push(
       `code: ${h.updates.appBehind} commit${h.updates.appBehind === 1 ? '' : 's'} behind — it may refuse newer verbs. ` +
-        'Run `agent-hub update --restart` on it.',
+        'Run `fleetwright update --restart` on it.',
     );
   }
   return lines.length ? lines.join('\n') : 'ok';
@@ -724,7 +724,7 @@ export class McpServer {
               // lift existed or what it was called. A refusal that hides its
               // own remedy from the one person who can apply it is worse than
               // a flat no.
-              `Whoever runs this server can allow it with AGENT_FLEET_MCP_ALLOW=${String(name).replace(/^fleet_/, '')} ` +
+              `Whoever runs this server can allow it with FLEETWRIGHT_MCP_ALLOW=${String(name).replace(/^fleet_/, '')} ` +
               'in its environment. If that is you, that is the whole change.'
           : `No such tool: ${name}. Available: ${this.tools.map((t) => t.name).join(', ')}.`,
         true,
@@ -836,7 +836,7 @@ export class McpServer {
     // Refusals arrive as data, and they name a reason — that is the property
     // the protocol was built for and the one an agent most needs, so it is
     // passed through rather than flattened into "failed".
-    // WHERE IT LANDED. `start` answered "Started X in /home/user/agent-runs" and
+    // WHERE IT LANDED. `start` answered "Started X in /home/user/fleetwright-runs" and
     // never said which box, so on a two-host fleet finding out cost a
     // `fleet_list` and a scan — and the tool that then wants to read its log
     // asks you which box it was. Both beta testers filed this.

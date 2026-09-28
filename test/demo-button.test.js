@@ -43,7 +43,7 @@ const fromWrangler = (key) => {
 };
 
 test('the demo host is the same in the Worker and in both apps', () => {
-  const host = fromWrangler('AGENT_FLEET_DEMO_HOST');
+  const host = fromWrangler('FLEETWRIGHT_DEMO_HOST');
   assert.match(host, /^[a-z0-9.-]+$/, 'a hostname, not a URL — worker.js compares it to url.hostname');
 
   // The apps hold an origin; the Worker holds a bare hostname. Compared
@@ -58,7 +58,7 @@ test('the demo host is the same in the Worker and in both apps', () => {
 });
 
 test('the demo credential is the same in all three places', () => {
-  const token = fromWrangler('AGENT_FLEET_DEMO_TOKEN');
+  const token = fromWrangler('FLEETWRIGHT_DEMO_TOKEN');
   assert.match(token, /^demo-/, 'prefixed so a request carrying it is obvious in a log at a glance');
   for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
     assert.ok(src.includes(token), `${name} ships a different demo credential`);
@@ -66,7 +66,7 @@ test('the demo credential is the same in all three places', () => {
 });
 
 test('the demo host and the fleet host are different domains', () => {
-  const demoHost = fromWrangler('AGENT_FLEET_DEMO_HOST');
+  const demoHost = fromWrangler('FLEETWRIGHT_DEMO_HOST');
   const routes = [...WRANGLER.matchAll(/pattern\s*=\s*"([^"]+)"/g)].map((m) => m[1]);
   assert.ok(routes.includes(demoHost), 'the demo host has no route, so nothing would answer on it');
 
@@ -100,23 +100,23 @@ test('the coordinator no longer serves the demo at all', () => {
   // now an ordinary bad credential, which is the answer it should always have
   // had once the demo had a Worker of its own.
   const src = read('worker/src/worker.js');
-  assert.equal(/demoReply|isDemoHost|AGENT_FLEET_DEMO_TOKEN/.test(src), false,
+  assert.equal(/demoReply|isDemoHost|FLEETWRIGHT_DEMO_TOKEN/.test(src), false,
     'the coordinator still has a demo path');
-  assert.equal(/AGENT_FLEET_DEMO/.test(settings(COORDINATOR)), false,
+  assert.equal(/FLEETWRIGHT_DEMO/.test(settings(COORDINATOR)), false,
     'the coordinator config still carries demo settings');
 });
 
 test('the product page is a redirect from the coordinator, never bytes', () => {
   // A coordinator holding the fleet should not also be an unauthenticated,
   // cacheable HTML surface. /docs hands out an address; the demo Worker serves
-  // the page. Off unless AGENT_FLEET_DOCS_URL is set, so a fork 404s.
+  // the page. Off unless FLEETWRIGHT_DOCS_URL is set, so a fork 404s.
   const src = read('worker/src/worker.js');
-  assert.match(src, /url\.pathname === '\/docs' && env\.AGENT_FLEET_DOCS_URL/);
+  assert.match(src, /url\.pathname === '\/docs' && env\.FLEETWRIGHT_DOCS_URL/);
   assert.equal(/new Response\(DOCS/.test(src), false, 'the coordinator is serving the page itself');
 
-  const target = /^AGENT_FLEET_DOCS_URL\s*=\s*"([^"]+)"/m.exec(COORDINATOR);
+  const target = /^FLEETWRIGHT_DOCS_URL\s*=\s*"([^"]+)"/m.exec(COORDINATOR);
   assert.ok(target, 'our deploy does not point /docs anywhere');
-  assert.equal(new URL(target[1]).hostname, fromWrangler('AGENT_FLEET_DEMO_HOST'),
+  assert.equal(new URL(target[1]).hostname, fromWrangler('FLEETWRIGHT_DEMO_HOST'),
     '/docs redirects somewhere other than the Worker that serves it');
 });
 

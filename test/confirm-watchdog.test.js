@@ -42,7 +42,7 @@ function arm(stateDir, { from = 'main-1', to = 'main-2', windowMs = 600_000, arm
 }
 
 function run(base, stateDir) {
-  execFileSync('sh', [SCRIPT], { env: { ...process.env, FLEET_BASE: base, AGENT_HUB_STATE_DIR: stateDir } });
+  execFileSync('sh', [SCRIPT], { env: { ...process.env, FLEET_BASE: base, FLEETWRIGHT_STATE_DIR: stateDir } });
 }
 
 test('nothing on trial: the watchdog does nothing', { skip: !linux }, (t) => {

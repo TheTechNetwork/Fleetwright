@@ -10,16 +10,16 @@ same box as the rest of §10. Everything below is a passing test in
 
 One unix socket per session on the host:
 
-    /run/agent-fleet/<name>.sock
+    /run/fleetwright-sidecar/<name>.sock
 
 bind-mounted into that session's container and nowhere else, always at the same
 path inside:
 
-    -v /run/agent-fleet/<name>.sock:/run/hub.sock
+    -v /run/fleetwright-sidecar/<name>.sock:/run/hub.sock
 
 ## Why it is the fix rather than a complication
 
-agent-hub's `/internal/session-start` is loopback-only and deliberately never
+fleetwright's `/internal/session-start` is loopback-only and deliberately never
 token-gated — the hook runs as a child of a `claude` process on the same box,
 and making it carry the operator token would mean writing that token into a
 world-readable hook script. The cost is that any local process can post any
@@ -46,11 +46,11 @@ The container is not even told its own name — it posts `{uuid, cwd}` to
 | A uuid posted on `<name>.sock` records against `<name>` | ✅ |
 | The client sends no name; the socket supplies it | ✅ |
 | A body naming a *different* session is refused (403) and records nothing | ✅ |
-| A body naming its *own* session is accepted | ✅ tolerated, so agent-hub's existing HTTP payload shape is not a hard failure |
+| A body naming its *own* session is accepted | ✅ tolerated, so fleetwright's existing HTTP payload shape is not a hard failure |
 | Two sessions' sockets are fully independent | ✅ |
 | Socket directory is `0700`, socket is `0600` | ✅ |
-| A name that would escape the directory (`../escape`) is refused | ✅ same charset as agent-hub's `names.js` |
-| Malformed uuid → 400, nothing recorded | ✅ including uppercase, which agent-hub also rejects |
+| A name that would escape the directory (`../escape`) is refused | ✅ same charset as fleetwright's `names.js` |
+| Malformed uuid → 400, nothing recorded | ✅ including uppercase, which fleetwright also rejects |
 | Non-object JSON body → 400 | ✅ `[]`, `null`, `"str"`, `` |
 | A 2 MB body is dropped and the listener survives | ✅ |
 | Only `POST /internal/session-start` is answered | ✅ 405 / 404 otherwise |
@@ -76,10 +76,10 @@ socket with a mode derived from the process umask, and there is an unavoidable
 window between `listen()` and `chmod()`. A `0700` directory makes that window
 unreachable rather than merely short. Both layers are asserted.
 
-## How this works without changing agent-hub
+## How this works without changing fleetwright
 
-No agent-hub change is required, which was not obvious at first. The
-[sidecar](./sidecar.md) owns the sockets and forwards what arrives to agent-hub's
+No fleetwright change is required, which was not obvious at first. The
+[sidecar](./sidecar.md) owns the sockets and forwards what arrives to fleetwright's
 existing `POST /internal/session-start` — the endpoint the ordinary hook already
 posts to, which is loopback-only and deliberately untokened:
 
@@ -95,7 +95,7 @@ await hooks.close(name);  // when the container exits
 
 The sidecar knows which session a report came from, because it knows which
 socket it arrived on, so it supplies the `name` the container was never given.
-agent-hub sees an ordinary hook report and records the uuid exactly as it always
+fleetwright sees an ordinary hook report and records the uuid exactly as it always
 has.
 
 That is the whole trick: **the untokened endpoint stops being a weakness once
@@ -103,19 +103,19 @@ the only thing that can reach it is a process that already knows who is
 calling.** A container reaches its own socket and nothing else; the sidecar
 reaches loopback; the endpoint itself is unchanged.
 
-Confirmed end to end against a real `agent-hub serve` on 2026-08-17 — a uuid
-posted on `demo.sock` with no name in the body appeared in agent-hub's own log
+Confirmed end to end against a real `fleetwright serve` on 2026-08-17 — a uuid
+posted on `demo.sock` with no name in the body appeared in fleetwright's own log
 as `hook: demo → a1b2c3d4-…`, and a post naming a different session was refused
 403 and never forwarded. See [`sidecar.md`](./sidecar.md).
 
-The container-side half is `postSessionStart()`. In a sandbox, `agent-hub hook`
+The container-side half is `postSessionStart()`. In a sandbox, `fleetwright hook`
 runs it instead of its HTTP POST — detected by the socket existing at
 `/run/hub.sock`. The spool fallback is unchanged and still applies: a transport
 failure returns `{ok: false, error}` rather than throwing, so the hook can spool
 and exit 0.
 
 The loopback HTTP endpoint does **not** go away. Sessions that are not sandboxed
-keep using it directly, and it remains the reason agent-hub's HTTP server starts
+keep using it directly, and it remains the reason fleetwright's HTTP server starts
 even in a Telegram-only deployment.
 
 ## Still unvalidated from §10
@@ -148,7 +148,7 @@ and its hooks say so — every hook receives the session's own `session_id`,
 `transcript_path`, `cwd` and `permission_mode` on stdin, which is the shape
 `sandbox/hook.mjs` already consumed for `SessionStart`.
 
-So `sandbox/entrypoint.sh` registers the rest, each as `agent-session-hook
+So `sandbox/entrypoint.sh` registers the rest, each as `fleetwright-session-hook
 <event> [matcher]`, and they post to `/internal/session-event` on the same
 socket with the same authority: the socket names the session, the body says
 only what happened.

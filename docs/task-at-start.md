@@ -81,7 +81,7 @@ loudly broken rather than subtly wrong.
 ## What shipped
 
 - **A host-side profile store**, `src/core/profiles.js` — `<name>.md` files
-  under `AGENT_HUB_PROFILE_DIR` (default `/var/lib/agent-hub/profiles`). Content
+  under `FLEETWRIGHT_PROFILE_DIR` (default `/var/lib/fleetwright/profiles`). Content
   never crosses the wire. The name charset has **no dot**, so `..` cannot be
   spelled, and the resolved path is compared to the directory anyway.
 - **`start { profile }`** as a bounded name, **refused** when the host does not

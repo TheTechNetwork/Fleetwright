@@ -5,13 +5,13 @@
 #   sudo /opt/fleetwright/current/install/uninstall.sh --purge  the above plus the code
 #   sudo /opt/fleetwright/current/install/uninstall.sh --yes    do not ask
 #
-# (On a checkout install the script lives under /opt/agent-fleet/install/ and
+# (On a checkout install the script lives under /opt/fleetwright-src/install/ and
 # --purge removes that checkout instead.)
 #
 # WHY THIS EXISTS, beyond tidiness.
 #
 # A cloned VM is the case that needs it. Cloning a box that has been installed
-# copies /var/lib/agent-fleet/host-key.json, and that file IS this machine's
+# copies /var/lib/fleetwright-sidecar/host-key.json, and that file IS this machine's
 # identity in the fleet — "whoever can read it can be this machine, and nothing
 # else can". Two boxes with the same key are one host as far as the coordinator
 # is concerned, and they will take turns holding the socket, each disconnecting
@@ -21,7 +21,7 @@
 #
 # WHAT IT DELIBERATELY DOES NOT TOUCH:
 #
-#   ~/agent-runs   the workspaces sessions ran in. That is work, not config.
+#   ~/fleetwright-runs   the workspaces sessions ran in. That is work, not config.
 #   tmux sessions  running sessions are left alone; stopping the services does
 #                  not kill them, which is the whole point of KillMode=process.
 #   node, tmux,    installed as dependencies, but something else on the box may
@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
       printf 'usage: uninstall.sh [--purge] [--yes]\n\n'
       printf '  --purge  also remove the code: every release under /opt/fleetwright, or the checkout\n'
       printf '  --yes    do not ask for confirmation\n\n'
-      printf 'Leaves ~/agent-runs, running tmux sessions, and node/tmux/podman/claude alone.\n'
+      printf 'Leaves ~/fleetwright-runs, running tmux sessions, and node/tmux/podman/claude alone.\n'
       exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -67,15 +67,18 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # release under /opt/fleetwright exactly where it was. A purge that removed a
 # pointer and called the code gone.
 #
-# A release tree is told apart the way install.sh tells it: lib/agent-hub.mjs
+# A release tree is told apart the way install.sh tells it: lib/fleetwright.mjs
 # exists in a release and not in a checkout. The base is the one install.sh
 # uses, so the two agree without either reading the other.
-FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+FLEET_BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 PACKAGED=0
-if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
+if [ -f "$DIR/lib/fleetwright.mjs" ]; then PACKAGED=1; fi
 if [ "$PACKAGED" = 1 ]; then PURGE_DIR="$FLEET_BASE"; else PURGE_DIR="$DIR"; fi
-RUN_USER="${AGENT_HUB_USER:-${SUDO_USER:-root}}"
-SERVICES=(agent-hub agent-fleet-sidecar agent-fleet-coordinator)
+RUN_USER="${FLEETWRIGHT_USER:-${SUDO_USER:-root}}"
+# The old names too: a box can be uninstalled without ever having been migrated
+# off agent-hub, and a service left running under its old name is still a host
+# in somebody's fleet. src/fleet/legacy-names.js has the whole list.
+SERVICES=(fleetwright fleetwright-sidecar fleetwright-coordinator agent-hub agent-fleet-sidecar agent-fleet-coordinator)
 
 # --- what is actually here, before anything is removed ----------------------
 # Shown first, because "uninstall" on a box that turns out to be a different
@@ -83,8 +86,8 @@ SERVICES=(agent-hub agent-fleet-sidecar agent-fleet-coordinator)
 # part worth reading: it is what the coordinator knows this machine as.
 say "About to remove"
 printf '  host     %s\n' "$(hostname 2>/dev/null || echo unknown)"
-if [ -f /var/lib/agent-fleet/host-key.json ]; then
-  FP="$(sudo -u "$RUN_USER" "$DIR/bin/agent-fleet-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+if [ -f /var/lib/fleetwright-sidecar/host-key.json ] || [ -f /var/lib/agent-fleet/host-key.json ]; then
+  FP="$(sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
   printf '  identity %s\n' "${FP:-present, could not read fingerprint}"
   printf '           THIS IS THE FLEET IDENTITY. Removing it means this box\n'
   printf '           gets a new one and must be enrolled again — and if this\n'
@@ -92,11 +95,12 @@ if [ -f /var/lib/agent-fleet/host-key.json ]; then
 else
   printf '  identity none\n'
 fi
-for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
-  [ -f "$f" ] && printf '  config   %s\n' "$f"
+for f in /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env \
+         /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
+  [ -f "$f" ] && [ ! -L "$f" ] && printf '  config   %s\n' "$f"
 done
 [ "$PURGE" = 1 ] && printf '  code     %s (--purge)\n' "$PURGE_DIR"
-printf '\n  Left alone: ~%s/agent-runs, running tmux sessions, node/tmux/podman/claude.\n' "$RUN_USER"
+printf '\n  Left alone: ~%s/fleetwright-runs, running tmux sessions, node/tmux/podman/claude.\n' "$RUN_USER"
 
 if [ "$ASSUME_YES" != 1 ]; then
   printf '\n  Type the hostname to confirm: '
@@ -120,12 +124,15 @@ done
 # is Linux-only. Left behind, it would keep firing against a box that no longer
 # has a release layout to revert to.
 if [ "$PLATFORM" = linux ]; then
-  systemctl disable --now agent-fleet-confirm.timer >/dev/null 2>&1 && ok "commit-confirm watchdog stopped and disabled" || true
-  rm -f /etc/systemd/system/agent-fleet-confirm.timer /etc/systemd/system/agent-fleet-confirm.service
+  systemctl disable --now fleetwright-confirm.timer >/dev/null 2>&1 && ok "commit-confirm watchdog stopped and disabled" || true
+  systemctl disable --now agent-fleet-confirm.timer >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/fleetwright-confirm.timer /etc/systemd/system/fleetwright-confirm.service \
+        /etc/systemd/system/agent-fleet-confirm.timer /etc/systemd/system/agent-fleet-confirm.service
   # The two oneshots the system-updates grant names. Its sudoers rule goes
   # below; the units it permitted starting stayed, and a purged package left
   # them in /etc/systemd/system naming an apt run nobody had asked for.
-  rm -f /etc/systemd/system/agent-hub-upgrade.service /etc/systemd/system/agent-hub-apt-update.service
+  rm -f /etc/systemd/system/fleetwright-upgrade.service /etc/systemd/system/fleetwright-apt-update.service \
+        /etc/systemd/system/agent-hub-upgrade.service /etc/systemd/system/agent-hub-apt-update.service
 fi
 [ "$PLATFORM" = linux ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
 ok "service definitions removed"
@@ -134,20 +141,30 @@ ok "service definitions removed"
 say "Removing identity and state"
 # The key first and by name, so that a failure anywhere after this cannot leave
 # a box holding an identity it is no longer configured to use.
-if [ -f /var/lib/agent-fleet/host-key.json ]; then
-  rm -f /var/lib/agent-fleet/host-key.json
-  ok "host key removed — this box is no longer any machine in any fleet"
-fi
-for d in /var/lib/agent-fleet /var/lib/agent-hub /var/lib/agent-fleet-coordinator; do
+for key in /var/lib/fleetwright-sidecar/host-key.json /var/lib/agent-fleet/host-key.json; do
+  if [ -f "$key" ] && [ ! -L "$key" ]; then
+    rm -f "$key"
+    ok "host key removed — this box is no longer any machine in any fleet"
+  fi
+done
+for d in /var/lib/fleetwright-sidecar /var/lib/fleetwright /var/lib/fleetwright-coordinator \
+         /var/lib/agent-fleet /var/lib/agent-hub /var/lib/agent-fleet-coordinator; do
+  # A symlink left by the rename goes as a link; its target is in this list too.
+  if [ -L "$d" ]; then rm -f "$d"; ok "$d"; continue; fi
   [ -d "$d" ] && { rm -rf "${d:?}"; ok "$d"; }
 done
-rm -rf /run/agent-fleet 2>/dev/null || true
+rm -rf /run/fleetwright-sidecar 2>/dev/null || true
 
 say "Removing configuration"
-for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
+for f in /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env \
+         /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
+  [ -L "$f" ] && { rm -f "$f"; ok "$f"; continue; }
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
 for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-migrate /etc/sudoers.d/agent-hub-reclaim; do
+  [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
+done
+for f in /etc/sudoers.d/fleetwright-upgrade /etc/sudoers.d/fleetwright-reboot /etc/sudoers.d/fleetwright-migrate /etc/sudoers.d/fleetwright-reclaim; do
   [ -f "$f" ] && { rm -f "$f"; ok "$f"; }
 done
 # THE ROOT HELPER GOES WITH ITS RULE. It is the one thing the installer puts
@@ -169,7 +186,7 @@ if [ -f /usr/local/sbin/fleetwright-reclaim ]; then
 fi
 
 say "Removing the CLIs"
-for c in agent-hub agent-fleet-sidecar agent-fleet-coordinator fleetwright fw; do
+for c in fleetwright fleetwright-sidecar fleetwright-coordinator fw agent-hub agent-fleet-sidecar agent-fleet-coordinator; do
   [ -L "/usr/local/bin/$c" ] || [ -f "/usr/local/bin/$c" ] && { rm -f "/usr/local/bin/$c"; ok "/usr/local/bin/$c"; }
 done
 
@@ -188,17 +205,17 @@ if [ -f "$SETTINGS" ] && command -v node >/dev/null; then
     const before = JSON.stringify(s.hooks ?? {});
     for (const event of Object.keys(s.hooks ?? {})) {
       s.hooks[event] = (s.hooks[event] ?? []).filter((entry) =>
-        !JSON.stringify(entry).includes("agent-hub"));
+        !JSON.stringify(entry).includes("fleetwright"));
       if (!s.hooks[event].length) delete s.hooks[event];
     }
     if (JSON.stringify(s.hooks ?? {}) === before) process.exit(0);
     // Written through a temp file and renamed, because a half-written
     // settings.json is a Claude Code that will not start at all.
-    const tmp = f + ".tmp-agent-hub-uninstall";
+    const tmp = f + ".tmp-fleetwright-uninstall";
     fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + "\n");
     fs.renameSync(tmp, f);
     console.log("  ok   removed the SessionStart hook from " + f);
-  ' "$SETTINGS" || warn "could not edit $SETTINGS — remove the agent-hub SessionStart hook by hand"
+  ' "$SETTINGS" || warn "could not edit $SETTINGS — remove the fleetwright SessionStart hook by hand"
 else
   ok "no settings.json to edit"
 fi

@@ -9,7 +9,7 @@ Section: admin
 Priority: optional
 Homepage: https://github.com/TheTechNetwork/Fleetwright
 Description: Fleetwright host: Claude Code sessions a fleet can reach
- The session manager (agent-hub), the fleet sidecar and the MCP server, laid
+ The session manager (fleetwright), the fleet sidecar and the MCP server, laid
  out under /opt/fleetwright exactly as the one-line installer lays them out,
  with the Node runtime they need carried in /usr/lib/fleetwright/node.
  .

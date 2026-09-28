@@ -160,7 +160,7 @@ test('the dangerous verbs are not exposed by default', () => {
 
   // AND `update` IS EXPOSED, on the same argument. The refusal lumped it in as
   // "restarts machines", which is true of reboot and false of this:
-  // agent-hub.service sets KillMode=process precisely so restarting the service
+  // fleetwright.service sets KillMode=process precisely so restarting the service
   // does not reap the tmux server holding every session — a comment that calls
   // itself load-bearing and names the outage that taught it.
   //
@@ -301,11 +301,11 @@ test('the binary speaks the protocol on stdio, against a real socket', async () 
   await new Promise((r) => fleet.listen(0, '127.0.0.1', () => r(null)));
   const port = /** @type {any} */ (fleet.address()).port;
 
-  const mcp = spawn(process.execPath, [path.join(root, 'bin/agent-fleet-mcp')], {
+  const mcp = spawn(process.execPath, [path.join(root, 'bin/fleetwright-mcp')], {
     env: {
       ...process.env,
-      AGENT_FLEET_COORDINATOR_URL: `http://127.0.0.1:${port}`,
-      AGENT_FLEET_CREDENTIAL: 'fwk_abc_def',
+      FLEETWRIGHT_COORDINATOR_URL: `http://127.0.0.1:${port}`,
+      FLEETWRIGHT_CREDENTIAL: 'fwk_abc_def',
     },
   });
   let out = '';
@@ -336,13 +336,13 @@ test('the binary refuses to start without a fleet to talk to', async () => {
   const { fileURLToPath } = await import('node:url');
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-  const r = spawnSync(process.execPath, [path.join(root, 'bin/agent-fleet-mcp')], {
-    env: { ...process.env, AGENT_FLEET_COORDINATOR_URL: '', AGENT_FLEET_CREDENTIAL: '' },
+  const r = spawnSync(process.execPath, [path.join(root, 'bin/fleetwright-mcp')], {
+    env: { ...process.env, FLEETWRIGHT_COORDINATOR_URL: '', FLEETWRIGHT_CREDENTIAL: '' },
     encoding: 'utf8',
   });
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '', 'nothing but protocol on stdout, even when refusing');
-  assert.match(r.stderr, /AGENT_FLEET_CREDENTIAL/);
+  assert.match(r.stderr, /FLEETWRIGHT_CREDENTIAL/);
 });
 
 // --- the lifecycle contract -------------------------------------------------

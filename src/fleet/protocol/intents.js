@@ -43,7 +43,7 @@
 // parse. Sharing a source file across that boundary is fine; sharing trust
 // across it is not.
 //
-// Behind the sidecar there is a second allowlist — agent-hub's own command
+// Behind the sidecar there is a second allowlist — fleetwright's own command
 // registry — but do not lean on it. `POST /api/command` runs whatever line it
 // is handed, `/login` included, and the sidecar holds the token. The verb set
 // below is what stands between a compromised coordinator and that endpoint.
@@ -181,10 +181,10 @@ function isRescue(env) {
 }
 
 /**
- * Session names, matching agent-hub's charset (`src/core/names.js`).
+ * Session names, matching fleetwright's charset (`src/core/names.js`).
  *
  * The leading character MUST be alphanumeric, and that is load-bearing rather
- * than cosmetic. agent-hub's command parser treats any whitespace-separated
+ * than cosmetic. fleetwright's command parser treats any whitespace-separated
  * token beginning with `--` as a flag, so a session named `--dangerous` would
  * turn `/stop --dangerous` into a flag with no argument. Anchoring the first
  * character is what makes "a name can never become a flag" true by
@@ -192,7 +192,7 @@ function isRescue(env) {
  */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
-// Text a PERSON wrote is cleaned by src/core/text.js, which agent-hub's HTTP
+// Text a PERSON wrote is cleaned by src/core/text.js, which fleetwright's HTTP
 // API also uses. Two doors into the same storage validating separately is the
 // shape of a bug this project has already paid for once.
 
@@ -266,7 +266,7 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  *    also allows. But `link` and `renew` WRITE a credential, and no amount of
  *    `start` does that — see the blast-radius note at the top of this file.
  *
- *  - **No path parameter anywhere.** agent-hub's `/new <name> <path>` takes any
+ *  - **No path parameter anywhere.** fleetwright's `/new <name> <path>` takes any
  *    path with no validation (a known gap, §1), and a sandboxed session's
  *    working directory is a fixed `/work` mount anyway (§2). Leaving the
  *    parameter out entirely removes the question rather than answering it — the
@@ -464,7 +464,7 @@ export const VERBS = Object.freeze({
   // HOW WORK IS AIMED, changed from a phone. Third sibling of `channel` and
   // `sandbox`, same storage and the same refuse-rather-than-lie rule.
   //
-  // Labels came from AGENT_FLEET_LABELS in a root-owned env file and from
+  // Labels came from FLEETWRIGHT_LABELS in a root-owned env file and from
   // auto-labels.js, so "this box is on the noisy switch, keep long jobs off it"
   // was a decision somebody could make and not express.
   //
@@ -487,7 +487,7 @@ export const VERBS = Object.freeze({
     summary:
       'The labels a host carries, and where each one came from: `auto` is a fact the machine derives ' +
       'about itself (os, architecture, distribution, whether its image has a browser), `env` is ' +
-      'AGENT_FLEET_LABELS at install time, and `set` is one added from here. Ask with no parameters for ' +
+      'FLEETWRIGHT_LABELS at install time, and `set` is one added from here. Ask with no parameters for ' +
       'the list. Only a `set` label can be removed; the other two are refused and say why. Labels are ' +
       'what `tag` matches on when work is aimed at part of a fleet.',
   },
@@ -1216,7 +1216,7 @@ function checkParam(verb, key, ps, value) {
     if (!/^[\x21-\x7e]+$/.test(value) || /['"\\]/.test(value)) {
       return bad(`${verb}.${key} does not look like a credential — send just the token or code itself`);
     }
-    // AND IT MAY NOT BEGIN WITH A DASH. agent-hub's parser reads any token
+    // AND IT MAY NOT BEGIN WITH A DASH. fleetwright's parser reads any token
     // matching `-word` as a FLAG, so a credential starting with one would stop
     // being an argument at all — and, worse, a value like `--host` would be
     // read as the flag that selects the box's shared row. No provider issues a

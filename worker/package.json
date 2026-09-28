@@ -1,5 +1,5 @@
 {
-  "name": "agent-fleet-worker",
+  "name": "fleetwright-worker",
   "private": true,
   "type": "module",
   "scripts": {

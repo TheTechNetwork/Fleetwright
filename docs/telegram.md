@@ -95,7 +95,7 @@ which asserts every route in it is reachable by one of them.
 
 ## Turning it back on
 
-It is not wired. `AGENT_HUB_TELEGRAM_TOKEN` is still read, only so that
+It is not wired. `FLEETWRIGHT_TELEGRAM_TOKEN` is still read, only so that
 setting it produces a warning saying this rather than silently doing
 nothing — a feature that is configured and absent is worse than one that
 is plainly gone.

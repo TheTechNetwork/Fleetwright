@@ -28,7 +28,7 @@ test('a box that does not know where its releases come from says so', () => {
   assert.equal(m.reason, 'unconfigured');
   // Names the variable and the remedy. "Cannot migrate" on its own is a
   // sentence nobody can act on.
-  assert.match(m.message, /AGENT_HUB_RELEASE_MANIFEST/);
+  assert.match(m.message, /FLEETWRIGHT_RELEASE_MANIFEST/);
   assert.match(m.message, /--upgrade/);
 });
 
@@ -59,7 +59,7 @@ test('the helper path is outside anything the service user can write', () => {
   // naming a script in that tree would let the service rewrite what it runs as
   // root.
   assert.equal(MIGRATE_BIN, '/usr/local/sbin/fleetwright-migrate');
-  assert.doesNotMatch(MIGRATE_BIN, /agent-fleet|fleetwright\/(current|releases)/);
+  assert.doesNotMatch(MIGRATE_BIN, /\/opt\/(fleetwright-src|agent-fleet)|fleetwright\/(current|releases)/);
 });
 
 test('a failed migration says nothing was switched over', () => {
@@ -239,11 +239,11 @@ test('the siblings are told before the helper runs, and told even when it fails'
     restart: () => { order.push('exit'); },
     head: 'main-102',
     actor: 'fleet:eli@example.com',
-    stateDir: '/var/lib/agent-hub',
+    stateDir: '/var/lib/fleetwright',
     logger: { info() {}, warn() {} },
   });
   assert.equal(heal.scheduled, true);
-  assert.deepEqual(order, ['mark main-102 by fleet:eli@example.com in /var/lib/agent-hub', 'helper', 'exit'],
+  assert.deepEqual(order, ['mark main-102 by fleet:eli@example.com in /var/lib/fleetwright', 'helper', 'exit'],
     'the marker goes down first — a sibling the installer restarts starts after it and ignores it; one it fails to restart picks it up');
 });
 
@@ -353,7 +353,7 @@ test('no helper, or no copy to compare against, is cannot tell and not stale', (
     if (!(p in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     return Buffer.from(files[p]);
   };
-  assert.equal(helperState({ installRoot: '/opt/agent-fleet', read }), null, 'a tree with no copy');
+  assert.equal(helperState({ installRoot: '/opt/fleetwright-src', read }), null, 'a tree with no copy');
   assert.equal(helperState({ installRoot: '/opt/x', bin: '/nowhere', read }), null, 'no helper at all');
 });
 

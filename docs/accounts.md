@@ -27,7 +27,7 @@ to make that one choice safely.
    session starts
         │
         ├── who asked?           the verified email, from the coordinator
-        ├── have they linked?    ~/.agent-fleet/accounts/<email>.json
+        ├── have they linked?    ~/.fleetwright/accounts/<email>.json
         │        yes ──▶ seed that
         │        no  ──▶ seed the shared org credential
         └── record which was used, on the session
@@ -39,7 +39,7 @@ People conflate these, and every wrong answer here comes from doing so.
 
 | | what it answers | where it lives today |
 |---|---|---|
-| **Fleet identity** | may you talk to this fleet at all | OIDC → `AGENT_FLEET_AUTH_ALLOW` → a per-device credential |
+| **Fleet identity** | may you talk to this fleet at all | OIDC → `FLEETWRIGHT_AUTH_ALLOW` → a per-device credential |
 | **Role** | may you do destructive things, and whose sessions may you see | `client.admin`, set for the first person in |
 | **Claude account** | which account the work is billed to and runs as | **new** — the file seeded into the session's volume |
 
@@ -224,7 +224,7 @@ is one people stop reading.
 
 ## Inviting somebody — done
 
-Adding a person meant editing `AGENT_FLEET_AUTH_ALLOW` and deploying: a code
+Adding a person meant editing `FLEETWRIGHT_AUTH_ALLOW` and deploying: a code
 change per person, made by the one person who could already do everything. It
 is a screen now (`docs/../src/fleet/coordinator/invites.js`), and the two lists
 answer two different questions:
@@ -282,7 +282,7 @@ change *whose* account is used and *who is billed*; they do not remove the
 durable secret. That is the same recursion `trust.md` describes, and the same
 answer applies: fewer, better-protected places.
 
-**Attribution is only as good as the hub token.** agent-hub does not verify the
+**Attribution is only as good as the hub token.** fleetwright does not verify the
 actor and cannot — it has one token, and whoever holds it can already run any
 command as anyone. So the record says what an already-trusted caller claimed.
 That is strictly better than `web`, which was never informative, and it is **not

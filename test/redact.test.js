@@ -98,7 +98,7 @@ test('a Telegram token that is set is reported as inert, not ignored', async () 
     'a box carrying a token is not told the adapter is gone',
   );
 
-  // AND NOTHING IS SAID WHEN IT IS ABSENT. "No AGENT_HUB_TELEGRAM_TOKEN — the
+  // AND NOTHING IS SAID WHEN IT IS ABSENT. "No FLEETWRIGHT_TELEGRAM_TOKEN — the
   // Telegram adapter is disabled" told every box in the fleet about a feature
   // that no longer exists, on every start, for ever.
   const without = /** @type {any} */ ({ telegram: { token: '' }, webEnabled: true, token: 'a'.repeat(24) });

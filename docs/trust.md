@@ -94,7 +94,7 @@ session fetches the value at runtime over the credential broker. The
 coordinator learns that a secret named `github-deploy` was requested and
 nothing else. This needs no cryptography, and it is where I started.
 
-**Built, protocol v4.** The store is `AGENT_HUB_SECRETS_DIR` (one file per
+**Built, protocol v4.** The store is `FLEETWRIGHT_SECRETS_DIR` (one file per
 name); `start --secret <name>` records the grant on the session; the session
 reads the value with `fleet-secret <name>` over the per-session socket, scoped
 to what it was granted, logged by name and never by value. `secrets` lists the
@@ -660,7 +660,7 @@ Two mechanisms, because `gh` and `git` want different things:
   process's environment for the life of one command, and never in a file, never
   in the session's shell, never in `~/.config/gh/hosts.yml`.
 
-The socket is the one that already exists: `/run/agent-fleet/<name>.sock`,
+The socket is the one that already exists: `/run/fleetwright-sidecar/<name>.sock`,
 bind-mounted into that session's container and nowhere else. The sidecar knows
 which session is asking because of which socket it arrived on, so a session
 cannot ask for another session's scope. That is the same unforgeability the
@@ -893,12 +893,12 @@ is separate work from either mechanism.
 ## What was missing under all of it, and now is not
 
 **Hosts had no identity.** Every host presented the same
-`AGENT_FLEET_HOST_TOKEN`, so the fleet could not distinguish one from another,
+`FLEETWRIGHT_HOST_TOKEN`, so the fleet could not distinguish one from another,
 could not revoke one, and — the part that mattered here — had nothing to
 encrypt a secret *to*.
 
 Each host now holds a P-256 keypair. The private half lives at
-`/var/lib/agent-fleet/host-key.json`, 0600, generated on first run and never
+`/var/lib/fleetwright-sidecar/host-key.json`, 0600, generated on first run and never
 sent anywhere; the coordinator keeps the public half and a name. Connecting is
 signing a nonce the coordinator issued seconds earlier, so nothing reusable
 crosses the wire — a captured connection yields a signature over a value that
@@ -926,7 +926,7 @@ rest of this document buildable rather than aspirational.
    custody.
 2. ~~**Secret references.**~~ **Done** (protocol v4). `start --secret <name>`
    names a secret the host holds; the coordinator learns the name and nothing
-   else, the host resolves it from its own store (`AGENT_HUB_SECRETS_DIR`), and
+   else, the host resolves it from its own store (`FLEETWRIGHT_SECRETS_DIR`), and
    the session fetches the value at runtime over the credential broker — the
    version this document argued for, materially more than "seed it the way
    credentials are seeded now", because the value never enters the container's

@@ -47,7 +47,7 @@ function isExecutableFile(p) {
  * Resolve a binary name to an absolute path.
  *
  * A name containing a slash is already a path and is returned untouched, so an
- * operator who sets AGENT_HUB_CLAUDE_BIN explicitly always wins. If nothing is
+ * operator who sets FLEETWRIGHT_CLAUDE_BIN explicitly always wins. If nothing is
  * found the original name comes back unchanged — the caller's error message
  * ("is claude on PATH?") is more useful than a synthetic one from here.
  *

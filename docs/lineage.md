@@ -1,50 +1,48 @@
-# The agent-hub lineage
+# Where Fleetwright came from
 
-The session manager in this project — `src/index.js`, `src/config.js`,
-`src/log.js`, `src/core/`, `src/adapters/`, `src/web/`, `bin/agent-hub`,
-`install/` — comes from
-[`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub).
-It is **upstream code we intend to contribute back to**, not a fork we intend to
-keep.
+Fleetwright began from [`ambersecurityinc/agent-hub`](https://github.com/ambersecurityinc/agent-hub),
+a single-box Claude Code session manager. The session manager here — the hub,
+`src/core/`, `src/adapters/`, `src/web/`, `bin/fleetwright` — started as that
+code. Everything around it (the fleet, the coordinator, the apps, the sandbox,
+packaging) was built here.
+
+**It is a spin-off, not a fork that tracks upstream.** It was first kept at
+agent-hub's own paths and names so that changes could be contributed back file
+for file. That stopped being the plan: the project renamed everything to
+Fleetwright — commands, units, files, settings — and does not track upstream.
 
 | | |
 |---|---|
-| Upstream | `https://github.com/ambersecurityinc/agent-hub` |
-| Taken from | `cac1f02` — *Fix the two things that broke the first real session on a fresh box* (upstream `main`) |
-| Taken on | 2026-08-17 |
-| Licence | MIT, © Amber Security Inc — kept verbatim as [`LICENSE-agent-hub`](../LICENSE-agent-hub) |
+| Began from | `cac1f02` — *Fix the two things that broke the first real session on a fresh box* (agent-hub `main`) |
+| On | 2026-08-17 |
+| Licence | MIT, © Amber Security Inc — kept verbatim as [`LICENSE-agent-hub`](../LICENSE-agent-hub), as the licence requires |
 
-## Why the paths are what they are
+## The rename, and what still says agent-hub
 
-Those files sit at **exactly their upstream paths**. That is deliberate and it
-is the one thing that keeps a future contribution cheap: the diff is
-file-for-file, with no renames to unpick and no import rewriting to review.
+Before the rename a box was made of agent-hub and agent-fleet names:
+`agent-hub.service`, `/etc/agent-hub.env` with `AGENT_HUB_*` settings,
+`/var/lib/agent-fleet/host-key.json`. Existing boxes move onto the new names the
+next time an installer runs on them, which the next update does — see
+`install/install.sh`, "the names from before the rename". Until then, and for
+anything written by hand with the old names, `src/fleet/legacy-names.js` reads
+them under the new ones.
 
-Fleet code lives under `src/fleet/` and nowhere else. Keeping that separation is
-what makes it possible to say what has changed upstream-of-us and what is ours.
+Four things keep their old names on purpose:
 
-## How to produce the contribution diff
+| | why |
+|---|---|
+| the coordinator Worker's script name, `agent-fleet-coordinator` | its Durable Object namespace — the whole fleet — belongs to the script name; a renamed Worker starts empty |
+| the signing context, `agent-fleet/v1/…` | it is inside every signature a host makes and the coordinator checks; changing it would split the fleet in two |
+| `agent-hub`, `agent-fleet-sidecar`, `agent-fleet-mcp` in `bin/` and a release's `lib/` | one-line aliases, because an unmigrated box's units name them for the one update that migrates it |
+| `agent-fleet` as a GitHub Actions OIDC audience | accepted beside `fleetwright`, because runner repositories copied before the rename ask for it |
 
-```sh
-git clone https://github.com/ambersecurityinc/agent-hub /tmp/upstream
-cd /tmp/upstream && git checkout cac1f02
-for f in src/index.js src/config.js src/log.js src/core src/adapters src/web bin/agent-hub install test/parsing.test.js; do
-  diff -ru "/tmp/upstream/$f" "/path/to/agent-fleet/$f"
-done
-```
+The history in `CHANGELOG.md` keeps the names it was written with.
 
-Two rules keep that diff small and reviewable:
+## What changed first, from `cac1f02`
 
-1. **No fleet code in those paths.** Everything the fleet needs from the session
-   manager, it gets over the loopback HTTP API from `src/fleet/host/` — see
-   [`sidecar.md`](./sidecar.md). If fleet concerns start leaking into `src/core/`
-   or `src/adapters/`, the upstream contribution stops being possible and this
-   becomes a fork by default rather than by decision.
-2. **Every change there stands on its own merits** to an agent-hub user who has
-   never heard of agent-fleet. If a change only makes sense because of the
-   fleet, it belongs in `src/fleet/`.
-
-## What has diverged from `cac1f02`
+These were the first changes made to the session manager after it was taken,
+recorded when the plan was still to send them upstream. They are kept as the
+record of why the code is shaped the way it is.
 
 ### 1. De-wrap the pane before reading the Remote Control URL
 
@@ -76,9 +74,9 @@ Three parts:
   `claude.ai/code` across two rows and matches nothing.
 
 No behaviour change at 80 columns, which is the only width the existing captures
-cover. Ready to go upstream as-is.
+cover.
 
-### 2. The ephemeral root sandbox (`AGENT_HUB_SANDBOX`)
+### 2. The ephemeral root sandbox (`FLEETWRIGHT_SANDBOX`)
 
 design.md §2, implemented. Config-gated and **off by default**, so a box without
 podman behaves exactly as before — which is what makes it contributable rather
@@ -90,7 +88,7 @@ than a fork.
   the image name.
 - `src/core/sessions.js` — creates and seeds volumes before launch, skips host
   trust entirely (the image bakes it), and `/forget` now deletes the volumes.
-- `src/config.js` — the `AGENT_HUB_SANDBOX*` block.
+- `src/config.js` — the `FLEETWRIGHT_SANDBOX*` block.
 
 Nothing in `tmux.js`, `registry.js` or the reconcile logic changed, which is the
 point: it is still one tmux session per agent, and `--rm` plus
@@ -127,7 +125,7 @@ does not already have (`systemctl restart` from an unprivileged unit would need
 polkit rules). Sessions are untouched, which is exactly what `KillMode=process`
 in the unit is for.
 
-Stands on its own merits for any agent-hub deployment. Contributable as-is.
+Stands on its own merits for any deployment of the session manager.
 
 ### 4. `setLogStream()` in `src/log.js`
 
@@ -136,7 +134,7 @@ console** can send every level to stderr. The sidecar in stdio mode writes
 newline-delimited JSON to stdout, where an `info` line is not noise — it is a
 corrupted message.
 
-The default stdout/stderr split is unchanged, so this is inert for agent-hub
+The default stdout/stderr split is unchanged, so this is inert for fleetwright
 itself. It stands on its own merits (any tool embedding the logger in a
 pipeline wants it) but it is the weakest of the candidates, and would be fine
 to drop from a contribution.
@@ -144,8 +142,8 @@ to drop from a contribution.
 ### 5. `install/install.sh` is now the whole project's installer
 
 It sets up the sidecar and coordinator configs and builds the sandbox image
-alongside everything it did before. **This one is not contributable as-is** —
-it is the monorepo's installer now, and an upstream PR would exclude it. The
+alongside everything it did before. It became the monorepo's installer, the first sign
+this was going to be a project of its own. The
 systemd unit and the env example it copies are untouched.
 
 ## Not carried over
@@ -168,6 +166,6 @@ with no name at all, and `/stop --safe` is a stop with no target.
 The fleet protocol closes this on its own side by anchoring the first character
 (`src/fleet/protocol/intents.js`), and `test/intents.test.js` pins both halves so
 nobody removes the anchor as redundant. Fixing `core/names.js` itself is a
-behaviour change for existing agent-hub deployments — a session someone already
-named `_build` would stop validating — so it belongs in an upstream
-conversation, not in a quiet edit here.
+behaviour change for existing deployments — a session someone already named
+`_build` would stop validating — so it was left for a deliberate change rather
+than a quiet edit.

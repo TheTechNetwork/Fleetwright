@@ -1,5 +1,5 @@
 [Unit]
-Description=agent-fleet coordinator — where the fleet meets
+Description=fleetwright coordinator — where the fleet meets
 Documentation=https://github.com/TheTechNetwork/Fleetwright
 After=network-online.target
 Wants=network-online.target
@@ -17,7 +17,7 @@ Type=simple
 # shim from the path systemd takes at all.
 User=__USER__
 WorkingDirectory=__DIR__
-EnvironmentFile=/etc/agent-fleet-coordinator.env
+EnvironmentFile=/etc/fleetwright-coordinator.env
 ExecStart=__NODE__ __ENTRY__
 
 Restart=always
@@ -27,7 +27,7 @@ RestartSec=3
 # sessions are untouched. What DOES have to survive is the membership list:
 # which hosts are enrolled, and their public keys. Lose that and every box in
 # the fleet is refused until somebody re-enrols it by hand.
-StateDirectory=agent-fleet-coordinator
+StateDirectory=fleetwright-coordinator
 StateDirectoryMode=0700
 
 KillMode=control-group
@@ -42,7 +42,7 @@ ProtectHome=read-only
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agent-fleet-coordinator
+SyslogIdentifier=fleetwright-coordinator
 
 [Install]
 WantedBy=multi-user.target

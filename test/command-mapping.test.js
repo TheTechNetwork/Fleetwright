@@ -1,6 +1,6 @@
 // Every verb's command line must be one the command actually parses.
 //
-// `/upgrade apply` looked right and did nothing: agent-hub's upgrade reads
+// `/upgrade apply` looked right and did nothing: fleetwright's upgrade reads
 // `flags.has('apply')`, and parse() only puts a DASH-PREFIXED token into flags,
 // so a positional `apply` was silently the reporting mode. The symptom was
 // exact and misleading — tapping "Apply upgrade" returned the check text,

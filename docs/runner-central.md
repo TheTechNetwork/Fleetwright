@@ -140,7 +140,7 @@ ends up with; the ticket is that value doing a second job.
 Both apps offer it beside the pin for a permanent host — a platform, the
 minutes, one button — and only when `/api/hosts` says `runners` is set. A
 fleet with no runner repository refuses `provision` with a sentence naming
-`AGENT_FLEET_RUNNER_REPO`, which is the right answer for an agent that asked
+`FLEETWRIGHT_RUNNER_REPO`, which is the right answer for an agent that asked
 and a dead button on every fleet that has not configured one; so the snapshot
 carries the repository and the control is drawn from that. The reply lands on
 the same screen, and it says what this page says: a dispatch is not a machine.
@@ -192,7 +192,7 @@ disagree, and none of it has been run.
 
 So it is written to **fail before enrolling rather than after**: a preflight
 checks pacman, tmux and that `node` is visible from the MSYS2 shell, and the
-run aborts if agent-hub does not answer. A runner that joins a fleet and then
+run aborts if fleetwright does not answer. A runner that joins a fleet and then
 cannot start a session is worse than one that never joined — it gets placed on,
 accepts work, and loses it.
 
@@ -209,7 +209,7 @@ the largest of these and it was missing from this document, which is worse than
 the gap itself: everything above describes getting a machine and nothing said
 what that machine can actually check out.
 
-A runner's `AGENT_HUB_STATE_DIR` is a fresh directory under `runner.temp`, so
+A runner's `FLEETWRIGHT_STATE_DIR` is a fresh directory under `runner.temp`, so
 its credential store is empty — connections are per person and live on the box
 they were made on, and a machine that has existed for ninety seconds has none.
 It gets `ANTHROPIC_API_KEY` and that is the whole list. The job's own

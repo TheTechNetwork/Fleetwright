@@ -105,13 +105,13 @@ jobs:
       - name: Be a host until the clock runs out
         working-directory: fleet
         env:
-          AGENT_FLEET_HOST_ID: gha-win-${{ github.run_id }}-${{ github.run_attempt }}
-          AGENT_FLEET_COORDINATOR_URL: ${{ inputs.coordinator }}
-          AGENT_FLEET_LABELS: windows,ephemeral
-          AGENT_HUB_SANDBOX: '0'
+          FLEETWRIGHT_HOST_ID: gha-win-${{ github.run_id }}-${{ github.run_attempt }}
+          FLEETWRIGHT_COORDINATOR_URL: ${{ inputs.coordinator }}
+          FLEETWRIGHT_LABELS: windows,ephemeral
+          FLEETWRIGHT_SANDBOX: '0'
           MINUTES: ${{ inputs.minutes }}
           TICKET: ${{ inputs.ticket }}
-          CLAIM: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
+          CLAIM: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN || secrets.AGENT_FLEET_RUNNER_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           [ -n "${TICKET:-}" ] && echo "::add-mask::$TICKET"
@@ -124,18 +124,18 @@ jobs:
           # exists to test.
           base="$(pwd)/../runtime"
           mkdir -p "$base/work" "$base/state" "$base/sockets"
-          export AGENT_HUB_WORKDIR="$(cygpath -w "$base/work")"
-          export AGENT_HUB_STATE_DIR="$(cygpath -w "$base/state")"
-          export AGENT_FLEET_HOST_KEY="$(cygpath -w "$base/state/host-key.json")"
-          export AGENT_FLEET_HOOK_SOCKET_DIR="$(cygpath -w "$base/sockets")"
+          export FLEETWRIGHT_WORKDIR="$(cygpath -w "$base/work")"
+          export FLEETWRIGHT_STATE_DIR="$(cygpath -w "$base/state")"
+          export FLEETWRIGHT_HOST_KEY="$(cygpath -w "$base/state/host-key.json")"
+          export FLEETWRIGHT_HOOK_SOCKET_DIR="$(cygpath -w "$base/sockets")"
 
-          node bin/agent-hub serve &
+          node bin/fleetwright serve &
           HUB=$!
           for _ in $(seq 1 30); do
             curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" && break || sleep 1
           done
           curl -sf -o /dev/null "http://127.0.0.1:8790/healthz" || {
-            echo "::error::agent-hub did not come up on this machine. Nothing has enrolled, which is the intended failure."
+            echo "::error::fleetwright did not come up on this machine. Nothing has enrolled, which is the intended failure."
             exit 1
           }
 
@@ -145,12 +145,12 @@ jobs:
             echo "::error::No ticket and no FLEETWRIGHT_RUNNER_TOKEN secret, so the fleet cannot tell whose runner this is."
             exit 1
           fi
-          node bin/agent-fleet-sidecar enrol-actions "$WHOSE"
+          node bin/fleetwright-sidecar enrol-actions "$WHOSE"
 
           set +e
-          node bin/agent-fleet-sidecar &
+          node bin/fleetwright-sidecar &
           SIDECAR=$!
-          echo "::notice::Enrolled as $AGENT_FLEET_HOST_ID for $MINUTES minutes."
+          echo "::notice::Enrolled as $FLEETWRIGHT_HOST_ID for $MINUTES minutes."
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start."
           fi

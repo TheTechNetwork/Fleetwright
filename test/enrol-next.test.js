@@ -1,5 +1,5 @@
 // Enrolment used to end with "Start the sidecar: sudo systemctl restart
-// agent-fleet-sidecar", printed whatever the box was doing. On the common path
+// fleetwright-sidecar", printed whatever the box was doing. On the common path
 // — a sidecar already running, which is what the installer leaves behind — that
 // instruction is wrong: the running process reconnects on its own.
 

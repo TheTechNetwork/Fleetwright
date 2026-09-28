@@ -15,7 +15,7 @@ Description: Enrolment pin:
  admin token. It is spent once and not kept.
  .
  Blank is fine: enrol whenever you have one with
- sudo -u <service user> agent-fleet-sidecar enrol <pin>
+ sudo -u <service user> fleetwright-sidecar enrol <pin>
 
 Template: fleetwright/user
 Type: string

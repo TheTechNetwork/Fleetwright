@@ -9,7 +9,7 @@ if [ -z "${BASH_VERSION:-}" ]; then
   exit 2
 fi
 
-# agent-fleet installer — the whole thing, in one script.
+# fleetwright installer — the whole thing, in one script.
 #
 #   curl -fsSL https://fleet.thetech.network/install | sudo sh
 #
@@ -18,21 +18,21 @@ fi
 # never needs git. By hand, from a checkout, which is what a box somebody edits
 # gets (`--from-source` asks the one-liner for the same):
 #
-#   git clone https://github.com/TheTechNetwork/Fleetwright /opt/agent-fleet
-#   sudo /opt/agent-fleet/install/install.sh
+#   git clone https://github.com/TheTechNetwork/Fleetwright /opt/fleetwright-src
+#   sudo /opt/fleetwright-src/install/install.sh
 #
 # Sets up both halves: the session manager (systemd service, SessionStart hook,
 # CLI) and the fleet sidecar (config, CLI). There is nothing else to run and
 # nothing to hand-copy between files.
 #
 # Idempotent: re-run it after `git pull` to pick up changes. It never overwrites
-# /etc/agent-hub.env or /etc/agent-fleet-sidecar.env once those exist, so your
+# /etc/fleetwright.env or /etc/fleetwright-sidecar.env once those exist, so your
 # tokens and allowlist survive every upgrade.
 set -euo pipefail
 
 # WHERE THE PAYLOAD IS — beside this script, unless told otherwise.
 #
-# AGENT_FLEET_PAYLOAD EXISTS TO BREAK ONE DEPENDENCY, and it is the reason this
+# FLEETWRIGHT_PAYLOAD EXISTS TO BREAK ONE DEPENDENCY, and it is the reason this
 # project stopped needing a release to fix its own installer.
 #
 # A migration lays a release out and then has to re-point the systemd units at
@@ -63,14 +63,27 @@ set -euo pipefail
 # THE TEMPLATES COME FROM HERE, AND THAT IS THE WHOLE POINT. install_unit read
 # `$DIR/install/<name>.service`, and $DIR is the PAYLOAD — so a box pointing its
 # units at a release read that RELEASE's unit template. v0.2.3's predates
-# __ENTRY__ and hardcodes `__DIR__/bin/agent-hub`, so the substitution found
+# __ENTRY__ and hardcodes `__DIR__/bin/fleetwright`, so the substitution found
 # nothing to replace and every repair wrote the same broken unit, on a box whose
 # installer had been correct for hours.
 #
 # The installer that is running is the newest thing on the box — it is what
 # `curl … | sudo sh` just updated. Its templates are the ones to use.
+# SETTINGS FROM BEFORE THE RENAME, read under their new names. A coordinator
+# deployed before it serves an /install that exports
+# AGENT_FLEET_COORDINATOR_URL, and somebody's muscle memory types
+# AGENT_HUB_NODE_BIN; both still work. The new name wins when both are set.
+# src/fleet/legacy-names.js is the same rule for the Node code.
+for __legacy in $(env | sed -n 's/^\(AGENT_\(HUB\|FLEET\)_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  __new="FLEETWRIGHT_${__legacy#AGENT_*_}"
+  if [ -z "$(eval "printf '%s' \"\${$__new:-}\"")" ]; then
+    eval "export $__new=\"\${$__legacy}\""
+  fi
+done
+unset __legacy __new
+
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIR="${AGENT_FLEET_PAYLOAD:-$SELF_DIR}"
+DIR="${FLEETWRIGHT_PAYLOAD:-$SELF_DIR}"
 
 # A RELEASE, OR A CHECKOUT. The two differ in exactly one way that matters here:
 # a release carries its dependencies already bundled into lib/, so there is no
@@ -82,7 +95,7 @@ DIR="${AGENT_FLEET_PAYLOAD:-$SELF_DIR}"
 # because the person running it got here by unpacking a tarball and has no
 # reason to know there are two shapes.
 PACKAGED=0
-if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
+if [ -f "$DIR/lib/fleetwright.mjs" ]; then PACKAGED=1; fi
 
 # A RELEASE IS INSTALLED BESIDE THE ONE BEFORE IT, never over it. The layout is
 # the rollback:
@@ -96,7 +109,7 @@ if [ -f "$DIR/lib/agent-hub.mjs" ]; then PACKAGED=1; fi
 # running process is reading is being written to. A checkout install keeps
 # running in place, because a checkout is a thing somebody edits and moving it
 # under them would be its own kind of rude.
-FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+FLEET_BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 # THE LAY-OUT ITSELF HAPPENS AFTER THE ARGUMENTS ARE READ, further down. It
 # used to be right here, and this file has learned that lesson once already:
 # "Ordering is the entire fix. Anything that can refuse this install has to
@@ -113,7 +126,7 @@ FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 # out of a checkout?
 #
 # THE ONE-LINER RE-RAN AND QUIETLY UN-MIGRATED A CONVERTED BOX. bootstrap.sh
-# updates /opt/agent-fleet and runs the install.sh inside it, so PACKAGED is 0 —
+# updates /opt/fleetwright-src and runs the install.sh inside it, so PACKAGED is 0 —
 # and everything below then re-pointed the units and the CLI links back at the
 # checkout, undoing a conversion nobody asked to undo, before offering to
 # convert again. The repeated offer was the visible half of a revert.
@@ -125,17 +138,178 @@ FLEET_BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
 # `warn` was defined killed the installer under `set -e` on exactly the boxes it
 # was added to rescue.
 
-# Set only when the new agent-hub has been SEEN to start. Section 8 will not
+# Set only when the new fleetwright has been SEEN to start. Section 8 will not
 # remove the install it replaced without it.
 SERVICES_STARTED=0
 OLD_UNIT_BACKUP_DIR=""
-ENV_FILE=/etc/agent-hub.env
-SIDECAR_ENV=/etc/agent-fleet-sidecar.env
-COORD_ENV=/etc/agent-fleet-coordinator.env
+ENV_FILE=/etc/fleetwright.env
+SIDECAR_ENV=/etc/fleetwright-sidecar.env
+COORD_ENV=/etc/fleetwright-coordinator.env
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  ok   %s\n' "$*"; }
 warn() { printf '  warn %s\n' "$*"; }
 die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
+
+# --- the names from before the rename ---------------------------------------
+#
+# FLEETWRIGHT WAS agent-hub AND agent-fleet UNTIL THE RENAME, and a box
+# installed before it is made of those names: agent-hub.service,
+# /etc/agent-hub.env full of AGENT_HUB_*, /var/lib/agent-fleet holding the
+# host key, sudoers rules naming the old units. This moves it onto the new
+# names, once, the first time a new installer runs on it — which the next
+# update does (the heal runs the release's installer with --repair).
+#
+# FIRST, BEFORE ANYTHING READS A UNIT. The two blocks below ask the units which
+# user this service runs as and whether the box is on packaged releases, and
+# both ask by the NEW names. Asked before this, an unmigrated box answers
+# "no unit" to both: the service user becomes whoever ran sudo, and the box is
+# treated as a checkout. That is the exact failure the RUN_USER comment
+# describes, reached a new way.
+#
+# NOTHING IS STOPPED HERE. Files move and the old paths become symlinks, so a
+# service still running under its old unit keeps finding everything; the old
+# unit is stopped only by start_service, immediately before its replacement
+# starts, and the sweep at the end starts the replacement of anything that was
+# running and that no other step restarted. KillMode=process on the hub is
+# what makes that safe mid-heal: stopping the old unit signals the hub alone,
+# not the helper and installer it spawned, and not the tmux sessions.
+#
+# Only what can be moved without a decision is moved. A new name that already
+# exists is left alone and said, never merged.
+LEGACY_RUNNING=""   # new unit names whose old unit was active
+LEGACY_UNITS=""     # old unit names to stop before their replacement starts
+legacy_unit_for() { # legacy_unit_for NEW → OLD, or nothing
+  case "$1" in
+    fleetwright) echo agent-hub ;;
+    fleetwright-sidecar) echo agent-fleet-sidecar ;;
+    fleetwright-coordinator) echo agent-fleet-coordinator ;;
+    fleetwright-upgrade) echo agent-hub-upgrade ;;
+    fleetwright-apt-update) echo agent-hub-apt-update ;;
+    fleetwright-confirm) echo agent-fleet-confirm ;;
+  esac
+}
+# Stop the old unit, if this box had one, the moment before its replacement
+# starts — never earlier, so a run that fails half way leaves the old service
+# running rather than nothing.
+stop_legacy_unit() { # stop_legacy_unit NEW
+  local old; old="$(legacy_unit_for "$1")"
+  [ -n "$old" ] || return 0
+  case " $LEGACY_UNITS " in *" $old "*) ;; *) return 0 ;; esac
+  systemctl stop "$old" >/dev/null 2>&1 || true
+}
+migrate_legacy_names() {
+  [ "$(id -u)" = 0 ] || return 0
+  for a in "$@"; do case "$a" in --check|-n|-h|--help) return 0 ;; esac; done
+
+  # UNITS, renamed on disk so the reads below find them. Contents untouched:
+  # install_unit rewrites every one of them a few sections down, and until then
+  # the old text is exactly the record those reads want.
+  local pair old new f
+  for pair in agent-hub:fleetwright agent-fleet-sidecar:fleetwright-sidecar \
+              agent-fleet-coordinator:fleetwright-coordinator \
+              agent-hub-upgrade:fleetwright-upgrade agent-hub-apt-update:fleetwright-apt-update; do
+    old="${pair%%:*}"; new="${pair#*:}"
+    if [ -f "/etc/systemd/system/$old.service" ]; then
+      if systemctl is-active --quiet "$old" 2>/dev/null; then LEGACY_RUNNING="$LEGACY_RUNNING $new"; fi
+      systemctl disable "$old" >/dev/null 2>&1 || true
+      if [ -e "/etc/systemd/system/$new.service" ]; then
+        warn "/etc/systemd/system/$new.service already exists — leaving it, and removing $old.service"
+        rm -f "/etc/systemd/system/$old.service"
+      else
+        mv "/etc/systemd/system/$old.service" "/etc/systemd/system/$new.service"
+      fi
+      LEGACY_UNITS="$LEGACY_UNITS $old"
+      ok "unit $old → $new"
+    fi
+    if [ -f "/Library/LaunchDaemons/network.thetech.$old.plist" ]; then
+      launchctl bootout "system/network.thetech.$old" >/dev/null 2>&1 && LEGACY_RUNNING="$LEGACY_RUNNING $new" || true
+      [ -e "/Library/LaunchDaemons/network.thetech.$new.plist" ] \
+        || mv "/Library/LaunchDaemons/network.thetech.$old.plist" "/Library/LaunchDaemons/network.thetech.$new.plist"
+      rm -f "/Library/LaunchDaemons/network.thetech.$old.plist"
+      ok "launchd $old → $new"
+    fi
+  done
+  # The watchdog is a timer and a oneshot; stopped outright, because the new
+  # one is armed by the start step and two would race over one trial record.
+  for f in service timer; do
+    if [ -f "/etc/systemd/system/agent-fleet-confirm.$f" ]; then
+      systemctl disable --now "agent-fleet-confirm.$f" >/dev/null 2>&1 || true
+      rm -f "/etc/systemd/system/agent-fleet-confirm.$f"
+      ok "unit agent-fleet-confirm.$f removed — fleetwright-confirm replaces it"
+    fi
+  done
+  [ -n "$LEGACY_UNITS" ] && { systemctl daemon-reload >/dev/null 2>&1 || true; }
+
+  # ENV FILES: moved, keys renamed, the old path left as a symlink. A key that
+  # would collide with one already renamed in the same file is commented out
+  # with a note rather than silently overriding it.
+  for pair in /etc/agent-hub.env:/etc/fleetwright.env \
+              /etc/agent-fleet-sidecar.env:/etc/fleetwright-sidecar.env \
+              /etc/agent-fleet-coordinator.env:/etc/fleetwright-coordinator.env; do
+    old="${pair%%:*}"; new="${pair#*:}"
+    [ -f "$old" ] && [ ! -L "$old" ] || continue
+    if [ -e "$new" ]; then warn "$new already exists — leaving $old where it is"; continue; fi
+    mv "$old" "$new"
+    ln -s "$new" "$old"
+    awk '
+      /^AGENT_(HUB|FLEET)_[A-Z0-9_]*=/ {
+        key = $0; sub(/=.*/, "", key); nk = key; sub(/^AGENT_(HUB|FLEET)_/, "FLEETWRIGHT_", nk)
+        if (nk in seen) { print "# renamed from " key ", which duplicated " nk " above: " $0; next }
+        seen[nk] = 1; sub(/^AGENT_(HUB|FLEET)_/, "FLEETWRIGHT_"); print; next
+      }
+      /^FLEETWRIGHT_[A-Z0-9_]*=/ { key = $0; sub(/=.*/, "", key); seen[key] = 1 }
+      { print }
+    ' "$new" \
+      | sed -e 's#/var/lib/agent-fleet-coordinator#/var/lib/fleetwright-coordinator#g' \
+            -e 's#/var/lib/agent-fleet/#/var/lib/fleetwright-sidecar/#g' \
+            -e 's#/var/lib/agent-fleet$#/var/lib/fleetwright-sidecar#' \
+            -e 's#/var/lib/agent-hub#/var/lib/fleetwright#g' \
+            -e 's#/run/agent-fleet#/run/fleetwright-sidecar#g' \
+            -e 's#/etc/agent-fleet-sidecar\.env#/etc/fleetwright-sidecar.env#g' \
+            -e 's#/etc/agent-fleet-coordinator\.env#/etc/fleetwright-coordinator.env#g' \
+            -e 's#/etc/agent-hub\.env#/etc/fleetwright.env#g' \
+      > "$new.renaming" && cat "$new.renaming" > "$new" && rm -f "$new.renaming"
+    ok "$old → $new, settings renamed to FLEETWRIGHT_*"
+  done
+
+  # STATE: moved whole, the old path a symlink, so an open file, a running
+  # sidecar reading its key, and any absolute path recorded anywhere still
+  # resolve. The host key in particular IS this box's identity in the fleet.
+  for pair in /var/lib/agent-hub:/var/lib/fleetwright \
+              /var/lib/agent-fleet:/var/lib/fleetwright-sidecar \
+              /var/lib/agent-fleet-coordinator:/var/lib/fleetwright-coordinator; do
+    old="${pair%%:*}"; new="${pair#*:}"
+    [ -d "$old" ] && [ ! -L "$old" ] || continue
+    if [ -e "$new" ]; then warn "$new already exists — leaving $old where it is"; continue; fi
+    mv "$old" "$new"
+    ln -s "$new" "$old"
+    ok "$old → $new"
+  done
+
+  # SUDOERS: the rules this box already agreed to, rewritten for the new unit
+  # names and validated before the old ones go. A rule that does not validate
+  # is left as it was — a broken sudoers.d file breaks sudo, not one rule.
+  for f in /etc/sudoers.d/agent-hub-*; do
+    [ -f "$f" ] || continue
+    new="/etc/sudoers.d/fleetwright-${f#/etc/sudoers.d/agent-hub-}"
+    if [ ! -e "$new" ]; then
+      sed -e 's/agent-hub-apt-update/fleetwright-apt-update/g' -e 's/agent-hub-upgrade/fleetwright-upgrade/g' \
+          -e 's/agent-fleet-sidecar/fleetwright-sidecar/g' -e 's/agent-fleet-coordinator/fleetwright-coordinator/g' \
+          -e 's/agent-hub/fleetwright/g' "$f" > "$new.tmp"
+      if command -v visudo >/dev/null 2>&1 && visudo -cf "$new.tmp" >/dev/null 2>&1; then
+        install -m 0440 "$new.tmp" "$new"
+      else
+        rm -f "$new.tmp"
+        warn "could not rewrite $f for the new names — left in place"
+        continue
+      fi
+      rm -f "$new.tmp"
+    fi
+    rm -f "$f"
+    ok "$f → $new"
+  done
+}
+migrate_legacy_names "$@"
 
 # MOVED DOWN, BECAUSE IT SPOKE BEFORE IT COULD SPEAK.
 #
@@ -156,8 +330,8 @@ die()  { printf '\n  FAIL %s\n\n' "$*" >&2; exit 1; }
 # is the same one: move the block, do not paper over the symptom.
 #
 CONVERTED=0
-if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
-   && grep -q "$FLEET_BASE/current" /etc/systemd/system/agent-hub.service 2>/dev/null; then
+if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/fleetwright.service ] \
+   && grep -q "$FLEET_BASE/current" /etc/systemd/system/fleetwright.service 2>/dev/null; then
   # AND THE RELEASE IT NAMES HAS TO BE THERE. "Converted" meant "the unit points
   # at the release tree", which is true of a box whose release tree is GONE —
   # and that is a state boxes reached, because an earlier installer deleted the
@@ -171,7 +345,7 @@ if [ "$PACKAGED" = 0 ] && [ -f /etc/systemd/system/agent-hub.service ] \
   # A box whose payload is missing is not converted. It is broken, and the
   # checkout beside it works — so it goes back to that, says so, and offers the
   # conversion again.
-  if [ -f "$FLEET_BASE/current/lib/agent-hub.mjs" ]; then
+  if [ -f "$FLEET_BASE/current/lib/fleetwright.mjs" ]; then
     CONVERTED=1
   else
     warn "$FLEET_BASE/current does not contain a usable release"
@@ -204,7 +378,7 @@ MISSING=()
 
 # WHO THIS SERVICE RUNS AS — READ FROM THE UNIT, NOT GUESSED FROM WHO IS TYPING.
 #
-# The order used to be AGENT_HUB_USER, then SUDO_USER, then whoever is running
+# The order used to be FLEETWRIGHT_USER, then SUDO_USER, then whoever is running
 # this. That is right for a FIRST install and wrong for every later one, because
 # on an existing box the service user is a property of the machine and not of
 # the person at the keyboard.
@@ -227,10 +401,10 @@ MISSING=()
 # them — a rerun silently changing whose service this is.
 #
 # The unit is the answer, which is the same rule fleetwright-migrate states
-# about what a box RUNS. An explicit AGENT_HUB_USER still wins: somebody setting
+# about what a box RUNS. An explicit FLEETWRIGHT_USER still wins: somebody setting
 # it is deliberately changing the answer.
 unit_user() {
-  for u in /etc/systemd/system/agent-hub.service /etc/systemd/system/agent-fleet-sidecar.service; do
+  for u in /etc/systemd/system/fleetwright.service /etc/systemd/system/fleetwright-sidecar.service; do
     [ -f "$u" ] || continue
     # `User=` only, and the first one: a unit has other lines with users in them.
     got="$(sed -n 's/^User=[[:space:]]*//p' "$u" | head -1)"
@@ -240,7 +414,7 @@ unit_user() {
   done
   return 1
 }
-RUN_USER="${AGENT_HUB_USER:-$(unit_user || printf '%s' "${SUDO_USER:-$(id -un)}")}"
+RUN_USER="${FLEETWRIGHT_USER:-$(unit_user || printf '%s' "${SUDO_USER:-$(id -un)}")}"
 
 # Resolved once, up here, because finding node depends on it — sudo hides
 # anything a version manager put in this directory.
@@ -266,6 +440,22 @@ user_home() {
   printf '%s' "$home"
 }
 USER_HOME="$(user_home "$RUN_USER")"
+
+# THE WORKSPACES, which are the one legacy path in somebody's home. Moved like
+# the state directories — whole, with a symlink left behind — so every session
+# the registry recorded by its absolute path, and every shell sitting in one,
+# still resolves. Only when nobody chose the place: a workdir set in the env
+# file is a decision, and it stays where it was put.
+if [ "$(id -u)" = 0 ] && [ -n "$USER_HOME" ] && [ -d "$USER_HOME/agent-runs" ] && [ ! -L "$USER_HOME/agent-runs" ] \
+   && [ ! -e "$USER_HOME/fleetwright-runs" ] \
+   && ! grep -qE '^(FLEETWRIGHT|AGENT_HUB)_WORKDIR=.' "$ENV_FILE" 2>/dev/null; then
+  case " $* " in *" --check "*|*" -n "*) ;; *)
+    mv "$USER_HOME/agent-runs" "$USER_HOME/fleetwright-runs"
+    ln -s fleetwright-runs "$USER_HOME/agent-runs"
+    chown -h "$RUN_USER" "$USER_HOME/agent-runs" 2>/dev/null || true
+    ok "~$RUN_USER/agent-runs → ~$RUN_USER/fleetwright-runs" ;;
+  esac
+fi
 USER_HOME="${USER_HOME:-$HOME}"
 
 # --check verifies the prerequisites and changes nothing. Worth having as a
@@ -322,7 +512,7 @@ while [ $# -gt 0 ]; do
     --upgrade)
       # AN ALREADY-CONFIGURED BOX, BROUGHT ONTO NEW CODE, WITH NO QUESTIONS.
       #
-      # `AGENT_HUB_NONINTERACTIVE=1` has always existed and does half the job:
+      # `FLEETWRIGHT_NONINTERACTIVE=1` has always existed and does half the job:
       # it skips the wizard, which is also where the services get restarted. So
       # an unattended run put the new code on disk and left the old code
       # RUNNING, reporting success — the exact failure update.js is written
@@ -360,15 +550,15 @@ else ASK_IN=""; fi
 # underneath debconf fights its frontend for the screen, and under Ansible or
 # unattended-upgrades there is nobody at all. So the package says so, and every
 # question takes its default or the answer it was handed.
-[ "${AGENT_HUB_ASK_NONE:-0}" = "1" ] && ASK_IN=""
+[ "${FLEETWRIGHT_ASK_NONE:-0}" = "1" ] && ASK_IN=""
 
 REPAIR="${REPAIR:-0}"
-[ "${AGENT_HUB_REPAIR:-0}" = "1" ] && { REPAIR=1; UPGRADE=1; WIZARD=no; }
+[ "${FLEETWRIGHT_REPAIR:-0}" = "1" ] && { REPAIR=1; UPGRADE=1; WIZARD=no; }
 FROM_SOURCE="${FROM_SOURCE:-0}"
-[ "${AGENT_HUB_FROM_SOURCE:-0}" = "1" ] && FROM_SOURCE=1
+[ "${FLEETWRIGHT_FROM_SOURCE:-0}" = "1" ] && FROM_SOURCE=1
 UPGRADE="${UPGRADE:-0}"
-[ "${AGENT_HUB_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
-[ "${AGENT_HUB_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
+[ "${FLEETWRIGHT_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
+[ "${FLEETWRIGHT_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
 if [ "$WIZARD" = auto ]; then
   # SOMEWHERE TO ASK, AND SOMEWHERE TO SHOW IT.
   #
@@ -428,7 +618,7 @@ fi
 # checklist". It is only ever used for packages from the distro's own
 # repositories — nothing here pipes a remote script into a shell.
 #
-# AGENT_HUB_NO_INSTALL_DEPS=1 turns it off for a box where package management is
+# FLEETWRIGHT_NO_INSTALL_DEPS=1 turns it off for a box where package management is
 # somebody else's job.
 # --- asking things ----------------------------------------------------------
 
@@ -541,7 +731,7 @@ refresh_release_if_converted() {
   [ "$CHECK_ONLY" != 1 ] || return 0
   [ "$PACKAGED" = 0 ] || return 0             # we ARE the release being laid out
   [ -z "${FLEETWRIGHT_MIGRATING:-}" ] || return 0   # the helper re-ran us; do not loop
-  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ] || return 0
+  [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ] || return 0
 
   # THE TREE'S HELPER, NOT THE INSTALLED SNAPSHOT. /usr/local/sbin's copy was
   # taken by whichever install ran last, so a fix to the helper would otherwise
@@ -576,7 +766,7 @@ as_user() {
 
 PKG_UPDATED=0
 pkg_install() {
-  [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ] && return 1
+  [ "${FLEETWRIGHT_NO_INSTALL_DEPS:-0}" = "1" ] && return 1
   # Homebrew REFUSES to run as root, which is the opposite of every package
   # manager below it — so this branch comes before the root check, and runs as
   # the invoking user rather than the one this script became.
@@ -602,14 +792,14 @@ pkg_install() {
 
 # Why it could not be installed, phrased for whoever has to fix it.
 pkg_why() {
-  if [ "${AGENT_HUB_NO_INSTALL_DEPS:-0}" = "1" ]; then printf 'AGENT_HUB_NO_INSTALL_DEPS=1 is set'
+  if [ "${FLEETWRIGHT_NO_INSTALL_DEPS:-0}" = "1" ]; then printf 'FLEETWRIGHT_NO_INSTALL_DEPS=1 is set'
   elif [ "$PLATFORM" = macos ]; then printf 'Homebrew is not installed — see https://brew.sh'
   elif [ "$(id -u)" != "0" ]; then printf 'not running as root — re-run with sudo'
   else printf 'no supported package manager found (apt, dnf, pacman, zypper, apk)'
   fi
 }
 
-say "agent-fleet installer${CHECK_ONLY:+}"
+say "fleetwright installer${CHECK_ONLY:+}"
 printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
 [ "$CHECK_ONLY" = 1 ] && printf '  mode   : --check (nothing will be changed)\n'
 
@@ -627,25 +817,25 @@ printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
 # key belongs to different hardware.
 previous_install() {
   FOUND=()
-  for f in /etc/agent-hub.env /etc/agent-fleet-sidecar.env /etc/agent-fleet-coordinator.env; do
+  for f in /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env; do
     [ -f "$f" ] && FOUND+=("config    $f")
   done
-  if [ -f /var/lib/agent-fleet/host-key.json ]; then
+  if [ -f /var/lib/fleetwright-sidecar/host-key.json ]; then
     local fp=""
-    fp="$(sudo -u "$RUN_USER" "$DIR/bin/agent-fleet-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
-    FOUND+=("IDENTITY  /var/lib/agent-fleet/host-key.json${fp:+  fingerprint $fp}")
+    fp="$(sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+    FOUND+=("IDENTITY  /var/lib/fleetwright-sidecar/host-key.json${fp:+  fingerprint $fp}")
   fi
-  for d in /var/lib/agent-hub /var/lib/agent-fleet-coordinator; do
+  for d in /var/lib/fleetwright /var/lib/fleetwright-coordinator; do
     [ -d "$d" ] && FOUND+=("state     $d")
   done
-  for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator agent-hub-upgrade agent-hub-apt-update; do
+  for u in fleetwright fleetwright-sidecar fleetwright-coordinator fleetwright-upgrade fleetwright-apt-update; do
     if [ "$PLATFORM" = macos ]; then
       [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] && FOUND+=("service   $u")
     else
       [ -f "/etc/systemd/system/$u.service" ] && FOUND+=("service   $u")
     fi
   done
-  for f in /etc/sudoers.d/agent-hub-upgrade /etc/sudoers.d/agent-hub-reboot /etc/sudoers.d/agent-hub-reclaim; do
+  for f in /etc/sudoers.d/fleetwright-upgrade /etc/sudoers.d/fleetwright-reboot /etc/sudoers.d/fleetwright-reclaim; do
     [ -f "$f" ] && FOUND+=("sudoers   $f")
   done
   # THE LAST COMMAND OF THIS FUNCTION DECIDES ITS EXIT STATUS, and the loop
@@ -672,14 +862,14 @@ previous_install() {
 # wrong. Read-only here; the rotation itself happens with the rest of the
 # identity work further down.
 CLONE=0
-if [ -f /var/lib/agent-fleet/host-key.json ] && [ -f /var/lib/agent-fleet/machine-id ]; then
+if [ -f /var/lib/fleetwright-sidecar/host-key.json ] && [ -f /var/lib/fleetwright-sidecar/machine-id ]; then
   NOW_ID=""
   if [ -r /etc/machine-id ]; then NOW_ID="$(cat /etc/machine-id)"
   elif [ -r /var/lib/dbus/machine-id ]; then NOW_ID="$(cat /var/lib/dbus/machine-id)"
   elif command -v ioreg >/dev/null 2>&1; then
     NOW_ID="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/ {print $4}')"
   fi
-  if [ -n "$NOW_ID" ] && [ "$(cat /var/lib/agent-fleet/machine-id 2>/dev/null)" != "$NOW_ID" ]; then
+  if [ -n "$NOW_ID" ] && [ "$(cat /var/lib/fleetwright-sidecar/machine-id 2>/dev/null)" != "$NOW_ID" ]; then
     CLONE=1
     [ "$CLEAN" = ask ] && CLEAN=yes
   fi
@@ -691,8 +881,8 @@ fi
 # part of that decision rather than furniture every box gets.
 install_upgrade_units() {
   [ "$PLATFORM" = macos ] && return 0
-  install_unit agent-hub-upgrade
-  install_unit agent-hub-apt-update
+  install_unit fleetwright-upgrade
+  install_unit fleetwright-apt-update
   systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
@@ -714,10 +904,10 @@ write_upgrade_sudoers() {
   tmp="$(mktemp)"
   # TWO NAMED UNITS, AND NOTHING THAT TAKES ARGUMENTS. This used to grant
   # three exact apt-get command lines, and the grant was the reason
-  # agent-hub.service could not keep ProtectSystem: sudo does not escape the
+  # fleetwright.service could not keep ProtectSystem: sudo does not escape the
   # hub's mount namespace, so the upgrade ran with the hub's read-only /usr and
   # /etc and dpkg failed on the first conffile. The upgrade now runs in
-  # install/agent-hub-upgrade.service — a oneshot with a namespace of its own —
+  # install/fleetwright-upgrade.service — a oneshot with a namespace of its own —
   # and the hub may only START it. `systemctl start <unit>` has no argument
   # anybody can widen; the flags live in the unit, owned by root.
   #
@@ -725,11 +915,11 @@ write_upgrade_sudoers() {
   # them when the unit grant is refused, so a box whose rule predates this
   # keeps upgrading the way it did until --repair moves it across.
   {
-    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start agent-hub-upgrade.service, ' "$RUN_USER"
-    printf '/usr/bin/systemctl start agent-hub-apt-update.service\n'
+    printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start fleetwright-upgrade.service, ' "$RUN_USER"
+    printf '/usr/bin/systemctl start fleetwright-apt-update.service\n'
   } > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
-    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-upgrade
+    install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-upgrade
     rm -f "$tmp"
     return 0
   fi
@@ -757,7 +947,7 @@ write_migrate_sudoers() {
   tmp="$(mktemp)"
   printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-migrate\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
-    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-migrate
+    install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-migrate
     rm -f "$tmp"
     return 0
   fi
@@ -770,7 +960,7 @@ write_reboot_sudoers() {
   tmp="$(mktemp)"
   printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl reboot\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
-    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-reboot
+    install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-reboot
     rm -f "$tmp"
     return 0
   fi
@@ -791,7 +981,7 @@ write_reclaim_sudoers() {
   tmp="$(mktemp)"
   printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/fleetwright-reclaim\n' "$RUN_USER" > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
-    install -m 0440 "$tmp" /etc/sudoers.d/agent-hub-reclaim
+    install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-reclaim
     rm -f "$tmp"
     return 0
   fi
@@ -893,15 +1083,15 @@ if [ -z "$NODE_BIN" ]; then
       die "node is not installed and could not be installed automatically ($(pkg_why)).
        Install Node $NODE_FLOOR or newer and re-run. If \`node -v\` already works for you,
        that is sudo's secure_path hiding it — point at it directly:
-           sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
+           sudo FLEETWRIGHT_NODE_BIN=\$(command -v node) $0"
     fi
   fi
 fi
 
 # An explicit override always wins.
-NODE_BIN="${AGENT_HUB_NODE_BIN:-${NODE_BIN:-}}"
+NODE_BIN="${FLEETWRIGHT_NODE_BIN:-${NODE_BIN:-}}"
 if [ -n "$NODE_BIN" ]; then
-  [ -x "$NODE_BIN" ] || die "AGENT_HUB_NODE_BIN=$NODE_BIN is not an executable file."
+  [ -x "$NODE_BIN" ] || die "FLEETWRIGHT_NODE_BIN=$NODE_BIN is not an executable file."
   NODE_MAJOR="$(node_major "$NODE_BIN")" || die "could not read a version from $NODE_BIN — is it really node?"
 
   # A distro whose nodejs package is older than we need. Say which, rather than
@@ -928,11 +1118,11 @@ if [ -n "$NODE_BIN" ]; then
        The prerequisite step installs it into your user's home with nvm, and is
        separate because changing how this machine gets software is not a thing
        an installer does on your behalf:
-           curl -fsSL ${AGENT_FLEET_COORDINATOR_URL:-https://fleet.thetech.network}/prereq | sudo sh
+           curl -fsSL ${FLEETWRIGHT_COORDINATOR_URL:-https://fleet.thetech.network}/prereq | sudo sh
 
        Or install node any other way — nvm, fnm, a backport — and re-run. If
        you already have one that sudo cannot see:
-           sudo AGENT_HUB_NODE_BIN=\$(command -v node) $0"
+           sudo FLEETWRIGHT_NODE_BIN=\$(command -v node) $0"
   ok "node $("$NODE_BIN" -v) at $NODE_BIN"
 fi
 
@@ -984,7 +1174,7 @@ if ! command -v tmux >/dev/null; then
 fi
 command -v tmux >/dev/null && ok "tmux $(tmux -V | awk '{print $2}')"
 
-# claude may legitimately be missing at this point — agent-hub can install
+# claude may legitimately be missing at this point — fleetwright can install
 # nothing for you, but it CAN log you in once it is running, so this is a
 # warning rather than a hard stop.
 CLAUDE_HOME="$USER_HOME"
@@ -992,7 +1182,7 @@ CLAUDE_HOME="$USER_HOME"
 # Look where the official installer actually puts it, not only on PATH. A login
 # shell does NOT necessarily see ~/.local/bin: Debian's stock ~/.bashrc returns
 # early for non-interactive shells, so the PATH line the Claude installer adds
-# there never runs for the `bash -lc` that launches sessions. agent-hub resolves
+# there never runs for the `bash -lc` that launches sessions. fleetwright resolves
 # an absolute path at startup (src/core/which.js) so this cannot bite it — but
 # report accurately here either way.
 CLAUDE_BIN=""
@@ -1009,15 +1199,15 @@ if [ -n "$CLAUDE_BIN" ]; then
   if as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     ok "claude is logged in"
   else
-    warn "claude is NOT logged in — once the service is up, run 'agent-hub login', or connect an account from the app"
+    warn "claude is NOT logged in — once the service is up, run 'fleetwright login', or connect an account from the app"
   fi
   # Put it on the login-shell PATH too, so an operator who SSHes in and types
-  # `claude` gets the same binary agent-hub uses.
+  # `claude` gets the same binary fleetwright uses.
   if ! as_user 'command -v claude' >/dev/null 2>&1; then
     BIN_DIR="$(dirname "$CLAUDE_BIN")"
     PROFILE="$CLAUDE_HOME/.profile"
     if ! grep -qF "$BIN_DIR" "$PROFILE" 2>/dev/null; then
-      printf '\n# added by agent-hub install.sh\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$PROFILE"
+      printf '\n# added by fleetwright install.sh\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$PROFILE"
       ok "added $BIN_DIR to $PROFILE (it was missing from the login-shell PATH)"
     fi
   fi
@@ -1042,7 +1232,7 @@ else
     done
     if [ -n "$CLAUDE_BIN" ]; then
       ok "installed claude $("$CLAUDE_BIN" --version 2>/dev/null | head -1) at $CLAUDE_BIN"
-      warn "claude is NOT logged in yet — run 'agent-hub login', or connect an account from the app"
+      warn "claude is NOT logged in yet — run 'fleetwright login', or connect an account from the app"
     else
       warn "the claude installer finished but no binary was found — see /tmp/claude-install.log"
     fi
@@ -1100,7 +1290,7 @@ fi
 # way back in except by hand.
 #
 # docs/packaging.md already states the rule this violated, about the packaged
-# installer: "Nothing is removed until the new agent-hub has been SEEN to
+# installer: "Nothing is removed until the new fleetwright has been SEEN to
 # start. Removing first would leave a box with neither." The same reasoning
 # governs the prerequisites, and only the packaged path had been taught it.
 #
@@ -1120,7 +1310,7 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
   # The identity is called out separately because it is the one thing here that
   # cannot be recreated: removing it means this box is no longer the host the
   # coordinator knows, and has to be enrolled again.
-  if [ -f /var/lib/agent-fleet/host-key.json ]; then
+  if [ -f /var/lib/fleetwright-sidecar/host-key.json ]; then
     printf '\n  The IDENTITY line is this box'"'"'s place in the fleet. Clearing it means\n'
     printf '  enrolling again, and removing the old entry from the coordinator.\n'
   fi
@@ -1173,7 +1363,7 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
       # Said BEFORE the gate, as what WOULD happen — "Removing." printed while
       # still asking whether to remove is the script claiming an action it has
       # not taken and might not take.
-      printf '\n  This would remove everything listed above. ~%s/agent-runs,\n' "$RUN_USER"
+      printf '\n  This would remove everything listed above. ~%s/fleetwright-runs,\n' "$RUN_USER"
       printf '  running sessions and node/tmux/claude are left alone.\n'
 
       # A second gate, and deliberately not [y/N]. A single keystroke is the
@@ -1181,7 +1371,7 @@ if [ ${#FOUND[@]} -gt 0 ] && [ "$CHECK_ONLY" = 0 ]; then
       # unrecoverable — the identity is a private key, and there is no copy.
       # Typing a word cannot be done by leaning on the return key.
       if [ -n "$ASK_IN" ]; then
-        if [ -f /var/lib/agent-fleet/host-key.json ]; then
+        if [ -f /var/lib/fleetwright-sidecar/host-key.json ]; then
           printf '\n  This deletes the host key. There is no copy, and the coordinator\n'
           printf '  will not recognise this box again until it is enrolled afresh.\n'
         fi
@@ -1210,7 +1400,7 @@ fi
 
 # --- 2. state directory -----------------------------------------------------
 say "Creating state directory"
-STATE_DIR="${AGENT_HUB_STATE_DIR:-/var/lib/agent-hub}"
+STATE_DIR="${FLEETWRIGHT_STATE_DIR:-/var/lib/fleetwright}"
 install -d -o "$RUN_USER" -m 0750 "$STATE_DIR"
 ok "$STATE_DIR"
 
@@ -1230,7 +1420,7 @@ ok "$STATE_DIR"
 # NEVER OVERWRITTEN. Re-running the installer is how you upgrade, and clobbering
 # a profile somebody wrote would be an upgrade that changes what their sessions
 # are told to do.
-PROFILE_DIR="${AGENT_HUB_PROFILE_DIR:-$STATE_DIR/profiles}"
+PROFILE_DIR="${FLEETWRIGHT_PROFILE_DIR:-$STATE_DIR/profiles}"
 install -d -o "$RUN_USER" -m 0750 "$PROFILE_DIR"
 for f in "$DIR"/install/profiles/*.md; do
   [ -e "$f" ] || continue
@@ -1250,7 +1440,7 @@ say "Configuration"
 if [ -f "$ENV_FILE" ]; then
   ok "$ENV_FILE already exists — left untouched"
 else
-  install -m 0600 "$DIR/install/agent-hub.env.example" "$ENV_FILE"
+  install -m 0600 "$DIR/install/fleetwright.env.example" "$ENV_FILE"
   ok "wrote $ENV_FILE from the template"
   ok "edit it to change anything — the defaults work"
 fi
@@ -1259,7 +1449,7 @@ fi
 # installed out of rather than baked in. A fork's boxes take the fork's
 # releases, and nobody has to be told to set a variable they have never heard
 # of — which is the state every box installed so far is in, and the reason
-# `/update` on a packaged host could only say "set AGENT_HUB_RELEASE_MANIFEST"
+# `/update` on a packaged host could only say "set FLEETWRIGHT_RELEASE_MANIFEST"
 # and stop.
 #
 # The STABLE address. `releases/latest/download` skips prereleases by GitHub's
@@ -1300,10 +1490,10 @@ release_manifest_url() { # release_manifest_url REMOTE
 # second updater with its own opinion of which version is current, and the two
 # would take turns moving `current`. src/core/release-check.js reads this and
 # asks apt instead. See docs/packaging.md, "Stable releases through apt".
-if [ "${AGENT_HUB_RELEASE_SOURCE:-}" = "apt" ] && [ "$CHECK_ONLY" != 1 ]; then
-  set_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE apt
+if [ "${FLEETWRIGHT_RELEASE_SOURCE:-}" = "apt" ] && [ "$CHECK_ONLY" != 1 ]; then
+  set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE apt
   ok "releases come from apt — the fleetwright package"
-elif [ "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE)" = "apt" ] && [ "$CHECK_ONLY" != 1 ] \
+elif [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" = "apt" ] && [ "$CHECK_ONLY" != 1 ] \
      && [ "$(dpkg-query -W -f='${Status}' fleetwright 2>/dev/null || true)" != "install ok installed" ]; then
   # THE PACKAGE WENT AND THE LINE STAYED. `apt remove` keeps /etc, so a box
   # moved back to the one-liner would go on asking apt about a package it no
@@ -1314,13 +1504,13 @@ elif [ "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE)" = "apt" ] && [ "$CHECK_
   ENVFILE="$ENV_FILE" "$NODE_BIN" -e '
     const fs = require("fs");
     const f = process.env.ENVFILE;
-    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^AGENT_HUB_RELEASE_SOURCE=.*$/m, "AGENT_HUB_RELEASE_SOURCE="));
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^FLEETWRIGHT_RELEASE_SOURCE=.*$/m, "FLEETWRIGHT_RELEASE_SOURCE="));
   '
   ok "the fleetwright package is gone — releases come from the manifest again"
 fi
 
-if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ] \
-   && [ "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_SOURCE)" != "apt" ]; then
+if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ] \
+   && [ "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_SOURCE)" != "apt" ]; then
   ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
   # TOLD, BEFORE IT IS GUESSED. A fresh box installed from a release has no
   # remote to read: bootstrap.sh fetched the manifest, verified the tarball
@@ -1328,17 +1518,17 @@ if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ] \
   # address this release was just checked against is the one `/update` should
   # read from. The remote is the answer for a checkout, where it is the only
   # thing that knows which repository this is.
-  if [ -n "${AGENT_HUB_RELEASE_MANIFEST:-}" ]; then
-    set_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "$AGENT_HUB_RELEASE_MANIFEST"
-    ok "releases come from $AGENT_HUB_RELEASE_MANIFEST"
+  if [ -n "${FLEETWRIGHT_RELEASE_MANIFEST:-}" ]; then
+    set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$FLEETWRIGHT_RELEASE_MANIFEST"
+    ok "releases come from $FLEETWRIGHT_RELEASE_MANIFEST"
   elif MANIFEST_URL=$(release_manifest_url "$ORIGIN"); then
-    set_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST "$MANIFEST_URL"
+    set_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "$MANIFEST_URL"
     ok "releases come from $MANIFEST_URL"
   else
     # Said rather than left silent. A box with no manifest URL is one whose
     # /update can only report that it cannot update, and finding that out on
     # the day it matters is the failure this whole line exists to avoid.
-    warn "could not tell which repository this came from, so AGENT_HUB_RELEASE_MANIFEST is unset"
+    warn "could not tell which repository this came from, so FLEETWRIGHT_RELEASE_MANIFEST is unset"
     warn "  set it in $ENV_FILE to the URL of a release manifest, or this box cannot take updates"
   fi
 fi
@@ -1370,7 +1560,7 @@ if [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
   if write_migrate_sudoers; then
     ok "the app can move this box onto packaged releases without a shell"
   else
-    warn "could not write /etc/sudoers.d/agent-hub-migrate — moving this box onto"
+    warn "could not write /etc/sudoers.d/fleetwright-migrate — moving this box onto"
     warn "  packaged releases will need: sudo /usr/local/sbin/fleetwright-migrate"
   fi
 fi
@@ -1381,7 +1571,7 @@ fi
 # run under sudo reports "claude on PATH: FAIL" on a box where the service is
 # perfectly happy. Recording the path removes the guess for both.
 if [ -n "$CLAUDE_BIN" ]; then
-  set_env "$ENV_FILE" AGENT_HUB_CLAUDE_BIN "$CLAUDE_BIN"
+  set_env "$ENV_FILE" FLEETWRIGHT_CLAUDE_BIN "$CLAUDE_BIN"
   ok "recorded claude at $CLAUDE_BIN in $ENV_FILE"
 fi
 
@@ -1394,7 +1584,7 @@ if [ -f "$SIDECAR_ENV" ]; then
   ok "$SIDECAR_ENV already exists — left untouched"
 else
   SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" \
-  TEMPLATE="$DIR/install/agent-fleet-sidecar.env.example" "$NODE_BIN" <<'NODE'
+  TEMPLATE="$DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
 
 // Read the hub's env the way systemd does: KEY=value, one per line, one layer
@@ -1412,17 +1602,17 @@ try {
 } catch { /* no hub env yet — defaults below are right anyway */ }
 
 // 0.0.0.0 and :: are bind addresses, not addresses to dial.
-let bind = hub.AGENT_HUB_BIND || '127.0.0.1';
+let bind = hub.FLEETWRIGHT_BIND || '127.0.0.1';
 if (bind === '0.0.0.0' || bind === '::' || bind === '') bind = '127.0.0.1';
-const port = hub.AGENT_HUB_PORT || '8790';
+const port = hub.FLEETWRIGHT_PORT || '8790';
 
 const filled = {
-  AGENT_FLEET_HUB_URL: `http://${bind}:${port}`,
-  AGENT_FLEET_HUB_TOKEN: hub.AGENT_HUB_TOKEN || '',
+  FLEETWRIGHT_HUB_URL: `http://${bind}:${port}`,
+  FLEETWRIGHT_HUB_TOKEN: hub.FLEETWRIGHT_TOKEN || '',
   // stdio is the only transport implemented, and this is a local placeholder
   // rather than a real remote origin — but the sidecar still refuses to start
   // without one, so filling it in keeps a fresh box working out of the box.
-  AGENT_FLEET_COORDINATOR_URL: 'stdio:local',
+  FLEETWRIGHT_COORDINATOR_URL: 'stdio:local',
 };
 
 const out = fs
@@ -1442,8 +1632,8 @@ fi
 
 # Reconcile the DERIVED values on every run, existing file or not.
 #
-# AGENT_FLEET_HUB_TOKEN is not an independent secret: it has to equal the hub's
-# AGENT_HUB_TOKEN or the sidecar cannot read /api/state, and the host joins the
+# FLEETWRIGHT_HUB_TOKEN is not an independent secret: it has to equal the hub's
+# FLEETWRIGHT_TOKEN or the sidecar cannot read /api/state, and the host joins the
 # fleet reporting "degraded — rejected the token". Copying it once at file
 # creation is wrong, because the hub token can be generated afterwards or
 # rotated later, and "already exists, left untouched" then freezes a value that
@@ -1474,11 +1664,11 @@ if (fs.existsSync(SIDECAR_ENV)) {
   const hub = read(HUB_ENV);
   const side = read(SIDECAR_ENV);
 
-  let bind = hub.AGENT_HUB_BIND || '127.0.0.1';
+  let bind = hub.FLEETWRIGHT_BIND || '127.0.0.1';
   if (bind === '0.0.0.0' || bind === '::' || bind === '') bind = '127.0.0.1';
   const want = {
-    AGENT_FLEET_HUB_URL: `http://${bind}:${hub.AGENT_HUB_PORT || '8790'}`,
-    AGENT_FLEET_HUB_TOKEN: hub.AGENT_HUB_TOKEN || '',
+    FLEETWRIGHT_HUB_URL: `http://${bind}:${hub.FLEETWRIGHT_PORT || '8790'}`,
+    FLEETWRIGHT_HUB_TOKEN: hub.FLEETWRIGHT_TOKEN || '',
   };
 
   let text = fs.readFileSync(SIDECAR_ENV, 'utf8');
@@ -1513,9 +1703,9 @@ refresh_release_if_converted
 
 say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd units")"
 
-# All three, not just agent-hub. Installing only the hub was a real bug with a
+# All three, not just fleetwright. Installing only the hub was a real bug with a
 # quiet symptom: the installer went on to call `systemctl enable --now
-# agent-fleet-sidecar` on a unit that did not exist, warned once, and finished
+# fleetwright-sidecar` on a unit that did not exist, warned once, and finished
 # looking successful — so the box never joined a fleet, and the coordinator it
 # was meant to join reported that no host had ever connected.
 # The same substitution either way; only the template and the destination
@@ -1532,7 +1722,7 @@ say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo 
 # Naming the module takes the shim out of systemd's path entirely. That also
 # fixes releases ALREADY ON DISK: the installer is updated by re-running the
 # one-liner, which costs nothing, while a payload can only be superseded. The
-# same reasoning as AGENT_FLEET_PAYLOAD, applied to the other half.
+# same reasoning as FLEETWRIGHT_PAYLOAD, applied to the other half.
 unit_entry() { # unit_entry NAME
   if [ -f "$DIR/lib/$1.mjs" ]; then printf '%s/lib/%s.mjs' "$DIR" "$1"
   else printf '%s/bin/%s' "$DIR" "$1"; fi
@@ -1590,7 +1780,7 @@ install_unit() { # install_unit NAME
 # record of where the previous install lived — and install_unit is about to
 # replace it. Section 8 reads these to know what it is replacing.
 OLD_UNIT_BACKUP_DIR="$(mktemp -d)"
-for u in agent-hub agent-fleet-sidecar agent-fleet-coordinator agent-hub-upgrade agent-hub-apt-update; do
+for u in fleetwright fleetwright-sidecar fleetwright-coordinator fleetwright-upgrade fleetwright-apt-update; do
   if [ "$PLATFORM" = macos ]; then
     [ -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] \
       && cp "/Library/LaunchDaemons/network.thetech.$u.plist" "$OLD_UNIT_BACKUP_DIR/$u.service" || true
@@ -1607,7 +1797,7 @@ done
 # what needs replacing.
 #
 # deb13-staging was already converted, with a unit written before units named
-# the module — `node .../current/bin/agent-hub`, against a release whose bin/ is
+# the module — `node .../current/bin/fleetwright`, against a release whose bin/ is
 # a shell shim. It had been in a restart loop for thirty-odd attempts. The
 # re-run that could have fixed it politely left it broken.
 #
@@ -1620,8 +1810,8 @@ if [ "$CONVERTED" = 1 ] && [ "$FROM_SOURCE" = 0 ]; then
   DIR="$FLEET_BASE/current"
 fi
 
-install_unit agent-hub
-install_unit agent-fleet-sidecar
+install_unit fleetwright
+install_unit fleetwright-sidecar
 # ONLY IF THE PAYLOAD HAS ONE. A release deliberately ships no coordinator —
 # that moved to a Cloudflare Worker — so writing this unit on a packaged box
 # produces a service pointing at a file that was never in the tarball, which
@@ -1630,13 +1820,13 @@ install_unit agent-fleet-sidecar
 #
 # A checkout still has it, so a box running its own coordinator keeps working
 # and `--from-source` keeps that possible on purpose.
-if [ -f "$DIR/bin/agent-fleet-coordinator" ]; then
-  install_unit agent-fleet-coordinator
+if [ -f "$DIR/bin/fleetwright-coordinator" ]; then
+  install_unit fleetwright-coordinator
 else
   ok "no coordinator in this payload — it runs as a Worker, so no unit is written"
 
   # AND RETIRE A LEFTOVER LOCAL ONE. A release ships no coordinator, so a
-  # packaged box that still has an agent-fleet-coordinator unit is carrying a
+  # packaged box that still has an fleetwright-coordinator unit is carrying a
   # checkout artifact from before it was packaged: a loopback coordinator with no
   # hosts, drifting on old code that no update here touches — the coordinator is
   # not in the payload, so applyRelease and this installer both pass it by, and
@@ -1656,14 +1846,14 @@ else
   # undone by a restart in the same run, and the leftover reappeared on the next
   # update besides. Deleting the file and reloading is what makes the retirement
   # stick: nothing can find it to restart, this run or any later one.
-  if [ "$PLATFORM" != macos ] && [ -f /etc/systemd/system/agent-fleet-coordinator.service ]; then
-    COORD_URL="$(sed -n 's/^AGENT_FLEET_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
+  if [ "$PLATFORM" != macos ] && [ -f /etc/systemd/system/fleetwright-coordinator.service ]; then
+    COORD_URL="$(sed -n 's/^FLEETWRIGHT_COORDINATOR_URL=//p' "$SIDECAR_ENV" 2>/dev/null | tail -1 | sed 's/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/')"
     case "$COORD_URL" in
       ''|stdio:*|*127.0.0.1*|*localhost*)
         : ;;  # local, loopback, or unset — the local coordinator may be in use
       *://*)
-        systemctl disable --now agent-fleet-coordinator >/dev/null 2>&1 || true
-        rm -f /etc/systemd/system/agent-fleet-coordinator.service
+        systemctl disable --now fleetwright-coordinator >/dev/null 2>&1 || true
+        rm -f /etc/systemd/system/fleetwright-coordinator.service
         systemctl daemon-reload >/dev/null 2>&1 || true
         ok "retired the leftover local coordinator — this box is packaged and uses the remote one ($COORD_URL)"
         # The env and state stay: harmless, and removing them is a bigger
@@ -1691,8 +1881,8 @@ if [ "$PACKAGED" = 1 ] && [ "$PLATFORM" != macos ] && [ "$CHECK_ONLY" != 1 ]; th
     # Owner root, mode 0755 — the watchdog must not be rewritable by the service
     # user it protects, or the thing being watched could edit its own watcher.
     install -m 0755 -o root -g root "$CONFIRM_SRC/install/fleetwright-confirm" /usr/local/sbin/fleetwright-confirm
-    install_unit agent-fleet-confirm
-    install -m 0644 -o root -g root "$CONFIRM_SRC/install/agent-fleet-confirm.timer" /etc/systemd/system/agent-fleet-confirm.timer
+    install_unit fleetwright-confirm
+    install -m 0644 -o root -g root "$CONFIRM_SRC/install/fleetwright-confirm.timer" /etc/systemd/system/fleetwright-confirm.timer
     ok "commit-confirm watchdog installed (reverts an update that cannot prove itself)"
   fi
 fi
@@ -1752,18 +1942,18 @@ else
   # unit file is written and will work the moment systemd is running — so this
   # is a note, not a failure.
   warn "systemd is not running here, so the units were written but not loaded."
-  warn "  Start the hub directly instead:  $UNIT_NODE_BIN $DIR/bin/agent-hub serve"
+  warn "  Start the hub directly instead:  $UNIT_NODE_BIN $DIR/bin/fleetwright serve"
   HAVE_SYSTEMD=0
 fi
 
 # --- 5. the SessionStart hook ----------------------------------------------
 # This is what makes resume reliable: Claude hands the hook its own session id
-# and transcript path, so the conversation uuid agent-hub records is
+# and transcript path, so the conversation uuid fleetwright records is
 # authoritative rather than guessed.
 say "Installing the Claude Code SessionStart hook"
 SETTINGS="${CLAUDE_HOME:-$HOME}/.claude/settings.json"
 install -d -o "$RUN_USER" -m 0755 "$(dirname "$SETTINGS")"
-HOOK_CMD="$DIR/bin/agent-hub hook"
+HOOK_CMD="$DIR/bin/fleetwright hook"
 
 # Merged with node rather than sed: settings.json holds the operator's own
 # hooks, theme and permissions, and a text-level edit would eventually eat one.
@@ -1786,6 +1976,31 @@ settings.hooks.SessionStart ||= [];
 
 let dirty = false;
 
+// THE HOOK FROM BEFORE THE RENAME is `<dir>/bin/agent-hub hook`. Left beside
+// the new one, both would run and every session start would be reported
+// twice; so it is rewritten in place, keeping whatever matcher group it is in.
+for (const group of settings.hooks.SessionStart) {
+  for (const h of group?.hooks ?? []) {
+    if (typeof h?.command === 'string' && /\/bin\/agent-hub hook$/.test(h.command)) {
+      h.command = cmd;
+      dirty = true;
+      console.log('  ok   SessionStart hook renamed from agent-hub');
+    }
+  }
+}
+// And only once, if the new one was there as well.
+const seen = new Set();
+for (const group of settings.hooks.SessionStart) {
+  if (!Array.isArray(group?.hooks)) continue;
+  group.hooks = group.hooks.filter((h) => {
+    if (h?.command !== cmd) return true;
+    if (seen.has(cmd)) { dirty = true; return false; }
+    seen.add(cmd);
+    return true;
+  });
+}
+settings.hooks.SessionStart = settings.hooks.SessionStart.filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
+
 const already = JSON.stringify(settings.hooks.SessionStart).includes(cmd);
 if (already) {
   console.log('  ok   SessionStart hook already installed');
@@ -1801,10 +2016,10 @@ if (already) {
 // deliberately turned one of these off keeps their choice on every re-run.
 const defaults = {
   // Remote Control on by default, so a session is drivable from claude.ai/code
-  // the moment it starts. agent-hub also passes --remote-control per session;
+  // the moment it starts. fleetwright also passes --remote-control per session;
   // this makes it the default for sessions started by hand on this box too.
   remoteControlAtStartup: true,
-  // agent-hub launches with --dangerously-skip-permissions. Without this, the
+  // fleetwright launches with --dangerously-skip-permissions. Without this, the
   // first such session stops at a one-time confirmation prompt that nobody is
   // there to answer — the exact silent hang this tool exists to prevent.
   skipDangerousModePermissionPrompt: true,
@@ -1820,7 +2035,7 @@ for (const [key, value] of Object.entries(defaults)) {
 }
 
 if (dirty) {
-  const tmp = `${file}.tmp-agent-hub`;
+  const tmp = `${file}.tmp-fleetwright`;
   fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
   fs.renameSync(tmp, file);
 }
@@ -1836,7 +2051,7 @@ chown "$RUN_USER" "${CLAUDE_HOME:-$HOME}/.claude/settings.json" 2>/dev/null || t
 # here by sudo is one the service can never see. It fails later, at the first
 # sandboxed session, with "the sandbox image is not built" pointing at an image
 # that very obviously IS built if you go and look as root.
-if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
+if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
   say "Preparing rootless podman for $RUN_USER"
 
   # Rootless containers need a subordinate uid/gid range and the setuid helpers
@@ -1870,15 +2085,15 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
   # and this line was pulling ours. See src/config.js — same two variables, same
   # precedence, because the hub and the installer disagreeing about which image
   # a box runs is a difference nobody would think to look for.
-  IMAGE_OWNER="${AGENT_HUB_SANDBOX_IMAGE_OWNER:-thetechnetwork}"
-  IMAGE="${AGENT_HUB_SANDBOX_IMAGE:-ghcr.io/${IMAGE_OWNER}/fleetwright-session:latest}"
+  IMAGE_OWNER="${FLEETWRIGHT_SANDBOX_IMAGE_OWNER:-thetechnetwork}"
+  IMAGE="${FLEETWRIGHT_SANDBOX_IMAGE:-ghcr.io/${IMAGE_OWNER}/fleetwright-session:latest}"
   say "Fetching the sandbox image"
   if as_user "podman image exists '$IMAGE'" 2>/dev/null \
-     && [ "${AGENT_FLEET_REBUILD_IMAGE:-0}" != "1" ]; then
+     && [ "${FLEETWRIGHT_REBUILD_IMAGE:-0}" != "1" ]; then
     ok "$IMAGE already present for $RUN_USER"
   elif [ "${IMAGE#localhost/}" != "$IMAGE" ]; then
     : # a localhost/ image can only be built, so fall through to the build below
-  elif as_user "podman pull '$IMAGE'" >/tmp/agent-session-pull.log 2>&1; then
+  elif as_user "podman pull '$IMAGE'" >/tmp/fleetwright-session-pull.log 2>&1; then
     ok "pulled $IMAGE"
     # WRITTEN ONLY IF A PERSON SAID IT. This line used to write the image on
     # every install, and it was writing the default — the same value the hub
@@ -1888,16 +2103,16 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
     # is kept when it was given; an owner is kept as the owner, so the hub
     # derives the same image and can still swap the tag; the default is left
     # to the code that already knows it.
-    if [ -n "${AGENT_HUB_SANDBOX_IMAGE:-}" ]; then
-      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
-    elif [ -n "${AGENT_HUB_SANDBOX_IMAGE_OWNER:-}" ]; then
-      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE_OWNER "$IMAGE_OWNER"
+    if [ -n "${FLEETWRIGHT_SANDBOX_IMAGE:-}" ]; then
+      set_env "$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE "$IMAGE"
+    elif [ -n "${FLEETWRIGHT_SANDBOX_IMAGE_OWNER:-}" ]; then
+      set_env "$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE_OWNER "$IMAGE_OWNER"
     fi
     IMAGE=""
   else
     warn "could not pull $IMAGE — falling back to building it here."
-    warn "  $(tail -1 /tmp/agent-session-pull.log 2>/dev/null || echo 'see /tmp/agent-session-pull.log')"
-    IMAGE="localhost/agent-session:latest"
+    warn "  $(tail -1 /tmp/fleetwright-session-pull.log 2>/dev/null || echo 'see /tmp/fleetwright-session-pull.log')"
+    IMAGE="localhost/fleetwright-session:latest"
   fi
 
   # The build, for a localhost/ image or a failed pull. Tagged with the
@@ -1906,11 +2121,11 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${AGENT_FLEET_BUILD_IMAGE:-1}" != "0" ]; then
   # unqualified-search-registries configured.
   if [ -n "$IMAGE" ]; then
     if as_user "podman build -t '$IMAGE' -f '$DIR/sandbox/Containerfile' '$DIR/sandbox'" \
-       >/tmp/agent-session-build.log 2>&1; then
+       >/tmp/fleetwright-session-build.log 2>&1; then
       ok "$IMAGE (built in $RUN_USER's image store)"
-      set_env "$ENV_FILE" AGENT_HUB_SANDBOX_IMAGE "$IMAGE"
+      set_env "$ENV_FILE" FLEETWRIGHT_SANDBOX_IMAGE "$IMAGE"
     else
-      warn "image build failed — see /tmp/agent-session-build.log."
+      warn "image build failed — see /tmp/fleetwright-session-build.log."
       warn "  Sandboxed sessions will not start until it succeeds; everything else works."
     fi
   fi
@@ -1921,13 +2136,13 @@ say "Configuring the coordinator"
 if [ -f "$COORD_ENV" ]; then
   ok "$COORD_ENV already exists — left untouched"
 else
-  install -m 0600 "$DIR/install/agent-fleet-coordinator.env.example" "$COORD_ENV"
+  install -m 0600 "$DIR/install/fleetwright-coordinator.env.example" "$COORD_ENV"
   ok "wrote $COORD_ENV from the template"
 fi
 
 # The three env files hold tokens, so they stay 0600 — but they are read by the
 # CLI as well as by systemd, and the CLI runs as the service user. Root-owned
-# 0600 means `agent-hub doctor` silently sees no config at all and reports
+# 0600 means `fleetwright doctor` silently sees no config at all and reports
 # things like "a control surface is configured — web only" on a box with
 # Telegram plainly working.
 for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
@@ -1944,7 +2159,7 @@ ok "config readable by $RUN_USER"
 # start without it. It dies with ERR_MODULE_NOT_FOUND, which names a package
 # nobody asked for and no fix at all.
 #
-# The sidecar and agent-hub are unaffected: neither imports it. That is why this
+# The sidecar and fleetwright are unaffected: neither imports it. That is why this
 # was invisible until a box tried to run its own coordinator.
 say "Runtime dependencies"
 if [ "$PACKAGED" = 1 ]; then
@@ -1966,7 +2181,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   [ -n "$NPM_BIN" ] && ok "npm at $NPM_BIN" || warn "npm is not installed — the installer would install it"
 elif [ -z "$NPM_BIN" ]; then
   warn "npm is not installed and could not be installed automatically ($(pkg_why)).
-       The sidecar and agent-hub are fine without it. A coordinator on this box is not:
+       The sidecar and fleetwright are fine without it. A coordinator on this box is not:
          cd $DIR && npm install --omit=dev"
 else
   # ci first: it installs exactly the lockfile and is the reproducible one. It
@@ -2049,7 +2264,7 @@ say "Linking the CLIs"
 # not: Homebrew lives in /opt/homebrew there, and nothing else creates the
 # directory — so a clean Mac ends this script with
 #
-#   ln: /usr/local/bin/agent-hub: No such file or directory
+#   ln: /usr/local/bin/fleetwright: No such file or directory
 #
 # after everything else has already been installed. It is on the default PATH
 # regardless (/etc/paths ships it), so creating it is the right fix rather than
@@ -2064,7 +2279,7 @@ fi
 # `#!/usr/bin/env node`, which is right on every box that has node where a
 # shell looks for it — and the deb is the box that does not: its node lives in
 # /usr/lib/fleetwright/node, on purpose, so that it neither shadows nor is
-# shadowed by a distro nodejs. Linked there, `agent-hub doctor` from a shell
+# shadowed by a distro nodejs. Linked there, `fleetwright doctor` from a shell
 # ends in "env: 'node': No such file or directory". The wrapper names the node
 # the units run, so the command a person types and the service agree on which
 # runtime this is.
@@ -2083,8 +2298,8 @@ fi
 # shorter, and a second copy of the entry point would be a second thing to
 # keep in step. `fleetwright` is the name a person is told; the agent-* names
 # stay for every box, runbook and muscle memory that already uses them.
-for pair in agent-hub:agent-hub agent-fleet-sidecar:agent-fleet-sidecar \
-            agent-fleet-coordinator:agent-fleet-coordinator \
+for pair in fleetwright:fleetwright fleetwright-sidecar:fleetwright-sidecar \
+            fleetwright-coordinator:fleetwright-coordinator \
             fleetwright:fleetwright fw:fleetwright; do
   link="${pair%%:*}"; cli="${pair#*:}"
   [ -f "$DIR/bin/$cli" ] || continue
@@ -2126,7 +2341,7 @@ if [ -n "${LINK_DIR_SAVED:-}" ]; then DIR="$LINK_DIR_SAVED"; unset LINK_DIR_SAVE
 #
 # Empty for a clone, a re-run, or anyone who fetched the installer from the
 # repository — all of which still get the questions.
-JOINING="${AGENT_FLEET_COORDINATOR_URL:-}"
+JOINING="${FLEETWRIGHT_COORDINATOR_URL:-}"
 case "$JOINING" in
   # Local and stdio are not a fleet somebody is joining; they are what the
   # wizard offers to set up, so leave the questions alone.
@@ -2152,32 +2367,32 @@ if [ "$WIZARD" = yes ]; then
   # --- is this box the coordinator too? ------------------------------------
   #
   # NOT ASKED WHEN THE ANSWER ARRIVED WITH THE SCRIPT. `curl .../install | sudo
-  # sh` off a coordinator sets AGENT_FLEET_COORDINATOR_URL, and the address in
+  # sh` off a coordinator sets FLEETWRIGHT_COORDINATOR_URL, and the address in
   # what somebody typed IS the answer to "which fleet" — asking again is asking
   # them to repeat themselves, and offering to run a second coordinator here is
   # offering the opposite of what they asked for.
   if [ -n "$JOINING" ]; then
-    set_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL "$JOINING"
+    set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "$JOINING"
     "$NODE_BIN" -e '
       const fs = require("fs");
       const [f, url] = process.argv.slice(1);
       fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-        .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, `AGENT_FLEET_COORDINATOR_URL=${url}`)
-        .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+        .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
+        .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
     ' "$SIDECAR_ENV" "$JOINING"
     ok "joining $JOINING"
-  elif [ -z "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] \
-     || [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "stdio:local" ]; then
+  elif [ -z "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" ] \
+     || [ "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" = "stdio:local" ]; then
     printf '\n  A fleet needs a coordinator somewhere. For one machine, this box can be\n'
     printf '  both — the coordinator and a host.\n'
     if confirm "Run the coordinator on this box?" Y; then
-      set_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL "http://127.0.0.1:8791"
+      set_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL "http://127.0.0.1:8791"
       "$NODE_BIN" -e '
         const fs = require("fs");
         const f = process.argv[1];
         fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-          .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, "AGENT_FLEET_COORDINATOR_URL=http://127.0.0.1:8791")
-          .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+          .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, "FLEETWRIGHT_COORDINATOR_URL=http://127.0.0.1:8791")
+          .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
       ' "$SIDECAR_ENV"
       FLEET_LOCAL=1
       ok "this box will run the coordinator, and join its own fleet"
@@ -2188,14 +2403,14 @@ if [ "$WIZARD" = yes ]; then
           const fs = require("fs");
           const [f, url] = process.argv.slice(1);
           fs.writeFileSync(f, fs.readFileSync(f, "utf8")
-            .replace(/^AGENT_FLEET_COORDINATOR_URL=.*$/m, `AGENT_FLEET_COORDINATOR_URL=${url}`)
-            .replace(/^AGENT_FLEET_TRANSPORT=.*$/m, "AGENT_FLEET_TRANSPORT=websocket"));
+            .replace(/^FLEETWRIGHT_COORDINATOR_URL=.*$/m, `FLEETWRIGHT_COORDINATOR_URL=${url}`)
+            .replace(/^FLEETWRIGHT_TRANSPORT=.*$/m, "FLEETWRIGHT_TRANSPORT=websocket"));
         ' "$SIDECAR_ENV" "$COORD_URL"
         ok "this host will join $COORD_URL"
       fi
     fi
   else
-    [ "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
+    [ "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" = "http://127.0.0.1:8791" ] && FLEET_LOCAL=1
   fi
 
   # --- fleet identity ------------------------------------------------------
@@ -2210,11 +2425,11 @@ if [ "$WIZARD" = yes ]; then
   # On the box that RUNS the coordinator, none of that needs a human: this
   # script already holds the admin token, so it mints a pin and spends it. On a
   # box joining somebody else's coordinator the pin comes from a person, so it
-  # is asked for — and blank is fine, because `agent-fleet-sidecar enrol` works
+  # is asked for — and blank is fine, because `fleetwright-sidecar enrol` works
   # perfectly well tomorrow.
   if [ "$FLEET_LOCAL" = 1 ]; then
-    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
-      set_env "$COORD_ENV" AGENT_FLEET_API_TOKEN "$(gen_secret)"
+    if [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)" ]; then
+      set_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN "$(gen_secret)"
       ok "generated an admin token for the coordinator"
     fi
   fi
@@ -2224,13 +2439,13 @@ if [ "$WIZARD" = yes ]; then
   # No -g: a matching group usually exists but is not guaranteed, and the mode
   # is 0700 so the group does not decide anything anyway. Same shape as the
   # STATE_DIR line above.
-  install -d -m 0700 -o "$RUN_USER" /var/lib/agent-fleet
-  KEY_FILE_PATH=/var/lib/agent-fleet/host-key.json
-  set_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY "$KEY_FILE_PATH"
+  install -d -m 0700 -o "$RUN_USER" /var/lib/fleetwright-sidecar
+  KEY_FILE_PATH=/var/lib/fleetwright-sidecar/host-key.json
+  set_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY "$KEY_FILE_PATH"
 
   # --- is this box a clone of one that was already in the fleet? -----------
   #
-  # /var/lib/agent-fleet/host-key.json IS this machine's identity — "whoever
+  # /var/lib/fleetwright-sidecar/host-key.json IS this machine's identity — "whoever
   # can read it can be this machine, and nothing else can". Clone a VM that has
   # been installed and both boxes now hold the same private key, so the
   # coordinator sees ONE host. They take turns proving the same identity and
@@ -2250,7 +2465,7 @@ if [ "$WIZARD" = yes ]; then
         | awk -F'"' '/IOPlatformUUID/ {print $4}'
     fi
   }
-  MACHINE_FILE=/var/lib/agent-fleet/machine-id
+  MACHINE_FILE=/var/lib/fleetwright-sidecar/machine-id
   THIS_MACHINE="$(machine_id || true)"
   if [ -n "$THIS_MACHINE" ]; then
     if [ -f "$KEY_FILE_PATH" ] && [ -f "$MACHINE_FILE" ] \
@@ -2279,17 +2494,17 @@ if [ "$WIZARD" = yes ]; then
   # file still looks live to whoever finds it next, and the whole point of the
   # change is that there is no shared string to leak.
   for STALE_ENV in "$COORD_ENV" "$SIDECAR_ENV"; do
-    if [ -f "$STALE_ENV" ] && grep -q '^AGENT_FLEET_HOST_TOKEN=' "$STALE_ENV"; then
+    if [ -f "$STALE_ENV" ] && grep -q '^FLEETWRIGHT_HOST_TOKEN=' "$STALE_ENV"; then
       ENVFILE="$STALE_ENV" "$NODE_BIN" -e '
         const fs = require("fs");
         const f = process.env.ENVFILE;
-        fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^AGENT_FLEET_HOST_TOKEN=.*\n?/gm, ""));
+        fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^FLEETWRIGHT_HOST_TOKEN=.*\n?/gm, ""));
       '
       ok "removed the old shared host token from $STALE_ENV — hosts hold a key now"
     fi
   done
 
-  ENROL_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
+  ENROL_URL="$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)"
 
   # --- push notifications --------------------------------------------------
   # Only worth asking on the box that actually runs the coordinator: it is the
@@ -2302,7 +2517,7 @@ if [ "$WIZARD" = yes ]; then
   # real newlines and JSON.parse fails. The result is a coordinator that starts
   # cleanly and silently never notifies anybody. Base64 has nothing in it for
   # either systemd or a shell to touch.
-  if [ "$FLEET_LOCAL" = 1 ] && [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_FCM_SERVICE_ACCOUNT)" ]; then
+  if [ "$FLEET_LOCAL" = 1 ] && [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_FCM_SERVICE_ACCOUNT)" ]; then
     printf '\n  Push notifications are how a phone finds out a session is waiting for an\n'
     printf '  answer. Without them the fleet works, and nothing tells you.\n'
     printf '  Firebase console -> Project settings -> Service accounts -> Generate new\n'
@@ -2329,7 +2544,7 @@ if [ "$WIZARD" = yes ]; then
       ' "$FCM_PATH" 2>&1)"; then
         warn "not a usable service account: $FCM_PROJECT"
       else
-        set_env "$COORD_ENV" AGENT_FLEET_FCM_SERVICE_ACCOUNT "$(base64 -w0 < "$FCM_PATH")"
+        set_env "$COORD_ENV" FLEETWRIGHT_FCM_SERVICE_ACCOUNT "$(base64 -w0 < "$FCM_PATH")"
         ok "push configured for Firebase project $FCM_PROJECT"
         break
       fi
@@ -2350,7 +2565,7 @@ if [ "$WIZARD" = yes ]; then
   # Validated with visudo before it is installed. A malformed file in
   # /etc/sudoers.d does not break one rule, it breaks sudo, and that is a bad
   # way to find out.
-  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" ] \
+  if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '\n  /upgrade can show what the operating system has waiting, and apply it.\n'
     printf '  That needs one sudoers rule permitting exactly two commands:\n'
@@ -2370,14 +2585,14 @@ if [ "$WIZARD" = yes ]; then
       # is not installed is a rule that permits nothing.
       install_upgrade_units
       if write_upgrade_sudoers; then
-        set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 1
-        set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
-        ok "/etc/sudoers.d/agent-hub-upgrade — $RUN_USER may start agent-hub-upgrade and agent-hub-apt-update"
+        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
+        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
+        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade and fleetwright-apt-update"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
     else
-      set_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE 0
+      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
       ok "skipping — /upgrade will report what is waiting but not apply it"
     fi
     printf '\n'
@@ -2388,32 +2603,32 @@ if [ "$WIZARD" = yes ]; then
   # and a reboot takes the tmux server with it, so every session dies
   # mid-thought. Folding the two into one question would mean somebody granting
   # the second while thinking about the first.
-  if [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT)" ] \
+  if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '  /reboot can restart this machine from chat, behind three confirmations:\n'
     printf '  the command, a one-time token, and the hostname typed out.\n'
     printf '  EVERY RUNNING SESSION DIES — a reboot takes the tmux server with it.\n'
     if confirm "Allow reboot from chat?" N; then
       if write_reboot_sudoers; then
-        set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 1
-        set_env "$ENV_FILE" AGENT_HUB_USER "$RUN_USER"
-        ok "/etc/sudoers.d/agent-hub-reboot — $RUN_USER may run systemctl reboot"
+        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
+        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
+        ok "/etc/sudoers.d/fleetwright-reboot — $RUN_USER may run systemctl reboot"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi
     else
-      set_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT 0
+      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
       ok "skipping — /reboot will explain how to turn it on if anybody asks"
     fi
     printf '\n'
   fi
 
   # --- sandbox -------------------------------------------------------------
-  if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" ]; then
+  if [ "$HAVE_PODMAN" = 1 ] && [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SANDBOX)" ]; then
     printf '\n  Sandboxed sessions get real root inside a container whose filesystem is\n'
     printf '  thrown away on every stop. The conversation and the workspace survive.\n'
     if confirm "Sandbox sessions?" Y; then
-      set_env "$ENV_FILE" AGENT_HUB_SANDBOX 1
+      set_env "$ENV_FILE" FLEETWRIGHT_SANDBOX 1
       ok "sandboxing on"
     fi
   fi
@@ -2452,7 +2667,7 @@ if [ "$WIZARD" = yes ]; then
     local pin=""
     if [ "$FLEET_LOCAL" = 1 ]; then
       local admin
-      admin="$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
+      admin="$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)"
       # Wait for the port. The coordinator was started seconds ago and binding
       # is not instant; without this the first install on a slow box asks for a
       # pin it could have minted itself.
@@ -2481,11 +2696,11 @@ if [ "$WIZARD" = yes ]; then
       # HANDED IN, when somebody already asked. The deb's debconf question is
       # the one that reaches a person under apt; asking again here would be
       # a second prompt for the same six digits, on a terminal debconf owns.
-      pin="${AGENT_FLEET_ENROL_PIN:-}"
+      pin="${FLEETWRIGHT_ENROL_PIN:-}"
       if [ -z "$pin" ]; then
         printf '\n  This box needs a six-digit pin from %s to join it.\n' "$ENROL_URL"
         printf '  Get one from the app (Fleet -> Add a host), or from anyone who has the admin token.\n'
-        printf '  Blank is fine — run "agent-fleet-sidecar enrol <pin>" whenever you have one.\n'
+        printf '  Blank is fine — run "fleetwright-sidecar enrol <pin>" whenever you have one.\n'
         ask pin "Enrolment pin"
       fi
       [ -n "$pin" ] || { warn "not enrolled — this host will be refused until it is"; return 0; }
@@ -2494,13 +2709,13 @@ if [ "$WIZARD" = yes ]; then
     # Six digits or nothing. A pin is not free text and never was.
     pin="$(printf '%s' "$pin" | tr -cd '0-9')"
     if [ ${#pin} -ne 6 ]; then
-      warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
+      warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
       return 0
     fi
     if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
       ok "enrolled at $ENROL_URL"
     else
-      warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/agent-fleet-sidecar enrol <pin>"
+      warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
     fi
   }
 
@@ -2519,11 +2734,11 @@ if [ "$WIZARD" = yes ]; then
   sidecar_cli() {
     local sub="$1" arg="${2:-}" quoted=""
     [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
-    as_user "AGENT_FLEET_ENROL_QUIET=1 \
-             AGENT_FLEET_COORDINATOR_URL='$ENROL_URL' \
-             AGENT_FLEET_HOST_ID='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)' \
-             AGENT_FLEET_HOST_KEY='$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_KEY)' \
-             '$UNIT_NODE_BIN' '$DIR/bin/agent-fleet-sidecar' $sub$quoted"
+    as_user "FLEETWRIGHT_ENROL_QUIET=1 \
+             FLEETWRIGHT_COORDINATOR_URL='$ENROL_URL' \
+             FLEETWRIGHT_HOST_ID='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)' \
+             FLEETWRIGHT_HOST_KEY='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY)' \
+             '$UNIT_NODE_BIN' '$DIR/bin/fleetwright-sidecar' $sub$quoted"
   }
 
   # --- start it ------------------------------------------------------------
@@ -2566,6 +2781,7 @@ if [ "$WIZARD" = yes ]; then
         # correct the unit it writes. A real host reached restart counter 6423
         # and every re-run of the installer reported `ok`.
         systemctl reset-failed "$1" >/dev/null 2>&1 || true
+        stop_legacy_unit "$1"
 
         WAS_ACTIVE=no
         systemctl is-active --quiet "$1" && WAS_ACTIVE=yes
@@ -2590,17 +2806,17 @@ if [ "$WIZARD" = yes ]; then
       # Recorded, because section 8 removes the previous install and must not
       # do that on a box where the replacement never came up. Seen-to-start is
       # the only evidence worth acting on.
-      if start_service agent-hub; then SERVICES_STARTED=1; fi
-      [ "$FLEET_LOCAL" = 1 ] && { start_service agent-fleet-coordinator || true; }
+      if start_service fleetwright; then SERVICES_STARTED=1; fi
+      [ "$FLEET_LOCAL" = 1 ] && { start_service fleetwright-coordinator || true; }
 
       # Arm the commit-confirm watchdog. A timer, not a service: `enable --now`
       # starts its clock, and it is a no-op on a box with nothing on trial.
-      if [ "$PACKAGED" = 1 ] && [ -f /etc/systemd/system/agent-fleet-confirm.timer ]; then
-        systemctl reset-failed agent-fleet-confirm.timer >/dev/null 2>&1 || true
-        if systemctl enable --now agent-fleet-confirm.timer >/dev/null 2>&1; then
+      if [ "$PACKAGED" = 1 ] && [ -f /etc/systemd/system/fleetwright-confirm.timer ]; then
+        systemctl reset-failed fleetwright-confirm.timer >/dev/null 2>&1 || true
+        if systemctl enable --now fleetwright-confirm.timer >/dev/null 2>&1; then
           ok "commit-confirm watchdog armed — a bad update reverts itself"
         else
-          warn "could not arm agent-fleet-confirm.timer — updates will not auto-revert"
+          warn "could not arm fleetwright-confirm.timer — updates will not auto-revert"
         fi
       fi
 
@@ -2610,7 +2826,7 @@ if [ "$WIZARD" = yes ]; then
       # and the first thing anyone does with that is assume it is broken.
       enrol_host
 
-      [ -n "$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)" ] && { start_service agent-fleet-sidecar || true; }
+      [ -n "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" ] && { start_service fleetwright-sidecar || true; }
       STARTED=1
     fi
   fi
@@ -2630,7 +2846,7 @@ if [ "$WIZARD" = yes ]; then
     printf '\n'
     if confirm "Log this box into a Claude account now?" Y; then
       sleep 2 # let the hub finish binding its port
-      if LOGIN_OUT="$("$DIR/bin/agent-hub" login 2>&1)"; then
+      if LOGIN_OUT="$("$DIR/bin/fleetwright" login 2>&1)"; then
         printf '%s\n' "$LOGIN_OUT"
         # Only ask for a code if there is a page to get one from. `login` on an
         # already-authenticated box answers "Already logged in", and asking for
@@ -2647,7 +2863,7 @@ if [ "$WIZARD" = yes ]; then
         if ! printf '%s' "$LOGIN_OUT" | grep -q 'Already logged in'; then
           ask AUTH_CODE "Paste the code from that page (blank to do it later)"
           if [ -n "$AUTH_CODE" ]; then
-            "$DIR/bin/agent-hub" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
+            "$DIR/bin/fleetwright" code "$AUTH_CODE" 2>&1 | sed 's/^/  /' || true
           fi
         else
           ok "nothing to do — this box is already logged in"
@@ -2670,7 +2886,7 @@ fi
 #
 # Nothing here touches state. The credentials, the host key, the registry and
 # the env files all live OUTSIDE the install directory already
-# (/etc/*.env, /var/lib/agent-hub, /var/lib/agent-fleet), which is why this can
+# (/etc/*.env, /var/lib/fleetwright, /var/lib/fleetwright-sidecar), which is why this can
 # be a directory removal rather than a migration of data. The units were
 # rewritten above with __DIR__ pointing at this release, so the switch has
 # already happened by the time we get here.
@@ -2678,7 +2894,7 @@ if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   say "The install this one replaces"
 
   OLD_DIR=""
-  for u in agent-hub agent-fleet-sidecar; do
+  for u in fleetwright fleetwright-sidecar; do
     [ -f "$OLD_UNIT_BACKUP_DIR/$u.service" ] || continue
     # The path the OLD unit ran from, taken from the backup rather than from
     # the file we just overwrote.
@@ -2699,7 +2915,7 @@ if [ "$PACKAGED" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     # somebody reads to find out whether a conversion worked.
     #
     # And keeping it is right on its own terms. That tree holds the installer a
-    # future migration runs (AGENT_FLEET_PAYLOAD), and it is the way back: one
+    # future migration runs (FLEETWRIGHT_PAYLOAD), and it is the way back: one
     # `ln -sfn` re-points `current` at it if a release turns out not to start.
     ok "$OLD_DIR kept — it is the installer future updates use, and the way back"
   elif [ "$SERVICES_STARTED" != 1 ]; then
@@ -2732,7 +2948,7 @@ fi
 # the wizard and the wizard does not run when nobody is there to answer.
 #
 # THE ANSWERS ARE ALREADY IN THE ENV FILE. A box that said yes to system
-# upgrades has AGENT_HUB_SYSTEM_UPGRADE=1 recorded, so re-applying the rule is
+# upgrades has FLEETWRIGHT_SYSTEM_UPGRADE=1 recorded, so re-applying the rule is
 # acting on a decision somebody already made rather than making one for them.
 # A box that said no keeps its no: this reads the setting, it never writes one.
 #
@@ -2744,19 +2960,19 @@ fi
 if [ "$REPAIR" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   say "Repairing what this box has already agreed to"
   if command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
-    if [ "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_UPGRADE)" = 1 ]; then
+    if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" = 1 ]; then
       install_upgrade_units
       if write_upgrade_sudoers; then
-        ok "/etc/sudoers.d/agent-hub-upgrade rewritten"
+        ok "/etc/sudoers.d/fleetwright-upgrade rewritten"
       else
         warn "the upgrade sudoers rule did not validate, so it was left as it was"
       fi
     else
       ok "system upgrades are off here — leaving that alone"
     fi
-    if [ "$(get_env "$ENV_FILE" AGENT_HUB_SYSTEM_REBOOT)" = 1 ]; then
+    if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" = 1 ]; then
       if write_reboot_sudoers; then
-        ok "/etc/sudoers.d/agent-hub-reboot rewritten"
+        ok "/etc/sudoers.d/fleetwright-reboot rewritten"
       else
         warn "the reboot sudoers rule did not validate, so it was left as it was"
       fi
@@ -2771,7 +2987,7 @@ fi
 # --- 9. --upgrade: apply the code, and say whether it can talk ---------------
 #
 # The wizard block above is where services get restarted, and it only runs with
-# a terminal. So `AGENT_HUB_NONINTERACTIVE=1` — which has existed all along —
+# a terminal. So `FLEETWRIGHT_NONINTERACTIVE=1` — which has existed all along —
 # put new code on disk and left the OLD CODE RUNNING while reporting success.
 # That is the failure src/core/update.js is written around, in the one place
 # nobody was looking.
@@ -2791,18 +3007,18 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   # to work out why nothing connected.
   UPGRADE_MISSING=""
   [ -f "$SIDECAR_ENV" ] || UPGRADE_MISSING="$UPGRADE_MISSING $SIDECAR_ENV"
-  [ -f /var/lib/agent-fleet/host-key.json ] || UPGRADE_MISSING="$UPGRADE_MISSING /var/lib/agent-fleet/host-key.json"
+  [ -f /var/lib/fleetwright-sidecar/host-key.json ] || UPGRADE_MISSING="$UPGRADE_MISSING /var/lib/fleetwright-sidecar/host-key.json"
   if [ -n "$UPGRADE_MISSING" ]; then
     die "--upgrade is for a box that is already in a fleet, and this one is not.
        Missing:$UPGRADE_MISSING
        Run the installer with a terminal to set it up and enrol it, or enrol by hand:
-           agent-fleet-sidecar enrol <pin>"
+           fleetwright-sidecar enrol <pin>"
   fi
 
   # Only what is actually installed. A box with no local coordinator has no
   # unit to restart, and trying is a failure message about a thing that is
   # absent on purpose.
-  for unit in agent-hub agent-fleet-coordinator agent-fleet-sidecar; do
+  for unit in fleetwright fleetwright-coordinator fleetwright-sidecar; do
     if [ "$PLATFORM" = macos ]; then
       label="system/network.thetech.$unit"
       plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
@@ -2824,6 +3040,7 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
     # that most needed repairing. And `restart` returning 0 says the request was
     # accepted, not that anything is running.
     systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    stop_legacy_unit "$unit"
     systemctl restart "$unit" >/dev/null 2>&1 || true
     sleep 1
     if systemctl is-active --quiet "$unit"; then
@@ -2844,7 +3061,7 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   #
   # An upgrade is exactly when that gap opens, so this is where it gets said.
   say "Checking the protocol"
-  UPGRADE_URL="$(get_env "$SIDECAR_ENV" AGENT_FLEET_COORDINATOR_URL)"
+  UPGRADE_URL="$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)"
   # BOTH SHAPES. A checkout has src/; a RELEASE has only bundled lib/, so this
   # read nothing on a packaged box and skipped the one check that catches the
   # failure described above — silently, on exactly the boxes an upgrade puts
@@ -2909,6 +3126,26 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   printf '  being filled in — see docs/wanted.md.\n'
 fi
 
+# --- what the rename stopped, started again ---------------------------------
+# A service that was running under its old name, and that no step above
+# restarted — the one-liner re-run with no terminal, say, which writes files
+# and starts nothing — is started under its new one. The migration must never
+# be the thing that leaves a working box stopped.
+if [ -n "$LEGACY_RUNNING" ] && [ "$PLATFORM" = linux ] && [ "$CHECK_ONLY" != 1 ]; then
+  for unit in $LEGACY_RUNNING; do
+    systemctl is-active --quiet "$unit" 2>/dev/null && continue
+    [ -f "/etc/systemd/system/$unit.service" ] || continue
+    stop_legacy_unit "$unit"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl enable --now "$unit" >/dev/null 2>&1 && systemctl is-active --quiet "$unit"; then
+      ok "$unit running — it was running before the rename"
+    else
+      warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new name:"
+      journalctl -u "$unit" -n 12 --no-pager 2>/dev/null | sed 's/^/       /' || true
+    fi
+  done
+fi
+
 say "Installed."
 
 # What is genuinely left, which is not the same as what the checklist used to
@@ -2920,7 +3157,7 @@ if [ "$WIZARD" = yes ]; then
     # As the RUN USER, not as root. doctor resolves paths relative to $HOME, so
     # running it under sudo answers a question nobody asked — it reports on
     # root's box while the service runs as somebody else.
-    as_user "'$UNIT_NODE_BIN' '$DIR/bin/agent-hub' doctor" 2>&1 | sed 's/^/  /' || true
+    as_user "'$UNIT_NODE_BIN' '$DIR/bin/fleetwright' doctor" 2>&1 | sed 's/^/  /' || true
   fi
 
   printf '\n'
@@ -2928,21 +3165,21 @@ if [ "$WIZARD" = yes ]; then
   # token from before the adapter was archived would otherwise start clean, log
   # nothing and answer no messages — which reads as a broken bot rather than an
   # absent one, and sends whoever set it looking at Telegram.
-  [ -n "$(get_env "$ENV_FILE" AGENT_HUB_TELEGRAM_TOKEN)" ] \
+  [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_TELEGRAM_TOKEN)" ] \
     && printf '  Telegram : archived — the token in %s is not read. See docs/telegram.md\n' "$ENV_FILE"
-  [ "$(get_env "$ENV_FILE" AGENT_HUB_SANDBOX)" = "1" ] && printf '  Sandbox  : on\n'
+  [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SANDBOX)" = "1" ] && printf '  Sandbox  : on\n'
   [ "$FLEET_LOCAL" = 1 ] && printf '  Fleet    : coordinator and host, both on this box\n'
 
   if [ "$HAVE_SYSTEMD" != 1 ]; then
     printf '\n  systemd is not running here, so nothing was started. Run them directly:\n'
-    printf '      %s %s/bin/agent-hub serve\n' "$UNIT_NODE_BIN" "$DIR"
-    [ "$FLEET_LOCAL" = 1 ] && printf '      %s %s/bin/agent-fleet-coordinator\n' "$UNIT_NODE_BIN" "$DIR"
-    printf '      %s %s/bin/agent-fleet-sidecar\n' "$UNIT_NODE_BIN" "$DIR"
+    printf '      %s %s/bin/fleetwright serve\n' "$UNIT_NODE_BIN" "$DIR"
+    [ "$FLEET_LOCAL" = 1 ] && printf '      %s %s/bin/fleetwright-coordinator\n' "$UNIT_NODE_BIN" "$DIR"
+    printf '      %s %s/bin/fleetwright-sidecar\n' "$UNIT_NODE_BIN" "$DIR"
   elif [ "${STARTED:-0}" != 1 ]; then
     printf '\n  Start them when you are ready:\n'
-    printf '      systemctl enable --now agent-hub'
-    [ "$FLEET_LOCAL" = 1 ] && printf ' agent-fleet-coordinator'
-    printf ' agent-fleet-sidecar\n'
+    printf '      systemctl enable --now fleetwright'
+    [ "$FLEET_LOCAL" = 1 ] && printf ' fleetwright-coordinator'
+    printf ' fleetwright-sidecar\n'
   fi
 
   # Enrolment only happens on the path where the services were started, because
@@ -2950,7 +3187,7 @@ if [ "$WIZARD" = yes ]; then
   # on the other two rather than leaving a box that connects and is refused.
   if [ -n "$ENROL_URL" ] && [ "${STARTED:-0}" != 1 ]; then
     printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
-    printf '      sudo -u %s %s/bin/agent-fleet-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
+    printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
     printf '  Until then the sidecar is refused on every try.\n'
   fi
 
@@ -2958,7 +3195,7 @@ if [ "$WIZARD" = yes ]; then
   # asking as root reports "not logged in" on a box that plainly is.
   if [ -n "$CLAUDE_BIN" ] && ! as_user "'$CLAUDE_BIN' auth status --json" 2>/dev/null | grep -q '"loggedIn": *true'; then
     printf '\n  claude is not logged in yet:\n'
-    printf '      agent-hub login          (then: agent-hub code <value>)\n'
+    printf '      fleetwright login          (then: fleetwright code <value>)\n'
     printf '      or connect an account from the app, once this box has joined a fleet\n'
   fi
 
@@ -2966,25 +3203,25 @@ if [ "$WIZARD" = yes ]; then
   # rather than chosen — so if it is not printed here, the install finishes with
   # the operator having no idea what to type into the app, and goes looking in a
   # 0600 file owned by root to find out.
-  if [ "$FLEET_LOCAL" = 1 ] && [ -n "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)" ]; then
+  if [ "$FLEET_LOCAL" = 1 ] && [ -n "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)" ]; then
     printf '\n  The coordinator on this box:\n'
     printf '      URL          http://%s:8791   (or your Worker, if you deploy one)\n' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
-    printf '      Admin token  %s\n' "$(get_env "$COORD_ENV" AGENT_FLEET_API_TOKEN)"
+    printf '      Admin token  %s\n' "$(get_env "$COORD_ENV" FLEETWRIGHT_API_TOKEN)"
     printf '\n  That token is break-glass, not the everyday credential: it can stop every\n'
     printf '  session and revoke every host. The app signs in instead and gets its own.\n'
     printf '\n  To add another box, mint it a pin:\n'
     printf "      curl -sX POST -H 'authorization: Bearer <admin token>' \\\n"
     printf "           -H 'content-type: application/json' -d '{\"kind\":\"host\"}' \\\n"
     printf '           http://127.0.0.1:8791/api/enroll\n'
-    printf '  then on that box:  sudo -u %s agent-fleet-sidecar enrol <pin>\n' "$RUN_USER"
+    printf '  then on that box:  sudo -u %s fleetwright-sidecar enrol <pin>\n' "$RUN_USER"
     # The app does not want the admin token. It signs in — which this box can
     # only accept if it has been told who is allowed, so say so here rather than
     # letting somebody discover it from a 503 on a phone.
-    if [ -z "$(get_env "$COORD_ENV" AGENT_FLEET_AUTH_ALLOW)" ]; then
+    if [ -z "$(get_env "$COORD_ENV" FLEETWRIGHT_AUTH_ALLOW)" ]; then
       printf '\n  For the app to SIGN IN to this coordinator, add to %s:\n' "$COORD_ENV"
-      printf '      AGENT_FLEET_AUTH_ISSUERS=https://appleid.apple.com https://accounts.google.com\n'
-      printf '      AGENT_FLEET_AUTH_AUDIENCES=<the iOS bundle id> <the Android web client id>\n'
-      printf '      AGENT_FLEET_AUTH_ALLOW=@yourdomain.com\n'
+      printf '      FLEETWRIGHT_AUTH_ISSUERS=https://appleid.apple.com https://accounts.google.com\n'
+      printf '      FLEETWRIGHT_AUTH_AUDIENCES=<the iOS bundle id> <the Android web client id>\n'
+      printf '      FLEETWRIGHT_AUTH_ALLOW=@yourdomain.com\n'
       printf '  Empty ALLOW lets nobody in, on purpose. Until then the app can use the admin\n'
       printf '  token above, under "use a credential instead".\n'
     fi
@@ -2996,17 +3233,17 @@ if [ "$WIZARD" = yes ]; then
     # Same trap as the pin above: this is a summary line, and a summary line
     # must not be able to end the install it is summarising.
     FP="$(sidecar_cli identity 2>/dev/null | sed -n 's/^fingerprint  *//p' || true)"
-    [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$(get_env "$SIDECAR_ENV" AGENT_FLEET_HOST_ID)" "$FP"
+    [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)" "$FP"
   fi
 
   cat <<EOF
 
   Drive it:
-      agent-hub list
-      journalctl -u agent-hub -f
+      fleetwright list
+      journalctl -u fleetwright -f
 
   Read the admin token again any time:
-      sudo grep AGENT_FLEET_API_TOKEN $COORD_ENV
+      sudo grep FLEETWRIGHT_API_TOKEN $COORD_ENV
 
   Config: $ENV_FILE
           $SIDECAR_ENV
@@ -3034,28 +3271,28 @@ elif [ "$UPGRADE" = 1 ] || [ "$HAD_PREVIOUS" = 1 ]; then
     printf '  checksum from here on, and `/update` from the app applies them.\n'
   fi
   printf '\n  Check it:\n'
-  printf '      systemctl status agent-hub agent-fleet-sidecar\n'
-  printf '      agent-hub doctor\n\n'
+  printf '      systemctl status fleetwright fleetwright-sidecar\n'
+  printf '      fleetwright doctor\n\n'
 else
   cat <<EOF
 
 Next:
 
   1. Start the session manager:
-       systemctl enable --now agent-hub
-       journalctl -u agent-hub -f
+       systemctl enable --now fleetwright
+       journalctl -u fleetwright -f
 
   2. Check the box is ready:
-       agent-hub doctor
+       fleetwright doctor
 
-  If claude is not logged in yet, run 'agent-hub login' and follow the link,
+  If claude is not logged in yet, run 'fleetwright login' and follow the link,
   or connect an account from the app once this box has joined a fleet.
 
-  For the fleet: put an AGENT_FLEET_API_TOKEN in $COORD_ENV (break-glass
+  For the fleet: put an FLEETWRIGHT_API_TOKEN in $COORD_ENV (break-glass
      admin; phones sign in and get their own), then:
-       systemctl enable --now agent-fleet-coordinator agent-fleet-sidecar
+       systemctl enable --now fleetwright-coordinator fleetwright-sidecar
      Hosts have no token. Mint a pin and spend it on the box:
-       agent-fleet-sidecar enrol <pin>
+       fleetwright-sidecar enrol <pin>
 
   Or re-run this installer with a terminal and it will ask instead — it
   generates the admin token, enrols this box and starts the services for you.
@@ -3092,14 +3329,14 @@ fi
 # interleaving.
 if [ "$PACKAGED" = 0 ] && [ "$FROM_SOURCE" = 0 ] && [ "$CHECK_ONLY" != 1 ] && [ "$CONVERTED" = 0 ] \
    && [ -z "${FLEETWRIGHT_MIGRATING:-}" ] && [ -x /usr/local/sbin/fleetwright-migrate ] \
-   && [ -n "$(get_env "$ENV_FILE" AGENT_HUB_RELEASE_MANIFEST)" ]; then
+   && [ -n "$(get_env "$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST)" ]; then
   say "Packaged releases"
   printf '  This box is a git checkout. On packaged releases an update is a\n'
   printf '  download with a checksum instead of a pull, installed beside what is\n'
   printf '  running and activated by a symlink — and the tree stops being\n'
   printf '  something that can drift.\n'
   printf '\n  What it does, so that it is not a surprise:\n'
-  printf '    - installs the current release under %s\n' "${AGENT_FLEET_BASE:-/opt/fleetwright}"
+  printf '    - installs the current release under %s\n' "${FLEETWRIGHT_BASE:-/opt/fleetwright}"
   printf '    - re-points the systemd units at it and RESTARTS the services\n'
   printf '    - leaves %s where it is, and leaves running sessions alone\n' "$DIR"
   printf '  Reversible: re-run this installer with --from-source.\n'

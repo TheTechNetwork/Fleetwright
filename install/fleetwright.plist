@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  agent-hub, as a launchd daemon. The macOS counterpart of
-  install/agent-hub.service — kept beside it deliberately, so a
+  fleetwright, as a launchd daemon. The macOS counterpart of
+  install/fleetwright.service — kept beside it deliberately, so a
   change to one is an obvious prompt to look at the other.
 
   __USER__ / __DIR__ / __NODE__ / __ENTRY__ are substituted by install.sh, as in
   the systemd unit.
 
   THE DIFFERENCE THAT MATTERS: launchd has no EnvironmentFile. systemd reads
-  /etc/agent-hub.env as root and hands it to the process; launchd
+  /etc/fleetwright.env as root and hands it to the process; launchd
   will not, so the binary has to read that file itself. It does — see
   src/core/env-file.js — and that is what makes running under launchd
   possible at all rather than a rewrite of how these services are configured.
@@ -22,7 +22,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>network.thetech.agent-hub</string>
+  <string>network.thetech.fleetwright</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -48,8 +48,8 @@
   <!-- There is no journal on macOS, so the logs need somewhere to go or they
        are discarded. `/logs` reads these. -->
   <key>StandardOutPath</key>
-  <string>/var/log/agent-hub.log</string>
+  <string>/var/log/fleetwright.log</string>
   <key>StandardErrorPath</key>
-  <string>/var/log/agent-hub.log</string>
+  <string>/var/log/fleetwright.log</string>
 </dict>
 </plist>

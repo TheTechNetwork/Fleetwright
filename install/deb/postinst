@@ -12,7 +12,7 @@
 # NO apt-get IN HERE. dpkg holds the lock for the whole of this script, and the
 # installer's habit of installing what is missing would wait on that lock for
 # ever. Everything it would reach for is in Depends or Recommends instead, and
-# AGENT_HUB_NO_INSTALL_DEPS tells it so.
+# FLEETWRIGHT_NO_INSTALL_DEPS tells it so.
 set -e
 
 case "$1" in
@@ -25,7 +25,7 @@ esac
 
 LIB=/usr/lib/fleetwright
 NODE="$LIB/node/bin/node"
-BASE="${AGENT_FLEET_BASE:-/opt/fleetwright}"
+BASE="${FLEETWRIGHT_BASE:-/opt/fleetwright}"
 PREVIOUS_VERSION="${2:-}"
 
 db_get fleetwright/coordinator-url
@@ -64,15 +64,15 @@ ROOT="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -1)"
 # Read BEFORE the installer moves it: the release to keep as the rollback.
 BEFORE="$(readlink "$BASE/current" 2>/dev/null || true)"
 
-export AGENT_HUB_NODE_BIN="$NODE"
-export AGENT_HUB_NO_INSTALL_DEPS=1
-export AGENT_HUB_ASK_NONE=1
-export AGENT_HUB_RELEASE_SOURCE=apt
+export FLEETWRIGHT_NODE_BIN="$NODE"
+export FLEETWRIGHT_NO_INSTALL_DEPS=1
+export FLEETWRIGHT_ASK_NONE=1
+export FLEETWRIGHT_RELEASE_SOURCE=apt
 # Blank is the installer's own rule: the user the units already name, else the
 # person who ran sudo. Worth preseeding under Ansible or cloud-init, where the
 # person who ran sudo is a deploy account rather than whoever will own the
 # sessions.
-[ -n "$RUN_AS" ] && export AGENT_HUB_USER="$RUN_AS"
+[ -n "$RUN_AS" ] && export FLEETWRIGHT_USER="$RUN_AS"
 
 # dpkg-reconfigure runs this with `configure`, like any other configure, and
 # says which it is only in the environment.
@@ -93,9 +93,12 @@ RECONFIGURE=0
 #               those, by design: it will not guess at enrolment). Laid out
 #               and left stopped, with the one command that joins it.
 if [ -n "$URL" ] && { [ -z "$PREVIOUS_VERSION" ] || [ "$RECONFIGURE" = 1 ]; }; then
-  AGENT_FLEET_COORDINATOR_URL="$URL" AGENT_FLEET_ENROL_PIN="$PIN" \
+  FLEETWRIGHT_COORDINATOR_URL="$URL" FLEETWRIGHT_ENROL_PIN="$PIN" \
     bash "$ROOT/install/install.sh" --wizard </dev/null
-elif [ -f /etc/systemd/system/agent-hub.service ] && [ -f /var/lib/agent-fleet/host-key.json ]; then
+# Either name: a box installed before the rename still has agent-hub.service
+# until this installer's --repair migrates it.
+elif { [ -f /etc/systemd/system/fleetwright.service ] || [ -f /etc/systemd/system/agent-hub.service ]; } \
+     && { [ -f /var/lib/fleetwright-sidecar/host-key.json ] || [ -f /var/lib/agent-fleet/host-key.json ]; }; then
   bash "$ROOT/install/install.sh" --repair </dev/null
 else
   bash "$ROOT/install/install.sh" --no-wizard </dev/null

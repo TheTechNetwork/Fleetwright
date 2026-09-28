@@ -71,7 +71,7 @@ test('a member’s fleet snapshot does not carry other people’s sessions', () 
  * @param {CoordinatorCore} core
  */
 function answerList(core, hostId = 'box') {
-  // Exactly what agent-hub's /list renders, glyphs and all — see
+  // Exactly what fleetwright's /list renders, glyphs and all — see
   // src/adapters/commands.js. The point of the test is that this prose never
   // reaches somebody it is not about.
   const text = [

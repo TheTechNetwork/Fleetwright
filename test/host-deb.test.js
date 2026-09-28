@@ -65,9 +65,9 @@ test('postinst: no apt-get, debconf released before anything prints, the pin not
   const s = read('postinst');
   const code = s.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
   assert.doesNotMatch(code, /apt-get|apt install/, 'dpkg holds the lock — apt-get here waits for ever');
-  assert.match(code, /AGENT_HUB_NO_INSTALL_DEPS=1/);
-  assert.match(code, /AGENT_HUB_ASK_NONE=1/);
-  assert.match(code, /AGENT_HUB_RELEASE_SOURCE=apt/);
+  assert.match(code, /FLEETWRIGHT_NO_INSTALL_DEPS=1/);
+  assert.match(code, /FLEETWRIGHT_ASK_NONE=1/);
+  assert.match(code, /FLEETWRIGHT_RELEASE_SOURCE=apt/);
   assert.ok(code.indexOf('db_stop') < code.indexOf('install.sh'), 'the installer prints into debconf\'s protocol');
   assert.match(code, /db_set fleetwright\/pin ""/);
   // The digest the release pipeline proved, checked before anything unpacks.

@@ -33,7 +33,7 @@ test('restarting and applying are opt-in, never by omission', () => {
   assert.equal(toCommandLine({ verb: 'update', params: { restart: 'yes' } }), '/update --restart');
   assert.equal(toCommandLine({ verb: 'upgrade', params: {} }), '/upgrade');
   // `--apply`, and this line used to read `'/upgrade apply'` — asserting the
-  // string the code produced rather than one the command parses. agent-hub's
+  // string the code produced rather than one the command parses. fleetwright's
   // upgrade reads `flags.has('apply')`, and a bare word never reaches flags, so
   // this test passed while the feature did nothing.
   //

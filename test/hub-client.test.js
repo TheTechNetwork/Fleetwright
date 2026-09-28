@@ -1,4 +1,4 @@
-// The client for a stock agent-hub, against a stub that speaks its exact API.
+// The client for a stock fleetwright, against a stub that speaks its exact API.
 //
 //   node --test test/
 //
@@ -36,7 +36,7 @@ test('a command line reaches /api/command and its reply comes back', async (t) =
 });
 
 test('a command the hub refuses is a reply, not an error', async (t) => {
-  // agent-hub answers 200 with ok:false in the body. Treating that as a
+  // fleetwright answers 200 with ok:false in the body. Treating that as a
   // transport failure would make the coordinator retry a command that was
   // correctly rejected.
   const { client } = await hubFor(t, { onCommand: () => ({ ok: false, text: 'No session named "ghost".' }) });
@@ -67,14 +67,14 @@ test('peek returns the pane text', async (t) => {
 });
 
 test('peek of a session that is not running is null, not a failure', async (t) => {
-  // agent-hub answers 404 for this, which is an ordinary outcome rather than a
+  // fleetwright answers 404 for this, which is an ordinary outcome rather than a
   // transport problem.
   const { client } = await hubFor(t, { panes: {} });
   assert.equal(await client.peek('ghost'), null);
 });
 
 test('peek can only narrow, because the hub serves a fixed 60 lines', async (t) => {
-  // There is no `lines` parameter on agent-hub's wire — sessions.peek(name, 60)
+  // There is no `lines` parameter on fleetwright's wire — sessions.peek(name, 60)
   // is hardcoded. Trimming client-side rather than pretending otherwise keeps
   // the limitation visible.
   const pane = Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
@@ -102,7 +102,7 @@ test('a session name with characters needing escaping is encoded in the query', 
 
 test('a hook report is forwarded to the loopback endpoint with its name', async (t) => {
   // This is what lets the per-session hook socket work against a stock
-  // agent-hub: the sidecar knows which session a report came from, and supplies
+  // fleetwright: the sidecar knows which session a report came from, and supplies
   // the name the container was never given.
   const { stub, client } = await hubFor(t);
 
@@ -126,7 +126,7 @@ test('a hook report the hub rejects comes back as ok:false, not as a throw', asy
 });
 
 test('the hook endpoint is reached without the operator token', async (t) => {
-  // It is deliberately not token-gated on agent-hub's side; sending the token
+  // It is deliberately not token-gated on fleetwright's side; sending the token
   // anyway is harmless, but the path must work when there is none to send.
   const stub = await startStubHub({ token: 'a-token-at-least-16-chars' });
   t.after(() => stub.close());
@@ -177,7 +177,7 @@ test('alive() is a boolean, never a throw', async (t) => {
   assert.equal(await dead.alive(), false);
 });
 
-test('something that is not agent-hub on that port is an error, not a silent success', async (t) => {
+test('something that is not fleetwright on that port is an error, not a silent success', async (t) => {
   // A tunnel login page, or a different service entirely. Parsing HTML as an
   // empty reply would make the sidecar report a healthy hub with no sessions.
   const { createServer } = await import('node:http');

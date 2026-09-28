@@ -1,6 +1,6 @@
 // A coordinator without a break-glass admin token, which most fleets will be.
 //
-// The Worker refused to run without AGENT_FLEET_API_TOKEN, on the reasoning
+// The Worker refused to run without FLEETWRIGHT_API_TOKEN, on the reasoning
 // that a coordinator with no credentials is remote control of every box for
 // whoever finds the URL. True when the admin token was the ONLY credential —
 // and it stopped being true when sign-in shipped. Phones hold per-device
@@ -27,8 +27,8 @@ const noFleet = {
 
 /** Sign-in configured, which is what makes the admin token optional. */
 const SIGNIN = {
-  AGENT_FLEET_AUTH_ISSUERS: 'https://accounts.google.com',
-  AGENT_FLEET_AUTH_AUDIENCES: 'network.thetech.fleetwright',
+  FLEETWRIGHT_AUTH_ISSUERS: 'https://accounts.google.com',
+  FLEETWRIGHT_AUTH_AUDIENCES: 'network.thetech.fleetwright',
 };
 
 /** @param {string} path */
@@ -70,8 +70,8 @@ test('a coordinator with NO way in at all refuses, and names both ways', async (
   assert.equal(res.status, 503);
   const body = /** @type {any} */ (await res.json());
   assert.equal(body.error.code, 'not_configured');
-  assert.match(body.text, /AGENT_FLEET_AUTH_ISSUERS/);
-  assert.match(body.text, /AGENT_FLEET_API_TOKEN/);
+  assert.match(body.text, /FLEETWRIGHT_AUTH_ISSUERS/);
+  assert.match(body.text, /FLEETWRIGHT_API_TOKEN/);
   // And says hosts need neither, because that is the question somebody asks
   // next and the answer stops them setting a token they do not want.
   assert.match(body.text, /Hosts need neither/);
@@ -81,9 +81,9 @@ test('half a sign-in configuration is not a sign-in configuration', async () => 
   // An issuer with no audience verifies nothing, so it must not count as a way
   // in — otherwise the 503 stops firing for a fleet nobody can reach.
   for (const half of [
-    { AGENT_FLEET_AUTH_ISSUERS: 'https://accounts.google.com' },
-    { AGENT_FLEET_AUTH_AUDIENCES: 'network.thetech.fleetwright' },
-    { AGENT_FLEET_AUTH_ISSUERS: '  ', AGENT_FLEET_AUTH_AUDIENCES: 'x' },
+    { FLEETWRIGHT_AUTH_ISSUERS: 'https://accounts.google.com' },
+    { FLEETWRIGHT_AUTH_AUDIENCES: 'network.thetech.fleetwright' },
+    { FLEETWRIGHT_AUTH_ISSUERS: '  ', FLEETWRIGHT_AUTH_AUDIENCES: 'x' },
   ]) {
     const res = await call('/api/hosts', half);
     assert.equal(res.status, 503, `${JSON.stringify(half)} was treated as configured`);
@@ -94,7 +94,7 @@ test('the admin token still works when it is set', async () => {
   // The break-glass has to keep working, or this is a removal rather than a
   // relaxation. It reaches the Durable Object, which throws in this harness —
   // that throw IS the evidence it got past the gate.
-  const env = { ...SIGNIN, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' };
+  const env = { ...SIGNIN, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' };
   const res = await call('/api/hosts', env, { authorization: 'Bearer a-token-at-least-16ch' });
   assert.notEqual(res.status, 401, 'the admin token stopped being admin');
 

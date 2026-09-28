@@ -28,9 +28,9 @@ import { s256 } from '../src/mcp/oauth.js';
  */
 async function coordinator(t) {
   const before = { ...process.env };
-  process.env.AGENT_FLEET_AUTH_ISSUERS = 'https://accounts.google.com';
-  process.env.AGENT_FLEET_AUTH_AUDIENCES = '123-abc.apps.googleusercontent.com,network.thetech.fleetwright';
-  process.env.AGENT_FLEET_AUTH_ALLOW = 'owner@example.com';
+  process.env.FLEETWRIGHT_AUTH_ISSUERS = 'https://accounts.google.com';
+  process.env.FLEETWRIGHT_AUTH_AUDIENCES = '123-abc.apps.googleusercontent.com,network.thetech.fleetwright';
+  process.env.FLEETWRIGHT_AUTH_ALLOW = 'owner@example.com';
   const c = new Coordinator();
   const port = await c.listen(0, '127.0.0.1');
   t.after(async () => {
@@ -412,10 +412,10 @@ test('fleet_health answers with capacity, not the word ok', async () => {
   assert.equal(/NOT LOGGED IN/.test(text), false, 'a healthy host is being reported as broken');
   assert.match(text, /2 accounts linked/);
   // Both facts travelled on every health frame and only `fleet_verify` and
-  // `agent-hub update` ever looked at them.
+  // `fleetwright update` ever looked at them.
   assert.match(text, /11 minutes left/);
   assert.match(text, /2 commits behind/);
-  assert.match(text, /agent-hub update --restart/);
+  assert.match(text, /fleetwright update --restart/);
 });
 
 test('a host nobody has linked an account on says so, and says how to fix it', async () => {
@@ -767,7 +767,7 @@ test('a withheld verb names the lift, because the reader may be the operator', a
     params: { name: 'fleet_purge', arguments: { name: 'x' } },
   });
   const text = String(r.result.content[0].text);
-  assert.match(text, /AGENT_FLEET_MCP_ALLOW=purge/);
+  assert.match(text, /FLEETWRIGHT_MCP_ALLOW=purge/);
   assert.match(text, /not a lock/);
 });
 
@@ -1162,7 +1162,7 @@ test('the Worker forwards every MCP path to the object, with no credential', asy
       },
     }),
   };
-  const env = /** @type {any} */ ({ FLEET: fleet, AGENT_FLEET_API_TOKEN: 'a-token-at-least-16ch' });
+  const env = /** @type {any} */ ({ FLEET: fleet, FLEETWRIGHT_API_TOKEN: 'a-token-at-least-16ch' });
   for (const p of paths) await worker.fetch(new Request(`https://fleet.example${p}`), env);
   assert.deepEqual(reached, paths);
 });

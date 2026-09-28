@@ -28,8 +28,8 @@ test('the uninstaller still parses', () => {
 test('--purge on a packaged box removes the releases, not the symlink it was run through', () => {
   // The same test install.sh uses to tell a release from a checkout, and the
   // same base, so the two agree without either reading the other.
-  assert.match(SH, /if \[ -f "\$DIR\/lib\/agent-hub\.mjs" \]; then PACKAGED=1; fi/);
-  assert.match(SH, /FLEET_BASE="\$\{AGENT_FLEET_BASE:-\/opt\/fleetwright\}"/);
+  assert.match(SH, /if \[ -f "\$DIR\/lib\/fleetwright\.mjs" \]; then PACKAGED=1; fi/);
+  assert.match(SH, /FLEET_BASE="\$\{FLEETWRIGHT_BASE:-\/opt\/fleetwright\}"/);
   assert.match(SH, /if \[ "\$PACKAGED" = 1 \]; then PURGE_DIR="\$FLEET_BASE"; else PURGE_DIR="\$DIR"; fi/);
   // And it is PURGE_DIR that goes, previewed under the same name it removes.
   assert.match(SH, /rm -rf "\$\{PURGE_DIR:\?\}"/);
@@ -42,11 +42,11 @@ test('root’s half goes too: the migrate rule and the helper it names', () => {
   // it may run as root — which is exactly why purging the tree never reached
   // it. Left behind, it is a root-capable script named by a rule that is
   // gone, on a box that is no longer in any fleet.
-  assert.match(SH, /\/etc\/sudoers\.d\/agent-hub-migrate/);
+  assert.match(SH, /\/etc\/sudoers\.d\/fleetwright-migrate/);
   assert.match(SH, /rm -f \/usr\/local\/sbin\/fleetwright-migrate/);
   // All three rules the installer can write, in one loop, so a fourth cannot
   // be added to the installer without this list being the next thing read.
-  for (const rule of ['agent-hub-upgrade', 'agent-hub-reboot', 'agent-hub-migrate']) {
+  for (const rule of ['fleetwright-upgrade', 'fleetwright-reboot', 'fleetwright-migrate']) {
     assert.ok(SH.includes(`/etc/sudoers.d/${rule}`), `${rule} is not removed`);
   }
 });

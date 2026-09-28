@@ -6,9 +6,9 @@
 > else below is unchanged, because they all go through the same command
 > registry the bot did.
 
-# agent-hub — the session manager
+# fleetwright — the session manager
 
-> **This is the upstream agent-hub README, kept as the session manager's manual.**
+> **This began as agent-hub's README, and is kept as the session manager's manual.**
 > Commands, permission modes, resume behaviour and the web UI below are all
 > current.
 >
@@ -21,7 +21,7 @@
 >
 > The rule for this file: **if a statement is about how to install or what to
 > install, it is upstream's and this repository's own docs win.** Provenance and
-> divergences: [`upstream-agent-hub.md`](./upstream-agent-hub.md).
+> divergences: [`lineage.md`](./lineage.md).
 
 Start, resume and stop **Claude Code** sessions on a box you own — from Telegram
 or a browser, without SSH.
@@ -36,7 +36,7 @@ machine never needs a terminal.
 
 ```
   Telegram ──long poll──▶ ┌──────────────────────┐
-  Browser  ──── HTTP ───▶ │      agent-hub       │──▶ tmux ──▶ claude --resume
+  Browser  ──── HTTP ───▶ │      fleetwright       │──▶ tmux ──▶ claude --resume
   CLI      ──────────────▶└──────────────────────┘
                              state: one JSON file
 ```
@@ -72,8 +72,8 @@ Cloudflare Tunnel (below) or leave it on loopback and use Telegram.
 **Removed rather than banner'd, which is the whole of finding G4.** This section
 used to be upstream's, and every line of it was wrong here in a different way:
 it cloned `ambersecurityinc/agent-hub` rather than this repository, and three of
-its four steps configured the Telegram bot — BotFather, `AGENT_HUB_TELEGRAM_TOKEN`,
-`AGENT_HUB_TELEGRAM_ALLOWED_USERS` — for an adapter that is archived and no
+its four steps configured the Telegram bot — BotFather, `FLEETWRIGHT_TELEGRAM_TOKEN`,
+`FLEETWRIGHT_TELEGRAM_ALLOWED_USERS` — for an adapter that is archived and no
 longer started.
 
 A banner saying "do not believe the section below" leaves the section below. It
@@ -91,7 +91,7 @@ curl -fsSL https://<your coordinator>/install | sudo sh
 current, both are ours, and neither mentions a bot.
 
 What the installer does is unchanged and worth knowing: it checks
-prerequisites, creates `/etc/agent-hub.env`, installs the systemd units,
+prerequisites, creates `/etc/fleetwright.env`, installs the systemd units,
 registers the Claude Code **SessionStart hook**, and links the CLIs. It is
 idempotent, and it never overwrites config you have already edited.
 
@@ -108,7 +108,7 @@ dispatcher, so nothing can work in one surface and be missing from another.
 | Command | What it does |
 |---|---|
 | `/new [name] [path] [--safe] [--profile=<name>]` | Start a session. Name optional, path defaults to the workdir. **Without a profile it comes up idle** — waiting for a person, not working. |
-| `/profiles` | The task profiles on this box. Each is a `<name>.md` file under `AGENT_HUB_PROFILE_DIR`; its content becomes a new session's first message. Adding one needs a shell here, which is what stops a coordinator from writing a session's instructions. Also reports the **house rules**, when the box has any: one file at `AGENT_HUB_RULES_FILE` that becomes `~/.claude/CLAUDE.md` inside every new session. A profile is what a session is asked to do, once; the rules are how work is done here, on every turn — so their size is reported, because it is paid on every turn. |
+| `/profiles` | The task profiles on this box. Each is a `<name>.md` file under `FLEETWRIGHT_PROFILE_DIR`; its content becomes a new session's first message. Adding one needs a shell here, which is what stops a coordinator from writing a session's instructions. Also reports the **house rules**, when the box has any: one file at `FLEETWRIGHT_RULES_FILE` that becomes `~/.claude/CLAUDE.md` inside every new session. A profile is what a session is asked to do, once; the rules are how work is done here, on every turn — so their size is reported, because it is paid on every turn. |
 | `/resume <name> [summary\|full]` | Bring a stopped session back **with its conversation**. |
 | `/stop <name>` | Stop it. The conversation is kept so `/resume` still works. |
 | `/list` | Everything — running and resumable. |
@@ -122,7 +122,7 @@ dispatcher, so nothing can work in one surface and be missing from another.
 | `/code <value>` | Send back the authorization code from the login page. |
 | `/whoami` | The id this hub sees you as — what goes in the allowlist. |
 
-From the shell: `agent-hub list`, `agent-hub new mysession`, and so on.
+From the shell: `fleetwright list`, `fleetwright new mysession`, and so on.
 
 This table is the session-manager core, not the whole registry — the fleet and
 credential commands (`/answer`, `/logs`, `/upgrade`, `/reboot`, `/enroll`,
@@ -140,7 +140,7 @@ session, and a resume that needs a decision offers both options as taps.
 ### Permission mode
 
 Sessions launch with `--dangerously-skip-permissions` by default
-(`AGENT_HUB_SKIP_PERMISSIONS`), because an unattended session that stops for a
+(`FLEETWRIGHT_SKIP_PERMISSIONS`), because an unattended session that stops for a
 permission prompt is a hung session. Override it for one session without
 touching the global default:
 
@@ -157,7 +157,7 @@ safe mode never gets quietly promoted.
 
 On a large or stale conversation, `claude --resume` wants to know whether to
 resume from a summary or in full — the second can consume a serious share of a
-usage limit. By default agent-hub **shows you the dialog and waits**:
+usage limit. By default fleetwright **shows you the dialog and waits**:
 
 ```
 > /resume bigjob
@@ -174,12 +174,12 @@ This session is 6d 12h old and 347.8k tokens.
 ```
 
 Answer with a tap, or by naming the mode up front (`/resume bigjob full`). Set
-`AGENT_HUB_RESUME_CHOICE=summary|full` to stop being asked. A session left
+`FLEETWRIGHT_RESUME_CHOICE=summary|full` to stop being asked. A session left
 waiting takes the summary option after
-`AGENT_HUB_RESUME_ASK_TIMEOUT_MS` (10 minutes) rather than hanging forever.
+`FLEETWRIGHT_RESUME_ASK_TIMEOUT_MS` (10 minutes) rather than hanging forever.
 
 Boot restore never asks — nobody is present at 3am — and uses
-`AGENT_HUB_RESUME_CHOICE_UNATTENDED`, which defaults to `summary`.
+`FLEETWRIGHT_RESUME_CHOICE_UNATTENDED`, which defaults to `summary`.
 
 ---
 
@@ -193,19 +193,19 @@ are obvious from the CLI's help text.
 Resume full session as-is" — and waits forever for a keypress nobody sends. An
 unattended restore therefore fails silently for exactly the long-running
 sessions it exists to protect; one sat at that dialog for two days, alive in
-tmux and doing nothing. agent-hub watches the pane and answers **only when the
+tmux and doing nothing. fleetwright watches the pane and answers **only when the
 dialog is actually on screen**, so a session that resumed cleanly never receives
 a stray Enter into a live conversation.
 
 **2. Never `--continue`.** In a shared working directory, `--continue` resumes
 *that directory's* most recent conversation. Restoring several sessions that way
-makes every one of them attach to the same conversation. agent-hub resumes by
+makes every one of them attach to the same conversation. fleetwright resumes by
 uuid or refuses — a session with no recorded uuid is reported as unresumable
 rather than quietly collided.
 
 **3. Remote Control fails silently.** The tmux pane is alive, but shows a plain
 prompt with no RC status line, so whoever asked for the session can never reach
-it. agent-hub polls for the status line and re-issues `/remote-control` once
+it. fleetwright polls for the status line and re-issues `/remote-control` once
 before giving up.
 
 The uuid itself comes from the **SessionStart hook**: Claude hands it the real
@@ -222,12 +222,12 @@ Keep the port on loopback and put a tunnel in front, so it never listens on a
 routable interface:
 
 ```sh
-cloudflared tunnel create agent-hub
-cloudflared tunnel route dns agent-hub hub.example.com
+cloudflared tunnel create fleetwright
+cloudflared tunnel route dns fleetwright hub.example.com
 # ingress: hostname hub.example.com -> service http://127.0.0.1:8790
 ```
 
-Set `AGENT_HUB_TOKEN` (`openssl rand -hex 24`) whenever the UI is reachable by
+Set `FLEETWRIGHT_TOKEN` (`openssl rand -hex 24`) whenever the UI is reachable by
 anyone but you. Visit `https://hub.example.com/?token=…` once and the browser
 remembers it. Cloudflare Access in front of that is worth the ten minutes.
 
@@ -243,25 +243,25 @@ Read this before you add the second name to the allowlist.
 
 - A session is **unsupervised shell access on this box**, running as the hub's
   user with `--dangerously-skip-permissions`. This used to name
-  `AGENT_HUB_TELEGRAM_ALLOWED_USERS` as the list of people who have that, and
+  `FLEETWRIGHT_TELEGRAM_ALLOWED_USERS` as the list of people who have that, and
   that adapter is archived — so the sentence described the wrong access
   control, which is worse in a security section than anywhere else on the page.
   **What grants it now is the hub's API token**: `/api/command` runs any line it
   is handed, so whoever holds that token has root on this box. Treat it as a
   root credential, because that is what it is. The coordinator adds identity in
-  front of it — an OIDC-verified email — but agent-hub itself has one token and
+  front of it — an OIDC-verified email — but fleetwright itself has one token and
   cannot tell callers apart; `docs/trust.md` says so where somebody might rely
   on the difference.
 - `/login` can point the box at a Claude account, and the authorization URL is
   visible to whoever asked. It is not a lesser permission than starting a
-  session — set `AGENT_HUB_LOGIN=0` if you want authentication to require SSH.
+  session — set `FLEETWRIGHT_LOGIN=0` if you want authentication to require SSH.
 - The hook endpoint (`/internal/session-start`) is loopback-only and never
   token-gated: it runs as a child of a `claude` process on this same box, and
   requiring the operator token would mean writing that token into a
   world-readable hook script.
 - Session names are charset-restricted (`[A-Za-z0-9_-]{1,40}`) and every tmux
   call is an argv array — a name can never become a command.
-- `/etc/agent-hub.env` is `0600` and holds your bot token. The state file holds
+- `/etc/fleetwright.env` is `0600` and holds your bot token. The state file holds
   conversation uuids, not conversations.
 
 ---
@@ -295,7 +295,7 @@ pair is a small addition when launcher-only stops being enough.
 ## Layout
 
 ```
-bin/agent-hub          CLI: serve · doctor · hook · any command
+bin/fleetwright          CLI: serve · doctor · hook · any command
 src/index.js           wiring: config → core → adapters → restore
 src/config.js          every environment variable, in one place
 src/core/
@@ -319,10 +319,10 @@ install/               install.sh, the systemd unit, the annotated env template
 ## Operating it
 
 ```sh
-systemctl status agent-hub
-journalctl -u agent-hub -f
-agent-hub doctor
-agent-hub list
+systemctl status fleetwright
+journalctl -u fleetwright -f
+fleetwright doctor
+fleetwright list
 ```
 
 **Restarting the hub does not touch your sessions.** The unit sets
@@ -330,8 +330,8 @@ agent-hub list
 cgroup, and with systemd's default a plain `systemctl restart` reaps the whole
 cgroup and kills every live session at once. Do not remove that line.
 
-To upgrade: `git -C /opt/agent-hub pull && sudo /opt/agent-hub/install/install.sh
-&& systemctl restart agent-hub`. Sessions keep running throughout.
+To upgrade: `git -C /opt/fleetwright pull && sudo /opt/fleetwright/install/install.sh
+&& systemctl restart fleetwright`. Sessions keep running throughout.
 
 ---
 

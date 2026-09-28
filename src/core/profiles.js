@@ -13,7 +13,7 @@
 //
 // That is also why this is a DIRECTORY OF FILES rather than a field in
 // state.json. A profile is prose somebody edits, reviews and version-controls;
-// it wants a filename and a diff, not a JSON string. `git -C /var/lib/agent-hub
+// it wants a filename and a diff, not a JSON string. `git -C /var/lib/fleetwright
 // diff profiles/` answers "what are these boxes being told to do", which is a
 // question worth being able to ask.
 //

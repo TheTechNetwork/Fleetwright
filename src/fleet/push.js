@@ -505,8 +505,8 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // Unset is off and SAYS SO. Silence here is how a fleet discovers on the day
   // it matters that push was never wired up, which is the exact failure
   // logPusher's own comment is about.
-  if (!truthy(env.AGENT_FLEET_PUSH)) {
-    logger.info('push: disabled (AGENT_FLEET_PUSH is not set) — notifications are logged, not sent');
+  if (!truthy(env.FLEETWRIGHT_PUSH)) {
+    logger.info('push: disabled (FLEETWRIGHT_PUSH is not set) — notifications are logged, not sent');
     return logPusher(logger);
   }
 
@@ -528,7 +528,7 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // reach this line saying nothing at all.
   //
   // The comment above the switch says "unset is off and SAYS SO" and it was
-  // only true of the unset branch. A fleet that sets AGENT_FLEET_PUSH and has
+  // only true of the unset branch. A fleet that sets FLEETWRIGHT_PUSH and has
   // no credentials — which is EVERY FORK deploying this repository's committed
   // wrangler.toml — fell through here silently, and neither apnsFromEnv nor
   // fcmFromEnv warns when its credentials are simply absent, because absent is
@@ -539,9 +539,9 @@ export function pusherFromEnv(env, logger, opts = {}) {
   // many words, and a document asserting something the code does not do is the
   // failure app-parity.md exists to name.
   logger.warn(
-    'push: AGENT_FLEET_PUSH is set but no provider is configured — notifications are logged, not sent. ' +
-      'APNs needs AGENT_FLEET_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs AGENT_FLEET_FCM_SERVICE_ACCOUNT. ' +
-      'Unset AGENT_FLEET_PUSH if that is deliberate.',
+    'push: FLEETWRIGHT_PUSH is set but no provider is configured — notifications are logged, not sent. ' +
+      'APNs needs FLEETWRIGHT_APNS_KEY, _KEY_ID and _TEAM_ID; FCM needs FLEETWRIGHT_FCM_SERVICE_ACCOUNT. ' +
+      'Unset FLEETWRIGHT_PUSH if that is deliberate.',
   );
   return logPusher(logger);
 }
@@ -550,7 +550,7 @@ export function pusherFromEnv(env, logger, opts = {}) {
  * `1`, `true`, `yes`, `on` — anything else, including absent, is off.
  *
  * Deliberately not `Boolean(value)`: the string "0" and the string "false" are
- * both truthy in JavaScript, and a config file where `AGENT_FLEET_PUSH = "0"`
+ * both truthy in JavaScript, and a config file where `FLEETWRIGHT_PUSH = "0"`
  * turns push ON is a config file nobody can read.
  *
  * @param {string|undefined} value
@@ -565,11 +565,11 @@ function truthy(value) {
  * @param {Deliver} [deliver]
  */
 function apnsFromEnv(env, logger, deliver) {
-  const { AGENT_FLEET_APNS_KEY_ID: keyId, AGENT_FLEET_APNS_TEAM_ID: teamId, AGENT_FLEET_APNS_KEY: privateKey } = env;
-  const bundleId = env.AGENT_FLEET_APNS_BUNDLE_ID || 'network.thetech.fleetwright';
+  const { FLEETWRIGHT_APNS_KEY_ID: keyId, FLEETWRIGHT_APNS_TEAM_ID: teamId, FLEETWRIGHT_APNS_KEY: privateKey } = env;
+  const bundleId = env.FLEETWRIGHT_APNS_BUNDLE_ID || 'network.thetech.fleetwright';
   if (!keyId && !teamId && !privateKey) return null;
   if (!keyId || !teamId || !privateKey) {
-    logger.warn('push: APNs needs AGENT_FLEET_APNS_KEY_ID, _TEAM_ID and _KEY — all three. iOS push is off.');
+    logger.warn('push: APNs needs FLEETWRIGHT_APNS_KEY_ID, _TEAM_ID and _KEY — all three. iOS push is off.');
     return null;
   }
   logger.info(`push: APNs configured for ${bundleId}`);
@@ -583,7 +583,7 @@ function apnsFromEnv(env, logger, deliver) {
       // the production environment, and only a build run from Xcode uses the
       // sandbox. Defaulting the other way would make the common case the one
       // that silently fails.
-      production: env.AGENT_FLEET_APNS_SANDBOX !== '1',
+      production: env.FLEETWRIGHT_APNS_SANDBOX !== '1',
     },
     { logger, deliver },
   );
@@ -594,12 +594,12 @@ function apnsFromEnv(env, logger, deliver) {
  * @param {{ info: Function, warn: Function }} logger
  */
 function fcmFromEnv(env, logger) {
-  const raw = env.AGENT_FLEET_FCM_SERVICE_ACCOUNT;
+  const raw = env.FLEETWRIGHT_FCM_SERVICE_ACCOUNT;
   if (!raw) return null;
   const parsed = parseServiceAccount(raw);
   if (!parsed) {
     logger.warn(
-      'push: AGENT_FLEET_FCM_SERVICE_ACCOUNT is neither JSON nor base64-encoded JSON — falling back to logging.\n' +
+      'push: FLEETWRIGHT_FCM_SERVICE_ACCOUNT is neither JSON nor base64-encoded JSON — falling back to logging.\n' +
         '  base64 -w0 service-account.json',
     );
     return null;

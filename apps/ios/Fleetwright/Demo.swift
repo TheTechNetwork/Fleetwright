@@ -4,7 +4,7 @@ import Foundation
 ///
 /// WHY THIS IS A CONSTANT IN THE BINARY AND NOT A SECRET.
 ///
-/// `AGENT_FLEET_DEMO_TOKEN` is a `[vars]` entry in `worker/wrangler.toml`, not
+/// `FLEETWRIGHT_DEMO_TOKEN` is a `[vars]` entry in `worker/wrangler.toml`, not
 /// a secret, deliberately — it guards nothing worth guarding. `worker.js`
 /// matches it BEFORE `env.FLEET` is touched, so there is no code path from a
 /// request carrying it to a Durable Object, a host socket, or a real session.

@@ -120,7 +120,7 @@ exit 0
     /** @param {Partial<any>} patch @returns {any} */
     cfg: (patch = {}) => ({
       podmanBin: bin,
-      sandboxImage: 'localhost/agent-session:latest',
+      sandboxImage: 'localhost/fleetwright-session:latest',
       sandboxAutoBuild: false,
       sandboxContainerfile: path.join(dir, 'Containerfile'),
       sandboxCredentialsFile: shared,

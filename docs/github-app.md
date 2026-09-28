@@ -231,7 +231,7 @@ progress and quietly widens what a single compromised host can reach.
 |---|---|---|
 | App ID | `4758006` | `[vars]` in `wrangler.production.toml` — ours; a fork registers its own App |
 | Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` in `wrangler.production.toml` — appears in every authorize URL |
-| Client secret | *(to generate)* | `wrangler secret put AGENT_FLEET_GITHUB_CLIENT_SECRET` |
+| Client secret | *(to generate)* | `wrangler secret put FLEETWRIGHT_GITHUB_CLIENT_SECRET` |
 | Private key | *(not yet needed)* | nowhere, until the broker exists |
 
 **The first build needs only the Client ID and the secret.** User-to-server
@@ -291,7 +291,7 @@ So it goes in two places, and both are deliberate:
 
 **1. A GitHub Actions secret, which the deploy pushes to Cloudflare.**
 
-`AGENT_FLEET_GITHUB_CLIENT_SECRET`, exactly like the APNs key and the FCM
+`FLEETWRIGHT_GITHUB_CLIENT_SECRET`, exactly like the APNs key and the FCM
 service account before it. `worker.yml` already has a "Sync the Worker's
 runtime secrets" step whose entire purpose is that **GitHub is the one place
 these are managed** — adding a name to that list is the whole of it, and
@@ -354,7 +354,7 @@ member per host, with the fleet-wide secret at rest and rotation in Cloudflare
 silently breaking every renewal eight hours later because that file was the one
 being read. Found by an outside review of the repository's own documents
 (`security.md` G2). The frame described above is what shipped in its place, and
-the renewal timer moved from agent-hub to the sidecar with it: the exchange
+the renewal timer moved from fleetwright to the sidecar with it: the exchange
 needs the secret, and the sidecar is the process that has it.
 
 ### Why this may be delivered at all, when the private key may not

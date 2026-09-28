@@ -24,6 +24,12 @@
 # and the secret block at the bottom of wrangler.toml has listed it as a secret
 # all along. The `[vars]` entry was the bug.
 
+# THE ONE NAME THE RENAME LEFT ALONE, and it is not an oversight. A Durable
+# Object namespace belongs to the script that declares it, so `Fleet` — every
+# host, device and person this coordinator knows — lives under this name. A
+# Worker deployed as `fleetwright-coordinator` would start with an empty fleet
+# and leave the real one running, unreachable, beside it. The script name is a
+# storage key, not a label; nobody types it, and the domain is what they see.
 name = "agent-fleet-coordinator"
 main = "src/worker.js"
 compatibility_date = "2026-01-15"
@@ -70,7 +76,7 @@ compatibility_flags = ["nodejs_als"]
 #
 # The hostname matters more here than it looks: §5 has the host agent PIN the
 # coordinator origin, so changing it means editing every host's
-# /etc/agent-fleet-sidecar.env. It is not a value to churn.
+# /etc/fleetwright-sidecar.env. It is not a value to churn.
 #
 # ONE DOMAIN, AND THE DEMO IS NO LONGER ON IT. `fleetdemo` used to be a second
 # custom domain on this same Worker, answered above the host routes so a request
@@ -96,25 +102,25 @@ routes = [
 # WHERE THE PRODUCT PAGE IS. /docs on the coordinator is a 302 to this and
 # nothing else — a coordinator holds the fleet and should not also be the
 # surface a stranger loads HTML from.
-AGENT_FLEET_DOCS_URL = "https://fleetdemo.thetech.network/docs"
+FLEETWRIGHT_DOCS_URL = "https://fleetdemo.thetech.network/docs"
 
 # WHOSE INSTALLER /install HANDS OUT. `install/bootstrap.sh` clones the
 # repository it was served from, so this decides whose code ends up on the
 # machines somebody installs. Unset is a 404 that says so.
-AGENT_FLEET_INSTALL_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh"
+FLEETWRIGHT_INSTALL_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/bootstrap.sh"
 
 # PUSH, which is off unless this says otherwise. The credentials that make it
 # work are ours and they address our app's device tokens, so a fork acquiring
 # them by copying a config would be notifying our users' phones.
-AGENT_FLEET_PUSH = "1"
+FLEETWRIGHT_PUSH = "1"
 
 # THE GITHUB APP. Identifiers rather than credentials — a client id is in the
 # query string of every authorize URL — but they are OURS, and a fork
 # inheriting them gets a flow that reaches GitHub and is refused there, because
 # their origin is not on our App's redirect list. Confidently broken, where
 # absent is honest. The CLIENT SECRET is a `wrangler secret`.
-AGENT_FLEET_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
-AGENT_FLEET_GITHUB_APP_ID = "4758006"
+FLEETWRIGHT_GITHUB_CLIENT_ID = "Iv23liR4EwdP1xDxLt5E"
+FLEETWRIGHT_GITHUB_APP_ID = "4758006"
 
 # THE CLOUDFLARE OAUTH CLIENT, the second provider through the same flow. An
 # identifier like the GitHub App's — it is in the query string of every
@@ -123,9 +129,9 @@ AGENT_FLEET_GITHUB_APP_ID = "4758006"
 # PRIVATE (dash.cloudflare.com → Manage Account → OAuth clients), which is the
 # reversible choice; public needs domain verification and cannot be undone —
 # see docs/connectors.md. The CLIENT SECRET is a `wrangler secret`
-# (AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET), and the offer stays off until the
+# (FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET), and the offer stays off until the
 # deploy has synced one.
-AGENT_FLEET_CLOUDFLARE_CLIENT_ID = "5e685e05a2484bf7dc78ce6536e7807d"
+FLEETWRIGHT_CLOUDFLARE_CLIENT_ID = "5e685e05a2484bf7dc78ce6536e7807d"
 
 # The SCOPES, which must match what the client above is registered with — a
 # requested scope the client lacks fails the authorize with `invalid_scope`,
@@ -138,7 +144,7 @@ AGENT_FLEET_CLOUDFLARE_CLIENT_ID = "5e685e05a2484bf7dc78ce6536e7807d"
 # scope offered (DNS write, Page Rules write): raw DNS-record and page-rule
 # edits stay with the pasted token, while Workers custom domains still work —
 # that API writes its own records under the Workers scopes.
-AGENT_FLEET_CLOUDFLARE_SCOPES = "workers-scripts.edit workers-kv-storage.write workers-routes.write workers-r2.write workers-r2-bucket-item.write d1.write workers-tail.read page.write zone.read zone-settings.read ssl-and-certificates.write dns.read account-settings.read memberships.read user-details.read offline_access"
+FLEETWRIGHT_CLOUDFLARE_SCOPES = "workers-scripts.edit workers-kv-storage.write workers-routes.write workers-r2.write workers-r2-bucket-item.write d1.write workers-tail.read page.write zone.read zone-settings.read ssl-and-certificates.write dns.read account-settings.read memberships.read user-details.read offline_access"
 
 # WHO MAY VOUCH FOR A PERSON, and which app the ID token must be for. These two
 # ARE safe for a fork to copy and are the best fork-parity property in the
@@ -147,19 +153,19 @@ AGENT_FLEET_CLOUDFLARE_SCOPES = "workers-scripts.edit workers-kv-storage.write w
 # sign in to a fork's coordinator unchanged. No Firebase project, no Apple
 # Developer account. They are here rather than in wrangler.toml only because a
 # fork should make that choice deliberately.
-AGENT_FLEET_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
-AGENT_FLEET_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
+FLEETWRIGHT_AUTH_ISSUERS = "https://accounts.google.com,https://appleid.apple.com"
+FLEETWRIGHT_AUTH_AUDIENCES = "network.thetech.fleetwright,654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com"
 
 # The fleet's name and the address invitations come from. Cloudflare Email
 # Sending needs a domain the account controls, so this is one of the three
 # things a fork genuinely cannot inherit.
-AGENT_FLEET_NAME = "the Fleetwright fleet"
-AGENT_FLEET_INVITE_FROM = "invites@fleet.thetech.network"
+FLEETWRIGHT_NAME = "the Fleetwright fleet"
+FLEETWRIGHT_INVITE_FROM = "invites@fleet.thetech.network"
 
 # Where an invitation says to get the app. Ours, and a fork's invitations should
 # not point at our store listings.
-AGENT_FLEET_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
-AGENT_FLEET_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
+FLEETWRIGHT_APP_IOS = "https://testflight.apple.com/join/FyQnP8T9"
+FLEETWRIGHT_APP_ANDROID = "https://play.google.com/store/apps/details?id=network.thetech.fleetwright"
 
 # ERROR REPORTING. A DSN is not a credential — it grants only the ability to
 # send events — but it names OUR project, and a fork deploying it posts their
@@ -208,23 +214,23 @@ enabled = true
 
 # --- secrets, set with `wrangler secret put NAME` ----------------------------
 #
-#   AGENT_FLEET_API_TOKEN             break-glass admin. NOT what phones use
-#   AGENT_FLEET_AUTH_ISSUERS          who may vouch for a person, e.g.
+#   FLEETWRIGHT_API_TOKEN             break-glass admin. NOT what phones use
+#   FLEETWRIGHT_AUTH_ISSUERS          who may vouch for a person, e.g.
 #                                     https://appleid.apple.com https://accounts.google.com
-#   AGENT_FLEET_AUTH_AUDIENCES        which app the ID token must be for — the
+#   FLEETWRIGHT_AUTH_AUDIENCES        which app the ID token must be for — the
 #                                     iOS bundle id, the Android web client id
-#   AGENT_FLEET_AUTH_ALLOW            who is allowed in: whole addresses, or
+#   FLEETWRIGHT_AUTH_ALLOW            who is allowed in: whole addresses, or
 #                                     @domain. EMPTY ALLOWS NOBODY, on purpose
 #
 # THERE IS NO HOST TOKEN. Hosts keep a keypair and sign a nonce per connection;
-# they enrol with a six-digit pin minted by somebody already in. AGENT_FLEET_HOST_TOKEN
+# they enrol with a six-digit pin minted by somebody already in. FLEETWRIGHT_HOST_TOKEN
 # was one string every machine presented — indistinguishable hosts, no way to
 # revoke one, replayable by anything that saw a single connection.
-#   AGENT_FLEET_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
+#   FLEETWRIGHT_FCM_SERVICE_ACCOUNT   the Firebase service-account JSON (or
 #                                     base64 of it), for push
-#   AGENT_FLEET_APNS_KEY              the .p8, for push to iOS
-#   AGENT_FLEET_APNS_KEY_ID           which key that is
-#   AGENT_FLEET_APNS_TEAM_ID          the team it belongs to
+#   FLEETWRIGHT_APNS_KEY              the .p8, for push to iOS
+#   FLEETWRIGHT_APNS_KEY_ID           which key that is
+#   FLEETWRIGHT_APNS_TEAM_ID          the team it belongs to
 #
 # The key id and team id are identifiers rather than credentials, and were
 # briefly a [vars] entry for that reason. They are secrets now because a name
@@ -232,10 +238,10 @@ enabled = true
 # deploy carrying a var CLOBBERS the secret of the same name. One place per
 # name, and for these the useful place is beside the .p8 they describe.
 #
-# AGENT_FLEET_DEMO_TOKEN is not here and is not in this file at all any more:
+# FLEETWRIGHT_DEMO_TOKEN is not here and is not in this file at all any more:
 # it belongs to wrangler.demo.toml, along with the fleet it describes.
 #
-# Without AGENT_FLEET_API_TOKEN the Worker refuses every request rather than
+# Without FLEETWRIGHT_API_TOKEN the Worker refuses every request rather than
 # running open — see worker.js. Without the AUTH_ pair, sign-in answers 503 and
 # says so, which leaves the admin token as the only way in. Without the FCM
 # service account, push is logged instead of sent, and says so.

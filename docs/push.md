@@ -58,7 +58,7 @@ permission dialog, and a CLI release that inserts an option renumbers it. So the
 apps hold only the words; `answerActions()` resolves each to a live option index
 on the box, and `answers` carries the pairing as `a:1,b:3`.
 
-Which is also why it survives `AGENT_FLEET_PROMPT_TEXT=0`: the labels are
+Which is also why it survives `FLEETWRIGHT_PROMPT_TEXT=0`: the labels are
 matched on the host and never travel. A fleet careful enough to have turned the
 quoting off still gets notifications it can answer.
 
@@ -241,18 +241,18 @@ was registered against a service that could not reach it.
 iOS to APNs, everything else to FCM. Three variables:
 
 ```sh
-AGENT_FLEET_APNS_KEY_ID=QK4U44N7R9     # the key's id
-AGENT_FLEET_APNS_TEAM_ID=…             # the same team id the iOS build signs with
-AGENT_FLEET_APNS_KEY="$(cat AuthKey_QK4U44N7R9.p8)"
+FLEETWRIGHT_APNS_KEY_ID=QK4U44N7R9     # the key's id
+FLEETWRIGHT_APNS_TEAM_ID=…             # the same team id the iOS build signs with
+FLEETWRIGHT_APNS_KEY="$(cat AuthKey_QK4U44N7R9.p8)"
 ```
 
 On Cloudflare all three are GitHub secrets, synced to the Worker on deploy:
 
 | | source |
 |---|---|
-| `AGENT_FLEET_APNS_KEY` | the `.p8` |
-| `AGENT_FLEET_APNS_KEY_ID` | which key that is |
-| `AGENT_FLEET_APNS_TEAM_ID` | reused from `APPLE_TEAM_ID`, the same team the iOS build signs with |
+| `FLEETWRIGHT_APNS_KEY` | the `.p8` |
+| `FLEETWRIGHT_APNS_KEY_ID` | which key that is |
+| `FLEETWRIGHT_APNS_TEAM_ID` | reused from `APPLE_TEAM_ID`, the same team the iOS build signs with |
 
 The key id and team id are identifiers rather than credentials, and the key id
 was briefly a `[vars]` entry for exactly that reason. **A name cannot be both.**
@@ -265,8 +265,8 @@ Push Notifications service**. It is *not* the App Store Connect API key used for
 TestFlight — different key, different page, downloadable once, and good for
 every app on the team.
 
-`AGENT_FLEET_APNS_BUNDLE_ID` defaults to `network.thetech.fleetwright`, and
-`AGENT_FLEET_APNS_SANDBOX=1` switches to the sandbox host for a build run from
+`FLEETWRIGHT_APNS_BUNDLE_ID` defaults to `network.thetech.fleetwright`, and
+`FLEETWRIGHT_APNS_SANDBOX=1` switches to the sandbox host for a build run from
 Xcode. TestFlight and App Store builds use production, which is the default,
 because defaulting the other way makes the common case the one that fails
 silently.
@@ -295,7 +295,7 @@ registration is gone for good, and it is pruned.
 
 ## Configuring the sender
 
-Two things, not one. **`AGENT_FLEET_PUSH` is the switch** — until it is set to
+Two things, not one. **`FLEETWRIGHT_PUSH` is the switch** — until it is set to
 `1`/`true`/`yes`/`on`, nothing is sent at all and the coordinator logs that it
 is disabled, whatever credentials exist (see
 [`push-encryption.md`](./push-encryption.md) for why the switch is separate).
@@ -309,11 +309,11 @@ whole reason it asks for a path rather than a value. By hand:
 
 ```sh
 # the coordinator on a box — BASE64, and not optionally so, see below
-base64 -w0 service-account.json      # paste into /etc/agent-fleet-coordinator.env
-AGENT_FLEET_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
+base64 -w0 service-account.json      # paste into /etc/fleetwright-coordinator.env
+FLEETWRIGHT_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
 
 # the coordinator on Cloudflare — either form; wrangler reads stdin
-cd worker && npx wrangler secret put AGENT_FLEET_FCM_SERVICE_ACCOUNT < service-account.json
+cd worker && npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
 ```
 
 ### Why base64 on a box

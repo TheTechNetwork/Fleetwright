@@ -21,7 +21,7 @@ attaches to from their own shell, and most of what a hardening guide recommends
 breaks one of those *silently*.
 
 ```sh
-# what agent-hub must survive
+# what fleetwright must survive
 systemd-run --quiet --wait --pipe --property=<DIRECTIVE> \
   podman run --rm docker.io/library/alpine:latest true
 
@@ -35,8 +35,8 @@ systemd-run --quiet --wait --pipe --working-directory=$PWD <PROPERTIES> \
 
 | unit | before | after |
 |---|---|---|
-| `agent-hub` | **9.0 UNSAFE** | **7.2 MEDIUM** |
-| `agent-fleet-sidecar` | 8.8 EXPOSED | **3.4 OK** |
+| `fleetwright` | **9.0 UNSAFE** | **7.2 MEDIUM** |
+| `fleetwright-sidecar` | 8.8 EXPOSED | **3.4 OK** |
 
 `systemd-analyze security --offline=true install/<unit>.service` reproduces
 these. The gap between the two is not an inconsistency — it is the difference
@@ -58,7 +58,7 @@ give.
 
 **And the session half is different too, which matters more.** The premise at
 the top of this page is that hardening the host narrows what a compromised
-agent-hub or sidecar reaches, while what a SESSION can do is bounded by the
+fleetwright or sidecar reaches, while what a SESSION can do is bounded by the
 container. On a Mac there is usually no container. `install.sh` says so as it
 goes:
 
@@ -79,19 +79,19 @@ the table below, measured the same way rather than recommended — and the
 reasons: unsandboxed sessions, and no `StateDirectory`/`RuntimeDirectory`
 equivalent yet.
 
-## What breaks agent-hub, and how
+## What breaks fleetwright, and how
 
 | directive | measured result |
 |---|---|
 | `NoNewPrivileges` | `newuidmap`/`newgidmap` are setuid-root and are how rootless podman gets a user namespace. A setuid binary under this reports **euid 65534 instead of 0** — it does not fail, it silently does nothing |
 | `RestrictSUIDSGID` | podman does not start: crun dies with ``cannot resolve `null` under rootfs``. It also stops a session running `apt install sudo` |
-| `PrivateTmp` | tmux's socket is `/tmp/tmux-<uid>`. A tmux server started under this is **invisible to `tmux ls` from the user's shell** — every `agent-hub attach` stops working |
+| `PrivateTmp` | tmux's socket is `/tmp/tmux-<uid>`. A tmux server started under this is **invisible to `tmux ls` from the user's shell** — every `fleetwright attach` stops working |
 | `ProtectHome` | rootless podman stores images in `~/.local/share/containers`; the Claude credential is in `~/.claude` |
-| `ProtectSystem=strict` | podman run fails. `full` fitted podman and then failed the upgrade, three rounds of it, because the sudo'd `apt-get` ran inside the hub's namespace and dpkg could not write `/etc` or `/usr`. That upgrade now runs in its own oneshot unit (`install/agent-hub-upgrade.service`) and the hub's grant is `systemctl start` of it, so the reason `full` was rejected is gone — but `full` against `podman run` under this unit has not been re-measured since, and the unit stays `no` until it is; the line to run is in the unit's own comment |
+| `ProtectSystem=strict` | podman run fails. `full` fitted podman and then failed the upgrade, three rounds of it, because the sudo'd `apt-get` ran inside the hub's namespace and dpkg could not write `/etc` or `/usr`. That upgrade now runs in its own oneshot unit (`install/fleetwright-upgrade.service`) and the hub's grant is `systemctl start` of it, so the reason `full` was rejected is gone — but `full` against `podman run` under this unit has not been re-measured since, and the unit stays `no` until it is; the line to run is in the unit's own comment |
 | `ProtectKernelTunables` | podman run fails |
 | `ProtectControlGroups` | podman run fails; it writes its own cgroup |
 | `ProtectHostname` | podman run fails |
-| `ProtectProc=invisible` | mounts the service's `/proc` hidepid — and rootless podman keeps one **pause namespace** per user that every container joins, so the hidepid `/proc` gets baked into it. A hidepid `/proc` is not "fully visible", so the kernel refuses a container a fresh proc mount: every session dies at start with ``crun: mount `proc` to `proc`: Operation not permitted`` — an error that blames crun. Added once without surviving this test; dormant until the release-first update re-applied the unit and each box's next start poisoned its pause, a fleet-wide outage. **Removing it is not enough on a broken box** — the poisoned pause outlives a restart — so agent-hub recreates it on startup (`healRootlessSandbox`), which is what makes an in-app update recover the box. The **sidecar keeps it** — it spawns nothing, so it has no pause |
+| `ProtectProc=invisible` | mounts the service's `/proc` hidepid — and rootless podman keeps one **pause namespace** per user that every container joins, so the hidepid `/proc` gets baked into it. A hidepid `/proc` is not "fully visible", so the kernel refuses a container a fresh proc mount: every session dies at start with ``crun: mount `proc` to `proc`: Operation not permitted`` — an error that blames crun. Added once without surviving this test; dormant until the release-first update re-applied the unit and each box's next start poisoned its pause, a fleet-wide outage. **Removing it is not enough on a broken box** — the poisoned pause outlives a restart — so fleetwright recreates it on startup (`healRootlessSandbox`), which is what makes an in-app update recover the box. The **sidecar keeps it** — it spawns nothing, so it has no pause |
 | `ProtectKernelLogs=yes` | the same failure as `ProtectProc`, one directive over, and why dropping `ProtectProc` alone did not fix the fleet. It overmounts `/proc/kmsg` onto systemd's inaccessible marker, which *also* makes `/proc` not "fully visible" — so the container's fresh proc mount is refused with the identical ``mount `proc` to `proc`: Operation not permitted``, the mask riding into the shared pause namespace exactly like hidepid. Measured: a pause created without it mounts proc, one created with it does not, same box and kernel. Kernel-version sensitive like `ProtectProc`. The **sidecar keeps it** — it spawns nothing |
 | `PrivateDevices` | podman run fails, and it implies `NoNewPrivileges` |
 | `RestrictNamespaces` | a container *is* namespaces |
@@ -104,12 +104,12 @@ blocks *creating* setuid files, not executing them. It is rejected for a
 different, larger reason, and an assumption would have got the right answer for
 the wrong cause and then been applied wrongly somewhere else.
 
-## The sidecar takes everything agent-hub cannot
+## The sidecar takes everything fleetwright cannot
 
 It is a single Node process: WebSocket to the coordinator, HTTP to
 `127.0.0.1:8790`, and files in its own state directory. It **spawns nothing**,
 and it never touches the credential store directly — connect, link and unlink
-all go through agent-hub's API. So every directive rejected above is available
+all go through fleetwright's API. So every directive rejected above is available
 here, including the full seccomp filter.
 
 ```ini
@@ -125,7 +125,7 @@ which of "denied" and "dead" the process gets.
 
 ## The sandbox escape hatch, checked
 
-`AGENT_HUB_SANDBOX_ARGS` is spliced straight into `podman run`. Most of what it
+`FLEETWRIGHT_SANDBOX_ARGS` is spliced straight into `podman run`. Most of what it
 is asked to do is ordinary — an extra mount, `--device=/dev/kvm` for an
 emulator — but a handful of options do not *extend* the sandbox, they **remove**
 it, while every document here goes on describing a session as contained.
@@ -142,14 +142,14 @@ that actually gets pasted is the container socket — "let the agent build
 images" — and inside a root-capable container that is the whole box, with no
 warning. The list is matched by path segment, so `/etcetera` is still yours;
 and it is a list of names, so a mount that hands over the box some other way
-is refused by nothing here. `AGENT_HUB_SANDBOX_ARGS` is split like a command
+is refused by nothing here. `FLEETWRIGHT_SANDBOX_ARGS` is split like a command
 line — quotes group, a backslash escapes — so a path with a space reaches
 podman as one argument and the check sees the argument the operator meant.
 
 The refusal is escapable, deliberately:
 
 ```sh
-AGENT_HUB_SANDBOX_ALLOW_UNSAFE_ARGS=1
+FLEETWRIGHT_SANDBOX_ALLOW_UNSAFE_ARGS=1
 ```
 
 A refusal somebody cannot act on gets worked around by deleting the check. With
@@ -166,7 +166,7 @@ A session gets **root inside its container** — on a box that has one; see
 [None of this is a Mac](#none-of-this-is-a-mac) — and that is the product.
 Hardening the host does not narrow what a session can do to itself, and is not
 meant to.
-What it narrows is what a compromised *agent-hub* or *sidecar* reaches — which is
+What it narrows is what a compromised *fleetwright* or *sidecar* reaches — which is
 the half of the risk that is not the session's by design.
 
 ## Still open

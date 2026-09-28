@@ -46,8 +46,8 @@ in with Google" and "Sign in with Apple" as two code paths — one verifier, and
 config saying which issuers and which addresses count:
 
 ```sh
-AGENT_FLEET_AUTH_ISSUERS=https://accounts.google.com,https://appleid.apple.com
-AGENT_FLEET_AUTH_ALLOW=eli@thetech.network,@thetech.network
+FLEETWRIGHT_AUTH_ISSUERS=https://accounts.google.com,https://appleid.apple.com
+FLEETWRIGHT_AUTH_ALLOW=eli@thetech.network,@thetech.network
 ```
 
 An entry with a local part is one person; an entry starting `@` is a domain.
@@ -104,7 +104,7 @@ allowlist is a *domain*, that is every colleague.
 **And it is a guardrail, not a security control.** It is enforced inside the
 coordinator, which `trust.md` assumes compromised; it protects against mistakes
 and against a colleague having a bad day, and against nothing else. The
-break-glass `AGENT_FLEET_API_TOKEN` always passes it, because the case it exists
+break-glass `FLEETWRIGHT_API_TOKEN` always passes it, because the case it exists
 for is the admin's phone being the thing that got lost.
 
 **It is not how hosts authenticate.** A host is a machine, not a person: it
@@ -144,8 +144,8 @@ and the fork-safe `worker/wrangler.toml` documents what happens while each is
 unset (sign-in answers 503 and says so):
 
 ```
-AGENT_FLEET_AUTH_ISSUERS    https://appleid.apple.com https://accounts.google.com
-AGENT_FLEET_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com
+FLEETWRIGHT_AUTH_ISSUERS    https://appleid.apple.com https://accounts.google.com
+FLEETWRIGHT_AUTH_AUDIENCES  network.thetech.fleetwright  654943059314-kosvngt4ggmdguksogppoiglo48nvm2i.apps.googleusercontent.com
 ```
 
 The allowlist is a **secret**, never a var — it decides who can reach a fleet
@@ -154,7 +154,7 @@ secrets in one namespace, a `[vars]` entry of the same name would clobber it on
 every deploy:
 
 ```sh
-npx wrangler secret put AGENT_FLEET_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
+npx wrangler secret put FLEETWRIGHT_AUTH_ALLOW    # e.g. you@gmail.com,@your-domain.example
 ```
 
 ## In the apps
@@ -172,7 +172,7 @@ Two things that will refuse a sign-in for reasons worth stating in advance:
   why they are missing from a list they are on.
 - **Audiences.** Apple issues its ID tokens for the **iOS bundle id**; Google
   issues them for the OAuth **web** client id the Android app names as its
-  server client. `AGENT_FLEET_AUTH_AUDIENCES` needs both, and a token for
+  server client. `FLEETWRIGHT_AUTH_AUDIENCES` needs both, and a token for
   another application is refused.
 
   The Google half is the **web** client (`client_type: 3`) from
@@ -208,7 +208,7 @@ gone, and its two jobs went to better homes. App Review, whose reviewers are on
 nobody's allowlist, gets a one-tap **"Look around the demo fleet"** button
 pointing at the demo Worker — whose token authorises nothing, because that
 Worker holds no fleet to protect. Getting back in when sign-in itself is broken
-is curl with `AGENT_FLEET_API_TOKEN`, not a paste field on every user's
+is curl with `FLEETWRIGHT_API_TOKEN`, not a paste field on every user's
 settings screen. See [`coordinator-deploy.md`](./coordinator-deploy.md).
 
 ## The hardening this stops short of

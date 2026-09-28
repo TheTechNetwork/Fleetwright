@@ -1,0 +1,113 @@
+#!/usr/bin/env node
+// The coordinator entrypoint.
+//
+//   fleetwright-coordinator          run it
+//
+// Hosts dial in over a WebSocket and hold it open; clients speak ordinary HTTP
+// to the same origin. See docs/coordinator.md.
+//
+// This is the plain-Node coordinator, which is what makes the whole loop
+// testable on one box. The Cloudflare Worker + Durable Object version is a
+// transport swap — the registry, scheduler and intent plumbing are runtime
+// agnostic on purpose.
+
+import os from 'node:os';
+import { dirname } from 'node:path';
+import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { log, setLogLevel } from '../src/log.js';
+import { loadEnvFile } from '../src/core/env-file.js';
+import { watchForRestart } from '../src/core/restart-watch.js';
+import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
+import { preferExisting } from '../src/fleet/legacy-paths.js';
+
+// systemd supplies this with EnvironmentFile=; a shell does not. Without it,
+// running this binary by hand binds with no admin token and refuses every
+// request, on a box whose /etc file has the token in it.
+// The old path on a box the installer has not migrated yet. The override is
+// read after adopting legacy names, so the old variable still works too.
+adoptLegacyEnv(process.env);
+loadEnvFile(process.env.FLEETWRIGHT_COORDINATOR_ENV_FILE || preferExisting('/etc/fleetwright-coordinator.env', '/etc/agent-fleet-coordinator.env'));
+
+/** @param {string} name @param {string} [fallback] */
+const str = (name, fallback = '') => {
+  const v = process.env[name];
+  return v === undefined || v === '' ? fallback : v;
+};
+
+setLogLevel(str('FLEETWRIGHT_LOG_LEVEL', 'info'));
+
+// Pick up an update without anybody opening a terminal. Same mechanism as the
+// hub's own restart: exit, and let systemd's Restart=always bring this back on
+// the new code. Hosts reconnect with backoff, so a coordinator that vanishes
+// for a second is a case the transport already handles.
+watchForRestart({ name: 'coordinator' });
+
+const bind = str('FLEETWRIGHT_COORDINATOR_BIND', '127.0.0.1');
+const port = Number(str('FLEETWRIGHT_COORDINATOR_PORT', '8791'));
+const apiToken = str('FLEETWRIGHT_API_TOKEN') || null;
+// Enrolled host keys live here. Hosts authenticate by signature, so this file
+// is the fleet's membership list — see saveState() in coordinator/server.js.
+const stateFile = str('FLEETWRIGHT_COORDINATOR_STATE', preferExisting('/var/lib/fleetwright-coordinator/state.json', '/var/lib/agent-fleet-coordinator/state.json'));
+
+// Same rule as fleetwright's own bind check, for the same reason: a control
+// surface reachable off-box with no credential is remote control of every host
+// in the fleet for anyone who can route to the port. Refuse rather than warn.
+//
+// Only the admin token is checked. Hosts have no token to forget to set — they
+// are refused by default and let in one at a time by enrolment, which is the
+// same property this check exists to guarantee, obtained structurally.
+const loopback = ['127.0.0.1', 'localhost', '::1'].includes(bind);
+if (!loopback && !apiToken) {
+  log.error(
+    `config: FLEETWRIGHT_COORDINATOR_BIND is ${bind} (not loopback) but ` +
+      'FLEETWRIGHT_API_TOKEN is empty. Set it, or bind 127.0.0.1 and put a tunnel in front.',
+  );
+  process.exit(1);
+}
+if (loopback && !apiToken) {
+  log.warn('no admin token set — fine on loopback for testing, not for anything reachable');
+}
+
+const coordinator = new Coordinator({ apiToken, stateFile, logger: log });
+try {
+  coordinator.loadState();
+} catch (e) {
+  // Deliberately fatal. Starting with an empty membership list because the file
+  // would not parse means refusing every host in the fleet and looking healthy
+  // while doing it.
+  log.error(`config: ${stateFile} could not be read: ${/** @type {Error} */ (e).message}`);
+  process.exit(1);
+}
+coordinator.loadEvents();
+try {
+  coordinator.assertStateWritable();
+} catch (e) {
+  // Also fatal, and for a failure mode that is otherwise invisible for weeks:
+  // everything works until the first restart, and then the entire fleet is
+  // refused because nothing was ever written down.
+  log.error(
+    `config: cannot write ${stateFile}: ${/** @type {Error} */ (e).message}\n` +
+      '  The coordinator has to remember which hosts are enrolled — that list IS the fleet.\n' +
+      '  Re-run install.sh so the unit gets StateDirectory=, or:\n' +
+      `    sudo install -d -m 0700 -o "$(id -un)" ${dirname(stateFile)}`,
+  );
+  process.exit(1);
+}
+const actualPort = await coordinator.listen(port, bind);
+
+log.info(`coordinator: ${os.hostname()} · hosts dial ws://${bind}:${actualPort}/host/connect`);
+log.info(`coordinator: clients POST http://${bind}:${actualPort}/api/intent`);
+
+/** @param {string} signal */
+const shutdown = async (signal) => {
+  // Hosts reconnect on their own with backoff, and their sessions are untouched
+  // by any of this — the coordinator holds no session state worth preserving.
+  log.info(`${signal} — shutting down (hosts will reconnect; their sessions are unaffected)`);
+  try {
+    await coordinator.close();
+  } catch { /* best effort */ }
+  process.exit(0);
+};
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));

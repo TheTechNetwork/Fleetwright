@@ -115,8 +115,60 @@ export function rootRefusal(uid, typed, hasPin) {
  */
 export function joinPlan({ url, pin, root, node, env = process.env }) {
   /** @type {NodeJS.ProcessEnv} */
-  const next = { ...env, AGENT_FLEET_COORDINATOR_URL: url };
-  if (pin) next.AGENT_FLEET_ENROL_PIN = pin;
-  if (!next.AGENT_HUB_NODE_BIN) next.AGENT_HUB_NODE_BIN = node;
+  const next = { ...env, FLEETWRIGHT_COORDINATOR_URL: url };
+  if (pin) next.FLEETWRIGHT_ENROL_PIN = pin;
+  if (!next.FLEETWRIGHT_NODE_BIN) next.FLEETWRIGHT_NODE_BIN = node;
   return { argv: ['bash', `${root}/install/install.sh`, '--wizard'], env: next };
+}
+
+/**
+ * The `join` verb, as the CLI runs it. Returns the exit code.
+ *
+ * Order matters and is tested: the arguments, then the address (no privilege
+ * needed, and a typo found before the sudo is one fewer round trip), then
+ * root, then the installer.
+ *
+ * @param {string[]} args
+ * @param {{ root: string, node: string, uid?: number, fetch?: typeof fetch,
+ *   spawn?: (cmd: string, argv: string[], opts: object) => { status: number|null },
+ *   out?: (s: string) => void, err?: (s: string) => void }} o
+ * @returns {Promise<number>}
+ */
+export async function runJoin(args, { root, node, uid, fetch: doFetch = fetch, spawn, out = console.log, err = console.error }) {
+  const fail = (/** @type {string} */ message) => {
+    err(`\n  FAIL ${message}\n`);
+    return 2;
+  };
+  let target = '';
+  let pin = '';
+  let skipCheck = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--pin') pin = args[++i] ?? '';
+    else if (a.startsWith('--pin=')) pin = a.slice('--pin='.length);
+    else if (a === '--no-check') skipCheck = true;
+    else if (a.startsWith('-')) return fail(`unknown option ${a}`);
+    else if (!target) target = a;
+    else return fail(`one coordinator at a time — got "${target}" and "${a}"`);
+  }
+
+  const u = coordinatorUrl(target);
+  if (!u.ok) return fail(u.message);
+  // Six digits or nothing, the installer's own rule, checked before anything
+  // runs as root.
+  if (pin && !/^\d{6}$/.test(pin)) return fail('a pin is six digits, from the app (Fleet → Add a host).');
+
+  if (!skipCheck) {
+    const probe = await probeCoordinator(u.url, { fetch: doFetch });
+    if (!probe.ok) return fail(`${probe.message}\n      Nothing was changed. Check the address, or --no-check to join it anyway.`);
+    out(`  ok   ${probe.message}`);
+  }
+
+  const refusal = rootRefusal(uid, target, Boolean(pin));
+  if (refusal) return fail(refusal);
+
+  const plan = joinPlan({ url: u.url, pin, root, node });
+  if (!spawn) throw new Error('runJoin needs a spawn to run the installer');
+  const r = spawn(plan.argv[0], plan.argv.slice(1), { stdio: 'inherit', env: plan.env });
+  return r.status ?? 1;
 }

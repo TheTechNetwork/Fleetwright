@@ -89,13 +89,13 @@ function workerFleet() {
     getWebSockets: () => [],
     setAlarm: () => {},
   };
-  const fleet = new Fleet(/** @type {any} */ (state), { AGENT_FLEET_API_TOKEN: ADMIN });
+  const fleet = new Fleet(/** @type {any} */ (state), { FLEETWRIGHT_API_TOKEN: ADMIN });
   return {
     fleet,
     call: (/** @type {string} */ path, /** @type {string} */ method, /** @type {Record<string,string>} */ headers = {}) =>
       worker.fetch(
         new Request(`https://fleet.example${path}`, { method, headers: { 'content-type': 'application/json', ...headers }, body: method === 'GET' ? undefined : bodyFor(path) }),
-        /** @type {any} */ ({ FLEET: { idFromName: () => 'id', get: () => fleet }, AGENT_FLEET_API_TOKEN: ADMIN }),
+        /** @type {any} */ ({ FLEET: { idFromName: () => 'id', get: () => fleet }, FLEETWRIGHT_API_TOKEN: ADMIN }),
       ),
   };
 }

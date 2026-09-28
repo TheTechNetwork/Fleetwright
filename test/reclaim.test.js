@@ -35,7 +35,7 @@ test('the helper removes only the quarantine, and nothing else', () => {
     mkdirSync(path.join(base, 'releases', stale, 'lib'), { recursive: true });
     writeFileSync(path.join(base, 'releases', stale, 'lib', 'bundle'), 'x');
   }
-  execFileSync('sh', [HELPER], { env: { ...process.env, AGENT_FLEET_BASE: base }, stdio: 'pipe' });
+  execFileSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, stdio: 'pipe' });
 
   // The quarantine is gone.
   assert.equal(existsSync(path.join(base, 'releases', '.stale-old-0')), false);
@@ -52,7 +52,7 @@ test('the helper is a clean no-op when there is no quarantine', () => {
   // No `.stale-` at all — the glob matches nothing and nothing is removed or
   // errored. The literal-glob trap (`rm` on `.stale-*` as a path) is what this
   // guards against.
-  const out = execFileSync('sh', [HELPER], { env: { ...process.env, AGENT_FLEET_BASE: base }, encoding: 'utf8' });
+  const out = execFileSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, encoding: 'utf8' });
   assert.match(out, /no quarantined releases to reclaim/);
   assert.equal(existsSync(path.join(base, 'releases', 'v1', 'keep')), true);
   rmSync(base, { recursive: true, force: true });
@@ -63,7 +63,7 @@ test('a name that only looks like quarantine, one level down, is not reached', (
   // real release is that release's business, not this helper's.
   const base = makeBox();
   mkdirSync(path.join(base, 'releases', 'v1', '.stale-decoy'), { recursive: true });
-  execFileSync('sh', [HELPER], { env: { ...process.env, AGENT_FLEET_BASE: base }, stdio: 'pipe' });
+  execFileSync('sh', [HELPER], { env: { ...process.env, FLEETWRIGHT_BASE: base }, stdio: 'pipe' });
   assert.equal(existsSync(path.join(base, 'releases', 'v1', '.stale-decoy')), true, 'reached past a direct child');
   rmSync(base, { recursive: true, force: true });
 });
@@ -122,7 +122,7 @@ test('reclaimStale never throws, and a refused sudo is a report', () => {
 });
 
 test('an unpackaged box has nothing to reclaim', () => {
-  const cfg = /** @type {any} */ ({ installDir: '/opt/agent-fleet' });
+  const cfg = /** @type {any} */ ({ installDir: '/opt/fleetwright-src' });
   assert.equal(reclaimStale(cfg, { run: () => ({ status: 0 }), exists: () => true }).reason, 'unpackaged');
 });
 

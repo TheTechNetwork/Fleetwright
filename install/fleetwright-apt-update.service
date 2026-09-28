@@ -1,9 +1,9 @@
 [Unit]
-Description=agent-hub — refresh the package lists, on request from the hub
-Documentation=https://github.com/ambersecurityinc/agent-hub
+Description=fleetwright — refresh the package lists, on request from the hub
+Documentation=https://github.com/TheTechNetwork/Fleetwright
 
 [Service]
-# The read half of agent-hub-upgrade.service, and its own unit for the same
+# The read half of fleetwright-upgrade.service, and its own unit for the same
 # reason that one exists: `apt-get update` needs root and writes under
 # /var/lib/apt, and the hub's grant is "start this named unit" rather than
 # "run apt-get with these arguments". It fetches metadata and changes nothing
@@ -16,4 +16,4 @@ TimeoutStartSec=120
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agent-hub-apt-update
+SyslogIdentifier=fleetwright-apt-update

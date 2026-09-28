@@ -229,7 +229,7 @@ test('a refusal never quotes the material back', () => {
 test('a host needs no configuration at all to renew', () => {
   // The standing goal: "I want to be able to spin up a host, run the install
   // and registration, and go — all the questions in the install are the goal
-  // to eliminate." A renewal that needed AGENT_HUB_GITHUB_CLIENT_ID on every
+  // to eliminate." A renewal that needed FLEETWRIGHT_GITHUB_CLIENT_ID on every
   // box would have added one, for a value that is public and already travels
   // past that box in every authorization URL.
   //

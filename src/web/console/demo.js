@@ -79,7 +79,7 @@ export const SCENARIOS = {
           title: 'clean up the release branch',
           status: 'running',
           hostId: 'deb13-staging',
-          // AGENT_FLEET_PROMPT_TEXT is off, so a permission dialog — which names
+          // FLEETWRIGHT_PROMPT_TEXT is off, so a permission dialog — which names
           // a command — sends its question and not its options.
           prompt: { id: 'b72f', kind: 'permission', question: 'A tool wants permission to run.', options: [] },
         },

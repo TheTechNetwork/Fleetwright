@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
-import { coordinatorUrl, probeCoordinator, joinPlan, rootRefusal } from '../src/core/join.js';
+import { coordinatorUrl, probeCoordinator, joinPlan, rootRefusal, runJoin } from '../src/core/join.js';
 
 const url = (s) => {
   const r = coordinatorUrl(s);
@@ -69,17 +69,17 @@ test('the plan is the installer\'s wizard, told the fleet, and the pin only when
   const env = { PATH: '/usr/bin' };
   const without = joinPlan({ url: 'https://f.example', root: '/opt/fleetwright/current', node: '/n', env });
   assert.deepEqual(without.argv, ['bash', '/opt/fleetwright/current/install/install.sh', '--wizard']);
-  assert.equal(without.env.AGENT_FLEET_COORDINATOR_URL, 'https://f.example');
-  assert.equal('AGENT_FLEET_ENROL_PIN' in without.env, false, 'blank pin: the wizard asks for it');
-  assert.equal(without.env.AGENT_HUB_NODE_BIN, '/n', 'on a deb box this node is the only one');
+  assert.equal(without.env.FLEETWRIGHT_COORDINATOR_URL, 'https://f.example');
+  assert.equal('FLEETWRIGHT_ENROL_PIN' in without.env, false, 'blank pin: the wizard asks for it');
+  assert.equal(without.env.FLEETWRIGHT_NODE_BIN, '/n', 'on a deb box this node is the only one');
 
-  const withPin = joinPlan({ url: 'https://f.example', pin: '123456', root: '/r', node: '/n', env: { AGENT_HUB_NODE_BIN: '/mine' } });
-  assert.equal(withPin.env.AGENT_FLEET_ENROL_PIN, '123456');
-  assert.equal(withPin.env.AGENT_HUB_NODE_BIN, '/mine', 'an operator\'s own choice is not overridden');
+  const withPin = joinPlan({ url: 'https://f.example', pin: '123456', root: '/r', node: '/n', env: { FLEETWRIGHT_NODE_BIN: '/mine' } });
+  assert.equal(withPin.env.FLEETWRIGHT_ENROL_PIN, '123456');
+  assert.equal(withPin.env.FLEETWRIGHT_NODE_BIN, '/mine', 'an operator\'s own choice is not overridden');
 });
 
 const cli = (...args) =>
-  spawnSync(process.execPath, ['bin/fleetwright', ...args], { encoding: 'utf8', env: { ...process.env, AGENT_HUB_ENV_FILE: '/nonexistent' } });
+  spawnSync(process.execPath, ['bin/fleetwright', ...args], { encoding: 'utf8', env: { ...process.env, FLEETWRIGHT_ENV_FILE: '/nonexistent' } });
 
 test('join refuses bad input before it needs root or the network', () => {
   const none = cli('join');
@@ -115,4 +115,40 @@ test('fleetwright --help names join and the short name', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /fleetwright join <coordinator>/);
   assert.match(r.stdout, /also: fw/);
+});
+
+test('runJoin: the address, then root, then the installer — with the terminal and the pin', async () => {
+  const runs = [];
+  const out = [];
+  const err = [];
+  const common = {
+    root: '/opt/fleetwright/current',
+    node: '/usr/lib/fleetwright/node/bin/node',
+    fetch: /** @type {any} */ (async () => ({ ok: true, status: 200 })),
+    spawn: (/** @type {string} */ cmd, /** @type {string[]} */ argv, /** @type {any} */ opts) => { runs.push({ cmd, argv, opts }); return { status: 0 }; },
+    out: (/** @type {string} */ s) => out.push(s),
+    err: (/** @type {string} */ s) => err.push(s),
+  };
+  assert.equal(await runJoin(['fleet.example.com', '--pin=123456'], { ...common, uid: 0 }), 0);
+  assert.equal(runs.length, 1);
+  assert.deepEqual([runs[0].cmd, ...runs[0].argv], ['bash', '/opt/fleetwright/current/install/install.sh', '--wizard']);
+  assert.equal(runs[0].opts.stdio, 'inherit', 'the wizard asks on the terminal the person typed into');
+  assert.equal(runs[0].opts.env.FLEETWRIGHT_COORDINATOR_URL, 'https://fleet.example.com');
+  assert.equal(runs[0].opts.env.FLEETWRIGHT_ENROL_PIN, '123456');
+  assert.match(out.join('\n'), /is a coordinator/);
+
+  // Not root: refused after the address answered, and nothing ran.
+  assert.equal(await runJoin(['fleet.example.com'], { ...common, uid: 1000 }), 2);
+  assert.equal(runs.length, 1);
+  assert.match(err.at(-1), /sudo fleetwright join fleet\.example\.com/);
+
+  // --no-check skips the probe entirely.
+  let probed = false;
+  const noProbe = { ...common, fetch: /** @type {any} */ (async () => { probed = true; return { ok: false, status: 500 }; }) };
+  assert.equal(await runJoin(['fleet.example.com', '--no-check'], { ...noProbe, uid: 0 }), 0);
+  assert.equal(probed, false);
+
+  assert.equal(await runJoin(['fleet.example.com', '--force'], { ...common, uid: 0 }), 2);
+  assert.match(err.at(-1), /unknown option --force/);
+  await assert.rejects(runJoin(['fleet.example.com'], { ...common, spawn: undefined, uid: 0 }), /needs a spawn/);
 });

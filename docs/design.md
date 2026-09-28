@@ -1,15 +1,15 @@
-# agent-fleet — design handoff
+# fleetwright — design handoff
 
 Carried over from a prior session that read `ambersecurityinc/agent-hub` end to end.
-Nothing has been built yet. No commits, no pushes were made to agent-hub.
+Nothing has been built yet. No commits, no pushes were made to fleetwright.
 
 **Goal:** a multi-host control plane for Claude Code sessions, with ephemeral root-capable
 sandboxes, session wake, and iOS/Android apps — Siri/Shortcuts being the highest priority.
-Host-side changes are intended to be contributed back upstream to agent-hub.
+Host-side changes were at first meant to go back upstream to agent-hub; Fleetwright is now a spin-off (`docs/lineage.md`).
 
 ---
 
-## 1. What agent-hub already is (don't re-derive this)
+## 1. What fleetwright already is (don't re-derive this)
 
 ~3,800 lines of Node, zero runtime dependencies (`node` 18+, `tmux`, `claude`). State is one
 JSON file. Telegram, a web UI, and a CLI all route through one command registry
@@ -19,7 +19,7 @@ JSON file. Telegram, a web UI, and a CLI all route through one command registry
 outage. Preserve all three; they are the actual value:
 
 1. **`--resume` does not always resume.** On a large/stale conversation `claude` shows a blocking
-   "summary or full?" dialog and waits forever. agent-hub watches the pane and answers *only when
+   "summary or full?" dialog and waits forever. fleetwright watches the pane and answers *only when
    the dialog is on screen*, so a clean resume never receives a stray Enter.
 2. **Never `--continue`.** In a shared workdir it resumes *that directory's* latest conversation,
    so restoring several sessions collides them all onto one. Resume by uuid or refuse
@@ -36,7 +36,7 @@ Conversation uuids come from the **SessionStart hook**, which posts to `/interna
 (loopback-only, deliberately never token-gated). That's what makes resume authoritative rather
 than scraped.
 
-### Known gaps in agent-hub as it stands
+### Known gaps in fleetwright as it stands
 
 - Tests cover pure string functions only (arg parsing, name charset, dialog text, URL de-wrapping).
   Reconcile, restore, cap accounting, and the tmux lifecycle are untested.
@@ -72,9 +72,9 @@ IS_SANDBOX=1 exec podman run --rm -it \
   --name agent-<name> \
   -v claude-<name>:/root/.claude \
   -v work-<name>:/work -w /work \
-  -v /run/agent-hub/<name>.sock:/run/hub.sock \
+  -v /run/fleetwright/<name>.sock:/run/hub.sock \
   --memory=8g --cpus=2 --pids-limit=512 \
-  agent-session:latest \
+  fleetwright-session:latest \
   claude --remote-control <name> --dangerously-skip-permissions --resume <uuid>
 ```
 
@@ -130,7 +130,7 @@ per-user-account path.
 ## 3. Multi-host
 
 **Hosts dial out. Nothing you own ever listens.** A persistent outbound WebSocket from each host
-preserves the property that makes agent-hub deployable at all (no inbound rule, works behind NAT
+preserves the property that makes fleetwright deployable at all (no inbound rule, works behind NAT
 on a Pi), and it gives wake for free — the coordinator pushes down an already-open socket.
 
 **Resume is pinned; only new sessions get scheduled.** `claude-<name>` is a host-local volume, so
@@ -145,7 +145,7 @@ tie-break round robin. Hosts report `maxSessions`, current count, load average, 
 never `healthy`. A session whose host is offline is `unreachable`, not `stopped`. This is recon's
 principle — make "we don't know" unrepresentable as a benign value — and it applies directly.
 
-**The warning:** multi-host reintroduces the two-plane split agent-hub's README explicitly
+**The warning:** multi-host reintroduces the two-plane split fleetwright's README explicitly
 celebrates having removed (a Worker + D1 request queue that needed a heartbeat protocol and a
 stale-row reaper). Unavoidable with more than one box, but it means **the coordinator's registry is
 a cache with provenance, never the authority.** Each host stays the sole authority on its own tmux.
@@ -175,7 +175,7 @@ second.
   Siri:** a Shortcut hitting a tailnet name works only when the VPN is up *and* connected, and Siri
   fires right after unlock on a cold radio. Always-on VPN mitigates but doesn't kill it.
 - **C — Shared broker (MQTT / ntfy / Telegram).** Nothing you own listens; Telegram is already
-  proven in agent-hub. But request/response is awkward, the scheduler has nowhere to live, and it's
+  proven in fleetwright. But request/response is awkward, the scheduler has nowhere to live, and it's
   a weak foundation for a native app API.
 
 **Decision: A for the phone leg, B available as a deployment mode for host↔coordinator.** Build the
@@ -219,8 +219,8 @@ You're authenticated there, so reuse it and skip building an account system:
 
 - **Phone:** `/enroll` in Telegram returns a one-time code or deep link; the app exchanges it once
   for a device credential.
-- **Host:** a one-time enrolment token pasted into `/etc/agent-fleet.env`, exchanged at first
-  check-in for a long-lived per-host key. This is agent-hub's `/whoami` bootstrap, generalized.
+- **Host:** a one-time enrolment token pasted into `/etc/fleetwright.env`, exchanged at first
+  check-in for a long-lived per-host key. This is fleetwright's `/whoami` bootstrap, generalized.
 
 ### The principle to enforce from day one
 
@@ -240,7 +240,7 @@ idempotency key (a replayed `/stop` is harmless; a replayed `/new` is not).
 
 ### What service auth still doesn't give you
 
-Authenticating the actor doesn't answer *which sessions this actor may touch*. That's agent-hub's
+Authenticating the actor doesn't answer *which sessions this actor may touch*. That's fleetwright's
 flat-allowlist problem — and the Worker is the right place to fix it, since it's one chokepoint
 instead of N hosts. Roles and per-session ownership are far cheaper to build here than to retrofit
 upstream.
@@ -249,15 +249,15 @@ upstream.
 
 ## 6. Host-side code structure
 
-> **Superseded 2026-08-17 — see §8.5.** The host side is a **sidecar process in agent-fleet**
-> driving agent-hub over its loopback HTTP API, not an adapter inside agent-hub. The
+> **Superseded 2026-08-17 — see §8.5.** The host side is a **sidecar process in fleetwright**
+> driving fleetwright over its loopback HTTP API, not an adapter inside fleetwright. The
 > reasoning below still holds and is why the sidecar translates intents into the same command
 > lines `dispatch()` takes; what changed is that it reaches that seam through `POST /api/command`
 > instead of by being loaded into the process. `docs/sidecar.md` has the detail, including the two
 > things the HTTP boundary costs.
 
 **The coordinator client is just another adapter.** `dispatch()` already takes
-`{sessions, login, cfg, actor}` plus a command line, and agent-hub's README advertises exactly this
+`{sessions, login, cfg, actor}` plus a command line, and fleetwright's README advertises exactly this
 seam: "Slack and WhatsApp are each one file; nothing in `src/core/` needs to change."
 
 So the host side is `src/adapters/fleet.js` — roughly 200 lines that dial the coordinator,
@@ -306,23 +306,23 @@ no multi-step handshakes on the hot path.
    a container runtime it didn't have.
 
    Landed: `docs/intents.md` + `src/fleet/protocol/intents.js` (the protocol, built by the coordinator
-   and enforced by the host), and `src/fleet/host/` + `bin/agent-fleet-sidecar` (the host side). Eight
+   and enforced by the host), and `src/fleet/host/` + `bin/fleetwright-sidecar` (the host side). Eight
    verbs, no `login`/`code`, no path parameter anywhere. 130 tests, plus an end-to-end run against
-   a real `agent-hub serve` — see `docs/sidecar.md`.
+   a real `fleetwright serve` — see `docs/sidecar.md`.
 
 5. **One project; the host side is a sidecar process, not an in-process adapter — settled
-   2026-08-17.** agent-hub lives in this repo now, at its own upstream paths (`src/core/`,
-   `src/adapters/`, `bin/agent-hub`, `install/`), with fleet code under `src/fleet/`. One
+   2026-08-17.** agent-hub's code lives in this repo now, at what were its upstream paths (`src/core/`,
+   `src/adapters/`, `bin/fleetwright`, `install/`), with fleet code under `src/fleet/`. One
    `package.json`, one test suite, one CI job.
 
    §6 proposes `src/adapters/fleet.js` *inside* the session manager, which is a clean fit for its
    adapter seam. We run a separate process instead, driving it over the loopback HTTP API
    (`POST /api/command`, `GET /api/state`, `GET /api/peek`).
 
-   The reason: **agent-hub is upstream code we intend to contribute back to.** Every line of
-   fleet logic added to that tree is a line that has to be untangled before any of it can go
-   upstream, and a tree that accumulates them becomes a fork by default rather than by decision.
-   The HTTP boundary keeps `docs/upstream-agent-hub.md`'s diff small enough to actually contribute.
+   The reason, at the time: **the session manager was upstream code we intended to contribute
+   back to**, and fleet logic in that tree would have had to be untangled first. That plan is
+   gone — Fleetwright is a spin-off (`docs/lineage.md`) — and the boundary stays for the reasons
+   below, which were always the better ones.
    Two smaller things it buys: the sidecar restarts without disturbing sessions, and a host can
    run a session manager other than the one in this tree. The cost is one loopback round trip per
    action, which is nothing against the ~20s a start already spends on the Remote Control check.
@@ -379,8 +379,8 @@ in there and watching a resume dialog render.
 Pure logic, testable with `node:test` and fakes:
 
 - The intent protocol / verb set.
-- The host sidecar against agent-hub's HTTP API, with a fake transport and a stub hub. (Better
-  than expected: a real `agent-hub serve` runs fine here on a scratch state dir, so the sidecar
+- The host sidecar against fleetwright's HTTP API, with a fake transport and a stub hub. (Better
+  than expected: a real `fleetwright serve` runs fine here on a scratch state dir, so the sidecar
   was validated against the actual API rather than only a stub — see §8.5.)
 - Scheduler: constraint filter, capacity ranking, sticky-placement rules.
 - Worker + Durable Object code (unit-testable with mocks; end-to-end needs a Cloudflare account).
@@ -440,7 +440,7 @@ https://claude.ai/code/session_016zfBs7LYmQwg7WqfD6dY3M
 
 Note: **the flag matters.** Launched *without* `--remote-control <name>` (RC coming up via
 `remoteControlAtStartup` instead), the pane shows only `/rc active` in the status line, which
-matches none of the patterns. agent-hub always passes the flag (`claude.js:33`), so this is not a
+matches none of the patterns. fleetwright always passes the flag (`claude.js:33`), so this is not a
 live bug — but do not remove that flag thinking the setting covers it.
 
 ### Latent risk found, not yet hit — now fixed
@@ -459,7 +459,7 @@ just a fixture.
 `claude.js` would be a cycle), and `extractRcUrl` de-wraps first and matches an explicit URL
 character set rather than `\S+` — de-wrapping can only ever join *more* text onto the end, and in
 a TUI that is as likely to be a box border as a path segment. It is the main divergence from
-upstream `cac1f02` and is ready to contribute as-is — see `docs/upstream-agent-hub.md`.
+agent-hub `cac1f02` — see `docs/lineage.md`.
 
 **And guarded again on the fleet side.** `src/fleet/host/pane.js` re-derives the URL from
 `GET /api/peek` and repairs what the record holds, naming which failure it found — `missing`,
@@ -467,7 +467,7 @@ upstream `cac1f02` and is ready to contribute as-is — see `docs/upstream-agent
 
 The sidecar's own layer stays regardless, and its role changes: with both in place
 `reconcileRcUrl` should report `repaired: false` in normal operation, so a `truncated` or
-`missing` in the logs now means agent-hub's extraction has regressed. That is exactly the failure
+`missing` in the logs now means fleetwright's extraction has regressed. That is exactly the failure
 that went unnoticed the first time, because nothing was watching for it.
 
 ### Still unvalidated

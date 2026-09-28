@@ -128,7 +128,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: agent-fleet-debug-apk
+          name: fleetwright-debug-apk
           path: apps/android/app/build/outputs/apk/debug/*.apk
           # Long enough to still be there when somebody gets to the PR, short
           # enough not to accumulate.
@@ -209,7 +209,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.1
         if: steps.keystore.outputs.have == 'true'
         with:
-          name: agent-fleet-release-apk
+          name: fleetwright-release-apk
           path: apps/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
