@@ -6,7 +6,7 @@ Description: Coordinator URL to join:
  is the same address that follows `curl -fsSL` in the one-line installer.
  .
  Leave it blank to install without joining. Join later with:
- sudo dpkg-reconfigure fleetwright
+ sudo fleetwright join fleet.example.com
 
 Template: fleetwright/pin
 Type: password

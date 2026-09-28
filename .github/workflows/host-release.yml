@@ -164,7 +164,7 @@ jobs:
           # THAT IT STARTS, not that it succeeds. Exit codes belong to each
           # tool — agent-fleet-mcp refuses without a coordinator URL and is
           # right to. A shim node cannot parse dies before any of that.
-          for entry in agent-hub agent-fleet-sidecar agent-fleet-mcp; do
+          for entry in agent-hub agent-fleet-sidecar agent-fleet-mcp fleetwright; do
             [ -f "$root/bin/$entry" ] || { echo "::error::no bin/$entry in the release"; exit 1; }
             for how in "node $root/bin/$entry" "$root/bin/$entry"; do
               out="$(cd / && $how --help 2>&1 || true)"
@@ -435,8 +435,15 @@ jobs:
               || { echo "::error::the install did not record apt as its updater"; exit 1; }
             grep -q "^ExecStart=/usr/lib/fleetwright/node/bin/node " /etc/systemd/system/agent-hub.service \
               || { echo "::error::the unit does not run the bundled node"; exit 1; }
-            out="$(agent-hub --help 2>&1 || true)"
-            case "$out" in *"not found"*|*SyntaxError*|"") echo "::error::agent-hub from PATH did not start: $out"; exit 1 ;; esac
+            for cmd in agent-hub fleetwright fw; do
+              out="$($cmd --help 2>&1 || true)"
+              case "$out" in *"not found"*|*SyntaxError*|"") echo "::error::$cmd from PATH did not start: $out"; exit 1 ;; esac
+            done
+            # join refuses a name that does not resolve, before it changes anything.
+            if fleetwright join nowhere.invalid > /tmp/join.log 2>&1; then
+              echo "::error::join accepted an address that does not answer"; exit 1
+            fi
+            grep -q "Nothing was changed" /tmp/join.log || { cat /tmp/join.log; exit 1; }
             apt-get purge -y -qq fleetwright > /tmp/purge.log 2>&1 || { cat /tmp/purge.log; exit 1; }
             [ ! -e /opt/fleetwright ] || { echo "::error::purge left /opt/fleetwright behind"; ls -la /opt/fleetwright; exit 1; }
             echo "--- installed, ran, purged ---"

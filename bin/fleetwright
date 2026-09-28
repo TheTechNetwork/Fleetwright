@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+// fleetwright — the command a person types. `fw` is the same thing, shorter.
+//
+//   sudo fleetwright join fleet.example.com [--pin 123456]
+//   fleetwright doctor
+//   fleetwright <anything agent-hub takes>
+//
+// A FRONT DOOR, NOT A SECOND CLI. `join` is the one verb that is new; every
+// other word is agent-hub's, run as agent-hub, so there is one implementation
+// of each command and `agent-hub doctor` keeps working on every box and in
+// every runbook that already says it. The services, the env files and the
+// AGENT_HUB_* settings keep their names: those are what an existing box is
+// made of, and renaming them is a migration of its own rather than a spelling
+// change.
+
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { INSTALL_ROOT } from '../src/core/resources.js';
+import { coordinatorUrl, probeCoordinator, joinPlan, rootRefusal } from '../src/core/join.js';
+
+const argv = process.argv.slice(2);
+
+if (argv[0] === 'join') {
+  process.exit(await join(argv.slice(1)));
+}
+
+if (argv.length === 0 || ['help', '--help', '-h'].includes(argv[0])) {
+  console.log(`fleetwright — Claude Code sessions a fleet can reach   (also: fw)
+
+  sudo fleetwright join <coordinator> [--pin 123456]
+                                join a fleet: fleet.example.com means https://
+  fleetwright doctor            check this box can run sessions
+  fleetwright <command>         anything agent-hub takes — list, status, login…
+`);
+  if (argv.length) process.exit(0);
+}
+
+// Everything else is agent-hub's. Run as a child rather than imported, so its
+// top-level work (reading /etc/agent-hub.env, deciding what `argv[0]` means)
+// happens exactly as it does when it is called by name.
+const r = spawnSync(process.execPath, [path.join(INSTALL_ROOT, 'bin', 'agent-hub'), ...argv], { stdio: 'inherit' });
+process.exit(r.status ?? 1);
+
+/** @param {string[]} args */
+async function join(args) {
+  let target = '';
+  let pin = '';
+  let skipCheck = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--pin') pin = args[++i] ?? '';
+    else if (a.startsWith('--pin=')) pin = a.slice('--pin='.length);
+    else if (a === '--no-check') skipCheck = true;
+    else if (a.startsWith('-')) return fail(`unknown option ${a}`);
+    else if (!target) target = a;
+    else return fail(`one coordinator at a time — got "${target}" and "${a}"`);
+  }
+
+  const u = coordinatorUrl(target);
+  if (!u.ok) return fail(u.message);
+  // Six digits or nothing, the installer's own rule, checked before anything
+  // runs as root.
+  if (pin && !/^\d{6}$/.test(pin)) return fail('a pin is six digits, from the app (Fleet → Add a host).');
+
+  // The address first: it needs no privilege, and a typo found before the
+  // sudo is one fewer round trip.
+  if (!skipCheck) {
+    const probe = await probeCoordinator(u.url);
+    if (!probe.ok) {
+      return fail(`${probe.message}\n      Nothing was changed. Check the address, or --no-check to join it anyway.`);
+    }
+    console.log(`  ok   ${probe.message}`);
+  }
+
+  const refusal = rootRefusal(process.getuid?.(), target, Boolean(pin));
+  if (refusal) return fail(refusal);
+
+  const plan = joinPlan({ url: u.url, pin, root: INSTALL_ROOT, node: process.execPath });
+  const r = spawnSync(plan.argv[0], plan.argv.slice(1), { stdio: 'inherit', env: plan.env });
+  return r.status ?? 1;
+}
+
+/** @param {string} message */
+function fail(message) {
+  console.error(`\n  FAIL ${message}\n`);
+  return 2;
+}

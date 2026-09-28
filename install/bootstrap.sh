@@ -64,7 +64,7 @@ if command -v dpkg-query >/dev/null 2>&1 \
    && [ "$(dpkg-query -W -f='${Status}' fleetwright 2>/dev/null || true)" = "install ok installed" ]; then
   die "this box has the fleetwright package, so apt installs and updates it.
        Update:            sudo apt update && sudo apt upgrade
-       Join a fleet:      sudo dpkg-reconfigure fleetwright
+       Join a fleet:      sudo fleetwright join <coordinator>
        Switch to this installer instead:  sudo apt remove fleetwright, then run this again"
 fi
 

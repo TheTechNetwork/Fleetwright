@@ -395,6 +395,6 @@ test('a box the fleetwright package owns is refused, and told how apt does each 
   // Two updaters taking turns moving `current` is the thing refused here.
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /apt installs and updates it/);
-  assert.match(r.stderr, /dpkg-reconfigure fleetwright/);
+  assert.match(r.stderr, /fleetwright join/);
   assert.equal(existsSync(rel.base), false, 'something was laid out before the refusal');
 });
