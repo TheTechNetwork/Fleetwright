@@ -28,7 +28,12 @@ test('a release tag becomes a version dpkg orders the way semver does', () => {
   if (has('dpkg')) {
     assert.equal(spawnSync('dpkg', ['--compare-versions', '0.3.0~rc1', 'lt', '0.3.0']).status, 0);
   }
-  assert.throws(() => debVersion('main-41'), /start with a digit/);
+  // A build of main — what the deb job sees on every push — sorts below any release.
+  assert.equal(debVersion('main-41'), '0.0.0~main.41');
+  if (has('dpkg')) {
+    assert.equal(spawnSync('dpkg', ['--compare-versions', '0.0.0~main.41', 'lt', '0.2.3']).status, 0);
+  }
+  assert.throws(() => debVersion('nightly'), /start with a digit/);
 });
 
 test('the pinned Node is read from node.env, and Renovate can see it', () => {

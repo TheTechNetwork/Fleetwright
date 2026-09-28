@@ -132,5 +132,8 @@ test('the Worker is configured for the domain and logs, and never ships packages
   const toml = readFileSync(new URL('../apt/wrangler.toml', import.meta.url), 'utf8');
   assert.match(toml, /pattern = "apt\.thetech\.network", custom_domain = true/);
   assert.match(toml, /\[observability\]\nenabled = true/);
+  // Without this, an existing asset is served before the Worker runs and no
+  // apt update is ever logged.
+  assert.match(toml, /run_worker_first = \["\/dists\/\*"\]/);
   assert.match(readFileSync(new URL('../apt/.gitignore', import.meta.url), 'utf8'), /^public\/$/m);
 });

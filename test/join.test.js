@@ -28,6 +28,8 @@ test('a loopback address is http, because there is no certificate to be had', ()
   assert.equal(url('localhost:8791'), 'http://localhost:8791');
   assert.equal(url('127.0.0.1:8791'), 'http://127.0.0.1:8791');
   assert.equal(url('[::1]:8791'), 'http://[::1]:8791');
+  assert.equal(url('::1'), 'http://[::1]');
+  assert.equal(url('2001:db8::1'), 'https://[2001:db8::1]');
 });
 
 test('a scheme somebody typed is kept, http included', () => {
@@ -37,7 +39,7 @@ test('a scheme somebody typed is kept, http included', () => {
 });
 
 test('what is not an address a sidecar can dial is refused, with why', () => {
-  for (const bad of ['', '   ', 'ftp://fleet.example.com', 'https://fleet.example.com/?x=1', 'https://fleet.example.com/#a', 'http://']) {
+  for (const bad of ['', '   ', 'ftp://fleet.example.com', 'https://fleet.example.com/?x=1', 'https://fleet.example.com/#a', 'http://', 'alice:pw@fleet.example.com', 'https://alice@fleet.example.com']) {
     const r = coordinatorUrl(bad);
     assert.equal(r.ok, false, `${JSON.stringify(bad)} was accepted`);
     assert.ok(/** @type {any} */ (r).message.length > 0);
