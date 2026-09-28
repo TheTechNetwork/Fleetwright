@@ -316,3 +316,18 @@ test('a commit message is checked before it is written, not after', () => {
   assert.match(verify, /hooks {6}\.\.\. off/);
   assert.doesNotMatch(verify, /hooksPath[\s\S]{0,200}?fail=1/, 'a missing hook fails the build');
 });
+
+test('a named node is honoured before the search, not after it has failed', () => {
+  // The deb's postinst names the node it ships in FLEETWRIGHT_NODE_BIN and
+  // sets FLEETWRIGHT_NO_INSTALL_DEPS, on a box that may have no other node —
+  // which is the point of shipping one. The search ran first, found nothing,
+  // and died asking for node to be installed, one line above the override it
+  // would have honoured. The first deb job on main found it: every install
+  // into a bare Debian container failed in postinst.
+  const sh = read('install/install.sh');
+  const probe = sh.indexOf('NODE_BIN="${FLEETWRIGHT_NODE_BIN:-$(find_node || true)}"');
+  const missing = sh.indexOf('# Missing entirely: install it');
+  assert.notEqual(probe, -1, 'the override no longer takes precedence over the search');
+  assert.notEqual(missing, -1);
+  assert.ok(probe < missing, 'the override has to be read before the "not installed" refusal can fire');
+});

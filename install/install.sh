@@ -1099,7 +1099,14 @@ node_major() {
   printf '%s\n' "$major"
 }
 
-NODE_BIN="$(find_node || true)"
+# AN EXPLICIT OVERRIDE IS LOOKED AT FIRST, before the search. The deb's
+# postinst names the node it ships in FLEETWRIGHT_NODE_BIN and sets
+# FLEETWRIGHT_NO_INSTALL_DEPS, on a box that may have no other node at all —
+# which is the point of shipping one. The search ran first, found nothing,
+# and died asking for a node to be installed, with the override one line
+# below it never reached. Checked again below: the override is still a path
+# somebody named, and it still has to be a node that is new enough.
+NODE_BIN="${FLEETWRIGHT_NODE_BIN:-$(find_node || true)}"
 
 # Missing entirely: install it, the same way tmux and podman are installed.
 if [ -z "$NODE_BIN" ]; then
