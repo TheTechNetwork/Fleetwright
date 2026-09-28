@@ -25,9 +25,13 @@ routes = [
 [assets]
 directory = "./public"
 binding = "ASSETS"
-# Metadata that exists is served straight from the edge; anything else — the
-# pool, and the front page — reaches the Worker.
 not_found_handling = "none"
+# THROUGH THE WORKER, or there is no log. An asset that exists is otherwise
+# served before the Worker runs, so `apt update` fetching InRelease would never
+# reach src/index.js and the "every update is a log line" promise would be
+# false — it was, for one commit. The pool and the front page reach the Worker
+# regardless (no such assets); dists/ is the one prefix that needs saying.
+run_worker_first = ["/dists/*"]
 
 [vars]
 # Where a package comes from on a cache miss: this repository's releases.
