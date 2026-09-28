@@ -23,6 +23,8 @@ import worker from '../worker/src/worker.js';
 
 const ADMIN = 'a-token-at-least-16ch';
 const SH = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+const IOS_CLIENT = readFileSync(new URL('../apps/ios/Fleetwright/Fleet.swift', import.meta.url), 'utf8');
+const IOS_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
 
 test('the command names the fleet and carries the pin as a variable, never in the URL', () => {
   const line = installCommand({ origin: 'https://fleet.example', installUrl: 'https://raw.example/bootstrap.sh', code: '123456' });
@@ -114,4 +116,19 @@ test('the installer spends a pin that arrived with the command, and only asks wh
   assert.ok(SH.indexOf('enrol_host() {') < wizard, 'enrol_host is only reachable from the wizard');
   assert.ok(SH.indexOf('WRITTEN WHETHER OR NOT THERE IS A TERMINAL') < wizard);
   assert.match(SH, /if \[ "\$WIZARD" != yes \] && \[ "\$CHECK_ONLY" != 1 \] && \[ -n "\$\{FLEETWRIGHT_ENROL_PIN:-\}" \]; then\n\s+say "Joining the fleet"\n\s+enrol_host/);
+});
+
+test('the iOS app reads the line off the reply and shows it beside the pin, and only when there is one', () => {
+  // A capability only reachable by curl is a capability the product does not
+  // have (test/enroll-ephemeral.test.js). The line is the product here: on a
+  // fresh box it is the whole join.
+  assert.match(IOS_CLIENT, /let install: String\?/, 'the reply\'s install field is not decoded');
+  assert.match(IOS_CLIENT, /struct MintedPin \{\n\s+let code: String\n\s+let install: String\?/);
+  assert.match(IOS_VIEW, /pinInstall = minted\.install/);
+  // Shown only when the coordinator offered one — an older coordinator or one
+  // with no installer gets the two-step form, never a line that would 404.
+  assert.match(IOS_VIEW, /if let install = pinInstall \{[\s\S]{0,600}?Text\(install\)[\s\S]{0,200}?\.textSelection\(\.enabled\)/);
+  assert.match(IOS_VIEW, /\} else \{\n\s+Text\("On that box: fleetwright-sidecar enrol \\\(pin\)"\)/);
+  // A bound pin re-keys a box that exists; no install line for it.
+  assert.match(IOS_VIEW, /mintHostPin\(hostId: hostId, readmit: readmit\)\.code/);
 });

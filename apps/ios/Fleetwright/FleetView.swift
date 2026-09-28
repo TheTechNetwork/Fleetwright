@@ -705,6 +705,14 @@ private struct SettingsView: View {
     @State private var signInResult = ""
     @State private var signingIn = false
     @State private var pin = ""
+    /// THE ONE LINE THAT INSTALLS A BOX AND JOINS IT with the pin in hand, or
+    /// nil when this coordinator publishes no installer. Round 4 of
+    /// docs/auth-and-join.md: the pin was the whole of how a host joins and the
+    /// installer already knew which fleet, so the only thing between this
+    /// screen and a box in the fleet was carrying six digits to a terminal.
+    /// The pin rides in the command as an environment variable, never in the
+    /// URL — see installCommand in the coordinator.
+    @State private var pinInstall: String?
     /// WHICH HOST THE PIN IN HAND IS FOR, or nil for an unbound one. A bound
     /// pin only works on the machine it names, so a screen showing six digits
     /// and not saying which box they belong to is a screen somebody types the
@@ -1115,9 +1123,12 @@ private struct SettingsView: View {
     @MainActor
     private func mintBoundPin(for hostId: String, readmit: Bool) async {
         pin = ""
+        pinInstall = nil
         pinBoundTo = nil
         do {
-            pin = try await Fleet(settings: settings).mintHostPin(hostId: hostId, readmit: readmit)
+            // A bound pin re-keys or readmits a box that already exists, so
+            // the install line is not offered for it — only the code.
+            pin = try await Fleet(settings: settings).mintHostPin(hostId: hostId, readmit: readmit).code
             // Set only on success, so a failed mint cannot leave the previous
             // pin on screen wearing a new host's name.
             pinBoundTo = hostId
@@ -1298,9 +1309,12 @@ private struct SettingsView: View {
                         Button("Mint a pin for a new host") {
                             Task {
                                 pin = ""
+                                pinInstall = nil
                                 pinBoundTo = nil
                                 do {
-                                    pin = try await Fleet(settings: settings).mintHostPin(ephemeral: ephemeralPin)
+                                    let minted = try await Fleet(settings: settings).mintHostPin(ephemeral: ephemeralPin)
+                                    pin = minted.code
+                                    pinInstall = minted.install
                                 } catch {
                                     signInResult = error.localizedDescription
                                 }
@@ -1318,9 +1332,24 @@ private struct SettingsView: View {
                                         .fleetType(.micro)
                                         .foregroundStyle(Design.Palette.attention)
                                 }
-                                Text("On that box: fleetwright-sidecar enrol \(pin)")
-                                    .fleetType(.microMono)
-                                    .foregroundStyle(Design.Palette.inkDim)
+                                if let install = pinInstall {
+                                    // THE LINE IS THE PRODUCT. On a fresh box
+                                    // this is the whole join; the two-step form
+                                    // below is for a box already installed.
+                                    Text("On a fresh box, as root — installs it and joins it:")
+                                        .fleetType(.label)
+                                        .foregroundStyle(Design.Palette.inkDim)
+                                    Text(install)
+                                        .fleetType(.microMono)
+                                        .textSelection(.enabled)
+                                    Text("Already installed: fleetwright-sidecar enrol \(pin)")
+                                        .fleetType(.microMono)
+                                        .foregroundStyle(Design.Palette.inkDim)
+                                } else {
+                                    Text("On that box: fleetwright-sidecar enrol \(pin)")
+                                        .fleetType(.microMono)
+                                        .foregroundStyle(Design.Palette.inkDim)
+                                }
                             }
                         }
                         temporaryMachine
