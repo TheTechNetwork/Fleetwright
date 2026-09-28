@@ -38,7 +38,7 @@ options:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
-    exactVersion: 9.29.0
+    exactVersion: 9.29.2
 
 targets:
   Fleetwright:
