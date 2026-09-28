@@ -49,6 +49,47 @@ radius is bounded by what the code does — it verifies tokens, and a
 malicious version could forge a sign-in but could not reach a host,
 because hosts verify signatures themselves.
 
+## oauth4webapi — runtime, coordinator and host
+
+Used for the outbound OAuth client — exchanging a GitHub or Cloudflare code
+for tokens, on the coordinator or on the host that minted the PKCE verifier —
+and for OIDC discovery in `oidc.js`, so an issuer nobody wrote down is asked
+where its keys are rather than guessed at.
+
+| | |
+|---|---|
+| version | exact, like `jose` — `package.json` is the number to believe |
+| dependencies | **none** |
+| licence | MIT |
+| author | panva, the same as `jose` |
+| runtime | WebCrypto and `fetch`, so the Worker bundle and the sidecar carry the same code |
+
+**Why a dependency here.** [`auth-and-join.md`](./auth-and-join.md) applies
+the sentence that took `jose` to the rest of the auth surface: a *primitive*
+is worth owning, a *protocol with negotiation and a silent failure mode* is
+not. A token endpoint is one — content types, error shapes, `WWW-Authenticate`
+challenges, the `token_type` check — and this repository had two hand-written
+clients for two providers that disagreed about all of it ("two functions
+wearing a trench coat", the old comment said). The library speaks RFC 6749 to
+both; what stays ours is the URL each person is sent to and the words they
+read on the way back.
+
+It also does discovery. `oidc.js` used to hard-code three JWKS URLs and guess
+`<issuer>/.well-known/jwks.json` for anyone else, which the specification does
+not require; `identity.md`'s "provider-agnostic" is true now.
+
+**The residual risk, stated.** Same maintainer as `jose`, so the same single
+account — and the same mitigations: exact pin, no transitive dependencies,
+Renovate proposing upgrades as reviewable pull requests. The blast radius is
+the exchange: a malicious version could leak a GitHub or Cloudflare token at
+link time, from the host that already holds the client secret. It could not
+mint a fleet credential and could not reach a session.
+
+**What it deliberately does not do here.** The PKCE *challenge* in
+`host/pkce.js` is still one `createHash('sha256')` of ours: it is a primitive,
+and `connect` builds its catalogue synchronously. The *verifier* is the
+library's, so the length and alphabet are RFC 7636's by construction.
+
 ## androidx.browser — Android app
 
 `androidx.browser:browser`, for Custom Tabs: the provider's authorization page
@@ -137,6 +178,14 @@ is a version nothing has ever fetched onto this machine.
 `crypto.subtle.sign` and `verify` directly. That is one primitive with no
 format to parse and no negotiation to get wrong — the argument above does not
 apply, and a library would be carried for two function calls.
+
+**An OAuth *server* library for the remote MCP endpoint.** The authorization
+server in `src/mcp/oauth.js` is hand-written, and the candidate for replacing
+it — Cloudflare's `workers-oauth-provider` — is a real option now that the
+coordinator only runs as a Worker. It is held rather than taken, because it
+would issue tokens of its own where today an MCP client's token *is* a device
+credential revocable from the People screen. The MCP SDK, as a dev-only
+conformance oracle, is what decides — [`auth-and-join.md`](./auth-and-join.md).
 
 **A secrets manager.** See `docs/trust.md`: it is a place to put the same
 question, plus an availability dependency on every session start.

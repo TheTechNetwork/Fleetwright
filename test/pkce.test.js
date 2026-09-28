@@ -79,15 +79,21 @@ test('the exchanges send the verifier when given one, in each provider\'s own en
   const seen = [];
   const fetch = /** @type {any} */ (async (url, init) => {
     seen.push({ url, init });
-    return { status: 200, json: async () => ({ access_token: 'tok', refresh_token: 'ref', expires_in: 28800 }) };
+    return new Response(JSON.stringify({ access_token: 'tok', token_type: 'bearer', refresh_token: 'ref', expires_in: 28800 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   });
+  // ONE ENCODING NOW: form-encoded, RFC 6749's, for both providers. GitHub used
+  // to be sent JSON because it accepts it; the library speaks the standard
+  // form and GitHub accepts that too.
   await exchangeCode({ clientId: 'id', clientSecret: 'shh', code: 'c', origin: 'https://fleet.example', codeVerifier: 'v', fetch });
-  assert.equal(JSON.parse(seen[0].init.body).code_verifier, 'v');
+  assert.equal(new URLSearchParams(String(seen[0].init.body)).get('code_verifier'), 'v');
   await exchangeCode({ clientId: 'id', clientSecret: 'shh', code: 'c', origin: 'https://fleet.example', fetch });
-  assert.equal('code_verifier' in JSON.parse(seen[1].init.body), false);
+  assert.equal(new URLSearchParams(String(seen[1].init.body)).has('code_verifier'), false);
 
   await exchangeCloudflareCode({ clientId: 'id', clientSecret: 'shh', code: 'c', origin: 'https://fleet.example', codeVerifier: 'v', fetch });
-  assert.equal(new URLSearchParams(seen[2].init.body).get('code_verifier'), 'v');
+  assert.equal(new URLSearchParams(String(seen[2].init.body)).get('code_verifier'), 'v');
 });
 
 test('a pending state remembers whether the host offered a challenge', () => {
@@ -222,8 +228,8 @@ test('exchange spends the verifier, exchanges with the frame\'s secret, and stor
   /** @type {any[]} */
   const seen = [];
   const fetchImpl = async (/** @type {string} */ url, /** @type {any} */ init) => {
-    seen.push({ url, body: JSON.parse(init.body) });
-    return { status: 200, json: async () => ({ access_token: 'gho_token', refresh_token: 'ghr_refresh', expires_in: 28800 }) };
+    seen.push({ url, body: Object.fromEntries(new URLSearchParams(String(init.body))) });
+    return new Response(JSON.stringify({ token_type: 'bearer', access_token: 'gho_token', refresh_token: 'ghr_refresh', expires_in: 28800 }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const { sidecar, commands } = await host(t, { fetchImpl });
   await sidecar.handle(FRAME);
@@ -252,7 +258,7 @@ test('exchange spends the verifier, exchanges with the frame\'s secret, and stor
 });
 
 test('exchange without a pending verifier is refused, and a second exchange finds the first one spent', async (t) => {
-  const fetchImpl = async () => ({ status: 200, json: async () => ({ access_token: 't', expires_in: 3600 }) });
+  const fetchImpl = async () => (new Response(JSON.stringify({ token_type: 'bearer', access_token: 't', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const { sidecar } = await host(t, { fetchImpl });
   await sidecar.handle(FRAME);
   const params = { provider: 'github', code: 'c', clientId: 'id', origin: 'https://fleet.example' };
@@ -269,7 +275,7 @@ test('exchange without a pending verifier is refused, and a second exchange find
 });
 
 test('somebody else cannot spend a verifier minted for another person', async (t) => {
-  const fetchImpl = async () => ({ status: 200, json: async () => ({ access_token: 't' }) });
+  const fetchImpl = async () => (new Response(JSON.stringify({ token_type: 'bearer', access_token: 't' }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const { sidecar } = await host(t, { fetchImpl });
   await sidecar.handle(FRAME);
   await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));
@@ -280,7 +286,7 @@ test('somebody else cannot spend a verifier minted for another person', async (t
 });
 
 test('a provider refusing the exchange is the provider\'s words, and nothing is stored', async (t) => {
-  const fetchImpl = async () => ({ status: 200, json: async () => ({ error: 'bad_verification_code', error_description: 'The code passed is incorrect or expired.' }) });
+  const fetchImpl = async () => (new Response(JSON.stringify({ error: 'bad_verification_code', error_description: 'The code passed is incorrect or expired.' }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const { sidecar, commands } = await host(t, { fetchImpl });
   await sidecar.handle(FRAME);
   await sidecar.handle(intent({ verb: 'connect', params: {}, actor: 'a@b.com' }));

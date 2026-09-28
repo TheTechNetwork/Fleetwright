@@ -14,11 +14,18 @@
 // S256 — the only method worth offering, since `plain` gives the relay the
 // verifier back.
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { generateRandomCodeVerifier } from 'oauth4webapi';
 
-/** A fresh verifier. Kept on this host, spent once, never on the wire. */
+/**
+ * A fresh verifier. Kept on this host, spent once, never on the wire.
+ *
+ * The library's, so the length and alphabet are RFC 7636's by construction
+ * rather than by the comment above. The challenge below stays ours: one hash,
+ * and `connect` builds its catalogue synchronously.
+ */
 export function newVerifier() {
-  return randomBytes(32).toString('base64url');
+  return generateRandomCodeVerifier();
 }
 
 /**

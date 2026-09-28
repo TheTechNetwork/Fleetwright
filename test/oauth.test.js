@@ -76,7 +76,7 @@ test('the authorize URL names its own redirect', () => {
 test('GitHub answering 200-with-an-error is treated as the failure it is', async () => {
   const res = await exchangeCode({
     clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
-    fetch: async () => new Response(JSON.stringify({ error: 'bad_verification_code', error_description: 'expired' }), { status: 200 }),
+    fetch: async () => new Response(JSON.stringify({ error: 'bad_verification_code', error_description: 'expired' }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   assert.equal(res.ok, false);
   assert.match(res.message, /expired/);
@@ -189,13 +189,14 @@ test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it i
     clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
     fetch: async (_url, init) => {
       sent = init;
-      return new Response(JSON.stringify({ access_token: 'cf-token', refresh_token: 'cf-refresh', expires_in: 3600 }), { status: 200 });
+      return new Response(JSON.stringify({ access_token: 'cf-token', token_type: 'bearer', refresh_token: 'cf-refresh', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   });
   assert.equal(ok.ok, true);
   assert.equal(ok.accessToken, 'cf-token');
   assert.equal(ok.refreshToken, 'cf-refresh');
-  assert.equal(sent.headers['content-type'], 'application/x-www-form-urlencoded');
+  // The library appends a charset; the type is what matters.
+  assert.match(sent.headers['content-type'], /^application\/x-www-form-urlencoded/);
   const form = new URLSearchParams(String(sent.body));
   assert.equal(form.get('grant_type'), 'authorization_code');
   assert.equal(form.get('redirect_uri'), 'https://f.example/oauth/cloudflare/callback');
@@ -203,7 +204,7 @@ test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it i
 
   const refused = await exchangeCloudflareCode({
     clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
-    fetch: async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'code spent' }), { status: 400 }),
+    fetch: async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'code spent' }), { status: 400, headers: { 'content-type': 'application/json' } }),
   });
   assert.equal(refused.ok, false);
   assert.match(refused.message, /code spent/);
@@ -219,7 +220,7 @@ test('the Cloudflare exchange is form-encoded, and a non-200 is the failure it i
   // screen.
   const empty = await exchangeCloudflareCode({
     clientId: 'a', clientSecret: 'b', code: 'c', origin: 'https://f.example',
-    fetch: async () => new Response(JSON.stringify({ token_type: 'bearer' }), { status: 200 }),
+    fetch: async () => new Response(JSON.stringify({ token_type: 'bearer' }), { status: 200, headers: { 'content-type': 'application/json' } }),
   });
   assert.equal(empty.ok, false);
   assert.match(empty.message, /no access token/);

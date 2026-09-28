@@ -174,3 +174,70 @@ test('an Apple relay address is recognised, because a domain rule can never matc
   assert.equal(isPrivateRelay('abc123@privaterelay.appleid.com'), true);
   assert.equal(isPrivateRelay('eli@thetech.network'), false);
 });
+
+test('an issuer nobody wrote down is DISCOVERED, and its keys are read from where it says they are', async (t) => {
+  // docs/identity.md promised "provider-agnostic" and the code guessed
+  // <issuer>/.well-known/jwks.json for anyone not in the map — a convention
+  // the OIDC specification does not require. An issuer keeping its keys
+  // elsewhere was refused with a fetch error that read as an outage.
+  //
+  // Now the discovery document is fetched once and `jwks_uri` read from it.
+  // This issuer serves its keys at a path nobody would guess, and 404s the
+  // conventional one, so the only way the token below verifies is through the
+  // document.
+  forgetJwks();
+  const OTHER = 'https://login.example.org';
+  const { sign, restore, keys } = await issuer();
+  const real = globalThis.fetch;
+  /** @type {string[]} */
+  const asked = [];
+  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url) => {
+    const u = String(url);
+    asked.push(new URL(u).pathname);
+    if (u === `${OTHER}/.well-known/openid-configuration`) {
+      return new Response(JSON.stringify({ issuer: OTHER, jwks_uri: `${OTHER}/keys/somewhere/else` }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (u === `${OTHER}/keys/somewhere/else`) {
+      return new Response(JSON.stringify({ keys }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('not here', { status: 404 });
+  });
+  t.after(() => { globalThis.fetch = real; restore(); });
+
+  const token = await sign({ ...base, iss: OTHER });
+  const who = await verifyIdToken(token, { issuers: [OTHER], audiences: [AUDIENCE] });
+  assert.equal(who.email, 'eli@thetech.network');
+  assert.deepEqual(asked, ['/.well-known/openid-configuration', '/keys/somewhere/else'], 'the document was read, and the keys came from where it said');
+
+  // A second token asks nothing new: the discovery is remembered, and jose
+  // caches the keys.
+  await verifyIdToken(await sign({ ...base, iss: OTHER }), { issuers: [OTHER], audiences: [AUDIENCE] });
+  assert.equal(asked.length, 2);
+});
+
+test('a discovery document from the wrong issuer is not believed', async (t) => {
+  // The library refuses a document whose `issuer` does not match the URL it
+  // came from — the check that stops a document served from the wrong place
+  // naming somebody else's keys. The fallback is the old convention, which
+  // this issuer does not serve either, so the token is refused rather than
+  // verified against keys the document pointed at.
+  forgetJwks();
+  const OTHER = 'https://login.example.org';
+  const { sign, restore, keys } = await issuer();
+  const real = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url) => {
+    const u = String(url);
+    if (u.endsWith('/.well-known/openid-configuration')) {
+      return new Response(JSON.stringify({ issuer: 'https://somebody.else.example', jwks_uri: `${OTHER}/planted` }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (u === `${OTHER}/planted`) return new Response(JSON.stringify({ keys }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response('not here', { status: 404 });
+  });
+  t.after(() => { globalThis.fetch = real; restore(); });
+
+  await assert.rejects(verifyIdToken(await sign({ ...base, iss: OTHER }), { issuers: [OTHER], audiences: [AUDIENCE] }));
+});
