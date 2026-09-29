@@ -912,6 +912,16 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                         )
+                        // WHEN IT WAS LAST HEARD FROM, so a name in this list
+                        // is a machine and not just a key. "never connected"
+                        // is a box that enrolled and never came up; "last seen"
+                        // is one that went away — a reinstall, usually, which
+                        // is what Replace key above is for.
+                        Text(
+                            host.lastSeenAt?.let { "last seen " + relative(it) } ?: "never connected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

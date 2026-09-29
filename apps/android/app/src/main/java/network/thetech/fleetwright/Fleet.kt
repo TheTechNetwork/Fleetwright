@@ -1064,6 +1064,7 @@ class Fleet(
                     hostId = o.optString("hostId"),
                     fingerprint = o.optString("fingerprint"),
                     revoked = o.optLong("revokedAt", 0L) > 0L,
+                    lastSeenAt = o.optLong("lastSeenAt", 0L).takeIf { it > 0L },
                 )
             }
         }.getOrDefault(emptyList())
@@ -1111,7 +1112,12 @@ class Fleet(
         }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
     }
 
-    data class Host(val hostId: String, val fingerprint: String, val revoked: Boolean)
+    /**
+     * A member of the fleet, reporting or not. `lastSeenAt` is milliseconds
+     * since the epoch, or null for a box that enrolled and never connected —
+     * which is a different fact from one that went away, and is shown as one.
+     */
+    data class Host(val hostId: String, val fingerprint: String, val revoked: Boolean, val lastSeenAt: Long? = null)
 
     /**
      * A device that holds a credential for this fleet. No secret in it — the

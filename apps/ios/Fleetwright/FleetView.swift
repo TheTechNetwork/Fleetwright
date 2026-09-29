@@ -1087,6 +1087,14 @@ private struct SettingsView: View {
         return parts.joined(separator: " · ")
     }
 
+    /// When a machine that is not reporting was last heard from. "never
+    /// connected" is a different fact from "last seen a while ago": one is a
+    /// box that enrolled and never came up, the other one that went away.
+    private func absence(_ host: Fleet.Host) -> String {
+        if let seen = host.lastSeenAt, seen > 0 { return "last seen \(relative(seen))" }
+        return "never connected"
+    }
+
     /// Milliseconds since the epoch, as words.
     private func relative(_ at: Double) -> String {
         let date = Date(timeIntervalSince1970: at / 1000)
@@ -1511,6 +1519,67 @@ private struct SettingsView: View {
                             .opacity(0)
                         )
                     }
+                    // THE MACHINES THAT ARE NOT SAYING ANYTHING. The list above
+                    // is what the fleet hears right now, and a box that has gone
+                    // quiet was simply absent from it — which on this screen
+                    // read as "does not exist". It exists: it is enrolled, the
+                    // coordinator holds its key, and that key is exactly what a
+                    // reinstalled box is refused for. "RPI-7550-ARM is already
+                    // enrolled. Replacing the key of a machine that exists
+                    // takes a pin minted for that name" names a remedy that
+                    // lives on the machine's own page, and the page could only
+                    // be reached through a card that only a reporting machine
+                    // got. So the routine reinstall ended in a curl with the
+                    // break-glass token, again.
+                    //
+                    // A card of the same shape, on purpose: RHYTHM is uniform
+                    // here and a row that looks different means something is
+                    // different — which the attention ring and the word "not
+                    // reporting" already say. The membership record is what is
+                    // known about it, so that is what the card shows, and
+                    // nothing it does not know: the last time it was heard
+                    // from, or that it never was.
+                    ForEach(hosts.filter { h in !fleetHosts.contains { $0.hostId == h.hostId } }) { host in
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                                Text(host.hostId)
+                                    .fleetType(.bodyStrong)
+                                    .foregroundStyle(Design.Palette.ink)
+                                Spacer(minLength: 0)
+                                Text(host.isRevoked ? "revoked" : "not reporting")
+                                    .fleetType(.label)
+                                    .foregroundStyle(Design.Palette.attention)
+                            }
+                            Text(absence(host))
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                            Text(host.fingerprint)
+                                .fleetType(.labelMono)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        }
+                        .fleetCard(radius: Design.Radius.cardSmall, ring: Design.Palette.attention.opacity(0.55))
+                        .fleetRow()
+                        .background(
+                            NavigationLink("") {
+                                // Nil, not a guess: the page shows what a box
+                                // reports, and this one reports nothing. Its
+                                // membership record is what there is, and it is
+                                // what Replace key and Revoke act on.
+                                HostView(
+                                    settings: settings,
+                                    hostId: host.hostId,
+                                    initialHealth: nil,
+                                    initialState: host.isRevoked ? "revoked" : "not reporting",
+                                    initialReason: host.isRevoked
+                                        ? "Its key was revoked. Readmit mints the pin that brings it back."
+                                        : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs.",
+                                    enrolled: host,
+                                    onChange: { await loadHosts() },
+                                )
+                            }
+                            .opacity(0)
+                        )
+                    }
                 } header: {
                     Text("Fleet")
                         .fleetType(.section)
@@ -1518,7 +1587,8 @@ private struct SettingsView: View {
                         .textCase(nil)
                 } footer: {
                     Text("What each machine reports about itself: whether it is signed in, which plan, "
-                         + "and whether its code is behind.")
+                         + "and whether its code is behind. A machine that is enrolled and not reporting "
+                         + "is listed too, so it can be re-keyed or removed.")
                 }
                 }
 
