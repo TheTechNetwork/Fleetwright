@@ -77,3 +77,8 @@ should be deleted with it.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — one pull request per layer, and why.
 - [`docs/ci.md`](docs/ci.md) — what ships where, and the few things still done by hand.
 - `./scripts/verify.sh` — the whole gate, the same locally and in CI.
+- [`.claude/skills/test-audit/SKILL.md`](.claude/skills/test-audit/SKILL.md) —
+  load it before adding, changing or sweeping tests: the authoring gate every
+  new test answers, the junk patterns, and what this repository keeps that
+  looks like one. Adapted from openclaw's, under MIT, so unlike the antislop
+  skills it is committed here.
