@@ -195,12 +195,16 @@ function packageListAgeHours() {
  * this runs off a health report.
  *
  * @param {{ systemUpgrade?: boolean }} cfg
- * @param {{ now?: () => number, minAgeHours?: number, exec?: typeof run }} [opts]  `exec`
- *   stands in for spawning, so a test can script sudo's answers
+ * @param {{ now?: () => number, minAgeHours?: number, exec?: typeof run, listsAge?: () => number|null }} [opts]  `exec`
+ *   stands in for spawning, so a test can script sudo's answers; `listsAge` stands
+ *   in for reading /var/lib/apt, for the same reason
  */
-export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6, exec = run } = {}) {
+export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6, exec = run, listsAge = packageListAgeHours } = {}) {
   if (!cfg.systemUpgrade) return { ok: false, reason: 'not permitted' };
-  const age = packageListAgeHours();
+  // Injectable for the same reason `now` and `exec` are: this reads the box's
+  // real /var/lib/apt, and a unit test that consults it passes or fails on
+  // whether somebody ran apt-get update on the box in the last six hours.
+  const age = listsAge();
   if (age !== null && age < minAgeHours) return { ok: false, reason: 'recent enough' };
   if (now() - lastRefreshAttempt < minAgeHours * 3_600_000) return { ok: false, reason: 'tried recently' };
 

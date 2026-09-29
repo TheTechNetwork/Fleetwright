@@ -128,12 +128,15 @@ test('a failed unit reports what apt said, read from the journal', () => {
 });
 
 test('the package-list refresh takes the same shape: the unit first, the old line on refusal', () => {
+  // listsAge is stubbed: the real one stats /var/lib/apt on the box running
+  // the tests, and this test went red the moment `apt-get update` had run
+  // there within six hours. A box's package state is not a fixture.
   const first = fakeExec([]);
-  refreshPackageLists(cfg, { exec: first.exec, now: () => 1_000_000_000_000 });
+  refreshPackageLists(cfg, { exec: first.exec, now: () => 1_000_000_000_000, listsAge: () => null });
   assert.deepEqual(first.calls, [`sudo -n /usr/bin/systemctl start ${APT_UPDATE_UNIT}`]);
 
   const second = fakeExec([{ match: /systemctl start/, status: 1, stderr: 'Sorry, user agent is not allowed to execute' }]);
-  refreshPackageLists(cfg, { exec: second.exec, now: () => 2_000_000_000_000 });
+  refreshPackageLists(cfg, { exec: second.exec, now: () => 2_000_000_000_000, listsAge: () => null });
   assert.deepEqual(second.calls, [
     `sudo -n /usr/bin/systemctl start ${APT_UPDATE_UNIT}`,
     'sudo -n /usr/bin/apt-get update',
