@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
-import { attachWebSocketServer } from '../../src/fleet/ws.js';
+import { attachWebSocketServer } from './ws-server.js';
 import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
 import { http2Deliver } from './apns-node.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
@@ -138,7 +138,7 @@ export class Coordinator {
     // value that gets serialised straight out of `GET /api/hosts`, and a live
     // WsConnection hanging off it drags the raw socket, the http.Server and
     // its connection table into that response — see the comment on close().
-    /** @type {Map<string, import('../../src/fleet/ws.js').WsConnection>} */
+    /** @type {Map<string, import('./ws-server.js').WsConnection>} */
     this.connections = new Map();
     // Debounced: a busy fleet records several events a second and this is a
     // file write. Losing the last 2s of history to a hard kill is a fair price
@@ -382,7 +382,7 @@ export class Coordinator {
   // --- hosts ---------------------------------------------------------------
 
   /**
-   * @param {import('../../src/fleet/ws.js').WsConnection} conn
+   * @param {import('./ws-server.js').WsConnection} conn
    * @param {import('node:http').IncomingMessage} req
    */
   #onHost(conn, req) {

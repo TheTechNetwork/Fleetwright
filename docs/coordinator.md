@@ -36,9 +36,12 @@ installer no longer offers it, and what is left of `server.js` is a test
 harness until the tests that use it drive the Worker directly. The parity
 tests stay, as conformance tests of the one that remains.
 
-The WebSocket framing in `src/fleet/ws.js` was hand-rolled for the Node
-coordinator's accept side and for the sidecar's dial. The accept side leaves
-with the Node coordinator; the dial is Node's own `WebSocket` from 22 on.
+The WebSocket framing that used to live in `src/fleet/ws.js` was hand-rolled
+for the Node coordinator's accept side and for the sidecar's dial. The dial is
+Node's own `WebSocket` now — it takes the proof headers, and the ping it lacked
+became the heartbeat frame in `src/fleet/protocol/heartbeat.js` — and the
+accept side is `test/helpers/ws-server.js`, a harness outside the package that
+leaves with the Node coordinator.
 
 ## The rule it must not break
 

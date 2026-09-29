@@ -144,6 +144,15 @@ async function run() {
           hostId: cfg.hostId,
           proof: () =>
             proveIdentity({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk }),
+          // WHY A DIAL WAS REFUSED. The platform WebSocket does not surface the
+          // body of a rejected upgrade, and the coordinator puts the reason
+          // there — "not enrolled", "revoked", "the signature does not match"
+          // are three different afternoons for whoever reads this journal. So
+          // the transport asks the same question `doctor` asks, over HTTP, and
+          // logs the sentence.
+          diagnose: () =>
+            checkEnrolled({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk })
+              .then((known) => (known.ok ? null : known.reason)),
           logger: log,
           // Reaching the coordinator confirms an update on trial. A no-op when
           // nothing is on trial, so it costs a connected box nothing.

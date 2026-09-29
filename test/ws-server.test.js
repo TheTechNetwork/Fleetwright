@@ -1,25 +1,32 @@
-// The hand-rolled WebSocket, over real loopback sockets.
+// The test harness's WebSocket server, driven by Node's own client and by raw
+// frames.
 //
 //   node --test test/
 //
-// A transport every fleet host holds open permanently is worth testing at the
-// frame level, not just "did a message arrive". The cases here are the ones
-// that make a hand-rolled implementation look fine against itself and fail
-// against everyone else: masking direction, fragmentation, control-frame rules,
-// and length fields that arrive attacker-controlled.
+// test/helpers/ws-server.js is what the Node coordinator in the harness accepts
+// hosts on, and the sidecar now dials with the platform WebSocket — so the
+// first thing to hold is that the two speak: a standard client connects, its
+// upgrade headers arrive, and authorisation still runs before the upgrade
+// completes. The frame-level cases after that — masking direction,
+// fragmentation, control-frame rules, and length fields that arrive
+// attacker-controlled — are injected through a raw client, because a library
+// client will not send most of them and a server that only ever met a polite
+// peer is a server that has not been tested.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { connect as netConnect } from 'node:net';
+import { randomBytes } from 'node:crypto';
 
 import {
   attachWebSocketServer,
-  connectWebSocket,
   encodeFrame,
   decodeFrame,
   acceptKey,
   WsConnection,
-} from '../src/fleet/ws.js';
+} from './helpers/ws-server.js';
+import { connectHostSocket } from './helpers/host-socket.js';
 
 /**
  * A server that echoes, plus the connections it accepted.
@@ -32,9 +39,14 @@ async function serverFor(t, opts = {}) {
   const conns = [];
   /** @type {string[]} */
   const received = [];
+  /** @type {any[]} */
+  const upgrades = [];
   attachWebSocketServer(server, {
     path: opts.path ?? '/host/connect',
-    authorise: opts.authorise,
+    authorise: (req) => {
+      upgrades.push(req.headers);
+      return opts.authorise ? opts.authorise(req) : true;
+    },
     maxMessageBytes: opts.maxMessageBytes,
     onConnection: (conn) => {
       conns.push(conn);
@@ -53,10 +65,47 @@ async function serverFor(t, opts = {}) {
     await new Promise((r) => server.close(() => r(null)));
   });
   const { port } = /** @type {import('node:net').AddressInfo} */ (server.address());
-  return { server, port, conns, received, url: `ws://127.0.0.1:${port}${opts.path ?? '/host/connect'}` };
+  return { server, port, conns, received, upgrades, url: `ws://127.0.0.1:${port}${opts.path ?? '/host/connect'}` };
 }
 
-/** @param {WsConnection} conn */
+/**
+ * A raw client: the handshake by hand over a TCP socket, then the harness's
+ * own connection class in client mode, so a test can write any bytes it likes
+ * down `conn.socket`. This is the client half that used to ship in the
+ * package, reduced to the forty lines a test needs.
+ *
+ * @param {string} url
+ * @param {{ maxMessageBytes?: number }} [opts]
+ * @returns {Promise<WsConnection>}
+ */
+function rawClient(url, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const key = randomBytes(16).toString('base64');
+    const socket = netConnect({ host: u.hostname, port: Number(u.port) });
+    socket.once('error', reject);
+    socket.once('connect', () => {
+      socket.write(
+        [`GET ${u.pathname} HTTP/1.1`, `host: ${u.host}`, 'upgrade: websocket', 'connection: Upgrade',
+          `sec-websocket-key: ${key}`, 'sec-websocket-version: 13', '', ''].join('\r\n'),
+      );
+    });
+    let head = Buffer.alloc(0);
+    const onData = (/** @type {Buffer} */ chunk) => {
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf('\r\n\r\n');
+      if (end === -1) return;
+      socket.off('data', onData);
+      const status = head.subarray(0, end).toString('latin1').split('\r\n')[0];
+      if (!/^HTTP\/1\.1 101/.test(status)) return reject(new Error(`upgrade refused: ${status}`));
+      assert.ok(head.toString('latin1').toLowerCase().includes(`sec-websocket-accept: ${acceptKey(key).toLowerCase()}`));
+      resolve(new WsConnection(socket, { isClient: true, maxMessageBytes: opts.maxMessageBytes }));
+    };
+    socket.on('data', onData);
+  });
+}
+
+/** @param {import('node:events').EventEmitter} conn */
 function nextMessage(conn) {
   return new Promise((resolve) => conn.once('message', resolve));
 }
@@ -67,7 +116,7 @@ function nextMessage(conn) {
  * Awaiting `once('message')` in a loop looks equivalent and is not: messages
  * that arrive between iterations land with no listener attached and are gone.
  * Anything expecting more than one message needs this.
- * @param {WsConnection} conn
+ * @param {import('node:events').EventEmitter} conn
  */
 function collect(conn) {
   /** @type {string[]} */
@@ -90,15 +139,19 @@ function collect(conn) {
   };
 }
 
-// --- the handshake ----------------------------------------------------------
+// --- the handshake, against Node's own client -------------------------------
 
-test('a client can connect and exchange a message', async (t) => {
-  const { url, received } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+test('Node’s own WebSocket connects, and its upgrade headers arrive', async (t) => {
+  // THE CONTRACT THE SIDECAR NOW DEPENDS ON. `{ headers }` is Node's extension
+  // to the WebSocket constructor; the proof rides in two of them. If a Node
+  // release ever dropped it, this is the test that says so before a fleet does.
+  const { url, received, upgrades } = await serverFor(t);
+  const conn = await connectHostSocket(url, { headers: { 'x-fleet-nonce': 'n-1', 'x-fleet-proof': 'p-1' } });
   t.after(() => conn.close());
 
+  assert.equal(upgrades[0]['x-fleet-nonce'], 'n-1');
+  assert.equal(upgrades[0]['x-fleet-proof'], 'p-1');
   conn.send('hello');
-
   assert.equal(await nextMessage(conn), 'echo:hello');
   assert.deepEqual(received, ['hello']);
 });
@@ -119,47 +172,30 @@ test('ordinary HTTP still works on the same port', async (t) => {
 
 test('a connection to the wrong path is refused', async (t) => {
   const { port } = await serverFor(t, { path: '/host/connect' });
-  await assert.rejects(
-    () => connectWebSocket(`ws://127.0.0.1:${port}/nope`, { timeoutMs: 3000 }),
-    /upgrade refused: HTTP\/1.1 404/,
-  );
+  await assert.rejects(() => connectHostSocket(`ws://127.0.0.1:${port}/nope`), /upgrade refused/);
+  await assert.rejects(() => rawClient(`ws://127.0.0.1:${port}/nope`), /upgrade refused: HTTP\/1.1 404/);
 });
 
 test('authorisation runs before the upgrade, so a refused peer never gets a socket', async (t) => {
-  const { port } = await serverFor(t, {
+  const { port, conns } = await serverFor(t, {
     authorise: (req) => req.headers.authorization === 'Bearer right' || 'Unauthorized',
   });
   const url = `ws://127.0.0.1:${port}/host/connect`;
 
-  await assert.rejects(
-    () => connectWebSocket(url, { headers: { authorization: 'Bearer wrong' }, timeoutMs: 3000 }),
-    /upgrade refused: HTTP\/1.1 401/,
-  );
+  await assert.rejects(() => connectHostSocket(url, { headers: { authorization: 'Bearer wrong' } }), /upgrade refused/);
+  assert.equal(conns.length, 0, 'a refused peer must not reach onConnection');
 
-  const good = await connectWebSocket(url, { headers: { authorization: 'Bearer right' } });
+  const good = await connectHostSocket(url, { headers: { authorization: 'Bearer right' } });
   t.after(() => good.close());
   good.send('ok');
   assert.equal(await nextMessage(good), 'echo:ok');
-});
-
-test('dialling something that is not a websocket fails cleanly', async (t) => {
-  const server = createServer((_req, res) => res.writeHead(200).end('hello'));
-  await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
-  t.after(() => new Promise((r) => server.close(() => r(null))));
-  const { port } = /** @type {import('node:net').AddressInfo} */ (server.address());
-
-  await assert.rejects(() => connectWebSocket(`ws://127.0.0.1:${port}/`, { timeoutMs: 3000 }), /upgrade refused/);
-});
-
-test('a non-websocket URL scheme is rejected without dialling', async () => {
-  await assert.rejects(() => connectWebSocket('http://127.0.0.1:1/'), /not a websocket url/);
 });
 
 // --- messages ---------------------------------------------------------------
 
 test('messages round-trip in order, including unicode and empty', async (t) => {
   const { url, received } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await connectHostSocket(url);
   t.after(() => conn.close());
   const echoes = collect(conn);
 
@@ -173,10 +209,10 @@ test('messages round-trip in order, including unicode and empty', async (t) => {
 });
 
 test('a message larger than one frame arrives whole', async (t) => {
-  // Not fragmented on the way out by this implementation, but a 100 KB payload
-  // certainly arrives as several TCP reads, which is the same reassembly path.
+  // Node's client may fragment a 100 KB payload, and it certainly arrives as
+  // several TCP reads, which is the same reassembly path.
   const { url, received } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await connectHostSocket(url);
   t.after(() => conn.close());
 
   const big = 'x'.repeat(100_000);
@@ -191,7 +227,7 @@ test('two messages arriving in one TCP read are both delivered', async (t) => {
   // is one frame. Getting this wrong drops every message after the first
   // whenever the network coalesces.
   const { url, received } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
   t.after(() => conn.close());
   const echoes = collect(conn);
 
@@ -205,7 +241,7 @@ test('two messages arriving in one TCP read are both delivered', async (t) => {
 
 test('a fragmented message is reassembled', async (t) => {
   const { url, received } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
   t.after(() => conn.close());
 
   // FIN=0 TEXT, then FIN=0 CONT, then FIN=1 CONT — built by hand because
@@ -224,9 +260,12 @@ test('a fragmented message is reassembled', async (t) => {
 
 // --- keepalive and close ----------------------------------------------------
 
-test('a ping is answered with a pong', async (t) => {
+test('a protocol ping is still answered with a pong, for the hosts that send one', async (t) => {
+  // A sidecar from before the heartbeat frame pings at the protocol level. The
+  // Cloudflare runtime answers those on the Worker; the harness must too, or
+  // the parity the tests claim would stop at the control frames.
   const { url } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
   t.after(() => conn.close());
 
   const pong = new Promise((r) => conn.once('pong', r));
@@ -236,7 +275,7 @@ test('a ping is answered with a pong', async (t) => {
 
 test('close is delivered to both ends with its code', async (t) => {
   const { url, conns } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await connectHostSocket(url);
   while (!conns.length) await new Promise((r) => setTimeout(r, 10));
 
   const serverSaw = new Promise((r) => conns[0].on('close', (code) => r(code)));
@@ -248,11 +287,11 @@ test('close is delivered to both ends with its code', async (t) => {
   assert.equal(conn.closed, true);
 });
 
-test('a dropped socket surfaces as a close, not a hang', async (t) => {
+test('a dropped socket surfaces to the client as an abnormal close, not a hang', async (t) => {
   // The case a fleet host actually hits: a NAT drops the mapping and the peer
   // never says goodbye.
   const { url, conns } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await connectHostSocket(url);
   while (!conns.length) await new Promise((r) => setTimeout(r, 10));
 
   const closed = new Promise((r) => conn.on('close', (code) => r(code)));
@@ -263,7 +302,7 @@ test('a dropped socket surfaces as a close, not a hang', async (t) => {
 
 test('sending after close is a no-op rather than a throw', async (t) => {
   const { url } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await connectHostSocket(url);
   conn.close();
   assert.equal(conn.send('anyone there'), false);
 });
@@ -274,7 +313,7 @@ test('a server rejects an unmasked client frame', async (t) => {
   // RFC 6455 is one-directional about this. Honouring it makes a
   // half-implemented peer fail loudly here rather than subtly later.
   const { url } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
 
   const closed = new Promise((r) => conn.on('close', (code) => r(code)));
   conn.socket.write(encodeFrame(0x1, Buffer.from('unmasked'), false));
@@ -301,7 +340,7 @@ test('an oversized declared length is refused before anything is allocated', () 
 
 test('a message over the limit closes the connection instead of buffering', async (t) => {
   const { url } = await serverFor(t, { maxMessageBytes: 1024 });
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
 
   const closed = new Promise((r) => conn.on('close', (code) => r(code)));
   conn.send('x'.repeat(4096));
@@ -329,7 +368,7 @@ test('a partial frame yields null rather than a wrong answer', () => {
 
 test('binary frames are refused, because nothing here sends bytes', async (t) => {
   const { url } = await serverFor(t);
-  const conn = await connectWebSocket(url);
+  const conn = await rawClient(url);
 
   const closed = new Promise((r) => conn.on('close', (code) => r(code)));
   conn.socket.write(encodeFrame(0x2, Buffer.from([1, 2, 3]), true));

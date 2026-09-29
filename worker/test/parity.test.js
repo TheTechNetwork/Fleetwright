@@ -12,7 +12,8 @@
 //
 // So this is the ws analogue of the executed OpenAPI spec. It boots the real
 // Worker under workerd AND a real Node coordinator, and drives each with the
-// SAME host client — `identity.js` and `ws.js`, the code a real sidecar ships —
+// SAME host client — `identity.js` and Node's own WebSocket with the proof
+// headers, exactly as the sidecar's transport opens it —
 // because the enrol / challenge / connect routes are identical on both by
 // design. A behaviour that is true of one coordinator and not the other fails
 // here instead of on somebody's phone.
@@ -30,7 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
-import { connectWebSocket } from '../../src/fleet/ws.js';
+import { connectHostSocket } from '../../test/helpers/host-socket.js';
 import { Coordinator } from '../../test/helpers/node-coordinator.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
@@ -104,7 +105,7 @@ async function connectHost(origin, hostId) {
   await enrol({ origin, code: minted.code, hostId, publicJwk });
   const { nonce, proof } = await proveIdentity({ origin, hostId, privateJwk });
 
-  const ws = await connectWebSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
+  const ws = await connectHostSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
     headers: { 'x-fleet-nonce': nonce, 'x-fleet-proof': proof },
   });
 
@@ -222,7 +223,7 @@ test('an unenrolled host is refused the upgrade with a reason, the same on both'
 
     let refused = null;
     try {
-      const ws = await connectWebSocket(`${c.origin.replace('http', 'ws')}/host/connect?hostId=parity-impostor`, {
+      const ws = await connectHostSocket(`${c.origin.replace('http', 'ws')}/host/connect?hostId=parity-impostor`, {
         headers: { 'x-fleet-nonce': nonce, 'x-fleet-proof': proof },
       });
       ws.close();

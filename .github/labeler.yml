@@ -51,7 +51,6 @@ platform/host:
           - 'src/web/**'
           - 'src/fleet/host/**'
           - 'src/fleet/protocol/**'
-          - 'src/fleet/ws.js'
           - 'src/fleet/legacy-*.js'
           - 'sandbox/**'
           - 'install/**'
@@ -173,7 +172,6 @@ area/protocol:
   - changed-files:
       - any-glob-to-any-file:
           - 'src/fleet/protocol/**'
-          - 'src/fleet/ws.js'
           - 'src/fleet/host/hub-client.js'
           - 'src/fleet/host/transports/**'
           - 'src/fleet/coordinator/spec.js'

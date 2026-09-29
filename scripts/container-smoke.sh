@@ -26,6 +26,10 @@
 #      the restart still spends AFTER it, so the Durable Object's SQLite is on
 #      the volume and not in the container's own filesystem
 #   7. the spent pin refuses a second host — single-use survives the restart too
+#   8. the sidecar's own transport holds a socket open: Node's WebSocket with
+#      the proof headers, and its heartbeat answered by the runtime's
+#      auto-response — the frame every host sends for weeks, proven against
+#      real workerd rather than the Node harness
 #
 # ENGINE-AGNOSTIC. CI has docker; the box this was first proven on has podman;
 # the two take the same verbs for everything used here. CONTAINER_ENGINE names
@@ -199,5 +203,34 @@ if sidecar smoke-three enrol "$CODE1" >"$WORK/enrol3.log" 2>&1; then
 fi
 grep -q "enrolment failed" "$WORK/enrol3.log" || die "unexpected refusal: $(cat "$WORK/enrol3.log")"
 ok "refused: $(sed -n 's/^enrolment failed: //p' "$WORK/enrol3.log" | head -n 1)"
+
+step "A host holds the socket, and its heartbeats are answered"
+# The transport a real sidecar runs, with its heartbeat turned up from every
+# twenty seconds to every 300ms, for three seconds: enough to see several pongs
+# come back from the runtime's auto-response and the host listed as connected.
+FLEETWRIGHT_COORDINATOR_URL="$URL" node --input-type=module -e '
+  import { loadOrCreateKey, proveIdentity } from "./src/fleet/host/identity.js";
+  import { WebSocketTransport } from "./src/fleet/host/transports/websocket.js";
+  const [hostId, keyFile] = process.argv.slice(1);
+  const origin = process.env.FLEETWRIGHT_COORDINATOR_URL;
+  const key = await loadOrCreateKey(keyFile);
+  const warned = [];
+  const transport = new WebSocketTransport({
+    origin, hostId,
+    proof: () => proveIdentity({ origin, hostId, privateJwk: key.privateJwk }),
+    logger: { debug() {}, info() {}, warn: (m) => warned.push(m), error: (m) => warned.push(m) },
+    pingIntervalMs: 300, pongGraceMs: 250,
+  });
+  await transport.start();
+  await new Promise((r) => setTimeout(r, 3000));
+  const up = transport.connected;
+  const beats = transport.heartbeats;
+  await transport.stop();
+  if (!up) { console.error("the socket did not stay up: " + warned.join(" | ")); process.exit(1); }
+  if (beats < 3) { console.error("only " + beats + " heartbeats were answered in 3s: " + warned.join(" | ")); process.exit(1); }
+  if (warned.length) { console.error("the transport warned: " + warned.join(" | ")); process.exit(1); }
+  process.stdout.write(String(beats));
+' smoke-one "$WORK/smoke-one/host-key.json" >"$WORK/beats.txt" 2>"$WORK/beats.err" || { cat "$WORK/beats.err" >&2; die "the transport did not hold its socket against the container"; }
+ok "smoke-one held the socket for 3s and $(cat "$WORK/beats.txt") heartbeats were answered"
 
 printf '\n\033[1mcontainer smoke passed\033[0m — %s, %s\n\n' "$ENGINE" "$TAG"
