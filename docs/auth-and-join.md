@@ -127,9 +127,9 @@ What goes with it, in order of how much it is used:
 | thing | today | after |
 |---|---|---|
 | `bin/agent-fleet-coordinator`, `install/agent-fleet-coordinator.*`, installer step 5c and the "Run the coordinator on this box?" question | offered on every checkout install | removed; the installer asks for a coordinator URL, full stop |
-| `src/fleet/coordinator/server.js` (~1500 lines) | shipped, and the in-process harness for 13 test files | test helper only, then deleted once those tests drive the Worker under workerd the way `live.test.js` and `parity.test.js` already do |
-| `src/fleet/ws.js` server half, `src/fleet/apns-node.js` | Node coordinator only | deleted with it |
-| `src/fleet/ws.js` client half | the sidecar's dial | Node ≥ 22 ships `WebSocket` with a `headers` option; the file goes entirely, with no dependency |
+| `src/fleet/coordinator/server.js` (~1500 lines) | shipped, and the in-process harness for 13 test files | `test/helpers/node-coordinator.js`, outside the package boundary; deleted once those tests drive the Worker under workerd the way `live.test.js` and `parity.test.js` already do |
+| `src/fleet/apns-node.js` | Node coordinator only | `test/helpers/apns-node.js`, beside it |
+| `src/fleet/ws.js` | the Node coordinator's accept side and the sidecar's dial | the accept side is harness-only now; the dial stays until a heartbeat frame replaces its ping, because Node's own `WebSocket` has none |
 | `openapi.test.js`, `parity.test.js` | drift detectors between two implementations | conformance tests of one |
 | `docs/coordinator.md` "there are two of it" | the design | history, kept as such |
 
@@ -247,19 +247,21 @@ Rounds, each a stacked PR set by layer per [`CONTRIBUTING.md`](../CONTRIBUTING.m
 The dependency rounds are ordered so each one deletes code the next one would
 otherwise have to touch twice.
 
-| round | what | deletes | adds |
-|---|---|---|---|
-| **0** | the four retention defects above, and the PKCE compare. Both coordinators while both exist | | four tests |
-| **1** | **stop offering the Node coordinator**: remove the binary, the units, installer step 5c and the "run it here?" question; `deployment.md` and `coordinator.md` say Cloudflare; `server.js` moves under `test/helpers/` as the in-process harness it already is. A `workerd` `Containerfile` is written and *tried*, and lands in the docs only if it survives a week | the shipped second implementation, `ws.js`, `apns-node.js` | nothing |
-| **2** | **oauth4webapi**: `coordinator/oauth.js` becomes configuration for two providers; `host/pkce.js` goes; `oidc.js` gains discovery for any issuer and the `nonce` `identity.md` deferred, once the apps send one | ~500 lines | one dependency |
-| **3** | **MCP conformance**: the SDK as a devDependency, a test that registers, authorizes and exchanges against our authorization server, and one that drives `/mcp` with the real client. Its verdict decides whether `@cloudflare/workers-oauth-provider` is taken | | dev-only |
-| **4** | **bootstrap ergonomics**: the app mints a pin and shows `curl …/install?pin=123456 \| sh`; the installer spends it unattended; `coordinator-deploy.md` moves the admin token to a break-glass section. Closes #332 | the curl-with-admin-token tutorial | app layers, both phones |
-| **5** | **one implementation**: the 13 test files that drive `server.js` in-process move to the Worker under workerd, and `server.js` is deleted. `openapi.test.js` and `parity.test.js` stay as conformance tests of the one that is left | ~1500 lines | |
-| later | passkeys with `@simplewebauthn/server`; signed intents, once the trust root question in `trust.md` is answered | | |
+| round | planned | what shipped, and where it differs |
+|---|---|---|
+| **0** | the four retention defects above, and the PKCE compare | **shipped**, as five: the read of the code for this round found that a runner's owner was always null too, because a pin's actor is a bare email and `emailOf` wanted `fleet:<email>`. `test/retention-defects.test.js` holds all five, on both coordinators |
+| **1** | stop offering the Node coordinator; a `workerd` `Containerfile`, tried | **shipped.** The binary, the units, the installer question, the admin-token generation and the push-credential question are gone; a box that ran its own coordinator finds the unit retired and is told where the fleet meets now. `worker/Containerfile` and `worker/workerd.capnp` run the deployed bundle under raw workerd with disk-backed storage: from a clean tree it answered `/healthz`, `/api/hosts` and minted a pin that was still pending after a restart. Not a week under real hosts, and the ratelimit and send_email bindings have no counterpart, so `coordinator-deploy.md` documents it as unproven and still says Cloudflare |
+| **2** | `oauth4webapi` for the outbound OAuth client and OIDC discovery; `host/pkce.js` goes | **shipped**, one deviation: `host/pkce.js` stays. Its challenge is one hash and `connect` builds its catalogue synchronously; the *verifier* is the library's. Both exchanges are one function over the library, GitHub's 200-with-an-error is still read as GitHub's sentence, and an issuer nobody wrote down is discovered through its `openid-configuration`. A checkout host needs `npm ci --omit=dev` again, because the sidecar finishes the PKCE exchange; a release bundles it |
+| **3** | the MCP SDK as a dev-only oracle; its verdict decides `workers-oauth-provider` | **shipped, verdict in.** The SDK's client went cold through the 401, both metadata documents, registration, the S256 challenge, the token exchange, `initialize`, the 202 for the initialized notification, `tools/list` and `tools/call` without a change to our server. `workers-oauth-provider` is **not taken**; `dependencies.md` records why |
+| **4** | the app mints a pin and shows `curl …/install?pin=123456 \| sh`; the installer spends it | **shipped, with the pin moved out of the URL.** `/install?pin=` would put a live credential in the coordinator's request log and make the shim carry a secret, which `worker-routes.test.js` forbids. The line is `curl -fsSL …/install \| sudo AGENT_FLEET_ENROL_PIN=123456 sh`: the pin rides as an environment variable through the shell that runs it and nowhere else. `POST /api/enroll` returns it as `install`, both apps show it beside the code, the installer spends it and enrols unattended, and the admin-token curl is a break-glass subsection. Closes the shape of #332 |
+| **5** | the 13 in-process tests move to workerd; `server.js` is deleted; the sidecar dials with Node's `WebSocket` | **scoped down, and said so.** `server.js` and `apns-node.js` are `test/helpers/` now — outside `src`, which is the package boundary, so no release, bundle or installer carries them and the product has one coordinator. Deleting them waits on the eight socket-leg tests moving to workerd, at a workerd per file. The sidecar keeps `ws.js`: Node's `WebSocket` has no ping, and the transport's liveness is a client-initiated ping with a pong deadline, so replacing it is a protocol change to make with hosts to test on |
+| later | passkeys with `@simplewebauthn/server`; signed intents, once the trust root question in `trust.md` is answered; the socket-leg tests under workerd and then `server.js` gone; a heartbeat frame so the sidecar can dial with the platform `WebSocket`; the container's week | |
 
 What this does not change: who may join (the allowlist and the pin), what a
 host proves (its key), what the coordinator may hold (nothing it can spend),
 and the rejection of device flow. Those were the decisions. What changed
 between the first draft of this note and this one is where the coordinator is
 allowed to run, and that one decision removed the largest dependency from the
-list by removing the code it was going to hold up.
+list by removing the code it was going to hold up. What changed between the
+plan and the build is in the third column above, and each deviation is a
+sentence with a reason rather than a row quietly marked done.
