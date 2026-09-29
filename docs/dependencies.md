@@ -90,6 +90,38 @@ mint a fleet credential and could not reach a session.
 and `connect` builds its catalogue synchronously. The *verifier* is the
 library's, so the length and alphabet are RFC 7636's by construction.
 
+## @modelcontextprotocol/sdk — development only, the conformance oracle
+
+Used in exactly one file, `test/mcp-conformance.test.js`, and never at
+runtime: the SDK's *client* is driven against our hand-written authorization
+server and Streamable HTTP transport in `src/mcp/`.
+
+| | |
+|---|---|
+| version | exact |
+| dependencies | many — express, zod, ajv and friends, which is why it stays a devDependency |
+| runtime | none; it is not in the coordinator bundle or the release |
+
+**Why a dependency, and why only in tests.** `src/mcp/oauth.js` and
+`routes.js` implement RFC 9728, 8414, 7591 and PKCE by hand, on the open
+internet, taking anonymous registrations. Every route was tested with requests
+we wrote. What was missing is a client we did *not* write, reading the
+specifications the way their reference implementation reads them — because the
+failure mode of a hand-rolled protocol server is not a crash, it is a quiet
+mismatch found by the first real client. The SDK is that client. Shipping it
+would mean carrying its dependency tree in the coordinator for a transport we
+already have; asking it questions costs nothing at runtime.
+
+**What it found, the first time it ran.** Nothing in the protocol: discovery
+from the 401's `WWW-Authenticate`, both metadata documents, dynamic
+registration, the S256 challenge, the code exchange at `/oauth/token`,
+`initialize`, the `initialized` notification's 202, `tools/list` and
+`tools/call` all went through unchanged. That is the answer to the question
+[`auth-and-join.md`](./auth-and-join.md) left open: Cloudflare's
+`workers-oauth-provider` is **not taken**, because the ~600 lines it would
+replace conform, and replacing them would cost the property that an MCP
+client's token *is* a device credential revocable from the People screen.
+
 ## androidx.browser — Android app
 
 `androidx.browser:browser`, for Custom Tabs: the provider's authorization page
