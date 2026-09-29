@@ -11,6 +11,18 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.3 — 2026-09-29
+
+**One fix: a grant now changes the recorded answer.**
+
+- **`sudo fleetwright grant reboot on` takes effect.** On 0.4.2 it wrote the
+  sudoers rule and restarted the hub, but left `FLEETWRIGHT_SYSTEM_REBOOT=0`
+  in `/etc/fleetwright.env`, so the hub came back refusing the reboot the rule
+  allowed. The installer recorded the answer with the writer that only fills
+  an empty value, which is right for a pasted token and wrong for a decision
+  being changed. A grant now overwrites the recorded answer, on and off, and a
+  box that recorded 1 can have it withdrawn the same way.
+
 ## 0.4.2 — 2026-09-29
 
 **Two fixes from the first real run of 0.4.1 on a Pi.**
