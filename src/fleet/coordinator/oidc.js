@@ -20,8 +20,20 @@
 // which addresses are allowed, and what to say when Apple hides one.
 
 import { jwtVerify, createRemoteJWKSet } from 'jose';
+import * as oauth from 'oauth4webapi';
 
-/** Providers whose key set is not at the conventional well-known path. */
+/**
+ * Providers whose key set is known without asking.
+ *
+ * Any OTHER issuer is DISCOVERED: its `/.well-known/openid-configuration` is
+ * fetched once and `jwks_uri` read from it, which is what "provider-agnostic"
+ * in docs/identity.md was always supposed to mean. This used to guess
+ * `<issuer>/.well-known/jwks.json` for everything not in this map, which is a
+ * convention some providers follow and the OIDC specification does not
+ * require; a Workspace, an Entra tenant or a self-hosted issuer that keeps its
+ * keys elsewhere was refused with "could not fetch the key set", which reads
+ * as an outage and is a configuration nobody was asked for.
+ */
 const JWKS_URLS = {
   'https://accounts.google.com': 'https://www.googleapis.com/oauth2/v3/certs',
   'https://appleid.apple.com': 'https://appleid.apple.com/auth/keys',
@@ -54,6 +66,53 @@ export const DEFAULT_ACTIONS_AUDIENCES = Object.freeze([DEFAULT_ACTIONS_AUDIENCE
 
 /** @type {Map<string, any>} */
 const jwks = new Map();
+/** Where each discovered issuer keeps its keys, once asked. @type {Map<string, Promise<string>>} */
+const discovered = new Map();
+
+/**
+ * Where an issuer's keys are.
+ *
+ * Known providers answer from the map. Anyone else is asked, once, through
+ * their discovery document — the library fetches it and refuses one whose
+ * `issuer` does not match the URL it came from, which is the check that stops
+ * a document served from the wrong place naming somebody else's keys. A
+ * failed discovery is forgotten so the next sign-in asks again; a document
+ * with no `jwks_uri`, or no document at all, falls back to the old convention
+ * with the reason kept in the error a refused token then carries.
+ *
+ * @param {string} issuer
+ * @returns {Promise<string>}
+ */
+function jwksUrlFor(issuer) {
+  const known = JWKS_URLS[/** @type {keyof typeof JWKS_URLS} */ (issuer)];
+  if (known) return Promise.resolve(known);
+  let pending = discovered.get(issuer);
+  if (!pending) {
+    pending = discover(issuer);
+    discovered.set(issuer, pending);
+    pending.catch(() => discovered.delete(issuer));
+  }
+  return pending;
+}
+
+/** @param {string} issuer */
+async function discover(issuer) {
+  const url = new URL(issuer);
+  try {
+    const res = await oauth.discoveryRequest(url, {
+      // Plain http only for a loopback issuer — a test's. The library refuses
+      // it otherwise, and so should this.
+      [oauth.allowInsecureRequests]: url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const as = await oauth.processDiscoveryResponse(url, res);
+    if (typeof as.jwks_uri === 'string' && as.jwks_uri) return as.jwks_uri;
+  } catch {
+    // Fall through to the convention. The token that needed this key then
+    // fails at jose with the fetch error, which names the URL it tried.
+  }
+  return `${issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
+}
 
 /**
  * The key set for an issuer.
@@ -65,13 +124,10 @@ const jwks = new Map();
  *
  * @param {string} issuer
  */
-function keysFor(issuer) {
+async function keysFor(issuer) {
   let set = jwks.get(issuer);
   if (!set) {
-    const url =
-      JWKS_URLS[/** @type {keyof typeof JWKS_URLS} */ (issuer)] ||
-      `${issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
-    set = createRemoteJWKSet(new URL(url), { cacheMaxAge: 3_600_000, cooldownDuration: 30_000 });
+    set = createRemoteJWKSet(new URL(await jwksUrlFor(issuer)), { cacheMaxAge: 3_600_000, cooldownDuration: 30_000 });
     jwks.set(issuer, set);
   }
   return set;
@@ -114,7 +170,7 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
 
   let payload;
   try {
-    ({ payload } = await jwtVerify(raw, keysFor(ACTIONS_ISSUER), {
+    ({ payload } = await jwtVerify(raw, await keysFor(ACTIONS_ISSUER), {
       issuer: ACTIONS_ISSUER,
       audience: audiences,
       algorithms: ['RS256', 'ES256'],
@@ -186,7 +242,7 @@ export async function verifyIdToken(token, { issuers, audiences }) {
 
   let payload;
   try {
-    ({ payload } = await jwtVerify(raw, keysFor(issuer), {
+    ({ payload } = await jwtVerify(raw, await keysFor(issuer), {
       issuer,
       audience: audiences,
       // Named explicitly. Left open, `alg` is chosen by the token, which is
@@ -289,6 +345,7 @@ export function isPrivateRelay(email) {
 /** Visible for tests. */
 export function forgetJwks() {
   jwks.clear();
+  discovered.clear();
 }
 
 /**
@@ -320,7 +377,7 @@ export async function verifyAppleNotification(token, { audiences }) {
   const issuer = 'https://appleid.apple.com';
   let payload;
   try {
-    ({ payload } = await jwtVerify(raw, keysFor(issuer), {
+    ({ payload } = await jwtVerify(raw, await keysFor(issuer), {
       issuer,
       audience: audiences,
       algorithms: ['RS256', 'ES256'],

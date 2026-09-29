@@ -360,7 +360,7 @@ const STEPS = [
           changed: false,
           text:
             'The code is updated, but npm is not installed on this box, so its packages are not.\n' +
-            'fleetwright and the sidecar are fine without them.\n' +
+            'fleetwright is fine without them; the sidecar is not.\n' +
             `  sudo apt install npm && cd ${dir} && npm ci --omit=dev`,
         };
       }

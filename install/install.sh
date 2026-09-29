@@ -2209,9 +2209,9 @@ ok "config readable by $RUN_USER"
 # this. A missing one dies at startup with ERR_MODULE_NOT_FOUND naming a package
 # nobody asked for and no fix at all — which is how `jose` was first noticed,
 # on the day a box tried to run the coordinator that has since left for the
-# Worker (docs/auth-and-join.md). Today the host code imports none of them and
-# this is a no-op that finishes in a second; the day it imports one, this is
-# what makes it start.
+# Worker (docs/auth-and-join.md). The sidecar imports one today: oauth4webapi,
+# through the OAuth exchange it finishes for a host that minted a PKCE
+# verifier. A release bundles it into lib/; a checkout gets it here.
 say "Runtime dependencies"
 if [ "$PACKAGED" = 1 ]; then
   # NOTHING TO INSTALL, and that is the point of the release rather than a
@@ -2232,7 +2232,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   [ -n "$NPM_BIN" ] && ok "npm at $NPM_BIN" || warn "npm is not installed — the installer would install it"
 elif [ -z "$NPM_BIN" ]; then
   warn "npm is not installed and could not be installed automatically ($(pkg_why)).
-       Fine while nothing on a host imports a runtime dependency; the day one does:
+       fleetwright is fine without it. The sidecar is not — it will not start:
          cd $DIR && npm install --omit=dev"
 else
   # ci first: it installs exactly the lockfile and is the reproducible one. It
@@ -2247,8 +2247,8 @@ else
     chown -R "$RUN_USER" "$DIR/node_modules" 2>/dev/null || true
     ok "installed $(cd "$DIR" && "$NPM_BIN" ls --omit=dev --depth=0 2>/dev/null | grep -c '^[├└]' || echo '?') runtime dependencies"
   else
-    warn "npm install failed in $DIR — fine while nothing on a host imports a
-       runtime dependency. Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
+    warn "npm install failed in $DIR — the sidecar on this box will not start.
+       Run it by hand and read the error:  cd $DIR && npm install --omit=dev"
   fi
 fi
 fi

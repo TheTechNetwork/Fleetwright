@@ -21,6 +21,39 @@
 // half that works without it: a short-lived user access token, scoped to what
 // the person chose, with a refresh token that belongs to them alone.
 
+import * as oauth from 'oauth4webapi';
+
+/**
+ * The two providers, as the authorization-server documents oauth4webapi wants.
+ *
+ * Written down rather than discovered: neither publishes an OAuth discovery
+ * document at its issuer, and both have had these endpoints for a decade. The
+ * `issuer` values are labels the library keys on; nothing here validates an
+ * ID token against them, because neither flow issues one.
+ *
+ * WHY A LIBRARY FOR THIS, when the two exchanges were ~100 lines of fetch:
+ * docs/auth-and-join.md applies the test that took `jose` — a protocol with
+ * negotiation and a silent failure mode is not worth owning — and a token
+ * endpoint is one: content types, error shapes, `WWW-Authenticate`
+ * challenges, the `token_type` check, and two providers that disagree about
+ * all of it. oauth4webapi is panva's, like jose, has no dependencies, and runs
+ * on WebCrypto and fetch, so the Worker bundle and the sidecar carry the same
+ * code. What stays ours is the URL each person is sent to and the words they
+ * read on the way back.
+ */
+/** @type {oauth.AuthorizationServer} */
+const GITHUB = Object.freeze({
+  issuer: 'https://github.com',
+  authorization_endpoint: 'https://github.com/login/oauth/authorize',
+  token_endpoint: 'https://github.com/login/oauth/access_token',
+});
+/** @type {oauth.AuthorizationServer} */
+const CLOUDFLARE = Object.freeze({
+  issuer: 'https://dash.cloudflare.com',
+  authorization_endpoint: 'https://dash.cloudflare.com/oauth2/auth',
+  token_endpoint: 'https://dash.cloudflare.com/oauth2/token',
+});
+
 /** How long somebody has to finish authorizing before the state is refused. */
 const STATE_TTL_MS = 10 * 60_000;
 
@@ -146,7 +179,7 @@ export function normaliseOrigin(value) {
 export function authorizeUrl({ clientId, origin, state, codeChallenge = null }) {
   const base = normaliseOrigin(origin);
   if (!base) return null;
-  const url = new URL('https://github.com/login/oauth/authorize');
+  const url = new URL(/** @type {string} */ (GITHUB.authorization_endpoint));
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', `${base}/oauth/github/callback`);
   url.searchParams.set('state', state);
@@ -182,7 +215,7 @@ export function authorizeUrl({ clientId, origin, state, codeChallenge = null }) 
 export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes, codeChallenge = null }) {
   const base = normaliseOrigin(origin);
   if (!base) return null;
-  const url = new URL('https://dash.cloudflare.com/oauth2/auth');
+  const url = new URL(/** @type {string} */ (CLOUDFLARE.authorization_endpoint));
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', `${base}/oauth/cloudflare/callback`);
@@ -198,7 +231,7 @@ export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes, codeCh
 }
 
 /**
- * Exchange the code for tokens.
+ * One exchange, for either provider.
  *
  * Never throws: a provider that is down, slow, or answering something
  * unexpected must produce a message somebody can act on rather than a stack
@@ -206,115 +239,118 @@ export function cloudflareAuthorizeUrl({ clientId, origin, state, scopes, codeCh
  *
  * `codeVerifier` is what a HOST passes, exchanging a code the coordinator
  * relayed to it: the verifier never left the host, so the same function serves
- * both places and only one of them can ever fill this in.
+ * both places and only one of them can ever fill this in. Without one, the
+ * library is told so explicitly (`nopkce`) rather than being left to infer it.
+ *
+ * The request is what RFC 6749 says: form-encoded, `client_secret_post`. Both
+ * providers accept that, and only Cloudflare insists on it — GitHub takes JSON
+ * too, which is what this used to send, and the point of a library is not to
+ * have a dialect per provider.
+ *
+ * @param {{ as: oauth.AuthorizationServer, label: string, clientId: string, clientSecret: string, code: string, redirectUri: string, codeVerifier: string|null, fetch: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, accessToken: string, refreshToken: string|null, expiresIn: number|null } | { ok: false, message: string }>}
+ */
+async function exchange({ as, label, clientId, clientSecret, code, redirectUri, codeVerifier, fetch: doFetch }) {
+  /** @type {oauth.Client} */
+  const client = { client_id: clientId };
+  let response;
+  try {
+    // The callback's parameters, validated the way the library wants them
+    // before it will build a token request from them. `state` was redeemed by
+    // PendingAuthorizations before this was called, and a host exchanging a
+    // relayed code never sees one — so none is expected here.
+    const params = oauth.validateAuthResponse(as, client, new URLSearchParams({ code }), oauth.expectNoState);
+    response = await oauth.authorizationCodeGrantRequest(
+      as,
+      client,
+      oauth.ClientSecretPost(clientSecret),
+      params,
+      redirectUri,
+      codeVerifier ?? oauth.nopkce,
+      { [oauth.customFetch]: doFetch, signal: AbortSignal.timeout(15_000) },
+    );
+  } catch (e) {
+    return { ok: false, message: `Could not reach ${label} to finish signing in: ${/** @type {Error} */ (e).message}` };
+  }
+
+  // GITHUB ANSWERS 200 WITH AN `error` FIELD rather than a status code, which
+  // the library reads as a token response missing its token — true, and it
+  // loses the one sentence GitHub bothered to send. Looked at first, so the
+  // person reads "bad_verification_code: expired" and not "no access token".
+  /** @type {any} */
+  const peek = await response.clone().json().catch(() => null);
+  if (peek && typeof peek === 'object' && peek.error) {
+    return { ok: false, message: `${label} refused the authorization: ${peek.error_description || peek.error}` };
+  }
+
+  try {
+    const tokens = await oauth.processAuthorizationCodeResponse(as, client, response);
+    return {
+      ok: true,
+      accessToken: tokens.access_token,
+      // GitHub sends one only when "Expire user authorization tokens" is on;
+      // Cloudflare only when the authorize request carried `offline_access`
+      // and the client has the grant. Absent is a fact the caller says to the
+      // person — an access token that never expires is the PAT problem with
+      // extra steps — rather than an error here.
+      refreshToken: typeof tokens.refresh_token === 'string' ? tokens.refresh_token : null,
+      expiresIn: Number(tokens.expires_in) || null,
+    };
+  } catch (e) {
+    return { ok: false, message: `${label} ${describeRefusal(/** @type {any} */ (e))}` };
+  }
+}
+
+/**
+ * The library's error, as the sentence the person reads.
+ *
+ * Three shapes: the provider said no (a body with `error`), the provider
+ * answered something that is not a token response (a 200 with no token in it,
+ * a wrong content type), or a `WWW-Authenticate` challenge. Each gets the one
+ * thing an operator can act on.
+ *
+ * @param {{ error?: string, error_description?: string, message?: string, status?: number, cause?: any }} e
+ */
+function describeRefusal(e) {
+  if (e instanceof oauth.ResponseBodyError) {
+    return `refused the authorization: ${e.error_description || e.error}`;
+  }
+  if (e instanceof oauth.WWWAuthenticateChallengeError) {
+    const first = e.cause?.[0];
+    return `refused the authorization: ${first?.parameters?.error_description || first?.parameters?.error || first?.scheme || 'challenge'}`;
+  }
+  if (/access_token/.test(String(e.message))) return 'returned no access token.';
+  return `refused the authorization: ${e.message || 'no reason given'}`;
+}
+
+/**
+ * Exchange a GitHub code for tokens.
  *
  * @param {{ clientId: string, clientSecret: string, code: string, origin: string, codeVerifier?: string|null, fetch?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, accessToken: string, refreshToken: string|null, expiresIn: number|null } | { ok: false, message: string }>}
  */
 export async function exchangeCode({ clientId, clientSecret, code, origin, codeVerifier = null, fetch: doFetch = globalThis.fetch }) {
   const base = normaliseOrigin(origin);
   if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
-  let body;
-  try {
-    const res = await doFetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        code,
-        redirect_uri: `${base}/oauth/github/callback`,
-        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    body = /** @type {any} */ (await res.json());
-  } catch (e) {
-    return { ok: false, message: `Could not reach GitHub to finish signing in: ${/** @type {Error} */ (e).message}` };
-  }
-
-  // GitHub answers 200 with an `error` field rather than a status code, which
-  // is the kind of thing that turns into "undefined" on a screen if nobody
-  // looks for it.
-  if (!body || body.error) {
-    return { ok: false, message: `GitHub refused the authorization: ${body?.error_description || body?.error || 'no reason given'}` };
-  }
-  if (typeof body.access_token !== 'string' || !body.access_token) {
-    return { ok: false, message: 'GitHub returned no access token.' };
-  }
-  return {
-    ok: true,
-    accessToken: body.access_token,
-    // Present only when "Expire user authorization tokens" is on. Absent means
-    // the App is configured for non-expiring tokens, which is a setting worth
-    // naming rather than silently tolerating — an access token that never
-    // expires is the PAT problem with extra steps.
-    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
-    expiresIn: Number(body.expires_in) || null,
-  };
+  return exchange({ as: GITHUB, label: 'GitHub', clientId, clientSecret, code, redirectUri: `${base}/oauth/github/callback`, codeVerifier, fetch: doFetch });
 }
 
 /**
  * Exchange a Cloudflare authorization code for tokens.
  *
- * Not the GitHub function with a different URL, because the two token
- * endpoints disagree about everything except the grant. Cloudflare's is RFC
- * 6749 as written: the request is FORM-ENCODED (a JSON body is a 400), the
- * client authenticates with `client_secret` in the form (`client_secret_post`,
- * which its discovery document lists as supported), and a refusal is a non-200
- * status carrying `error`/`error_description` — where GitHub answers 200 with
- * an `error` field. Pretending they are one function would mean a parameter
- * for each disagreement, which is two functions wearing a trench coat.
- *
- * The refresh token arrives only when the authorize request carried
- * `offline_access` AND the client was registered with the refresh-token grant.
- * Absent is not an error here — the flow still yields a working access token —
- * and the caller says so to the person, the same way the GitHub flow does when
- * renewal material cannot be deposited.
+ * Same function as GitHub's with a different server document, which is what a
+ * library buys: the two token endpoints used to disagree about everything
+ * except the grant, and each disagreement was a parameter or a second
+ * function. The redirect URI must byte-match the authorize request's, or the
+ * exchange is refused — which is the property the redirect binding depends on.
  *
  * @param {{ clientId: string, clientSecret: string, code: string, origin: string, codeVerifier?: string|null, fetch?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, accessToken: string, refreshToken: string|null, expiresIn: number|null } | { ok: false, message: string }>}
  */
 export async function exchangeCloudflareCode({ clientId, clientSecret, code, origin, codeVerifier = null, fetch: doFetch = globalThis.fetch }) {
   const base = normaliseOrigin(origin);
   if (!base) return { ok: false, message: 'This coordinator could not work out its own address.' };
-  /** @type {any} */
-  let body;
-  let status = 0;
-  try {
-    const res = await doFetch('https://dash.cloudflare.com/oauth2/token', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        // Must byte-match the authorize request's, or the exchange is refused
-        // — which is the property the redirect binding depends on.
-        redirect_uri: `${base}/oauth/cloudflare/callback`,
-        client_id: clientId,
-        client_secret: clientSecret,
-        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
-      }).toString(),
-      signal: AbortSignal.timeout(15_000),
-    });
-    status = res.status;
-    body = await res.json().catch(() => null);
-  } catch (e) {
-    return { ok: false, message: `Could not reach Cloudflare to finish signing in: ${/** @type {Error} */ (e).message}` };
-  }
-  if (status < 200 || status >= 300 || !body || body.error) {
-    return {
-      ok: false,
-      message: `Cloudflare refused the authorization: ${body?.error_description || body?.error || `it answered ${status}`}`,
-    };
-  }
-  if (typeof body.access_token !== 'string' || !body.access_token) {
-    return { ok: false, message: 'Cloudflare returned no access token.' };
-  }
-  return {
-    ok: true,
-    accessToken: body.access_token,
-    refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
-    expiresIn: Number(body.expires_in) || null,
-  };
+  return exchange({ as: CLOUDFLARE, label: 'Cloudflare', clientId, clientSecret, code, redirectUri: `${base}/oauth/cloudflare/callback`, codeVerifier, fetch: doFetch });
 }
 
 /**
