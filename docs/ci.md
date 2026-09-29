@@ -28,6 +28,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
 | `renovate-config.yml` | PRs touching `renovate.json` | none |
+| `label.yml` | every PR, on open and every push (`pull_request_target`, no checkout) | none — `GITHUB_TOKEN` with `pull-requests: write`, applying `platform/*` and `area/*` from `.github/labeler.yml`; `test/labeler.test.js` keeps the rules covering every tracked file |
 
 ## The merge gate
 

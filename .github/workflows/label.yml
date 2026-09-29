@@ -1,0 +1,36 @@
+name: Label
+
+# Every pull request gets its labels from the files it changes, and keeps them
+# in step with the diff as it moves. The rules are .github/labeler.yml; the
+# label set is the repository's own (`platform/*` for where, `area/*` for
+# what), and test/labeler.test.js fails a tree with a file no rule names.
+#
+# pull_request_target, not pull_request, because a label is written to the PR
+# and a fork's pull_request token cannot write anything. It is safe HERE and
+# only here: this job checks nothing out and runs nothing from the branch —
+# the action reads the rule file from the BASE branch through the API and
+# writes labels, which is the whole surface. Do not add a checkout to it.
+#
+# `synchronize` is what makes sync-labels mean something: a push that takes
+# the Android change out of a PR takes platform/android with it.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v7.0.0
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: true
