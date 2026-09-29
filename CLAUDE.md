@@ -57,7 +57,7 @@ Do not re-litigate these; change the test if you disagree with the rule.
 
 **R-02 forbids the em dash in any text.** This project does not, in UI strings.
 
-It is 41 of them across the two apps and 26 more in the host's replies, and they
+It is 52 of them across the two apps and 26 more in the host's replies, and they
 are not decoration: this product's voice is long sentences that name a thing and
 then qualify it, and the em dash is the joint. Rewriting them to commas would
 not make them sound less generated, it would make them sound less like anything.

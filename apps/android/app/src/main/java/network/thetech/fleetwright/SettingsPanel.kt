@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material3.HorizontalDivider
@@ -65,6 +66,13 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var signInResult by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var pin by rememberSaveable { mutableStateOf("") }
+    // THE ONE LINE THAT INSTALLS A BOX AND JOINS IT with the pin in hand, or
+    // empty when this coordinator publishes no installer. Round 4 of
+    // docs/auth-and-join.md: the pin was the whole of how a host joins and the
+    // installer already knew which fleet, so the only thing between this screen
+    // and a box in the fleet was carrying six digits to a terminal. The pin
+    // rides in the command as an environment variable, never in the URL.
+    var pinInstall by rememberSaveable { mutableStateOf("") }
     // WHICH HOST THE PIN IN HAND IS FOR, or empty for an unbound one. A bound
     // pin only works on the machine it names, and the refusal for using it
     // elsewhere arrives on the box rather than here — so a screen showing six
@@ -751,8 +759,11 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                 onClick = {
                     scope.launch {
                         busy = true
+                        pinInstall = ""
                         pinBoundTo = ""
                         pin = runCatching { Fleet(settings).mintHostPin(ephemeralPin) }
+                            .onSuccess { pinInstall = it.install ?: "" }
+                            .map { it.code }
                             .getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
                         busy = false
                     }
@@ -773,11 +784,30 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
-                Text(
-                    "On that box: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                )
+                if (pinInstall.isNotBlank()) {
+                    // THE LINE IS THE PRODUCT. On a fresh box this is the whole
+                    // join; the two-step form is for a box already installed.
+                    Text(
+                        "On a fresh box, as root — installs it and joins it:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SelectionContainer {
+                        Text(pinInstall, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                    Text(
+                        "Already installed: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "On that box: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
 
             // A MACHINE THAT DOES NOT EXIST YET, beside the pin for one that
@@ -891,9 +921,12 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                     scope.launch {
                                         busy = true
                                         pinBoundTo = ""
+                                        // A bound pin re-keys or readmits a box
+                                        // that exists: the code only, no install line.
+                                        pinInstall = ""
                                         pin = runCatching {
                                             Fleet(settings).mintHostPin(hostId = host.hostId, readmit = host.revoked)
-                                        }.getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
+                                        }.map { it.code }.getOrElse { signInResult = it.message ?: "could not mint a pin"; "" }
                                         // Set only on success, so a failed mint
                                         // cannot leave the previous pin on
                                         // screen wearing a new host's name.

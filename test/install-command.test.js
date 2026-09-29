@@ -25,6 +25,8 @@ const ADMIN = 'a-token-at-least-16ch';
 const SH = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 const IOS_CLIENT = readFileSync(new URL('../apps/ios/Fleetwright/Fleet.swift', import.meta.url), 'utf8');
 const IOS_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+const DROID_CLIENT = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');
+const DROID_VIEW = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/SettingsPanel.kt', import.meta.url), 'utf8');
 
 test('the command names the fleet and carries the pin as a variable, never in the URL', () => {
   const line = installCommand({ origin: 'https://fleet.example', installUrl: 'https://raw.example/bootstrap.sh', code: '123456' });
@@ -131,4 +133,16 @@ test('the iOS app reads the line off the reply and shows it beside the pin, and 
   assert.match(IOS_VIEW, /\} else \{\n\s+Text\("On that box: fleetwright-sidecar enrol \\\(pin\)"\)/);
   // A bound pin re-keys a box that exists; no install line for it.
   assert.match(IOS_VIEW, /mintHostPin\(hostId: hostId, readmit: readmit\)\.code/);
+});
+
+test('the Android app reads the line off the reply and shows it beside the pin, and only when there is one', () => {
+  assert.match(DROID_CLIENT, /data class MintedPin\(val code: String, val install: String\?\)/);
+  // org.json renders a JSON null as the string "null"; a command to paste must
+  // never be the word null.
+  assert.match(DROID_CLIENT, /if \(json\.isNull\("install"\)\) null else json\.optString\("install"\)\.ifBlank \{ null \}/);
+  assert.match(DROID_VIEW, /\.onSuccess \{ pinInstall = it\.install \?: "" \}/);
+  assert.match(DROID_VIEW, /if \(pinInstall\.isNotBlank\(\)\) \{[\s\S]{0,700}?SelectionContainer \{\n\s+Text\(pinInstall/);
+  assert.match(DROID_VIEW, /\} else \{\n\s+Text\(\n\s+"On that box: fleetwright-sidecar enrol \$pin/);
+  // A bound pin re-keys a box that exists; no install line for it.
+  assert.match(DROID_VIEW, /pinInstall = ""\n\s+pin = runCatching \{\n\s+Fleet\(settings\)\.mintHostPin\(hostId = host\.hostId, readmit = host\.revoked\)\n\s+\}\.map \{ it\.code \}/);
 });
