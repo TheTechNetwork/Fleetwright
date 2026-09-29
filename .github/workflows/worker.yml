@@ -130,6 +130,11 @@ jobs:
               *.md) ;;
               worker/*|src/fleet/*|src/core/*|src/mcp/*|package.json|package-lock.json|.github/workflows/worker.yml)
                 bundle=true; break ;;
+              # Not in the bundle and not in the push filter — it deploys
+              # nothing — but the container job below runs it, so a change to
+              # it has to run that job to be checked at all.
+              scripts/container-smoke.sh)
+                bundle=true; break ;;
             esac
           done
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
@@ -204,6 +209,42 @@ jobs:
       - name: Run the Worker in workerd and drive it
         working-directory: worker
         run: npm test
+
+  # THE SAME BUNDLE, AS A CONTAINER, BUILT AND DRIVEN. worker/Containerfile is
+  # the door coordinator-deploy.md keeps open for whoever has no Cloudflare
+  # account: workerd running the bundle `wrangler deploy` ships, with the
+  # Durable Object's SQLite on a volume. Its comment said what had been proven
+  # of it — built, started, driven, state surviving a restart — and that was
+  # true once, on one machine. Nothing kept it true: the capnp maps every
+  # variable by hand, the Containerfile pins a runtime, and a bundle change
+  # that adds an `env.X` the capnp does not name is silent.
+  #
+  # scripts/container-smoke.sh is that paragraph as a script. It builds the
+  # image, starts it, mints a pin, enrols a REAL host with bin/fleetwright-sidecar,
+  # restarts the container and shows the host is still known and a pin minted
+  # before the restart still spends after it. Docker here; podman where it was
+  # first run — the script takes either.
+  #
+  # Gated like `check`, on the same answer: a change that is not in the bundle
+  # does not build an image of it. And in `gate`'s list, so a red build here is
+  # a red `Worker passed`, the one check branch protection reads.
+  container:
+    name: the coordinator container runs
+    needs: changes
+    if: needs.changes.outputs.bundle == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '26.10.0'
+      # The ROOT dependencies only: the sidecar that enrols against the
+      # container imports `jose` from here. The image builds its own inside
+      # the build stage and needs nothing from the runner.
+      - name: Install the shared runtime dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build the image and drive it, as an operator and then as a host
+        run: scripts/container-smoke.sh
 
   deploy:
     needs: check
@@ -364,12 +405,12 @@ jobs:
         run: echo "::notice::Deployed. Point a host at it with FLEETWRIGHT_COORDINATOR_URL — see docs/coordinator-deploy.md."
 
   # The one required check for this workflow, for the same reason ci.yml has
-  # one: `check` is skipped on a change that is not in the bundle, and a
-  # required check has to report something on every pull request. Skipped is a
-  # pass here; failed and cancelled are not.
+  # one: `check` and `container` are skipped on a change that is not in the
+  # bundle, and a required check has to report something on every pull
+  # request. Skipped is a pass here; failed and cancelled are not.
   gate:
     name: Worker passed
-    needs: [changes, check]
+    needs: [changes, check, container]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -12,6 +12,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
 | `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |
+| `worker.yml` — `container` | the same PRs, plus `scripts/container-smoke.sh` — builds `worker/Containerfile` under docker and drives it: pin, a real host enrolling, a restart, the state surviving it | none |
 | `worker.yml` — `gate` (`Worker passed`) | every push, PR and merge-queue run | none |
 | `sandbox.yml` — `smoke` | PRs touching `sandbox/` | none |
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
@@ -37,7 +38,7 @@ Two named checks, and they are the only two worth requiring:
 | check | what it means |
 |---|---|
 | **`CI passed`** | `ci.yml`'s `test` matrix and `checks` job both passed, or were legitimately skipped |
-| **`Worker passed`** | `worker.yml`'s `check` job passed, or the change was not in the Worker's bundle |
+| **`Worker passed`** | `worker.yml`'s `check` and `container` jobs passed, or the change was not in the Worker's bundle |
 
 **They exist so that a required check can have a stable name.** Requiring
 `test (node 24)` directly works right up until the matrix moves — it has
