@@ -315,6 +315,18 @@ It also **forces** the app-side check. The commit count in a health frame comes
 from a cache refreshed every fifteen minutes, which is right for a frame sent
 every fifteen seconds and wrong for somebody who just pressed a button.
 
+**And it carries the next answer, not only the count.** "1 package can be
+upgraded" and "0.3.1 is waiting" are facts that ask a question each — which
+package, and what is in it — and both answers existed on the box or one fetch
+away. `waiting.system.packages` names the packages; `waiting.app.notes` is the
+changelog sections between the version the box runs and the one waiting, read
+from `CHANGELOG.md` at the release's tag (the same parser the stores use, so a
+phone and TestFlight describe a version in the same words), newest first, one
+fetch per version. Both come after the three summary lines in the reply's
+text, so a chat reads them as prose; the row's own sentence stays the count.
+`notes: null` is cannot tell — GitHub could not be reached, and the reply says
+so — and never "a release with nothing in it".
+
 **`channel` is what makes `update` mean anything.** It decides which releases a
 box is eligible for: `stable` takes published releases, `rolling` takes the
 newest build of `main` on every merge. Changing it installs nothing by itself.

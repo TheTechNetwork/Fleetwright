@@ -16,64 +16,29 @@
 //
 // Exits non-zero when the version asked for is not in the file, because a
 // release that quietly ships empty notes is the failure this replaces.
+//
+// THE PARSER LIVES IN src/core/changelog.js, because a host reads the same
+// file the same way to tell a phone what an update contains. One reading of
+// the heading format, so the notes a store shows and the notes a phone shows
+// for a version are the same notes.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+import { sections as parse, fit } from '../src/core/changelog.js';
 
-/** `## 0.2.1 — 2026-09-02`. The dash may be an em dash or a hyphen. */
-const HEADING = /^##\s+(\d+\.\d+\.\d+)\s*(?:[—-]\s*(.*))?$/;
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 /**
  * Every version section in the changelog, in file order.
  * @param {string} [text]
- * @returns {Array<{ version: string, date: string, body: string }>}
  */
 export function sections(text = readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8')) {
-  const lines = text.split('\n');
-  /** @type {Array<{ version: string, date: string, body: string }>} */
-  const out = [];
-  /** @type {{ version: string, date: string, lines: string[] } | null} */
-  let current = null;
-  for (const line of lines) {
-    const m = HEADING.exec(line.trim());
-    if (m) {
-      if (current) out.push({ version: current.version, date: current.date, body: current.lines.join('\n').trim() });
-      current = { version: m[1], date: (m[2] || '').trim(), lines: [] };
-      continue;
-    }
-    if (current) current.lines.push(line);
-  }
-  if (current) out.push({ version: current.version, date: current.date, body: current.lines.join('\n').trim() });
-  return out;
+  return parse(text);
 }
 
-/**
- * Fit notes into a store's limit WITHOUT cutting a word in half.
- *
- * Play refuses more than 500 characters per locale and refusing is the good
- * case — a truncated sentence that ends mid-clause reads as a bug in the app.
- * Trimmed at a paragraph boundary where one fits, at a line otherwise, and the
- * ellipsis says a fuller version exists rather than pretending this is all.
- *
- * @param {string} body
- * @param {number} max
- */
-export function fit(body, max) {
-  if (!max || body.length <= max) return body;
-  const tail = '\n\nFull notes: github.com/TheTechNetwork/Fleetwright/blob/main/CHANGELOG.md';
-  const room = max - tail.length;
-  // A negative or tiny budget means the caller's limit cannot hold a pointer
-  // as well as prose. Prose wins: a note that is only a URL is not a note.
-  if (room < 80) return body.slice(0, max);
-  let cut = body.lastIndexOf('\n\n', room);
-  if (cut < room / 2) cut = body.lastIndexOf('\n', room);
-  if (cut < room / 2) cut = body.lastIndexOf(' ', room);
-  if (cut < 0) cut = room;
-  return body.slice(0, cut).trimEnd() + tail;
-}
+export { fit };
 
 /** @param {string[]} argv */
 function main(argv) {
