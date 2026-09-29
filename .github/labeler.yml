@@ -34,7 +34,6 @@ platform/coordinator:
           - 'src/fleet/coordinator/**'
           - 'src/fleet/push.js'
           - 'src/fleet/push-crypto.js'
-          - 'src/fleet/apns-node.js'
           - 'src/fleet/crypto.js'
           - 'openapi.json'
 
@@ -225,7 +224,6 @@ area/notifications:
       - any-glob-to-any-file:
           - 'src/fleet/push.js'
           - 'src/fleet/push-crypto.js'
-          - 'src/fleet/apns-node.js'
           - 'apps/ios/Fleetwright/NotificationAnswers.swift'
           - 'apps/android/app/src/main/java/network/thetech/fleetwright/Messaging.kt'
           - 'apps/android/app/src/main/java/network/thetech/fleetwright/NotificationAnswers.kt'
