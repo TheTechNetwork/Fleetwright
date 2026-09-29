@@ -150,7 +150,7 @@ jobs:
           set +e
           node bin/fleetwright-sidecar &
           SIDECAR=$!
-          echo "::notice::Enrolled as $FLEETWRIGHT_HOST_ID for $MINUTES minutes."
+          echo "::notice::Enrolled for $MINUTES minutes, under the name the coordinator printed above — not $FLEETWRIGHT_HOST_ID, which is only what this job called itself before it was told."
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start."
           fi

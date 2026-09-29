@@ -140,3 +140,51 @@ export async function checkEnrolled({ origin, hostId, privateJwk, fetchImpl }) {
 export function keyFingerprint(publicJwk) {
   return fingerprint(publicJwk);
 }
+
+/**
+ * Where the name a coordinator ASSIGNED this key is kept: beside the key,
+ * because the two travel together — the coordinator knows this key under
+ * exactly one name.
+ *
+ * Only `enrol-actions` writes it. A pin enrolment asks for a name and gets it;
+ * a GitHub Actions enrolment is TOLD its name, derived from the job token so a
+ * job cannot call itself after a permanent host. The sidecar that starts a
+ * moment later in the workflow has to dial under that name, and it is a
+ * different process: setting `process.env` in the enrol step reached nobody,
+ * so the runner enrolled as `gha-<owner>-<repo>-<run>-<attempt>` and dialled
+ * as `gha-mac-<run>-<attempt>`, and was refused as never enrolled.
+ *
+ * @param {string} hostKeyFile
+ */
+export function assignedNameFile(hostKeyFile) {
+  return path.join(path.dirname(hostKeyFile), 'host-id.json');
+}
+
+/**
+ * Record the name a coordinator gave this key.
+ * @param {string} hostKeyFile @param {{ hostId: string, origin: string }} spec
+ */
+export function recordAssignedName(hostKeyFile, { hostId, origin }) {
+  const file = assignedNameFile(hostKeyFile);
+  writeFileSync(file, `${JSON.stringify({ hostId, assignedBy: origin, at: Date.now() }, null, 2)}\n`, { mode: 0o600 });
+  return file;
+}
+
+/**
+ * The name a coordinator gave this key, or null when nobody has.
+ *
+ * Null is the normal answer on a permanent host, which was never told its
+ * name. Anything unreadable or malformed is also null: a broken file must not
+ * turn into a host called "undefined".
+ *
+ * @param {string} hostKeyFile
+ */
+export function readAssignedName(hostKeyFile) {
+  try {
+    const parsed = JSON.parse(readFileSync(assignedNameFile(hostKeyFile), 'utf8'));
+    const id = typeof parsed?.hostId === 'string' ? parsed.hostId.trim() : '';
+    return id || null;
+  } catch {
+    return null;
+  }
+}

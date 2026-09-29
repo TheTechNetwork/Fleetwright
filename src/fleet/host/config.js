@@ -11,6 +11,7 @@ import { REPLAY_TTL_MS } from './sidecar.js';
 import { readApiToken } from '../../core/api-token.js';
 import { adoptLegacyEnv } from '../legacy-names.js';
 import { preferExisting } from '../legacy-paths.js';
+import { readAssignedName } from './identity.js';
 
 /** @typedef {ReturnType<typeof loadSidecarConfig>} SidecarConfig */
 
@@ -36,6 +37,8 @@ const list = (env, name) =>
 /** @param {NodeJS.ProcessEnv} [env] */
 export function loadSidecarConfig(env = process.env) {
   adoptLegacyEnv(env);
+  // Resolved first because the host's NAME may be recorded beside it.
+  const hostKeyFile = str(env, 'FLEETWRIGHT_HOST_KEY', preferExisting('/var/lib/fleetwright-sidecar/host-key.json', '/var/lib/agent-fleet/host-key.json'));
   return Object.freeze({
     // --- the fleetwright this sidecar drives ---------------------------------
     // Loopback by default, because that is where fleetwright binds and the
@@ -72,10 +75,16 @@ export function loadSidecarConfig(env = process.env) {
     // connecting means signing a nonce the coordinator issued seconds earlier.
     // It replaces FLEETWRIGHT_HOST_TOKEN, which was one shared string that
     // could not tell two hosts apart and could not be revoked for one of them.
-    hostKeyFile: str(env, 'FLEETWRIGHT_HOST_KEY', preferExisting('/var/lib/fleetwright-sidecar/host-key.json', '/var/lib/agent-fleet/host-key.json')),
+    hostKeyFile,
 
     // --- this host ----------------------------------------------------------
-    hostId: str(env, 'FLEETWRIGHT_HOST_ID', os.hostname()),
+    // THE NAME THE COORDINATOR GAVE THIS KEY WINS. A permanent host has no such
+    // record and is called what it asked to be called — FLEETWRIGHT_HOST_ID, or
+    // its hostname. A GitHub Actions runner was TOLD its name by the coordinator
+    // at `enrol-actions`, in a process that has since exited; reading it back
+    // here is what makes the sidecar dial under the name that was enrolled. See
+    // readAssignedName in identity.js for the bug this closes.
+    hostId: readAssignedName(hostKeyFile) ?? str(env, 'FLEETWRIGHT_HOST_ID', os.hostname()),
     // Constraint labels the scheduler filters on before it ranks by capacity
     // (§3) — e.g. "gpu", "debian13", "has-monorepo".
     labels: list(env, 'FLEETWRIGHT_LABELS'),

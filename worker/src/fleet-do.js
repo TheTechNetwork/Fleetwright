@@ -26,6 +26,7 @@ import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
+import { emailOf } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 
@@ -476,8 +477,13 @@ export class Fleet {
         hostId: wanted,
         publicJwk: body?.publicJwk,
         enrolledBy: spent.entry.actor,
+        // Whose it is — only for an ephemeral host, as on the Node side. The
+        // Worker passed neither this nor `ephemeral`, so a runner enrolled with
+        // a pin here was a permanent, unowned host. Parity with server.js.
+        owner: spent.entry.ephemeral ? emailOf(spent.entry.actor) : null,
         readmit: spent.entry.readmit,
         boundToThisHost: Boolean(spent.entry.hostId),
+        ephemeral: Boolean(spent.entry.ephemeral),
       });
       if (!result.ok) {
         // A full fleet is not a bad request — see the copy above.
@@ -653,7 +659,7 @@ export class Fleet {
       if (existing?.revokedAt) {
         return json({ ok: true, text: `${hostId} was already revoked.` });
       }
-      const gone = this.core.hostIds.revoke(hostId);
+      const gone = this.core.revokeHost(hostId);
       if (gone) {
         await this.#saveHosts();
         // Disconnected as well as revoked: a revoked host with a live socket is
@@ -666,7 +672,6 @@ export class Fleet {
             } catch { /* already gone */ }
           }
         }
-        this.core.hostDisconnected(hostId, 'revoked');
       }
       return json({ ok: gone, text: gone ? `${hostId} is out of the fleet.` : 'No such host, or already revoked.' }, gone ? 200 : 404);
     }

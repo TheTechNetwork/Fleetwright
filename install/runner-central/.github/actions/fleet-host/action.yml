@@ -167,7 +167,7 @@ runs:
         set +e
         node bin/fleetwright-sidecar &
         SIDECAR=$!
-        echo "::notice::Enrolled as $FLEETWRIGHT_HOST_ID for $MINUTES minutes."
+        echo "::notice::Enrolled for $MINUTES minutes, under the name the coordinator printed above — not $FLEETWRIGHT_HOST_ID, which is only what this job called itself before it was told."
         # SAID EITHER WAY, and said differently. A runner with no key is not
         # broken, it is unusable — and those need different sentences, because
         # only one of them names something somebody can go and fix.
