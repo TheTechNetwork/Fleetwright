@@ -445,6 +445,23 @@ jobs:
               echo "::error::join accepted an address that does not answer"; exit 1
             fi
             grep -q "Nothing was changed" /tmp/join.log || { cat /tmp/join.log; exit 1; }
+            # THE HOOK RUNS WITH THE SESSION'"'"'S PATH, which on this box has no node.
+            # The first apt box opened every session with "env: node: No such
+            # file or directory" from exactly this command.
+            hook="$(/usr/lib/fleetwright/node/bin/node -e "const s=require(\"/root/.claude/settings.json\");for(const g of s.hooks.SessionStart)for(const h of g.hooks)if(h.command.includes(\"fleetwright hook\"))console.log(h.command)")"
+            [ -n "$hook" ] || { echo "::error::no SessionStart hook was installed"; exit 1; }
+            env -i PATH=/usr/bin:/bin HOME=/root sh -c "$hook" </dev/null > /tmp/hook.log 2>&1 || true
+            if grep -q "No such file" /tmp/hook.log; then echo "::error::the hook cannot find node: $hook"; cat /tmp/hook.log; exit 1; fi
+            # A BARE ADDRESS AND A PIN, the way debconf hands them over, on a box
+            # without systemd: the address becomes https and the pin is SPENT
+            # (here: tried, and refused by a name that does not resolve) rather
+            # than dropped with "has not joined yet".
+            FLEETWRIGHT_COORDINATOR_URL=nowhere.invalid FLEETWRIGHT_ENROL_PIN=123456 \
+              FLEETWRIGHT_NODE_BIN=/usr/lib/fleetwright/node/bin/node FLEETWRIGHT_NO_INSTALL_DEPS=1 \
+              bash /opt/fleetwright/current/install/install.sh --wizard </dev/null > /tmp/wizard.log 2>&1 || true
+            grep -q "joining https://nowhere.invalid" /tmp/wizard.log || { echo "::error::a bare address was not made https"; cat /tmp/wizard.log; exit 1; }
+            grep -q "enrolment failed" /tmp/wizard.log || { echo "::error::the pin was not spent on a box without systemd"; cat /tmp/wizard.log; exit 1; }
+            if grep -q "image build failed" /tmp/wizard.log; then echo "::error::a re-run tried to build an image that was already present"; exit 1; fi
             apt-get purge -y -qq fleetwright > /tmp/purge.log 2>&1 || { cat /tmp/purge.log; exit 1; }
             [ ! -e /opt/fleetwright ] || { echo "::error::purge left /opt/fleetwright behind"; ls -la /opt/fleetwright; exit 1; }
             echo "--- installed, ran, purged ---"
