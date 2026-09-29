@@ -4,8 +4,10 @@
 `beta-blocking` one: a fresh box cannot install.
 
 Two testers, told nothing about the design and asked not to be reasonable about
-effort. The returning-user run is complete (`RETURNING-USER-REPORT.md` on
-`claude/fleetwright-returning-user-3z0b2m`); the first-run tester is still going.
+effort. Both reports are kept whole, as the testers wrote them, in
+[`beta-reports/`](beta-reports/): [the first run](beta-reports/first-run.md)
+and [the returning user](beta-reports/returning-user.md). The section numbers
+cited below are theirs.
 
 This file exists so none of it is lost. Every row has an owner, a severity and
 enough detail to act on cold.
@@ -103,8 +105,8 @@ Ranked by friction removed per unit of work, which is not the order of severity.
 # Round two: the first-run tester
 
 Same brief, opposite end of the funnel — a stranger following the README on a
-clean Linux box, then driving the live fleet through MCP. Full text on
-`claude/fleetwright-beta-report-bv9xl0`.
+clean Linux box, then driving the live fleet through MCP. Full text in
+[`beta-reports/first-run.md`](beta-reports/first-run.md).
 
 **It found something neither of us predicted, and it outranks everything above.**
 
