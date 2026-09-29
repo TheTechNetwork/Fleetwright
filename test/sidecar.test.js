@@ -690,21 +690,20 @@ test('the health frame says how much a box puts into every session, in three sta
   // And three states, because two of them look alike and are not: "no rules
   // file" and "a rules file that is being ignored" both mean a session gets
   // nothing, and only one of them is a fault somebody should see.
-  const { mkdtempSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const nodePath = await import('node:path');
-  const stateDir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-rules-'));
-  const rulesFile = nodePath.join(stateDir, 'CLAUDE.md');
-  const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir, rulesFile }) });
+  //
+  // FLEETWRIGHT'S ANSWER, CARRIED. The sidecar used to stat the file itself,
+  // which only worked while the two ran as one user; now the number is what
+  // /api/state says, read on every frame, and the three states are its.
+  const { sidecar, stub } = await setup(t, { facts: { houseRules: null } });
 
   const none = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0001' }));
   assert.equal(none.health.houseRules, null, 'no file at all is the normal case, and null');
 
-  writeFileSync(rulesFile, '# Here\n\nSmall commits.\n');
+  stub.setFacts({ houseRules: '# Here\n\nSmall commits.\n'.length });
   const some = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0002' }));
   assert.equal(some.health.houseRules, '# Here\n\nSmall commits.\n'.length, 'edited, and the next frame says so');
 
-  writeFileSync(rulesFile, 'x'.repeat(20_000));
+  stub.setFacts({ houseRules: 0 });
   const refused = await sidecar.handle(intent({ verb: 'health', id: 'idem-rules-0003' }));
   assert.equal(refused.health.houseRules, 0, 'a file that is present and unusable is 0, not null');
 });
@@ -727,25 +726,81 @@ test('the frame carries what a box runs and what its disk holds, side by side', 
   assert.equal(r.health.version.helper, 'stale');
 });
 
-test('a host with no hub config cannot say whether it has house rules', async (t) => {
+test('a fleetwright that does not publish the facts leaves them null, never defaulted', async (t) => {
+  // NULL IS CANNOT TELL. A stub with none of the fields is a fleetwright from
+  // before it published them, and the frame must not say "stable", "minimal"
+  // or "no rules" about a box it was not told about.
   const { sidecar } = await setup(t);
   const r = await sidecar.handle(intent({ verb: 'health' }));
   assert.equal(r.health.houseRules, null);
+  assert.equal(r.health.channel, null);
+  assert.equal(r.health.channelPinned, null);
+  assert.equal(r.health.sandbox, null);
+  assert.deepEqual(r.health.setLabels, []);
+  assert.deepEqual(r.health.labels, ['debian13', 'gpu'], 'the labels this process was given still go out');
+});
+
+test('the facts fleetwright publishes ride the frame in the shape the apps read', async (t) => {
+  const facts = {
+    labels: { auto: ['amd64', 'linux', 'browser'], set: ['noisy'] },
+    channel: 'rolling',
+    channelPinned: false,
+    sandbox: { variant: 'browser', image: 'ghcr.io/x/fleetwright-session:web', pinned: false },
+    houseRules: 42,
+  };
+  const { sidecar } = await setup(t, { facts });
+  const r = await sidecar.handle(intent({ verb: 'health' }));
+  assert.equal(r.health.channel, 'rolling');
+  assert.equal(r.health.channelPinned, false);
+  assert.deepEqual(r.health.sandbox, facts.sandbox);
+  assert.equal(r.health.houseRules, 42);
+  // Three sources, one list: given, derived, set. And the removable ones
+  // named apart, so a screen offers Remove on exactly those.
+  assert.deepEqual(r.health.labels, ['amd64', 'browser', 'debian13', 'gpu', 'linux', 'noisy']);
+  assert.deepEqual(r.health.setLabels, ['noisy']);
+});
+
+test('a fact of the wrong shape is dropped rather than forwarded', async (t) => {
+  // The one place the sidecar takes another process's word for what the
+  // frame will say. A string where a number belongs is not "cannot tell" in
+  // a different font; it is refused.
+  const { sidecar } = await setup(t, {
+    facts: { labels: { auto: 'amd64', set: [] }, channel: 'nightly', channelPinned: 'yes', sandbox: { variant: 1 }, houseRules: '42' },
+  });
+  const r = await sidecar.handle(intent({ verb: 'health' }));
+  assert.equal(r.health.channel, null);
+  assert.equal(r.health.channelPinned, null);
+  assert.equal(r.health.sandbox, null);
+  assert.equal(r.health.houseRules, null);
+  assert.deepEqual(r.health.labels, ['debian13', 'gpu']);
 });
 
 test('a label added from an app reaches the scheduler without a restart', async (t) => {
   // Health goes out every fifteen seconds and the coordinator filters and ranks
   // on the last frame it received. A list frozen at construction would mean a
   // label added from a phone arrived at the next service restart — which is the
-  // whole failure this verb exists to remove.
-  const { mkdtempSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const nodePath = await import('node:path');
-  const stateDir = mkdtempSync(nodePath.join(tmpdir(), 'sidecar-labels-'));
-  const { sidecar } = await setup(t, {}, { hubConfig: /** @type {any} */ ({ stateDir }) });
+  // whole failure this verb exists to remove. The list is read off fleetwright
+  // on every frame, and the getter answers with what the last frame said.
+  const { sidecar, stub } = await setup(t, { facts: { labels: { auto: [], set: [] } } });
 
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-labels-0001' }));
   assert.deepEqual(sidecar.labels, ['debian13', 'gpu']);
-  const { addLabel } = await import('../src/core/labels.js');
-  addLabel(/** @type {any} */ ({ stateDir }), 'noisy');
+  stub.setFacts({ labels: { auto: [], set: ['noisy'] } });
+  const r = await sidecar.handle(intent({ verb: 'health', id: 'idem-labels-0002' }));
+  assert.deepEqual(r.health.labels, ['debian13', 'gpu', 'noisy']);
   assert.deepEqual(sidecar.labels, ['debian13', 'gpu', 'noisy']);
+});
+
+test('while fleetwright is unreachable the frame keeps the last labels and drops the live fields', async (t) => {
+  // The scheduler filters on labels, and a box whose hub is restarting still
+  // has them; the fields that need a live answer — sessions, channel, the
+  // variant — are null, which is cannot tell and not "none".
+  const { sidecar, stub } = await setup(t, { facts: { labels: { auto: ['arm64'], set: ['noisy'] }, channel: 'rolling' } });
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-down-0001' }));
+  await stub.close();
+  const r = await sidecar.handle(intent({ verb: 'health', id: 'idem-down-0002' }));
+  assert.equal(r.health.hub.reachable, false);
+  assert.deepEqual(r.health.labels, ['arm64', 'debian13', 'gpu', 'noisy']);
+  assert.equal(r.health.sessions, null);
+  assert.equal(r.health.channel, undefined, 'the live block is not sent when there is nothing live to say');
 });

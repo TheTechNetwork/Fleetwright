@@ -123,11 +123,10 @@ jobs:
           # ones, converted by cygpath — which is the single join this workflow
           # exists to test.
           base="$(pwd)/../runtime"
-          mkdir -p "$base/work" "$base/state" "$base/sockets"
+          mkdir -p "$base/work" "$base/state"
           export FLEETWRIGHT_WORKDIR="$(cygpath -w "$base/work")"
           export FLEETWRIGHT_STATE_DIR="$(cygpath -w "$base/state")"
           export FLEETWRIGHT_HOST_KEY="$(cygpath -w "$base/state/host-key.json")"
-          export FLEETWRIGHT_HOOK_SOCKET_DIR="$(cygpath -w "$base/sockets")"
 
           node bin/fleetwright serve &
           HUB=$!

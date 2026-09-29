@@ -123,7 +123,6 @@ runs:
         # unwritable without sudo or simply absent — and the failure is `enrol`
         # dying on EACCES before the host ever appears in the fleet.
         FLEETWRIGHT_HOST_KEY: ${{ runner.temp }}/state/host-key.json
-        FLEETWRIGHT_HOOK_SOCKET_DIR: ${{ runner.temp }}/sockets
         MINUTES: ${{ inputs.minutes }}
         TICKET: ${{ inputs.ticket }}
         CLAIM: ${{ inputs.claim }}
@@ -137,8 +136,8 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
       run: |
         set -euo pipefail
-        mkdir -p "$FLEETWRIGHT_WORKDIR" "$FLEETWRIGHT_STATE_DIR" "$FLEETWRIGHT_HOOK_SOCKET_DIR"
-        chmod 700 "$FLEETWRIGHT_STATE_DIR" "$FLEETWRIGHT_HOOK_SOCKET_DIR"
+        mkdir -p "$FLEETWRIGHT_WORKDIR" "$FLEETWRIGHT_STATE_DIR"
+        chmod 700 "$FLEETWRIGHT_STATE_DIR"
 
         # The session manager first: the sidecar talks to it on loopback and is
         # useless without it.

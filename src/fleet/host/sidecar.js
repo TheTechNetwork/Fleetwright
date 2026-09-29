@@ -48,18 +48,13 @@ import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN } from '../p
 import { readConfigFrame } from '../protocol/config-frame.js';
 import { PendingVerifiers } from './pkce.js';
 import { exchangeCode, exchangeCloudflareCode, connectedText } from '../coordinator/oauth.js';
-import { renewProviderTokens } from '../../core/keepalive.js';
 import { HubError } from './hub-client.js';
 import { reconcileRcUrl, extractRcUrl, isRemoteControlOnline } from './pane.js';
 import { SessionWatcher } from './watcher.js';
 import { promptId, describePrompt } from './prompt.js';
 import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
-import { readChannel, pinnedByEnv } from '../../core/channel.js';
-import { readVariant, sessionImage, pinnedByEnv as sandboxPinned } from '../../core/sandbox-variant.js';
-import { readLabels } from '../../core/labels.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
-import { readHouseRules } from '../../core/rules.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -68,6 +63,47 @@ import { readHouseRules } from '../../core/rules.js';
 // logger; tests pass one that captures.
 /** @type {Logger} */
 const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+
+/**
+ * What fleetwright publishes about the box on /api/state, in the shape the
+ * health frame carries. See #hostFacts in src/adapters/http.js for the other
+ * end and for why each field is null rather than defaulted when unknown.
+ *
+ * @typedef {object} HostFacts
+ * @property {{ auto: string[], set: string[] }|null} labels
+ * @property {'stable'|'rolling'|null} channel
+ * @property {boolean|null} channelPinned
+ * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
+ * @property {number|null} houseRules
+ */
+
+/**
+ * The facts out of a /api/state reply, shape-checked.
+ *
+ * Checked rather than spread, because this is the one place the sidecar
+ * takes another process's word for what the health frame will say, and a
+ * fleetwright from before these fields existed answers none of them. A
+ * missing field is null — the frame's word for cannot tell — and a field of
+ * the wrong shape is treated the same way rather than forwarded.
+ *
+ * @param {any} state
+ * @returns {HostFacts}
+ */
+export function factsFrom(state) {
+  const labels = state?.labels;
+  const strings = (/** @type {unknown} */ v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  const sandbox = state?.sandbox;
+  return {
+    labels: labels && strings(labels.auto) && strings(labels.set) ? { auto: labels.auto, set: labels.set } : null,
+    channel: state?.channel === 'stable' || state?.channel === 'rolling' ? state.channel : null,
+    channelPinned: typeof state?.channelPinned === 'boolean' ? state.channelPinned : null,
+    sandbox:
+      sandbox && typeof sandbox.variant === 'string' && typeof sandbox.image === 'string' && typeof sandbox.pinned === 'boolean'
+        ? { variant: sandbox.variant, image: sandbox.image, pinned: sandbox.pinned }
+        : null,
+    houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
+  };
+}
 
 // A replayed /stop is harmless; a replayed /new is not — it burns a slot
 // against the concurrency cap and starts work nobody asked for twice. So every
@@ -200,11 +236,24 @@ export class Sidecar {
     /** @type {any} */
     this.renewTimer = null;
     this.renewIntervalMs = renewIntervalMs;
-    // Enough of fleetwright's config to find its credential store. The sidecar
-    // and fleetwright run as the same user on the same box, which is what lets
-    // the process holding the secret write the result where the sessions will
-    // read it.
+    // fleetwright's configuration AS THIS PROCESS SEES IT, which is the
+    // defaults plus whatever of its environment the sidecar can read — and
+    // /etc/fleetwright.env is root's, so mostly the defaults. Used for one
+    // thing: which systemctl to ask about units. It used to be how the sidecar
+    // found fleetwright's state directory and read and wrote files in it,
+    // which only worked while the two ran as one user (#270). Everything that
+    // was read that way is now asked of fleetwright over HTTP — see `facts`.
     this.hubConfig = hubConfig;
+    /**
+     * What fleetwright last said about this box: labels, channel, variant,
+     * house rules. Read off /api/state on every health frame and kept here so
+     * the `labels` getter has an answer between frames and a frame built
+     * while fleetwright is restarting still names the labels the scheduler
+     * was matching on a minute ago. Null until the first frame — CANNOT TELL,
+     * which is what an app renders when the fields are missing.
+     * @type {HostFacts|null}
+     */
+    this.facts = null;
     // The PKCE verifiers this box is holding between a `connect` it answered
     // and the `exchange` that spends one — see ./pkce.js. Memory only, like
     // the client secret they are used with.
@@ -257,12 +306,14 @@ export class Sidecar {
     }
     this.watcher?.start();
 
-    // RENEWING PROVIDER TOKENS BELONGS HERE, not in fleetwright, because the
-    // exchange needs the App client secret and this is the process that has it
-    // — in memory, off the config frame, never on disk. fleetwright renews the
-    // CLAUDE credential on its own timer, which is a different mechanism for a
-    // different reason: that one renews by being used.
-    if (this.renewIntervalMs > 0 && this.hubConfig) {
+    // RENEWING PROVIDER TOKENS IS TIMED FROM HERE, because the exchange needs
+    // the App client secret and this is the process that has it — in memory,
+    // off the config frame, never on disk. The exchange itself runs in
+    // fleetwright, which owns the store the refresh tokens are in; the secret
+    // travels there for the duration of one loopback request. fleetwright
+    // renews the CLAUDE credential on its own timer, which is a different
+    // mechanism for a different reason: that one renews by being used.
+    if (this.renewIntervalMs > 0) {
       this.renewTimer = setInterval(() => void this.#renewProviders(), this.renewIntervalMs);
       this.renewTimer.unref?.();
     }
@@ -299,7 +350,14 @@ export class Sidecar {
     // on is how a log stops being read.
     if (!Object.keys(secrets).length) return;
     try {
-      const results = await renewProviderTokens(this.hubConfig, { secrets });
+      const results = await this.hub.renewProviders(secrets);
+      if (results === null) {
+        // A fleetwright from before it took renewal requests. Said once an
+        // hour rather than swallowed: the tokens on this box will expire on
+        // schedule and the fix is an update, which is worth a line.
+        this.log.warn('sidecar: fleetwright here does not renew provider tokens — update it');
+        return;
+      }
       const renewed = results.filter((r) => r.outcome === 'renewed').length;
       if (renewed) this.log.info(`sidecar: renewed ${renewed} provider token(s)`);
     } catch (e) {
@@ -698,17 +756,40 @@ export class Sidecar {
    * scheduler on the next service restart — which is the "the product names a
    * fix and only a shell can apply it" shape this whole file argues against.
    *
-   * One small file read on a path taken four times a minute.
+   * Three sources, composed: FLEETWRIGHT_LABELS from this process's own env
+   * file; the facts fleetwright derives about the machine (`arm64`, `debian`,
+   * `browser` — the last from the image it runs sessions in, which only it
+   * knows); and the ones set from an app, which fleetwright stores. The
+   * second and third arrive on /api/state, so what this answers between
+   * frames is what the last frame said.
    *
    * @returns {string[]}
    */
   get labels() {
-    const set = this.hubConfig ? readLabels(this.hubConfig) : [];
-    return [...new Set([...this.givenLabels, ...set])].sort();
+    const auto = this.facts?.labels?.auto ?? [];
+    const set = this.facts?.labels?.set ?? [];
+    return [...new Set([...this.givenLabels, ...auto, ...set])].sort();
   }
 
   async health() {
     const [load1, load5, load15] = os.loadavg();
+
+    // ASK FIRST, so the facts below are this frame's. The fields that used to
+    // be read out of fleetwright's state directory here — labels, channel,
+    // variant, house rules — ride on /api/state now, and the frame is built
+    // from that one answer. When fleetwright cannot be reached the last facts
+    // stand (see `facts`), and the fields that need a live answer are null.
+    /** @type {any} */
+    let state = null;
+    /** @type {(Error & { code?: string })|null} */
+    let unreachable = null;
+    try {
+      state = await this.hub.state();
+      this.facts = factsFrom(state);
+    } catch (e) {
+      unreachable = /** @type {Error & { code?: string }} */ (e);
+    }
+
     /** @type {Record<string, any>} */
     const base = {
       hostId: this.hostId,
@@ -729,7 +810,7 @@ export class Sidecar {
       //
       // Sent rather than asked for, like the channel and the variant beside it:
       // a list of machines must not become a round trip per row.
-      setLabels: this.hubConfig ? readLabels(this.hubConfig) : [],
+      setLabels: this.facts?.labels?.set ?? [],
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for
@@ -758,15 +839,14 @@ export class Sidecar {
       // normal case and also what a host too old to send this reads as. The
       // last two collapsing would be the C-5 failure — cannot-tell rendered as
       // nothing.
-      houseRules: this.#houseRules(),
+      houseRules: this.facts?.houseRules ?? null,
       loadavg: [load1, load5, load15],
       freeMemBytes: os.freemem(),
       totalMemBytes: os.totalmem(),
       uptimeSec: Math.round(os.uptime()),
     };
 
-    try {
-      const state = await this.hub.state();
+    if (state) {
       const sessions = /** @type {any[]} */ (Array.isArray(state.sessions) ? state.sessions : []);
       const running = sessions.filter((s) => s?.status === 'running').length;
       return {
@@ -896,10 +976,14 @@ export class Sidecar {
         // "stable" — the distinction the credential field above is written
         // around, and the one that stops an app confidently mislabelling a box
         // that is taking prereleases.
-        channel: this.hubConfig ? readChannel(this.hubConfig) : null,
+        //
+        // Null too on a fleetwright from before it published this — the
+        // sidecar could read the file then and cannot now, and answering
+        // "stable" for it would be the same claim in a new place.
+        channel: this.facts?.channel ?? null,
         // Whether that is forced by the box's environment, so an app disables
         // the control instead of offering a change that will be refused.
-        channelPinned: this.hubConfig ? pinnedByEnv(this.hubConfig) : null,
+        channelPinned: this.facts?.channelPinned ?? null,
         // WHICH IMAGE SESSIONS RUN IN, carried with health for the same reason
         // as the channel: the app draws a list of machines, and a variant
         // picker that had to ask each box separately would be a round trip per
@@ -908,25 +992,22 @@ export class Sidecar {
         // Null on a host too old to send it, which is CANNOT TELL and never
         // "minimal" — a fleet where every old box claims to have no browser is
         // a fleet where `tag: browser` looks broken.
-        sandbox: this.hubConfig
-          ? { variant: readVariant(this.hubConfig), image: sessionImage(this.hubConfig), pinned: sandboxPinned(this.hubConfig) }
-          : null,
-      };
-    } catch (e) {
-      const err = /** @type {Error & {code?: string}} */ (e);
-      this.log.warn(`sidecar: health could not reach fleetwright: ${err.message}`);
-      return {
-        ...base,
-        hub: { reachable: false, reason: err.message, code: err.code || 'hub_unreachable' },
-        maxSessions: null,
-        running: null,
-        free: null,
-        resumable: null,
-        sessions: null,
-        loggedIn: null,
-        claudeAccounts: null,
+        sandbox: this.facts?.sandbox ?? null,
       };
     }
+    const err = /** @type {Error & {code?: string}} */ (unreachable);
+    this.log.warn(`sidecar: health could not reach fleetwright: ${err.message}`);
+    return {
+      ...base,
+      hub: { reachable: false, reason: err.message, code: err.code || 'hub_unreachable' },
+      maxSessions: null,
+      running: null,
+      free: null,
+      resumable: null,
+      sessions: null,
+      loggedIn: null,
+      claudeAccounts: null,
+    };
   }
 
   /**
@@ -1081,29 +1162,6 @@ export class Sidecar {
       this.log.warn(`sidecar: config frame carried "${key}", which this host does not recognise — dropped`);
     }
     return { kind: 'none' };
-  }
-
-  /**
-   * How many characters of house rules this box gives a new session, 0 if it
-   * has a rules file it cannot use, and null if it has none at all.
-   *
-   * READ EVERY TIME rather than cached at start, like the labels and the
-   * channel beside it: somebody edits the file and the next health frame says
-   * so, without a restart. It is one stat and one read of a small file, on a
-   * frame that already shells out for load average.
-   *
-   * @returns {number|null}
-   */
-  #houseRules() {
-    if (!this.hubConfig) return null;
-    try {
-      const rules = readHouseRules(this.hubConfig);
-      if (!rules) return null;
-      return rules.ok ? rules.chars : 0;
-    } catch {
-      // A frame is not the place to fail over a nicety. Cannot tell.
-      return null;
-    }
   }
 
   /**

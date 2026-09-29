@@ -33,6 +33,10 @@ export async function startStubHub({
   maxSessions = 5,
   host = 'unabandoned',
   onCommand,
+  facts = {},
+  onTrial = false,
+  renewResults = [],
+  without = [],
 } = {}) {
   // Mutable, so a test can take a healthy box and make it degraded — which is
   // the state that used to hide a host's sessions entirely.
@@ -47,8 +51,15 @@ export async function startStubHub({
    * that, and "it is not on the command line" is exactly what some of those
    * fields exist to be. @type {any[]} */
   const bodies = [];
-  /** @type {Array<{name: string, cwd: string|null, uuid: string}>} */
-  const hookReports = [];
+  /** The `which` of every evidence request, so a test can see the sidecar
+   * asked rather than wrote. @type {string[]} */
+  const evidence = [];
+  /** The secrets of every renewal request — what the sidecar holds in memory
+   * and hands over for one call. @type {Array<Record<string, string>>} */
+  const renewals = [];
+  // What the hub says about the box: labels, channel, sandbox, house rules.
+  // Mutable so a test can change a label and see the next frame say so.
+  let hostFacts = facts;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://stub');
@@ -61,16 +72,6 @@ export async function startStubHub({
     const body = await readBody(req);
 
     if (p === '/healthz') return json(200, { ok: true, host });
-
-    // Loopback-only and deliberately never token-gated — the hook cannot carry
-    // the operator token without that token living in a world-readable script.
-    if (p === '/internal/session-start' && req.method === 'POST') {
-      if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(String(body.uuid || ''))) {
-        return json(400, { ok: false, message: `Not a conversation uuid: ${body.uuid}` });
-      }
-      hookReports.push({ name: String(body.name || ''), cwd: body.cwd ?? null, uuid: String(body.uuid) });
-      return json(200, { ok: true, message: 'recorded' });
-    }
 
     // Everything below is operator surface.
     const bearer = (req.headers.authorization || '').startsWith('Bearer ')
@@ -88,8 +89,27 @@ export async function startStubHub({
         auth,
         claudeAccounts,
         loginPending: null,
+        // The facts an older fleetwright did not publish. Spread rather than
+        // fixed so a test for that older hub passes none and the fields are
+        // simply absent, as they would be.
+        ...hostFacts,
         sessions,
       });
+    }
+
+    // The two writes the sidecar used to make into fleetwright's state
+    // directory itself, now asked for. `without` lets a test stand in for a
+    // fleetwright from before either route existed.
+    if (without.includes(p)) return json(404, { error: 'not found' });
+    if (p === '/api/update-evidence' && req.method === 'POST') {
+      if (body.which !== 'coord') return json(400, { ok: false, text: 'only the coordinator half of the evidence is accepted here' });
+      evidence.push(String(body.which));
+      return json(200, onTrial ? { ok: true, noted: true } : { ok: true, noted: false, why: 'nothing on trial' });
+    }
+    if (p === '/api/renew-providers' && req.method === 'POST') {
+      if (!body.secrets || typeof body.secrets !== 'object') return json(400, { ok: false, text: 'secrets must be an object of strings' });
+      renewals.push(body.secrets);
+      return json(200, { ok: true, results: renewResults });
     }
 
     if (p === '/api/command' && req.method === 'POST') {
@@ -131,9 +151,14 @@ export async function startStubHub({
     setClaudeAccounts: (n) => {
       claudeAccounts = n;
     },
+    /** @param {Record<string, unknown>} next */
+    setFacts: (next) => {
+      hostFacts = next;
+    },
     commands,
     bodies,
-    hookReports,
+    evidence,
+    renewals,
     sessions,
     panes,
     close: () => new Promise((resolve) => server.close(() => resolve(null))),
