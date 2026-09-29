@@ -11,6 +11,28 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.3.1 — 2026-09-29
+
+**What the first apt-installed boxes found, fixed.**
+
+- **A session runs as the person who started it, on every box.** A host
+  without sandboxing used the box's own Claude login, and a fresh apt box has
+  none — so the account you linked from the app was ignored and the session
+  opened on Claude's first-run wizard with nobody at the terminal. A direct
+  session now gets the linked account the way a sandboxed one always has.
+  `fleetwright doctor` asks whether anybody has linked an account, not whether
+  the box is logged in.
+- **Sessions on an apt box no longer start with a hook error.** The
+  SessionStart hook could not find node, because the package keeps its Node
+  out of the shell's path on purpose. The hook now names that node, and an
+  installed hook is rewritten on upgrade.
+- **The coordinator address can be typed without `https://`**, in the
+  package's install questions as well as in `fleetwright join`.
+- **`join` with a pin enrols on a box without systemd**, such as a container,
+  instead of writing the address and dropping the pin.
+- **Re-running the installer no longer tries to rebuild a sandbox image it
+  already has.**
+
 ## 0.3.0 — 2026-09-29
 
 **The product is Fleetwright now, everywhere, and a box installs from apt.**
