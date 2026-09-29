@@ -492,3 +492,37 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
   // before any unit work.
   assert.match(SH, /Prerequisites look fine[\s\S]*?exit 0/);
 });
+
+test('the SessionStart hook names the node the units run on a box whose shell has none', () => {
+  // bin/fleetwright starts `#!/usr/bin/env node`, and Claude runs the hook with
+  // the session's PATH. A deb box has node only under /usr/lib/fleetwright, so
+  // the bare command opened every session with "SessionStart hook error: env:
+  // 'node': No such file or directory" and the hook never ran. The links in
+  // /usr/local/bin were already wrapped on that box; the hook has to be too,
+  // which means the wrapper decision is made BEFORE the hook is written.
+  const decision = SH.indexOf('CLI_NEEDS_WRAPPER=0\nPATH_NODE=');
+  const hook = SH.indexOf('HOOK_CMD="$DIR/bin/fleetwright hook"');
+  assert.notEqual(decision, -1, 'the wrapper decision is gone');
+  assert.notEqual(hook, -1, 'the hook command is gone');
+  assert.ok(decision < hook, 'the wrapper decision must come before the hook is written');
+  assert.match(SH, /HOOK_CMD="\$UNIT_NODE_BIN \$DIR\/bin\/fleetwright hook"/, 'the hook is never wrapped');
+  // And an already-installed bare hook is rewritten on the next run, not left
+  // beside the wrapped one to fail twice.
+  assert.match(SH, /\/\\\/bin\\\/\(agent-hub\|fleetwright\) hook\$\/\.test\(h\.command\)/);
+});
+
+test('a pin given to join enrols with a remote coordinator whether or not anything was started here', () => {
+  // `fleetwright join fleet.example.com --pin` on a box without systemd wrote
+  // the address, printed "has not joined yet" and dropped the pin: enrolment
+  // lived only on the started path, on reasoning that holds for a local
+  // coordinator and not for a Worker that is up regardless.
+  assert.match(
+    SH,
+    /if \[ "\$\{STARTED:-0\}" != 1 \] && \[ -n "\$ENROL_URL" \] && \[ "\$FLEET_LOCAL" != 1 \]; then\n\s+enrol_host/,
+    'the not-started path no longer enrols with a remote coordinator',
+  );
+  // The closing "has not joined yet" is about being enrolled, not about
+  // whether systemd started anything.
+  assert.match(SH, /if \[ -n "\$ENROL_URL" \] && \[ "\$\{ENROLLED:-0\}" != 1 \]; then/);
+  assert.equal((SH.match(/^\s+ENROLLED=1$/gm) || []).length, 2, 'both enrolled outcomes set ENROLLED');
+});

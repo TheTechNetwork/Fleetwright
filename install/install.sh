@@ -1991,7 +1991,25 @@ fi
 say "Installing the Claude Code SessionStart hook"
 SETTINGS="${CLAUDE_HOME:-$HOME}/.claude/settings.json"
 install -d -o "$RUN_USER" -m 0755 "$(dirname "$SETTINGS")"
+# THE HOOK IS THE CLI WRAPPER'S PROBLEM IN ANOTHER PLACE. bin/fleetwright
+# starts `#!/usr/bin/env node`, and Claude runs the hook with the session's own
+# PATH — on a deb box that has no node at all, only the one under
+# /usr/lib/fleetwright/node. Every session then opened with "SessionStart hook
+# error: env: 'node': No such file or directory", non-blocking, on every start,
+# and the hook never ran. The links in /usr/local/bin already get a wrapper on
+# exactly that box (see CLI_NEEDS_WRAPPER below the units); the hook is written
+# the same way, naming the node the units run.
+CLI_NEEDS_WRAPPER=0
+PATH_NODE="$(command -v node 2>/dev/null || true)"
+if [ -z "$PATH_NODE" ]; then
+  CLI_NEEDS_WRAPPER=1
+elif ! PATH_NODE_MAJOR="$(node_major "$PATH_NODE")" || [ "$PATH_NODE_MAJOR" -lt "$NODE_FLOOR" ]; then
+  CLI_NEEDS_WRAPPER=1
+fi
 HOOK_CMD="$DIR/bin/fleetwright hook"
+if [ "$CLI_NEEDS_WRAPPER" = 1 ] && [ -n "${UNIT_NODE_BIN:-}" ]; then
+  HOOK_CMD="$UNIT_NODE_BIN $DIR/bin/fleetwright hook"
+fi
 
 # Merged with node rather than sed: settings.json holds the operator's own
 # hooks, theme and permissions, and a text-level edit would eventually eat one.
@@ -2014,15 +2032,18 @@ settings.hooks.SessionStart ||= [];
 
 let dirty = false;
 
-// THE HOOK FROM BEFORE THE RENAME is `<dir>/bin/agent-hub hook`. Left beside
-// the new one, both would run and every session start would be reported
-// twice; so it is rewritten in place, keeping whatever matcher group it is in.
+// AN EARLIER FORM OF THE HOOK is rewritten in place, keeping whatever matcher
+// group it is in: `<dir>/bin/agent-hub hook` from before the rename, or the
+// bare `<dir>/bin/fleetwright hook` on a box that has since lost the node on
+// its PATH (or gained one). Left beside the new one, both would run and every
+// session start would be reported twice — or, for the bare one on a deb box,
+// fail on every start.
 for (const group of settings.hooks.SessionStart) {
   for (const h of group?.hooks ?? []) {
-    if (typeof h?.command === 'string' && /\/bin\/agent-hub hook$/.test(h.command)) {
+    if (typeof h?.command === 'string' && h.command !== cmd && /\/bin\/(agent-hub|fleetwright) hook$/.test(h.command)) {
       h.command = cmd;
       dirty = true;
-      console.log('  ok   SessionStart hook renamed from agent-hub');
+      console.log('  ok   SessionStart hook command updated');
     }
   }
 }
@@ -2325,13 +2346,8 @@ fi
 # on PATH would run the shim and fail on the first modern line, which is the
 # same box — the deb on a machine that happens to have Debian's node — with a
 # stranger error.
-CLI_NEEDS_WRAPPER=0
-PATH_NODE="$(command -v node 2>/dev/null || true)"
-if [ -z "$PATH_NODE" ]; then
-  CLI_NEEDS_WRAPPER=1
-elif ! PATH_NODE_MAJOR="$(node_major "$PATH_NODE")" || [ "$PATH_NODE_MAJOR" -lt "$NODE_FLOOR" ]; then
-  CLI_NEEDS_WRAPPER=1
-fi
+# CLI_NEEDS_WRAPPER is decided above, before the SessionStart hook is written,
+# because the hook is the same question with a worse failure mode.
 # NAME:FILE, because `fw` is not a file of its own: it is `fleetwright`,
 # shorter, and a second copy of the entry point would be a second thing to
 # keep in step. `fleetwright` is the name a person is told; the agent-* names
@@ -2699,6 +2715,7 @@ if [ "$WIZARD" = yes ]; then
     DOCTOR_OUT="$(sidecar_cli doctor 2>/dev/null || true)"
     if printf '%s\n' "$DOCTOR_OUT" | grep -q '^ ok .*coordinator knows this host'; then
       ok "this box is already enrolled at $ENROL_URL"
+      ENROLLED=1
       return 0
     fi
 
@@ -2752,6 +2769,7 @@ if [ "$WIZARD" = yes ]; then
     fi
     if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
       ok "enrolled at $ENROL_URL"
+      ENROLLED=1
     else
       warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
     fi
@@ -2867,6 +2885,17 @@ if [ "$WIZARD" = yes ]; then
       [ -n "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_COORDINATOR_URL)" ] && { start_service fleetwright-sidecar || true; }
       STARTED=1
     fi
+  fi
+
+  # A REMOTE COORDINATOR IS UP WHETHER OR NOT THIS BOX'S SERVICES ARE. Enrolment
+  # used to happen only on the started path above, on the reasoning that it is
+  # the only path with a coordinator to enrol with — which is true of the local
+  # one, and not of a Worker. So `fleetwright join fleet.example.com --pin`
+  # on a box without systemd (a container, WSL) wrote the address, printed
+  # "has not joined yet", and dropped the pin it was given. The same for a
+  # box whose operator declined the start: the pin is the thing they typed.
+  if [ "${STARTED:-0}" != 1 ] && [ -n "$ENROL_URL" ] && [ "$FLEET_LOCAL" != 1 ]; then
+    enrol_host
   fi
 
   # --- log claude in -------------------------------------------------------
@@ -3245,10 +3274,10 @@ if [ "$WIZARD" = yes ]; then
     printf ' fleetwright-sidecar\n'
   fi
 
-  # Enrolment only happens on the path where the services were started, because
-  # that is the only path where there is a coordinator up to enrol WITH. Say so
-  # on the other two rather than leaving a box that connects and is refused.
-  if [ -n "$ENROL_URL" ] && [ "${STARTED:-0}" != 1 ]; then
+  # Said when this box is still not enrolled — a local coordinator that was not
+  # started, a blank pin, or a refusal — rather than leaving a box that
+  # connects and is refused on every try.
+  if [ -n "$ENROL_URL" ] && [ "${ENROLLED:-0}" != 1 ]; then
     printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
     printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
     printf '  Until then the sidecar is refused on every try.\n'
