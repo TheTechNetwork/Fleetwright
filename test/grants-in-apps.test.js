@@ -11,9 +11,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { iosSources } from './helpers/ios-sources.js';
+import { androidSources } from './helpers/android-sources.js';
 import { grantCommand } from '../src/core/grants.js';
 
 const IOS = iosSources();
+const ANDROID = androidSources();
 
 test('iOS decodes the grants from the frame and from a check, and keeps them across a check that does not say', () => {
   assert.match(IOS, /struct Grants: Codable, Hashable \{\s*let upgrades: Bool\?\s*let reboot: Bool\?\s*\}/);
@@ -43,4 +45,34 @@ test('iOS says what the box allows before a button is pressed, and nothing from 
   // Copyable, and dim: an answer, not a fault.
   assert.match(IOS, /Text\(line\)\s*\.fleetType\(\.labelMono\)[\s\S]*?\.textSelection\(\.enabled\)/);
   assert.match(IOS, /Text\(fact\)\.fleetType\(\.label\)\.foregroundStyle\(Design\.Palette\.inkDim\)/);
+});
+
+test('Android parses the grants with a has-check, from the frame and from a check, and keeps them across a check that does not say', () => {
+  assert.match(ANDROID, /val grantUpgrades: Boolean\? = null,\s*val grantReboot: Boolean\? = null,/);
+  // `has` first, twice: optBoolean turns a missing grant into false, and a
+  // host too old to say is not a host that refuses.
+  const parses = ANDROID.match(/optJSONObject\("grants"\)\?\.takeIf \{ it\.has\("reboot"\) && !it\.isNull\("reboot"\) \}\?\.optBoolean\("reboot"\)/g) || [];
+  assert.equal(parses.length, 2, 'the frame and the check reply both parse the reboot grant honestly');
+  assert.match(ANDROID, /grantUpgrades = w\.grantUpgrades \?: it\.grantUpgrades,\s*grantReboot = w\.grantReboot \?: it\.grantReboot,/);
+});
+
+test('Android draws Reboot only where the box allows it, and the line where it does not', () => {
+  assert.match(ANDROID, /if \(host\.grantReboot != false\) \{\s*TextButton\([\s\S]*?\) \{ Text\("Reboot"\) \}\s*\}/);
+  assert.match(ANDROID, /if \(host\.systemPending && host\.grantUpgrades != false\)/);
+  assert.match(ANDROID, /host\.grantReboot\?\.let \{ allowed ->[\s\S]*?"Reboot from the app: \$\{if \(allowed\) "allowed" else "not allowed"\}"[\s\S]*?if \(!allowed\) GrantOff\("Turning it on is one line on the box:", grantLine\("reboot"\)\)/);
+  assert.match(ANDROID, /host\.grantUpgrades\?\.let \{ allowed ->[\s\S]*?"System upgrades from the app: [\s\S]*?GrantOff\("Turning it on is one line on the box:", grantLine\("upgrades"\)\)/);
+  assert.match(ANDROID, /private fun grantLine\(name: String\): String = "sudo fleetwright grant \$name on"/);
+  // Copyable, and not the error colour: an answer, not a fault.
+  assert.match(ANDROID, /private fun GrantOff\(fact: String, line: String\) \{[\s\S]*?SelectionContainer \{\s*Text\(line, style = MaterialTheme\.typography\.bodySmall\.copy\(fontFamily = FontFamily\.Monospace\)\)/);
+  assert.doesNotMatch(ANDROID, /fun grant\(host|\.grant\(host/, 'the app has no verb to change a grant, on purpose');
+});
+
+test('both phones name the same line and the same sentence, so a person who reads one is not surprised by the other', () => {
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.match(src, /Turning it on is one line on the box:/, `${name} words the fix differently`);
+    assert.match(src, /grantLine\("reboot"\)/, `${name} does not name the reboot line`);
+    assert.match(src, /grantLine\("upgrades"\)/, `${name} does not name the upgrades line`);
+  }
+  // And the line is the host's own, so the three cannot drift.
+  assert.equal(grantCommand('upgrades'), 'sudo fleetwright grant upgrades on');
 });
