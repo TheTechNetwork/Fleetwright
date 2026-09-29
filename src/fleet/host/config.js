@@ -116,11 +116,6 @@ export function loadSidecarConfig(env = process.env) {
     // that pane is still because somebody has to answer it.
     idleRestartMs: Math.max(0, int(env, 'FLEETWRIGHT_IDLE_RESTART_MINUTES', 60)) * 60_000,
 
-    // --- the per-session hook socket ---------------------------------------
-    // Where the sockets bind-mounted into sandboxes live. See host/hook-socket.js.
-    hookSocketDir: str(env, 'FLEETWRIGHT_HOOK_SOCKET_DIR', preferExisting('/run/fleetwright-sidecar', '/run/agent-fleet')),
-    hookSocketsEnabled: str(env, 'FLEETWRIGHT_HOOK_SOCKETS', '1') !== '0',
-
     logLevel: str(env, 'FLEETWRIGHT_LOG_LEVEL', 'info'),
   });
 }

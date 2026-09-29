@@ -6,9 +6,10 @@
 // routes it publishes:
 //
 //   POST /api/command              {command}  → {ok, text, sessions?, buttons?}
-//   GET  /api/state                           → {host, maxSessions, running, auth, sessions}
+//   GET  /api/state                           → {host, maxSessions, running, auth, sessions, labels, channel, sandbox, …}
 //   GET  /api/peek?name=…                     → {name, text} | 404
-//   POST /internal/session-start   {name,cwd,uuid} → {ok, message}
+//   POST /api/update-evidence      {which}    → {ok, noted, why?}
+//   POST /api/renew-providers      {secrets}  → {ok, results}
 //   GET  /healthz                             → {ok, host}
 //
 // Three things about that API are worth knowing before reading the sidecar,
@@ -25,12 +26,12 @@
 //     flat-allowlist gap design.md §1 lists, and it is not fixable from out
 //     here — only upstream, or in the coordinator.
 //
-//  3. **/internal/session-start is loopback-only and never token-gated**, by
-//     design: the hook runs as a child of a claude process on the same box, and
-//     giving it the operator token would mean writing that token into a
-//     world-readable hook script. The sidecar runs on that same box, so it can
-//     forward hook reports there — which is what lets the per-session hook
-//     socket work without modifying fleetwright at all.
+//  3. **Everything the sidecar knows about the box, it is told.** The labels,
+//     channel, variant and house rules on the health frame are read off
+//     /api/state, and the two things it used to write into fleetwright's state
+//     directory — the commit-confirm evidence, a renewed provider token — are
+//     requests. This client never opens a file of fleetwright's, which is what
+//     lets the two run as different users (#270).
 //
 // The credential: whatever FLEETWRIGHT_TOKEN the hub was configured with. A hub
 // bound to loopback may have none, in which case there is nothing to send.
@@ -156,25 +157,43 @@ export class HubClient {
   }
 
   /**
-   * Hand a conversation uuid to the hub, as the SessionStart hook would.
+   * Record that this box reached its coordinator — the sidecar's half of the
+   * evidence that a release on trial did not sever it from the fleet. See
+   * src/core/update-confirm.js; the file is fleetwright's and it writes it.
    *
-   * This is how the per-session hook socket reaches a stock fleetwright: the
-   * sidecar owns the socket, so it knows which session a report came from, and
-   * forwards it here with that name attached. The container never gets to name
-   * a session, and fleetwright is unchanged.
+   * A hub from before the route answers 404, reported as not noted with the
+   * reason rather than thrown: a connect is not the place to fail, and the
+   * standing watchdog reverting an update for lack of evidence is a louder
+   * signal than this log line would be.
    *
-   * @param {{ name: string, cwd?: string|null, uuid: string }} rec
-   * @returns {Promise<{ ok: boolean, message?: string }>}
+   * @returns {Promise<{ noted: boolean, why?: string }>}
    */
-  async recordSessionStart({ name, cwd = null, uuid }) {
-    const r = await this.#json(
-      'POST',
-      '/internal/session-start',
-      { name, ...(cwd ? { cwd } : {}), uuid },
-      this.readTimeoutMs,
-      { allowStatus: [400, 403] },
-    );
-    return { ok: r.ok === true, message: r.message || r.error };
+  async noteCoordinatorReached() {
+    const r = await this.#json('POST', '/api/update-evidence', { which: 'coord' }, this.readTimeoutMs, {
+      allowStatus: [404],
+    });
+    if (r.__status === 404) return { noted: false, why: 'fleetwright here has no update-evidence route — update it' };
+    return { noted: r.noted === true, ...(r.why ? { why: String(r.why) } : {}) };
+  }
+
+  /**
+   * Have fleetwright trade the refresh tokens in its store for new access
+   * tokens, using the client secrets this process holds in memory.
+   *
+   * The secrets travel to fleetwright over the loopback for one request and
+   * are not kept there; see src/core/keepalive.js for why the exchange needs
+   * them and src/fleet/protocol/config-frame.js for why nothing writes them
+   * down. Null for a hub from before the route, so the caller can say so.
+   *
+   * @param {Record<string, string>} secrets
+   * @returns {Promise<Array<{ row: string, provider: string, outcome: string, detail?: string }>|null>}
+   */
+  async renewProviders(secrets) {
+    const r = await this.#json('POST', '/api/renew-providers', { secrets }, this.commandTimeoutMs, {
+      allowStatus: [404],
+    });
+    if (r.__status === 404) return null;
+    return Array.isArray(r.results) ? r.results : [];
   }
 
   /** Liveness only. @returns {Promise<boolean>} */

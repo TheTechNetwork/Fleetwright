@@ -132,5 +132,5 @@ test('the host frame carries removability, so no screen has to derive it', () =>
   // Sent rather than asked for, like the channel and the variant beside it: a
   // list of machines must not become a round trip per row.
   const sidecar = readFileSync(new URL('../src/fleet/host/sidecar.js', import.meta.url), 'utf8');
-  assert.match(code(sidecar), /setLabels: this\.hubConfig \? readLabels\(this\.hubConfig\) : \[\]/);
+  assert.match(code(sidecar), /setLabels: this\.facts\?\.labels\?\.set \?\? \[\]/);
 });

@@ -98,42 +98,41 @@ test('a session name with characters needing escaping is encoded in the query', 
   assert.equal(await client.peek('a b&c'), 'pane');
 });
 
-// --- the hook forwarding path ----------------------------------------------
+// --- the two writes the sidecar used to make itself -------------------------
 
-test('a hook report is forwarded to the loopback endpoint with its name', async (t) => {
-  // This is what lets the per-session hook socket work against a stock
-  // fleetwright: the sidecar knows which session a report came from, and supplies
-  // the name the container was never given.
+test('reaching the coordinator is reported to the hub, which owns the evidence file', async (t) => {
+  // The sidecar used to stamp the file in fleetwright's state directory
+  // directly, which only worked as one user. Now it asks, and the answer is
+  // fleetwright's: nothing on trial is not noted, with the reason.
   const { stub, client } = await hubFor(t);
+  assert.deepEqual(await client.noteCoordinatorReached(), { noted: false, why: 'nothing on trial' });
+  assert.deepEqual(stub.evidence, ['coord']);
 
-  const r = await client.recordSessionStart({
-    name: 'bigjob',
-    cwd: '/work',
-    uuid: 'a1b2c3d4-1111-2222-3333-444455556666',
-  });
-
-  assert.equal(r.ok, true);
-  assert.deepEqual(stub.hookReports, [
-    { name: 'bigjob', cwd: '/work', uuid: 'a1b2c3d4-1111-2222-3333-444455556666' },
-  ]);
+  const trial = await hubFor(t, { onTrial: true });
+  assert.deepEqual(await trial.client.noteCoordinatorReached(), { noted: true });
 });
 
-test('a hook report the hub rejects comes back as ok:false, not as a throw', async (t) => {
-  const { client } = await hubFor(t);
-  const r = await client.recordSessionStart({ name: 'bigjob', uuid: 'not-a-uuid' });
-  assert.equal(r.ok, false);
-  assert.match(String(r.message), /uuid/i);
+test('a hub from before the evidence route is not noted, and says why, rather than a throw', async (t) => {
+  // A connect is not the place to fail. The watchdog reverting an update for
+  // lack of evidence is the louder signal; this line is what points at why.
+  const { client } = await hubFor(t, { without: ['/api/update-evidence'] });
+  const r = await client.noteCoordinatorReached();
+  assert.equal(r.noted, false);
+  assert.match(String(r.why), /update it/);
 });
 
-test('the hook endpoint is reached without the operator token', async (t) => {
-  // It is deliberately not token-gated on fleetwright's side; sending the token
-  // anyway is harmless, but the path must work when there is none to send.
-  const stub = await startStubHub({ token: 'a-token-at-least-16-chars' });
-  t.after(() => stub.close());
-  const client = new HubClient({ baseUrl: stub.baseUrl, token: null });
+test('renewal hands the hub the secrets for one request and gets its per-row answers', async (t) => {
+  const results = [{ row: 'ann@example.com', provider: 'github', outcome: 'renewed' }];
+  const { stub, client } = await hubFor(t, { renewResults: results });
+  assert.deepEqual(await client.renewProviders({ githubClientSecret: 'shh' }), results);
+  // WHAT TRAVELLED, exactly: the secret, in the body, over the loopback. Not
+  // on a command line and not in a header a log would print.
+  assert.deepEqual(stub.renewals, [{ githubClientSecret: 'shh' }]);
+});
 
-  const r = await client.recordSessionStart({ name: 'x', uuid: 'a1b2c3d4-1111-2222-3333-444455556666' });
-  assert.equal(r.ok, true);
+test('a hub from before the renewal route is null, so the caller can say so', async (t) => {
+  const { client } = await hubFor(t, { without: ['/api/renew-providers'] });
+  assert.equal(await client.renewProviders({ githubClientSecret: 'shh' }), null);
 });
 
 // --- auth -------------------------------------------------------------------

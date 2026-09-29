@@ -88,10 +88,17 @@ test('a browser is a label, because only the box can answer that', () => {
   assert.ok(!autoLabels({ sandboxImage: 'ghcr.io/o/webhooks-runner:latest' }, linux).includes('browser'));
 });
 
-test('the operator keeps their own labels', () => {
+test('the operator keeps their own labels, and the machine facts come from fleetwright', () => {
   // "gpu", "prod", "noisy-neighbour" are decisions, and no amount of
-  // introspection produces them. The two sets are unioned; an operator naming
-  // something this file also derives is not a conflict.
-  const src = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
-  assert.match(src, /labels: \[\.\.\.new Set\(\[\.\.\.cfg\.labels, \.\.\.autoLabels\(loadConfig\(\)\)\]\)\]\.sort\(\)/);
+  // introspection produces them; they stay in the sidecar's env file. The
+  // derived ones are fleetwright's to publish — `browser` is a fact about the
+  // image IT runs sessions in, read from a state directory the sidecar may not
+  // be able to (#270) — and the sidecar unions the three in one getter.
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
+  assert.match(bin, /labels: cfg\.labels,/);
+  assert.doesNotMatch(bin, /autoLabels\(/, 'the sidecar derives nothing about the machine itself');
+  const hub = readFileSync(new URL('../src/adapters/http.js', import.meta.url), 'utf8');
+  assert.match(hub, /labels: tell\(\(\) => \(\{ auto: autoLabels\(cfg\), set: readLabels\(cfg\) \}\)\)/);
+  const sidecar = readFileSync(new URL('../src/fleet/host/sidecar.js', import.meta.url), 'utf8');
+  assert.match(sidecar, /\[\.\.\.new Set\(\[\.\.\.this\.givenLabels, \.\.\.auto, \.\.\.set\]\)\]\.sort\(\)/);
 });

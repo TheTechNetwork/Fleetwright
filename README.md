@@ -171,7 +171,7 @@ never be built.
 |---|---|
 | `src/core/`, `src/adapters/`, `src/index.js` | the session manager |
 | `src/fleet/protocol/` | the intent protocol: built by the coordinator, enforced by the sidecar |
-| `src/fleet/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
+| `src/fleet/host/` | the sidecar: hub client, pane parsing, transports |
 | `src/fleet/coordinator/` | the coordinator's decisions: host registry, scheduler, identity, enrolment — shared with `worker/`, which is where it runs |
 | `sandbox/` | the container image a sandboxed session runs in |
 | `bin/fleetwright` | the session manager's CLI and SessionStart hook |

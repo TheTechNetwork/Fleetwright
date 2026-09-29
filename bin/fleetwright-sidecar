@@ -12,12 +12,10 @@
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadConfig } from '../src/config.js';
-import { autoLabels } from '../src/fleet/host/auto-labels.js';
 import { updateStatus } from '../src/core/update.js';
 import { installedVersion, currentVersion } from '../src/core/release-apply.js';
 import { helperState } from '../src/core/migrate.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
-import { HookSocketServer } from '../src/core/hook-socket.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint, recordAssignedName } from '../src/fleet/host/identity.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport, MAX_BACKOFF_MS } from '../src/fleet/host/transports/websocket.js';
@@ -27,7 +25,6 @@ import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
 import { watchForRestart } from '../src/core/restart-watch.js';
-import { noteHealth } from '../src/core/update-confirm.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
@@ -85,19 +82,6 @@ async function run() {
   // one-shot subcommands finish in under a second and have nothing to pick up.
   watchForRestart({ name: 'sidecar' });
 
-  // COMMIT-CONFIRM, THE SIDECAR'S HALF. When a release is on trial, reaching the
-  // coordinator is this box's proof that the update did not sever it from the
-  // fleet — the exact capability a bad update takes away. The sidecar does NOT
-  // decide anything: it records that half of the evidence, and the standing
-  // watchdog (install/fleetwright-confirm, on a systemd timer) confirms or
-  // reverts. That separation is deliberate — a watchdog inside this process
-  // could not catch this process failing to start.
-  const hubCfg = loadConfig();
-  const onCoordinatorConnect = () => {
-    const r = noteHealth(hubCfg, 'coord');
-    if (r.noted) log.info('update: recorded that this box reached its coordinator');
-  };
-
   const { errors, warnings } = validateSidecarConfig(cfg);
   for (const w of warnings) log.warn(`config: ${w}`);
   if (errors.length) {
@@ -111,6 +95,27 @@ async function run() {
     commandTimeoutMs: cfg.hubCommandTimeoutMs,
     readTimeoutMs: cfg.hubReadTimeoutMs,
   });
+
+  // COMMIT-CONFIRM, THE SIDECAR'S HALF. When a release is on trial, reaching the
+  // coordinator is this box's proof that the update did not sever it from the
+  // fleet — the exact capability a bad update takes away. The sidecar does NOT
+  // decide anything: it asks fleetwright to record that half of the evidence
+  // (the file is fleetwright's, in a directory this process may not be able
+  // to write — #270), and the standing watchdog (install/fleetwright-confirm,
+  // on a systemd timer) confirms or reverts. That separation is deliberate — a
+  // watchdog inside this process could not catch this process failing to start.
+  //
+  // Fire and forget from a synchronous hook: the transport calls this as the
+  // socket opens and must not wait on a loopback request to finish opening it.
+  const onCoordinatorConnect = () => {
+    void hub
+      .noteCoordinatorReached()
+      .then((r) => {
+        if (r.noted) log.info('update: recorded that this box reached its coordinator');
+        else if (r.why && r.why !== 'nothing on trial') log.warn(`update: could not record reaching the coordinator — ${r.why}`);
+      })
+      .catch((e) => log.warn(`update: could not record reaching the coordinator — ${e.message}`));
+  };
 
   // Not fatal. fleetwright may be starting alongside this, and the sidecar's job
   // is to keep answering the coordinator either way — a host that reports
@@ -170,22 +175,24 @@ const sidecar = new Sidecar({
     hub,
     transport,
     hostId: cfg.hostId,
-    // WHAT THE OPERATOR SAID, PLUS WHAT THE MACHINE KNOWS. Labels are how work
-    // is aimed — `tag: macos` on a start, filtered before ranking — and they
-    // came only from FLEETWRIGHT_LABELS, so every one was somebody having
-    // remembered to type it at install time. The facts that never change and
-    // are never wrong were the ones most likely to be missing.
+    // WHAT THE OPERATOR SAID. Labels are how work is aimed — `tag: macos` on a
+    // start, filtered before ranking — and "gpu", "prod", "noisy-neighbour"
+    // are decisions no amount of introspection produces, so they come from
+    // FLEETWRIGHT_LABELS in this process's own env file.
     //
-    // Derived at startup from the machine rather than stored, and unioned with
-    // the operator's own: "gpu", "prod", "noisy-neighbour" are decisions no
-    // amount of introspection produces.
-    labels: [...new Set([...cfg.labels, ...autoLabels(loadConfig())])].sort(),
+    // WHAT THE MACHINE KNOWS — `arm64`, `debian`, `browser` — is unioned in
+    // by the sidecar from what fleetwright publishes on /api/state, not
+    // derived here: the `browser` label is a fact about the image fleetwright
+    // runs sessions in, which it reads from a state directory this process
+    // may not be able to (#270). See auto-labels.js and Sidecar#labels.
+    labels: cfg.labels,
     maxSkewMs: cfg.maxSkewMs,
     promptText: cfg.promptText,
     idleRestartMs: cfg.idleRestartMs,
-    // fleetwright's own config, so the sidecar can reach the credential store it
-    // writes renewed tokens into. Same user, same box — see
-    // src/fleet/protocol/config-frame.js for why the renewal lives here.
+    // fleetwright's configuration as this process sees it — the defaults, since
+    // /etc/fleetwright.env is root's. Used to find systemctl and nothing else
+    // now: everything the sidecar used to read from fleetwright's files it is
+    // told on /api/state, and the two things it wrote are requests (#270).
     hubConfig: loadConfig(),
     logger: log,
     // Reported with health, so a phone can say "this box is 3 commits behind
@@ -368,19 +375,6 @@ const sidecar = new Sidecar({
   setTimeout(() => void refreshUpdates(), 0).unref?.();
   setInterval(() => void refreshUpdates(), UPDATE_EVERY_MS).unref?.();
 
-  // The per-session hook sockets. The sidecar owns them, so it knows which
-  // session a report came from and forwards it to fleetwright's loopback hook
-  // endpoint with that name attached — which is how a container gets a
-  // conversation uuid recorded without ever being able to name a session, and
-  // without fleetwright changing at all.
-  const hooks = cfg.hookSocketsEnabled
-    ? new HookSocketServer({
-        dir: cfg.hookSocketDir,
-        onSessionStart: (r) => hub.recordSessionStart(r),
-        logger: log,
-      })
-    : null;
-
   await sidecar.start();
 
   const shutdown = async (/** @type {string} */ signal) => {
@@ -390,7 +384,6 @@ const sidecar = new Sidecar({
     log.info(`${signal} — shutting down (fleetwright and its sessions are left alone)`);
     try {
       await sidecar.stop();
-      await hooks?.closeAll();
     } catch { /* best effort */ }
     process.exit(0);
   };
@@ -402,7 +395,6 @@ const sidecar = new Sidecar({
   // its own — that is the point of it — so the process stays up until signalled.
   if (transport instanceof StdioTransport) {
     await transport.closed;
-    await hooks?.closeAll();
   }
 }
 
