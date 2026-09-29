@@ -48,7 +48,7 @@ function world({ assets = {}, upstream = (/** @type {string} */ _u) => new Respo
   };
   const ctx = { waitUntil: (/** @type {Promise<unknown>} */ p) => pending.push(p) };
   const get = async (path, init = {}) => {
-    const r = await handle(new Request(`https://apt.thetech.network${path}`, init), env, ctx);
+    const r = await handle(new Request(`https://fleet-apt.thetech.network${path}`, init), env, ctx);
     return r;
   };
   const settle = () => Promise.all(pending.splice(0));
@@ -130,7 +130,7 @@ test('read-only', async () => {
 
 test('the Worker is configured for the domain and logs, and never ships packages', () => {
   const toml = readFileSync(new URL('../apt/wrangler.toml', import.meta.url), 'utf8');
-  assert.match(toml, /pattern = "apt\.thetech\.network", custom_domain = true/);
+  assert.match(toml, /pattern = "fleet-apt\.thetech\.network", custom_domain = true/);
   assert.match(toml, /\[observability\]\nenabled = true/);
   // Without this, an existing asset is served before the Worker runs and no
   // apt update is ever logged.

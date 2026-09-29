@@ -1,7 +1,7 @@
 name: apt repository
 
 # THE APT REPOSITORY: stable releases whose rollout is complete, and nothing
-# else, at https://apt.thetech.network. docs/packaging.md, "Stable releases
+# else, at https://fleet-apt.thetech.network. docs/packaging.md, "Stable releases
 # through apt", says why apt only ever gets these.
 #
 # A CLOUDFLARE WORKER, NOT PAGES (apt/wrangler.toml). A deb is ~29 MB and both

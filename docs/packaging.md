@@ -334,16 +334,16 @@ up for a stable box to take an unreleased build.
 ## Stable releases through apt
 
 A box can also be installed with `apt install fleetwright`, and then apt is
-the only thing that updates it. The repository is `apt.thetech.network`, a
+the only thing that updates it. The repository is `fleet-apt.thetech.network`, a
 Cloudflare Worker that serves the signed metadata and streams each package from
 Cloudflare's cache, filled from its GitHub release asset (`apt/`, and
 docs/ci.md for why not Pages). It carries
 **stable releases whose rollout is complete, and nothing else**.
 
 ```sh
-curl -fsSL https://apt.thetech.network/fleetwright.gpg \
+curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \
   | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://apt.thetech.network stable main" \
+echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \
   | sudo tee /etc/apt/sources.list.d/fleetwright.list
 sudo apt update && sudo apt install fleetwright
 ```
