@@ -11,6 +11,46 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.0 — 2026-09-29
+
+**A pin comes with the one line that installs the box, and no box runs its own
+coordinator any more.**
+
+- **Install and join in one line.** Every pin the app mints now comes with the
+  command that spends it: `curl -fsSL https://<your fleet>/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh`.
+  Paste it on a fresh box and it installs, enrols and starts with nobody at the
+  keyboard; the pin rides as an environment variable, never in the URL, so it
+  is in no request log. Both apps show the line beside the code, with a copy
+  button.
+- **The coordinator runs on Cloudflare, and nowhere else.** The installer no
+  longer asks whether to run one on this box, and the command that did is
+  gone. A box that ran its own finds that unit retired on its next update and
+  is told, in the installer's output, where the fleet meets now. For whoever
+  will not have a Cloudflare account, `worker/Containerfile` runs the same
+  Worker under `workerd` on a box you own; CI builds and drives it on every
+  change, but it has not carried real hosts for a week yet, so the install
+  guide still says Cloudflare.
+- **Joining works where nobody is watching.** `fleetwright join` from cron,
+  Ansible or a container used to print a `/dev/tty` error at every question;
+  it is silent now and takes the defaults. A box that enrolled as one name and
+  woke up as another (cloud images rename on first boot) is no longer refused
+  with its own key: the name the coordinator accepted is recorded beside the
+  key. The closing summary names the host.
+- **Five things the fleet forgot, kept.** A runner enrolled with a temporary
+  pin is now actually retired when its job ends; the person who minted a pin is
+  recorded as the owner; the founding admin's record is never swept, so a
+  fleet whose phones were all revoked does not get re-founded by a stranger; a
+  revoked machine leaves the list at once rather than at the next restart; and
+  a GitHub Actions runner dials under the name it enrolled with.
+- **apt on a Raspberry Pi is quiet.** The source line names the box's
+  architecture, so `apt update` stops saying this repository has no armhf, and
+  the index carries a date, so an unchanged repository is not re-downloaded on
+  every run. A box with the old line: `sudo sed -i 's/^deb \[/deb [arch=arm64 /' /etc/apt/sources.list.d/fleetwright.list`.
+- **Under the hood.** Sign-in to GitHub and Cloudflare from the app, and the
+  discovery of any OpenID provider, go through `oauth4webapi` rather than
+  code of our own. The MCP server's authorization flow was driven cold by the
+  official MCP client and needed no change.
+
 ## 0.3.2 — 2026-09-29
 
 **A machine that has gone quiet can be re-keyed from the app, and an update
