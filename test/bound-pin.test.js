@@ -91,6 +91,6 @@ test('a failed mint does not leave the old pin wearing a new name', () => {
   // The label is set only after the call returns a code. Setting it first would
   // relabel whatever was already on screen as belonging to the host somebody
   // just tapped.
-  assert.match(IOS_VIEW, /pin = try await Fleet\(settings: settings\)\.mintHostPin\(hostId: hostId, readmit: readmit\)\n\s+\/\/[\s\S]{0,200}?pinBoundTo = hostId/);
+  assert.match(IOS_VIEW, /pin = try await Fleet\(settings: settings\)\.mintHostPin\(hostId: hostId, readmit: readmit\)\.code\n\s+\/\/[\s\S]{0,200}?pinBoundTo = hostId/);
   assert.match(DROID_VIEW, /if \(pin\.isNotBlank\(\)\) pinBoundTo = host\.hostId/);
 });

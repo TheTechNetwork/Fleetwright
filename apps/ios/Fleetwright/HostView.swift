@@ -534,7 +534,7 @@ struct HostView: View {
                 Task {
                     busy = true
                     defer { busy = false }
-                    do { pin = try await fleet.mintHostPin(hostId: hostId, readmit: enrolled?.isRevoked == true) }
+                    do { pin = try await fleet.mintHostPin(hostId: hostId, readmit: enrolled?.isRevoked == true).code }
                     catch { result = error.localizedDescription }
                 }
             }

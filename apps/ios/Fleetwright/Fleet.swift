@@ -792,7 +792,7 @@ struct Fleet {
     /// - Parameter readmit: additionally permits bringing back a host that was
     ///   revoked, so that undoing a removal is a decision somebody makes rather
     ///   than a side effect of holding a pin.
-    func mintHostPin(ephemeral: Bool = false, hostId: String? = nil, readmit: Bool = false) async throws -> String {
+    func mintHostPin(ephemeral: Bool = false, hostId: String? = nil, readmit: Bool = false) async throws -> MintedPin {
         /// A dictionary rather than a struct because the two optional keys are
         /// omitted entirely when absent — sending `hostId: null` would bind the
         /// pin to nothing and read, on the wire, as somebody having meant to.
@@ -802,10 +802,20 @@ struct Fleet {
             body["readmit"] = readmit
         }
         let data = try await post("/api/enroll", body: body)
-        struct Reply: Codable { let ok: Bool?; let code: String?; let text: String? }
+        struct Reply: Codable { let ok: Bool?; let code: String?; let text: String?; let install: String? }
         let reply = try JSONDecoder().decode(Reply.self, from: data)
         guard let code = reply.code else { throw FleetError.message(reply.text ?? "Could not mint a pin.") }
-        return code
+        return MintedPin(code: code, install: reply.install)
+    }
+
+    /// A pin, and — when the coordinator publishes an installer — the one line
+    /// that installs a fresh box and joins it with that pin. `install` is nil
+    /// on a coordinator that does not (its /install answers 404, so the line
+    /// would too) and on an older coordinator that omits the field; the screen
+    /// then shows the two-step form and nothing that would fail. C-5.
+    struct MintedPin {
+        let code: String
+        let install: String?
     }
 
     /// Remove a machine from the fleet. It is disconnected as well as revoked —
