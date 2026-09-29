@@ -17,7 +17,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -228,4 +228,22 @@ test('the PKCE verifier is still checked, just not byte-by-byte-and-stop', async
   assert.ok(bad.ok);
   const refused = await auth.redeem({ code: bad.code, clientId: reg.clientId, redirectUri: 'https://client.example/cb', verifier: 'w'.repeat(43) });
   assert.equal(refused.ok, false);
+});
+
+test('a plain `enrol <pin>` records the name beside the key, like the Actions path', () => {
+  // The recorder existed for ephemeral runners, whose name the coordinator
+  // derives. A permanent box had the same exposure from the other direction:
+  // its default name is the hostname, cloud images rewrite that on first boot,
+  // and a box enrolled as `vm` that woke up as `web-1` dialled as web-1 and
+  // was refused with its own key on disk. Found by running the installer on a
+  // box, not by a test — so this is the test.
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
+  const start = bin.indexOf('async function doEnrol(');
+  const end = bin.indexOf('async function', start + 1);
+  assert.ok(start > 0 && end > start, 'doEnrol moved');
+  const body = bin.slice(start, end);
+  assert.match(body, /recordAssignedName\(cfg\.hostKeyFile, \{ hostId: cfg\.hostId, origin: cfg\.coordinatorUrl \}\)/);
+  // After the enrol succeeded and before afterEnrol, so a refused pin records nothing.
+  assert.ok(body.indexOf('await enrol(') < body.indexOf('recordAssignedName('), 'recorded before the coordinator answered');
+  assert.ok(body.indexOf('recordAssignedName(') < body.indexOf('await afterEnrol()'), 'recorded after the sidecar was already told to start');
 });

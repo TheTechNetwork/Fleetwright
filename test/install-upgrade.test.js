@@ -107,7 +107,10 @@ test('a piped install can still ask, because it asks the terminal', () => {
   // What this removes is the DEPENDENCE on being invoked that way. Every other
   // route — `sh -c "$(curl …)"`, piping straight into install.sh, a wrapper —
   // got a silent wizard that took defaults on somebody's box.
-  assert.match(SH, /elif \[ -r \/dev\/tty \]; then ASK_IN=\/dev\/tty/);
+  // OPENED, not stat'ed: `[ -r /dev/tty ]` is true with no controlling
+  // terminal, and then every question printed "No such device or address".
+  assert.match(SH, /elif \{ : <\/dev\/tty; \} 2>\/dev\/null; then ASK_IN=\/dev\/tty/);
+  assert.equal(/\[ -r \/dev\/tty \]; then ASK_IN=/.test(SH), false, 'the stat test is back');
   assert.match(SH, /read -r __reply <"\$ASK_IN"/);
 
   // The auto-detection has to agree, or the questions exist and are never
@@ -558,4 +561,16 @@ test('a sandbox image that is already present is not built again on a re-run', (
   // build below is keyed on exactly that.
   const present = /ok "\$IMAGE already present for \$RUN_USER"\n(?:\s*#[^\n]*\n)*\s*IMAGE=""/.exec(SH);
   assert.ok(present, 'the already-present branch does not clear IMAGE, so the build runs anyway');
+});
+
+test('the closing summary names this host the way the sidecar does, not from a blank env line', () => {
+  // FLEETWRIGHT_HOST_ID is blank on most boxes — the hostname is the default,
+  // and the coordinator may have recorded a different name beside the key —
+  // so reading the env file printed "This host:   fingerprint …" with nothing
+  // where the name goes. Seen on the first unattended box run.
+  assert.match(SH, /IDENT="\$\(sidecar_cli identity 2>\/dev\/null \|\| true\)"/);
+  assert.match(SH, /HID="\$\(printf '%s\\n' "\$IDENT" \| sed -n 's\/\^host id  \*\/\/p'\)"/);
+  assert.match(SH, /This host: %s  fingerprint %s\\n' "\$HID" "\$FP"/);
+  assert.equal(/This host: %s  fingerprint %s\\n' "\$\(get_env "\$SIDECAR_ENV" FLEETWRIGHT_HOST_ID\)"/.test(SH), false,
+    'the summary reads the name from the env file again');
 });

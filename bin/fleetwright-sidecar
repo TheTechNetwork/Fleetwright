@@ -495,6 +495,13 @@ async function doEnrol(pin) {
     console.log(`enrolled ${cfg.hostId} at ${cfg.coordinatorUrl}`);
     console.log(`  fingerprint ${fp}`);
     if (res.replaced) console.log('  (replaced the key this host had registered before)');
+    // RECORDED BESIDE THE KEY, as the Actions path does. The name this box
+    // enrolled under is the name the coordinator will accept its key for, and
+    // the default is the hostname — which cloud images rewrite on first boot
+    // and people rename. Without this a box enrolled as `vm` that woke up as
+    // `web-1` dialled as web-1 and was refused for ever, with the key that
+    // would have let it in sitting right there.
+    recordAssignedName(cfg.hostKeyFile, { hostId: cfg.hostId, origin: cfg.coordinatorUrl });
     await afterEnrol();
   } catch (e) {
     console.error(`enrolment failed: ${/** @type {Error} */ (e).message}`);

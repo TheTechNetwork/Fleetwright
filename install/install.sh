@@ -571,8 +571,16 @@ done
 #
 # Empty means there is genuinely nobody: cron, a CI job, a container build. Then
 # `ask` returns the default without printing a prompt nobody will see.
+#
+# OPENED, NOT STAT'ED. `[ -r /dev/tty ]` is true on every Linux box, because the
+# device node is there and world-readable — it says nothing about whether THIS
+# process has a controlling terminal behind it. Without one, every `read` from
+# it fails with "No such device or address", printed once per question into a
+# log, while the question silently takes its default. `fleetwright join` under
+# cron, Ansible or a container found this: it forces the wizard and had no
+# terminal to force it onto. Opening the device is the only honest test.
 if [ -t 0 ]; then ASK_IN=/dev/stdin
-elif [ -r /dev/tty ]; then ASK_IN=/dev/tty
+elif { : </dev/tty; } 2>/dev/null; then ASK_IN=/dev/tty
 else ASK_IN=""; fi
 # NOBODY TO ASK, EVEN WITH A TERMINAL IN THE ROOM. A deb's postinst runs with
 # apt's terminal attached and debconf holding it: the questions have already
@@ -3250,8 +3258,16 @@ if [ "$WIZARD" = yes ]; then
   if [ -n "$ENROL_URL" ]; then
     # Same trap as the pin above: this is a summary line, and a summary line
     # must not be able to end the install it is summarising.
-    FP="$(sidecar_cli identity 2>/dev/null | sed -n 's/^fingerprint  *//p' || true)"
-    [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)" "$FP"
+    #
+    # THE NAME COMES FROM THE SIDECAR, NOT THE ENV FILE. FLEETWRIGHT_HOST_ID is
+    # blank on most boxes — the hostname is the default, and the coordinator may
+    # have recorded a different name beside the key — so reading the env file
+    # printed "This host:   fingerprint …" with nothing where the name goes.
+    # `identity` resolves the name the same way the running sidecar does.
+    IDENT="$(sidecar_cli identity 2>/dev/null || true)"
+    FP="$(printf '%s\n' "$IDENT" | sed -n 's/^fingerprint  *//p')"
+    HID="$(printf '%s\n' "$IDENT" | sed -n 's/^host id  *//p')"
+    [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$HID" "$FP"
   fi
 
   cat <<EOF
