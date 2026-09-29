@@ -43,9 +43,9 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * src/core/profiles.js for why it can never come from the wire.
  *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null }} opts
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
 
@@ -64,7 +64,14 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
   // deliberately arbitrary text — which is why the quoting is a real escape and
   // not a formality.
   const quoted = argv.map((a) => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
-  return `IS_SANDBOX=1 exec ${quoted}`;
+  // A direct session's own Claude config — its credential, identity, trust and
+  // hook — rather than the box's ~/.claude (see direct-config.js). Only ever
+  // for a direct session: a sandboxed one has its volume, and the variable
+  // would only reach the podman process, not the CLI inside.
+  const dir = !cfg.sandbox && typeof configDir === 'string' && configDir
+    ? `CLAUDE_CONFIG_DIR='${configDir.replace(/'/g, `'\\''`)}' `
+    : '';
+  return `${dir}IS_SANDBOX=1 exec ${quoted}`;
 }
 
 /**

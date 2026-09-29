@@ -12,7 +12,7 @@ import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { ensureApiToken } from './core/api-token.js';
-import { adoptBoxAccount } from './core/accounts.js';
+import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
 import { readConfirmation, noteHealth } from './core/update-confirm.js';
 import { reclaimStale } from './core/reclaim.js';
@@ -167,10 +167,20 @@ export async function main() {
     // by `claude auth login`. Fixing it here rather than only after /login
     // repairs boxes that were authenticated some other way.
     markOnboardingComplete(cfg);
+  }
+  // WHAT SESSIONS RUN AS IS A PERSON'S LINKED ACCOUNT, sandboxed or not
+  // (docs/one-account-per-person.md, direct-config.js), so the line that
+  // matters at start-up is whether anybody has linked one. The box's own login
+  // is reported above when it exists and is not a condition for anything: this
+  // used to warn "NOT logged in — sessions will fail" on a box where a linked
+  // account was about to run them perfectly well.
+  const linked = new Accounts(cfg.stateDir).list();
+  if (linked.length) {
+    log.info(`accounts: ${linked.length} linked (${linked.join(', ')}) — a session runs as the person who starts it`);
   } else {
-    // Not fatal. The hub still runs, and logging in is one of the things it can
-    // do for you — which is exactly the situation on a freshly built box.
-    log.warn('claude: NOT logged in — sessions will fail until you run /login. The hub is up and can do that for you.');
+    // Not fatal. The hub still runs, and linking is one of the things it can do
+    // for you — which is exactly the situation on a freshly built box.
+    log.warn('accounts: nobody has linked a Claude account here yet — connect one from the app, or run /login. No session can start until somebody has.');
   }
 
   // Adopt whatever is already on the box before deciding what to restore, so a

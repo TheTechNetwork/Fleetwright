@@ -93,6 +93,29 @@ After that the box's copy is never consulted again. A fleet where everybody was
 already running on the org account keeps running on it, under the name of the
 person it always belonged to.
 
+## Direct sessions too
+
+The first apt-installed box found the half that had not been built. Sessions
+there run directly on the host (no podman), the app linked an account and
+requested a session — and it came up on Claude's first-run wizard asking how
+to log in. The sandbox path seeds the chosen credential into the session's
+volume; the direct path had gone on reading the box's `~/.claude`, which this
+document had already declared empty.
+
+A direct session now gets its own Claude configuration, the way a sandboxed one
+gets its own volume: `${stateDir}/direct/<name>`, pointed at with
+`CLAUDE_CONFIG_DIR`. It holds the person's credential and identity (the CLI
+decides logged-in-ness from the pair), onboarding declared complete, the trust
+for the session's working directory, and the SessionStart hook copied from the
+box's own `settings.json`. A resume keeps its account and takes today's
+credential. Nobody linked is the same refusal the sandbox gives, naming the
+box. The box's `~/.claude` is not read for a session and not written by one.
+
+So `fleetwright doctor` no longer has a "claude logged in" row: it has "a
+Claude account to run sessions as", which is any linked person. The box's own
+login is one way to get one — it is adopted into a linked row at start-up —
+and not a requirement.
+
 ## What this does not change
 
 - **Sandbox seeding**, which already copies a chosen credential into a volume.

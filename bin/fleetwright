@@ -25,6 +25,7 @@ import { releaseLayout } from '../src/core/release-apply.js';
 import { checkRelease } from '../src/core/release-check.js';
 import { accessSync, constants as fsConstants, mkdirSync } from 'node:fs';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
+import { Accounts } from '../src/core/accounts.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
 
 const argv = process.argv.slice(2);
@@ -192,7 +193,19 @@ async function doctor({ repair = false } = {}) {
       authDetail = `${who} (${how})`;
     }
   } catch { /* leave as not-logged-in */ }
-  ok('claude logged in', authOk, authDetail);
+  // AN ACCOUNT TO RUN SESSIONS AS is what a session needs, and it is a linked
+  // person's — sandboxed or direct (src/core/direct-config.js). The box's own
+  // login is one way to get one (it is adopted into a linked row at start-up),
+  // not the requirement: this row read "FAIL claude logged in" on a box where
+  // the app had just linked an account and a session was about to run on it.
+  const linked = new Accounts(cfg.stateDir).list();
+  const accountOk = linked.length > 0 || authOk;
+  const accountDetail = linked.length
+    ? `${linked.length} linked: ${linked.join(', ')}`
+    : authOk
+      ? `${authDetail} — the box's own login, adopted as a linked account when the service starts`
+      : 'connect one from the app, or run: fleetwright login';
+  ok('a Claude account to run sessions as', accountOk, accountDetail);
 
   ok(`workdir ${cfg.workdir}`, true);
   ok(`state dir ${cfg.stateDir}`, true);

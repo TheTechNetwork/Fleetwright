@@ -827,6 +827,40 @@ function seedHouseRules(cfg, volume) {
 }
 
 /**
+ * Why a session cannot start: nobody's account was found.
+ *
+ * REFUSED, NOT SKIPPED. Seeding used to return ok — "deliberately disabled" —
+ * because the only way to get here was an operator emptying the config. Now it
+ * means nobody's account was found, and starting anyway produces a session
+ * that comes up at a login prompt with nobody there to answer it, which is the
+ * exact silent hang this whole tool exists to prevent.
+ *
+ * The refusal carries WHY, because every version of it is a thing one person
+ * can fix in one step: link an account, or name which of several is the
+ * operator. Shared by the sandbox and the direct path (direct-config.js), so
+ * the two say the same thing.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ why?: string }} picked
+ */
+export function noAccountRefusal(cfg, picked) {
+  return (
+    `No Claude account to give this session on ${cfg.hostname}: ${picked.why ?? 'none is linked on this box'}.\n`
+    // NAMES THE MACHINE, and does not name a screen. Claude is linked PER
+    // MACHINE, so "connect one" without saying which box is an instruction
+    // somebody can follow and still not fix this — they connect on the host
+    // they happen to be looking at, and the scheduler puts the next session
+    // somewhere else.
+    //
+    // The screen was named too, and named wrongly: it said "under Your
+    // credentials in the app", which on iOS hid Claude and on Android does
+    // not exist. A remedy pointing at a surface that cannot perform it is
+    // worse than one that just says what is needed.
+    + `Connect a Claude account for ${cfg.hostname} from the app, or run \`fleetwright login\` on that box.`
+  );
+}
+
+/**
  * Copy a Claude credential into a conversation volume.
  *
  * Done with a throwaway container rather than by writing into the volume's
@@ -848,33 +882,7 @@ function seedHouseRules(cfg, volume) {
  */
 function seedCredentials(cfg, volume, picked, actor = null) {
   const source = picked.source;
-  if (!source) {
-    // REFUSED, NOT SKIPPED. This used to return ok — "deliberately disabled" —
-    // because the only way to get here was an operator emptying the config.
-    // Now it means nobody's account was found, and starting anyway produces a
-    // session that comes up at a login prompt with nobody there to answer it,
-    // which is the exact silent hang this whole tool exists to prevent.
-    //
-    // The refusal carries WHY, because every version of it is a thing one
-    // person can fix in one step: link an account, or name which of several is
-    // the operator.
-    return {
-      ok: false,
-      message:
-        `No Claude account to give this session on ${cfg.hostname}: ${picked.why ?? 'none is linked on this box'}.\n`
-        // NAMES THE MACHINE, and does not name a screen. Claude is linked PER
-        // MACHINE, so "connect one" without saying which box is an instruction
-        // somebody can follow and still not fix this — they connect on the host
-        // they happen to be looking at, and the scheduler puts the next session
-        // somewhere else.
-        //
-        // The screen was named too, and named wrongly: it said "under Your
-        // credentials in the app", which on iOS hid Claude and on Android does
-        // not exist. A remedy pointing at a surface that cannot perform it is
-        // worse than one that just says what is needed.
-        + `Connect a Claude account for ${cfg.hostname} from the app, or run \`fleetwright login\` on that box.`,
-    };
-  }
+  if (!source) return { ok: false, message: noAccountRefusal(cfg, picked) };
   // The identity rides with the credential when there is one. The entrypoint
   // merges .oauth-account.json into the container's /root/.claude.json on
   // every start — the newer CLI reads logged-in-ness off the PAIR, and a
