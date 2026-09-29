@@ -52,6 +52,21 @@ export function protectedResourceMetadata(origin) {
  * seen this fleet has no client_id and no way to be given one by hand — dynamic
  * registration is what makes "paste a URL" the whole setup.
  *
+ * SERVED AT TWO PATHS, AND IT IS ONE DOCUMENT. RFC 8414 puts this at
+ * `/.well-known/oauth-authorization-server`; OpenID Connect puts a superset of
+ * it at `/.well-known/openid-configuration`, and clients differ in which they
+ * ask for first — the MCP SDK tries the RFC 8414 path and falls back to the
+ * OIDC one, and other clients read only the OIDC one. routes.js answers both
+ * with THIS, byte for byte, and that is a decision rather than an oversight:
+ * this server issues no id_token, so the OIDC-only claims (`jwks_uri`,
+ * `userinfo_endpoint`, `subject_types_supported`, the id_token algorithms)
+ * have nothing true to say, and a document at the OIDC path that carried them
+ * would be a promise the token endpoint does not keep. `scopes_supported`
+ * stays `fleet` alone, without `openid`, for the same reason. The keys here
+ * are all in both specifications, so a client reading either path sees a
+ * valid document and asks for nothing this server cannot give.
+ * test/mcp-discovery.test.js holds both halves of that.
+ *
  * @param {string} origin
  */
 export function authorizationServerMetadata(origin) {

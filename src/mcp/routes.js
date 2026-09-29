@@ -109,6 +109,10 @@ export async function mcpRoutes(req, deps) {
   if (method === 'GET' && path === '/.well-known/oauth-protected-resource') {
     return { status: 200, json: protectedResourceMetadata(origin) };
   }
+  // ONE DOCUMENT AT BOTH DISCOVERY PATHS, on purpose: the OIDC path is where
+  // some clients look first and the only place others look at all, and this
+  // server issues no id_token, so there is no OIDC-only claim to add there.
+  // The reasoning is on authorizationServerMetadata.
   if (method === 'GET' && (path === '/.well-known/oauth-authorization-server' || path === '/.well-known/openid-configuration')) {
     return { status: 200, json: authorizationServerMetadata(origin) };
   }
