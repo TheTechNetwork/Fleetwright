@@ -2150,6 +2150,11 @@ if [ "$HAVE_PODMAN" = "1" ] && [ "${FLEETWRIGHT_BUILD_IMAGE:-1}" != "0" ]; then
   if as_user "podman image exists '$IMAGE'" 2>/dev/null \
      && [ "${FLEETWRIGHT_REBUILD_IMAGE:-0}" != "1" ]; then
     ok "$IMAGE already present for $RUN_USER"
+    # Cleared, like the pulled case, or the build below runs on every re-run
+    # of a box that already has the image — and on the first apt box it did:
+    # "already present" followed by "image build failed", from a build nobody
+    # needed, on a Containerfile that is not in the release payload.
+    IMAGE=""
   elif [ "${IMAGE#localhost/}" != "$IMAGE" ]; then
     : # a localhost/ image can only be built, so fall through to the build below
   elif as_user "podman pull '$IMAGE'" >/tmp/fleetwright-session-pull.log 2>&1; then
@@ -2396,6 +2401,20 @@ if [ -n "${LINK_DIR_SAVED:-}" ]; then DIR="$LINK_DIR_SAVED"; unset LINK_DIR_SAVE
 # Empty for a clone, a re-run, or anyone who fetched the installer from the
 # repository — all of which still get the questions.
 JOINING="${FLEETWRIGHT_COORDINATOR_URL:-}"
+# A BARE HOSTNAME MEANS HTTPS, the same rule `fleetwright join` applies
+# (src/core/join.js): `fleet.example.com` is somebody naming a host, and a
+# Worker answers on nothing else. debconf's "Coordinator URL to join" was
+# answered with exactly that on the first apt box, the address was written as
+# typed, and enrolment failed with "Failed to parse URL from
+# fleet.thetech.network/api/enroll/host" — a sentence about a scheme, shown to
+# somebody who typed the same thing `join` accepts. A loopback address is
+# http, because the local coordinator has no certificate; an explicit scheme
+# is kept as typed.
+case "$JOINING" in
+  ''|*://*) ;;
+  localhost*|127.*|\[::1\]*) JOINING="http://$JOINING" ;;
+  *) JOINING="https://$JOINING" ;;
+esac
 case "$JOINING" in
   # Local and stdio are not a fleet somebody is joining; they are what the
   # wizard offers to set up, so leave the questions alone.

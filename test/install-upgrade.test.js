@@ -526,3 +526,26 @@ test('a pin given to join enrols with a remote coordinator whether or not anythi
   assert.match(SH, /if \[ -n "\$ENROL_URL" \] && \[ "\$\{ENROLLED:-0\}" != 1 \]; then/);
   assert.equal((SH.match(/^\s+ENROLLED=1$/gm) || []).length, 2, 'both enrolled outcomes set ENROLLED');
 });
+
+test('a bare coordinator address handed to the installer means https, as join already says', () => {
+  // debconf's "Coordinator URL to join" was answered `fleet.thetech.network`
+  // on the first apt box, written as typed, and enrolment failed with "Failed
+  // to parse URL" — the same thing `fleetwright join` accepts, refused one
+  // screen later. src/core/join.js is the rule; this is it in the installer.
+  const block = /JOINING="\$\{FLEETWRIGHT_COORDINATOR_URL:-\}"[\s\S]*?FLEET_LOCAL=0/.exec(SH);
+  assert.ok(block, 'the joining block is gone');
+  assert.match(block[0], /\*\) JOINING="https:\/\/\$JOINING" ;;/, 'a bare host is not made https');
+  assert.match(block[0], /localhost\*\|127\.\*\|\\\[::1\\\]\*\) JOINING="http:\/\/\$JOINING" ;;/, 'loopback is not made http');
+  assert.match(block[0], /''\|\*:\/\/\*\) ;;/, 'an explicit scheme must be kept as typed');
+  // Normalised BEFORE the local/stdio check, or http://127.0.0.1 typed bare
+  // would slip past it as a fleet to join.
+  assert.ok(block[0].indexOf('JOINING="https://$JOINING"') < block[0].indexOf("''|stdio:*|http://127.0.0.1*"));
+});
+
+test('a sandbox image that is already present is not built again on a re-run', () => {
+  // "already present" followed by "image build failed", on every re-run of a
+  // box that had pulled the image: the present branch left IMAGE set, and the
+  // build below is keyed on exactly that.
+  const present = /ok "\$IMAGE already present for \$RUN_USER"\n(?:\s*#[^\n]*\n)*\s*IMAGE=""/.exec(SH);
+  assert.ok(present, 'the already-present branch does not clear IMAGE, so the build runs anyway');
+});
