@@ -492,3 +492,60 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
   // before any unit work.
   assert.match(SH, /Prerequisites look fine[\s\S]*?exit 0/);
 });
+
+test('the SessionStart hook names the node the units run on a box whose shell has none', () => {
+  // bin/fleetwright starts `#!/usr/bin/env node`, and Claude runs the hook with
+  // the session's PATH. A deb box has node only under /usr/lib/fleetwright, so
+  // the bare command opened every session with "SessionStart hook error: env:
+  // 'node': No such file or directory" and the hook never ran. The links in
+  // /usr/local/bin were already wrapped on that box; the hook has to be too,
+  // which means the wrapper decision is made BEFORE the hook is written.
+  const decision = SH.indexOf('CLI_NEEDS_WRAPPER=0\nPATH_NODE=');
+  const hook = SH.indexOf('HOOK_CMD="$DIR/bin/fleetwright hook"');
+  assert.notEqual(decision, -1, 'the wrapper decision is gone');
+  assert.notEqual(hook, -1, 'the hook command is gone');
+  assert.ok(decision < hook, 'the wrapper decision must come before the hook is written');
+  assert.match(SH, /HOOK_CMD="\$UNIT_NODE_BIN \$DIR\/bin\/fleetwright hook"/, 'the hook is never wrapped');
+  // And an already-installed bare hook is rewritten on the next run, not left
+  // beside the wrapped one to fail twice.
+  assert.match(SH, /\/\\\/bin\\\/\(agent-hub\|fleetwright\) hook\$\/\.test\(h\.command\)/);
+});
+
+test('a pin given to join enrols with a remote coordinator whether or not anything was started here', () => {
+  // `fleetwright join fleet.example.com --pin` on a box without systemd wrote
+  // the address, printed "has not joined yet" and dropped the pin: enrolment
+  // lived only on the started path, on reasoning that holds for a local
+  // coordinator and not for a Worker that is up regardless.
+  assert.match(
+    SH,
+    /if \[ "\$\{STARTED:-0\}" != 1 \] && \[ -n "\$ENROL_URL" \] && \[ "\$FLEET_LOCAL" != 1 \]; then\n\s+enrol_host/,
+    'the not-started path no longer enrols with a remote coordinator',
+  );
+  // The closing "has not joined yet" is about being enrolled, not about
+  // whether systemd started anything.
+  assert.match(SH, /if \[ -n "\$ENROL_URL" \] && \[ "\$\{ENROLLED:-0\}" != 1 \]; then/);
+  assert.equal((SH.match(/^\s+ENROLLED=1$/gm) || []).length, 2, 'both enrolled outcomes set ENROLLED');
+});
+
+test('a bare coordinator address handed to the installer means https, as join already says', () => {
+  // debconf's "Coordinator URL to join" was answered `fleet.thetech.network`
+  // on the first apt box, written as typed, and enrolment failed with "Failed
+  // to parse URL" — the same thing `fleetwright join` accepts, refused one
+  // screen later. src/core/join.js is the rule; this is it in the installer.
+  const block = /JOINING="\$\{FLEETWRIGHT_COORDINATOR_URL:-\}"[\s\S]*?FLEET_LOCAL=0/.exec(SH);
+  assert.ok(block, 'the joining block is gone');
+  assert.match(block[0], /\*\) JOINING="https:\/\/\$JOINING" ;;/, 'a bare host is not made https');
+  assert.match(block[0], /localhost\*\|127\.\*\|\\\[::1\\\]\*\) JOINING="http:\/\/\$JOINING" ;;/, 'loopback is not made http');
+  assert.match(block[0], /''\|\*:\/\/\*\) ;;/, 'an explicit scheme must be kept as typed');
+  // Normalised BEFORE the local/stdio check, or http://127.0.0.1 typed bare
+  // would slip past it as a fleet to join.
+  assert.ok(block[0].indexOf('JOINING="https://$JOINING"') < block[0].indexOf("''|stdio:*|http://127.0.0.1*"));
+});
+
+test('a sandbox image that is already present is not built again on a re-run', () => {
+  // "already present" followed by "image build failed", on every re-run of a
+  // box that had pulled the image: the present branch left IMAGE set, and the
+  // build below is keyed on exactly that.
+  const present = /ok "\$IMAGE already present for \$RUN_USER"\n(?:\s*#[^\n]*\n)*\s*IMAGE=""/.exec(SH);
+  assert.ok(present, 'the already-present branch does not clear IMAGE, so the build runs anyway');
+});
