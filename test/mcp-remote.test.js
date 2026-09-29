@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import worker from '../worker/src/worker.js';
 import { isMcpPath } from '../src/mcp/routes.js';
 import { s256 } from '../src/mcp/oauth.js';

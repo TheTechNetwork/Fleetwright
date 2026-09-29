@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { generateKeyPair } from '../src/fleet/crypto.js';
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 import worker from '../worker/src/worker.js';
 

@@ -564,7 +564,7 @@ test('the Node coordinator reads the same OAuth variables the Worker does', asyn
   // the App, and no host behind a Node coordinator could ever renew. Both
   // coordinators SERVED the route, so openapi.test.js could not see it: parity
   // of routes, divergence of configuration.
-  const { Coordinator } = await import('../src/fleet/coordinator/server.js');
+  const { Coordinator } = await import('./helpers/node-coordinator.js');
   const names = [
     'FLEETWRIGHT_GITHUB_CLIENT_ID', 'FLEETWRIGHT_GITHUB_CLIENT_SECRET',
     'FLEETWRIGHT_CLOUDFLARE_CLIENT_ID', 'FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET', 'FLEETWRIGHT_CLOUDFLARE_SCOPES',

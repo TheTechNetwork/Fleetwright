@@ -20,7 +20,7 @@ import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 const files = [
   'worker/src/worker.js',
   'worker/src/demo.js',
-  'src/fleet/coordinator/server.js',
+  'test/helpers/node-coordinator.js',
   'src/fleet/coordinator/core.js',
 ];
 

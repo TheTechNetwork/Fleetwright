@@ -24,7 +24,7 @@ import { HostRegistry } from '../src/fleet/coordinator/registry.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { verifyActionsToken, ACTIONS_ISSUER, forgetJwks } from '../src/fleet/coordinator/oidc.js';
-import { Coordinator } from '../src/fleet/coordinator/server.js';
+import { Coordinator } from './helpers/node-coordinator.js';
 import { generateKeyPair } from '../src/fleet/crypto.js';
 
 // --- the ticket ------------------------------------------------------------

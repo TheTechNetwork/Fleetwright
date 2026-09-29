@@ -22,7 +22,7 @@ install-guide sentence until it has been run for a week
 
 §4 chose Cloudflare Workers + Durable Objects for the phone leg, and that is
 what production has always run. For a long time the same design also ran as a
-plain Node process — `src/fleet/coordinator/server.js` — so the whole loop
+plain Node process — now `test/helpers/node-coordinator.js` — so the whole loop
 could be driven on one box with a breakpoint in it: `registry.js`,
 `scheduler.js`, `core.js` and the intent plumbing carry all the decisions and
 touch nothing runtime-specific, so the two were a transport swap rather than

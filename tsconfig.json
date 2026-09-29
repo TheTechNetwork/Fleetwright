@@ -19,7 +19,9 @@
   "include": [
     "src/**/*.js",
     "bin/fleetwright",
-    "bin/fleetwright-sidecar"
+    "bin/fleetwright-sidecar",
+    "test/helpers/node-coordinator.js",
+    "test/helpers/apns-node.js"
   ],
   "exclude": [
     "src/web/console.js",

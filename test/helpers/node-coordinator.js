@@ -1,4 +1,14 @@
-// The coordinator.
+// The coordinator, as a plain Node process — A TEST HELPER, not the product.
+//
+// docs/auth-and-join.md: the coordinator runs as a Cloudflare Worker and
+// nowhere else. This file is the same design driven from an in-process
+// `node:http` server so the whole loop can be tested on one box with a
+// breakpoint in it, and it lives under test/ so that no release, no bundle and
+// no installer ever carries it — `src` is the package boundary (HOST_PATHS in
+// src/core/update.js) and this is outside it. It stays until the socket-leg
+// tests that need a real listener drive the Worker under workerd the way
+// worker/test/live.test.js does; the HTTP-leg tests already can use the
+// Durable Object in-process (see test/openapi.test.js).
 //
 // Hosts dial IN and hold the socket open; nothing you own ever listens on a
 // host (design.md §3). Clients — a phone, a Shortcut, curl — speak ordinary
@@ -27,22 +37,22 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
-import { attachWebSocketServer } from '../ws.js';
-import { CoordinatorCore, deviceStatus, deviceText } from './core.js';
-import { http2Deliver } from '../apns-node.js';
-import { pusherFromEnv } from '../push.js';
-import { PROTOCOL_VERSION } from '../protocol/intents.js';
-import { SPEC_ORIGIN } from './spec.js';
-import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from './oidc.js';
-import { sendInvite } from './invite-email.js';
-import { credentialFrom, isClientCredential } from './credential.js';
-import { RunnerTickets } from './runner-tickets.js';
-import { callbackPage } from './oauth.js';
-import { resource } from '../../core/resources.js';
-import { identify } from './identity.js';
-import { mcpRoutes, isMcpPath } from '../../mcp/routes.js';
-import { memberRoutes, isMemberPath, signInClients } from './member-page.js';
-import { emailOf, installCommand } from './enrollment.js';
+import { attachWebSocketServer } from '../../src/fleet/ws.js';
+import { CoordinatorCore, deviceStatus, deviceText } from '../../src/fleet/coordinator/core.js';
+import { http2Deliver } from './apns-node.js';
+import { pusherFromEnv } from '../../src/fleet/push.js';
+import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
+import { SPEC_ORIGIN } from '../../src/fleet/coordinator/spec.js';
+import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal } from '../../src/fleet/coordinator/oidc.js';
+import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
+import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/credential.js';
+import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
+import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
+import { resource } from '../../src/core/resources.js';
+import { identify } from '../../src/fleet/coordinator/identity.js';
+import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
+import { memberRoutes, isMemberPath, signInClients } from '../../src/fleet/coordinator/member-page.js';
+import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
 
 /** How long to wait for a host's reply before giving up on it. */
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
@@ -58,7 +68,7 @@ export class Coordinator {
    *   stateFile?: string|null,
    *   intentTimeoutMs?: number,
    *   healthIntervalMs?: number,
-   *   logger?: typeof import('../../log.js').log,
+   *   logger?: typeof import('../../src/log.js').log,
    * }} [opts]
    */
   constructor({
@@ -128,7 +138,7 @@ export class Coordinator {
     // value that gets serialised straight out of `GET /api/hosts`, and a live
     // WsConnection hanging off it drags the raw socket, the http.Server and
     // its connection table into that response — see the comment on close().
-    /** @type {Map<string, import('../ws.js').WsConnection>} */
+    /** @type {Map<string, import('../../src/fleet/ws.js').WsConnection>} */
     this.connections = new Map();
     // Debounced: a busy fleet records several events a second and this is a
     // file write. Losing the last 2s of history to a hard kill is a fair price
@@ -372,7 +382,7 @@ export class Coordinator {
   // --- hosts ---------------------------------------------------------------
 
   /**
-   * @param {import('../ws.js').WsConnection} conn
+   * @param {import('../../src/fleet/ws.js').WsConnection} conn
    * @param {import('node:http').IncomingMessage} req
    */
   #onHost(conn, req) {
@@ -475,7 +485,7 @@ export class Coordinator {
    * kind of credential, and no new list of who is allowed. That is the reason
    * this function is a mapping rather than an implementation.
    *
-   * @returns {import('../../mcp/routes.js').Deps}
+   * @returns {import('../../src/mcp/routes.js').Deps}
    */
   #mcpDeps() {
     return {
