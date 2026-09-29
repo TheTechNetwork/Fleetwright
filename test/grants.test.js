@@ -126,6 +126,18 @@ test('the installer has one place a grant is turned on or off, and three callers
   assert.match(SH, /FLEETWRIGHT_SYSTEM_REBOOT\)" = 1 \]; then\n\s+apply_grant reboot yes/);
   assert.match(SH, /--grant\)/);
   assert.match(SH, /GRANT_ONLY=1/);
+  // THE GRANT MODE RUNS BEFORE SECTION 1, which is where the installer finds
+  // its node — and set_env, which records the answer, runs node. The first
+  // `sudo fleetwright grant reboot on` on a real box printed
+  // "NODE_BIN: unbound variable" and changed nothing. So the block resolves
+  // NODE_BIN itself, from the name the CLI hands in, before its first
+  // apply_grant.
+  const block = /if \[ "\$GRANT_ONLY" = 1 \]; then([\s\S]*?)\n\s+exit 0\nfi/.exec(SH)?.[1] ?? '';
+  assert.ok(block, 'the grant-only block is gone');
+  const finds = block.indexOf('NODE_BIN="${FLEETWRIGHT_NODE_BIN:-');
+  const applies = block.indexOf('apply_grant ');
+  assert.ok(finds >= 0, 'the grant-only block does not resolve NODE_BIN');
+  assert.ok(applies > finds, 'the grant-only block applies a grant before it has a node to record it with');
   // A handed-in answer is applied instead of asked, even over a recorded one.
   assert.match(SH, /if \[ -n "\$GRANT_REBOOT" \] && command -v visudo/);
   assert.match(SH, /if \[ -n "\$GRANT_UPGRADES" \] && command -v visudo/);

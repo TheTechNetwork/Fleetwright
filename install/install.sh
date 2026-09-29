@@ -1192,6 +1192,13 @@ if [ "$GRANT_ONLY" = 1 ]; then
   [ -f "$ENV_FILE" ] || die "$ENV_FILE does not exist, so this box is not installed yet — install first, then grant"
   { command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; } || die "no visudo or no /etc/sudoers.d on this box, so nothing here can be granted"
   say "Changing what this box allows from chat"
+  # THE NODE THIS RUNS, before section 1 has found one. set_env records the
+  # answer through node, and the first `fleetwright grant reboot on` on a
+  # real box stopped at "NODE_BIN: unbound variable" for want of this line.
+  # `fleetwright grant` names the node it runs on in FLEETWRIGHT_NODE_BIN; a
+  # hand-run of --grant gets whatever node is on PATH.
+  NODE_BIN="${FLEETWRIGHT_NODE_BIN:-$(command -v node || true)}"
+  [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ] || die "no node to record the answer with — run it as: sudo fleetwright grant …"
   if [ -n "$GRANT_UPGRADES" ]; then apply_grant upgrades "$GRANT_UPGRADES" || exit 1; fi
   if [ -n "$GRANT_REBOOT" ]; then apply_grant reboot "$GRANT_REBOOT" || exit 1; fi
   # THE SERVICE READS THE ANSWER AT START, so it restarts here rather than
