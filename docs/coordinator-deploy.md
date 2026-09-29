@@ -523,6 +523,12 @@ A fleet host holds its socket open for weeks and says almost nothing. The DO
 uses `acceptWebSocket`, so it is **evicted between messages** and rebuilt on the
 next one — otherwise every idle socket would pin it in memory and bill for it.
 
+The heartbeat every host sends is answered without waking it: the object sets
+a `WebSocketRequestResponsePair` for the two frames in
+`src/fleet/protocol/heartbeat.js`, and the runtime replies from outside the
+object — so twenty hosts asking "are you there" every twenty seconds cost no
+duration at all, exactly as the protocol-level ping they replaced did.
+
 Which means the host registry cannot be authoritative: it is rebuilt from what
 hosts report after every eviction. That is the same rule §3 arrived at from a
 completely different direction — *the coordinator's registry is a cache with

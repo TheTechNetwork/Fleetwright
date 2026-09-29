@@ -23,6 +23,7 @@ import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeU
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
+import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets } from './runner-tickets.js';
 import { SpentTokens } from './spent-tokens.js';
 
@@ -323,6 +324,22 @@ export class CoordinatorCore {
     }
 
     if (msg.kind === 'event') return this.#onHostEvent(hostId, msg);
+
+    // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
+    // moves, no event is recorded, no log line — twenty hosts ask three times a
+    // minute, for weeks. Answered here so both coordinators answer it
+    // identically; on Cloudflare the runtime's auto-response usually gets there
+    // first and this branch is what runs when it does not. A pong arriving here
+    // is a host echoing us, and is dropped in the same silence.
+    if (msg.kind === 'ping') {
+      const host = this.registry.hosts.get(hostId);
+      if (host?.connected && typeof host.send === 'function') {
+        // The constant, not a fresh object: the sidecar compares bytes.
+        try { host.send(JSON.parse(HEARTBEAT_PONG)); } catch { /* the socket is going; its close says so */ }
+      }
+      return;
+    }
+    if (msg.kind === 'pong') return;
 
     if (msg.kind !== 'reply' || typeof msg.id !== 'string') {
       this.log.warn(`coordinator: ${hostId} sent something that is not a reply, health or event`);
