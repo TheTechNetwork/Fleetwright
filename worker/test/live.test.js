@@ -37,8 +37,9 @@ const requireWorker = createRequire(new URL('../package.json', import.meta.url))
 // SYSTEM package (/usr/share/nodejs/ws), passed every local run, and then
 // failed on CI with MODULE_NOT_FOUND — a dependency that was never declared
 // anywhere and worked by coincidence. Using the in-repo client also means the
-// handshake below exercises the exact frames a real host sends.
-import { connectWebSocket } from '../../src/fleet/ws.js';
+// handshake below exercises the exact frames a real host sends, over the same
+// platform WebSocket the sidecar dials with.
+import { connectHostSocket } from '../../test/helpers/host-socket.js';
 
 const ADMIN = 'live-test-admin-token-0123456789';
 let worker;
@@ -82,7 +83,7 @@ async function connectHost(hostId) {
   await enrol({ origin, code: minted.code, hostId, publicJwk });
   const { nonce, proof } = await proveIdentity({ origin, hostId, privateJwk });
 
-  const ws = await connectWebSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
+  const ws = await connectHostSocket(`${origin.replace('http', 'ws')}/host/connect?hostId=${hostId}`, {
     headers: { 'x-fleet-nonce': nonce, 'x-fleet-proof': proof },
   });
 

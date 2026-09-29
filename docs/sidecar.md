@@ -256,6 +256,9 @@ agent so transport is one swappable module".
 
 `websocket` is what a deployed host uses: it dials the coordinator and holds the
 connection open, so nothing listens on the host and there is no port to open.
+The socket is Node's own `WebSocket`, opened with the two proof headers on the
+upgrade and kept honest with the heartbeat frame above; the hand-rolled framing
+that used to sit beside it is a test harness now, outside the package.
 
 `stdio` speaks the same newline-delimited JSON over stdin/stdout, which makes
 the whole path drivable by hand with no coordinator at all:

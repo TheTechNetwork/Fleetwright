@@ -173,7 +173,6 @@ never be built.
 | `src/fleet/protocol/` | the intent protocol: built by the coordinator, enforced by the sidecar |
 | `src/fleet/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
 | `src/fleet/coordinator/` | the coordinator's decisions: host registry, scheduler, identity, enrolment — shared with `worker/`, which is where it runs |
-| `src/fleet/ws.js` | a hand-rolled RFC 6455 WebSocket, because zero dependencies |
 | `sandbox/` | the container image a sandboxed session runs in |
 | `bin/fleetwright` | the session manager's CLI and SessionStart hook |
 | `bin/fleetwright-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |

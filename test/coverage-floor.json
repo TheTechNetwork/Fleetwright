@@ -90,7 +90,6 @@
   "src/fleet/protocol/intents.js": 99,
   "src/fleet/push-crypto.js": 100,
   "src/fleet/push.js": 94,
-  "src/fleet/ws.js": 93,
   "src/log.js": 83,
   "src/mcp/authorize-page.js": 98,
   "src/mcp/http.js": 98,

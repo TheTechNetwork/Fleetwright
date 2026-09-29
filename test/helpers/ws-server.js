@@ -1,10 +1,19 @@
-// A minimal RFC 6455 WebSocket, server and client, in plain Node.
+// A minimal RFC 6455 WebSocket SERVER, in plain Node — a test harness.
 //
-// Why hand-rolled rather than `ws`: this project has zero runtime dependencies
-// and that is the portability promise — a coworker clones the repo and runs it,
-// with no install step on either the host or the coordinator. A WebSocket is
-// about 200 lines of well-specified framing, and the alternative is a dependency
-// on the one code path that every host holds open permanently.
+// This was src/fleet/ws.js: client and server both, hand-rolled because the
+// package promised zero runtime dependencies and every fleet host held the
+// client half open permanently. The client half is gone — the sidecar dials
+// with Node's own `WebSocket`, which takes the proof headers and needs no ping
+// now that the heartbeat is a message (src/fleet/protocol/heartbeat.js) — and
+// what is left here is the ACCEPT side, which only the Node coordinator in
+// test/helpers/node-coordinator.js ever used. It lives with it, outside `src`,
+// which is the package boundary: no release, bundle or installer carries it.
+//
+// It stays hand-rolled rather than becoming a dev dependency on `ws` because
+// the frame-level tests in test/ws-server.test.js are the point of it: masking
+// direction, fragmentation, control-frame rules, and length fields that arrive
+// attacker-controlled are exactly what a harness should be able to inject, and
+// a library client would refuse to send most of them.
 //
 // What is implemented: the handshake, text frames, fragmentation, ping/pong,
 // and the close handshake. What is not: binary frames (nothing here sends
@@ -19,8 +28,6 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { connect as netConnect } from 'node:net';
-import { connect as tlsConnect } from 'node:tls';
 
 /** The magic string from RFC 6455 §1.3. Not configurable, not a secret. */
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -266,123 +273,6 @@ export function attachWebSocketServer(server, { path = '/', authorise, onConnect
     });
   });
   return () => server.off('upgrade', onUpgrade);
-}
-
-/**
- * Dial a WebSocket. Resolves once the server has accepted the upgrade.
- *
- * @param {string} url ws:// or wss://
- * @param {{ headers?: Record<string,string>, timeoutMs?: number, maxMessageBytes?: number }} [opts]
- * @returns {Promise<WsConnection>}
- */
-export function connectWebSocket(url, { headers = {}, timeoutMs = 15_000, maxMessageBytes } = {}) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const secure = u.protocol === 'wss:';
-    if (!secure && u.protocol !== 'ws:') return reject(new Error(`not a websocket url: ${url}`));
-    const port = Number(u.port) || (secure ? 443 : 80);
-    const key = randomBytes(16).toString('base64');
-
-    const socket = secure
-      ? tlsConnect({ host: u.hostname, port, servername: u.hostname })
-      : netConnect({ host: u.hostname, port });
-
-    let settled = false;
-    /** @param {Error} e */
-    const fail = (e) => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      reject(e);
-    };
-
-    const timer = setTimeout(() => fail(new Error(`websocket handshake to ${url} timed out`)), timeoutMs);
-    timer.unref?.();
-
-    socket.on('error', fail);
-    socket.once(secure ? 'secureConnect' : 'connect', () => {
-      const lines = [
-        `GET ${u.pathname}${u.search} HTTP/1.1`,
-        `host: ${u.host}`,
-        'upgrade: websocket',
-        'connection: Upgrade',
-        `sec-websocket-key: ${key}`,
-        'sec-websocket-version: 13',
-        ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
-        '',
-        '',
-      ];
-      socket.write(lines.join('\r\n'));
-    });
-
-    /** @type {Buffer} */
-    let head = Buffer.alloc(0);
-    const onHandshakeData = (/** @type {Buffer} */ chunk) => {
-      head = Buffer.concat([head, chunk]);
-      const end = head.indexOf('\r\n\r\n');
-      if (end === -1) {
-        // A server that never finishes its headers must not be able to grow
-        // this buffer without limit.
-        if (head.length > 64 * 1024) fail(new Error('handshake response headers too large'));
-        return;
-      }
-      const raw = head.subarray(0, end).toString('latin1');
-      const [status, ...rest] = raw.split('\r\n');
-      if (!/^HTTP\/1\.1 101/.test(status)) {
-        // The BODY, not only the status line. A refusal says which of "not
-        // enrolled", "revoked" and "the signature does not match" happened, and
-        // those send an operator to three different actions — but only the Node
-        // coordinator can put it in the reason phrase. A Worker's Response puts
-        // it in the body, so reporting the status line alone would throw away
-        // the sentence somebody needs.
-        let body = head.subarray(end + 4).toString('utf8');
-        const refused = () =>
-          fail(new Error(`websocket upgrade refused: ${status.trim()}${body ? ` — ${body.trim()}` : ''}`));
-        if (body) {
-          refused();
-        } else {
-          // Nothing yet: one short beat for it to arrive, and report whatever
-          // there is either way rather than hanging on a server that says
-          // nothing.
-          const bodyTimer = setTimeout(refused, 250);
-          bodyTimer.unref?.();
-          socket.on('data', (/** @type {Buffer} */ more) => {
-            body += more.toString('utf8');
-            clearTimeout(bodyTimer);
-            refused();
-          });
-          socket.once('end', () => {
-            clearTimeout(bodyTimer);
-            refused();
-          });
-        }
-        return;
-      }
-      const got = rest
-        .map((l) => l.split(':'))
-        .find(([k]) => k.toLowerCase().trim() === 'sec-websocket-accept');
-      if (!got || got.slice(1).join(':').trim() !== acceptKey(key)) {
-        // Wrong accept value means whatever answered is not speaking WebSocket
-        // to us — a proxy, a captive portal, or the wrong service on that port.
-        return fail(new Error('websocket accept header did not match'));
-      }
-
-      clearTimeout(timer);
-      settled = true;
-      socket.off('data', onHandshakeData);
-      socket.off('error', fail);
-      const conn = new WsConnection(/** @type {import('node:net').Socket} */ (socket), {
-        isClient: true,
-        maxMessageBytes,
-      });
-      resolve(conn);
-      // Bytes that arrived in the same packet as the handshake response are
-      // already frames, and dropping them loses the first message.
-      const leftover = head.subarray(end + 4);
-      if (leftover.length) socket.emit('data', leftover);
-    };
-    socket.on('data', onHandshakeData);
-  });
 }
 
 // --- framing ----------------------------------------------------------------
