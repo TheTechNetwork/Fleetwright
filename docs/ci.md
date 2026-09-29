@@ -236,6 +236,14 @@ where they disagree — `package.json`, `MARKETING_VERSION` in
 `apps/ios/project.yml`, `versionName` in `apps/android/app/build.gradle.kts`.
 The fourth is `CHANGELOG.md`, whose top section must be that same version.
 
+**Which number: the patch, until 1.0.** 0.4.0 → 0.4.1 → 0.4.2, whatever
+landed — a new command, a new account on the box, a new verb on the wire. This
+is decided, not an oversight: before 1.0 the minor carries no promise anybody
+reads, and a release PR that argues semver over its own number is spending the
+reviewer's attention on the least important line in it. The minor moves when
+the owner says so, for a change that makes an operator do something by hand
+across the fleet; nothing else earns it.
+
 1. Bump the three, write the changelog section, merge.
 2. Publish a GitHub release on that commit. **Prerelease** ships external
    TestFlight and the Play commit track; a **full release** ships the App Store
