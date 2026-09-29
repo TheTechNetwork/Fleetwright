@@ -1,0 +1,236 @@
+# Which labels a pull request gets, from the files it changes.
+#
+# Read by .github/workflows/label.yml (actions/labeler). Two families, both
+# already in the repository's label set: `platform/*` says WHERE a change
+# lands, `area/*` says WHAT it is about. A PR usually gets one of the first
+# and one or two of the second; a version bump touches a bit of everything
+# and reads that way.
+#
+# EVERY TRACKED FILE MATCHES A `platform/*` RULE OR `area/ci` (the tooling
+# is not a platform), and test/labeler.test.js fails a tree where one does not — a PR that changes something no rule names
+# would otherwise arrive unlabelled, which is the same as "nobody looked". The
+# `area/*` rules are narrower on purpose: an area a file does not belong to is
+# noise, not coverage, and a file with no area is fine.
+#
+# `sync-labels` is on in the workflow, so a label follows the diff: a commit
+# that takes the Android change out of a PR takes the label with it.
+
+# --- where -----------------------------------------------------------------
+
+platform/ios:
+  - changed-files:
+      - any-glob-to-any-file: ['apps/ios/**']
+
+platform/android:
+  - changed-files:
+      - any-glob-to-any-file: ['apps/android/**']
+
+# The Worker, the Node coordinator behind the tests, and the push path that
+# only the coordinator sends on.
+platform/coordinator:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'worker/**'
+          - 'src/fleet/coordinator/**'
+          - 'src/fleet/push.js'
+          - 'src/fleet/push-crypto.js'
+          - 'src/fleet/apns-node.js'
+          - 'src/fleet/crypto.js'
+          - 'openapi.json'
+
+# fleetwright and the sidecar, on a box: the hub, the host side of the fleet,
+# the session image it runs, and everything that installs or updates it.
+platform/host:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/index.js'
+          - 'src/config.js'
+          - 'src/log.js'
+          - 'src/core/**'
+          - 'src/adapters/**'
+          - 'src/mcp/**'
+          - 'src/web/**'
+          - 'src/fleet/host/**'
+          - 'src/fleet/protocol/**'
+          - 'src/fleet/ws.js'
+          - 'src/fleet/legacy-*.js'
+          - 'sandbox/**'
+          - 'install/**'
+          - 'apt/**'
+          - 'archive/**'
+          - '.dev.vars.example'
+
+platform/cli:
+  - changed-files:
+      - any-glob-to-any-file: ['bin/**']
+
+platform/docs:
+  - changed-files:
+      - any-glob-to-any-file: ['docs/**', '*.md', 'apps/*.md', 'LICENSE*']
+
+# --- what ------------------------------------------------------------------
+
+area/ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - '.githooks/**'
+          - '.claude/**'
+          - 'scripts/**'
+          - 'test/**'
+          - 'tools/**'
+          - 'package.json'
+          - 'package-lock.json'
+          - 'tsconfig*.json'
+          - 'renovate.json'
+          - 'commitlint.config.mjs'
+          - 'mise.toml'
+          - '.gitignore'
+          - 'docs/ci.md'
+          - 'docs/ci-scope.md'
+          - 'docs/app-testing.md'
+          - 'docs/app-parity.md'
+
+area/install:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'install/**'
+          - 'apt/**'
+          - 'tools/build-*'
+          - 'tools/rollout.mjs'
+          - 'src/core/release*.js'
+          - 'src/core/update*.js'
+          - 'src/core/upgrades.js'
+          - 'src/core/apt-release.js'
+          - 'src/core/changelog.js'
+          - 'src/core/channel.js'
+          - 'src/core/migrate.js'
+          - 'src/core/restart-watch.js'
+          - 'src/core/env-file.js'
+          - 'src/core/which.js'
+          - 'src/fleet/legacy-*.js'
+          - 'docs/packaging.md'
+          - 'docs/deployment.md'
+          - 'docs/coordinator-deploy.md'
+          - 'docs/naming.md'
+          - 'docs/dependencies.md'
+
+area/credentials:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/core/accounts.js'
+          - 'src/core/claude-credential.js'
+          - 'src/core/connectors.js'
+          - 'src/core/credential-broker.js'
+          - 'src/core/login.js'
+          - 'src/core/secret-store.js'
+          - 'src/core/api-token.js'
+          - 'src/core/direct-config.js'
+          - 'src/fleet/coordinator/credential.js'
+          - 'src/fleet/coordinator/oauth.js'
+          - 'src/fleet/coordinator/oidc.js'
+          - 'src/fleet/host/pkce.js'
+          - 'sandbox/credential.mjs'
+          - 'docs/accounts.md'
+          - 'docs/one-account-per-person.md'
+          - 'docs/credential-broker.md'
+          - 'docs/connectors.md'
+          - 'docs/github-app.md'
+
+area/sessions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/core/sessions.js'
+          - 'src/core/podman.js'
+          - 'src/core/claude.js'
+          - 'src/core/pane.js'
+          - 'src/core/tmux.js'
+          - 'src/core/reclaim.js'
+          - 'src/core/sandbox-*.js'
+          - 'src/core/profiles.js'
+          - 'src/core/rules.js'
+          - 'src/core/titles.js'
+          - 'src/core/keepalive.js'
+          - 'src/core/hook-socket.js'
+          - 'src/core/files.js'
+          - 'src/core/logs.js'
+          - 'src/core/runners.js'
+          - 'src/core/activity.js'
+          - 'src/fleet/host/pane.js'
+          - 'src/fleet/host/watcher.js'
+          - 'src/fleet/host/prompt.js'
+          - 'src/fleet/coordinator/scheduler.js'
+          - 'src/fleet/coordinator/runner-tickets.js'
+          - 'sandbox/**'
+          - 'docs/session-manager.md'
+          - 'docs/task-at-start.md'
+          - 'docs/hook-socket.md'
+          - 'docs/first-session.md'
+          - 'docs/filesystem.md'
+          - 'docs/runner-central.md'
+          - 'docs/ephemeral-hosts.md'
+
+area/protocol:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/fleet/protocol/**'
+          - 'src/fleet/ws.js'
+          - 'src/fleet/host/hub-client.js'
+          - 'src/fleet/host/transports/**'
+          - 'src/fleet/coordinator/spec.js'
+          - 'openapi.json'
+          - 'docs/intents.md'
+          - 'docs/protocol-negotiation.md'
+          - 'docs/coordinator.md'
+          - 'docs/sidecar.md'
+
+area/onboarding:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/fleet/coordinator/enrollment.js'
+          - 'src/fleet/coordinator/invites.js'
+          - 'src/fleet/coordinator/invite-email.js'
+          - 'src/fleet/coordinator/member-page.js'
+          - 'src/fleet/coordinator/hosts.js'
+          - 'src/core/join.js'
+          - 'src/core/fleet-identity.js'
+          - 'src/fleet/host/enrol-next.js'
+          - 'src/fleet/host/identity.js'
+          - 'src/fleet/host/config.js'
+          - 'install/install.sh'
+          - 'docs/identity.md'
+          - 'docs/first-session.md'
+          - 'docs/psychology.md'
+
+area/security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/core/trust.js'
+          - 'src/core/redact.js'
+          - 'src/core/egress.js'
+          - 'src/core/sandbox-userns.js'
+          - 'src/fleet/crypto.js'
+          - 'src/fleet/coordinator/identity.js'
+          - 'src/fleet/coordinator/spent-tokens.js'
+          - 'src/fleet/coordinator/random.js'
+          - 'sandbox/egress/**'
+          - 'docs/trust.md'
+          - 'docs/security.md'
+          - 'docs/hardening.md'
+          - 'docs/push-encryption.md'
+          - 'docs/relay-terms.md'
+
+area/notifications:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/fleet/push.js'
+          - 'src/fleet/push-crypto.js'
+          - 'src/fleet/apns-node.js'
+          - 'apps/ios/Fleetwright/NotificationAnswers.swift'
+          - 'apps/android/app/src/main/java/network/thetech/fleetwright/Messaging.kt'
+          - 'apps/android/app/src/main/java/network/thetech/fleetwright/NotificationAnswers.kt'
+          - 'docs/push.md'
+          - 'docs/push-encryption.md'
+          - 'docs/outbox.md'
+          - 'docs/telegram.md'
+          - 'docs/whatsapp.md'
