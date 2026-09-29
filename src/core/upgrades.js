@@ -21,6 +21,7 @@ import { existsSync, statSync } from 'node:fs';
 
 import { log } from '../log.js';
 import { unitName } from '../fleet/legacy-paths.js';
+import { APT_PACKAGE } from './apt-release.js';
 
 const CHECK_TIMEOUT_MS = 20_000;
 
@@ -70,6 +71,14 @@ function run(argv, timeout = CHECK_TIMEOUT_MS) {
  */
 export const UPGRADE_UNIT = 'fleetwright-upgrade.service';
 export const APT_UPDATE_UNIT = 'fleetwright-apt-update.service';
+/**
+ * The third unit: the fleetwright package alone, for a box apt owns. The
+ * system unit holds the package for its run, so the two doors move disjoint
+ * sets — "Apply update" is this one and "Apply system upgrade" is the other,
+ * and neither drags the other's packages along. Started with --no-block,
+ * because the package's postinst restarts the hub that started it.
+ */
+export const PACKAGE_UPGRADE_UNIT = 'fleetwright-package-upgrade.service';
 const SYSTEMCTL = '/usr/bin/systemctl';
 const REFUSED_RE = /not allowed to execute|sorry, user|a password is required/i;
 
@@ -142,18 +151,37 @@ export function systemUpdates() {
   const r = run(['apt', 'list', '--upgradable']);
   if (r.status !== 0) return { ...none, reason: r.stderr.split('\n')[0] || 'apt failed' };
 
-  const lines = r.stdout
-    .split('\n')
-    .filter((l) => l.includes('/') && !l.startsWith('Listing'))
-    .map((l) => l.trim());
-  const security = lines.filter((l) => /-security/i.test(l)).length;
-
   return {
     supported: true,
-    count: lines.length,
-    security,
+    ...parseUpgradable(r.stdout),
     rebootRequired: existsSync('/var/run/reboot-required'),
     listsAgeHours: packageListAgeHours(),
+  };
+}
+
+/**
+ * `apt list --upgradable`, read. PURE, so it is tested without apt.
+ *
+ * THE FLEETWRIGHT PACKAGE IS NOT AN OPERATING-SYSTEM UPDATE. On a box apt
+ * owns it sits in this list like any other, and counting it here made the
+ * same release show up twice on a phone — "1 package can be upgraded" above
+ * "fleetwright 0.4.0 is waiting" — with the OS button installing it. It is
+ * reported by the release check and installed by its own unit; this list is
+ * everything else, which is what the system unit now upgrades. On a box
+ * without the package the line is never there and nothing changes.
+ *
+ * @param {string} stdout
+ * @returns {{ count: number, security: number, packages: string[] }}
+ */
+export function parseUpgradable(stdout) {
+  const lines = String(stdout || '')
+    .split('\n')
+    .filter((l) => l.includes('/') && !l.startsWith('Listing'))
+    .map((l) => l.trim())
+    .filter((l) => l.split('/')[0] !== APT_PACKAGE);
+  return {
+    count: lines.length,
+    security: lines.filter((l) => /-security/i.test(l)).length,
     // Names only. The full apt line is version noise that no notification has
     // room for.
     packages: lines.map((l) => l.split('/')[0]).slice(0, 20),
@@ -317,7 +345,9 @@ export function plannedUpgrades({ hasAptGet = () => existsSync('/usr/bin/apt-get
   if (!hasAptGet()) return { supported: false, packages: [] };
   const r = exec(['apt-get', '-s', 'upgrade']);
   if (r.status !== 0) return { supported: false, packages: [] };
-  return { supported: true, packages: parseUpgradePlan(r.stdout) };
+  // The simulate cannot see the hold the unit will put on the package, so it
+  // lists it; the unit will not move it, and the reply must not claim it did.
+  return { supported: true, packages: parseUpgradePlan(r.stdout).filter((pk) => pk.name !== APT_PACKAGE) };
 }
 
 /**
@@ -343,6 +373,81 @@ export function describeApplied(applied, plan) {
 }
 
 /**
+ * What an operator has to do for this box to apply packages from chat: the
+ * refusal both apply paths give, so the two cannot drift apart.
+ *
+ * @param {import('../config.js').Config} cfg
+ */
+function upgradesOff(cfg) {
+  return (
+        'System upgrades are off.\n\n' +
+        'This service runs unprivileged on purpose, so applying packages needs a rule that says ' +
+        'so out loud. On the box:\n\n' +
+        // THE SAME RULE THE INSTALLER WRITES, and it has to be — somebody who
+        // pastes this and somebody who re-runs the installer must end up with
+        // the same permissions, or one of them gets an upgrade that stalls on
+        // a conffile prompt and the other does not.
+        //
+        // The backslashes are not decoration: `:` and `=` are sudoers
+        // metacharacters, separating the host, runas and command sections, and
+        // visudo rejects the line without them.
+        // THE UNITS FIRST: a grant to start a unit that is not installed
+        // permits nothing. Both live in install/ and take no arguments.
+        '  sudo install -m 0644 install/fleetwright-upgrade.service install/fleetwright-apt-update.service install/fleetwright-package-upgrade.service /etc/systemd/system/\n' +
+        '  sudo systemctl daemon-reload\n' +
+        '  sudo tee /etc/sudoers.d/fleetwright-upgrade >/dev/null <<\'EOF\'\n' +
+        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}, /usr/bin/systemctl start --no-block ${PACKAGE_UPGRADE_UNIT}\n` +
+        '  EOF\n' +
+        '  sudo chmod 0440 /etc/sudoers.d/fleetwright-upgrade\n\n' +
+        'then set FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env and restart.\n' +
+        `Scoped to starting those three units — one runs \`apt-get -y upgrade\` with the fleetwright package held and conffile prompts answered, ` +
+        'one `apt-get update`, one `apt-get install --only-upgrade fleetwright` — it cannot install, remove or run anything else.'
+  );
+}
+
+/**
+ * Install the fleetwright package that apt has waiting, and nothing else.
+ *
+ * THE OTHER DOOR. "Apply update" on a box apt owns used to point at the
+ * system upgrade, which takes every package waiting to move this one; now it
+ * starts the package unit, whose ExecStart names fleetwright and no
+ * argument the hub could widen. --no-block, and the reply comes back at
+ * once: the package's postinst restarts this very process, so waiting on the
+ * unit would be waiting on our own restart. The health frame reports the
+ * new version when the services are back, which the apps already draw.
+ *
+ * The same grant gates it. A box whose sudoers predates this unit is refused
+ * by sudo, which is a clean signal: the remedy is the installer's --repair,
+ * and `apt install fleetwright` on the box works meanwhile.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {{ actor?: string|null, version?: string|null, exec?: typeof run }} [opts]
+ */
+export function runPackageUpgrade(cfg, { actor = null, version = null, exec = run } = {}) {
+  if (!cfg.systemUpgrade) return { ok: false, text: upgradesOff(cfg) };
+  const what = `${APT_PACKAGE}${version ? ` ${version}` : ''}`;
+  log.warn(`upgrade: installing ${what} from apt${actor ? ` for ${actor}` : ''}`);
+  const r = exec(['sudo', '-n', SYSTEMCTL, 'start', '--no-block', unitName(PACKAGE_UPGRADE_UNIT)], 30_000);
+  if (r.status !== 0 && REFUSED_RE.test(`${r.stderr}${r.stdout}`)) {
+    return {
+      ok: false,
+      text:
+        `This box's sudoers rule predates the package unit, so it cannot install ${what} from here yet.\n` +
+        `On the box: sudo ${cfg.installDir}/install/install.sh --repair puts the rule in place — or sudo apt install ${APT_PACKAGE} does the update itself.`,
+    };
+  }
+  if (r.status !== 0) {
+    return { ok: false, text: `could not start ${PACKAGE_UPGRADE_UNIT}:\n${upgradeFailureDetail(r)}` };
+  }
+  return {
+    ok: true,
+    text:
+      `Installing ${what} from apt. The services restart themselves when it lands — sessions keep running — ` +
+      'and this box reports the new version within a minute.',
+  };
+}
+
+/**
  * Apply system updates.
  *
  * The installer offers to set this up, and the grant is narrow enough to be
@@ -362,34 +467,7 @@ export function describeApplied(applied, plan) {
  *   can script what sudo and apt answer without either on the box
  */
 export function runUpgrade(cfg, { actor = null, exec = run, updates = systemUpdates } = {}) {
-  if (!cfg.systemUpgrade) {
-    return {
-      ok: false,
-      text:
-        'System upgrades are off.\n\n' +
-        'This service runs unprivileged on purpose, so applying packages needs a rule that says ' +
-        'so out loud. On the box:\n\n' +
-        // THE SAME RULE THE INSTALLER WRITES, and it has to be — somebody who
-        // pastes this and somebody who re-runs the installer must end up with
-        // the same permissions, or one of them gets an upgrade that stalls on
-        // a conffile prompt and the other does not.
-        //
-        // The backslashes are not decoration: `:` and `=` are sudoers
-        // metacharacters, separating the host, runas and command sections, and
-        // visudo rejects the line without them.
-        // THE UNITS FIRST: a grant to start a unit that is not installed
-        // permits nothing. Both live in install/ and take no arguments.
-        '  sudo install -m 0644 install/fleetwright-upgrade.service install/fleetwright-apt-update.service /etc/systemd/system/\n' +
-        '  sudo systemctl daemon-reload\n' +
-        '  sudo tee /etc/sudoers.d/fleetwright-upgrade >/dev/null <<\'EOF\'\n' +
-        `  ${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl start ${UPGRADE_UNIT}, /usr/bin/systemctl start ${APT_UPDATE_UNIT}\n` +
-        '  EOF\n' +
-        '  sudo chmod 0440 /etc/sudoers.d/fleetwright-upgrade\n\n' +
-        'then set FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env and restart.\n' +
-        `Scoped to starting those two units — one runs \`apt-get -y upgrade\` with conffile prompts answered, the other \`apt-get update\` — ` +
-        'it cannot install, remove or run anything else.',
-    };
-  }
+  if (!cfg.systemUpgrade) return { ok: false, text: upgradesOff(cfg) };
 
   const before = updates();
   if (before.supported && !before.count) {

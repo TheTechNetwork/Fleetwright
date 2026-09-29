@@ -113,7 +113,7 @@ test('with upgrades off, the refusal is the instructions', () => {
   // see it.
   const r = runUpgrade(/** @type {any} */ ({ systemUpgrade: false, runUser: 'agent' }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/systemctl start fleetwright-upgrade\.service, \/usr\/bin\/systemctl start fleetwright-apt-update\.service/);
+  assert.match(r.text, /agent ALL=\(root\) NOPASSWD: \/usr\/bin\/systemctl start fleetwright-upgrade\.service, \/usr\/bin\/systemctl start fleetwright-apt-update\.service, \/usr\/bin\/systemctl start --no-block fleetwright-package-upgrade\.service/);
   assert.match(r.text, /FLEETWRIGHT_SYSTEM_UPGRADE=1/);
   assert.match(r.text, /cannot install, remove or run anything else/);
   assert.match(r.text, /apt-get update/, 'the refresh is in the grant, because this box never does it itself');

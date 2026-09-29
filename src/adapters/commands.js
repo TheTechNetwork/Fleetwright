@@ -102,7 +102,7 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
-import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
+import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade, runPackageUpgrade } from '../core/upgrades.js';
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
@@ -1610,14 +1610,23 @@ export const COMMANDS = {
       // the package, and nothing else on an apt box pulls it.
       if (status.packaged && ctx.cfg.releaseSource === 'apt') {
         const r = await checkRelease(ctx.cfg);
+        const owner = `${status.dir} is installed from apt, so apt is what updates it.`;
+        // APPLY MEANS THE PACKAGE, ALONE. This used to hand the person to
+        // /upgrade — the system updates — which moved every package waiting to
+        // move this one. The package has a unit of its own now; the system
+        // unit holds it for its run; the two buttons move disjoint sets.
+        if ((flags.has('restart') || flags.has('apply')) && r.available) {
+          const p = runPackageUpgrade(ctx.cfg, { actor: ctx.actor, version: r.available });
+          return { ok: p.ok, text: `${owner}\n\n${p.text}` };
+        }
         const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
         const imageNote = image?.text ? `\n\n${image.text}` : '';
         return {
           ok: r.ok,
-          text: `${status.dir} is installed from apt, so apt is what updates it.\n\n${r.message}${imageNote}`,
+          text: `${owner}\n\n${r.message}${imageNote}`,
           // Only when there is something to install AND this box may install
-          // it from here: without the grant /upgrade can only explain itself.
-          buttons: r.available && ctx.cfg.systemUpgrade ? [{ label: 'Install system updates', command: '/upgrade' }] : undefined,
+          // it from here: without the grant the apply can only explain itself.
+          buttons: r.available && ctx.cfg.systemUpgrade ? [{ label: `Install ${r.available}`, command: '/update --apply' }] : undefined,
         };
       }
 
