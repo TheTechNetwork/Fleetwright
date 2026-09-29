@@ -94,9 +94,12 @@ export function checkAptRelease({ exec = run } = {}) {
       configured: true,
       ok: true,
       reason: 'apt',
+      // THE PACKAGE'S OWN DOOR, not the system upgrade's. This said "installs
+      // with the system updates", and on a phone that was the wrong button:
+      // Apply system upgrade took the kernel along to move this one package.
       message:
         `${APT_PACKAGE} ${candidate} is waiting in apt (this box has ${installed}).\n` +
-        'It installs with the system updates: /upgrade, or apt upgrade on the box.',
+        `Apply update installs just the package: /update --apply, or apt install ${APT_PACKAGE} on the box.`,
     };
   }
   return {

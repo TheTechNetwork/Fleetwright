@@ -386,8 +386,16 @@ offer a button that installs past apt, and leave the next `apt upgrade` to move
 
 So on such a box:
 
-- **`/update`** reports apt's candidate, and offers `/upgrade` (the system
-  updates, which install the package) only when the box has that grant.
+- **`/update`** reports apt's candidate, and **Apply update** installs the
+  package alone: `install/fleetwright-package-upgrade.service` runs
+  `apt-get install --only-upgrade fleetwright` and nothing else, started with
+  `--no-block` because the package's postinst restarts the hub that started
+  it. Offered only when the box has the upgrade grant.
+- **`/upgrade`** is the operating system, and on such a box that means
+  **everything but fleetwright**: `fleetwright-upgrade.service` holds the
+  package for its run and lets it go afterwards (a hold the operator set
+  themselves is kept). The OS count leaves the package out too, so one release
+  is not reported twice. Two buttons, two disjoint sets of packages.
 - **`/channel`** is `stable` and pinned. There is no rolling address in apt;
   a box that wants main builds uses the one-liner.
 - **The one-liner refuses**, and names the apt commands for each thing it

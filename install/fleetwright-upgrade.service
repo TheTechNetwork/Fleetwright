@@ -23,7 +23,20 @@ Documentation=https://github.com/TheTechNetwork/Fleetwright
 Type=oneshot
 User=root
 Environment=DEBIAN_FRONTEND=noninteractive
+# EVERYTHING BUT FLEETWRIGHT. On a box apt owns, the fleetwright package is
+# just another upgradable, and "Apply system upgrade" would move it along
+# with the kernel — restarting the hub in the middle of a run somebody
+# started for the OS. fleetwright-package-upgrade.service is the door for
+# the package; this one holds it for the run and lets it go afterwards.
+#
+# A hold the operator set themselves is kept: the marker in /run says the
+# package was already held, and ExecStopPost then leaves it that way. On a
+# box where the package is not installed at all (a one-liner install), both
+# steps are no-ops — `-` in front means a failure here never stops the
+# upgrade, and ExecStopPost runs whether apt-get succeeded or not.
+ExecStartPre=-/bin/sh -c 'rm -f /run/fleetwright-upgrade.held; dpkg-query -W fleetwright >/dev/null 2>&1 || exit 0; if apt-mark showhold 2>/dev/null | grep -qx fleetwright; then touch /run/fleetwright-upgrade.held; else apt-mark hold fleetwright >/dev/null; fi'
 ExecStart=/usr/bin/apt-get -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef upgrade
+ExecStopPost=-/bin/sh -c 'if [ -e /run/fleetwright-upgrade.held ]; then rm -f /run/fleetwright-upgrade.held; elif dpkg-query -W fleetwright >/dev/null 2>&1; then apt-mark unhold fleetwright >/dev/null; fi'
 # Long enough for a kernel plus a toolchain on a slow mirror; upgrades.js waits
 # the same fifteen minutes on `systemctl start`.
 TimeoutStartSec=900

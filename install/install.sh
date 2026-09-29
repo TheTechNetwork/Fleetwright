@@ -921,6 +921,9 @@ install_upgrade_units() {
   [ "$PLATFORM" = macos ] && return 0
   install_unit fleetwright-upgrade
   install_unit fleetwright-apt-update
+  # The package's own door, for a box apt owns: it names fleetwright and
+  # nothing else, and the system unit holds fleetwright for its run.
+  install_unit fleetwright-package-upgrade
   systemctl daemon-reload >/dev/null 2>&1 || true
 }
 
@@ -952,9 +955,14 @@ write_upgrade_sudoers() {
   # The old apt-get lines are not written any more. upgrades.js still tries
   # them when the unit grant is refused, so a box whose rule predates this
   # keeps upgrading the way it did until --repair moves it across.
+  #
+  # THE THIRD, WITH --no-block: the package unit restarts the hub that starts
+  # it, so the hub must not wait on it. The option is part of the granted
+  # line — sudo matches the whole argv — and it is the only form permitted.
   {
     printf '%s ALL=(root) NOPASSWD: /usr/bin/systemctl start fleetwright-upgrade.service, ' "$RUN_USER"
-    printf '/usr/bin/systemctl start fleetwright-apt-update.service\n'
+    printf '/usr/bin/systemctl start fleetwright-apt-update.service, '
+    printf '/usr/bin/systemctl start --no-block fleetwright-package-upgrade.service\n'
   } > "$tmp"
   if visudo -cf "$tmp" >/dev/null 2>&1; then
     install -m 0440 "$tmp" /etc/sudoers.d/fleetwright-upgrade
@@ -2689,10 +2697,12 @@ if [ "$WIZARD" = yes ]; then
   if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '\n  /upgrade can show what the operating system has waiting, and apply it.\n'
-    printf '  That needs one sudoers rule permitting exactly two commands:\n'
-    printf '      apt-get update       (refresh the package lists)\n'
-    printf '      apt-get -y upgrade   (install what is waiting)\n'
-    printf '  and nothing else — not install, not remove, not a shell.\n'
+    printf '  That needs one sudoers rule permitting exactly three things, each a\n'
+    printf '  root-owned unit this user may start and cannot give arguments to:\n'
+    printf '      apt-get update                          (refresh the package lists)\n'
+    printf '      apt-get -y upgrade                      (install what is waiting, fleetwright held)\n'
+    printf '      apt-get install --only-upgrade fleetwright   (this package alone)\n'
+    printf '  and nothing else — not another package, not remove, not a shell.\n'
     printf '\n  The refresh matters: this box does not update its package lists on its\n'
     printf '  own, so without it "no updates" would mean "nobody has looked since\n'
     printf '  install day".\n'
@@ -2708,7 +2718,7 @@ if [ "$WIZARD" = yes ]; then
       if write_upgrade_sudoers; then
         set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
-        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade and fleetwright-apt-update"
+        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update and fleetwright-package-upgrade"
       else
         warn "the sudoers rule did not validate, so it was NOT installed"
       fi

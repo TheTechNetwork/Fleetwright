@@ -1,0 +1,31 @@
+[Unit]
+Description=fleetwright — install the fleetwright package waiting in apt, on request from the hub
+Documentation=https://github.com/TheTechNetwork/Fleetwright
+
+[Service]
+# ONE PACKAGE, BY NAME, AND NOTHING ELSE. On a box apt owns, "Apply update"
+# used to mean "install the system updates" — the only door was
+# fleetwright-upgrade.service, which takes every package that is waiting,
+# kernel included, to move this one. This unit is the other door: apt
+# upgrades fleetwright alone, and the system unit beside it now holds
+# fleetwright for its run, so each button moves exactly what it names.
+#
+# The name is fixed here, in a file root owns. The hub may only START this
+# unit — `systemctl start --no-block` — and cannot hand it another package.
+#
+# --no-block on the grant, not --wait: the package's postinst restarts the
+# hub, so a hub that waited on this unit would be waiting on its own
+# restart. It starts the unit, answers, and the health frame reports the new
+# version when the services come back.
+#
+# The same conservative dpkg flags as the system unit: an upgrade run by a
+# machine must not replace a file somebody edited.
+Type=oneshot
+User=root
+Environment=DEBIAN_FRONTEND=noninteractive
+ExecStart=/usr/bin/apt-get -y -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef install --only-upgrade fleetwright
+TimeoutStartSec=900
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fleetwright-package-upgrade
