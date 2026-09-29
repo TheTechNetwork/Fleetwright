@@ -21,6 +21,7 @@
 // only part that requires having read which machine you are talking to.
 
 import { spawnSync } from 'node:child_process';
+import { grantCommand } from './grants.js';
 import { randomInt } from 'node:crypto';
 import os from 'node:os';
 
@@ -67,11 +68,11 @@ export function reboot(cfg, args, { actor = null, sessions = [], now = () => Dat
       text:
         'Rebooting from chat is off.\n\n' +
         'It is a bigger grant than the package one — it ends every running session — so it is a ' +
-        'separate rule. On the box:\n\n' +
-        `  echo '${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl reboot' \\\n` +
-        '    | sudo tee /etc/sudoers.d/fleetwright-reboot\n' +
-        '  sudo chmod 0440 /etc/sudoers.d/fleetwright-reboot\n\n' +
-        'then set FLEETWRIGHT_SYSTEM_REBOOT=1 in /etc/fleetwright.env and restart.',
+        'separate rule, and one only somebody with a shell on the box can give. There:\n\n' +
+        `  ${grantCommand('reboot', 'on')}\n\n` +
+        `which writes /etc/sudoers.d/fleetwright-reboot (${cfg.runUser} ALL=(root) NOPASSWD: /usr/bin/systemctl reboot), ` +
+        'records FLEETWRIGHT_SYSTEM_REBOOT=1 in /etc/fleetwright.env and restarts the service; sessions keep running. ' +
+        'On a box installed from apt, sudo dpkg-reconfigure fleetwright asks the same question.',
     };
   }
 

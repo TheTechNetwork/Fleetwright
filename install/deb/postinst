@@ -34,6 +34,14 @@ db_get fleetwright/pin
 PIN="$RET"
 db_get fleetwright/user
 RUN_AS="$RET"
+# THE TWO GRANTS, as debconf has them. Handed to the wizard below on a first
+# install and on a reconfigure; NOT on an upgrade, whose --repair re-applies
+# what the box already recorded and must not let a debconf default overwrite
+# a decision somebody made with `fleetwright grant` since.
+db_get fleetwright/upgrades
+GRANT_UPGRADES="$RET"
+db_get fleetwright/reboot
+GRANT_REBOOT="$RET"
 # Spent once, and not kept: debconf's database is a file on disk, and a pin
 # that sits in it after it has been used is a secret with no purpose.
 db_set fleetwright/pin ""
@@ -96,6 +104,7 @@ RECONFIGURE=0
 #               and left stopped, with the one command that joins it.
 if [ -n "$URL" ] && { [ -z "$PREVIOUS_VERSION" ] || [ "$RECONFIGURE" = 1 ]; }; then
   FLEETWRIGHT_COORDINATOR_URL="$URL" FLEETWRIGHT_ENROL_PIN="$PIN" \
+  FLEETWRIGHT_GRANT_UPGRADES="$GRANT_UPGRADES" FLEETWRIGHT_GRANT_REBOOT="$GRANT_REBOOT" \
     bash "$ROOT/install/install.sh" --wizard </dev/null
 # Either name: a box installed before the rename still has agent-hub.service
 # until this installer's --repair migrates it.

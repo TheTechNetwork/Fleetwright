@@ -104,6 +104,7 @@ import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
 import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade, runPackageUpgrade } from '../core/upgrades.js';
 import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
+import { grantsOf } from '../core/grants.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
@@ -1953,7 +1954,11 @@ export const COMMANDS = {
         // `notes` joins the app half only when there was a release to ask
         // about: absent is "not that kind of box", null is "asked and could
         // not tell", a list is the answer.
-        waiting: { app: notes === undefined ? app : { ...app, notes }, system, sandbox },
+        // WHAT THIS BOX ALLOWS FROM CHAT, beside what is waiting: the apps
+        // draw Apply update, Apply system upgrade and Reboot, and a button for
+        // an action the box refuses is the fault C-2 names. The sidecar
+        // carries this into the health frame.
+        waiting: { app: notes === undefined ? app : { ...app, notes }, system, sandbox, grants: grantsOf(ctx.cfg) },
       };
     },
   },

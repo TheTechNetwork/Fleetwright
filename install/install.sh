@@ -516,7 +516,27 @@ while [ $# -gt 0 ]; do
       printf '                box has already agreed to. Never changes an answer\n'
       printf '  --from-source stay a git checkout. For a box somebody EDITS; every\n'
       printf '                other install ends up on packaged releases\n'
+      printf '  --grant reboot=on|off      change one answer the wizard asked, and nothing\n'
+      printf '  --grant upgrades=on|off    else: the rule, the recorded answer, a restart.\n'
+      printf '                             `sudo fleetwright grant …` is the same thing\n'
       exit 0 ;;
+    --grant)
+      # ONE ANSWER, CHANGED ON PURPOSE, AND NOTHING ELSE TOUCHED. The wizard
+      # asks about upgrades and reboot once and records the answer; --repair
+      # re-applies the recorded answers and never changes one. So a box that
+      # said no on install day — every apt box, which is asked nothing and
+      # takes the defaults — had no way to say yes later except a hand-written
+      # sudoers line and an edit to a root-owned env file. This is that way:
+      # `sudo fleetwright grant reboot on` runs it.
+      shift
+      case "${1:-}" in
+        reboot=on|reboot=yes|reboot=1|reboot=true)        GRANT_REBOOT=yes ;;
+        reboot=off|reboot=no|reboot=0|reboot=false)       GRANT_REBOOT=no ;;
+        upgrades=on|upgrades=yes|upgrades=1|upgrades=true)  GRANT_UPGRADES=yes ;;
+        upgrades=off|upgrades=no|upgrades=0|upgrades=false) GRANT_UPGRADES=no ;;
+        *) die "--grant takes reboot=on|off or upgrades=on|off (got: ${1:-nothing})" ;;
+      esac
+      GRANT_ONLY=1 ;;
     --repair)
       # EVERYTHING THIS INSTALLER GENERATES, PUT BACK, and nothing it was told.
       #
@@ -597,6 +617,21 @@ FROM_SOURCE="${FROM_SOURCE:-0}"
 UPGRADE="${UPGRADE:-0}"
 [ "${FLEETWRIGHT_UPGRADE:-0}" = "1" ] && { UPGRADE=1; WIZARD=no; }
 [ "${FLEETWRIGHT_NONINTERACTIVE:-0}" = "1" ] && WIZARD=no
+# AN ANSWER HANDED IN, for the two questions that write a sudoers rule. debconf
+# asks them on a deb box (install/deb/config) and the postinst passes the
+# answers here; a flag or `fleetwright grant` sets the same variables. Given,
+# the wizard applies the answer instead of asking — even when one is already
+# recorded, which is how `dpkg-reconfigure` changes a decision.
+grant_answer() { # grant_answer VALUE → yes|no|'' (empty: not given, or not an answer)
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    yes|y|on|1|true) printf yes ;;
+    no|n|off|0|false) printf no ;;
+    *) printf '' ;;
+  esac
+}
+GRANT_REBOOT="$(grant_answer "${GRANT_REBOOT:-${FLEETWRIGHT_GRANT_REBOOT:-}}")"
+GRANT_UPGRADES="$(grant_answer "${GRANT_UPGRADES:-${FLEETWRIGHT_GRANT_UPGRADES:-}}")"
+GRANT_ONLY="${GRANT_ONLY:-0}"
 if [ "$WIZARD" = auto ]; then
   # SOMEWHERE TO ASK, AND SOMEWHERE TO SHOW IT.
   #
@@ -1014,6 +1049,49 @@ write_reboot_sudoers() {
   return 1
 }
 
+# THE ONE PLACE A GRANT IS TURNED ON OR OFF. The wizard calls it when somebody
+# answers, --repair calls it for the answers already recorded, and --grant
+# calls it for an answer changed later. Three callers, one implementation:
+# the rule, the units it names, and the recorded answer move together, or a
+# box ends up permitted something the env file says it is not.
+#
+# Off REMOVES the rule. A recorded "0" beside a rule still on disk is the
+# shape of drift this file keeps finding, and a grant somebody withdrew from
+# chat has to be withdrawn from sudo too.
+apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did not validate
+  case "$1:$2" in
+    upgrades:yes)
+      install_upgrade_units
+      if write_upgrade_sudoers; then
+        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
+        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
+        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update and fleetwright-package-upgrade"
+      else
+        warn "the upgrade sudoers rule did not validate, so it was NOT installed"
+        return 1
+      fi ;;
+    upgrades:no)
+      rm -f /etc/sudoers.d/fleetwright-upgrade
+      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
+      ok "system upgrades from chat are off — /etc/sudoers.d/fleetwright-upgrade removed" ;;
+    reboot:yes)
+      if write_reboot_sudoers; then
+        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
+        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
+        ok "/etc/sudoers.d/fleetwright-reboot — $RUN_USER may run systemctl reboot"
+      else
+        warn "the reboot sudoers rule did not validate, so it was NOT installed"
+        return 1
+      fi ;;
+    reboot:no)
+      rm -f /etc/sudoers.d/fleetwright-reboot
+      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
+      ok "reboot from chat is off — /etc/sudoers.d/fleetwright-reboot removed" ;;
+    *) die "apply_grant: not a grant: $1=$2" ;;
+  esac
+  return 0
+}
+
 # RECLAIMING A ROOT-OWNED RELEASE prune COULD NOT DELETE. An update runs as the
 # service user; when prune meets a legacy release left root-owned by an old
 # `sudo` install it renames it aside to `.stale-` and carries on, because the
@@ -1034,6 +1112,36 @@ write_reclaim_sudoers() {
   rm -f "$tmp"
   return 1
 }
+
+# --- 0. --grant: one answer, changed on purpose --------------------------------
+#
+# Everything this needs is defined above this line, and nothing below it runs:
+# a grant is not an install, and a box asking to allow reboots from chat should
+# not have its units rewritten and its hook reinstalled on the way.
+if [ "$GRANT_ONLY" = 1 ]; then
+  [ "$(id -u)" = 0 ] || die "changing a grant writes /etc/sudoers.d, so it needs root: sudo fleetwright grant …"
+  [ -f "$ENV_FILE" ] || die "$ENV_FILE does not exist, so this box is not installed yet — install first, then grant"
+  { command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; } || die "no visudo or no /etc/sudoers.d on this box, so nothing here can be granted"
+  say "Changing what this box allows from chat"
+  if [ -n "$GRANT_UPGRADES" ]; then apply_grant upgrades "$GRANT_UPGRADES" || exit 1; fi
+  if [ -n "$GRANT_REBOOT" ]; then apply_grant reboot "$GRANT_REBOOT" || exit 1; fi
+  # THE SERVICE READS THE ANSWER AT START, so it restarts here rather than
+  # leaving a box whose env file says one thing and whose process believes
+  # another until somebody remembers. Sessions keep running: they live in tmux
+  # and in containers, not in the hub.
+  if command -v systemctl >/dev/null 2>&1; then
+    for u in fleetwright "$(legacy_unit_for fleetwright)"; do
+      systemctl cat "$u.service" >/dev/null 2>&1 || continue
+      if systemctl restart "$u" >/dev/null 2>&1; then
+        ok "$u restarted, so the change is live — sessions keep running"
+      else
+        warn "$u did not restart; sudo systemctl restart $u applies the change"
+      fi
+      break
+    done
+  fi
+  exit 0
+fi
 
 # --- 1. prerequisites -------------------------------------------------------
 say "Checking prerequisites"
@@ -2694,7 +2802,11 @@ if [ "$WIZARD" = yes ]; then
   # Validated with visudo before it is installed. A malformed file in
   # /etc/sudoers.d does not break one rule, it breaks sudo, and that is a bad
   # way to find out.
-  if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" ] \
+  if [ -n "$GRANT_UPGRADES" ] && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
+    # Answered already — by debconf, a flag, or `fleetwright grant` — so the
+    # answer is applied and the question is not asked.
+    apply_grant upgrades "$GRANT_UPGRADES" || true
+  elif [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '\n  /upgrade can show what the operating system has waiting, and apply it.\n'
     printf '  That needs one sudoers rule permitting exactly three things, each a\n'
@@ -2707,21 +2819,7 @@ if [ "$WIZARD" = yes ]; then
     printf '  own, so without it "no updates" would mean "nobody has looked since\n'
     printf '  install day".\n'
     if confirm "Allow system updates from chat?" Y; then
-      # TWO FORMS, AND THE OLD ONE STAYS. sudo matches the whole command line,
-      # so an option this rule does not name is a refusal — which is why an
-      # unattended upgrade could not pass the flags that make it unattended.
-      # The plain form is kept so a box whose rule predates this keeps working:
-      # upgrades.js tries the option form and falls back on a refusal.
-      # The units the grant names, first: a rule that may start a unit that
-      # is not installed is a rule that permits nothing.
-      install_upgrade_units
-      if write_upgrade_sudoers; then
-        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
-        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
-        ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update and fleetwright-package-upgrade"
-      else
-        warn "the sudoers rule did not validate, so it was NOT installed"
-      fi
+      apply_grant upgrades yes || true
     else
       set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
       ok "skipping — /upgrade will report what is waiting but not apply it"
@@ -2734,22 +2832,18 @@ if [ "$WIZARD" = yes ]; then
   # and a reboot takes the tmux server with it, so every session dies
   # mid-thought. Folding the two into one question would mean somebody granting
   # the second while thinking about the first.
-  if [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" ] \
+  if [ -n "$GRANT_REBOOT" ] && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
+    apply_grant reboot "$GRANT_REBOOT" || true
+  elif [ -z "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" ] \
      && command -v sudo >/dev/null && command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     printf '  /reboot can restart this machine from chat, behind three confirmations:\n'
     printf '  the command, a one-time token, and the hostname typed out.\n'
     printf '  EVERY RUNNING SESSION DIES — a reboot takes the tmux server with it.\n'
     if confirm "Allow reboot from chat?" N; then
-      if write_reboot_sudoers; then
-        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
-        set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
-        ok "/etc/sudoers.d/fleetwright-reboot — $RUN_USER may run systemctl reboot"
-      else
-        warn "the sudoers rule did not validate, so it was NOT installed"
-      fi
+      apply_grant reboot yes || true
     else
       set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
-      ok "skipping — /reboot will explain how to turn it on if anybody asks"
+      ok "skipping — sudo fleetwright grant reboot on turns it on later, and /reboot says so"
     fi
     printf '\n'
   fi
@@ -3005,23 +3099,14 @@ if [ "$REPAIR" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
   say "Repairing what this box has already agreed to"
   if command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; then
     if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE)" = 1 ]; then
-      install_upgrade_units
-      if write_upgrade_sudoers; then
-        ok "/etc/sudoers.d/fleetwright-upgrade rewritten"
-      else
-        warn "the upgrade sudoers rule did not validate, so it was left as it was"
-      fi
+      apply_grant upgrades yes || true
     else
-      ok "system upgrades are off here — leaving that alone"
+      ok "system upgrades are off here — leaving that alone (sudo fleetwright grant upgrades on)"
     fi
     if [ "$(get_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT)" = 1 ]; then
-      if write_reboot_sudoers; then
-        ok "/etc/sudoers.d/fleetwright-reboot rewritten"
-      else
-        warn "the reboot sudoers rule did not validate, so it was left as it was"
-      fi
+      apply_grant reboot yes || true
     else
-      ok "reboot from chat is off here — leaving that alone"
+      ok "reboot from chat is off here — leaving that alone (sudo fleetwright grant reboot on)"
     fi
   else
     warn "no visudo on this box, so the sudoers rules were not touched"

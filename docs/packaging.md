@@ -427,6 +427,8 @@ and on `dpkg-reconfigure fleetwright`, and never on an upgrade:
 | `fleetwright/coordinator-url` | high | blank installs without joining |
 | `fleetwright/pin` | high | spent once, then **cleared from debconf's database** |
 | `fleetwright/user` | low | who the sessions run as; blank is the installer's own rule |
+| `fleetwright/upgrades` | low | allow system updates from chat; default **yes**, the wizard's own default |
+| `fleetwright/reboot` | low | allow reboot from chat; default **no**, because it ends every session |
 
 Preseed them for Ansible or cloud-init:
 
@@ -439,7 +441,25 @@ With a URL, the installer runs its wizard with those answers and every other
 question at its default: the same as pressing enter through the one-liner.
 That means sandboxing on when podman is there, system updates from chat
 allowed (apt needs that grant to update the box from the app), reboot from
-chat refused, and the services started. The Claude login is skipped, because
+chat refused, and the services started.
+
+**Changing a grant later is one line, on the box**, and the same line whether
+the box came from apt or the one-liner:
+
+```sh
+sudo fleetwright grant reboot on        # or: reboot off, upgrades on, upgrades off
+sudo fleetwright grant                  # what this box allows now
+```
+
+It writes or removes the sudoers rule, installs the units the upgrade rule
+names, records the answer in `/etc/fleetwright.env` and restarts the service;
+sessions keep running. On a deb box `sudo dpkg-reconfigure fleetwright` asks
+the two questions again and does the same. The refusal a phone or a chat gets
+when a grant is off names this line rather than the rule to type by hand.
+There is deliberately no way to do it from the app: the grant is a root-owned
+rule that lets an unprivileged service run `systemctl reboot`, and a service
+that could write that rule for itself would already hold the privilege. The
+apps show the state, from `updates.grants` in the health frame, and the line. The Claude login is skipped, because
 it needs somebody to paste a code; connect an account from the app. A
 **loopback** URL is read as "run the coordinator here", as it is everywhere
 else.

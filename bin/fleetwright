@@ -61,6 +61,14 @@ switch (sub) {
   case 'doctor':
     await doctor({ repair: argv.includes('--repair') });
     break;
+  case 'grant': {
+    // WHAT THIS BOX ALLOWS FROM CHAT, and the one command that changes it.
+    // The installer does the writing, as root; this names it.
+    const { runGrant } = await import('../src/core/grants.js');
+    const { INSTALL_ROOT } = await import('../src/core/resources.js');
+    const { spawnSync: spawn } = await import('node:child_process');
+    process.exit(runGrant(argv.slice(1), { cfg, root: INSTALL_ROOT, node: process.execPath, uid: process.getuid?.(), spawn }));
+  }
   case 'help':
   case '--help':
   case '-h':
@@ -78,6 +86,11 @@ function usage() {
   fleetwright serve              run the service (systemd calls this)
   fleetwright doctor             check this box can run sessions
   fleetwright doctor --repair    and fix what can be fixed safely
+  fleetwright grant              what this box allows from chat
+  sudo fleetwright grant reboot on
+                                 allow /reboot from chat (or: upgrades on|off,
+                                 reboot off). Writes the sudoers rule, records
+                                 the answer, restarts the service
   fleetwright hook               SessionStart hook (reads Claude's JSON on stdin)
   fleetwright <command...>       run a command against the running hub, e.g.
 

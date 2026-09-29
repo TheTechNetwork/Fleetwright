@@ -24,3 +24,26 @@ Description: Account the sessions run as:
  Blank means the account the services already run as, or on a first install
  the one that ran sudo. Asked only at low priority; preseed it for an
  unattended install.
+
+Template: fleetwright/upgrades
+Type: boolean
+Default: true
+Description: Allow system updates from chat?
+ The app and the chat commands can then show what the operating system has
+ waiting and install it (and install this package alone when a new version
+ is in apt). It is one sudoers rule letting the service user start three
+ root-owned units: apt-get update, apt-get upgrade with fleetwright held,
+ and apt-get install --only-upgrade fleetwright. Nothing else.
+ .
+ Later: sudo fleetwright grant upgrades on|off
+
+Template: fleetwright/reboot
+Type: boolean
+Default: false
+Description: Allow reboot from chat?
+ /reboot can then restart this machine from the app, behind three
+ confirmations: the command, a one-time pin, and the hostname typed out.
+ EVERY RUNNING SESSION DIES, which is why it is a separate question and
+ defaults to no. It is one sudoers rule: systemctl reboot, and nothing else.
+ .
+ Later: sudo fleetwright grant reboot on|off

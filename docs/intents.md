@@ -327,6 +327,14 @@ text, so a chat reads them as prose; the row's own sentence stays the count.
 `notes: null` is cannot tell — GitHub could not be reached, and the reply says
 so — and never "a release with nothing in it".
 
+**And what the box allows.** `waiting.grants` is `{ upgrades, reboot }`, both
+booleans, read from the box's own env file; the sidecar carries it into the
+health frame as `updates.grants`, null from a hub too old to send it. A phone
+draws Reboot only where it would work, and where it would not, the one line
+that changes that: `sudo fleetwright grant reboot on`. There is no verb to
+change a grant, on purpose — it is a root-owned sudoers rule, and a service
+that could write it for itself would already hold the privilege.
+
 **`channel` is what makes `update` mean anything.** It decides which releases a
 box is eligible for: `stable` takes published releases, `rolling` takes the
 newest build of `main` on every merge. Changing it installs nothing by itself.
