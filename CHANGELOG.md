@@ -11,6 +11,50 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.1 — 2026-09-29
+
+**The sidecar runs as its own account, a box tells the app what it allows, and
+updating Fleetwright no longer means upgrading the operating system.**
+
+- **Apply update and Apply system upgrade are two doors.** Apply update now
+  installs the `fleetwright` package alone; Apply system upgrade takes
+  everything else and holds `fleetwright` while it runs, so neither can move
+  the other by accident. The OS count leaves the package out, so one release is
+  reported once and "Nothing to upgrade" is true when only Fleetwright is
+  waiting. A box still on the old grant is refused once and told the two ways
+  out; this release's install repairs the grant, so that happens at most once.
+- **A grant is one line on the box.** `sudo fleetwright grant reboot on` (or
+  `reboot off`, `upgrades on`, `upgrades off`) replaces the four-step recipe
+  the refusal used to print; `sudo fleetwright grant` alone says what this box
+  allows. A deb install asks the same two questions through debconf, and
+  `sudo dpkg-reconfigure fleetwright` asks them again. Both apps now show
+  "Allowed from the app" per box and draw Reboot and Apply system upgrade only
+  where the box would not refuse them; where it would, the line to type is
+  there instead, copyable. A box too old to say keeps its buttons.
+- **The sidecar runs as its own account.** The installer creates
+  `fleetwright-sidecar`, a system account with no login, and the sidecar's
+  service runs as it; sessions keep running as the user they always did. The
+  process holding the coordinator connection can no longer read anybody's
+  Claude or provider credentials, and the process running sessions can no
+  longer read the box's fleet identity. On a packaged box this happens on the
+  next update, once: the key directory and `/etc/fleetwright-sidecar.env`
+  change owner. A box installed from a checkout keeps the old shape until
+  somebody runs `sudo install/install.sh` again. `enrol`, `identity` and
+  `doctor` now run as that account: `sudo -u fleetwright-sidecar fleetwright-sidecar doctor`.
+  Still true, and written down: the sidecar holds the hub token, so this stops
+  it *reading* credentials, not writing one.
+- **A host behind a NAT that dies is noticed.** The sidecar sends a heartbeat
+  every twenty seconds and drops a connection that stays silent, then
+  reconnects; on Cloudflare the coordinator answers without waking anything.
+  Before this a host whose connection had gone dead behind a router looked
+  online until somebody tried it. The sidecar also dials with Node's own
+  WebSocket now; nothing changes on the wire.
+- **Under the hood.** The per-session hook sockets live under
+  `/run/fleetwright`, the hub's own runtime directory, rather than the
+  sidecar's; a box that set `FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR` keeps its
+  path. The two beta reports are kept in `docs/` rather than on branches nobody
+  merged, and contributors get a test-audit skill beside the review one.
+
 ## 0.4.0 — 2026-09-29
 
 **A pin comes with the one line that installs the box, and no box runs its own
