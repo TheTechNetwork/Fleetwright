@@ -26,7 +26,7 @@ import { credentialFrom, isClientCredential } from '../../src/fleet/coordinator/
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
-import { emailOf } from '../../src/fleet/coordinator/enrollment.js';
+import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { withCurrentNames } from '../../src/fleet/legacy-names.js';
 
@@ -770,7 +770,16 @@ export class Fleet {
       });
       await this.#saveEnrollment();
       this.core.record({ event: 'enrol.minted', hostId: null, text: `a ${kind} code was minted by ${actor || 'the admin token'}` });
-      return json({ ok: true, ...issued });
+      // THE ONE-LINER, when this coordinator can honour it: its /install shim
+      // exists only with FLEETWRIGHT_INSTALL_URL set, and the address is the
+      // configured public origin or, failing that, the one this request came
+      // to. A person reads this off a phone and pastes it into a fresh box;
+      // the pin rides as an environment variable, never in the URL — see
+      // installCommand. Not for a device pin, which no installer spends.
+      const install = kind === 'host'
+        ? installCommand({ origin: this.env.FLEETWRIGHT_PUBLIC_ORIGIN || url.origin, installUrl: this.env.FLEETWRIGHT_INSTALL_URL, code: issued.code })
+        : null;
+      return json({ ok: true, ...issued, install });
     }
 
     if (url.pathname === '/api/enroll' && request.method === 'GET') {

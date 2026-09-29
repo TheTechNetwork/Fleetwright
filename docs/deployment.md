@@ -337,7 +337,7 @@ order:
 | it asks | what to have ready | blank means |
 |---|---|---|
 | Coordinator URL to join | the Worker's address — not asked when you curled the coordinator's own `/install`, which carries it | set `FLEETWRIGHT_COORDINATOR_URL` in `/etc/fleetwright-sidecar.env` later |
-| Enrolment pin | six digits from the app (Fleet → Add a host), or from anyone with the admin token | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
+| Enrolment pin | six digits from the app (Fleet → Add a host) — not asked when the one line the app shows was run, which carries the pin as `FLEETWRIGHT_ENROL_PIN` | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
 

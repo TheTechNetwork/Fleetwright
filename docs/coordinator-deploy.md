@@ -175,22 +175,44 @@ than everyone.
 
 There is nothing to set. A host generates its own keypair, presents the public
 half once with a six-digit pin, and signs a fresh nonce on every connection —
-see [`trust.md`](./trust.md). Mint the first pin with the admin token:
+see [`trust.md`](./trust.md).
+
+**Sign in on a phone first, then add machines from it.** The first person to
+sign in is the fleet's admin; Fleet → Add a host mints a pin and shows, beside
+it, the one line that installs a fresh box and joins it:
 
 ```sh
-curl -sX POST https://your-coordinator/api/enroll \
-     -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
-     -H 'content-type: application/json' -d '{"kind":"host"}'
+curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
 ```
 
-then on the box, as the service user:
+The pin rides as an environment variable on the command line, never in the
+URL — it does not reach the coordinator's request log, and the shim `/install`
+serves stays an address and nothing else. Ten minutes, single-use, and spent by
+the installer before it starts the sidecar. A box that is already installed
+takes the pin by hand instead, as the service user:
 
 ```sh
 fleetwright-sidecar enrol 123456
 ```
 
-or send `/enroll 123456` to that box's Telegram bot, which does the same thing
-without an SSH session.
+The line appears only when this coordinator publishes an installer
+(`AGENT_FLEET_INSTALL_URL`); without one the app shows the two-step form.
+
+#### Break-glass: minting a pin with the admin token
+
+For the fleet whose phone is the thing that got lost, or a first host on a
+coordinator nobody has signed in to yet, the admin token mints a pin over
+curl. It is not the everyday path, which is why it is down here rather than
+up there:
+
+```sh
+curl -sX POST https://your-coordinator/api/enroll \
+     -H "authorization: Bearer $AGENT_FLEET_API_TOKEN" \
+     -H 'content-type: application/json' -d '{"kind":"host"}'
+# {"ok":true,"code":"123456","install":"curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh",…}
+```
+
+The reply carries the same one line the app would show.
 
 Optionally, for push:
 
