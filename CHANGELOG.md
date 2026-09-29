@@ -11,6 +11,24 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.3.2 — 2026-09-29
+
+**A machine that has gone quiet can be re-keyed from the app, and an update
+says what is in it.**
+
+- **Every enrolled machine is listed, reporting or not.** Reinstalling a box
+  under its existing name asks for a pin minted for that name, and the app
+  could not mint one because a machine that was not reporting was not on
+  screen. It is now: the fleet list shows every enrolled machine, marked "not
+  reporting" or "revoked", with when it was last heard from, and its page
+  offers Replace key the same as a reporting one. Android says when each
+  machine was last seen too.
+- **Check for updates says what is waiting, not only how much.** The reply
+  names the operating-system packages apt has waiting, and for a Fleetwright
+  release prints the changelog for every version between the one the box
+  runs and the one waiting. Notes that could not be fetched say so rather
+  than showing nothing; the row itself still shows the count.
+
 ## 0.3.1 — 2026-09-29
 
 **What the first apt-installed boxes found, fixed.**
