@@ -86,11 +86,10 @@ It is deliberately not token-gated: the SessionStart hook runs as a child of a
 `claude` process on the same box, and giving it the operator token would mean
 writing that token into a world-readable hook script.
 
-The sidecar runs on that same box, so it can forward hook reports there. That is
-what lets the **per-session hook socket** ([`hook-socket.md`](./hook-socket.md))
-work without touching the session manager: the sidecar owns the socket, so it knows
-which session a report came from, and supplies the name the container was never
-given. The container posts `{uuid, cwd}` to `/run/hub.sock` and can name nothing.
+The **per-session hook socket** ([`hook-socket.md`](./hook-socket.md)) is the
+sandboxed form of the same report, and fleetwright serves it itself: the socket
+says which session a report came from, so the container posts `{uuid, cwd}` to
+`/run/hub.sock` and can name nothing. The sidecar is not in that path.
 
 ## What it fixes
 

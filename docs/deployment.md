@@ -498,23 +498,21 @@ config file people copy between boxes, and this must never be copied.
 
 ### Hook socket directory
 
-When `FLEETWRIGHT_HOOK_SOCKETS=1`, the sidecar serves one unix socket per
-sandboxed session under `FLEETWRIGHT_HOOK_SOCKET_DIR` (default
-`/run/fleetwright-sidecar`). It creates the directory `0700` on demand and each socket
-`0600` — see [`hook-socket.md`](./hook-socket.md) for why both layers matter.
+fleetwright serves one unix socket per sandboxed session under
+`FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR` (default `/run/fleetwright`, which is the
+`RuntimeDirectory` its unit already creates `0700` for the service user). Each
+socket is `0600` — see [`hook-socket.md`](./hook-socket.md) for why both layers
+matter.
 
 `/run` is tmpfs, so the directory does not survive a reboot and does not need
-cleaning up. A sidecar running as **root** creates it itself. A sidecar running
-as an unprivileged user cannot create a directory in `/run`, so when the unit
-arrives it will want:
+cleaning up. Outside systemd, a service running as **root** creates it itself;
+an unprivileged user cannot create a directory in `/run`, so pre-create it with
+the right owner or point the variable somewhere the service can write.
 
-```ini
-RuntimeDirectory=fleetwright-sidecar
-RuntimeDirectoryMode=0700
-```
-
-which makes systemd create and own it. Until then, either run the sidecar as
-root or pre-create the directory with the right owner.
+The default used to be `/run/fleetwright-sidecar`, the sidecar's runtime
+directory, from a design in which the sidecar served these sockets. It never
+did, and once the sidecar runs as its own user that directory is one fleetwright
+cannot enter. A box that set the old path explicitly keeps it.
 
 `sessions.js` opens a socket per session as it starts one and closes it on
 stop, so this is live rather than idle: it is how a sandboxed session's
@@ -553,11 +551,11 @@ Two things to know:
   session comes up unauthenticated and hangs at a login prompt nobody can
   answer. `FLEETWRIGHT_SANDBOX_CREDENTIALS` points at the source; set it empty to
   manage credentials yourself.
-- **Run the sidecar too, or sessions are not resumable.** The conversation uuid
-  arrives over the per-session hook socket, which the sidecar owns. fleetwright
-  warns loudly and starts anyway if the socket is missing, because a session you
-  can use now beats no session — but it will have no uuid, and `/resume` will
-  refuse it.
+- **The hook socket is what makes a session resumable.** The conversation uuid
+  arrives over the per-session socket fleetwright opens before `podman run`.
+  If it cannot be opened, fleetwright warns loudly and starts anyway, because a
+  session you can use now beats no session — but it will have no uuid, and
+  `/resume` will refuse it.
 
 Resource limits are podman flags — `FLEETWRIGHT_SANDBOX_MEMORY` (8g),
 `FLEETWRIGHT_SANDBOX_CPUS` (2), `FLEETWRIGHT_SANDBOX_PIDS_LIMIT` (512), and

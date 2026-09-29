@@ -10,12 +10,12 @@ same box as the rest of §10. Everything below is a passing test in
 
 One unix socket per session on the host:
 
-    /run/fleetwright-sidecar/<name>.sock
+    /run/fleetwright/<name>.sock
 
 bind-mounted into that session's container and nowhere else, always at the same
 path inside:
 
-    -v /run/fleetwright-sidecar/<name>.sock:/run/hub.sock
+    -v /run/fleetwright/<name>.sock:/run/hub.sock
 
 ## Why it is the fix rather than a complication
 
@@ -76,27 +76,35 @@ socket with a mode derived from the process umask, and there is an unavoidable
 window between `listen()` and `chmod()`. A `0700` directory makes that window
 unreachable rather than merely short. Both layers are asserted.
 
-## How this works without changing fleetwright
+## Who serves the sockets
 
-No fleetwright change is required, which was not obvious at first. The
-[sidecar](./sidecar.md) owns the sockets and forwards what arrives to fleetwright's
-existing `POST /internal/session-start` — the endpoint the ordinary hook already
-posts to, which is loopback-only and deliberately untokened:
+fleetwright does, from `src/index.js`, and `src/core/sessions.js` opens one per
+session before `podman run` so the path exists to mount:
 
 ```js
 const hooks = new HookSocketServer({
-  dir: cfg.hookSocketDir,
-  onSessionStart: (r) => hub.recordSessionStart(r),   // → POST /internal/session-start
-  logger: log,
+  dir: cfg.sandboxHookSocketDir,                       // /run/fleetwright by default
+  onSessionStart: (r) => sessions.recordUuid(r),
+  onSessionEvent: (e) => sessions.recordEvent(e),
+  secretsFor, expiryFor, namedSecretFor,               // the credential broker
 });
 await hooks.open(name);   // before podman run, to get the path to mount
 await hooks.close(name);  // when the container exits
 ```
 
-The sidecar knows which session a report came from, because it knows which
-socket it arrived on, so it supplies the `name` the container was never given.
-fleetwright sees an ordinary hook report and records the uuid exactly as it always
-has.
+The server knows which session a report came from because it knows which socket
+it arrived on, so it supplies the `name` the container was never given, and the
+session manager records the uuid exactly as it does for the loopback hook.
+
+This section used to say the [sidecar](./sidecar.md) owned the sockets and
+forwarded reports to `POST /internal/session-start`. That was the first design
+and the reason the directory was called `/run/fleetwright-sidecar`; it was never
+what shipped. The process that starts the container has to be the one that
+opens the socket, and once the credential broker became a route on the same
+socket the answers it needed — whose session, whose tokens, read at the moment
+of the request — were all fleetwright's. The directory moved to fleetwright's own
+`RuntimeDirectory` when the two services stopped sharing a user (#270): a
+directory systemd creates 0700 for one service is not one the other can enter.
 
 That is the whole trick: **the untokened endpoint stops being a weakness once
 the only thing that can reach it is a process that already knows who is
