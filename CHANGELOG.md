@@ -11,6 +11,23 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.2 — 2026-09-29
+
+**Two fixes from the first real run of 0.4.1 on a Pi.**
+
+- **Check for updates asks apt now, not as of this morning.** On a box apt
+  owns, Check read apt's answer before refreshing the package lists, and only
+  refreshed them at all when they were more than six hours old — a limit meant
+  for the sidecar's own poll, not for a thumb on a button. A box on 0.4.0 went
+  on saying 0.4.0 was the newest in apt for hours after 0.4.1 was published.
+  Check now fetches the lists first, every time it is pressed, with a minute
+  between fetches so a double tap does not run apt twice. The sidecar's
+  fifteen-minute poll keeps its rate limit.
+- **`sudo fleetwright grant reboot on` works.** On 0.4.1 it stopped at
+  "NODE_BIN: unbound variable" and changed nothing: the grant runs before the
+  installer finds its node, and recording the answer needs one. It finds it
+  first now.
+
 ## 0.4.1 — 2026-09-29
 
 **The sidecar runs as its own account, a box tells the app what it allows, and
