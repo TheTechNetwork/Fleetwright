@@ -11,6 +11,60 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.3.0 — 2026-09-29
+
+**The product is Fleetwright now, everywhere, and a box installs from apt.**
+
+This project started as a spin-off of agent-hub and kept the name in its
+services, its directories and its command. Everything is named Fleetwright:
+the command is `fleetwright` (`fw` for short), the units are
+`fleetwright.service` and `fleetwright-sidecar.service`, the directories are
+`/opt/fleetwright` and the env files `/etc/fleetwright.env` and
+`/etc/fleetwright-sidecar.env`. **A box on the old names moves
+itself over on its next install or update**, keeping its host key, its
+enrolment and its sessions — the coordinator sees the same host it always
+did. The old commands and unit names keep working as aliases, so a script or a
+habit that says `agent-hub` is not broken by this.
+
+**Installing a host is three lines.** Deploy the coordinator, then on the box:
+
+    sudo apt install fleetwright
+    sudo fleetwright join fleet.example.com
+
+The package carries its own Node, kept current by the same dependency updates
+as everything else, so a bare Debian or Ubuntu machine needs nothing first.
+`join` checks the address answers as a coordinator before it writes anything,
+defaults to https, and hands over to the same wizard the one-liner runs, so
+the pin is asked for on the terminal you typed into. A box installed from apt
+is updated by apt: `/update` says so and offers `apt upgrade` instead of
+fetching a release itself, and the channel is pinned to stable. The repository
+is `fleet-apt.thetech.network`, signed, and the README has the two lines to
+add it. The one-liner still works and is unchanged for a box that has it.
+
+**Also**
+
+- **A packaged update reverts itself if the new release does not come up.** A
+  watchdog outside the process waits for the updated host to confirm it is
+  running; if it never does, the previous release is switched back to and the
+  failed one is quarantined rather than deleted, so an update can no longer
+  strand a machine nobody can reach.
+- **A release-installed box refreshes its session image on `/update` too.**
+  The image is published separately from the release and used to be pulled
+  only on checkouts, so a packaged box could report "up to date" while running
+  session bytes from weeks earlier.
+- **A protocol bump no longer deadlocks a fleet.** A host held back by protocol
+  is offered the newest release it can run, and a fleet stranded on the rolling
+  channel has a button to bring it back.
+- **The credentials screen says what the host found.** After connecting a
+  provider it reads the refreshed answer: connected says so, and a connect that
+  stored nothing says that, instead of "Checked with GitHub" above a row
+  reading "not connected".
+- **Anonymous enrolment is confined to the coordinator's own loopback**, and
+  nine hardening recommendations from a review were checked against the code
+  and applied.
+- **Both phones record a masked session replay, only when something broke**,
+  so a crash report shows what led to it without showing what was on screen.
+
 ## 0.2.3 — 2026-09-05
 
 **For operators, and it matters if you have a box on v0.2.2.**
