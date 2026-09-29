@@ -109,13 +109,19 @@ struct HostView: View {
                 if health?.updates?.appUpdatePending == true {
                     Button("Apply update") { run { try await fleet.update(host: hostId, restart: true) } }
                 }
-                if health?.updates?.systemPending == true {
+                // ONLY WHERE IT WOULD WORK. A box that has not granted the
+                // upgrade refuses it with a paragraph; the button that earns
+                // that paragraph is the fault C-2 names. Nil is cannot tell
+                // (an older host) and keeps the button — the refusal explains.
+                if health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
                     Button("Apply system upgrade") { run { try await fleet.upgrade(host: hostId, apply: true) } }
                 }
             } header: {
                 sectionHead("Software")
             }
             .listRowBackground(Design.Palette.card)
+
+            allowedSection
 
             channelSection
 
@@ -464,6 +470,54 @@ struct HostView: View {
         run { try await fleet.labels(host: hostId, add: wanted) }
     }
 
+    /// The one line on the box that turns a grant on. The app never runs it:
+    /// it is shown to be typed by somebody with a shell there.
+    private func grantLine(_ name: String) -> String { "sudo fleetwright grant \(name) on" }
+
+    /// A grant that is off: the fact, then the line, selectable so it can be
+    /// copied into a terminal. Dim, not attention — this is an answer, not a
+    /// fault; the box is doing what somebody decided.
+    @ViewBuilder private func grantOff(_ fact: String, line: String) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(fact).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+            Text(line)
+                .fleetType(.labelMono)
+                .foregroundStyle(Design.Palette.ink)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, Design.Space.hair)
+    }
+
+    /// WHAT THIS BOX ALLOWS FROM THE APP, said before a button is pressed.
+    ///
+    /// Two rows, the same shape, one per grant, and only when the host said —
+    /// an older host sends nothing and gets no section, because "not allowed"
+    /// invented from silence would send somebody to a terminal for nothing.
+    /// A grant that is off carries the line that turns it on.
+    @ViewBuilder private var allowedSection: some View {
+        if let grants = health?.updates?.grants {
+            Section {
+                if let upgrades = grants.upgrades {
+                    LabeledContent("System upgrades") {
+                        Text(upgrades ? "allowed" : "not allowed").fleetType(.label)
+                    }
+                    if !upgrades { grantOff("Turning it on is one line on the box:", line: grantLine("upgrades")) }
+                }
+                if let reboot = grants.reboot {
+                    LabeledContent("Reboot") {
+                        Text(reboot ? "allowed" : "not allowed").fleetType(.label)
+                    }
+                    if !reboot { grantOff("Turning it on is one line on the box:", line: grantLine("reboot")) }
+                }
+            } header: {
+                sectionHead("Allowed from the app")
+            } footer: {
+                Text("Each one is a root-owned rule on the machine, given by somebody with a shell there. Nothing here can change it; sudo fleetwright grant does, and keeps every session running.")
+            }
+            .listRowBackground(Design.Palette.card)
+        }
+    }
+
     @ViewBuilder private var dangerSection: some View {
         Section {
             // ONE STEP AT A TIME, AND ONLY THE ONE YOU ARE ON.
@@ -481,9 +535,18 @@ struct HostView: View {
             // phone can ask it.
             switch rebootStage {
             case .idle:
-                Button("Reboot", role: .destructive) {
-                    rebootStage = .asking
-                    Task { await askToReboot() }
+                if health?.updates?.grants?.reboot == false {
+                    // NO BUTTON FOR A THING THE BOX REFUSES. The grant is a
+                    // root-owned rule on the machine and nothing on a phone can
+                    // write it, so the honest control is the sentence and the
+                    // one line that changes it. Same words as Android, held
+                    // equal by test/grants-in-apps.test.js.
+                    grantOff("Reboot from the app is off on this box.", line: grantLine("reboot"))
+                } else {
+                    Button("Reboot", role: .destructive) {
+                        rebootStage = .asking
+                        Task { await askToReboot() }
+                    }
                 }
             case .asking:
                 Text("Asking \(hostId) for a PIN…")
