@@ -434,7 +434,10 @@ MISSING=()
 # about what a box RUNS. An explicit FLEETWRIGHT_USER still wins: somebody setting
 # it is deliberately changing the answer.
 unit_user() {
-  for u in /etc/systemd/system/fleetwright.service /etc/systemd/system/fleetwright-sidecar.service; do
+  # THE HUB'S UNIT ONLY. The sidecar's names a different account since #270,
+  # and reading it here would make that account the owner of the sessions on
+  # the one box where the hub's unit was missing.
+  for u in /etc/systemd/system/fleetwright.service; do
     [ -f "$u" ] || continue
     # `User=` only, and the first one: a unit has other lines with users in them.
     got="$(sed -n 's/^User=[[:space:]]*//p' "$u" | head -1)"
@@ -445,6 +448,20 @@ unit_user() {
   return 1
 }
 RUN_USER="${FLEETWRIGHT_USER:-$(unit_user || printf '%s' "${SUDO_USER:-$(id -un)}")}"
+
+# WHO THE SIDECAR RUNS AS — ITS OWN ACCOUNT. The sidecar holds this box's
+# private key and the coordinator socket; $RUN_USER holds every member's Claude
+# and provider credential and runs the sessions. One uid for both meant each
+# could read the other's secrets (#270). The account is created below, once
+# say/ok/warn exist, and the sidecar's unit, state directory and env file are
+# given to it. FLEETWRIGHT_SIDECAR_USER names another account instead — set it
+# to $RUN_USER to keep the old shape on purpose.
+#
+# Not on a Mac: launchd daemons run as a named user, and making a hidden
+# system account through dscl is more machinery than this installer wants to
+# own for a platform hardening.md says is not the one this is built for.
+SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-fleetwright-sidecar}"
+[ "$PLATFORM" = macos ] && SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-$RUN_USER}"
 
 # Resolved once, up here, because finding node depends on it — sudo hides
 # anything a version manager put in this directory.
@@ -837,6 +854,55 @@ as_user() {
   fi
 }
 
+# The same, as the sidecar's account. Never `-l` on runuser and never su
+# without -s: the account's shell is nologin, and a login shell of it is a
+# refusal that reads like a broken box.
+as_sidecar() {
+  if [ "$(id -un)" = "$SIDECAR_USER" ]; then
+    bash -lc "$1"
+  elif command -v sudo >/dev/null; then
+    sudo -u "$SIDECAR_USER" -H bash -lc "$1"
+  elif command -v runuser >/dev/null; then
+    runuser -u "$SIDECAR_USER" -- bash -lc "$1"
+  elif command -v su >/dev/null; then
+    su -s /bin/bash "$SIDECAR_USER" -c "$1"
+  else
+    return 1
+  fi
+}
+
+# Make the sidecar's account exist. A system account with no login shell and
+# its home at its state directory — the one place it owns — so a `bash -lc`
+# under it has somewhere to be and git has somewhere to read a config from.
+# Where no account can be made (no useradd, and no busybox adduser either) the
+# sidecar falls back to $RUN_USER and the summary says so, rather than a unit
+# naming a user that does not exist.
+SIDECAR_USER_FALLBACK=0
+ensure_sidecar_user() {
+  [ "$SIDECAR_USER" = "$RUN_USER" ] && return 0
+  if id "$SIDECAR_USER" >/dev/null 2>&1; then
+    ok "$SIDECAR_USER exists"
+    return 0
+  fi
+  [ "$CHECK_ONLY" = 1 ] && { ok "would create the $SIDECAR_USER account"; return 0; }
+  local shell=/usr/sbin/nologin
+  [ -x "$shell" ] || shell=/sbin/nologin
+  [ -x "$shell" ] || shell=/bin/false
+  if command -v useradd >/dev/null \
+     && useradd --system --user-group --home-dir /var/lib/fleetwright-sidecar --no-create-home \
+                --shell "$shell" "$SIDECAR_USER" 2>/dev/null; then
+    ok "created the $SIDECAR_USER account (system, no login)"
+  elif command -v adduser >/dev/null \
+       && adduser -S -D -H -h /var/lib/fleetwright-sidecar -s "$shell" "$SIDECAR_USER" 2>/dev/null; then
+    ok "created the $SIDECAR_USER account (system, no login)"
+  else
+    warn "could not create the $SIDECAR_USER account — the sidecar will run as $RUN_USER"
+    MISSING+=("a separate account for the sidecar: create $SIDECAR_USER (useradd --system) and re-run this")
+    SIDECAR_USER="$RUN_USER"
+    SIDECAR_USER_FALLBACK=1
+  fi
+}
+
 PKG_UPDATED=0
 pkg_install() {
   [ "${FLEETWRIGHT_NO_INSTALL_DEPS:-0}" = "1" ] && return 1
@@ -873,7 +939,7 @@ pkg_why() {
 }
 
 say "fleetwright installer${CHECK_ONLY:+}"
-printf '  source : %s\n  user   : %s\n' "$DIR" "$RUN_USER"
+printf '  source : %s\n  user   : %s\n  sidecar: %s\n' "$DIR" "$RUN_USER" "$SIDECAR_USER"
 [ "$CHECK_ONLY" = 1 ] && printf '  mode   : --check (nothing will be changed)\n'
 
 # --- 0. what is already here -------------------------------------------------
@@ -895,7 +961,10 @@ previous_install() {
   done
   if [ -f /var/lib/fleetwright-sidecar/host-key.json ]; then
     local fp=""
-    fp="$(sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+    # As whichever account can read the key: the sidecar's on a box that has
+    # been through this installer since #270, the session user's before it.
+    fp="$( { as_sidecar "'$DIR/bin/fleetwright-sidecar' identity" 2>/dev/null \
+            || as_user "'$DIR/bin/fleetwright-sidecar' identity" 2>/dev/null; } | awk '/fingerprint/ {print $2}' || true)"
     FOUND+=("IDENTITY  /var/lib/fleetwright-sidecar/host-key.json${fp:+  fingerprint $fp}")
   fi
   for d in /var/lib/fleetwright /var/lib/fleetwright-coordinator; do
@@ -1565,6 +1634,36 @@ STATE_DIR="${FLEETWRIGHT_STATE_DIR:-/var/lib/fleetwright}"
 install -d -o "$RUN_USER" -m 0750 "$STATE_DIR"
 ok "$STATE_DIR"
 
+# THE SIDECAR'S, owned by its own account. systemd's StateDirectory= fixes the
+# ownership of the directory itself on every start but not of what is in it,
+# and what is in it is this box's private key — written by $RUN_USER on every
+# box installed before #270. A key the sidecar cannot read is a host that
+# cannot prove who it is, so the contents move with the directory, once.
+ensure_sidecar_user
+if [ "$CHECK_ONLY" != 1 ]; then
+  install -d -m 0700 -o "$SIDECAR_USER" /var/lib/fleetwright-sidecar
+  if find /var/lib/fleetwright-sidecar -mindepth 1 ! -user "$SIDECAR_USER" 2>/dev/null | grep -q .; then
+    chown -R "$SIDECAR_USER" /var/lib/fleetwright-sidecar \
+      && ok "/var/lib/fleetwright-sidecar now belongs to $SIDECAR_USER" \
+      || warn "could not chown /var/lib/fleetwright-sidecar to $SIDECAR_USER — the sidecar will not be able to read its key"
+  else
+    ok "/var/lib/fleetwright-sidecar"
+  fi
+  # A CHECKOUT BELONGS TO $RUN_USER, and git refuses to read a repository owned
+  # by somebody else ("dubious ownership") — which would leave the sidecar's
+  # version and update fields on the health frame null, for ever, on every box
+  # installed from source. The account's home is its state directory, so the
+  # one line git needs goes there, for this account alone rather than in
+  # /etc/gitconfig for everybody.
+  if [ -d "$DIR/.git" ] && [ "$SIDECAR_USER" != "$RUN_USER" ] && command -v git >/dev/null; then
+    git config --file /var/lib/fleetwright-sidecar/.gitconfig --replace-all safe.directory "$DIR" 2>/dev/null \
+      && chown "$SIDECAR_USER" /var/lib/fleetwright-sidecar/.gitconfig 2>/dev/null \
+      && chmod 0600 /var/lib/fleetwright-sidecar/.gitconfig 2>/dev/null \
+      && ok "$SIDECAR_USER may read the checkout's git history" \
+      || warn "could not write $SIDECAR_USER's git config — the sidecar will report no version"
+  fi
+fi
+
 # TASK PROFILES. A session started with no profile comes up idle, waiting for a
 # person; a profile is a file here whose content becomes its first message.
 #
@@ -1864,6 +1963,22 @@ refresh_release_if_converted
 
 say "Installing the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd units")"
 
+# CAN THE SIDECAR'S ACCOUNT RUN THE SIDECAR. Its unit names a node and an entry
+# that $RUN_USER can read by construction and another account can only read
+# if the directories on the way allow it — a checkout cloned into a 0750 home,
+# a node under ~/.nvm. Checked as that account, before a unit is written that
+# would die at ExecStart with a permissions error attributed to node.
+if [ "$SIDECAR_USER" != "$RUN_USER" ] && [ "$CHECK_ONLY" != 1 ]; then
+  if as_sidecar "test -r '$(unit_entry fleetwright-sidecar)' && test -x '$NODE_BIN'" >/dev/null 2>&1; then
+    ok "$SIDECAR_USER can read $DIR and run $NODE_BIN"
+  else
+    warn "$SIDECAR_USER cannot read $(unit_entry fleetwright-sidecar) or run $NODE_BIN — the sidecar will run as $RUN_USER"
+    MISSING+=("a separate account for the sidecar: make $DIR and $NODE_BIN readable by $SIDECAR_USER and re-run this")
+    SIDECAR_USER="$RUN_USER"
+    SIDECAR_USER_FALLBACK=1
+  fi
+fi
+
 # All three, not just fleetwright. Installing only the hub was a real bug with a
 # quiet symptom: the installer went on to call `systemctl enable --now
 # fleetwright-sidecar` on a unit that did not exist, warned once, and finished
@@ -1904,7 +2019,19 @@ install_unit() { # install_unit NAME
     src="$from/install/$1.service"
     dest="/etc/systemd/system/$1.service"
   fi
+  # ProtectHome=yes is the template's answer and right on every box where the
+  # code and its node live outside /home — which is every packaged box. A
+  # checkout or a version-managed node under somebody's home would be invisible
+  # to a unit that says yes, and the service would die at ExecStart.
+  local protect_home="ProtectHome=yes"
+  case "$DIR:$NODE_BIN" in
+    /home/*|/root/*|*:/home/*|*:/root/*)
+      protect_home="ProtectHome=read-only"
+      [ "$1" = fleetwright-sidecar ] && warn "$DIR or $NODE_BIN is under a home directory, so the sidecar's unit keeps ProtectHome=read-only" ;;
+  esac
   sed -e "s|__USER__|$RUN_USER|g" \
+      -e "s|__SIDECAR_USER__|$SIDECAR_USER|g" \
+      -e "s|^ProtectHome=yes$|$protect_home|" \
       -e "s|__ENTRY__|$(unit_entry "$1")|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
@@ -2319,13 +2446,19 @@ fi
 # 0600 means `fleetwright doctor` silently sees no config at all and reports
 # things like "a control surface is configured — web only" on a box with
 # Telegram plainly working.
-for f in "$ENV_FILE" "$SIDECAR_ENV" "$COORD_ENV"; do
+for f in "$ENV_FILE" "$COORD_ENV"; do
   # $COORD_ENV only on a box from before the coordinator left, which still has one.
   [ -f "$f" ] || continue
   chown "$RUN_USER" "$f" 2>/dev/null || true
   chmod 0600 "$f"
 done
-ok "config readable by $RUN_USER"
+# The sidecar's file to the sidecar's account: `fleetwright-sidecar enrol` and
+# `doctor` run as it and read this. systemd reads it as root either way.
+if [ -f "$SIDECAR_ENV" ]; then
+  chown "$SIDECAR_USER" "$SIDECAR_ENV" 2>/dev/null || true
+  chmod 0600 "$SIDECAR_ENV"
+fi
+ok "config readable by $RUN_USER, the sidecar's by $SIDECAR_USER"
 
 # --- 5b. runtime dependencies ------------------------------------------------
 # package.json's `dependencies` are what a checkout host runs with, and
@@ -2577,7 +2710,7 @@ fi
 sidecar_cli() {
   local sub="$1" arg="${2:-}" quoted=""
   [ -n "$arg" ] && printf -v quoted ' %q' "$arg"
-  as_user "FLEETWRIGHT_ENROL_QUIET=1 \
+  as_sidecar "FLEETWRIGHT_ENROL_QUIET=1 \
            FLEETWRIGHT_COORDINATOR_URL='$ENROL_URL' \
            FLEETWRIGHT_HOST_ID='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_ID)' \
            FLEETWRIGHT_HOST_KEY='$(get_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY)' \
@@ -2644,14 +2777,14 @@ enrol_host() {
   # Six digits or nothing. A pin is not free text and never was.
   pin="$(printf '%s' "$pin" | tr -cd '0-9')"
   if [ ${#pin} -ne 6 ]; then
-    warn "that is not a six-digit pin — enrol later with: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+    warn "that is not a six-digit pin — enrol later with: sudo -u $SIDECAR_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
     return 0
   fi
   if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
     ok "enrolled at $ENROL_URL"
     ENROLLED=1
   else
-    warn "enrolment failed — run: sudo -u $RUN_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
+    warn "enrolment failed — run: sudo -u $SIDECAR_USER $DIR/bin/fleetwright-sidecar enrol <pin>"
   fi
 }
 
@@ -2726,7 +2859,7 @@ if [ "$WIZARD" = yes ]; then
   # No -g: a matching group usually exists but is not guaranteed, and the mode
   # is 0700 so the group does not decide anything anyway. Same shape as the
   # STATE_DIR line above.
-  install -d -m 0700 -o "$RUN_USER" /var/lib/fleetwright-sidecar
+  install -d -m 0700 -o "$SIDECAR_USER" /var/lib/fleetwright-sidecar
   KEY_FILE_PATH=/var/lib/fleetwright-sidecar/host-key.json
   set_env "$SIDECAR_ENV" FLEETWRIGHT_HOST_KEY "$KEY_FILE_PATH"
 
@@ -2772,7 +2905,7 @@ if [ "$WIZARD" = yes ]; then
       warn "  Meant to replace the original? Move the file back and destroy the original."
     fi
     printf '%s' "$THIS_MACHINE" > "$MACHINE_FILE"
-    chown "$RUN_USER" "$MACHINE_FILE" 2>/dev/null || true
+    chown "$SIDECAR_USER" "$MACHINE_FILE" 2>/dev/null || true
     chmod 0600 "$MACHINE_FILE"
   fi
 
@@ -3336,7 +3469,7 @@ if [ "$WIZARD" = yes ]; then
   # connects and is refused on every try.
   if [ -n "$ENROL_URL" ] && [ "${ENROLLED:-0}" != 1 ]; then
     printf '\n  This box has not joined %s yet. With a six-digit pin from the app:\n' "$ENROL_URL"
-    printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$RUN_USER" "$DIR"
+    printf '      sudo -u %s %s/bin/fleetwright-sidecar enrol <pin>\n' "$SIDECAR_USER" "$DIR"
     printf '  Until then the sidecar is refused on every try.\n'
   fi
 

@@ -112,6 +112,26 @@ and it never touches the credential store directly — connect, link and unlink
 all go through fleetwright's API. So every directive rejected above is available
 here, including the full seccomp filter.
 
+**And it runs as its own account.** `install.sh` creates `fleetwright-sidecar`
+(a system account, no login shell, home at its state directory) and the unit
+says `User=fleetwright-sidecar`; the session user keeps `fleetwright.service`.
+The sidecar holds this box's private key and the coordinator socket; the
+session user holds every member's Claude and provider credential and the
+podman image store. With one uid each could read the other's half — a
+compromised sidecar could read `~/.claude` and `connections/*.env`, and a
+session escape landing as the service user could read the host key. The code
+had to stop crossing that line first: the labels, channel, variant and house
+rules the sidecar used to read out of fleetwright's state directory ride on
+`/api/state` now, and the two things it wrote there — the commit-confirm
+evidence and a renewed provider token — are requests to fleetwright, which
+owns the files. With nothing left to read, `ProtectHome=yes` follows.
+
+What this does **not** narrow: the sidecar still holds the hub token, and
+`/api/command` runs any command line for whoever holds it, `link` included. A
+compromised sidecar cannot read a member's credential file but can still write
+one, and can still start a session as anyone. That is the token's shape, not
+the account's, and it is the next thing.
+
 ```ini
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
@@ -171,10 +191,9 @@ the half of the risk that is not the session's by design.
 
 ## Still open
 
-- **A separate unix user for the sidecar**, so a compromised sidecar cannot read
-  `~/.claude`, `accounts/*.json` or `connections/*.env` at all. It is a pure API
-  client, so nothing structural prevents this — the cost is ownership migration
-  on hosts that are already running.
+- **A hub token scoped to what the sidecar does.** The separate account (above)
+  stops a compromised sidecar reading credentials; the token it holds still
+  lets it write them and start sessions as anyone.
 - **Distroless or containerised sidecar**, for the same reason and further.
 - The credential-terminating proxy in [trust.md](./trust.md), which is the only
   thing that changes what a session holds.

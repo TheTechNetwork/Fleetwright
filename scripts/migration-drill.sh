@@ -82,6 +82,11 @@ done
 # CREATED HERE, AND ONLY IF IT IS NOT ALREADY SOMEBODY'S. A drill that adopts an
 # existing account would remove it in cleanup, which is a considerably worse
 # outcome than a failed test.
+# THE SIDECAR'S OWN ACCOUNT, which the installer makes (#270) and this drill
+# must not leave behind. Recorded before the first install so cleanup removes
+# it only if no install before this one had.
+SIDECAR_USER_EXISTED=0
+id fleetwright-sidecar >/dev/null 2>&1 && SIDECAR_USER_EXISTED=1
 DRILL_USER_CREATED=0
 if id "$DRILL_USER" >/dev/null 2>&1; then
   echo "using the existing $DRILL_USER account (it will not be removed)"
@@ -114,6 +119,9 @@ cleanup() {
   # ONLY IF THIS RUN MADE IT. See above.
   if [ "${DRILL_USER_CREATED:-0}" = 1 ]; then
     userdel -r "$DRILL_USER" >/dev/null 2>&1 || userdel "$DRILL_USER" >/dev/null 2>&1 || true
+  fi
+  if [ "${SIDECAR_USER_EXISTED:-0}" = 0 ]; then
+    userdel fleetwright-sidecar >/dev/null 2>&1 || true
   fi
   echo "  logs in ${DRILL_LOGS:-/tmp/fleetwright-drill-logs}"
   echo "  removed everything this drill created"

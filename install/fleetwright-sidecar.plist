@@ -30,8 +30,11 @@
     <string>__ENTRY__</string>
   </array>
 
+  <!-- On Linux this is the sidecar's own account (see the .service). launchd
+       gets the session user: install.sh does not create system accounts on a
+       Mac, and hardening.md says why none of this is a Mac. -->
   <key>UserName</key>
-  <string>__USER__</string>
+  <string>__SIDECAR_USER__</string>
 
   <key>WorkingDirectory</key>
   <string>__DIR__</string>

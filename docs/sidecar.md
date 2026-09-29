@@ -274,8 +274,9 @@ line landing on stdout would not be noise, it would be a corrupted message.
 
 This box has a **keypair**, not a token. The private half lives at
 `/var/lib/fleetwright-sidecar/host-key.json` — 0600, in a directory systemd creates
-0700 for this service — and is generated the first time anything needs it, not
-only by `run`. Connecting means asking the coordinator for a nonce and signing
+0700 for this service's own account, `fleetwright-sidecar`, which is not the
+user the sessions run as — and is generated the first time anything needs it,
+not only by `run`. Connecting means asking the coordinator for a nonce and signing
 it:
 
 ```

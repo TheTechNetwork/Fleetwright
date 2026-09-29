@@ -19,7 +19,16 @@ Type=simple
 # systemd ran `node <shim>` — and when that shim was a shell script, every
 # service died at startup with a syntax error. Naming the module removes the
 # shim from the path systemd takes at all.
-User=__USER__
+# ITS OWN ACCOUNT, not the one fleetwright and the sessions run as. install.sh
+# creates `fleetwright-sidecar` (FLEETWRIGHT_SIDECAR_USER to choose another) and
+# substitutes it here. The sidecar holds this box's private key and the
+# coordinator socket; fleetwright's user holds every member's Claude and
+# provider credential and the podman image store. One uid holding both meant a
+# compromised sidecar could read ~/.claude and connections/*.env, and a session
+# escape landing as the service user could read the host key — #270. Two uids,
+# and each can only read its own half. Everything the sidecar used to read out
+# of fleetwright's state directory it now asks fleetwright for over the loopback.
+User=__SIDECAR_USER__
 WorkingDirectory=__DIR__
 EnvironmentFile=/etc/fleetwright-sidecar.env
 ExecStart=__NODE__ __ENTRY__
@@ -27,12 +36,11 @@ ExecStart=__NODE__ __ENTRY__
 Restart=always
 RestartSec=3
 
-# The per-session hook sockets live here. systemd creates it 0700 owned by this
-# user, which is what lets an unprivileged sidecar serve them at all — /run is
-# not writable by a normal user. It is removed when the service stops, and /run
-# is tmpfs, so there is nothing to clean up.
-RuntimeDirectory=fleetwright-sidecar
-RuntimeDirectoryMode=0700
+# NO RuntimeDirectory. It used to make /run/fleetwright-sidecar for the
+# per-session hook sockets, from a design in which the sidecar served them. It
+# never did — fleetwright opens each one before `podman run`, and its own unit
+# has RuntimeDirectory=fleetwright for them — and a 0700 directory owned by this
+# account is exactly one fleetwright's account cannot enter.
 
 # This box's private key lives here — /var/lib/fleetwright-sidecar, created 0700 owned
 # by this user before the service starts. It is the whole of this host's
@@ -63,7 +71,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
-ProtectHome=read-only
+ProtectHome=yes
 ProtectProc=invisible
 ProtectClock=yes
 ProtectHostname=yes
@@ -86,9 +94,11 @@ SystemCallFilter=@system-service
 # way; this chooses which of "denied" and "dead" the process gets.
 SystemCallErrorNumber=EPERM
 #
-# ProtectHome is READ-ONLY rather than yes: the sidecar reads the account and
-# connection files that live under the hub's state directory, which may be in
-# $HOME on a box installed from a checkout. Writing them is fleetwright's job.
+# ProtectHome=yes: there is nothing under anybody's home this process needs.
+# It used to be read-only, for the account and connection files under the
+# hub's state directory, which it read directly and now asks fleetwright for.
+# install.sh drops it back to read-only on the one box where the code or the
+# node it runs on lives under /home or /root, and says so.
 
 StandardOutput=journal
 StandardError=journal
