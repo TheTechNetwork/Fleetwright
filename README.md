@@ -87,7 +87,7 @@ updates the box:
 ```sh
 curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \
   | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \
   | sudo tee /etc/apt/sources.list.d/fleetwright.list
 sudo apt update && sudo apt install fleetwright
 ```
