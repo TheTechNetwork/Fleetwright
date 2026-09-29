@@ -137,7 +137,7 @@ export class Sidecar {
    *   hubConfig?: any,
    *   fetchImpl?: typeof globalThis.fetch,
    *   watch?: boolean,
-   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null })|null,
+   *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null, grants?: { upgrades: boolean, reboot: boolean }|null })|null,
    *   adoptUpdates?: ((waiting: any) => void)|null,
    *   version?: (() => { head: string|null, branch: string|null, installed?: string|null, helper?: 'current'|'stale'|null }|null)|null,
    * }} opts

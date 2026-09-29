@@ -20,6 +20,7 @@
   "src/core/env-file.js": 100,
   "src/core/files.js": 96,
   "src/core/fleet-identity.js": 91,
+  "src/core/grants.js": 95,
   "src/core/hook-socket.js": 97,
   "src/core/join.js": 100,
   "src/core/keepalive.js": 94,

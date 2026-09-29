@@ -22,6 +22,7 @@ import { existsSync, statSync } from 'node:fs';
 import { log } from '../log.js';
 import { unitName } from '../fleet/legacy-paths.js';
 import { APT_PACKAGE } from './apt-release.js';
+import { grantCommand } from './grants.js';
 
 const CHECK_TIMEOUT_MS = 20_000;
 
@@ -382,7 +383,11 @@ function upgradesOff(cfg) {
   return (
         'System upgrades are off.\n\n' +
         'This service runs unprivileged on purpose, so applying packages needs a rule that says ' +
-        'so out loud. On the box:\n\n' +
+        'so out loud, and only somebody with a shell on the box can give it. There:\n\n' +
+        `  ${grantCommand('upgrades', 'on')}\n\n` +
+        'which installs the three units, writes the rule, records FLEETWRIGHT_SYSTEM_UPGRADE=1 in /etc/fleetwright.env ' +
+        'and restarts the service (sessions keep running). On a box installed from apt, sudo dpkg-reconfigure fleetwright ' +
+        'asks the same question. By hand, it is:\n\n' +
         // THE SAME RULE THE INSTALLER WRITES, and it has to be — somebody who
         // pastes this and somebody who re-runs the installer must end up with
         // the same permissions, or one of them gets an upgrade that stalls on

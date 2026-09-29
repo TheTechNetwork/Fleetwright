@@ -355,6 +355,13 @@ const sidecar = new Sidecar({
       // version, so both of the old signals were null on it and it rendered as
       // up to date with nothing to press.
       appPending: typeof app.pending === 'boolean' ? app.pending : null,
+      // WHAT THE BOX ALLOWS FROM CHAT, so a phone can draw Reboot only where
+      // it would work and name the one line that changes it elsewhere. Null
+      // is a hub too old to say — CANNOT TELL — and never "off".
+      grants:
+        waiting.grants && typeof waiting.grants === 'object'
+          ? { upgrades: Boolean(waiting.grants.upgrades), reboot: Boolean(waiting.grants.reboot) }
+          : (lastUpdates?.grants ?? null),
     };
   }
 

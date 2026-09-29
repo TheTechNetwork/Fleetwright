@@ -237,15 +237,19 @@ test('a repair reads the recorded answers and never writes one', () => {
   assert.match(section, /leaving that alone/);
 });
 
-test('the sudoers rules have one implementation, called twice', () => {
-  // The wizard writes them when somebody says yes; --repair writes them when
-  // the env file says they already did. Two copies of a rule that must match is
-  // how a box ends up permitted to run a command the code no longer issues —
-  // which is the drift --repair exists to undo.
+test('the sudoers rules have one implementation, behind one switch, with three callers', () => {
+  // The wizard applies them when somebody says yes; --repair applies them
+  // when the env file says they already did; --grant applies a changed
+  // answer. Two copies of a rule that must match is how a box ends up
+  // permitted to run a command the code no longer issues — which is the
+  // drift --repair exists to undo — so the writers are called from
+  // apply_grant and nowhere else, and apply_grant is what the three call.
   assert.match(SH, /^write_upgrade_sudoers\(\) \{/m);
   assert.match(SH, /^write_reboot_sudoers\(\) \{/m);
-  assert.equal((SH.match(/if write_upgrade_sudoers; then/g) || []).length, 2, 'not called from both places');
-  assert.equal((SH.match(/if write_reboot_sudoers; then/g) || []).length, 2, 'not called from both places');
+  assert.equal((SH.match(/if write_upgrade_sudoers; then/g) || []).length, 1, 'the upgrade writer has a second caller');
+  assert.equal((SH.match(/if write_reboot_sudoers; then/g) || []).length, 1, 'the reboot writer has a second caller');
+  assert.ok((SH.match(/apply_grant upgrades yes/g) || []).length >= 2, 'the wizard and --repair both apply the upgrade grant');
+  assert.ok((SH.match(/apply_grant reboot yes/g) || []).length >= 2, 'the wizard and --repair both apply the reboot grant');
 
   // Every one of them validates before installing. A malformed file in
   // /etc/sudoers.d does not break one rule, it breaks sudo.

@@ -20,6 +20,13 @@ case "$1" in
 esac
 
 db_input low fleetwright/user || true
+# THE TWO GRANTS, at low priority: a default install takes the defaults
+# (updates yes, reboot no), the same answers the installer's wizard gives when
+# nobody is there, and `dpkg-reconfigure fleetwright` asks them out loud —
+# which is how an apt box, asked nothing on install day, says yes later.
+# `sudo fleetwright grant reboot on` is the same change without debconf.
+db_input low fleetwright/upgrades || true
+db_input low fleetwright/reboot || true
 db_input high fleetwright/coordinator-url || true
 db_go || true
 db_get fleetwright/coordinator-url
