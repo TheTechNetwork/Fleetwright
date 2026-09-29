@@ -1,4 +1,4 @@
-// The two Cloudflare globals this Worker names in JSDoc.
+// The Cloudflare globals this Worker names in JSDoc and in code.
 //
 // Deliberately not @cloudflare/workers-types: that package is large, changes on
 // its own schedule, and would replace two names with a full ambient environment
@@ -22,6 +22,20 @@ declare class DurableObjectState {
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WebSocket[];
   blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+  // The heartbeat: a request the runtime answers for every accepted socket
+  // without waking the object. Optional here because the unit tests hand the
+  // object a fake state without it, and the constructor checks before calling.
+  setWebSocketAutoResponse?(pair?: WebSocketRequestResponsePair): void;
+  getWebSocketAutoResponseTimestamp?(ws: WebSocket): Date | null;
+}
+
+// The request/response pair setWebSocketAutoResponse takes. A workerd global,
+// which is why fleet-do.js checks `typeof` before constructing one: under Node
+// (the unit tests) it does not exist.
+declare class WebSocketRequestResponsePair {
+  constructor(request: string, response: string);
+  getRequest(): string;
+  getResponse(): string;
 }
 
 declare class DurableObjectNamespace {

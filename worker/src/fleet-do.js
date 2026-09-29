@@ -29,6 +29,7 @@ import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { withCurrentNames } from '../../src/fleet/legacy-names.js';
+import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -135,6 +136,25 @@ export class Fleet {
         .catch((e) => console.warn(`fleet: could not persist the event ring: ${e?.message || e}`));
       this.state.waitUntil?.(pending);
     };
+
+    // THE HEARTBEAT, ANSWERED BY THE RUNTIME. A host asks "are you there" every
+    // twenty seconds, for weeks, and with `acceptWebSocket` this object is
+    // evicted between messages — so a heartbeat that reached webSocketMessage
+    // would wake it (and bill for it) every twenty seconds per host, for a
+    // frame whose whole answer is a constant. setWebSocketAutoResponse matches
+    // the request byte for byte and replies from the runtime without waking
+    // anything, which is the same cost the protocol-level ping had: none. The
+    // strings are the shared constants and nothing else, because the match is
+    // on bytes; see protocol/heartbeat.js. The core also answers a ping that
+    // does reach it, so the Node harness and a runtime without this call
+    // behave the same on the wire — this line is the cost optimisation, not
+    // the behaviour.
+    //
+    // Guarded because the unit tests hand this class a fake state with no such
+    // method, and the pair class is a workerd global.
+    if (typeof this.state.setWebSocketAutoResponse === 'function' && typeof WebSocketRequestResponsePair !== 'undefined') {
+      this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
+    }
 
     // Rebuilt on wake: hibernation means this object is evicted between
     // messages, and every socket that is still open comes back with the host id

@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Fleet } from '../worker/src/fleet-do.js';
+import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.js';
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
 import { mkdtempSync } from 'node:fs';
@@ -264,4 +265,35 @@ test('a spent sign-in token stays spent across an eviction', async () => {
   // real one does, so let the restore's chain of storage reads drain.
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(await second.core.spentTokens.spend('eyJ.a.b', Date.now() + 600_000), false, 'an eviction made it reusable');
+});
+
+test('the heartbeat auto-response is the shared constants, byte for byte', () => {
+  // setWebSocketAutoResponse matches the REQUEST bytes and replies with the
+  // RESPONSE bytes without waking the object. The sidecar compares bytes too.
+  // If either side ever built its frame with a JSON.stringify of its own, a key
+  // order or a space would turn a free heartbeat into one that wakes the
+  // object every twenty seconds per host — so the pair the object registers is
+  // pinned to the constants, not to a re-spelling of them.
+  const state = fakeState();
+  /** @type {any} */
+  let registered = null;
+  /** @type {any} */ (state).setWebSocketAutoResponse = (/** @type {any} */ pair) => { registered = pair; };
+  // The pair class is a workerd global; stand one in that records its inputs.
+  const had = /** @type {any} */ (globalThis).WebSocketRequestResponsePair;
+  /** @type {any} */ (globalThis).WebSocketRequestResponsePair = class {
+    /** @param {string} request @param {string} response */
+    constructor(request, response) { this.request = request; this.response = response; }
+  };
+  try {
+    new Fleet(/** @type {any} */ (state), {});
+  } finally {
+    if (had === undefined) delete /** @type {any} */ (globalThis).WebSocketRequestResponsePair;
+    else /** @type {any} */ (globalThis).WebSocketRequestResponsePair = had;
+  }
+  assert.ok(registered, 'the object registered no auto-response');
+  assert.equal(registered.request, HEARTBEAT_PING);
+  assert.equal(registered.response, HEARTBEAT_PONG);
+  // And a fake state without the method is simply not asked — the unit tests
+  // above construct the object that way on every run.
+  new Fleet(/** @type {any} */ (fakeState()), {});
 });

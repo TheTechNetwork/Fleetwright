@@ -86,6 +86,7 @@
   "src/fleet/legacy-names.js": 100,
   "src/fleet/legacy-paths.js": 100,
   "src/fleet/protocol/config-frame.js": 100,
+  "src/fleet/protocol/heartbeat.js": 100,
   "src/fleet/protocol/intents.js": 99,
   "src/fleet/push-crypto.js": 100,
   "src/fleet/push.js": 94,

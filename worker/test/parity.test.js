@@ -33,6 +33,7 @@ import { enrol, proveIdentity } from '../../src/fleet/host/identity.js';
 import { connectWebSocket } from '../../src/fleet/ws.js';
 import { Coordinator } from '../../test/helpers/node-coordinator.js';
 import { PROTOCOL_VERSION } from '../../src/fleet/protocol/intents.js';
+import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
 
 const requireWorker = createRequire(new URL('../package.json', import.meta.url));
 
@@ -242,6 +243,39 @@ test('an unenrolled host is refused the upgrade with a reason, the same on both'
       !(body.hosts || []).some((/** @type {any} */ h) => h.hostId === 'parity-impostor'),
       `[${c.name}] a refused host entered the registry`,
     );
+  }
+});
+
+test('a heartbeat is answered byte for byte, and moves nothing, the same on both', async () => {
+  // The sidecar's liveness check, once it dials with Node's own WebSocket: it
+  // sends HEARTBEAT_PING and compares what comes back to HEARTBEAT_PONG as
+  // BYTES. On the Worker the runtime's auto-response answers; on the Node
+  // harness the core does. Same wire either way, or a host would drop a
+  // perfectly good socket every thirty-five seconds against one of them.
+  for (const c of coordinators) {
+    const ws = await connectHost(c.origin, 'parity-heartbeat');
+    try {
+      await waitForState(c.origin, 'parity-heartbeat', 'healthy');
+      const before = await fetch(`${c.origin}/api/events`, { headers: auth }).then((r) => r.json());
+
+      const pong = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`[${c.name}] no pong within 2s`)), 2000);
+        ws.on('message', (text) => {
+          if (String(text) === HEARTBEAT_PONG) { clearTimeout(timer); resolve(String(text)); }
+        });
+      });
+      ws.send(HEARTBEAT_PING);
+      assert.equal(await pong, HEARTBEAT_PONG, `[${c.name}] the pong must be the shared constant, byte for byte`);
+
+      // And it was nothing but an answer: the host is where it was, and no
+      // event was recorded for it. Twenty hosts ask three times a minute.
+      const host = await waitForState(c.origin, 'parity-heartbeat', 'healthy', 500);
+      assert.equal(host?.state, 'healthy', `[${c.name}] a heartbeat moved the host's state`);
+      const after = await fetch(`${c.origin}/api/events`, { headers: auth }).then((r) => r.json());
+      assert.equal((after.events || []).length, (before.events || []).length, `[${c.name}] a heartbeat recorded an event`);
+    } finally {
+      ws.close();
+    }
   }
 });
 

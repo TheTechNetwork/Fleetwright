@@ -288,6 +288,19 @@ it issued and needs the nonce back to check the signature against it.
 Nothing reusable crosses the wire. A captured connection yields a signature
 over a value that will never be accepted again.
 
+**Liveness is a heartbeat frame, not a protocol ping.** A dead TCP connection
+behind a NAT looks exactly like an idle healthy one until somebody writes to
+it, so every twenty seconds the sidecar sends `{"kind":"ping"}` and expects
+`{"kind":"pong"}`; any frame at all counts as proof of life, and only total
+silence past the grace period drops the socket for a reconnect. It is a text
+frame rather than the WebSocket control frame it used to be because Node's own
+`WebSocket` cannot send a ping, and carrying four hundred lines of hand-rolled
+framing for one control frame was the wrong trade. On Cloudflare the Durable
+Object answers it with `setWebSocketAutoResponse`, so a heartbeat never wakes
+the object — the same cost the protocol ping had, which was none. The two
+strings live once, in `src/fleet/protocol/heartbeat.js`, because that match is
+on bytes.
+
 **A challenge, not a self-issued JWT** — which is a deliberate departure from
 design.md §5, and the cheaper of the two. A JWT the host signs for itself is
 replayable for as long as it is valid, so its window has to be short; and a
