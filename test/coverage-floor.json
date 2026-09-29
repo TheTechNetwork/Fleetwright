@@ -76,6 +76,7 @@
   "src/fleet/host/auto-labels.js": 100,
   "src/fleet/host/config.js": 65,
   "src/fleet/host/enrol-next.js": 100,
+  "src/fleet/host/evidence.js": 100,
   "src/fleet/host/hub-client.js": 99,
   "src/fleet/host/identity.js": 88,
   "src/fleet/host/pane.js": 100,

@@ -16,6 +16,7 @@ import { updateStatus } from '../src/core/update.js';
 import { installedVersion, currentVersion } from '../src/core/release-apply.js';
 import { helperState } from '../src/core/migrate.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
+import { recordCoordinatorReached } from '../src/fleet/host/evidence.js';
 import { loadOrCreateKey, enrol, proveIdentity, checkEnrolled, keyFingerprint, recordAssignedName } from '../src/fleet/host/identity.js';
 import { StdioTransport } from '../src/fleet/host/transports/stdio.js';
 import { WebSocketTransport, MAX_BACKOFF_MS } from '../src/fleet/host/transports/websocket.js';
@@ -107,14 +108,10 @@ async function run() {
   //
   // Fire and forget from a synchronous hook: the transport calls this as the
   // socket opens and must not wait on a loopback request to finish opening it.
+  // The ask retries until fleetwright answers — see src/fleet/host/evidence.js
+  // for why one request at connect time would have reverted every update.
   const onCoordinatorConnect = () => {
-    void hub
-      .noteCoordinatorReached()
-      .then((r) => {
-        if (r.noted) log.info('update: recorded that this box reached its coordinator');
-        else if (r.why && r.why !== 'nothing on trial') log.warn(`update: could not record reaching the coordinator — ${r.why}`);
-      })
-      .catch((e) => log.warn(`update: could not record reaching the coordinator — ${e.message}`));
+    void recordCoordinatorReached(hub, { log });
   };
 
   // Not fatal. fleetwright may be starting alongside this, and the sidecar's job
