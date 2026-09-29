@@ -1270,8 +1270,12 @@ export function toCommandLine({ verb, params, actor }) {
     case 'secrets':
       return '/secrets';
     // A bounded enum, so it is a single token that cannot become a second flag.
+    // `--fresh` is a literal this side adds, never a param: this line is the
+    // app's Check, somebody asking now, and it tells the verb to fetch apt's
+    // lists before answering. The sidecar's own fifteen-minute poll sends the
+    // bare verb and keeps the rate limit.
     case 'updates':
-      return '/updates';
+      return '/updates --fresh';
     case 'channel':
       return p.to ? `/channel ${p.to}` : '/channel';
     case 'sandbox':

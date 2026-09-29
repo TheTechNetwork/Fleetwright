@@ -1610,6 +1610,11 @@ export const COMMANDS = {
       // updates such a box. The image is still refreshed: it is not part of
       // the package, and nothing else on an apt box pulls it.
       if (status.packaged && ctx.cfg.releaseSource === 'apt') {
+        // ASK APT AFTER APT HAS FETCHED. The candidate is read from the
+        // package lists, and a person typing /update is asking now, not as
+        // of this morning. An apply skips it: the version it installs was
+        // named by the check that offered the button.
+        if (!(flags.has('restart') || flags.has('apply'))) refreshPackageLists(ctx.cfg, { force: true });
         const r = await checkRelease(ctx.cfg);
         const owner = `${status.dir} is installed from apt, so apt is what updates it.`;
         // APPLY MEANS THE PACKAGE, ALONE. This used to hand the person to
@@ -1775,8 +1780,21 @@ export const COMMANDS = {
       'Both kinds at once: this software, and the operating system. They are ' +
       'different questions with different answers, and a screen that shows one ' +
       'of them next to the other without saying which is which contradicts itself.',
-    run: async (ctx) => {
+    run: async (ctx, _args, flags) => {
       const status = updateStatus(ctx.cfg);
+
+      // THE LISTS FIRST, BEFORE EITHER HALF. On a box apt owns the app half
+      // is apt's candidate, which is only as new as the package lists, and
+      // this refresh used to run after that question had been answered: a
+      // Check on the afternoon 0.4.1 was published said "0.4.0 is the newest
+      // in apt, as of the last time this box fetched its package lists" for
+      // hours, and the row beside it drew nothing waiting. Rate-limited
+      // inside for the sidecar's fifteen-minute poll; `--fresh` is the app's
+      // Check, which is somebody asking now and gets apt asked now. A no-op
+      // when the box has not been given permission — in which case both
+      // halves are measured against whatever the lists last said, and their
+      // sentences say so rather than reporting a reassuring zero.
+      refreshPackageLists(ctx.cfg, { force: flags.has('fresh') });
 
       // THE APP HALF, and which question it is depends on how this box was
       // installed. A release compares versions against a manifest; a checkout
@@ -1865,11 +1883,7 @@ export const COMMANDS = {
         app = { kind: 'unknown', pending: false, text: status.message ?? 'Could not read the install.' };
       }
 
-      // THE OS HALF. Refreshed first, rate-limited inside, and a no-op when the
-      // box has not been given permission — in which case the count below is
-      // measured against whatever the lists last said, and describeSystemUpdates
-      // says so rather than reporting a reassuring zero.
-      refreshPackageLists(ctx.cfg);
+      // THE OS HALF, from the lists refreshed above.
       const s = systemUpdates();
       const summary = describeSystemUpdates(s);
       // THE NAMES, beside the count. "1 package can be upgraded" reached a
