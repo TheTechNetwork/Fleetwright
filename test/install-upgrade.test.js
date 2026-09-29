@@ -54,11 +54,11 @@ test('it refuses a box that is not already in a fleet, and names what is missing
 
 test('it restarts the services, which is the whole point', () => {
   const section = SH.slice(SH.indexOf('# --- 9.'));
-  for (const unit of ['fleetwright', 'fleetwright-coordinator', 'fleetwright-sidecar']) {
+  for (const unit of ['fleetwright', 'fleetwright-sidecar']) {
     assert.ok(section.includes(unit), `${unit} is never restarted`);
   }
-  // Only units that exist. A box with no local coordinator has nothing to
-  // restart, and trying prints a failure about something absent on purpose.
+  // Only units that exist, so a unit an older install wrote and this one
+  // retired is not a failure about something absent on purpose.
   assert.match(section, /list-unit-files/);
   // And macOS, which uses launchd and needs bootout before bootstrap —
   // bootstrap on a loaded label fails rather than replacing it, which is an
@@ -149,19 +149,21 @@ test('joining a fleet still costs a pin, and the one-liner changes nothing about
   // typed, and it is in their shell history. Enrolment is unchanged: a
   // six-digit pin, minted by a person in the app, short-lived and single-use.
   //
-  // The only path that mints a pin without being asked is a box running its own
-  // coordinator, using the admin token generated on that same machine seconds
-  // earlier. That is not a shared credential; it is a box authorising itself.
+  // There used to be one path that minted a pin without asking: a box running
+  // its own coordinator, with the admin token it had generated seconds earlier.
+  // No box runs a coordinator now (docs/auth-and-join.md), so the installer
+  // holds nothing that could mint a pin, and every enrolment is asked for.
   const enrol = /enrol_host\(\) \{[\s\S]*?\n  \}/.exec(SH);
   assert.ok(enrol, 'enrol_host is gone');
 
-  // A remote fleet always asks.
+  // It always asks.
   assert.match(enrol[0], /ask pin "Enrolment pin"/);
   assert.match(enrol[0], /not enrolled — this host will be refused until it is/);
   // Six digits or nothing — a pin is not free text.
   assert.match(enrol[0], /\$\{#pin\} -ne 6/);
-  // The self-mint is gated on running the coordinator here, and on nothing else.
-  assert.match(enrol[0], /if \[ "\$FLEET_LOCAL" = 1 \]/);
+  // And nothing in it can mint one: no admin token, no self-authorising branch.
+  assert.doesNotMatch(enrol[0], /FLEETWRIGHT_API_TOKEN/);
+  assert.doesNotMatch(enrol[0], /FLEET_LOCAL/);
 
   // NOTHING JOINS A FLEET FROM AN ENVIRONMENT VARIABLE. The shim exports one,
   // and it is an address; if enrolment ever grew a credential it could read
@@ -452,26 +454,25 @@ test('the installer records the manifest the one-liner verified against, before 
   assert.match(block.slice(told, guessed), /set_env "\$ENV_FILE" FLEETWRIGHT_RELEASE_MANIFEST "\$FLEETWRIGHT_RELEASE_MANIFEST"/);
 });
 
-test('a packaged box retires a leftover local coordinator, but only when it uses a remote one', () => {
-  // A release ships no coordinator — the fleet meets at the Worker — so a
-  // packaged box that still has an fleetwright-coordinator unit is a checkout
-  // artifact from before it was packaged: loopback, no hosts, drifting on old
-  // code no update touches. It should retire itself through root's half of an
-  // update rather than needing a shell. But only when the sidecar here points at
-  // a REMOTE coordinator: a box genuinely running its own over stdio/loopback is
-  // still using it.
+test('any box retires a leftover local coordinator, and one that was its own fleet is told where to go', () => {
+  // No box runs a coordinator any more (docs/auth-and-join.md), and a checkout
+  // no longer carries the binary — so a unit an older install wrote would
+  // crash-loop against a file that is gone. It is retired on every run,
+  // through root's half of an update, with no shell needed.
   //
-  // The block lives in the "no coordinator in this payload" else, so it can only
-  // fire on a packaged box; a checkout installs and keeps its own coordinator.
-  const start = SH.indexOf('no coordinator in this payload');
-  assert.ok(start > 0, 'the packaged-coordinator branch moved');
-  const block = SH.slice(start, start + 2800);
+  // This test used to assert the opposite gate: retire ONLY under a remote
+  // URL, spare loopback/stdio because that coordinator was in use. There is
+  // nothing left for it to run now, so the gate went; what replaced it is a
+  // sentence for the box that WAS its own fleet, naming where the fleet meets
+  // now and what to set.
+  const start = SH.indexOf('AND RETIRE A LEFTOVER ONE');
+  assert.ok(start > 0, 'the retire block moved');
+  const block = SH.slice(start, start + 3400);
 
-  // It reads the coordinator URL from the sidecar env, and retires only under a
-  // real (non-loopback) URL.
-  assert.match(block, /FLEETWRIGHT_COORDINATOR_URL=/, 'the remote-coordinator signal is not consulted');
+  // It reads the coordinator URL from the sidecar env, to decide what to SAY —
+  // not whether to retire.
+  assert.match(block, /FLEETWRIGHT_COORDINATOR_URL=/, 'the sidecar URL is not consulted');
   assert.match(block, /systemctl disable --now fleetwright-coordinator/, 'the leftover unit is never disabled');
-  assert.match(block, /\*:\/\/\*\)/, 'the retire is not gated on a URL shape');
 
   // DISABLE IS NOT ENOUGH — it leaves the unit file, and section 9 restarts
   // every unit list-unit-files still reports, so a mere disable is undone in
@@ -484,9 +485,13 @@ test('a packaged box retires a leftover local coordinator, but only when it uses
   );
   assert.match(block, /systemctl daemon-reload/, 'systemd is not told the unit is gone');
 
-  // And the loopback / stdio / unset cases are left alone — a coordinator in use
-  // must not be pulled out from under the box.
-  assert.match(block, /''\|stdio:\*\|\*127\.0\.0\.1\*\|\*localhost\*\)/, 'a local coordinator in use is not spared');
+  // The loopback / stdio / unset case is the box that ran its own fleet. It is
+  // still retired — there is no binary — and it is told, in the installer's
+  // output, what to deploy and which variable to set.
+  assert.match(block, /''\|stdio:\*\|\*127\.0\.0\.1\*\|\*localhost\*\)/, 'the box that was its own fleet is not recognised');
+  assert.match(block, /this box ran its own coordinator, and that is no longer shipped/);
+  assert.match(block, /FLEETWRIGHT_COORDINATOR_URL=https:\/\/your-coordinator/);
+  assert.match(block, /docs\/coordinator-deploy\.md/);
 
   // Never touched by --check: the installer exits at the prerequisites gate
   // before any unit work.
@@ -515,10 +520,11 @@ test('a pin given to join enrols with a remote coordinator whether or not anythi
   // `fleetwright join fleet.example.com --pin` on a box without systemd wrote
   // the address, printed "has not joined yet" and dropped the pin: enrolment
   // lived only on the started path, on reasoning that holds for a local
-  // coordinator and not for a Worker that is up regardless.
+  // coordinator and not for a Worker that is up regardless — and the Worker is
+  // the only coordinator there is now, so the path is not gated on a local one.
   assert.match(
     SH,
-    /if \[ "\$\{STARTED:-0\}" != 1 \] && \[ -n "\$ENROL_URL" \] && \[ "\$FLEET_LOCAL" != 1 \]; then\n\s+enrol_host/,
+    /if \[ "\$\{STARTED:-0\}" != 1 \] && \[ -n "\$ENROL_URL" \]; then\n\s+enrol_host/,
     'the not-started path no longer enrols with a remote coordinator',
   );
   // The closing "has not joined yet" is about being enrolled, not about
@@ -532,7 +538,7 @@ test('a bare coordinator address handed to the installer means https, as join al
   // on the first apt box, written as typed, and enrolment failed with "Failed
   // to parse URL" — the same thing `fleetwright join` accepts, refused one
   // screen later. src/core/join.js is the rule; this is it in the installer.
-  const block = /JOINING="\$\{FLEETWRIGHT_COORDINATOR_URL:-\}"[\s\S]*?FLEET_LOCAL=0/.exec(SH);
+  const block = /JOINING="\$\{FLEETWRIGHT_COORDINATOR_URL:-\}"[\s\S]*?\nif \[ "\$WIZARD" = yes \]; then/.exec(SH);
   assert.ok(block, 'the joining block is gone');
   assert.match(block[0], /\*\) JOINING="https:\/\/\$JOINING" ;;/, 'a bare host is not made https');
   assert.match(block[0], /localhost\*\|127\.\*\|\\\[::1\\\]\*\) JOINING="http:\/\/\$JOINING" ;;/, 'loopback is not made http');

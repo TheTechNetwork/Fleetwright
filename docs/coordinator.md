@@ -11,29 +11,34 @@ phone ──http─▶ /api/intent       one round trip, flat JSON
 Both on one port, because a host pins exactly one origin and adding a second
 would mean pinning two.
 
-```sh
-set -a; . /etc/fleetwright-coordinator.env; set +a
-fleetwright-coordinator
-```
+It runs as a Cloudflare Worker — `worker/`, deployed per
+[`coordinator-deploy.md`](./coordinator-deploy.md) — and nowhere else. The one
+alternative kept open is that same Worker under `workerd` in a container, for
+whoever will not have a Cloudflare account; it is a roadmap row rather than an
+install-guide sentence until it has been run for a week
+([`auth-and-join.md`](./auth-and-join.md)).
 
-## There are two of it, and they are one design
+## There used to be two of it, and they were one design
 
 §4 chose Cloudflare Workers + Durable Objects for the phone leg, and that is
-what production runs (`worker/`, see
-[`coordinator-deploy.md`](./coordinator-deploy.md)). This is the same design
-running somewhere you can put a breakpoint in: `registry.js`, `scheduler.js`
-and the intent plumbing carry all the decisions and touch nothing
-runtime-specific, so the two are a transport swap rather than two
-implementations — held to one contract by `openapi.json` and
-`test/openapi.test.js` for the phone leg, and by `worker/test/parity.test.js`
-for the host socket leg. That second one drives a single host client — the
-`identity.js` and `ws.js` a real sidecar ships — through the Worker in workerd
-and the Node coordinator in process, and asserts the same answer on each: one
-sidecar able to drive both is the transport swap made executable.
+what production has always run. For a long time the same design also ran as a
+plain Node process — `src/fleet/coordinator/server.js` — so the whole loop
+could be driven on one box with a breakpoint in it: `registry.js`,
+`scheduler.js`, `core.js` and the intent plumbing carry all the decisions and
+touch nothing runtime-specific, so the two were a transport swap rather than
+two implementations, held to one contract by `openapi.json` executed as
+`test/openapi.test.js` for the phone leg and by `worker/test/parity.test.js`
+for the host socket leg.
 
-The WebSocket is hand-rolled (`src/fleet/ws.js`) because this project has zero
-runtime dependencies, and a dependency on the one code path every host holds
-open permanently is a poor trade for ~200 lines of well-specified framing.
+That second implementation stopped being part of the package in
+[`auth-and-join.md`](./auth-and-join.md): a release never shipped it, the
+installer no longer offers it, and what is left of `server.js` is a test
+harness until the tests that use it drive the Worker directly. The parity
+tests stay, as conformance tests of the one that remains.
+
+The WebSocket framing in `src/fleet/ws.js` was hand-rolled for the Node
+coordinator's accept side and for the sidecar's dial. The accept side leaves
+with the Node coordinator; the dial is Node's own `WebSocket` from 22 on.
 
 ## The rule it must not break
 

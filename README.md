@@ -5,7 +5,7 @@ around it: ephemeral root-capable sandboxes, session wake, and a phone that can
 reach any of it from a cold radio.
 
 > **One name now.** The repository, the phone app, the package, the binaries
-> (`fleetwright`, `fleetwright-sidecar`, `fleetwright-coordinator`), the systemd
+> (`fleetwright`, `fleetwright-sidecar`, `fleetwright-mcp`), the systemd
 > units, the `FLEETWRIGHT_*` environment variables and `/opt/fleetwright` are
 > all Fleetwright. They were `agent-hub` and `agent-fleet` until the rename; a
 > box installed before it moves itself onto the new names on its next update,
@@ -103,21 +103,21 @@ from the app (or `--pin 123456`). Unattended, preseed both. [`docs/packaging.md`
 which fleet, because you already said. It installs what is missing, asks for the
 six-digit pin you mint in the app, enrols the box and starts the services.
 
-The pin is the only thing it asks for. Nothing else is needed to join a fleet,
-and the question that was in the way — whether to run a coordinator here — is
-for somebody setting one up rather than joining one, so it is asked only when
-there is no fleet in the URL. (Telegram used to be asked for here too; it is
-archived, and [`docs/telegram.md`](./docs/telegram.md) says why.)
+The pin is the only thing it asks for. Nothing else is needed to join a fleet.
+(Telegram used to be asked for here too; it is archived, and
+[`docs/telegram.md`](./docs/telegram.md) says why. So did "run the coordinator
+on this box?", and that is gone for a different reason: the coordinator runs
+as a Cloudflare Worker and nowhere else —
+[`docs/auth-and-join.md`](./docs/auth-and-join.md).)
 
-**No fleet to join yet?** Then there is no URL to curl, and the clone path
-below is yours: [`docs/first-session.md`](./docs/first-session.md) runs it
-end to end. Answer `Y` when the installer offers to run the coordinator on the
-box, or — for a coordinator a phone on mobile data can reach — deploy it to
-your own Cloudflare account first:
-[`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md). (A fresh
-coordinator's own `/install` answers 404 until you point
-`FLEETWRIGHT_INSTALL_URL` at your copy of the repository, which is deliberate:
-a coordinator never hands root a script its operator did not name.)
+**No fleet to join yet?** Then deploy the coordinator first — five commands on
+a free Cloudflare account,
+[`docs/coordinator-deploy.md`](./docs/coordinator-deploy.md) — and curl its
+`/install`. [`docs/first-session.md`](./docs/first-session.md) runs the whole
+thing end to end. (A fresh coordinator's own `/install` answers 404 until you
+point `FLEETWRIGHT_INSTALL_URL` at your copy of the repository, which is
+deliberate: a coordinator never hands root a script its operator did not
+name.)
 
 Already installed and joined? `install.sh --upgrade` brings a box onto new code
 with no questions at all, restarts the services, and tells you whether its
@@ -167,12 +167,11 @@ never be built.
 | `src/core/`, `src/adapters/`, `src/index.js` | the session manager |
 | `src/fleet/protocol/` | the intent protocol: built by the coordinator, enforced by the sidecar |
 | `src/fleet/host/` | the sidecar: hub client, pane parsing, hook sockets, transports |
-| `src/fleet/coordinator/` | the coordinator: host registry, scheduler, HTTP + WebSocket |
+| `src/fleet/coordinator/` | the coordinator's decisions: host registry, scheduler, identity, enrolment — shared with `worker/`, which is where it runs |
 | `src/fleet/ws.js` | a hand-rolled RFC 6455 WebSocket, because zero dependencies |
 | `sandbox/` | the container image a sandboxed session runs in |
 | `bin/fleetwright` | the session manager's CLI and SessionStart hook |
 | `bin/fleetwright-sidecar` | the fleet host process (`doctor` checks a box before you trust it) |
-| `bin/fleetwright-coordinator` | the coordinator |
 | `install/` | one installer for all of it, plus the systemd unit |
 | `.github/workflows/` | CI: tests, the iOS build, the Android APK, the Worker deploy — see [`docs/ci.md`](./docs/ci.md) |
 | `apps/` | [Android](./apps/android/README.md) and [iOS](./apps/ios/README.md) clients — [testing handoff](./docs/app-testing.md) |
@@ -194,16 +193,16 @@ used to check the JSDoc annotations.
 
 ```sh
 npm install
-# The Worker has its own dependencies, and the tests import it — three test
-# files assert the two coordinators agree, so they load worker/src/worker.js.
-# Skipping this gets you three failures that look like a broken clone.
+# The Worker has its own dependencies, and the tests import it — the
+# coordinator IS the Worker, so most fleet tests load worker/src/worker.js.
+# Skipping this gets you failures that look like a broken clone.
 npm install --prefix worker
 npm test
 npm run typecheck
 
 npm start                          # the session manager
 npm run sidecar -- doctor          # check this box can drive it
-node bin/fleetwright-coordinator   # the coordinator
+(cd worker && npx wrangler dev)    # the coordinator, locally, under workerd
 ```
 
 `mise` pins the dev environment and carries the tasks that need more than node —

@@ -764,13 +764,13 @@ of the two drifting into looking like different apps.
 Not a CI secret. It goes to whichever coordinator is running:
 
 ```sh
-# on Cloudflare — JSON or base64, either works
+# on Cloudflare — JSON or base64, either works; wrangler reads stdin
 cd worker && npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
-
-# on a box — base64, because a systemd EnvironmentFile mangles the JSON
-base64 -w0 service-account.json     # into /etc/fleetwright-coordinator.env as
-FLEETWRIGHT_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
 ```
+
+(A box used to be the other place this could go, base64'd into a systemd
+EnvironmentFile. No box runs a coordinator any more —
+[`auth-and-join.md`](./auth-and-join.md).)
 
 Firebase console → Project settings → Service accounts → Generate new private
 key. See [`push.md`](./push.md) — including the newline mangling that catches

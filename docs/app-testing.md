@@ -44,8 +44,7 @@ misconfigured one. Pick one:
 | | how | good for |
 |---|---|---|
 | **The Worker** | `https://fleet.thetech.network`, already deployed by CI | iOS, and anything realistic — it is HTTPS, which iOS needs |
-| **A box on the LAN** | `http://<box>:8791` after `install.sh` | Android; see the ATS note before trying it on iOS |
-| **Local Node coordinator** | `node bin/fleetwright-coordinator` on the Mac | fastest loop, no fleet — but with no host connected, `list` is legitimately empty |
+| **The Worker, locally** | `cd worker && npx wrangler dev` on the Mac — the real Worker under workerd, on `http://127.0.0.1:8787` | fastest loop, no fleet — but with no host connected, `list` is legitimately empty; see the ATS note before pointing iOS at plain HTTP |
 
 **Both apps sign in.** There is no token to type: the app hands the coordinator
 an Apple or Google ID token, and gets back a credential issued to that device.
@@ -62,8 +61,8 @@ Two shortcuts while testing:
   everything downstream of sign-in without sign-in working yet. The old
   collapsed "use a credential instead" field is gone from both apps.
 - The admin token still works over curl for whatever the demo cannot show:
-  `sudo grep FLEETWRIGHT_API_TOKEN /etc/fleetwright-coordinator.env` on a box;
-  for the Worker it is the `FLEETWRIGHT_API_TOKEN` GitHub Actions secret.
+  it is the `FLEETWRIGHT_API_TOKEN` GitHub Actions secret for the production
+  Worker, and whatever `wrangler secret put` set on yours.
 
 Two things that will stop a real sign-in, both worth checking before debugging
 the app:

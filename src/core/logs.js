@@ -27,7 +27,8 @@ import { unitName } from '../fleet/legacy-paths.js';
  */
 export const LOG_SOURCES = Object.freeze({
   hub: { unit: 'fleetwright', legacy: 'agent-hub', what: 'the session manager' },
-  coordinator: { unit: 'fleetwright-coordinator', legacy: 'agent-fleet-coordinator', what: 'the fleet coordinator' },
+  // No `coordinator`: it runs as a Worker, so no box has its journal. The
+  // Worker's own log is `wrangler tail` (docs/coordinator-deploy.md).
   sidecar: { unit: 'fleetwright-sidecar', legacy: 'agent-fleet-sidecar', what: 'this box as a fleet host' },
 });
 
@@ -142,14 +143,10 @@ const ALIASES = {
   hub: 'hub',
   service: 'hub',
   main: 'hub',
-  coord: 'coordinator',
-  'fleetwright-coordinator': 'coordinator',
-  coordinator: 'coordinator',
   'fleetwright-sidecar': 'sidecar',
   sidecar: 'sidecar',
   // The unit names from before the rename, which is what a runbook says.
   'agent-hub': 'hub',
-  'agent-fleet-coordinator': 'coordinator',
   'agent-fleet-sidecar': 'sidecar',
   fleet: 'sidecar',
 };

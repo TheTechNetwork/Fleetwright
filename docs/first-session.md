@@ -34,17 +34,17 @@ anything, naming this command.
 
 ## Join it to a coordinator
 
-Skip if this box *is* the coordinator — the installer asks whether to run one
-here, sets it up on a `Y`, and prints where it listens. That is the whole
-single-box setup.
+The coordinator is a Cloudflare Worker, and a box is never one. No coordinator
+yet? Deploy it to your own Cloudflare account first —
+[coordinator-deploy.md](./coordinator-deploy.md) is five commands on a free
+account — and give the installer that URL when it asks (or curl the
+coordinator's own `/install`, which carries it).
 
-No coordinator anywhere yet, and you want one a phone on mobile data can
-reach? Deploy it to your own Cloudflare account first —
-[coordinator-deploy.md](./coordinator-deploy.md) is five commands — and give
-the installer that URL when it asks.
+Then a pin: from the app, Fleet → Add a host, or with the break-glass admin
+token if no phone has signed in yet:
 
 ```sh
-# On the coordinator, with the admin token:
+# Against the coordinator, with the admin token:
 curl -sX POST https://your-coordinator/api/enroll \
   -H "authorization: Bearer $FLEETWRIGHT_API_TOKEN" \
   -H 'content-type: application/json' -d '{"kind":"host"}'

@@ -51,14 +51,15 @@ test('the services are a fixed list, not a pattern', () => {
   // A unit name from the wire would read any unit on the box. Everyone who can
   // run this can already start a session with a shell in it, but that is not a
   // reason to add a second way.
-  assert.deepEqual(Object.keys(LOG_SOURCES).sort(), ['coordinator', 'hub', 'sidecar']);
+  assert.deepEqual(Object.keys(LOG_SOURCES).sort(), ['hub', 'sidecar']);
 });
 
 test('the names people actually reach for all resolve', () => {
   assert.equal(resolveSource('hub'), 'hub');
   assert.equal(resolveSource('fleetwright'), 'hub');
-  assert.equal(resolveSource('coord'), 'coordinator');
-  assert.equal(resolveSource('COORDINATOR'), 'coordinator');
+  // No coordinator source: it runs as a Worker, and no box has its journal.
+  assert.equal(resolveSource('coord'), null);
+  assert.equal(resolveSource('COORDINATOR'), null);
   assert.equal(resolveSource('fleet'), 'sidecar');
   assert.equal(resolveSource('sidecar'), 'sidecar');
 });
@@ -74,7 +75,7 @@ test('an unknown service is refused with the list of real ones', (t) => {
   const r = readLogs(s.cfg(), { source: 'sshd' });
   assert.equal(r.ok, false);
   assert.match(r.text, /not a service I can read/);
-  assert.match(r.text, /hub, coordinator, sidecar/);
+  assert.match(r.text, /hub, sidecar/);
   assert.equal(s.args(), '', 'journalctl must not even be invoked');
 });
 
@@ -108,8 +109,8 @@ test('a line count is honoured and clamped', (t) => {
 
 test('each service maps to its own unit', (t) => {
   const s = stubJournal(t, { stdout: 'x' });
-  readLogs(s.cfg(), { source: 'coordinator' });
-  assert.match(s.args(), /-u fleetwright-coordinator/);
+  readLogs(s.cfg(), { source: 'hub' });
+  assert.match(s.args(), /-u fleetwright/);
   readLogs(s.cfg(), { source: 'sidecar' });
   assert.match(s.args(), /-u fleetwright-sidecar/);
 });
@@ -145,10 +146,10 @@ test('a user who cannot read the journal is told that, not "no entries"', (t) =>
 test('a service that has never run says so plainly', (t) => {
   const s = stubJournal(t, { stdout: '-- No entries --\n' });
 
-  const r = readLogs(s.cfg(), { source: 'coordinator' });
+  const r = readLogs(s.cfg(), { source: 'sidecar' });
 
   assert.equal(r.ok, true, 'nothing is wrong; there is just nothing to show');
-  assert.match(r.text, /No log entries for fleetwright-coordinator/);
+  assert.match(r.text, /No log entries for fleetwright-sidecar/);
   assert.match(r.text, /may never have been started/);
 });
 

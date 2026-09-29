@@ -303,18 +303,17 @@ Then the credential: an environment variable holding the Firebase
 service-account JSON — as JSON, or base64-encoded. Both are accepted; which one
 you want depends on where it is going.
 
-The installer asks for this and does the encoding — `install.sh` takes the
-*path* to the JSON and base64s it into the coordinator's env file, which is the
-whole reason it asks for a path rather than a value. By hand:
+The coordinator is a Worker, and wrangler reads the file from stdin — either
+form, JSON or base64:
 
 ```sh
-# the coordinator on a box — BASE64, and not optionally so, see below
-base64 -w0 service-account.json      # paste into /etc/fleetwright-coordinator.env
-FLEETWRIGHT_FCM_SERVICE_ACCOUNT=eyJwcm9qZWN0X2lkIjoi…
-
-# the coordinator on Cloudflare — either form; wrangler reads stdin
 cd worker && npx wrangler secret put FLEETWRIGHT_FCM_SERVICE_ACCOUNT < service-account.json
 ```
+
+(The installer used to ask for the path to this file and base64 it into a
+coordinator env file on the box, because a systemd EnvironmentFile mangles the
+JSON — see below. No box runs a coordinator any more, so it no longer asks;
+the base64 note stays because the sender still accepts both forms.)
 
 ### Why base64 on a box
 

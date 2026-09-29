@@ -16,10 +16,12 @@ standable-up yet.
 | **Android app** | ⚠️ in open testing on Play — what is proven is [`app-parity.md`'s table](./app-parity.md#what-is-actually-proven-about-the-apps), which this row defers to |
 | **iOS app** | ⚠️ in beta on TestFlight — same table, same deferral |
 
-A box you set up today runs the whole loop: a coordinator, this box as a fleet
-host, and sandboxed sessions with real root inside a container whose filesystem
-is thrown away on every stop. That much is validated on hardware — see
-[§10 of `design.md`](./design.md).
+A box you set up today runs its half of the loop: this box as a fleet host,
+and sandboxed sessions with real root inside a container whose filesystem is
+thrown away on every stop. The other half — the coordinator — is a Cloudflare
+Worker ([`coordinator-deploy.md`](./coordinator-deploy.md)), and never a
+service on a box ([`auth-and-join.md`](./auth-and-join.md)). The host half is
+validated on hardware — see [§10 of `design.md`](./design.md).
 
 The ⚠️ rows are the honest ones: built, and unproven in the one way that
 matters until somebody runs them.
@@ -316,13 +318,12 @@ is what you want for a fork or a branch under test:
 One script does everything:
 
 - checks prerequisites (node, tmux, claude, podman)
-- creates `/etc/fleetwright.env`, `/etc/fleetwright-sidecar.env` and
-  `/etc/fleetwright-coordinator.env`, all `0600`
+- creates `/etc/fleetwright.env` and `/etc/fleetwright-sidecar.env`, both `0600`
 - **copies the hub URL and token into the sidecar's config**, so there is no
   secret to hand-copy between files — the step people get wrong
 - installs the systemd unit and registers the Claude Code **SessionStart hook**
 - builds the sandbox image (`localhost/fleetwright-session:latest`) if podman is present
-- links `fleetwright`, `fleetwright-sidecar` and `fleetwright-coordinator`
+- links `fleetwright`, `fw` and `fleetwright-sidecar`
 
 It is idempotent — re-run it after `git pull` and it will never overwrite a
 config that already exists. `FLEETWRIGHT_REBUILD_IMAGE=1` forces an image
@@ -335,9 +336,8 @@ order:
 
 | it asks | what to have ready | blank means |
 |---|---|---|
-| Run the coordinator on this box? | `Y` for a single-machine setup | it asks for a coordinator URL to join instead |
-| Enrolment pin — **only when joining** someone else's coordinator | six digits from the app, or from anyone with the admin token | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
-| Firebase service-account JSON | **the path to the file**, already on the box | push is logged instead of sent |
+| Coordinator URL to join | the Worker's address — not asked when you curled the coordinator's own `/install`, which carries it | set `FLEETWRIGHT_COORDINATOR_URL` in `/etc/fleetwright-sidecar.env` later |
+| Enrolment pin | six digits from the app (Fleet → Add a host), or from anyone with the admin token | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
 
@@ -358,29 +358,17 @@ One of those is worth planning for before you start:
 the private half at `/var/lib/fleetwright-sidecar/host-key.json` (0600), and signs a
 nonce on every connection. Joining is a six-digit pin, spent once.
 
-On the box that **runs the coordinator**, that enrolment is silent: the
-installer holds the admin token, so it mints a pin and spends it rather than
-making you copy six digits from one terminal into the same terminal.
-
-`FLEETWRIGHT_API_TOKEN` is generated rather than asked, and **printed when the
-install finishes** — it is break-glass, not the everyday credential:
-
-```
-  The coordinator on this box:
-      URL          http://10.0.0.5:8791   (or your Worker, if you deploy one)
-      Admin token  623ad69f979bdf7a7b5253d94fde3202ea1dd1438a06868e
-```
+The installer holds no credential that could mint a pin — a box never runs
+the coordinator, so there is no admin token on it — and every enrolment is
+asked for. The pin comes from the coordinator: handed out by the app (Fleet →
+Add a host), or minted with the break-glass `FLEETWRIGHT_API_TOKEN` that
+[`coordinator-deploy.md`](./coordinator-deploy.md) sets on the Worker.
 
 The app does not want that token. It signs in — Sign in with Apple, or the
 system account picker on Android — and is issued a credential of its own, which
 can be revoked without disturbing any other device. Sign-in needs
 `FLEETWRIGHT_AUTH_ISSUERS`, `FLEETWRIGHT_AUTH_AUDIENCES` and
 `FLEETWRIGHT_AUTH_ALLOW`; see [`identity.md`](./identity.md).
-
-On a box **joining a coordinator that already exists** — the Worker, or another
-machine — the enrolment pin is *asked for*, because it has to come from that
-coordinator: minted with the admin token, or handed out by the app (Fleet → Add
-a host).
 
 **With the admin token, that is one curl** — written down here because a beta
 tester with no app and no Telegram had to find it by reading `openapi.json`,
@@ -398,12 +386,6 @@ The pin is short-lived and single-use, so mint it when the box is ready to
 take it rather than in advance. Leave it blank and the box
 stays unenrolled — the sidecar keeps connecting and getting refused until
 someone runs `fleetwright-sidecar enrol <pin>`, as the service user.
-
-Either way, to read one back later:
-
-```sh
-sudo grep FLEETWRIGHT_API_TOKEN /etc/fleetwright-coordinator.env
-```
 
 It is idempotent. Re-run it after `git pull` and it will never overwrite a value
 that is already set — which also means the way to *change* an answer is to edit
@@ -424,19 +406,18 @@ comment is there.
 ## 2. Run the fleet
 
 If you answered the wizard, this is already done: both env files are written,
-the admin token is generated, this box is enrolled, and the services are
-running as `fleetwright-coordinator` and `fleetwright-sidecar`. Skip to the
-check below.
+this box is enrolled, and the services are running as `fleetwright` and
+`fleetwright-sidecar`. Skip to the check below.
 
 ```sh
-systemctl status fleetwright-coordinator fleetwright-sidecar
+systemctl status fleetwright fleetwright-sidecar
 ```
 
-To do it by hand, or to point this host at a coordinator somewhere else, the
-whole configuration is two lines in `/etc/fleetwright-sidecar.env`:
+To do it by hand, or to point this host at a different coordinator, the whole
+configuration is two lines in `/etc/fleetwright-sidecar.env`:
 
 ```
-FLEETWRIGHT_COORDINATOR_URL=https://fleet.thetech.network   # or http://127.0.0.1:8791
+FLEETWRIGHT_COORDINATOR_URL=https://fleet.thetech.network   # your Worker
 FLEETWRIGHT_TRANSPORT=websocket
 ```
 
@@ -453,14 +434,14 @@ fleetwright-sidecar doctor           # says whether the coordinator accepts it
 The pin comes from the app — Fleet → Add a host — or from the curl above;
 the box is the only place it can be spent.
 
-**Where the coordinator runs is a real choice**, and both are supported:
-
-| | when |
-|---|---|
-| **Cloudflare Worker** | you want it reachable from a phone on mobile data. No port, no cert, no tunnel — see [`coordinator-deploy.md`](./coordinator-deploy.md) |
-| **Node process on a box** | single-machine testing, or a fleet that never leaves your network |
-
-The same code runs in both. Check the host either way:
+**Where the coordinator runs is not a choice any more.** It is a Cloudflare
+Worker — no port, no cert, no tunnel, see
+[`coordinator-deploy.md`](./coordinator-deploy.md) — or, when that exists, the
+same Worker under `workerd` in a container for a fleet that never leaves your
+network. It used to also run as a Node process on a box; that stopped being
+part of the package in [`auth-and-join.md`](./auth-and-join.md), and a box
+that ran one is told so by the installer, which retires the unit. Check the
+host:
 
 ```sh
 fleetwright-sidecar doctor
@@ -474,13 +455,15 @@ fleetwright-sidecar doctor
  ok   host id unabandoned  — labels: gpu, debian13
 ```
 
-Then drive the fleet through the coordinator. Against a local one:
+Then drive the fleet through the coordinator, with a device credential from the
+app or the break-glass admin token:
 
 ```sh
-curl -s localhost:8791/api/hosts            # who is in the fleet, and why not
-curl -s localhost:8791/api/list             # every session, attributed by host
-curl -s localhost:8791/api/status/bigjob
-curl -s -X POST localhost:8791/api/intent \
+C=https://your-coordinator; H='authorization: Bearer fwk_…'
+curl -s -H "$H" $C/api/hosts                # who is in the fleet, and why not
+curl -s -H "$H" $C/api/list                 # every session, attributed by host
+curl -s -H "$H" $C/api/status/bigjob
+curl -s -H "$H" -X POST $C/api/intent \
   -H 'content-type: application/json' \
   -d '{"verb":"start","params":{"name":"api"}}'
 ```
@@ -499,9 +482,11 @@ stdout would not be noise, it would be a corrupted message.
 
 ### The units
 
-`install/fleetwright-sidecar.service` and
-`install/fleetwright-coordinator.service`, installed and started by the
-installer. The sidecar's unit only became possible with the websocket transport:
+`install/fleetwright.service` and `install/fleetwright-sidecar.service`,
+installed and started by the installer. (There was a
+`fleetwright-coordinator.service` for a box that ran its own coordinator;
+no box does now, and the installer retires a leftover one.) The sidecar's
+unit only became possible with the websocket transport:
 under `stdio` the process ends when stdin does, so a unit would have
 crash-looped.
 
@@ -622,7 +607,7 @@ SVC="$(stat -c %U /opt/fleetwright-src/bin/fleetwright)"
 sudo -u "$SVC" fleetwright-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
 fleetwright list                        # the session manager answers
 sudo -u "$SVC" fleetwright-sidecar identity  # this box's key and fingerprint
-curl -s localhost:8791/api/hosts      # the coordinator sees this box
+curl -s -H "authorization: Bearer fwk_…" https://your-coordinator/api/hosts   # the coordinator sees this box
 systemctl status fleetwright
 journalctl -u fleetwright -f
 ```

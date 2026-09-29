@@ -393,20 +393,30 @@ test('the entry points a unit names run under node, not just as scripts', async 
 });
 
 
-test('no unit is written for an entry point the payload does not have', () => {
-  // The coordinator moved to a Cloudflare Worker, so a release ships no
-  // bin/fleetwright-coordinator — deliberately. install.sh wrote the unit
-  // anyway, so converting a box that ran its own coordinator produced a service
-  // pointing at a file that was never in the tarball. It fails at every start,
-  // and reads as a broken box rather than as a component that is not supposed
-  // to be there.
+test('no coordinator unit is written, on any box, and a leftover one is retired', () => {
+  // The coordinator runs as a Cloudflare Worker, and since docs/auth-and-join.md
+  // that is the ONLY place it runs: a checkout no longer carries
+  // bin/fleetwright-coordinator either, so the unit that used to be written for
+  // a checkout would point at nothing. Nothing is written for it anywhere.
   const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
-  assert.match(sh, /if \[ -f "\$DIR\/bin\/fleetwright-coordinator" \]; then\n\s+install_unit fleetwright-coordinator/);
-  assert.match(sh, /it runs as a Worker, so no unit is written/);
+  assert.doesNotMatch(sh, /install_unit fleetwright-coordinator/);
+  assert.match(sh, /it runs as a Worker, not on this box/);
+  for (const gone of ['../bin/fleetwright-coordinator', '../bin/agent-fleet-coordinator',
+                      '../install/fleetwright-coordinator.service', '../install/fleetwright-coordinator.plist',
+                      '../install/fleetwright-coordinator.env.example']) {
+    assert.equal(existsSync(new URL(gone, import.meta.url).pathname), false, `${gone} is still in the tree`);
+  }
 
-  // And a checkout still gets one, because a box running its own coordinator is
-  // a thing --from-source keeps possible on purpose.
-  assert.equal(existsSync(new URL('../bin/fleetwright-coordinator', import.meta.url).pathname), true);
+  // A box that ran its own coordinator from a checkout still has the unit, and
+  // it would crash-loop against a binary that is gone. Retired on every run,
+  // whatever the sidecar's URL says — and a box that WAS its own fleet is told
+  // where the fleet meets now rather than left with a sidecar that cannot say.
+  assert.match(sh, /rm -f \/etc\/systemd\/system\/fleetwright-coordinator\.service/);
+  assert.match(sh, /this box ran its own coordinator, and that is no longer shipped/);
+  assert.match(sh, /docs\/coordinator-deploy\.md/);
+
+  // And the question that offered it is gone.
+  assert.doesNotMatch(sh, /Run the coordinator on this box\?/);
 });
 
 test('a unit names the module, so a bad shim in a release cannot stop it', () => {
@@ -428,8 +438,7 @@ test('a unit names the module, so a bad shim in a release cannot stop it', () =>
 
   // No unit hardcodes bin/ any more — that is the substitution that could not
   // tell a checkout from a release.
-  for (const f of ['fleetwright.service', 'fleetwright-sidecar.service', 'fleetwright-coordinator.service',
-                   'fleetwright.plist', 'fleetwright-sidecar.plist', 'fleetwright-coordinator.plist']) {
+  for (const f of ['fleetwright.service', 'fleetwright-sidecar.service', 'fleetwright.plist', 'fleetwright-sidecar.plist']) {
     const unit = readFileSync(new URL(`../install/${f}`, import.meta.url), 'utf8');
 
     // THE LINES THAT SAY WHAT RUNS, rather than the file with its comments

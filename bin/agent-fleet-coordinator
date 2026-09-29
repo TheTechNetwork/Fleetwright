@@ -1,4 +1,0 @@
-#!/usr/bin/env node
-// agent-fleet-coordinator is fleetwright-coordinator since the rename. Kept so boxes, units and runbooks from before
-// it keep working; see src/fleet/legacy-names.js for when this goes.
-import './fleetwright-coordinator';
