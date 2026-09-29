@@ -21,7 +21,8 @@ import {
 import { isValidName, nameError, generateName } from './names.js';
 import { titleFromCwd, cleanTitle } from './titles.js';
 import { readPrompt, promptId } from '../fleet/host/prompt.js';
-import { ensureWorkdirTrusted, trustDirectory, resolveWorkdir } from './trust.js';
+import { resolveWorkdir } from './trust.js';
+import { ensureDirectConfig, removeDirectConfig } from './direct-config.js';
 import { ensureSandboxVolumes, removeSandboxVolumes, stopSandboxContainer } from './podman.js';
 import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
@@ -422,6 +423,8 @@ export class SessionManager {
     // means "whatever was already there".
     /** @type {string|null} */
     let seededAccount = null;
+    /** @type {string|null} */
+    let configDir = null;
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
@@ -459,10 +462,24 @@ export class SessionManager {
       }
       seededAccount = volumes.account ?? null;
     } else {
-      ensureWorkdirTrusted(this.cfg);
-      // A session in any OTHER directory needs that directory trusted too, or it
-      // stops at "Do you trust the files in this folder?" with nobody to answer.
-      if (cwd !== this.cfg.workdir) trustDirectory(cwd);
+      // A DIRECT SESSION GETS THE SAME ACCOUNT A SANDBOXED ONE WOULD. It used to
+      // fall through to the box's own ~/.claude, which docs/one-account-per-
+      // person.md had already declared empty — and on a fresh box it was: the
+      // app linked an account, a session was requested, and it came up on
+      // Claude's first-run wizard asking how to log in. The session's config
+      // is its own directory now (direct-config.js): the person's credential,
+      // the trust for this cwd, and the hook, none of it in the box's home.
+      try {
+        mkdirSync(cwd, { recursive: true });
+      } catch { /* already there, or not ours to make — tmux reports either */ }
+      const known = this.registry.get(name);
+      const staged = ensureDirectConfig(this.cfg, name, actor, { account: known?.account ?? null, cwd });
+      if (!staged.ok) {
+        this.registry.upsert(name, { status: 'error', detail: staged.message, cwd, createdBy: actor });
+        return { ok: false, message: `Could not start "${name}": ${staged.message}` };
+      }
+      if (staged.fresh) seededAccount = staged.account;
+      configDir = staged.dir;
     }
     this.inFlight.add(name);
     try {
@@ -475,6 +492,7 @@ export class SessionManager {
         // would replay the whole task as a new message into a conversation that
         // has already done it.
         prompt,
+        configDir,
       });
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.
@@ -876,6 +894,7 @@ export class SessionManager {
       void this.hooks?.close(name);
       stopSandboxContainer(this.cfg, name);
       const { removed, failed } = removeSandboxVolumes(this.cfg, name);
+      removeDirectConfig(this.cfg, name);
       if (removed.length) volumes = `\nDeleted ${removed.join(' and ')}.`;
       // Not fatal, and said out loud rather than swallowed: a volume left
       // behind is disk someone has to reclaim by hand, and silently succeeding
@@ -910,6 +929,7 @@ export class SessionManager {
     const expired = this.registry.expiredFromBin(this.cfg.binTtlMs);
     for (const name of expired) {
       if (this.cfg.sandbox) removeSandboxVolumes(this.cfg, name);
+      removeDirectConfig(this.cfg, name);
       this.registry.dropBinned(name);
       log.info(`bin: ${name} passed its recovery window and was deleted`);
     }
