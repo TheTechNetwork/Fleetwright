@@ -121,6 +121,79 @@ test('the front page says how to install, with the signed line and join', async 
   assert.match(text, /signed-by=\/usr\/share\/keyrings\/fleetwright\.gpg/);
   assert.match(text, /fleetwright join/);
   assert.doesNotMatch(text, /trusted=yes/);
+  // THE BOX'S OWN ARCHITECTURE, so apt asks for one index. Raspberry Pi OS
+  // keeps armhf enabled beside arm64, and without this every apt update on a
+  // Pi printed a notice that this repository does not carry armhf.
+  assert.match(text, /deb \[arch=\$\(dpkg --print-architecture\) signed-by=/);
+  // The same line everywhere somebody might copy it from.
+  const line = /echo "deb \[[^"]*\] https:\/\/fleet-apt\.thetech\.network stable main"/;
+  const expected = text.match(line)?.[0];
+  assert.ok(expected);
+  for (const doc of ['README.md', 'docs/packaging.md']) {
+    assert.equal(readFileSync(new URL(`../${doc}`, import.meta.url), 'utf8').match(line)?.[0], expected, `${doc} gives a different sources line`);
+  }
+});
+
+const RELEASE = `-----BEGIN PGP SIGNED MESSAGE-----
+Origin: Fleetwright
+Suite: stable
+Date: Tue, 29 Sep 2026 04:16:25 +0000
+Architectures: amd64 arm64
+-----BEGIN PGP SIGNATURE-----
+x
+-----END PGP SIGNATURE-----
+`;
+
+test('metadata carries the signed Release date, and a box that has it gets a 304', async () => {
+  // apt asks with If-Modified-Since and prints "Hit" on a 304. The assets
+  // come with no Last-Modified, so every apt update re-downloaded InRelease
+  // and printed "Get" for a repository that had not changed.
+  const w = world({ assets: { '/dists/stable/InRelease': RELEASE, '/dists/stable/main/binary-arm64/Packages': 'pkgs' } });
+  const fresh = await w.get('/dists/stable/InRelease');
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
+  assert.equal(await fresh.text(), RELEASE);
+  // Every file under dists/ carries the same date: one build, one Release.
+  const pkgs = await w.get('/dists/stable/main/binary-arm64/Packages');
+  assert.equal(pkgs.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
+  assert.equal(await pkgs.text(), 'pkgs');
+
+  const same = await w.get('/dists/stable/InRelease', { headers: { 'if-modified-since': 'Tue, 29 Sep 2026 04:16:25 GMT' } });
+  assert.equal(same.status, 304);
+  assert.equal(same.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
+  assert.equal(same.headers.get('content-length'), null);
+  const later = await w.get('/dists/stable/InRelease', { headers: { 'if-modified-since': 'Wed, 30 Sep 2026 00:00:00 GMT' } });
+  assert.equal(later.status, 304);
+  // A box whose copy predates this build downloads it.
+  const older = await w.get('/dists/stable/InRelease', { headers: { 'if-modified-since': 'Tue, 29 Sep 2026 02:28:00 GMT' } });
+  assert.equal(older.status, 200);
+  assert.equal(await older.text(), RELEASE);
+  // Garbage is not a date, and is not a 304.
+  assert.equal((await w.get('/dists/stable/InRelease', { headers: { 'if-modified-since': 'yesterday-ish' } })).status, 200);
+  // HEAD carries the header and no body.
+  const head = await w.get('/dists/stable/InRelease', { method: 'HEAD' });
+  assert.equal(head.headers.get('last-modified'), 'Tue, 29 Sep 2026 04:16:25 GMT');
+  assert.equal(await head.text(), '');
+});
+
+test('no date in the Release, or no Release: the metadata is served as it is', async () => {
+  // Nothing invented: a Last-Modified the repository did not sign would be a
+  // claim about when it was built that nothing backs.
+  const w = world({ assets: { '/dists/stable/InRelease': 'signed', '/fleetwright.gpg': 'key' } });
+  const r = await w.get('/dists/stable/InRelease', { headers: { 'if-modified-since': 'Tue, 29 Sep 2026 04:16:25 GMT' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('last-modified'), null);
+  // A Packages file with no InRelease beside it (a half-published tree), and
+  // a Release whose Date is not one: both served plain, neither a 304.
+  const noRelease = world({ assets: { '/dists/stable/main/binary-arm64/Packages': 'pkgs' } });
+  const p = await noRelease.get('/dists/stable/main/binary-arm64/Packages', { headers: { 'if-modified-since': 'Tue, 29 Sep 2026 04:16:25 GMT' } });
+  assert.equal(p.status, 200);
+  assert.equal(p.headers.get('last-modified'), null);
+  const badDate = world({ assets: { '/dists/stable/InRelease': 'Date: not a date\n' } });
+  assert.equal((await badDate.get('/dists/stable/InRelease')).headers.get('last-modified'), null);
+  // The key is not under dists/ and is left alone either way.
+  const key = await world({ assets: { '/dists/stable/InRelease': RELEASE, '/fleetwright.gpg': 'key' } }).get('/fleetwright.gpg');
+  assert.equal(key.headers.get('last-modified'), null);
 });
 
 test('read-only', async () => {

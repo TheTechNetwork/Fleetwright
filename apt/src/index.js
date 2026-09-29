@@ -30,7 +30,7 @@ const FRONT = `Fleetwright apt repository — stable releases whose rollout is c
 
   curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg \\
     | sudo tee /usr/share/keyrings/fleetwright.gpg > /dev/null
-  echo "deb [signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \\
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network stable main" \\
     | sudo tee /etc/apt/sources.list.d/fleetwright.list
   sudo apt update && sudo apt install fleetwright
   sudo fleetwright join fleet.example.com
@@ -71,7 +71,69 @@ export async function handle(request, env, ctx = { waitUntil: () => {} }) {
     // An apt update, as near as the Worker can tell: every one fetches this.
     console.log(JSON.stringify({ event: 'update', ua: request.headers.get('user-agent') || '' }));
   }
+  if (asset.ok && url.pathname.startsWith('/dists/')) return dated(request, env, url.origin, asset);
   return asset;
+}
+
+/**
+ * When the repository was published, read from the signed Release's own Date,
+ * once per isolate: the assets deploy with the code, so what InRelease says
+ * cannot change under a running Worker.
+ *
+ * @type {WeakMap<object, Promise<Date|null>>}
+ */
+const published = new WeakMap();
+
+/**
+ * @param {Env} env
+ * @param {string} origin
+ */
+function publishedAt(env, origin) {
+  let p = published.get(env.ASSETS);
+  if (!p) {
+    p = (async () => {
+      const r = await env.ASSETS.fetch(new Request(`${origin}/dists/stable/InRelease`));
+      if (!r.ok) return null;
+      const m = /^Date:\s*(.+)$/m.exec(await r.text());
+      const d = m ? new Date(m[1].trim()) : null;
+      return d && !Number.isNaN(d.getTime()) ? d : null;
+    })();
+    published.set(env.ASSETS, p);
+  }
+  return p;
+}
+
+/**
+ * The metadata with a Last-Modified, and a 304 when the box already has it.
+ *
+ * WHY: apt asks for InRelease with If-Modified-Since and prints "Hit" on a
+ * 304; the assets are served without a Last-Modified, so apt had no date to
+ * ask about and re-downloaded the file on every update, printing "Get" for a
+ * repository that had not changed. Small (2.7 KB), and wrong: a fleet of boxes
+ * asking every fifteen minutes should cost the edge a 304 each, and a person
+ * reading `apt update` should see the same word Debian's mirrors give.
+ *
+ * The date is the one in the signed Release file — the repository's own
+ * account of when it was built — rounded to the second, which is all the
+ * header can carry. Assets keep their ETag; this adds the header apt uses.
+ *
+ * @param {Request} request
+ * @param {Env} env
+ * @param {string} origin
+ * @param {Response} asset
+ */
+async function dated(request, env, origin, asset) {
+  const at = await publishedAt(env, origin);
+  if (!at) return asset;
+  const modified = Math.floor(at.getTime() / 1000) * 1000;
+  const headers = new Headers(asset.headers);
+  headers.set('last-modified', new Date(modified).toUTCString());
+  const since = Date.parse(request.headers.get('if-modified-since') || '');
+  if (!Number.isNaN(since) && since >= modified) {
+    headers.delete('content-length');
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(request.method === 'HEAD' ? null : asset.body, { status: asset.status, headers });
 }
 
 /**
