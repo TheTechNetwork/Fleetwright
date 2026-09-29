@@ -312,6 +312,29 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     if (host.rebootRequired) {
                         Text("reboot required", style = MaterialTheme.typography.bodySmall)
                     }
+                    // WHAT THIS BOX ALLOWS FROM THE APP, said before a button is
+                    // pressed — and only when the host said: an older host sends
+                    // nothing and gets no line, because "not allowed" invented
+                    // from silence would send somebody to a terminal for
+                    // nothing. A grant that is off carries the one line on the
+                    // box that turns it on. Same words as iOS, held equal by
+                    // test/grants-in-apps.test.js.
+                    host.grantUpgrades?.let { allowed ->
+                        Text(
+                            "System upgrades from the app: ${if (allowed) "allowed" else "not allowed"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (!allowed) GrantOff("Turning it on is one line on the box:", grantLine("upgrades"))
+                    }
+                    host.grantReboot?.let { allowed ->
+                        Text(
+                            "Reboot from the app: ${if (allowed) "allowed" else "not allowed"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (!allowed) GrantOff("Turning it on is one line on the box:", grantLine("reboot"))
+                    }
                     // MAINTENANCE, which used to need SSH. Update is safe and
                     // idempotent so it is one tap; reboot is two steps and asks
                     // for the hostname, exactly as it does in chat — a remote
@@ -380,6 +403,12 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                                     null
                                                 },
                                                 appPendingReported = w.appPending,
+                                                // Carried over when the reply does
+                                                // not say: an older host's check
+                                                // must not clear what its frame
+                                                // reported.
+                                                grantUpgrades = w.grantUpgrades ?: it.grantUpgrades,
+                                                grantReboot = w.grantReboot ?: it.grantReboot,
                                             )
                                         }
                                     }
@@ -400,7 +429,11 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                 },
                             ) { Text("Apply update") }
                         }
-                        if (host.systemPending) {
+                        // ONLY WHERE IT WOULD WORK. A box that has not granted
+                        // the upgrade refuses it with a paragraph; the button
+                        // that earns that paragraph is the fault C-2 names.
+                        // Null is cannot tell (an older host) and keeps it.
+                        if (host.systemPending && host.grantUpgrades != false) {
                             TextButton(
                                 enabled = busyHost == null,
                                 onClick = {
@@ -414,10 +447,17 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                                 },
                             ) { Text("Apply upgrade") }
                         }
-                        TextButton(
-                            enabled = busyHost == null,
-                            onClick = { rebootTarget = host.hostId; rebootPin = ""; rebootConfirm = "" },
-                        ) { Text("Reboot") }
+                        // NO BUTTON FOR A THING THE BOX REFUSES. The grant is
+                        // a root-owned rule on the machine and nothing on a
+                        // phone can write it; the sentence lives with the
+                        // other grant lines above, so the row simply has no
+                        // Reboot when the box would say no.
+                        if (host.grantReboot != false) {
+                            TextButton(
+                                enabled = busyHost == null,
+                                onClick = { rebootTarget = host.hostId; rebootPin = ""; rebootConfirm = "" },
+                            ) { Text("Reboot") }
+                        }
                         TextButton(onClick = { credentialsFor = host.hostId }) { Text("Credentials") }
                         // SETTINGS, BEHIND A TAP, because the two behind it are
                         // a segmented choice and a list that grows — and putting
@@ -1202,4 +1242,20 @@ private fun describeRunning(host: Fleet.FleetHost): String {
         parts.add(if (host.channelPinned) "$it, set on the box" else it)
     }
     return if (parts.isEmpty()) "version not reported" else parts.joinToString(" · ")
+}
+
+/** The one line on the box that turns a grant on. The app never runs it. */
+private fun grantLine(name: String): String = "sudo fleetwright grant $name on"
+
+/**
+ * A grant that is off: the fact, then the line, selectable so it can be copied
+ * into a terminal. Not the error colour — this is an answer, not a fault; the
+ * box is doing what somebody decided.
+ */
+@Composable
+private fun GrantOff(fact: String, line: String) {
+    Text(fact, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    SelectionContainer {
+        Text(line, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+    }
 }

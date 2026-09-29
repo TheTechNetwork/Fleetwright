@@ -270,6 +270,18 @@ class Fleet(
          */
         val release: Release? = null,
         /**
+         * What the box allows from the app: system upgrades, and reboot. Each
+         * is a root-owned sudoers rule on the machine, and a phone cannot
+         * write that rule and must not be able to — so the app draws a button
+         * only where it would work, and names the one line on the box that
+         * turns it on elsewhere.
+         *
+         * NULL IS CANNOT TELL, from a host too old to say, and is not "off":
+         * the buttons stay, and the host's own refusal explains.
+         */
+        val grantUpgrades: Boolean? = null,
+        val grantReboot: Boolean? = null,
+        /**
          * Forgotten, still recoverable. Empty on a host that has not been
          * updated — which renders as no section at all, the correct answer for
          * a box where forget still deletes.
@@ -440,6 +452,9 @@ class Fleet(
         val appText: String? = null,
         val systemPending: Boolean = false,
         val systemText: String? = null,
+        /** What the box allows from the app, beside what is waiting; null when the host did not say. */
+        val grantUpgrades: Boolean? = null,
+        val grantReboot: Boolean? = null,
     )
 
     data class Reply(
@@ -1423,6 +1438,10 @@ class Fleet(
                             appText = a?.optString("text")?.takeIf { it.isNotBlank() && it != "null" },
                             systemPending = sy?.optBoolean("pending") == true,
                             systemText = sy?.optString("text")?.takeIf { it.isNotBlank() && it != "null" },
+                            // `has` first, for the same reason as `pending`: a
+                            // missing grant is a host that did not say, not off.
+                            grantUpgrades = w.optJSONObject("grants")?.takeIf { it.has("upgrades") && !it.isNull("upgrades") }?.optBoolean("upgrades"),
+                            grantReboot = w.optJSONObject("grants")?.takeIf { it.has("reboot") && !it.isNull("reboot") }?.optBoolean("reboot"),
                         )
                     },
                     profiles = json.optJSONArray("profiles")?.let { a ->
@@ -1534,6 +1553,10 @@ class Fleet(
                             message = r.optString("message").takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
+                    // `has` first: optBoolean turns a missing grant into false,
+                    // and a host too old to say is not a host that refuses.
+                    grantUpgrades = updates?.optJSONObject("grants")?.takeIf { it.has("upgrades") && !it.isNull("upgrades") }?.optBoolean("upgrades"),
+                    grantReboot = updates?.optJSONObject("grants")?.takeIf { it.has("reboot") && !it.isNull("reboot") }?.optBoolean("reboot"),
                     channel = health?.optString("channel")?.takeIf { it.isNotBlank() && it != "null" },
                     channelPinned = health?.optBoolean("channelPinned") == true,
                     sandboxVariant = health?.optJSONObject("sandbox")?.optString("variant")?.takeIf { it.isNotBlank() && it != "null" },
