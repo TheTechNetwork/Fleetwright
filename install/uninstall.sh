@@ -75,6 +75,10 @@ PACKAGED=0
 if [ -f "$DIR/lib/fleetwright.mjs" ]; then PACKAGED=1; fi
 if [ "$PACKAGED" = 1 ]; then PURGE_DIR="$FLEET_BASE"; else PURGE_DIR="$DIR"; fi
 RUN_USER="${FLEETWRIGHT_USER:-${SUDO_USER:-root}}"
+# The sidecar's own account, which install.sh makes with its home at its state
+# directory. That home is how this script tells an account it made from one
+# somebody else did, so that only the former is removed.
+SIDECAR_USER="${FLEETWRIGHT_SIDECAR_USER:-fleetwright-sidecar}"
 # The old names too: a box can be uninstalled without ever having been migrated
 # off agent-hub, and a service left running under its old name is still a host
 # in somebody's fleet. src/fleet/legacy-names.js has the whole list.
@@ -87,7 +91,10 @@ SERVICES=(fleetwright fleetwright-sidecar fleetwright-coordinator agent-hub agen
 say "About to remove"
 printf '  host     %s\n' "$(hostname 2>/dev/null || echo unknown)"
 if [ -f /var/lib/fleetwright-sidecar/host-key.json ] || [ -f /var/lib/agent-fleet/host-key.json ]; then
-  FP="$(sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null | awk '/fingerprint/ {print $2}' || true)"
+  # As whichever account can read the key: the sidecar's since #270, the
+  # session user's on a box installed before it.
+  FP="$( { sudo -u "$SIDECAR_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null \
+          || sudo -u "$RUN_USER" "$DIR/bin/fleetwright-sidecar" identity 2>/dev/null; } | awk '/fingerprint/ {print $2}' || true)"
   printf '  identity %s\n' "${FP:-present, could not read fingerprint}"
   printf '           THIS IS THE FLEET IDENTITY. Removing it means this box\n'
   printf '           gets a new one and must be enrolled again — and if this\n'
@@ -154,6 +161,22 @@ for d in /var/lib/fleetwright-sidecar /var/lib/fleetwright /var/lib/fleetwright-
   [ -d "$d" ] && { rm -rf "${d:?}"; ok "$d"; }
 done
 rm -rf /run/fleetwright-sidecar 2>/dev/null || true
+
+# The sidecar's account, if the installer made it: a system account whose home
+# is the state directory just removed. One with any other home was somebody's
+# and stays.
+if [ "$PLATFORM" = linux ] && id "$SIDECAR_USER" >/dev/null 2>&1; then
+  home="$(getent passwd "$SIDECAR_USER" 2>/dev/null | cut -d: -f6 || true)"
+  if [ "$home" = /var/lib/fleetwright-sidecar ]; then
+    if userdel "$SIDECAR_USER" >/dev/null 2>&1 || deluser "$SIDECAR_USER" >/dev/null 2>&1; then
+      ok "removed the $SIDECAR_USER account"
+    else
+      warn "could not remove the $SIDECAR_USER account — userdel $SIDECAR_USER"
+    fi
+  else
+    ok "left the $SIDECAR_USER account alone — its home is $home, so the installer did not make it"
+  fi
+fi
 
 say "Removing configuration"
 for f in /etc/fleetwright.env /etc/fleetwright-sidecar.env /etc/fleetwright-coordinator.env \

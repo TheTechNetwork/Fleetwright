@@ -385,7 +385,8 @@ curl -sX POST https://your-coordinator/api/enroll \
 The pin is short-lived and single-use, so mint it when the box is ready to
 take it rather than in advance. Leave it blank and the box
 stays unenrolled — the sidecar keeps connecting and getting refused until
-someone runs `fleetwright-sidecar enrol <pin>`, as the service user.
+someone runs `fleetwright-sidecar enrol <pin>`, as the sidecar's account
+(`sudo -u fleetwright-sidecar`).
 
 It is idempotent. Re-run it after `git pull` and it will never overwrite a value
 that is already set — which also means the way to *change* an answer is to edit
@@ -491,10 +492,19 @@ under `stdio` the process ends when stdin does, so a unit would have
 crash-looped.
 
 The sidecar's unit carries `StateDirectory=fleetwright-sidecar`, which is what creates
-`/var/lib/fleetwright-sidecar` 0700 owned by the service user before the process
-starts. That is where this box's private key lives — the whole of its identity
-in the fleet. Deliberately not under `/etc` with the env file: an env file is a
-config file people copy between boxes, and this must never be copied.
+`/var/lib/fleetwright-sidecar` 0700 owned by the sidecar's own account before the
+process starts. That is where this box's private key lives — the whole of its
+identity in the fleet. Deliberately not under `/etc` with the env file: an env
+file is a config file people copy between boxes, and this must never be copied.
+
+The sidecar runs as **`fleetwright-sidecar`**, a system account the installer
+creates, and not as the user the sessions run as — so the process holding the
+coordinator socket cannot read the credential files, and the process running
+sessions cannot read the host key ([`hardening.md`](./hardening.md)). Set
+`FLEETWRIGHT_SIDECAR_USER` before running the installer to name another account,
+or to the session user to keep the old shape. A box installed before this is
+moved on its next install: the key directory and the sidecar's env file change
+owner, once.
 
 ### Hook socket directory
 
@@ -601,10 +611,9 @@ Shortcut could call it directly.
 
 ```sh
 fleetwright doctor                      # can this box run sessions at all
-SVC="$(stat -c %U /opt/fleetwright-src/bin/fleetwright)"
-sudo -u "$SVC" fleetwright-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
+sudo -u fleetwright-sidecar fleetwright-sidecar doctor    # can the sidecar drive it, and does the coordinator know it
 fleetwright list                        # the session manager answers
-sudo -u "$SVC" fleetwright-sidecar identity  # this box's key and fingerprint
+sudo -u fleetwright-sidecar fleetwright-sidecar identity  # this box's key and fingerprint
 curl -s -H "authorization: Bearer fwk_…" https://your-coordinator/api/hosts   # the coordinator sees this box
 systemctl status fleetwright
 journalctl -u fleetwright -f

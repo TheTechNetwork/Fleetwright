@@ -47,10 +47,10 @@ digits, the one line that installs a fresh box and joins it:
 curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
 ```
 
-A box already installed takes the pin by hand, as the service user:
+A box already installed takes the pin by hand, as the sidecar's account:
 
 ```sh
-sudo -u fleetwright fleetwright-sidecar enrol <pin>
+sudo -u fleetwright-sidecar fleetwright-sidecar enrol <pin>
 ```
 
 No phone signed in yet? The break-glass admin token mints one over curl — see
