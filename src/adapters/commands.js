@@ -27,6 +27,8 @@
  *   A NAME, never the words: the content is a file on this box, and a caller
  *   that could supply it would be writing the instructions of an agent with
  *   root in a container. See src/core/profiles.js
+ * @property {typeof fetch} [fetch] stands in for the network, so a test can
+ *   serve the changelog a release check reads; the real one otherwise
  * @property {string} [secret]     which named secret a new session may fetch.
  *   A NAME, never the value: the value is a file on this box the session reads
  *   at runtime over the hook socket, and a caller that could supply it would be
@@ -100,7 +102,8 @@ import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW } from '../core/accounts.js';
-import { systemUpdates, describeSystemUpdates, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
+import { systemUpdates, describeSystemUpdates, describePackages, refreshPackageLists, runUpgrade } from '../core/upgrades.js';
+import { fetchNotes, describeNotes, changelogRepo } from '../core/changelog.js';
 import { reboot } from '../core/reboot.js';
 import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-identity.js';
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
@@ -1859,10 +1862,18 @@ export const COMMANDS = {
       refreshPackageLists(ctx.cfg);
       const s = systemUpdates();
       const summary = describeSystemUpdates(s);
+      // THE NAMES, beside the count. "1 package can be upgraded" reached a
+      // phone and the person holding it asked, reasonably, which one — and the
+      // only answer was a shell. The list is data for a row that wants it and
+      // prose for the reply that is read as prose; the row's own sentence
+      // stays the count, because forty names in a fleet list is not a fleet
+      // list.
+      const packages = describePackages(s);
       const system = {
         supported: s.supported,
         pending: Boolean(summary),
         count: s.count,
+        packages: s.packages,
         // CARRIED, because the sidecar's health frame is built from this reply
         // now rather than from its own computation — and this is the one field
         // that was only ever computed there. A box needing a reboot would
@@ -1872,6 +1883,26 @@ export const COMMANDS = {
           ? `No package information here (${s.reason ?? 'unsupported'}).`
           : (summary ?? 'No system packages are waiting.'),
       };
+
+      // WHAT THE UPDATE CONTAINS, for the one kind of box that has a version to
+      // look up. A phone that says "0.3.1 is waiting" beside an Apply button
+      // is asking somebody to take a release on the strength of its number;
+      // the notes are the rest of the sentence. Fetched from the tag, cached
+      // per version, and a fetch that fails says so rather than showing
+      // nothing — "there are no notes" and "the notes could not be reached"
+      // are different answers, and only one of them is about the release.
+      //
+      // `notes` is null for CANNOT TELL and an empty list for asked-and-none,
+      // the same tri-state as `pending` above and for the same reason.
+      let notesLine = '';
+      /** @type {Array<{ version: string, date: string, body: string }> | null | undefined} */
+      let notes;
+      if (app.kind === 'release' && app.available) {
+        const from = currentVersion(ctx.cfg.installDir);
+        const r = await fetchNotes(ctx.cfg, { installed: from, available: app.available }, { fetch: ctx.fetch });
+        notes = r.ok ? r.notes : null;
+        notesLine = r.ok ? describeNotes(r.notes, { repo: changelogRepo(ctx.cfg) }) : r.message ?? '';
+      }
 
       // THE SESSION IMAGE, the third thing that updates and the one that used to
       // say nothing. It is a moving dependency — the entrypoint, the credential
@@ -1899,10 +1930,21 @@ export const COMMANDS = {
         ok: true,
         // EACH LINE NAMES ITS SUBJECT. The bug this verb exists for was two
         // true sentences with no subjects, rendered next to each other.
-        text: `Fleetwright: ${app.text}\nOperating system: ${system.text}\nSession image: ${sandbox.text}`,
+        //
+        // THE DETAILS COME AFTER THE THREE LINES, not inside them: the summary
+        // is read top to bottom in three glances, and a package list or a
+        // changelog in the middle of it would put the session image below
+        // forty lines of something else.
+        text:
+          `Fleetwright: ${app.text}\nOperating system: ${system.text}\nSession image: ${sandbox.text}` +
+          (packages ? `\n\nWaiting for the operating system: ${packages}` : '') +
+          (notesLine ? `\n\n${notesLine}` : ''),
         // And as DATA, so a row can render a state rather than parse a
         // sentence — the same rule as `profiles`, `entries` and `channel`.
-        waiting: { app, system, sandbox },
+        // `notes` joins the app half only when there was a release to ask
+        // about: absent is "not that kind of box", null is "asked and could
+        // not tell", a list is the answer.
+        waiting: { app: notes === undefined ? app : { ...app, notes }, system, sandbox },
       };
     },
   },
@@ -1935,12 +1977,9 @@ export const COMMANDS = {
       // has to say which one it just looked at.
       if (!summary) return { ok: true, text: 'No system packages are waiting. (This is the OS, not Fleetwright — /update checks that.)' };
 
-      const shown = s.packages.slice(0, 12).join(', ');
       return {
         ok: true,
-        text:
-          `${summary}\n\n${shown}${s.packages.length > 12 ? `, …and ${s.count - 12} more` : ''}` +
-          '\n\n/upgrade --apply to install them.',
+        text: `${summary}\n\n${describePackages(s)}\n\n/upgrade --apply to install them.`,
         buttons: ctx.cfg.systemUpgrade ? [{ label: 'Install updates', command: '/upgrade --apply' }] : undefined,
       };
     },

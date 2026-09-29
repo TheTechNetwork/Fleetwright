@@ -245,6 +245,27 @@ export function describeSystemUpdates(s) {
 }
 
 /**
+ * Which packages, by name, for a reply that has room for them.
+ *
+ * The count is what a row shows; the names are what somebody asks for next,
+ * because "1 package can be upgraded" answers nothing about whether it is the
+ * kernel or a timezone file. Capped, and the cap says so: a box with forty
+ * waiting is not served by forty names in a chat message, and "…and 28 more"
+ * is the honest shape of the cut.
+ *
+ * Empty when there is nothing to name, so a caller can leave the line out.
+ *
+ * @param {ReturnType<typeof systemUpdates>} s
+ * @param {number} [max]
+ */
+export function describePackages(s, max = 12) {
+  if (!s.count || !s.packages.length) return '';
+  const shown = s.packages.slice(0, max).join(', ');
+  const rest = s.count - Math.min(s.packages.length, max);
+  return rest > 0 ? `${shown}, …and ${rest} more` : shown;
+}
+
+/**
  * The version transitions in an `apt-get -s upgrade` plan.
  *
  * PURE, so the parsing is tested without apt on the box. `apt-get --simulate`
