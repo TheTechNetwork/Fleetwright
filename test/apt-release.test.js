@@ -8,16 +8,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
 import { parseAptPolicy, checkAptRelease } from '../src/core/apt-release.js';
 import { checkRelease } from '../src/core/release-check.js';
 import { dispatch } from '../src/adapters/commands.js';
-
-const POLICY = (installed, candidate) =>
-  `fleetwright:\n  Installed: ${installed}\n  Candidate: ${candidate}\n  Version table:\n *** ${installed} 500\n`;
+import { aptBox, POLICY } from './helpers/apt-box.js';
 
 const ok = (stdout) => () => ({ status: 0, stdout, stderr: '' });
 
@@ -73,26 +67,6 @@ test('checkRelease asks apt, and never the manifest, on an apt box', async () =>
   assert.equal(r.available, '9.9.9');
 });
 
-/** A packaged install dir, and an apt-cache on PATH that answers `policy`. */
-function aptBox(policy) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'apt-box-'));
-  mkdirSync(path.join(dir, 'lib'));
-  writeFileSync(path.join(dir, 'lib', 'fleetwright.mjs'), '');
-  const bin = path.join(dir, 'bin');
-  mkdirSync(bin);
-  writeFileSync(path.join(bin, 'apt-cache'), `#!/bin/sh\ncat <<'EOF'\n${policy}EOF\n`);
-  chmodSync(path.join(bin, 'apt-cache'), 0o755);
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
-  return {
-    dir,
-    done() {
-      process.env.PATH = oldPath;
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
-
 test('/update on an apt box reports apt, and offers the package install only when it may run it', async () => {
   const box = aptBox(POLICY('0.2.3', '0.2.4'));
   try {
@@ -102,6 +76,17 @@ test('/update on an apt box reports apt, and offers the package install only whe
     assert.match(granted.text, /0\.2\.4 is waiting/);
     // THE PACKAGE'S OWN DOOR, named by version, not the system upgrade.
     assert.deepEqual(granted.buttons?.map((b) => [b.label, b.command]), [['Install 0.2.4', '/update --apply']]);
+    // ASKED APT AFTER APT FETCHED. The candidate is only as new as the
+    // package lists, and a person typing /update is asking now: the lists
+    // refresh (the unit, through sudo) is spawned before apt-cache is read,
+    // whatever the lists' age. The afternoon this was wrong, a box on 0.4.0
+    // answered "0.4.0 is the newest in apt" for hours after 0.4.1 was
+    // published, because its lists were younger than the six-hour gate.
+    const calls = box.calls();
+    const fetched = calls.findIndex((c) => /^sudo .*systemctl start fleetwright-apt-update\.service$/.test(c));
+    const asked = calls.findIndex((c) => c.startsWith('apt-cache policy'));
+    assert.ok(fetched >= 0, `the lists were not refreshed:\n${calls.join('\n')}`);
+    assert.ok(asked > fetched, `apt was asked before its lists were fetched:\n${calls.join('\n')}`);
 
     // C-2: no button for an action this box has not been allowed to take —
     // and asked anyway, the apply explains the grant rather than doing nothing.

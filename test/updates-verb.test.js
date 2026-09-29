@@ -26,6 +26,7 @@ import { VERBS, isMutating } from '../src/fleet/protocol/intents.js';
 import { toCommandLine } from '../src/fleet/host/sidecar.js';
 import { iosSources } from './helpers/ios-sources.js';
 import { androidSources } from './helpers/android-sources.js';
+import { aptBox, POLICY } from './helpers/apt-box.js';
 
 /** A box laid out the way a release install leaves one. */
 function packagedBox(installed = 'v0.2.2') {
@@ -47,7 +48,32 @@ test('the verb is a read, takes nothing, and is free to add', () => {
   // v3 hosts were in the field. An older host answers `unknown_verb` to this
   // and strands nothing.
   assert.deepEqual(Object.keys(VERBS.update.params).sort(), ['restart']);
-  assert.equal(toCommandLine({ verb: 'updates', params: {}, actor: '' }), '/updates');
+  // THE APP'S CHECK IS SOMEBODY ASKING NOW. `--fresh` is a literal this side
+  // adds, never a param, and it is what makes the verb fetch apt's lists
+  // before answering; the sidecar's own poll sends the bare verb.
+  assert.equal(toCommandLine({ verb: 'updates', params: {}, actor: '' }), '/updates --fresh');
+});
+
+test('the app\'s Check on an apt box fetches the lists before reading the candidate', async () => {
+  // The bug: a Pi on 0.4.0, lists fetched at noon, 0.4.1 published at five.
+  // Check said "0.4.0 is the newest in apt, as of the last time this box
+  // fetched its package lists", and the row drew nothing waiting. True, and
+  // no use to the person holding the phone. What they asked for was apt's
+  // answer NOW, which means apt-get update first and apt-cache second.
+  const box = aptBox(POLICY('0.4.0', '0.4.1'));
+  try {
+    const cfg = { installDir: box.dir, stateDir: box.dir, hostname: 'h', releaseSource: 'apt', releaseManifest: '', runUser: 'agent', systemUpgrade: true };
+    const r = await dispatch(/** @type {any} */ ({ cfg }), toCommandLine({ verb: 'updates', params: {}, actor: '' }));
+    assert.equal(r.waiting.app.pending, true, r.text);
+    assert.equal(r.waiting.app.available, '0.4.1');
+    const calls = box.calls();
+    const fetched = calls.findIndex((c) => /^sudo .*systemctl start fleetwright-apt-update\.service$/.test(c));
+    const asked = calls.findIndex((c) => c.startsWith('apt-cache policy'));
+    assert.ok(fetched >= 0, `the lists were not refreshed:\n${calls.join('\n')}`);
+    assert.ok(asked > fetched, `apt was asked before its lists were fetched:\n${calls.join('\n')}`);
+  } finally {
+    box.done();
+  }
 });
 
 test('all three halves answer, and each says which one it is', async () => {

@@ -159,6 +159,17 @@ test('the package-list refresh takes the same shape: the unit first, the old lin
     `sudo -n /usr/bin/systemctl start ${APT_UPDATE_UNIT}`,
     'sudo -n /usr/bin/apt-get update',
   ]);
+
+  // FORCED IS A PERSON PRESSING CHECK: lists an hour old are refreshed
+  // anyway, and only a double tap inside a minute is not.
+  const third = fakeExec([]);
+  const t = 3_000_000_000_000;
+  assert.equal(refreshPackageLists(cfg, { exec: third.exec, now: () => t, listsAge: () => 1 }).reason, 'recent enough');
+  assert.deepEqual(third.calls, []);
+  assert.equal(refreshPackageLists(cfg, { exec: third.exec, now: () => t, listsAge: () => 1, force: true }).ok, true);
+  assert.deepEqual(third.calls, [`sudo -n /usr/bin/systemctl start ${APT_UPDATE_UNIT}`]);
+  assert.equal(refreshPackageLists(cfg, { exec: third.exec, now: () => t + 30_000, listsAge: () => 0, force: true }).reason, 'tried recently');
+  assert.equal(third.calls.length, 1, 'a second tap within a minute ran apt-get update again');
 });
 
 test('the package upgrade starts its unit without waiting, and says the box will come back', () => {

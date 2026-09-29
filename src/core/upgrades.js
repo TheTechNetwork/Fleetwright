@@ -224,18 +224,30 @@ function packageListAgeHours() {
  * this runs off a health report.
  *
  * @param {{ systemUpgrade?: boolean }} cfg
- * @param {{ now?: () => number, minAgeHours?: number, exec?: typeof run, listsAge?: () => number|null }} [opts]  `exec`
+ * @param {{ now?: () => number, minAgeHours?: number, force?: boolean, exec?: typeof run, listsAge?: () => number|null }} [opts]  `force`
+ *   skips the age gate, for a check a person asked for; `exec`
  *   stands in for spawning, so a test can script sudo's answers; `listsAge` stands
  *   in for reading /var/lib/apt, for the same reason
  */
-export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6, exec = run, listsAge = packageListAgeHours } = {}) {
+export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours = 6, force = false, exec = run, listsAge = packageListAgeHours } = {}) {
   if (!cfg.systemUpgrade) return { ok: false, reason: 'not permitted' };
-  // Injectable for the same reason `now` and `exec` are: this reads the box's
-  // real /var/lib/apt, and a unit test that consults it passes or fails on
-  // whether somebody ran apt-get update on the box in the last six hours.
-  const age = listsAge();
-  if (age !== null && age < minAgeHours) return { ok: false, reason: 'recent enough' };
-  if (now() - lastRefreshAttempt < minAgeHours * 3_600_000) return { ok: false, reason: 'tried recently' };
+  // FORCED IS A PERSON PRESSING CHECK. The six-hour gate is right for the
+  // sidecar's fifteen-minute poll and wrong for a thumb on a button: a release
+  // published an hour after this box last fetched its lists was invisible to
+  // Check for the rest of the afternoon, and the answer, "0.4.0 is the newest
+  // in apt, as of the last time this box fetched its package lists", was true
+  // and useless. Somebody asking now gets apt asked now. A minute between
+  // forced fetches is enough to stop a double tap running apt-get twice.
+  if (force) {
+    if (now() - lastRefreshAttempt < FORCED_REFRESH_GAP_MS) return { ok: false, reason: 'tried recently' };
+  } else {
+    // Injectable for the same reason `now` and `exec` are: this reads the box's
+    // real /var/lib/apt, and a unit test that consults it passes or fails on
+    // whether somebody ran apt-get update on the box in the last six hours.
+    const age = listsAge();
+    if (age !== null && age < minAgeHours) return { ok: false, reason: 'recent enough' };
+    if (now() - lastRefreshAttempt < minAgeHours * 3_600_000) return { ok: false, reason: 'tried recently' };
+  }
 
   lastRefreshAttempt = now();
   // The unit first; the apt-get line only for a box whose grant predates it.
@@ -252,6 +264,7 @@ export function refreshPackageLists(cfg, { now = () => Date.now(), minAgeHours =
 }
 
 let lastRefreshAttempt = 0;
+const FORCED_REFRESH_GAP_MS = 60_000;
 
 /**
  * A sentence, or null when there is nothing worth saying.
