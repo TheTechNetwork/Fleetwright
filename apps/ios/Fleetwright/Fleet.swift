@@ -1052,6 +1052,15 @@ struct Fleet {
             /// kind of box. Nil from a host too old to send it, in which case
             /// the derivation below stands in.
             let appPending: Bool?
+            /// What the box allows from the app: system upgrades, and reboot.
+            /// Each is a root-owned sudoers rule on the machine, and a phone
+            /// cannot write that rule and must not be able to — so the app's
+            /// part is to draw a button only where it would work, and to name
+            /// the one line on the box that turns it on elsewhere.
+            ///
+            /// NIL IS CANNOT TELL, from a host too old to say, and is not
+            /// "off": the buttons stay, and the host's own refusal explains.
+            let grants: Grants?
 
             /// Is there anything to apply? Two separate answers, because they
             /// are two different actions on two different things.
@@ -1067,6 +1076,12 @@ struct Fleet {
             /// host that sends it means no check has finished or none could.
             var appStatusKnown: Bool { appPending != nil || (appBehind ?? 0) > 0 || release?.available != nil }
             var systemPending: Bool { !(system ?? "").isEmpty }
+        }
+        /// What the box allows from the app. `false` hides the button and
+        /// shows the line; `nil` inside says the host did not say.
+        struct Grants: Codable, Hashable {
+            let upgrades: Bool?
+            let reboot: Bool?
         }
         /// What a release-installed box found waiting for it.
         struct Release: Codable, Hashable {
@@ -1204,6 +1219,8 @@ struct Fleet {
             }
             let app: App?
             let system: System?
+            /// What the box allows from the app, beside what is waiting.
+            let grants: Grants?
         }
 
         /// The same health with a channel the host has just confirmed.
@@ -1232,6 +1249,9 @@ struct Fleet {
                     ? Release(available: app?.available, configured: app?.configured, message: app?.text)
                     : nil,
                 appPending: app?.pending,
+                // Carried over when the reply does not say: an older host's
+                // check must not clear what its frame reported.
+                grants: w.grants ?? updates?.grants,
             )
             return HostHealth(
                 account: account, credential: credential, version: version, updates: next,
