@@ -21,12 +21,12 @@
 // Instead the isolation supplies the authentication. Each session gets its own
 // socket on the host:
 //
-//     /run/fleetwright-sidecar/<name>.sock
+//     /run/fleetwright/<name>.sock
 //
 // and podman mounts exactly that one into exactly that one container, always at
 // the same path inside:
 //
-//     -v /run/fleetwright-sidecar/<name>.sock:/run/hub.sock
+//     -v /run/fleetwright/<name>.sock:/run/hub.sock
 //
 // So the session name is a property of WHICH SOCKET the request arrived on, not
 // of anything in the request. The container cannot name another session because
@@ -56,7 +56,6 @@ import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { chmodSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { preferExisting } from '../fleet/legacy-paths.js';
 
 /** The one route a session socket answers. Same path fleetwright's HTTP adapter
  * uses, so the hook payload and the hub's handler are unchanged. */
@@ -77,8 +76,23 @@ export const SECRET_PATH = '/internal/secret';
  * does not know (and must not need to know) its own name on the host. */
 export const CONTAINER_SOCKET_PATH = '/run/hub.sock';
 
-/** Default host-side directory holding one socket per live session. */
-export const DEFAULT_SOCKET_DIR = preferExisting('/run/fleetwright-sidecar', '/run/agent-fleet');
+/**
+ * Default host-side directory holding one socket per live session.
+ *
+ * FLEETWRIGHT'S OWN RUNTIME DIRECTORY, which its unit creates (`RuntimeDirectory=
+ * fleetwright`, 0700, owned by the service user). It used to be the SIDECAR's
+ * — `/run/fleetwright-sidecar`, and the legacy name before that — from the
+ * time the sidecar was going to serve these sockets. It never did: the process
+ * that opens a socket before `podman run` and mounts it is this one
+ * (src/core/sessions.js), and writing into another service's runtime directory
+ * only worked because the two ran as one user. Under #270 they do not, and the
+ * sidecar's directory becomes one this process cannot enter.
+ *
+ * Not `preferExisting` over the old paths: both exist on every box under
+ * systemd, so preferring whichever is there would pick the wrong one forever.
+ * A box that needs the old path can still name it — FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR.
+ */
+export const DEFAULT_SOCKET_DIR = '/run/fleetwright';
 
 /** A conversation uuid, in the shape fleetwright already validates. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f-]{27}$/;

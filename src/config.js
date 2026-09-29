@@ -14,6 +14,7 @@ import { unsafeSandboxArgs, unsafeSandboxMessage, splitArgs } from './core/sandb
 import { INSTALL_ROOT } from './core/resources.js';
 import { adoptLegacyEnv } from './fleet/legacy-names.js';
 import { preferExisting } from './fleet/legacy-paths.js';
+import { DEFAULT_SOCKET_DIR } from './core/hook-socket.js';
 
 // The checkout this process is running from — two levels up from src/config.js.
 // Derived rather than configured, so it is right by construction even when the
@@ -314,7 +315,9 @@ export function loadConfig(env = process.env) {
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('FLEETWRIGHT_SANDBOX_HOOK_SOCKET', true),
-    sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', preferExisting('/run/fleetwright-sidecar', '/run/agent-fleet')),
+    // Default: this service's own runtime directory — see DEFAULT_SOCKET_DIR
+    // in core/hook-socket.js for why it stopped being the sidecar's.
+    sandboxHookSocketDir: str('FLEETWRIGHT_SANDBOX_HOOK_SOCKET_DIR', DEFAULT_SOCKET_DIR),
     // Copied into each session's fresh conversation volume, or the session
     // comes up unauthenticated and hangs at a login prompt nobody can answer.
     // Set empty to disable and manage credentials yourself.

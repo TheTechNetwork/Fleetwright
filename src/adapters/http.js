@@ -31,6 +31,13 @@ import { Accounts } from '../core/accounts.js';
 import { pickCredentialSource } from '../core/podman.js';
 import { apiTokenFile } from '../core/api-token.js';
 import { resource } from '../core/resources.js';
+import { readLabels } from '../core/labels.js';
+import { readChannel, pinnedByEnv as channelPinnedByEnv } from '../core/channel.js';
+import { readVariant, sessionImage, pinnedByEnv as sandboxPinnedByEnv } from '../core/sandbox-variant.js';
+import { readHouseRules } from '../core/rules.js';
+import { noteHealth } from '../core/update-confirm.js';
+import { renewProviderTokens } from '../core/keepalive.js';
+import { autoLabels } from '../fleet/host/auto-labels.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -199,12 +206,75 @@ export class HttpAdapter {
           }
         })(),
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
+        // WHAT THIS BOX IS, as far as fleetwright's own files say, published so
+        // the sidecar can carry it on the health frame WITHOUT READING THOSE
+        // FILES ITSELF. Until this shipped the sidecar opened `labels`,
+        // `channel`, `variant` and the house-rules file in fleetwright's state
+        // directory directly, which only works while the two services share a
+        // user — and the sidecar is the process that holds the coordinator
+        // socket, so it is the one that should not be able to read anything it
+        // does not need (#270). Every field here is read on the request rather
+        // than cached, because each one changes without a restart and the
+        // health frame is how a phone learns that it has.
+        //
+        // Each field is one small read or stat. A caller that could not stand
+        // them would be one that cannot stand /api/state at all.
+        ...this.#hostFacts(),
         sessions,
         // What has been forgotten but not yet deleted. Additive: an older
         // sidecar or console ignores the field, and a newer one can offer the
         // undo — a bin nobody can see is not a bin, it is a delay.
         bin: this.sessions.binned(),
       });
+    }
+
+    // --- what the sidecar used to do to fleetwright's files ------------------
+    //
+    // Two writes into the state directory that the sidecar made itself, as the
+    // same user, and now asks for. Both are token-gated like every other route
+    // below the authorisation check: the sidecar holds the hub token already,
+    // and neither is anything a caller without it should be able to do.
+
+    // COMMIT-CONFIRM, THE SIDECAR'S HALF. Reaching the coordinator is the
+    // box's proof that a release on trial did not sever it from the fleet, and
+    // the evidence is a file next to the trial record (src/core/update-confirm.js).
+    // Only that half is accepted here: the hub's half is "a session actually
+    // started", which this process establishes for itself in src/index.js and
+    // which nothing holding the token can attest to over HTTP. A caller that
+    // could stamp `hub` from outside could confirm a release that cannot run a
+    // session, which is the exact outage the trial exists to catch.
+    if (p === '/api/update-evidence' && method === 'POST') {
+      const body = await readJson(req);
+      if (body.which !== 'coord') {
+        return json(res, 400, { ok: false, text: 'only the coordinator half of the evidence is accepted here' });
+      }
+      const r = noteHealth(this.cfg, 'coord');
+      return json(res, 200, { ok: true, ...r });
+    }
+
+    // PROVIDER TOKEN RENEWAL, on the sidecar's schedule and with the sidecar's
+    // secrets. The refresh tokens are in fleetwright's connections store; the
+    // client secrets that make them usable arrive on the coordinator's config
+    // frame and live in the sidecar's memory (src/fleet/protocol/config-frame.js
+    // says why they are never written down). So the sidecar sends them here
+    // for the duration of one call, over the loopback it already sends the hub
+    // token over, and fleetwright does the exchange against its own files.
+    if (p === '/api/renew-providers' && method === 'POST') {
+      const body = await readJson(req);
+      const secrets = body.secrets;
+      if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)
+        || Object.values(secrets).some((v) => typeof v !== 'string')) {
+        return json(res, 400, { ok: false, text: 'secrets must be an object of strings' });
+      }
+      try {
+        const results = await renewProviderTokens(this.cfg, { secrets: /** @type {Record<string,string>} */ (secrets) });
+        return json(res, 200, { ok: true, results });
+      } catch (e) {
+        // The store refusing to open is the one failure the helper does not
+        // catch per row. Said rather than thrown: the sidecar is on a timer
+        // and a 500 with a reason is what it can log.
+        return json(res, 500, { ok: false, text: /** @type {Error} */ (e).message });
+      }
     }
 
     // One command endpoint rather than a REST verb per action: the web UI and
@@ -389,6 +459,50 @@ export class HttpAdapter {
     }
 
     return json(res, 404, { error: 'not found' });
+  }
+
+  /**
+   * The facts about this box that ride on the health frame and are read from
+   * fleetwright's own files: labels, release channel, sandbox variant, house
+   * rules. See the call in /api/state for why they are published at all.
+   *
+   * NULL IS CANNOT TELL, in every field. A reader that throws (an unreadable
+   * state directory, a rules file that is a directory) leaves a null, not a
+   * default: a health frame saying "stable" or "no rules" about a box it could
+   * not read is the C-5 failure this repository argues about most, and the
+   * apps already render null as "not reported". Caught per field rather than
+   * around the whole object so one bad file does not blank the others.
+   *
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, houseRules: number|null }}
+   */
+  #hostFacts() {
+    const cfg = this.cfg;
+    /** @template T @param {() => T} read @returns {T|null} */
+    const tell = (read) => {
+      try {
+        return read();
+      } catch {
+        return null;
+      }
+    };
+    return {
+      // Both sources fleetwright owns. The third — FLEETWRIGHT_LABELS — is in
+      // the sidecar's env file, and the sidecar adds it before sending.
+      labels: tell(() => ({ auto: autoLabels(cfg), set: readLabels(cfg) })),
+      channel: tell(() => readChannel(cfg)),
+      channelPinned: tell(() => channelPinnedByEnv(cfg)),
+      sandbox: cfg.sandbox
+        ? tell(() => ({ variant: readVariant(cfg), image: sessionImage(cfg), pinned: sandboxPinnedByEnv(cfg) }))
+        : null,
+      // How many characters of house rules every session here is given, 0 when
+      // the file exists and is refused (too big, not a file), null when there
+      // is none — the shape the sidecar always sent, moved here unchanged.
+      houseRules: tell(() => {
+        const rules = readHouseRules(cfg);
+        if (!rules) return null;
+        return rules.ok ? rules.chars : 0;
+      }),
+    };
   }
 
   /**
