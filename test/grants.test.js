@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -119,6 +119,17 @@ test('the installer has one place a grant is turned on or off, and three callers
   // Off REMOVES the rule: a recorded 0 beside a rule on disk is drift.
   assert.match(SH, /upgrades:no\)\n\s+rm -f \/etc\/sudoers\.d\/fleetwright-upgrade/);
   assert.match(SH, /reboot:no\)\n\s+rm -f \/etc\/sudoers\.d\/fleetwright-reboot/);
+  // THE ANSWER IS OVERWRITTEN, not filled in. The Pi's first `grant reboot
+  // on` wrote the rule and left FLEETWRIGHT_SYSTEM_REBOOT=0 in the file,
+  // because set_env keeps whatever is there; the hub restarted into the
+  // same refusal. A grant is a decision being changed, so it goes through
+  // put_env, the writer that replaces.
+  const applyGrant = /^apply_grant\(\) \{[\s\S]*?\n\}/m.exec(SH)?.[0] ?? '';
+  for (const key of ['FLEETWRIGHT_SYSTEM_UPGRADE', 'FLEETWRIGHT_SYSTEM_REBOOT']) {
+    assert.match(applyGrant, new RegExp(`put_env "\\$ENV_FILE" ${key} 1`), `${key} on is not overwritten`);
+    assert.match(applyGrant, new RegExp(`put_env "\\$ENV_FILE" ${key} 0`), `${key} off is not overwritten`);
+    assert.doesNotMatch(applyGrant, new RegExp(`set_env "\\$ENV_FILE" ${key}`), `${key} still goes through the fill-if-empty writer`);
+  }
   // The wizard, the repair and --grant.
   assert.match(SH, /if confirm "Allow system updates from chat\?" Y; then\n\s+apply_grant upgrades yes/);
   assert.match(SH, /if confirm "Allow reboot from chat\?" N; then\n\s+apply_grant reboot yes/);
@@ -162,4 +173,39 @@ test('--grant takes reboot=on|off and upgrades=on|off, and nothing else', () => 
   const none = grantRun(['--grant']);
   assert.notEqual(none.status, 0);
   assert.match(none.out, /got: nothing/);
+});
+
+test('put_env replaces a recorded answer, appends a missing one, and leaves a comment alone', () => {
+  // The function itself, at its boundary: bash running the node it is given
+  // against a real file, the way the grant mode runs it. The file is the
+  // shape of a real /etc/fleetwright.env — a commented default above the
+  // live lines, and no newline at the end, which is how the Pi's was.
+  const dir = mkdtempSync(path.join(tmpdir(), 'put-env-'));
+  try {
+    const file = path.join(dir, 'fleetwright.env');
+    writeFileSync(file, '#FLEETWRIGHT_SYSTEM_REBOOT=0\nFLEETWRIGHT_USER=user\nFLEETWRIGHT_SYSTEM_REBOOT=0\nFLEETWRIGHT_SANDBOX=1');
+    const fn = /^put_env\(\) \{[\s\S]*?\n\}/m.exec(SH)?.[0] ?? '';
+    assert.ok(fn, 'put_env is gone');
+    const run = (key, value) =>
+      execFileSync('bash', ['-euo', 'pipefail', '-c', `${fn}\nput_env "$1" "$2" "$3"`, 'put_env', file, key, value], {
+        encoding: 'utf8',
+        env: { ...process.env, NODE_BIN: process.execPath },
+      });
+    run('FLEETWRIGHT_SYSTEM_REBOOT', '1');
+    assert.equal(
+      readFileSync(file, 'utf8'),
+      '#FLEETWRIGHT_SYSTEM_REBOOT=0\nFLEETWRIGHT_USER=user\nFLEETWRIGHT_SYSTEM_REBOOT=1\nFLEETWRIGHT_SANDBOX=1',
+      '0 became 1, the comment and the neighbours did not move',
+    );
+    run('FLEETWRIGHT_SYSTEM_REBOOT', '0');
+    assert.match(readFileSync(file, 'utf8'), /^FLEETWRIGHT_SYSTEM_REBOOT=0$/m, 'and back');
+    run('FLEETWRIGHT_SYSTEM_UPGRADE', '1');
+    assert.equal(
+      readFileSync(file, 'utf8'),
+      '#FLEETWRIGHT_SYSTEM_REBOOT=0\nFLEETWRIGHT_USER=user\nFLEETWRIGHT_SYSTEM_REBOOT=0\nFLEETWRIGHT_SANDBOX=1\nFLEETWRIGHT_SYSTEM_UPGRADE=1\n',
+      'a missing key is appended on its own line, even after a file with no final newline',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

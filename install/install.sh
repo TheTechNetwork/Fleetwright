@@ -771,6 +771,27 @@ set_env() { # set_env FILE KEY VALUE
   '
 }
 
+# Set KEY=VALUE in an env file, WHATEVER is there. The one for an answer that
+# is being CHANGED: `fleetwright grant reboot on` on a box whose file recorded
+# FLEETWRIGHT_SYSTEM_REBOOT=0 wrote the sudoers rule, restarted the hub, and
+# left the 0 in place, because set_env above keeps a value that is already
+# set — the right promise for a token somebody pasted, and the wrong one for
+# a decision somebody just made. The hub then went on refusing a reboot the
+# rule allowed. Anchored to the live line: a commented-out `#KEY=` stays a
+# comment.
+put_env() { # put_env FILE KEY VALUE
+  ENVFILE="$1" ENVKEY="$2" ENVVAL="$3" "$NODE_BIN" -e '
+    const fs = require("fs");
+    const { ENVFILE, ENVKEY, ENVVAL } = process.env;
+    const text = fs.readFileSync(ENVFILE, "utf8");
+    const line = new RegExp(`^${ENVKEY}=.*$`, "m");
+    const out = line.test(text)
+      ? text.replace(line, `${ENVKEY}=${ENVVAL}`)
+      : `${text}${text.endsWith("\n") || text === "" ? "" : "\n"}${ENVKEY}=${ENVVAL}\n`;
+    fs.writeFileSync(ENVFILE, out);
+  '
+}
+
 # Read a value back out of an env file.
 #
 # CANNOT FAIL, AND THAT IS THE POINT. This is a reader whose contract is "empty
@@ -1132,7 +1153,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
     upgrades:yes)
       install_upgrade_units
       if write_upgrade_sudoers; then
-        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
+        put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
         ok "/etc/sudoers.d/fleetwright-upgrade — $RUN_USER may start fleetwright-upgrade, fleetwright-apt-update and fleetwright-package-upgrade"
       else
@@ -1141,11 +1162,11 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
       fi ;;
     upgrades:no)
       rm -f /etc/sudoers.d/fleetwright-upgrade
-      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
+      put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0
       ok "system upgrades from chat are off — /etc/sudoers.d/fleetwright-upgrade removed" ;;
     reboot:yes)
       if write_reboot_sudoers; then
-        set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
+        put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 1
         set_env "$ENV_FILE" FLEETWRIGHT_USER "$RUN_USER"
         ok "/etc/sudoers.d/fleetwright-reboot — $RUN_USER may run systemctl reboot"
       else
@@ -1154,7 +1175,7 @@ apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did
       fi ;;
     reboot:no)
       rm -f /etc/sudoers.d/fleetwright-reboot
-      set_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
+      put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0
       ok "reboot from chat is off — /etc/sudoers.d/fleetwright-reboot removed" ;;
     *) die "apply_grant: not a grant: $1=$2" ;;
   esac
@@ -1192,7 +1213,7 @@ if [ "$GRANT_ONLY" = 1 ]; then
   [ -f "$ENV_FILE" ] || die "$ENV_FILE does not exist, so this box is not installed yet — install first, then grant"
   { command -v visudo >/dev/null && [ -d /etc/sudoers.d ]; } || die "no visudo or no /etc/sudoers.d on this box, so nothing here can be granted"
   say "Changing what this box allows from chat"
-  # THE NODE THIS RUNS, before section 1 has found one. set_env records the
+  # THE NODE THIS RUNS, before section 1 has found one. put_env records the
   # answer through node, and the first `fleetwright grant reboot on` on a
   # real box stopped at "NODE_BIN: unbound variable" for want of this line.
   # `fleetwright grant` names the node it runs on in FLEETWRIGHT_NODE_BIN; a
