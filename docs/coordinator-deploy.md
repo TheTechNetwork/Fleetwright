@@ -251,12 +251,15 @@ from it.
 
 **What is proven, and what is not**, stated because the decision in
 [`auth-and-join.md`](./auth-and-join.md) was to put this in the install guide
-only after a week under real hosts. From a clean tree the bundle has been
-started under raw `workerd` with disk-backed storage and driven through
-`/healthz`, `/api/hosts` and pin minting; the SQLite landed under `/data` and
-the pin was still pending after a restart. It has **not** carried a real host's
-socket for a week. Three Cloudflare bindings have no counterpart here and are
-absent rather than emulated:
+only after a week under real hosts. On every change to the bundle,
+`scripts/container-smoke.sh` — the `container` job in `worker.yml` — builds this
+image, starts it with a volume, mints a pin, enrols a real host with
+`fleetwright-sidecar enrol`, restarts the container, and shows the host is still
+known and a pin minted before the restart still spends after it. So the build,
+the boot, the admin token, pin minting, enrolment and the state on `/data` are
+proven on every commit, under docker in CI and podman where it was first run.
+It has **not** carried a real host's socket for a week. Three Cloudflare
+bindings have no counterpart here and are absent rather than emulated:
 
 | binding | on Cloudflare | here |
 |---|---|---|

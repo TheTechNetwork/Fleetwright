@@ -194,7 +194,9 @@ if out=$(npx tsc --noEmit -p tsconfig.names.json 2>&1 | grep 'TS2304' || true); 
 fi
 
 printf 'installer  ... '
-if bash -n install/install.sh 2>/dev/null && sh -n install/bootstrap.sh 2>/dev/null; then
+# scripts/container-smoke.sh rides along: it is bash that CI runs against a
+# built image, and a syntax error in it is a red Worker check four minutes in.
+if bash -n install/install.sh 2>/dev/null && sh -n install/bootstrap.sh 2>/dev/null && bash -n scripts/container-smoke.sh 2>/dev/null; then
   printf 'parses\n'
 else
   printf 'FAILED\n'; fail=1

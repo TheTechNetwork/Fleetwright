@@ -8,11 +8,14 @@
 # built here is byte-for-byte what `wrangler deploy` ships, and workerd is the
 # runtime Cloudflare runs it on.
 #
-# WHAT IS PROVEN, and what is not. From a clean tree this has been built,
-# started, and driven through /healthz, /api/hosts and pin minting, and the
-# Durable Object's SQLite landed under /data and survived a restart. It has NOT
-# run for a week under real hosts, and three things on Cloudflare have no
-# counterpart here and are simply absent:
+# WHAT IS PROVEN, and what is not. On every change to the bundle, worker.yml's
+# `container` job runs scripts/container-smoke.sh: this is built, started with
+# a volume, driven through /healthz, /api/hosts and pin minting, a real host
+# enrols with bin/fleetwright-sidecar, the container restarts, and the host is
+# still known and a pin minted before the restart still spends — so the
+# Durable Object's SQLite is under /data and survives. It has NOT run for a
+# week under real hosts, and three things on Cloudflare have no counterpart
+# here and are simply absent:
 #
 #   SIGNIN_RATE_LIMIT   the ratelimit binding. worker.js guards every use, so
 #                       sign-in is unmetered here rather than broken. Put a
