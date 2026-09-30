@@ -105,6 +105,51 @@ may be "nothing", and that is worth knowing before designing launchd units.
 
 ## Elsewhere
 
+### Proxmox VM and container templates as session hosts
+
+A VM or LXC template on a Proxmox node, cloned when a session needs a machine,
+enrolled as a host, worked in, and destroyed after. The same shape as the
+GitHub Actions runner in `docs/runner-central.md`, on hardware you own: no
+six-hour ceiling, internal network reachable, and a template that can hold
+whatever a job needs baked in, which is the answer to the two problems the
+sandbox image keeps meeting (a per-session install is minutes of every start,
+and a fatter default image makes every session pay for it).
+
+[ProxmoxMCP-Plus](https://github.com/RekklesNA/ProxmoxMCP-Plus) is the
+reference: an MCP server over the Proxmox API with clone, start, stop and
+destroy as tools. Worth reading for the API surface and the token model
+whether or not any of it is used directly.
+
+**What makes it hard is the token, and it is the grants argument again.** A
+Proxmox API token that can clone and destroy guests is root on the
+hypervisor. Held by the coordinator it would be a credential at rest in the
+party this system treats as compromised, and every box behind that node with
+it. The shape that fits is the one `runner-central` landed on: the credential
+lives on a host, and the coordinator asks that host to act. Here that means a
+sidecar on the Proxmox node itself, or on a box beside it, holding the token
+the way a host holds a person's GitHub token today, so `provision` names a
+template and the node does the cloning. The coordinator never sees the token
+and cannot exceed the host that holds it.
+
+**The clone has to join on its own.** A fresh guest has nobody at a shell.
+The pin plus the one-line install already run unattended (`docs/auth-and-join.md`,
+`install/deb/`), so the question is only how they reach the guest: cloud-init
+user data for a VM, `pct exec` or a mounted file for a container, and in
+either case a pin minted per clone and single-use, the rule
+`ephemeral-hosts.md` already sets. The host id has to be unique per clone or
+two jobs collide on one identity, which is the clone bug in a new costume.
+
+**Templates go stale.** A template is an image nobody rebuilds, so the
+Fleetwright inside it is whatever version it was made with, and so is
+everything else. Either the clone updates itself on first boot (apt already
+does this for the package; the sandbox image refresh is per session), or
+there is a scheduled rebuild, and which one is a decision about who owns the
+template.
+
+**What it does not replace:** a permanent host. A clone that is destroyed after
+the job is right for a build, a test, a throwaway environment, and wrong for
+the long-lived session this product is otherwise about.
+
 ### Reachability: an Inkbox-shaped thing, on Telnyx
 
 [Inkbox](https://inkbox.ai) gives an agent **one identity that is reachable on
