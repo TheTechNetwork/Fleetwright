@@ -83,3 +83,35 @@ test('coverage names the machines that do not have it', async () => {
   // have turned "missing workflow" into "missing b".
   assert.deepEqual(github.missing, ['workflow']);
 });
+
+test('what an account has left is one fact, and the box that asked last has it', async () => {
+  // An account is a person's, not a machine's: the same address linked on two
+  // boxes is one plan with one five-hour window. Each box asks the endpoint
+  // because the token lives there; the merge keeps the freshest answer, and a
+  // box that could not ask never overwrites one that could.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({ logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  for (const id of ['a', 'b', 'c']) {
+    core.registry.hosts.set(id, { hostId: id, state: 'healthy', connected: true, healthAt: Date.now(), health: {} });
+  }
+  const windows = (/** @type {number} */ used) => ({ fiveHour: { used, resetsAt: 1_700_000_900_000 }, sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null });
+  const usageOn = /** @type {Record<string, any>} */ ({
+    a: { checkedAt: 1_700_000_000_000, windows: windows(40), why: null },
+    b: { checkedAt: 1_700_000_600_000, windows: windows(42), why: null },
+    c: null,
+  });
+  core.send = async (host) => ({
+    ok: true,
+    hostId: host.hostId,
+    connections: {
+      catalogue: [{ provider: 'claude', label: 'Claude' }],
+      connected: [{ provider: 'claude', label: 'Claude', account: 'a@example.com', updatedAt: 0, usage: usageOn[host.hostId] }],
+    },
+  });
+
+  const reply = await core.dispatch({ verb: 'connect', params: {} });
+  const claude = reply.connections.connected.find((c) => c.provider === 'claude');
+  assert.equal(claude.usage.checkedAt, 1_700_000_600_000, 'the freshest box');
+  assert.equal(claude.usage.windows.fiveHour.used, 42);
+  assert.deepEqual(claude.hosts, ['a', 'b', 'c']);
+});
