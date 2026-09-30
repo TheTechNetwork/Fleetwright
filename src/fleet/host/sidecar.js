@@ -927,6 +927,16 @@ export class Sidecar {
             // showing a prompt — that pane is still because somebody has to
             // answer it, which is the opposite of idle.
             idleSince: this.watcher?.idleSince?.(s.name) ?? null,
+            // HOW FULL ITS WINDOW IS: the tokens in context at the last
+            // assistant turn, and the model that answered. Read off the
+            // transcript by whichever process can see it (src/core/
+            // context-usage.js), never guessed from the pane. No window size
+            // and no percentage, because the transcript does not say and a
+            // table about somebody else's models would be wrong the week one
+            // changed. Null is CANNOT TELL — not running, no turn yet, an
+            // older host — and both phones draw that as nothing rather than
+            // as empty.
+            context: s.context ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
         // HOW MANY PEOPLE CAN START A SESSION HERE. The health field that

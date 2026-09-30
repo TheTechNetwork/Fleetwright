@@ -235,3 +235,53 @@ test("the hook sockets default to fleetwright's own runtime directory", () => {
   assert.equal(DEFAULT_SOCKET_DIR, '/run/fleetwright');
   assert.doesNotMatch(DEFAULT_SOCKET_DIR, /sidecar|agent-fleet/);
 });
+
+// --- what each account has left, and where a transcript is ------------------
+
+test('/api/state carries the usage monitor\'s last answer, and null when there is none', async (t) => {
+  const none = await hub(t);
+  assert.equal((await none.state()).usage, null, 'no monitor: cannot tell, never "nothing used"');
+
+  // The same adapter with a provider wired, as the entrypoint wires it.
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'hostroutes-usage-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ ...none.cfg, stateDir, rulesFile: path.join(stateDir, 'CLAUDE.md'), workdir: path.join(stateDir, 'work') });
+  const snapshot = { checkedAt: 1_700_000_000_000, accounts: [{ account: 'a@example.com', usage: { fiveHour: { used: 42, resetsAt: 1_700_000_900_000 }, sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null }, why: null }] };
+  let calls = 0;
+  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [] });
+  const login = /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null });
+  const adapter = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg), usage: () => { calls++; return snapshot; } });
+  await adapter.start();
+  t.after(() => adapter.server?.close());
+  const port = /** @type {any} */ (adapter.server).address().port;
+  const auth = { authorization: `Bearer ${ensureApiToken(cfg)}` };
+
+  const state = await (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: auth })).json();
+  assert.deepEqual(state.usage, snapshot);
+  assert.equal(calls, 1, 'read on the ask, not cached at construction');
+});
+
+test('the SessionStart hook on this box may say where the transcript is, and the route passes it on', async (t) => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'hostroutes-transcript-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ stateDir, bind: '127.0.0.1', port: 0, token: '', hostname: 'testbox', workdir: path.join(stateDir, 'work'), maxSessions: 5, loginEnabled: true, sandbox: false, sandboxCredentialsFile: '', sandboxImage: 'x:latest', sandboxImagePinned: false, releaseChannel: '', rulesFile: path.join(stateDir, 'CLAUDE.md') });
+  /** @type {any[]} */
+  const recorded = [];
+  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [], recordUuid: (/** @type {any} */ r) => { recorded.push(r); return { ok: true, message: 'recorded' }; } });
+  const login = /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null });
+  const adapter = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg) });
+  await adapter.start();
+  t.after(() => adapter.server?.close());
+  const port = /** @type {any} */ (adapter.server).address().port;
+
+  const uuid = '11111111-2222-3333-4444-555555555555';
+  const transcriptPath = `/home/agent/.claude/projects/-work/${uuid}.jsonl`;
+  const r = await fetch(`http://127.0.0.1:${port}/internal/session-start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'local', cwd: '/work', uuid, transcriptPath }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal(recorded[0].transcriptPath, transcriptPath);
+  assert.equal(recorded[0].uuid, uuid);
+});

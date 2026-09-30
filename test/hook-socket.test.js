@@ -393,6 +393,22 @@ test('a lifecycle event records against the socket it arrived on, with a bounded
   assert.equal(typeof events[0].at, 'number');
 });
 
+test('an event may carry how full the window is, bounded to a count and a model', async (t) => {
+  // The hook reads the transcript's last assistant turn — the only process
+  // that can, in a sandbox — and the number rides on the event. Junk is null
+  // rather than a refusal: the event itself is still news.
+  const { server, events } = eventHarness(t);
+  const sock = await server.open('bigjob');
+
+  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: 248717, model: 'claude-fable-5-1' } }), { path: SESSION_EVENT_PATH });
+  await rawPost(sock, JSON.stringify({ event: 'Stop', context: { tokens: '248717' } }), { path: SESSION_EVENT_PATH });
+  await rawPost(sock, JSON.stringify({ event: 'Stop' }), { path: SESSION_EVENT_PATH });
+
+  assert.deepEqual(events[0].context, { tokens: 248717, model: 'claude-fable-5-1' });
+  assert.equal(events[1].context, null, 'a string is not a count');
+  assert.equal(events[2].context, null, 'absent is absent');
+});
+
 test('an event this host does not know is refused, and records nothing', async (t) => {
   // An event the table has no reading for is one it must not pretend to
   // understand: PreToolUse is real, and deliberately not registered.

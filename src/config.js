@@ -376,6 +376,14 @@ export function loadConfig(env = process.env) {
     // one did not work, and only when there is something to gain.
     credentialKeepaliveMs: Math.max(0, int('FLEETWRIGHT_CREDENTIAL_KEEPALIVE_MS', 3_600_000)),
 
+    // How often the box asks, per linked account, how much of the plan's limit
+    // is used — the answer the app draws beside the account. Ten minutes: the
+    // five-hour window moves at that grain, and it is one small request per
+    // account. 0 turns it off, and health then carries null for it, which the
+    // apps render as not reported rather than as nothing used. See
+    // src/core/usage.js for where the answer comes from and on what terms.
+    usageCheckMs: Math.max(0, int('FLEETWRIGHT_USAGE_CHECK_MS', 600_000)),
+
 
     // Count (and show) tmux sessions this hub did not start. On by default:
     // what matters for the cap is the box's REAL concurrency, not who asked.
