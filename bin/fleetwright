@@ -235,7 +235,11 @@ async function doctor({ repair = false } = {}) {
   // there is a unit it gets to be the one that speaks.
   const unit = unitState();
   if (!unit.known || hubUp) {
-    ok(`hub reachable at ${base}`, hubUp, hubUp ? '' : 'is it running? there is no systemd unit here');
+    // A Mac has no systemd unit and never will; launchd is where its answer is.
+    const where = process.platform === 'darwin'
+      ? 'is it running? sudo launchctl print system/network.thetech.fleetwright'
+      : 'is it running? there is no systemd unit here';
+    ok(`hub reachable at ${base}`, hubUp, hubUp ? '' : where);
   }
 
   ok('a control surface is configured', cfg.webEnabled, 'web, app, MCP and CLI');

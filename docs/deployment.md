@@ -35,7 +35,10 @@ the thing it had been waiting on since the sender was written.
 
 **A Linux host**, and nothing else you have to install by hand. §9 of
 `design.md` explains why validating any of the sandbox work on macOS proves less
-than it looks like it does.
+than it looks like it does. A Mac installs too — launchd daemons instead of
+systemd units, Homebrew for what is missing, and CI installs one for real on
+every change to the installer — but its sessions run unsandboxed and nothing
+applies from chat there; [`hardening.md`](./hardening.md) says what that costs.
 
 The installer installs what is missing — tmux, podman, git, curl — from the
 distribution's own repositories. It does not pipe a remote script into a shell.

@@ -860,6 +860,40 @@ refresh_release_if_converted() {
     || warn "could not refresh the release — carrying on with the one this box has"
 }
 
+# Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
+# second, and the first version of the two chown guards below asked GNU's
+# question there, got nothing back, and chowned a tree it did not need to on
+# every run. Empty when the path is missing.
+owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
+
+# IS THIS DAEMON RUNNING, BY LAUNCHD'S OWN WORD. `launchctl bootstrap`
+# returning 0 says the request was accepted, and nothing else: a job whose
+# spawn fails sits at "spawn scheduled" with KeepAlive retrying it, and
+# bootstrap has already said yes. The installer reported "fleetwright running"
+# over exactly that, and its own doctor two lines later could not reach the
+# hub. So the state line is read, and given a moment to become `running`.
+# On failure the reason launchd knows is printed — the last exit code is
+# where EX_CONFIG shows up — with the tail of the log if there is one.
+launchd_running() { # launchd_running NAME
+  local label="system/network.thetech.$1" state="" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    state="$(launchctl print "$label" 2>/dev/null | awk '/^\tstate = / {print $3}')"
+    if [ "$state" = running ]; then
+      # RUNNING HAS TO HOLD. A process that exits within seconds — the hub
+      # with no tmux on its PATH did, three times — is `running` between
+      # spawn and exit, and that window is exactly when this first looked.
+      sleep 3
+      state="$(launchctl print "$label" 2>/dev/null | awk '/^\tstate = / {print $3}')"
+      [ "$state" = running ] && return 0
+    fi
+    sleep 1
+  done
+  warn "$1 is '${state:-not loaded}', not running:"
+  launchctl print "$label" 2>/dev/null | grep -E '^\t(state|last exit code|runs) = ' | sed 's/^/       /' || true
+  tail -n 12 "/var/log/$1.log" 2>/dev/null | sed 's/^/       /' || true
+  return 1
+}
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -1149,6 +1183,20 @@ write_reboot_sudoers() {
 # shape of drift this file keeps finding, and a grant somebody withdrew from
 # chat has to be withdrawn from sudo too.
 apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did not validate
+  # A MAC APPLIES NOTHING FROM CHAT. Both rules name systemctl and apt-get,
+  # which it does not have, and visudo would accept the line anyway — so a Mac
+  # ended up with a sudoers rule permitting two commands that do not exist,
+  # recorded as a grant the app then drew as allowed. The answer is recorded
+  # as off, with the reason, and no rule is written.
+  if [ "$PLATFORM" = macos ]; then
+    case "$1" in
+      upgrades) put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0 ;;
+      reboot)   put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0 ;;
+      *) die "apply_grant: not a grant: $1=$2" ;;
+    esac
+    [ "$2" = yes ] && warn "$1 from chat is not available on a Mac — recorded as off (apt and systemctl are Linux)"
+    return 0
+  fi
   case "$1:$2" in
     upgrades:yes)
       install_upgrade_units
@@ -1410,7 +1458,7 @@ case "${NODE_BIN:-}" in
       pkg_install nodejs || true
     done
     if [ "$UNIT_NODE_BIN" = "$NODE_BIN" ]; then
-      warn "no system node available — the systemd unit will point at $NODE_BIN"
+      warn "no system node available — the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd unit") will point at $NODE_BIN"
       warn "  A version-manager upgrade will move it and the service will fail to start."
     else
       ok "systemd will use $UNIT_NODE_BIN — a path that will not move"
@@ -1842,7 +1890,17 @@ fi
 # — see write_migrate_sudoers. And GNU install unlinks before it writes, so a
 # helper that is running this installer keeps reading the file it started
 # from rather than the one that replaces it.
-if [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
+#
+# NOT ON A MAC. The helper rewrites systemd units under /etc/systemd/system and
+# runs the packaged release's installer, and a Mac has neither the units nor
+# the packaged layout — /update there pulls the checkout and the operator
+# re-runs this script with --upgrade, which is what the launchd path exercises
+# in CI. The first macOS runner got exactly this far and stopped on BSD
+# install's `unknown group root`: root's group on a Mac is wheel. Saying that
+# the helper is not for this box is the honest answer, not a portable group.
+if [ "$PLATFORM" = macos ]; then
+  say "the release-migration helper is systemd-only — a Mac updates by re-running this installer with --upgrade"
+elif [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
   install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
   ok "installed /usr/local/sbin/fleetwright-migrate"
   if write_migrate_sudoers; then
@@ -2032,6 +2090,26 @@ unit_entry() { # unit_entry NAME
   else printf '%s/bin/%s' "$DIR" "$1"; fi
 }
 
+# THE PATH A LAUNCHD DAEMON GETS. launchd gives a daemon PATH=/usr/bin:/bin:
+# /usr/sbin:/sbin and nothing else — no /opt/homebrew/bin, no /usr/local/bin —
+# and the hub looks tmux and claude up on PATH. The first macOS runner installed
+# tmux with brew, wrote the plist, and the hub exited on "tmux is not installed"
+# three times in a row. So the plist carries the directories of the tools THIS
+# installer found, in front of launchd's defaults. systemd does not need it:
+# its units name absolute paths and read the env file.
+launchd_path() {
+  local out="" d tool
+  for tool in "${UNIT_NODE_BIN:-$NODE_BIN}" "$(command -v tmux 2>/dev/null || true)" "${CLAUDE_BIN:-}"; do
+    [ -n "$tool" ] || continue
+    d="$(dirname "$tool")"
+    case ":$out:" in *":$d:"*) ;; *) out="${out:+$out:}$d" ;; esac
+  done
+  for d in /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+    case ":$out:" in *":$d:"*) ;; *) out="${out:+$out:}$d" ;; esac
+  done
+  printf '%s' "$out"
+}
+
 install_unit() { # install_unit NAME
   local src dest
   # THE TEMPLATE FROM THIS INSTALLER, the entry path from the payload. Reading
@@ -2063,6 +2141,7 @@ install_unit() { # install_unit NAME
       -e "s|__ENTRY__|$(unit_entry "$1")|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
+      -e "s|__PATH__|$(launchd_path)|g" \
       -e "s|__STATE_DIR__|$STATE_DIR|g" \
       -e "s|__FLEET_BASE__|$FLEET_BASE|g" \
       "$src" > "$dest"
@@ -2071,6 +2150,20 @@ install_unit() { # install_unit NAME
   # about the file it means.
   chown root:wheel "$dest" 2>/dev/null || true
   chmod 0644 "$dest"
+  # THE LOG FILE THE PLIST NAMES HAS TO EXIST BEFORE LAUNCHD SPAWNS THE JOB.
+  # launchd opens StandardOutPath as the job's user, and /var/log is root's:
+  # the open fails, launchd gives up with EX_CONFIG (78), and `launchctl
+  # print` shows "spawn scheduled" forever — while bootstrap returned 0 and
+  # nothing was written anywhere to say why. The first macOS runner sat
+  # exactly there, both daemons, three runs each. Created empty and owned by
+  # the user the plist runs as; an existing file is re-owned, not truncated.
+  if [ "$PLATFORM" = macos ]; then
+    local log_owner; log_owner="$(sed -n '/<key>UserName<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$dest" | head -1)"
+    [ -n "$log_owner" ] || log_owner="$RUN_USER"
+    [ -e "/var/log/$1.log" ] || : > "/var/log/$1.log"
+    chown "$log_owner" "/var/log/$1.log" 2>/dev/null || true
+    chmod 0644 "/var/log/$1.log" 2>/dev/null || true
+  fi
 
   # WHAT THIS UNIT NAMES HAS TO EXIST, and nothing checked. A unit is written
   # from a template and looks perfectly correct while pointing at a file that is
@@ -2545,7 +2638,7 @@ fi
 # The alternative — giving the service user passwordless sudo for git — is a far
 # larger grant to solve a file-ownership problem, so: the deployment owns its
 # own deployment.
-if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER" ]; then
+if [ -d "$DIR/.git" ] && [ "$(owner_of "$DIR/.git")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$DIR" 2>/dev/null; then
     ok "$DIR now belongs to $RUN_USER, so /update can pull"
   else
@@ -2577,7 +2670,7 @@ fi
 # /etc, the env file is root-owned and 0600, and the sudoers rule names
 # /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, so that
 # a service user who can rewrite the tree still cannot rewrite what runs as root.
-if [ -d "$FLEET_BASE" ] && [ "$(stat -c %U "$FLEET_BASE" 2>/dev/null)" != "$RUN_USER" ]; then
+if [ -d "$FLEET_BASE" ] && [ "$(owner_of "$FLEET_BASE")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
     ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
   else
@@ -3041,13 +3134,11 @@ if [ "$WIZARD" = yes ]; then
           # the restart-an-active-unit case below, and the same bug it fixes:
           # an upgrade that leaves the old code running while reporting success.
           launchctl bootout "$label" >/dev/null 2>&1 || true
-          if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+          if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$1"; then
             ok "$1 running"
             return 0
           fi
-          warn "$1 failed to start:"
-          tail -n 12 "/var/log/$1.log" 2>/dev/null | sed 's/^/       /' \
-            || warn "       /var/log/$1.log"
+          warn "$1 failed to start — see above, then: sudo launchctl print $label"
           return 1
         fi
         systemctl daemon-reload >/dev/null 2>&1 || true
@@ -3313,10 +3404,10 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
       plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
       [ -f "$plist" ] || continue
       launchctl bootout "$label" >/dev/null 2>&1 || true
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
         ok "$unit restarted, on the new code"
       else
-        warn "$unit did not come back — tail /var/log/$unit.log"
+        warn "$unit did not come back — sudo launchctl print $label"
       fi
       continue
     fi
@@ -3427,10 +3518,10 @@ if [ -n "$LEGACY_RUNNING" ] && [ "$CHECK_ONLY" != 1 ]; then
       launchctl print "system/network.thetech.$unit" >/dev/null 2>&1 && continue
       [ -f "$plist" ] || continue
       stop_legacy_unit "$unit"
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
         ok "$unit running — it was running before the rename"
       else
-        warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — tail /var/log/$unit.log"
+        warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — sudo launchctl print system/network.thetech.$unit"
       fi
       continue
     fi
@@ -3526,11 +3617,15 @@ if [ "$WIZARD" = yes ]; then
     [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$HID" "$FP"
   fi
 
+  # The log is wherever this platform puts it: the journal, or the file the
+  # plist names. A Mac told to run journalctl has been told nothing.
+  FOLLOW_LOG="journalctl -u fleetwright -f"
+  [ "$PLATFORM" = macos ] && FOLLOW_LOG="tail -f /var/log/fleetwright.log"
   cat <<EOF
 
   Drive it:
       fleetwright list
-      journalctl -u fleetwright -f
+      $FOLLOW_LOG
 
   Config: $ENV_FILE
           $SIDECAR_ENV

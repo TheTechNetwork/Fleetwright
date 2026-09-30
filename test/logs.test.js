@@ -163,3 +163,41 @@ test('a box with no journalctl says where to look instead', (t) => {
   assert.match(r.text, /No journalctl on this box/);
   assert.match(r.text, /wherever the service was started/);
 });
+
+// --- a Mac: launchd's files instead of the journal ------------------------
+
+test("with no journalctl, a launchd log file is the log, and its tail is what comes back", (t) => {
+  // The plists say StandardOutPath=/var/log/<unit>.log and "/logs reads
+  // these". It did not: a Mac answered "No journalctl on this box" about a
+  // file that was right there. Held to the promise on a runner, and here.
+  const j = stubJournal(t, { missing: true });
+  const logDir = mkdtempSync(path.join(os.tmpdir(), 'launchd-logs-'));
+  t.after(() => rmSync(logDir, { recursive: true, force: true }));
+  writeFileSync(path.join(logDir, 'fleetwright.log'), Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n') + '\n');
+
+  const r = readLogs({ ...j.cfg(), launchdLogDir: logDir }, { lines: 5 });
+  assert.equal(r.ok, true);
+  assert.equal(r.source, 'hub');
+  assert.match(r.text, /^fleetwright — last 5 lines\n\nline 26\nline 27\nline 28\nline 29\nline 30$/);
+
+  // The other unit reads the other file, by the same name the plist uses.
+  writeFileSync(path.join(logDir, 'fleetwright-sidecar.log'), 'dialling\n');
+  assert.match(readLogs({ ...j.cfg(), launchdLogDir: logDir }, { source: 'sidecar' }).text, /fleetwright-sidecar — last 1 lines\n\ndialling$/);
+
+  // An empty file is a daemon that has not spoken, said the way the journal
+  // says it; and no file at all is still the honest "not where the logs are".
+  writeFileSync(path.join(logDir, 'fleetwright.log'), '');
+  assert.match(readLogs({ ...j.cfg(), launchdLogDir: logDir }, {}).text, /No log entries for fleetwright/);
+  assert.match(readLogs({ ...j.cfg(), launchdLogDir: path.join(logDir, 'nowhere') }, {}).text, /No journalctl on this box/);
+});
+
+test('a plist in LaunchDaemons counts as an installed unit, so a Mac offers its log buttons', async (t) => {
+  const { unitInstalled } = await import('../src/core/logs.js');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'launchd-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ systemctlBin: path.join(dir, 'no-systemctl'), launchdDir: dir });
+  assert.equal(unitInstalled(cfg, 'fleetwright'), false, 'no plist and no systemctl is not installed');
+  writeFileSync(path.join(dir, 'network.thetech.fleetwright.plist'), '<plist/>');
+  assert.equal(unitInstalled(cfg, 'fleetwright'), true);
+  assert.equal(unitInstalled(cfg, 'fleetwright-sidecar'), false, 'one plist does not vouch for the other daemon');
+});

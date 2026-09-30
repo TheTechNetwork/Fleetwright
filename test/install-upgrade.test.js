@@ -65,6 +65,42 @@ test('it restarts the services, which is the whole point', () => {
   // upgrade that leaves the old code running while reporting success.
   assert.match(section, /launchctl bootout/);
   assert.match(section, /launchctl bootstrap/);
+  // And bootstrap's exit code is not the answer: it says the request was
+  // accepted. The first macOS runner had both daemons at "spawn scheduled"
+  // with EX_CONFIG behind an installer that had printed "running". Every
+  // start on a Mac reads launchd's own state line.
+  assert.match(section, /launchctl bootstrap system "\$plist" >\/dev\/null 2>&1 && launchd_running/);
+  assert.match(SH, /launchd_running\(\) \{/);
+  assert.match(SH.slice(SH.indexOf('launchd_running() {')), /state = /);
+});
+
+test('a launchd daemon is given a PATH that has Homebrew on it', () => {
+  // launchd starts a daemon with /usr/bin:/bin:/usr/sbin:/sbin and nothing
+  // else; the hub looks tmux and claude up on PATH. The first runner installed
+  // tmux with brew and watched the hub exit on "tmux is not installed".
+  for (const unit of ['fleetwright', 'fleetwright-sidecar']) {
+    const plist = readFileSync(new URL(`../install/${unit}.plist`, import.meta.url), 'utf8');
+    assert.match(plist, /<key>EnvironmentVariables<\/key>\s*<dict>\s*<key>PATH<\/key>\s*<string>__PATH__<\/string>/);
+  }
+  assert.match(SH, /-e "s\|__PATH__\|\$\(launchd_path\)\|g"/);
+  const fn = SH.slice(SH.indexOf('launchd_path() {'), SH.indexOf('\n}\n', SH.indexOf('launchd_path() {')));
+  // The tools this installer found come first, then launchd's own defaults
+  // with Homebrew ahead of them.
+  assert.match(fn, /command -v tmux/);
+  assert.match(fn, /CLAUDE_BIN/);
+  assert.match(fn, /\/opt\/homebrew\/bin \/usr\/local\/bin \/usr\/bin \/bin \/usr\/sbin \/sbin/);
+});
+
+test('on a Mac the log file the plist names exists before launchd spawns the job', () => {
+  // launchd opens StandardOutPath as the job's user, and /var/log is root's.
+  // Without the file, the spawn fails with EX_CONFIG and nothing is written
+  // anywhere to say so — the install that found this had no log to tail.
+  const unit = SH.slice(SH.indexOf('install_unit() {'), SH.indexOf('\n}\n', SH.indexOf('install_unit() {')));
+  assert.match(unit, /\[ -e "\/var\/log\/\$1\.log" \] \|\| : > "\/var\/log\/\$1\.log"/);
+  assert.match(unit, /chown "\$log_owner" "\/var\/log\/\$1\.log"/);
+  // Owned by whoever the plist runs as, read back from the plist rather than
+  // assumed — the sidecar's user and the hub's are one variable each.
+  assert.match(unit, /<key>UserName<\\\/key>/);
 });
 
 test('it compares this box against the coordinator and says so plainly', () => {

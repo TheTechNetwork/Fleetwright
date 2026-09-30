@@ -28,6 +28,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `apt-repo.yml` | a release's build finishing, or manual | `APT_SIGNING_KEY`, Cloudflare — skips with a notice without either. See [apt](#apt--a-signed-repository-on-a-worker) |
 | `tail.yml` | manual | Cloudflare |
 | `ephemeral-mac.yml` | manual | `FLEETWRIGHT_RUNNER_TOKEN` — see [`ephemeral-hosts.md`](./ephemeral-hosts.md) |
+| `mac-host.yml` | PRs and pushes touching `install/`, `bin/` or the files the installer's macOS path leans on; manual | none — installs for real on a macOS runner: both launchd daemons up, the hub answering, the key's owner and mode, `/logs` on the plists' files, `--upgrade`, `uninstall.sh` |
 | `renovate-config.yml` | PRs touching `renovate.json` | none |
 | `label.yml` | every PR, on open and every push (`pull_request_target`, no checkout) | none — `GITHUB_TOKEN` with `pull-requests: write`, applying `platform/*` and `area/*` from `.github/labeler.yml`; `test/labeler.test.js` keeps the rules covering every tracked file |
 

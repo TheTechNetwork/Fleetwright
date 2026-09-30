@@ -270,6 +270,24 @@ test('with no helper installed the update says what was not refreshed, and how t
   assert.match(heal.text, /not refreshed/);
 });
 
+test('a Mac is not told to install a helper it can never have', () => {
+  // The helper rewrites systemd units and runs a packaged release's installer.
+  // install.sh skips it on Darwin and says why, so "re-run the installer and it
+  // will put it there" would send somebody round a loop: the installer, run
+  // again, still would not. Both texts that name the missing helper say what
+  // a Mac does instead — the root half of an update is the installer, by hand.
+  const heal = healAfterRelease({ exists: () => false, platform: 'darwin', after: () => { throw new Error('must not schedule'); } });
+  assert.equal(heal.scheduled, false);
+  assert.match(heal.text, /still running the code they started from/);
+  assert.match(heal.text, /install\.sh --upgrade/);
+  assert.doesNotMatch(heal.text, /every update after it will/, 'that promise is false on a Mac');
+
+  const m = migrationState(cfg, { packaged: false }, READY, { ...ABSENT, platform: 'darwin' });
+  assert.equal(m.reason, 'no_helper');
+  assert.match(m.message, /no helper to install/);
+  assert.doesNotMatch(m.message, /will put it there/);
+});
+
 test('a helper that exits 0 without running the installer is not called a success', () => {
   // THE BOX THIS PINS ran main-103 under `current`, with a hub that had
   // restarted at 04:14 and a sidecar that had not, and the journal said
