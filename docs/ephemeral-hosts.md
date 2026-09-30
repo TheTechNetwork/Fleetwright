@@ -247,10 +247,13 @@ closer to `claude -p`: give it the work, let it run, collect the output, know
 when it is finished. `peek` reads a pane and `answer` types into one; neither is
 "tell me when this is done".
 
-**Nothing reports completion.** A runner session that has finished its work looks
-exactly like one sitting idle, which is the same ambiguity the watcher already
-cannot resolve on a permanent host — and on a runner it matters more, because
-the machine is being paid for by the minute.
+**Completion is reported, as the return to the prompt.** A runner session that
+has finished its work used to look exactly like one sitting idle. The watcher now
+raises `session.ready` when a session comes back to the CLI's prompt after it was
+seen working, and the coordinator pushes it for every session on a temporary
+machine — see [runner-central.md](./runner-central.md#what-this-does-not-solve).
+It says the session stopped working, not that it did what was asked; that is
+still the log's to show.
 
 **MCP is where this landed** — see [`mcp.md`](./mcp.md). The intent protocol
 was already the right shape for it (fixed verbs, typed parameters, structured
@@ -258,6 +261,5 @@ replies), and the MCP server is a thin adapter over `/api/intent` rather than
 new architecture. `fleet_start` on a named ephemeral host exists,
 `fleet_await`/`fleet_read_log` cover watching and collecting, and
 `fleet_provision` now asks for the machine as well — so the whole loop is verbs
-a session can reach rather than a browser tab somebody has to open. The
-completion signal is the piece that still does not: a finished session still
-looks like an idle one.
+a session can reach rather than a browser tab somebody has to open, and
+`fleet_await` returns when a session comes back to its prompt.
