@@ -255,6 +255,38 @@ name. There is no verb that sets them; putting the file on a box needs a shell
 on that box, which is the same bound `profile` has and one fewer thing than
 `profile` needs.
 
+**Health says how full each running session's window is, as a count.** `context`
+on each session record is `{ tokens, model }`: the tokens that were in the
+window at the last assistant turn (what was sent, what was newly cached, what
+was read from cache — the same sum Claude Code's own status line draws) and the
+model that answered, both read off the transcript by whichever process can see
+it. Inside a sandbox that is the hook, which posts it with every lifecycle event
+because the volume is the session's and the hub cannot read it; for a session on
+the box it is the hub, reading the file the SessionStart hook named, only when
+it has changed. No window size and no percentage: the transcript does not say,
+and a table about somebody else's models would be wrong the week one changed.
+`null` is *cannot tell* — not running, no turn yet, an older host — and a
+screen draws it as nothing rather than as empty. `src/core/context-usage.js`.
+
+**The Claude row of a person's connections says how much of their limit is
+used.** `connect` (the listing) returns `connected`, and the `claude` row now
+carries `usage: { checkedAt, windows, why }`, where `windows` is the four
+rate-limit windows Claude Code's own `/usage` draws — `fiveHour`, `sevenDay`,
+`sevenDayOpus`, `sevenDaySonnet`, each `{ used, resetsAt }` with `used` a
+percentage and `resetsAt` epoch ms — or `null` with `why` saying what stopped
+the box asking (an expired credential, a refused token, an answer in a shape
+this version does not read). It is on the ACCOUNT's row and not on the health
+frame because an account is a person's, not a machine's: the same address
+linked on three boxes is one plan with one window, and the coordinator's merge
+of the listing keeps the freshest box's answer. The box asks because the token
+lives there (`src/core/usage.js`, every `FLEETWRIGHT_USAGE_CHECK_MS`, ten
+minutes, 0 off), on exactly the terms that file sets out: the shape the
+endpoint answered with is what is read, and anything else is *cannot tell*
+with a reason, never a number. `null` on the whole field is a box that has not
+asked yet, one where it is off, or an older host. It is the difference between
+"sessions are failing" and "sessions are failing because this plan is out
+until 15:10".
+
 **Health says what a box runs and what its disk holds, as two versions.**
 `version.head` is what the service sending the frame is running — from inside
 a process the install root resolves through `current` to the real directory,

@@ -50,7 +50,7 @@
 
 import { answerCredentialRequest, CREDENTIAL_PATH } from './credential-broker.js';
 import { answerSecretRequest } from './secret-store.js';
-import { SESSION_EVENTS, cleanDetail } from './activity.js';
+import { SESSION_EVENTS, cleanDetail, cleanContext } from './activity.js';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
@@ -137,7 +137,7 @@ export function isValidSessionName(name) {
  *   name it asked for, decide whether the grant allows it and return the value
  *   from the store, read now. Absent means the route answers 404, which is what
  *   an older or non-sandboxed host does. See src/core/secret-store.js.
- * @property {(e: { name: string, event: string, detail: string|null, at: number }) => { ok: boolean, message?: string } | void} [onSessionEvent]
+ * @property {(e: { name: string, event: string, detail: string|null, at: number, context?: import('./context-usage.js').ContextUsage|null }) => { ok: boolean, message?: string } | void} [onSessionEvent]
  *   A lifecycle hook fired inside the session — Stop, PermissionRequest and
  *   the rest of src/core/activity.js — with the name from the socket. Absent
  *   means the route answers 404, which is what an older host does.
@@ -318,7 +318,9 @@ export class HookSocketServer {
     if (!SESSION_EVENTS.includes(event)) {
       return json(res, 400, { ok: false, error: `not a session event: ${event.slice(0, 40)}` });
     }
-    const result = await this.onSessionEvent({ name, event, detail: cleanDetail(body.detail), at: Date.now() });
+    // How full the window is, when the hook read it off the transcript. Bounded
+    // to a count and a model name; see cleanContext for what a lie can cost.
+    const result = await this.onSessionEvent({ name, event, detail: cleanDetail(body.detail), at: Date.now(), context: cleanContext(body.context) });
     const answer = result ?? { ok: true };
     return json(res, answer.ok === false ? 400 : 200, answer);
   }

@@ -33,6 +33,7 @@ import { log } from '../log.js';
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"
  * @property {string|null} detail         last human-readable outcome
  * @property {string|null} rcUrl          claude.ai/code URL, when Remote Control came online
+ * @property {string|null} [transcriptPath]  where the CLI writes this conversation, when its hook ran on this box and said; the hub reads the window's size off it
  * @property {string|null} createdBy      e.g. "telegram:12345", "web", "cli"
  * @property {number} createdAt
  * @property {number} updatedAt

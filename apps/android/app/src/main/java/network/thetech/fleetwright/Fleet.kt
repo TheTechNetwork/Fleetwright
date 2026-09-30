@@ -78,9 +78,44 @@ class Fleet(
          * the whole question somebody opens the app to ask.
          */
         val atRest: Boolean = false,
+        /**
+         * How full its window is: the tokens in context at the last assistant
+         * turn, and the model that answered, as the host read them off the
+         * transcript. No size and no percentage — the transcript does not say
+         * how big the window is, and a table of models here would be wrong the
+         * week one changed. Null is CANNOT TELL: not running, no turn yet, an
+         * older host. Drawn as nothing, never as empty.
+         */
+        val context: ContextUsage? = null,
     ) {
+        // Not `Context`: android.content.Context is imported in this file, and a
+        // nested class of the same name is a reading trap for whoever is next.
+        data class ContextUsage(val tokens: Long?, val model: String?)
+
         /** What to show. The name is the identity; the title is for people. */
         val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
+
+        /**
+         * "248k in context", or null when the host did not say. Same words as
+         * iOS, held equal by test/context-and-usage-in-apps.test.js.
+         */
+        val contextLine: String? get() {
+            if (!isRunning) return null
+            val tokens = context?.tokens?.takeIf { it >= 0 } ?: return null
+            return "${compactTokens(tokens)} in context"
+        }
+
+        companion object {
+            /**
+             * 412 → "412 tokens", 248_717 → "248k", 1_200_000 → "1.2M". Coarse
+             * on purpose: the question is "how full", never the exact count.
+             */
+            fun compactTokens(tokens: Long): String = when {
+                tokens < 1000 -> "$tokens tokens"
+                tokens < 1_000_000 -> "${tokens / 1000}k"
+                else -> String.format(java.util.Locale.ROOT, "%.1fM", tokens / 1_000_000.0)
+            }
+        }
 
         val isRunning: Boolean get() = status == "running"
 
@@ -427,6 +462,32 @@ class Fleet(
      *   for a person rather than for a terminal, and it is the only place that
      *   knows which of the three states it is describing.
      */
+    /**
+     * How much of an account's limit is used, on the Claude row of a person's
+     * connections: the four windows Claude Code's own /usage draws, or the
+     * host's reason there is no answer. On the ACCOUNT's row and not on each
+     * host, because an account is a person's — the same address linked on
+     * three boxes is one plan with one window, and the coordinator keeps the
+     * freshest box's answer. Null on the row is CANNOT TELL and is drawn as
+     * nothing.
+     */
+    data class UsageReport(val checkedAt: Long?, val windows: Windows?, val why: String?) {
+        data class Windows(val fiveHour: Window?, val sevenDay: Window?, val sevenDayOpus: Window?, val sevenDaySonnet: Window?)
+
+        /**
+         * @property used percent of the window used, 0-100, as the endpoint gave it
+         * @property resetsAt when it resets, epoch millis; the phone does the arithmetic
+         */
+        data class Window(val used: Double?, val resetsAt: Long?)
+
+        /**
+         * Worth colouring: a window that is nearly spent. Ninety percent,
+         * because the next session start is what a person is deciding on.
+         */
+        val isNearLimit: Boolean get() =
+            listOf(windows?.fiveHour, windows?.sevenDay, windows?.sevenDayOpus, windows?.sevenDaySonnet).any { (it?.used ?: 0.0) >= 90.0 }
+    }
+
     data class Credential(
         val state: String?,
         val expiresAt: Long?,
@@ -681,6 +742,8 @@ class Fleet(
              * could not use, and cleared the moment a fresh token is stored.
              */
             val needsReconnect: Boolean = false,
+            /** What this account has left, on the Claude row. Null from a host that has not said. */
+            val usage: UsageReport? = null,
         )
 
         fun linked(provider: String): Linked? = connected.firstOrNull { it.provider == provider }
@@ -1652,6 +1715,30 @@ class Fleet(
                             (0 until m.length()).mapNotNull { k -> m.optString(k).takeIf { it.isNotBlank() } }
                         } ?: emptyList(),
                         needsReconnect = c.optBoolean("needsReconnect"),
+                        // A window the host did not send, or sent as null,
+                        // stays null rather than reading as 0% used.
+                        usage = c.optJSONObject("usage")?.let { u ->
+                            fun window(o: JSONObject?, key: String): UsageReport.Window? =
+                                o?.optJSONObject(key)?.let { w ->
+                                    UsageReport.Window(
+                                        used = w.takeIf { it.has("used") && !it.isNull("used") }?.optDouble("used"),
+                                        resetsAt = w.optLong("resetsAt", 0L).takeIf { it > 0L },
+                                    )
+                                }
+                            val w = u.optJSONObject("windows")
+                            UsageReport(
+                                checkedAt = u.optLong("checkedAt", 0L).takeIf { it > 0L },
+                                windows = w?.let {
+                                    UsageReport.Windows(
+                                        fiveHour = window(it, "fiveHour"),
+                                        sevenDay = window(it, "sevenDay"),
+                                        sevenDayOpus = window(it, "sevenDayOpus"),
+                                        sevenDaySonnet = window(it, "sevenDaySonnet"),
+                                    )
+                                },
+                                why = u.optString("why").takeIf { it.isNotBlank() && it != "null" },
+                            )
+                        },
                     )
                 }
             },
@@ -1684,6 +1771,15 @@ class Fleet(
                 },
                 idleSince = o.optLong("idleSince").takeIf { it > 0 },
                 atRest = o.optBoolean("atRest"),
+                // A count the host read, or null — never 0 for a missing key:
+                // optLong would read absent as 0, and "empty window" is a
+                // claim the host did not make.
+                context = o.optJSONObject("context")?.let { c ->
+                    Session.ContextUsage(
+                        tokens = c.takeIf { it.has("tokens") && !it.isNull("tokens") }?.optLong("tokens"),
+                        model = c.optString("model").takeIf { it.isNotBlank() && it != "null" },
+                    )
+                },
             )
         }
     }
@@ -1931,3 +2027,47 @@ class Settings(context: Context) {
  * argument; Kotlin already has `ifEmpty`, so this is the whole of it.
  */
 fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
+
+/**
+ * "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.
+ *
+ * EVERY FIGURE IS THE ENDPOINT'S. The percentages are what the account's own
+ * usage endpoint said, the reset is its timestamp with the phone doing the
+ * arithmetic, and a report with no answer says so in the host's words rather
+ * than drawing 0% — which would be the one reading worse than nothing. Drawn
+ * under "connected as you@…" on the credentials sheet: an account's fact, on
+ * the account's row, once. Same words as iOS, held equal by
+ * test/context-and-usage-in-apps.test.js.
+ */
+fun describeUsage(report: Fleet.UsageReport, now: Long = System.currentTimeMillis()): String {
+    val windows = report.windows ?: return buildString {
+        append("usage not reported")
+        report.why?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
+    }
+    val parts = mutableListOf<String>()
+    windows.fiveHour?.let { w ->
+        w.used?.let { used ->
+            parts.add("5h ${Math.round(used)}%")
+            w.resetsAt?.takeIf { it > 0 }?.let { parts.add("resets in ${describeUntil(it, now)}") }
+        }
+    }
+    windows.sevenDay?.used?.let { parts.add("7d ${Math.round(it)}%") }
+    windows.sevenDayOpus?.used?.let { parts.add("Opus 7d ${Math.round(it)}%") }
+    windows.sevenDaySonnet?.used?.let { parts.add("Sonnet 7d ${Math.round(it)}%") }
+    if (parts.isEmpty()) return "usage not reported"
+    return parts.joinToString(" · ")
+}
+
+/**
+ * "now" / "9m" / "2h" / "3d" until an epoch-millisecond instant. Coarse: the
+ * question is whether to wait, not when to set an alarm.
+ */
+fun describeUntil(epochMs: Long, now: Long = System.currentTimeMillis()): String {
+    val seconds = (epochMs - now) / 1000
+    return when {
+        seconds <= 0 -> "now"
+        seconds < 3600 -> "${maxOf(1, seconds / 60)}m"
+        seconds < 86_400 -> "${seconds / 3600}h"
+        else -> "${seconds / 86_400}d"
+    }
+}

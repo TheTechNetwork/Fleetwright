@@ -318,6 +318,46 @@ test('a linked Claude account shows as connected for the person who linked it', 
   );
 });
 
+test('what the account has left rides on its own row, and only its own', async () => {
+  // An account is a person's, not a machine's — so the number is read here,
+  // where a person looks at their own credentials, and not on the health
+  // frame where it was first put and drawn once per host. The hub's monitor
+  // is what asked; the row is where the answer is read.
+  const { dispatch } = await import('../src/adapters/commands.js');
+  const { Accounts } = await import('../src/core/accounts.js');
+  const state = dir();
+  mkdirSync(join(state, 'accounts'), { recursive: true });
+  new Accounts(state).save('me@example.com', JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+  const windows = { fiveHour: { used: 42, resetsAt: 1_700_000_900_000 }, sevenDay: { used: 12, resetsAt: null }, sevenDayOpus: null, sevenDaySonnet: null };
+  const snapshot = {
+    checkedAt: 1_700_000_000_000,
+    accounts: [
+      { account: 'someone-else@example.com', usage: { ...windows, fiveHour: { used: 99, resetsAt: null } }, why: null },
+      { account: 'me@example.com', usage: windows, why: null },
+    ],
+  };
+  const base = {
+    cfg: { stateDir: state, hostname: 'box', loginEnabled: true },
+    actor: 'fleet:me@example.com',
+    login: { status: () => ({ loggedIn: false }) },
+  };
+
+  const mine = (await dispatch(/** @type {any} */ ({ ...base, usage: () => snapshot }), '/connect')).connections.connected.find((c) => c.provider === 'claude');
+  assert.deepEqual(mine.usage, { checkedAt: 1_700_000_000_000, windows, why: null }, 'my row, my figures');
+
+  // A reason instead of a number, when the box could not ask.
+  const stale = { checkedAt: 1, accounts: [{ account: 'me@example.com', usage: null, why: 'the credential has expired and has not renewed yet' }] };
+  const why = (await dispatch(/** @type {any} */ ({ ...base, usage: () => stale }), '/connect')).connections.connected.find((c) => c.provider === 'claude');
+  assert.equal(why.usage.windows, null);
+  assert.match(why.usage.why, /expired/);
+
+  // No monitor, or one that has not asked yet: null, never "nothing used".
+  const none = (await dispatch(/** @type {any} */ (base), '/connect')).connections.connected.find((c) => c.provider === 'claude');
+  assert.equal(none.usage, null);
+  const unasked = (await dispatch(/** @type {any} */ ({ ...base, usage: () => null }), '/connect')).connections.connected.find((c) => c.provider === 'claude');
+  assert.equal(unasked.usage, null);
+});
+
 test('an identity that cannot be resolved gets NO row, not the shared one', () => {
   // THE FIX FOR THE REAL DEFECT. `emailFromActor` returns null for two
   // completely different situations — "a local operator, use the shared row"

@@ -47,9 +47,10 @@ export class HttpAdapter {
   /**
    * @param {import('../config.js').Config} cfg
    * @param {{ sessions: import('../core/sessions.js').SessionManager, login: import('../core/login.js').LoginFlow, token?: string|null,
-   *   sidecarToken?: string|null }} deps
+   *   sidecarToken?: string|null,
+   *   usage?: (() => import('../core/usage.js').UsageSnapshot|null)|null }} deps
    */
-  constructor(cfg, { sessions, login, token = null, sidecarToken = null }) {
+  constructor(cfg, { sessions, login, token = null, sidecarToken = null, usage = null }) {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
@@ -60,6 +61,12 @@ export class HttpAdapter {
     // test, an older entrypoint) and the sidecar is whoever holds the
     // operator's, as it always was.
     this.sidecarToken = sidecarToken || null;
+    // The last answer about each linked account's limits, from the monitor the
+    // entrypoint runs — a function so this reads the current one on every ask.
+    // Null when the check is off or not wired, which /api/state publishes as
+    // null: CANNOT TELL, never "nothing used".
+    /** @type {(() => import('../core/usage.js').UsageSnapshot|null)|null} */
+    this.usage = usage;
     // RESOLVED, NOT READ FROM CONFIG. An unset FLEETWRIGHT_TOKEN used to mean "no
     // gate at all", which stopped being defensible when the credential verbs
     // landed on this endpoint — see src/core/api-token.js. The caller passes
@@ -126,6 +133,10 @@ export class HttpAdapter {
         uuid: String(body.uuid || ''),
         // What the person asked for, read out of the transcript by the hook.
         title: body.title ? String(body.title) : null,
+        // Where that transcript is, so the hub can read how full the window
+        // is for a session running on this box. Advisory, and checked for
+        // shape where it is recorded.
+        transcriptPath: body.transcriptPath ?? null,
       });
       return json(res, r.ok ? 200 : 400, r);
     }
@@ -224,6 +235,20 @@ export class HttpAdapter {
           }
         })(),
         loginPending: this.login.isPending() ? { url: this.login.pending?.url ?? null } : null,
+        // HOW MUCH OF EACH LINKED ACCOUNT'S LIMIT IS USED, as the account's own
+        // endpoint last said — one row per linked account, with the reason
+        // when there is no answer. Null before the first check and when the
+        // check is off. The hub's own publication, for its console and for
+        // tests; the fleet reads it per PERSON, on the Claude row of the
+        // connections listing, because an account is not a host's fact — see
+        // connectionsPayload in commands.js and src/core/usage.js.
+        usage: (() => {
+          try {
+            return this.usage?.() ?? null;
+          } catch {
+            return null;
+          }
+        })(),
         // WHAT THIS BOX IS, as far as fleetwright's own files say, published so
         // the sidecar can carry it on the health frame WITHOUT READING THOSE
         // FILES ITSELF. Until this shipped the sidecar opened `labels`,
@@ -478,7 +503,7 @@ export class HttpAdapter {
       const reply = await dispatch(
         // Split back into a list here, so a command reads labels and never a
         // string it has to remember to parse.
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta,
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta,
           ...(meta.hostLabels ? { hostLabels: String(meta.hostLabels).split(',').filter(Boolean) } : {}) },
         line,
       );

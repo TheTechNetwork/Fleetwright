@@ -152,6 +152,7 @@ fun SessionSheet(fleet: Fleet, initial: Fleet.Session, onDismiss: () -> Unit, on
                         session.workspace?.let { "· $it" },
                         session.age?.let { "· $it" },
                         session.account?.takeIf { it != "shared" }?.let { "· $it" },
+                        session.contextLine?.let { "· $it" },
                     ).joinToString(" "),
                     style = Design.Style.micro,
                     color = Design.Palette.inkDim.now,

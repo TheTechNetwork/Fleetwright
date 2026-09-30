@@ -11,6 +11,7 @@ import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
+import { UsageMonitor } from './core/usage.js';
 import { ensureApiToken, ensureSidecarToken } from './core/api-token.js';
 import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
@@ -190,7 +191,22 @@ export async function main() {
 
   /** @type {Array<{ stop: () => Promise<unknown> }>} */
   const adapters = [];
-  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg), sidecarToken: ensureSidecarToken(cfg) });
+  // WHAT EACH LINKED ACCOUNT HAS LEFT, asked on a timer and published on
+  // /api/state for the health frame. Off when the interval is 0, and the
+  // adapter then publishes null, which is the honest answer. First ask after
+  // the keepalive's first pass, so a token it just renewed is the one used.
+  const usage = cfg.usageCheckMs ? new UsageMonitor(cfg, { log }) : null;
+  if (usage) {
+    const check = () => {
+      usage.refresh().catch((e) => log.warn('usage check failed', e));
+    };
+    setTimeout(check, 45_000).unref?.();
+    setInterval(check, cfg.usageCheckMs).unref?.();
+  }
+
+  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg),
+    sidecarToken: ensureSidecarToken(cfg),
+    usage: usage ? () => usage.snapshot() : null });
   await http.start();
   adapters.push(http);
 

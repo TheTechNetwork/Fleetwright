@@ -159,8 +159,12 @@ async function runHook() {
     // hub falls back to the working directory.
     const title = titleFromTranscript(payload.transcript_path);
 
+    // Where the transcript is, so the hub can read how full the window is
+    // without a hook per turn: this hook runs as the service user on this box,
+    // and so does the hub, so what one can read the other can.
+    const transcriptPath = typeof payload.transcript_path === 'string' ? payload.transcript_path : null;
     try {
-      await post('/internal/session-start', { name, cwd, uuid, ...(title ? { title } : {}) }, 3000);
+      await post('/internal/session-start', { name, cwd, uuid, ...(title ? { title } : {}), ...(transcriptPath ? { transcriptPath } : {}) }, 3000);
     } catch {
       // The hub is restarting, moved port, or not up yet. Spool it; the hub
       // drains this on its next reconcile. A dropped uuid means an

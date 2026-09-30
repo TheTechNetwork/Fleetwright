@@ -171,6 +171,12 @@ only what happened.
 | `Stop`, `StopFailure` | the turn ended; back at its prompt | ready |
 | `SessionEnd` | the CLI exited | ended |
 
+Every one of these events may also carry `context`: the tokens in the window
+at the transcript's last assistant turn, and the model that answered. The hook
+reads the transcript's tail because it is the only process that can — the
+volume belongs to the session's user namespace — and the hub keeps the number
+from the last event that carried one. `src/core/context-usage.js`.
+
 `src/core/activity.js` is the one table; `SessionManager.recordEvent` keeps
 the last phase per running session and drops it on every launch, resume and
 stop, so nothing said in one life of a container answers a question about the
