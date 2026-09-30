@@ -745,6 +745,9 @@ private fun SessionCard(
             session.workspace,
             session.age,
             session.account?.takeIf { it != "shared" },
+            // How full its window is, when the host read it. A count, not a
+            // bar: the window's size is not something the host knows.
+            session.contextLine,
         )
         if (context.isNotEmpty()) {
             Text(

@@ -252,6 +252,20 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    // WHAT EACH OF THEM HAS LEFT, one line per linked account,
+                    // in the account's own figures. The difference between
+                    // "sessions are failing" and "sessions are failing because
+                    // this plan is out until 15:10". Nothing at all from a
+                    // host that has not said; coloured only when a window is
+                    // nearly spent.
+                    host.usage?.accounts?.forEach { row ->
+                        Text(
+                            describeUsage(row),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (row.isNearLimit) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     // WHAT IT IS RUNNING, WHAT IS WAITING, AND WHICH RELEASES
                     // IT TAKES — one line, read left to right in the order
                     // somebody asks the questions. The channel had a line of
