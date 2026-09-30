@@ -30,7 +30,7 @@ const DEFAULT_INTERVAL_MS = 20_000;
  *  cannot say why. "Something is waiting" is worth a notification even when the
  *  question is not one we know how to read. */
 export const AWAITING_RE =
-  /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files|Is this a project you created or one you trust/i;
+  /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files|Is this a project you created or one you trust|Do you want to use this API key/i;
 
 /**
  * The CLI is drawing its own chrome, so it is not wedged.

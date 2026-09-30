@@ -95,6 +95,19 @@ unsandboxed session inherits the environment of the process that started it, so
 a key in the job's environment is a key in front of the CLI. No linked account
 is involved at any point.
 
+**And the CLI asks before it will use one.** Started interactively with
+`ANTHROPIC_API_KEY` set, Claude Code draws *"Detected a custom API key in your
+environment. Do you want to use this API key?"* with **No (recommended)**
+focused, and waits. Nothing answered that on a runner, the watcher did not know
+the dialog, and a session sat at it for the whole of its minutes looking idle —
+which read, from the outside, as "the API key does not work". The hub now
+answers it the way the person who set the key would: it writes the approval the
+CLI itself records (`customApiKeyResponses.approved` in `~/.claude.json`, keyed
+by the key's last twenty characters) at startup, and marks the box onboarded,
+because a box with a key is authenticated. The watcher also knows the dialog
+now, so if it ever does appear it is reported as *waiting* rather than *idle*.
+`src/core/trust.js`.
+
 **No sandbox.** Rootless podman on a macOS runner is a Linux VM inside a VM,
 slow where it works at all — and the sandbox protects a machine that persists.
 This one is destroyed in an hour by something more thorough than a container.

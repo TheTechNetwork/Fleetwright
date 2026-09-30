@@ -7,7 +7,7 @@ import { log, setLogLevel } from './log.js';
 import { Registry } from './core/registry.js';
 import { SessionManager } from './core/sessions.js';
 import { LoginFlow } from './core/login.js';
-import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
+import { ensureWorkdirTrusted, markOnboardingComplete, approveApiKey } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
@@ -166,6 +166,17 @@ export async function main() {
     // Authenticated but possibly never onboarded — the state a box is left in
     // by `claude auth login`. Fixing it here rather than only after /login
     // repairs boxes that were authenticated some other way.
+    markOnboardingComplete(cfg);
+  }
+  // AN API KEY IN THE ENVIRONMENT IS A CREDENTIAL TOO — the one a runner has,
+  // where nobody is present to finish a login (docs/ephemeral-hosts.md). The
+  // CLI asks before using one, interactively, with "No" focused; a session
+  // started here would sit at that question. Answer it the way the person who
+  // put the key in the environment would, and treat the box as onboarded for
+  // the same reason a logged-in one is: it is authenticated.
+  if (process.env.ANTHROPIC_API_KEY) {
+    log.info('claude: ANTHROPIC_API_KEY is set — sessions started here authenticate with it');
+    approveApiKey(process.env.ANTHROPIC_API_KEY);
     markOnboardingComplete(cfg);
   }
   // WHAT SESSIONS RUN AS IS A PERSON'S LINKED ACCOUNT, sandboxed or not
