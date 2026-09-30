@@ -173,14 +173,53 @@ runner has no profiles. This is the one place something verifies an identity
 the coordinator relayed rather than trusting it, which is why it holds here when
 nothing else in this section does.
 
+**A person's Claude login on their runner, and what it adds.** Not a verb: a
+`claude-login` frame a runner sends, and `PUT /api/claude-login`, which a
+person's own computer calls to deposit their `claude setup-token` with the
+minting Worker (`runner-central.md`, "Your Claude login on a runner"). Both
+carry a credential through the coordinator, so both are accounted for here.
+
+- **The deposit** is sealed on the person's computer to the minter's deposit
+  key, and the tool refuses to seal unless that key is the **pin** the person
+  was given by their operator, by a route that is not the fleet. A coordinator
+  offering its own key is caught there, before anything is sent. Inside the
+  seal is a GitHub token of theirs: the minter asks GitHub whose it is and keeps
+  the login for that account id, so the coordinator's word about the person is
+  never read, and the GitHub token is not kept. Each deposit carries its time;
+  one older than ten minutes, or not newer than the one held, is refused, so a
+  captured envelope cannot be replayed to put back a login its owner forgot.
+- **The hand-out** is `mint`'s construction without the repository: sealed to a
+  one-request key, bound into the audience of the runner's job token, verified
+  against GitHub's keys, a runner workflow started by a dispatch — and the
+  login goes to the account that **started the job**, and only from a job in
+  that account's own repository or one on `FLEETWRIGHT_GITHUB_MINT_OWNERS`.
+- **What it can still do** is deny: drop a deposit or a hand-out, and the
+  runner uses its repository's API key. It names the runner's owner in the
+  reply, and the runner runs that person's sessions on the login — a lie there
+  changes whose sessions on *that one runner* use it, which is no more than
+  forging the `actor` on a `start` already gives it. It can start sessions on
+  the runner, which then run on the person's subscription; a runner has no
+  profiles and no verb carries free text, so such a session sits at an empty
+  prompt. The login never leaves the runner through the fleet: the file verbs
+  reach podman volumes only, and a runner has none.
+- **What it cannot narrow** is the credential itself: a setup-token is the
+  person's whole subscription for a year. At rest in the minter it is sealed
+  to the deposit key under the account id; on the runner it is a 0600 file for
+  the length of the job, and the session running there can read it. That is
+  the reach a session on their permanent box already has with their login.
+
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture
 every token it signs from then on — for every repository of every account on
 `FLEETWRIGHT_GITHUB_MINT_OWNERS` the App is installed on, and, by editing that
-list or ignoring it, every installation. Secrets cannot be read back out of
-Cloudflare; code can be swapped. So the account and the API token that deploys
-to it are the boundary for the key, not the coordinator. Rotating the key on
-github.com ends it.
+list or ignoring it, every installation — and open every Claude login the
+minter keeps, since new code runs with the deposit key. Secrets cannot be read
+back out of Cloudflare; code can be swapped. So the account and the API token
+that deploys to it are the boundary for both keys, not the coordinator.
+Rotating the App key on github.com ends the first. For the second, a new
+deposit key makes every kept login unreadable, but a token already captured
+lasts its year: Anthropic's documentation does not say where a person revokes
+a setup-token, and this page will not guess.
 
 **Duration:** until redeploy / secret rotation. There is no per-intent signature
 to expire.

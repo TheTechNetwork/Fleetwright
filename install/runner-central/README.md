@@ -43,7 +43,7 @@ these files.
 
 | secret | needed | what it is |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | **yes** | what sessions on a runner authenticate with. There is nobody on a runner to complete a login, so this is the credential the design settled on — revocable on its own, billed separately, and not somebody's Claude account. Without it a runner joins the fleet and cannot start a single session |
+| `ANTHROPIC_API_KEY` | **yes**, unless everybody deposits a login | what sessions on a runner authenticate with. There is nobody on a runner to complete a login, so this is the credential the design settled on — revocable on its own, billed separately, and not somebody's Claude account. A person who [deposited their own Claude login](../../docs/runner-central.md#your-claude-login-on-a-runner) gets their sessions on runners they started run on that instead. Without either, a runner joins the fleet and cannot start a single session |
 | `FLEETWRIGHT_RUNNER_TOKEN` | only for runs you start by hand | says whose runner a manually started run is. Mint it in the app under Hosts → Runner tokens. A run the fleet dispatches carries its own single-use ticket and ignores this |
 
 Neither of them admits a machine to a fleet. That is GitHub's own job token,

@@ -20,11 +20,19 @@
 // refreshes that account's credential — same person, current token, so a
 // session resumed a week later is not carrying a receipt for a login instead
 // of one. It is a refusal, not a login prompt, when nobody's account is found.
+//
+// EXCEPT ON A RUNNER, where nobody links an account to a machine that lives
+// for an hour: there the person's deposited Claude login, or the runner
+// repository's API key, is the answer instead (./runner-login.js). The session
+// still gets its own directory; what changes is that the credential is in its
+// environment rather than in a `.credentials.json` beside it.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import { pickCredentialSource, credentialSourceForAccount, noAccountRefusal } from './podman.js';
+import { emailFromActor } from './accounts.js';
+import { runnerAuthFor } from './runner-login.js';
 
 /**
  * Where a direct session's Claude config lives.
@@ -60,25 +68,38 @@ function dirAccount(dir) {
  *   `account` is what the session's record says, on a resume; `cwd` is the
  *   directory the session works in, which has to be trusted or the TUI stops
  *   at "Do you trust the files in this folder?" with nobody to answer.
- * @returns {{ ok: true, dir: string, account: string|null, fresh: boolean } | { ok: false, message: string }}
+ * @returns {{ ok: true, dir: string, account: string|null, fresh: boolean, auth?: import('./runner-login.js').RunnerAuth } | { ok: false, message: string }}
+ *   `auth` is set only on a runner, for a session with no linked account: what
+ *   buildCommand puts in its environment instead
  */
 export function ensureDirectConfig(cfg, name, actor, { account: recorded = null, cwd }) {
   const dir = directConfigDir(cfg, name);
-  const fresh = !existsSync(path.join(dir, '.credentials.json'));
+  // A runner session keeps no credential file, so its marker says it has
+  // been staged — and for whom, which a resume asks.
+  const fresh = !existsSync(path.join(dir, '.credentials.json')) && !existsSync(path.join(dir, RUNNER_MARK));
 
   /** @type {{ source: string|null, accountMeta?: string|null, account: string, why?: string }|null} */
   let picked;
   if (fresh) {
     picked = pickCredentialSource(cfg, actor);
-    if (!picked.source) return { ok: false, message: noAccountRefusal(cfg, picked) };
+    if (!picked.source) {
+      const email = emailFromActor(actor);
+      const auth = runnerAuthFor(cfg, email);
+      if (!auth) return { ok: false, message: noAccountRefusal(cfg, picked) };
+      return stageForRunner(cfg, dir, cwd, email, auth, true);
+    }
   } else {
     // A RESUME KEEPS ITS ACCOUNT AND TAKES TODAY'S CREDENTIAL. Failure here is
     // not fatal: resuming with the credential it had is the old behaviour, and
     // refusing to resume because a refresh could not happen would be worse
     // than the staleness being fixed.
-    const owner = recorded ?? dirAccount(dir);
+    const owner = recorded ?? dirAccount(dir) ?? runnerMarkAccount(dir);
     picked = owner ? credentialSourceForAccount(cfg, owner) : null;
     if (!picked?.source) {
+      // A RESUME ON A RUNNER asks the same question a start did, of the same
+      // person, so it comes back on the same credential.
+      const auth = runnerAuthFor(cfg, owner);
+      if (auth) return stageForRunner(cfg, dir, cwd, owner, auth, false);
       log.warn(`direct: ${name} ${owner ? `belongs to ${owner}, who has no credential on this box any more` : 'does not say whose account it holds'}; keeping the one it has`);
       stageSettings(cfg, dir);
       trust(dir, cwd, null);
@@ -105,14 +126,49 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
 }
 
 /**
+ * A runner session's directory, with no credential file in it: the
+ * credential goes in its environment, from `auth`.
+ *
+ * @param {import('../config.js').Config} cfg @param {string} dir @param {string} cwd
+ * @param {string|null} account @param {import('./runner-login.js').RunnerAuth} auth @param {boolean} fresh
+ * @returns {{ ok: true, dir: string, account: string|null, fresh: boolean, auth: import('./runner-login.js').RunnerAuth }}
+ */
+function stageForRunner(cfg, dir, cwd, account, auth, fresh) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(dir, RUNNER_MARK), `${account ?? ''}\n`, { mode: 0o600 });
+  trust(dir, cwd, null, auth.kind === 'key' ? auth.key : null);
+  stageSettings(cfg, dir);
+  log.info(`direct: ${path.basename(dir)} runs on ${auth.kind === 'token' ? `${auth.login ?? account}'s deposited Claude login` : 'the runner repository\'s API key'}`);
+  return { ok: true, dir, account, fresh, auth };
+}
+
+/** Beside a runner session's config, in place of `.credentials.json`: whose it is. */
+const RUNNER_MARK = '.runner-account';
+
+/** @param {string} dir */
+function runnerMarkAccount(dir) {
+  try {
+    return readFileSync(path.join(dir, RUNNER_MARK), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The session's `.claude.json`: the identity beside the credential (the CLI
  * decides logged-in-ness from the PAIR), onboarding declared done (there is
  * an account, so the wizard has nothing to ask), and the working directory
  * trusted. Merged, never replaced: the CLI writes its own state into this file
  * and a resume must not lose it.
- * @param {string} dir @param {string} cwd @param {any} meta
+ * AND, ON A RUNNER WITH AN API KEY, the answer to the CLI's "use this API
+ * key?" dialog. trust.js's approveApiKey writes it into the box's own
+ * `~/.claude.json`, which a session under CLAUDE_CONFIG_DIR never reads, so
+ * without this copy every runner session would sit at that dialog with "No"
+ * focused — the bug #700 fixed, back again one directory over.
+ *
+ * @param {string} dir @param {string} cwd @param {any} meta @param {string|null} [apiKey]
  */
-function trust(dir, cwd, meta) {
+function trust(dir, cwd, meta, apiKey = null) {
   const file = path.join(dir, '.claude.json');
   /** @type {any} */
   let state = {};
@@ -124,6 +180,18 @@ function trust(dir, cwd, meta) {
   if (state.theme === undefined) state.theme = 'dark';
   state.projects ||= {};
   state.projects[cwd] = { ...(state.projects[cwd] || {}), hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true };
+  if (apiKey && apiKey.length >= 20) {
+    // The CLI's own record: the key's last twenty characters (trust.js says
+    // how that was established). Never the key.
+    const suffix = apiKey.slice(-20);
+    const responses = state.customApiKeyResponses && typeof state.customApiKeyResponses === 'object' ? state.customApiKeyResponses : {};
+    const approved = Array.isArray(responses.approved) ? responses.approved : [];
+    const rejected = Array.isArray(responses.rejected) ? responses.rejected : [];
+    state.customApiKeyResponses = {
+      approved: approved.includes(suffix) ? approved : [...approved, suffix],
+      rejected: rejected.filter((/** @type {unknown} */ r) => r !== suffix),
+    };
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }

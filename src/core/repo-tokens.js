@@ -141,6 +141,30 @@ export async function checkRepoAccess({ repo, token, fetchImpl = fetch }) {
 }
 
 /**
+ * Whose GitHub token this is: the numeric account id and the login, or why
+ * GitHub would not say. For the minting Worker, which is handed a person's
+ * token inside a sealed Claude-login deposit and uses it for this one call,
+ * to learn which runners the login may go to without asking the coordinator.
+ *
+ * @param {{ token: string, fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, userId: string, login: string } | { ok: false, message: string }>}
+ */
+export async function githubUser({ token, fetchImpl = fetch }) {
+  try {
+    const res = await fetchImpl('https://api.github.com/user', {
+      headers: headers(token),
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+    if (res.status === 401) return { ok: false, message: 'GitHub rejected that token (401)' };
+    const body = res.ok ? /** @type {any} */ (await res.json()) : null;
+    if (!res.ok || body?.id === undefined) return { ok: false, message: `GitHub would not say whose token that is (${res.status})` };
+    return { ok: true, userId: String(body.id), login: String(body.login || '') };
+  } catch (e) {
+    return { ok: false, message: `could not reach GitHub: ${/** @type {Error} */ (e).message}` };
+  }
+}
+
+/**
  * Is this job one that may ask for a repository token? A runner workflow,
  * started by a dispatch. The same four files `provision` dispatches; anything
  * else in a runner repository — a workflow a pull request added, a scheduled

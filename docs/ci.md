@@ -355,6 +355,16 @@ permanent box that holds the key, or reach public code only. See
 `docs/runner-central.md`, and `test/app-key-custody.test.js` for what keeps it
 this way.
 
+**`FLEETWRIGHT_MINTER_DEPOSIT_KEY` travels with it**, on the same terms and
+for the same reason: it is the key people seal their Claude logins to, so it
+opens every one the minter keeps. Another environment secret of
+`github-app-key`, synced by the same run of `minter-key`, which puts whichever
+of the two is present and leaves the Worker's copy of the other alone.
+`node scripts/minter-deposit-key.mjs` makes one, and prints the pin people
+check it against. Optional; without it the minter keeps no Claude logins and
+runners use their repository's API key. See `docs/runner-central.md`, "Your
+Claude login on a runner".
+
 And four repository **variables**:
 
 | variable | |

@@ -152,8 +152,8 @@ brief and mode, as `start` would take them — and the coordinator holds that
 session with the dispatch ticket. When the runner enrols on that ticket and
 sends its first health frame, the coordinator starts the session there, as the
 person who asked, once. The session announces itself the way every session
-does, with its Remote Control link, and a start that fails is recorded rather
-than silent. Task profiles and secrets are not offered for a new machine: it
+does, and a start that fails is recorded rather than silent. It carries no
+Remote Control link: neither credential a runner is given can open one ([below](#what-it-cannot-narrow)). Task profiles and secrets are not offered for a new machine: it
 is minutes old and holds neither.
 
 ## Your own runner repository
@@ -338,8 +338,9 @@ coordinator is the internet-facing part this project treats as compromised, so
 [github-app.md](./github-app.md) refuses the key a home there. What it gets
 instead is the **minting Worker** ([`minter.js`](../worker/src/minter.js),
 [`wrangler.minter.toml`](../worker/wrangler.minter.toml)): a separate script
-with no routes, no workers.dev address and no bindings, reached only by the
-coordinator's `MINTER` service binding, answering one question. **No permanent
+with no routes, no workers.dev address and no binding but a storage object of
+its own (for [Claude logins](#your-claude-login-on-a-runner)), reached only by
+the coordinator's `MINTER` service binding, answering one question per route. **No permanent
 box is needed to mint** — a fleet of nothing but runners can reach private
 code, which is what this was for.
 
@@ -385,24 +386,151 @@ fresh one and delete the old one on github.com.
 | any other host | nothing — the helper is registered for github.com only, and answers nothing else |
 | a fleet with no minting Worker key and no minting box | public code, exactly as before; git gets no answer and falls through |
 
+## Your Claude login on a runner
+
+> Can we have it use a Claude account instead of api
+
+A runner's sessions bill to the runner repository's `ANTHROPIC_API_KEY`
+unless the person who asked for the runner has **deposited their own Claude
+login**, in which case sessions they start there run on their subscription.
+
+**Every runner has an owner.** It was started because somebody asked, through
+the app or MCP, and GitHub's job token names the account that started it. So a
+runner can be given its owner's login and never anybody else's, which is the
+line that makes this different from a shared token in a repository secret: in
+the fleet's runner repository that would put one person's subscription under
+everybody's sessions, which is account sharing whoever the people are.
+
+### Depositing one
+
+```sh
+claude setup-token                  # on your own computer: a token for your subscription
+fleetwright-claude-login            # paste it when asked
+fleetwright-claude-login forget     # take it back
+```
+
+`fleetwright-claude-login` takes the same `FLEETWRIGHT_COORDINATOR_URL` and
+`FLEETWRIGHT_CREDENTIAL` as `fleetwright-mcp`, and one more:
+**`FLEETWRIGHT_MINTER_KEY`, the pin** — the minting Worker's public key, which
+whoever runs your fleet gives you by a route that is not the fleet. Run it once
+without the pin and it prints the key the fleet claims, sends nothing, and
+asks you to check that key with them. With the pin set, it refuses any other
+key, because a coordinator offering its own is exactly how somebody would read
+your login on its way through.
+
+It also needs a GitHub token of yours — `GH_TOKEN`, or whatever `gh auth
+token` prints. That is how the minter learns whose login this is without
+asking the coordinator: it asks GitHub, once, and does not keep the token.
+
+`claude setup-token` needs a Pro, Max, Team or Enterprise plan, and the token
+it prints lasts a year.
+
+```
+your computer ── seals { Claude token, GitHub token, now } to the PINNED key
+   │  PUT /api/claude-login
+   ▼
+coordinator ─── relays it unread
+   ▼
+minting Worker — opens it; asks GitHub whose the GitHub token is
+   │  refuses anything older than ten minutes, or older than the one it holds
+   │  keeps the Claude token SEALED to its own key, under that account id;
+   │    drops the GitHub token
+   ⋮
+runner joins ── one-request key; job token with audience = hash(key)
+   │  `claude-login` frame
+   ▼
+minting Worker — GitHub's signature on the job token; a runner workflow,
+   │  started by a dispatch; in the starter's own repository or one on
+   │  FLEETWRIGHT_GITHUB_MINT_OWNERS; the login kept for the STARTER's id
+   ▼
+coordinator relays ciphertext ──▶ runner opens it ──▶ the owner's sessions
+```
+
+### On the runner
+
+The sidecar asks when the runner joins, before its first health frame, and a
+session start waits for the answer, so the session a phone asked for with the
+machine is not placed on the API key a moment before the login arrives.
+
+| who starts the session | what it runs on |
+|---|---|
+| the runner's owner, with a login deposited | their login, as `CLAUDE_CODE_OAUTH_TOKEN`, with `ANTHROPIC_API_KEY` **unset** for that session — the CLI ranks an API key above the token and would bill the repository anyway |
+| the owner, with none | the repository's `ANTHROPIC_API_KEY` |
+| anybody else the fleet places there | the repository's `ANTHROPIC_API_KEY` |
+
+The token is a 0600 file in the job's private state directory, read when the
+session starts (`$(cat …)`), so it never appears in a command line, tmux's
+arguments or `ps`. The sidecar's log says which of the three a runner got, and
+why, and the fleet's events record `runner.claude` or `runner.claude-refused`.
+
+**This also fixed the API key.** Since per-person accounts, a session with no
+linked account was refused, on a runner as anywhere — and nobody links an
+account to a machine that lives for an hour, so runner sessions were refused
+even with the key set. A runner now says it is one (only a GitHub Actions job
+has a job token to say it with), and its sessions fall back to the key. A
+permanent box never says so, and still refuses a guest who has linked nothing,
+whatever is in its environment. And the CLI's "use this API key?" question is
+now answered in the session's own config directory, which is the one it reads;
+it was being answered in the box's, one directory over.
+
+### What it cannot narrow
+
+**A setup-token is your whole subscription, for a year.** There is no Claude
+credential for one session and an hour, so this is limited by *where* it goes,
+not by what it can do: only to runners you started, only for your sessions,
+and gone when the job ends. For as long as the job lives, the session running
+there can read it — the same reach a session on your permanent box has with
+your login. Usage counts against your plan's limits like your own Claude Code
+does.
+
+**Remote Control does not work on it.** Anthropic's documentation says Remote
+Control needs a full-scope login; a setup-token can only make model requests,
+and an API key cannot either. So a runner session is driven through the fleet,
+not from claude.ai, whichever it runs on.
+
+**Taking it back.** `fleetwright-claude-login forget` makes the minter forget
+it, and a runner that joins afterwards uses the API key. A runner that already
+has it keeps it until its job ends. Anthropic's documentation does not say
+where a setup-token is revoked, so this page does not claim one can be; if it
+leaks, assume it lasts its year.
+
+### For whoever runs the fleet
+
+```sh
+node scripts/minter-deposit-key.mjs
+```
+
+prints a private key and its pin. The private key is
+`FLEETWRIGHT_MINTER_DEPOSIT_KEY`, an **environment** secret of `github-app-key`
+beside the App key, synced to the minting Worker by the same manual run of the
+Worker workflow with **sync_app_key** ticked ([ci.md](./ci.md)). The pin goes
+to each person who will deposit, by message or in person. Without the key the
+minter keeps no logins and every runner uses its repository's key, as before.
+A new key makes every kept login unreadable; people deposit again.
+
+The logins live in a Durable Object of the minting Worker's own
+([`wrangler.minter.toml`](../worker/wrangler.minter.toml)), which no other
+script is bound to, and each row is still sealed to the deposit key. What
+guards them is what guards the App key: the Cloudflare account, and whoever can
+deploy to it ([security.md §4.1](./security.md)).
+
 ## What this does not solve
 
-**A runner still has no Claude login and no Cloudflare connection of its own,
-and neither is carried there.** GitHub is the one provider with a narrower
-credential than the account itself, so it is the one this could be built for:
+**A runner has no Cloudflare connection of its own, and its Claude login is
+one the person deposited, never the one on their box.** GitHub is the one
+provider with a narrower credential than the account itself:
 
-- **Claude.** Sessions on a runner authenticate with the runner repository's
-  `ANTHROPIC_API_KEY` and bill to it, not to anybody's subscription. There is no
-  way to mint a Claude credential for one session and an hour; carrying the
-  person's login would put their subscription on a machine in a public
-  repository's job, which is the line ephemeral-hosts.md draws.
+- **Claude.** Carried only as [a token the person made for it and
+  deposited](#your-claude-login-on-a-runner), and only to runners they started.
+  The login on their permanent box is not carried: it renews itself by being
+  used, and a second copy would break the first. There is still no Claude
+  credential for one session and an hour, so what bounds it is where it goes.
 - **Cloudflare.** [trust.md](./trust.md) says why: minting a Cloudflare token
   needs a parent with API Tokens: Edit, which is close to account-wide, so the
   minting authority is *stronger* than what it mints. Sealing one to a runner
   would be sending the whole account for an hour.
 
-Both stay not built until a provider offers something narrower, and neither is
-a missing piece of the design above.
+Cloudflare stays not built until it offers something narrower.
 
 **Windows runners get no repository tokens.** The runner's broker is a unix
 socket and Node on Windows listens on a named pipe; that workflow has not yet
@@ -427,11 +555,11 @@ waits for it; `status` is the answer, a few minutes later — or, from the New
 session sheet, the session's own notification when the coordinator starts it on
 the runner's first health frame.
 
-**Sessions on a runner still bill to the repository's API key.** A runner is
-minutes old and has no Claude login of its own, so it authenticates with the
-`ANTHROPIC_API_KEY` secret. Private GitHub code is reachable, one repository at a
-time ([above](#private-code-on-a-runner)); a person's Claude login and Cloudflare
-connection are not carried, for the reasons at the start of this section.
+**Sessions on a runner bill to the repository's API key** unless the person
+who started it [deposited their Claude login](#your-claude-login-on-a-runner).
+Private GitHub code is reachable, one repository at a time
+([above](#private-code-on-a-runner)); a Cloudflare connection is not carried,
+for the reason at the start of this section.
 
 **The session cannot outlive the host.** `resume` is pinned to the box holding
 the volume, so when a runner goes, its sessions go. Collect what you need before
@@ -441,4 +569,4 @@ exit that does not need somebody watching.
 **Actions minutes are somebody's.** Free on standard runners for a public
 repository, metered otherwise, and macOS is the one to check before promising
 anything. A session on a runner bills to the API key the runner repository
-holds, not to a subscription.
+holds, or to its owner's subscription when they deposited a login.

@@ -50,6 +50,13 @@ const MAX_RUNNER_STARTS = 200;
  */
 const MAX_MINTS_PER_WINDOW = 30;
 const MINT_WINDOW_MS = 10 * 60_000;
+
+/**
+ * How many times one runner may ask for its owner's Claude login in
+ * MINT_WINDOW_MS. It asks once, when it joins; a few more is a reconnect or
+ * two. Past that it is asking for something other than a login.
+ */
+const MAX_CLAUDE_PER_WINDOW = 5;
 /** A frame id worth correlating on — the same shape a reply id is held to. */
 const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
@@ -109,7 +116,8 @@ export class CoordinatorCore {
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
    *   cloudflareOauth?: { clientId?: string, clientSecret?: string, scopes?: string }|null,
    *   runnerRepo?: string|null,
-   *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any> }|null,
+   *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any>,
+   *     claude?: (route: 'key'|'deposit'|'login', ask: Record<string, unknown>) => Promise<any> }|null,
    * }} [opts]
    */
   constructor({
@@ -144,7 +152,9 @@ export class CoordinatorCore {
     // holds the GitHub App key and mints runners their repository tokens. The
     // coordinator only relays to it and never holds the key — see
     // src/fleet/minter/answer.js. Absent means a permanent box that holds the
-    // key is asked instead, and a fleet with neither mints nothing.
+    // key is asked instead, and a fleet with neither mints nothing. Its
+    // `claude` half keeps people's Claude logins for their own runners
+    // (src/fleet/minter/claude.js), and is absent on a minter that predates it.
     minter = null,
   } = {}) {
     this.now = now;
@@ -183,6 +193,8 @@ export class CoordinatorCore {
      * @type {Map<string, number[]>}
      */
     this.mintAsks = new Map();
+    /** The same, for Claude logins. @type {Map<string, number[]>} */
+    this.claudeAsks = new Map();
     /**
      * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
      * back. In memory rather than in storage on purpose: it lives ten minutes,
@@ -384,6 +396,8 @@ export class CoordinatorCore {
     // A RUNNER ASKING FOR A REPOSITORY TOKEN. The one host-initiated request in
     // the protocol, and it is answered on the same socket by a `minted` frame.
     if (msg.kind === 'mint') return this.#onRunnerMint(hostId, msg);
+    // AND FOR ITS OWNER'S CLAUDE LOGIN, answered the same way.
+    if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -2191,6 +2205,136 @@ export class CoordinatorCore {
         ? { ok: true, sealed: reply.sealed, repo: reply.repo, expiresAt: reply.expiresAt, permissions: reply.permissions, text: reply.text }
         : { ok: false, error: reply?.error || { code: 'refused' }, text: reply?.text || 'No box would mint that token.' },
     );
+  }
+
+  /**
+   * A runner wants its owner's Claude login.
+   *
+   * The same relay as #onRunnerMint, to the minting Worker's `claude` half and
+   * nowhere else: there is no permanent box to fall back to, because no box
+   * holds a person's deposited login. The coordinator adds whose runner this
+   * is — for the record and for the reply, so the runner knows which person's
+   * sessions the login is for — and carries back ciphertext it cannot open.
+   * What decides the answer is the job token, checked by the minter against
+   * GitHub, and not anything said here.
+   *
+   * A refusal is ordinary: most people will not have deposited one, and their
+   * runner then uses its repository's API key, as every runner did before.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onRunnerClaude(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for a Claude login without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the runner's wait runs out and says so */ }
+    };
+    if (!host?.ephemeral || !host.owner) {
+      answer({ ok: false, error: { code: 'not_a_runner' }, text: 'Only a temporary machine with an owner is given a Claude login.' });
+      return;
+    }
+    const job = String(msg.job || '');
+    const key = String(msg.key || '');
+    if (!JWT_RE.test(job) || job.length > 8192 || !SEAL_KEY_RE.test(key)) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That request for a Claude login is not in the shape one takes.' });
+      return;
+    }
+    const now = this.now();
+    const recent = (this.claudeAsks.get(hostId) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_CLAUDE_PER_WINDOW) {
+      answer({ ok: false, error: { code: 'too_many' }, text: `${hostId} has asked for a Claude login ${recent.length} times in ten minutes.` });
+      return;
+    }
+    recent.push(now);
+    this.claudeAsks.set(hostId, recent);
+
+    const reply = await this.#askMinterClaude('login', { job, key });
+    this.record({
+      hostId,
+      event: reply.ok ? 'runner.claude' : 'runner.claude-refused',
+      actor: host.owner,
+      text: reply.ok
+        ? `${host.owner}’s runner ${hostId} was given ${reply.login || 'their'} Claude login`
+        : `${host.owner}’s runner ${hostId} runs on its repository’s API key: ${reply.text || 'no reason given'}`,
+    });
+    answer(
+      reply.ok
+        ? { ok: true, sealed: reply.sealed, login: reply.login, owner: host.owner, text: reply.text }
+        : { ok: false, owner: host.owner, error: reply.error || { code: 'refused' }, text: reply.text || 'No Claude login for this runner.' },
+    );
+  }
+
+  /**
+   * Ask the minting Worker's Claude half, and turn "there is none" and "it did
+   * not answer" into refusals like any other, so no caller has to know which
+   * of the three it was.
+   *
+   * @param {'key'|'deposit'|'login'} route @param {Record<string, unknown>} ask
+   * @returns {Promise<any>}
+   */
+  async #askMinterClaude(route, ask) {
+    if (!this.minter?.claude) {
+      return {
+        ok: false,
+        error: { code: 'no_minter' },
+        text: 'This fleet has no minting Worker that keeps Claude logins. See docs/runner-central.md, “Your Claude login on a runner”.',
+      };
+    }
+    return this.minter.claude(route, ask).then(
+      (r) => (r && typeof r === 'object' ? r : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
+      (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
+    );
+  }
+
+  /**
+   * The key a person seals their Claude login to, as the minting Worker states
+   * it. Offered so the deposit tool can show it — and compare it with the pin
+   * the person was given, because a coordinator is exactly what would swap it.
+   *
+   * @returns {Promise<{ ok: boolean, key?: string, error?: { code: string }, text?: string }>}
+   */
+  async claudeLoginKey() {
+    const r = await this.#askMinterClaude('key', {});
+    return r.ok && typeof r.key === 'string' && SEAL_KEY_RE.test(r.key)
+      ? { ok: true, key: r.key }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker has no deposit key.') };
+  }
+
+  /**
+   * A person deposits, replaces or forgets their Claude login.
+   *
+   * The body is sealed on their computer to the minting Worker's key, and this
+   * carries it through unread. Whose login it is comes from GitHub, inside the
+   * seal, and is the minter's to decide; the requester here is only recorded,
+   * so the fleet's events say which member made a deposit for which GitHub
+   * account.
+   *
+   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async depositClaudeLogin(requester, body) {
+    const sealed = body?.sealed;
+    if (!sealed || typeof sealed !== 'object' || JSON.stringify(sealed).length > 8192) {
+      return { ok: false, error: { code: 'bad_params' }, text: 'That is not a sealed Claude login.' };
+    }
+    const r = await this.#askMinterClaude('deposit', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct } });
+    this.record({
+      event: r.ok ? (r.forgotten ? 'claude.forgotten' : 'claude.deposited') : 'claude.deposit-refused',
+      actor: requester?.email ?? null,
+      text: r.ok
+        ? `${requester?.email ?? 'someone'} ${r.forgotten ? 'forgot' : 'deposited'} the Claude login for GitHub account ${r.login}`
+        : `${requester?.email ?? 'someone'}’s Claude login was refused: ${r.text || 'no reason given'}`,
+    });
+    return r.ok
+      ? { ok: true, login: String(r.login || ''), forgotten: r.forgotten === true, text: String(r.text || '') }
+      : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
   }
 
   /**

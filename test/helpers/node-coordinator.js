@@ -69,6 +69,7 @@ export class Coordinator {
    *   intentTimeoutMs?: number,
    *   healthIntervalMs?: number,
    *   logger?: typeof import('../../src/log.js').log,
+   *   minter?: any,
    * }} [opts]
    */
   constructor({
@@ -77,6 +78,9 @@ export class Coordinator {
     intentTimeoutMs = DEFAULT_INTENT_TIMEOUT_MS,
     healthIntervalMs = HEALTH_INTERVAL_MS,
     logger,
+    // The minting Worker, when a test stands one in. In production it is a
+    // separate Worker bound to the Cloudflare coordinator; this one has none.
+    minter = null,
   } = {}) {
     this.apiToken = apiToken;
     // Replaced by listen() with the real bound address. Set here so a
@@ -94,6 +98,7 @@ export class Coordinator {
     // Everything that carries a decision lives in the core, shared verbatim
     // with the Cloudflare Worker. This class is transport and nothing else.
     this.core = new CoordinatorCore({
+      minter,
       logger: this.log,
       intentTimeoutMs,
       // The HTTP/2 transport is handed in here rather than reached for in
@@ -1088,6 +1093,21 @@ export class Coordinator {
         return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
       }
       if (req.method === 'DELETE') return json(res, 200, this.core.clearRunnerRepo(requesterFor(client)));
+    }
+
+    // Your Claude login, for your own runners — see the Worker's copy.
+    if (p === '/api/claude-login') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a Claude login belongs to a person.' });
+      }
+      if (req.method === 'GET') {
+        const r = await this.core.claudeLoginKey();
+        return json(res, r.ok ? 200 : 503, r);
+      }
+      if (req.method === 'PUT') {
+        const r = await this.core.depositClaudeLogin(requesterFor(client), await readJson(req));
+        return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
     }
 
     if (p === '/api/runner-tokens' && req.method === 'POST') {

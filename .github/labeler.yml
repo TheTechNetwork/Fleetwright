@@ -58,6 +58,9 @@ platform/host:
           # Sealing a runner's repository token: runs on the runner and the
           # minting box; the coordinator only borrows its key pattern.
           - 'src/fleet/seal.js'
+          # Depositing a Claude login: runs on the person's own computer, as
+          # the MCP server does, and seals to the minting Worker's key.
+          - 'src/fleet/claude-deposit.js'
           - 'sandbox/**'
           - 'install/**'
           - 'apt/**'
@@ -214,6 +217,8 @@ area/security:
           - 'src/core/sandbox-userns.js'
           - 'src/fleet/crypto.js'
           - 'src/fleet/seal.js'
+          - 'src/fleet/claude-deposit.js'
+          - 'src/core/runner-login.js'
           - 'src/core/repo-tokens.js'
           - 'src/fleet/minter/**'
           - 'worker/src/minter.js'

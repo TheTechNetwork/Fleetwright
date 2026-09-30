@@ -141,7 +141,13 @@ compatibility_flags = ["nodejs_als"]
 #                                 deploy has nothing to bind to. Deployed with
 #                                 no key it mints nothing, a permanent box that
 #                                 holds the key is asked instead, and with
-#                                 neither, runners reach public code only
+#                                 neither, runners reach public code only.
+#                                 It also keeps people's Claude logins for
+#                                 their own runners
+#   FLEETWRIGHT_MINTER_DEPOSIT_KEY  NOT READ HERE: a secret of the minting
+#                                 Worker, the key those logins are sealed
+#                                 to. Unset there → it keeps none, and every
+#                                 runner uses its repository's API key
 #   FLEETWRIGHT_NAME              unset → invitations are not sent, and the
 #   FLEETWRIGHT_INVITE_FROM       reply says which happened
 #   FLEETWRIGHT_APP_IOS/_ANDROID  unset → an invitation with no app links

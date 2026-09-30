@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+// Give your own runners your Claude subscription, instead of the runner
+// repository's API key.
+//
+//   claude setup-token                 # once: prints a token for your subscription
+//   fleetwright-claude-login           # paste it when asked
+//   fleetwright-claude-login forget    # take it back
+//
+// Configured by environment, the same two variables fleetwright-mcp takes,
+// plus the pin:
+//
+//   FLEETWRIGHT_COORDINATOR_URL   the fleet
+//   FLEETWRIGHT_CREDENTIAL        a device token (fwk_…) from the app
+//   FLEETWRIGHT_MINTER_KEY        the minting Worker's public key, from whoever
+//                                 runs your fleet. Run without it once to see
+//                                 what the fleet says it is, and check that
+//                                 with them before setting it
+//   CLAUDE_CODE_OAUTH_TOKEN       the token, instead of pasting it
+//   GH_TOKEN / GITHUB_TOKEN       a GitHub token of yours; otherwise `gh auth
+//                                 token`. Used once, by the minter, to learn
+//                                 which GitHub account's runners get the login
+//
+// docs/runner-central.md, "Your Claude login on a runner", is the whole story:
+// what this reaches, what it cannot narrow, and how it is taken back.
+
+import { execFileSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { depositClaudeLogin } from '../src/fleet/claude-deposit.js';
+
+const forget = process.argv[2] === 'forget';
+if (process.argv[2] && !forget) {
+  process.stderr.write('usage: fleetwright-claude-login [forget]\n');
+  process.exit(2);
+}
+const coordinator = process.env.FLEETWRIGHT_COORDINATOR_URL;
+const credential = process.env.FLEETWRIGHT_CREDENTIAL;
+if (!coordinator || !credential) {
+  process.stderr.write(
+    'fleetwright-claude-login needs FLEETWRIGHT_COORDINATOR_URL and FLEETWRIGHT_CREDENTIAL (a device token from the app),\n' +
+      'the same two fleetwright-mcp takes.\n',
+  );
+  process.exit(2);
+}
+
+/** A GitHub token, from the environment or from gh. */
+function githubToken() {
+  const env = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  if (env) return env.trim();
+  try {
+    return execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The Claude token: from the environment, piped in, or typed with the echo
+ * off, because it is a year of somebody's subscription and a terminal's
+ * scrollback is not where it should end up.
+ * @returns {Promise<string>}
+ */
+async function claudeToken() {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN.trim();
+  const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: process.stdin.isTTY === true });
+  if (process.stdin.isTTY) {
+    process.stderr.write('Paste the token `claude setup-token` printed (it will not be shown): ');
+    // readline echoes through this; muting it after the prompt hides the paste.
+    /** @type {any} */ (rl)._writeToOutput = () => {};
+  }
+  const line = await new Promise((resolve) => rl.once('line', resolve));
+  rl.close();
+  if (process.stdin.isTTY) process.stderr.write('\n');
+  return String(line || '').trim();
+}
+
+const github = githubToken();
+if (!github) {
+  process.stderr.write('No GitHub token: set GH_TOKEN, or sign in with `gh auth login`. The minter uses it once to learn whose login this is.\n');
+  process.exit(2);
+}
+const claude = forget ? null : await claudeToken();
+if (!forget && !claude) {
+  process.stderr.write('No token was given. Run `claude setup-token` and paste what it prints.\n');
+  process.exit(2);
+}
+
+try {
+  const r = await depositClaudeLogin({ coordinator, credential, pin: process.env.FLEETWRIGHT_MINTER_KEY?.trim() || null, claude, github });
+  (r.ok ? process.stdout : process.stderr).write(`${r.text}\n`);
+  process.exit(r.ok ? 0 : 1);
+} catch (e) {
+  process.stderr.write(`Could not reach the fleet: ${/** @type {Error} */ (e).message}\n`);
+  process.exit(1);
+}

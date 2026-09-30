@@ -15,13 +15,17 @@ import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
 
 const WORKFLOW = /** @type {any} */ (load(readFileSync(new URL('../.github/workflows/worker.yml', import.meta.url), 'utf8')));
-const KEY = 'FLEETWRIGHT_GITHUB_APP_KEY';
+// The App key, and the key Claude logins are deposited to: each opens
+// something for everybody in the fleet, so each is held to the same rule.
+const KEYS = ['FLEETWRIGHT_GITHUB_APP_KEY', 'FLEETWRIGHT_MINTER_DEPOSIT_KEY'];
 
-test('one job reads the App key, and it is not the job that deploys on every push', () => {
-  const readers = Object.entries(WORKFLOW.jobs)
-    .filter(([, job]) => JSON.stringify(job).includes(`secrets.${KEY}`))
-    .map(([name]) => name);
-  assert.deepEqual(readers, ['minter-key']);
+test('one job reads each minter key, and it is not the job that deploys on every push', () => {
+  for (const key of KEYS) {
+    const readers = Object.entries(WORKFLOW.jobs)
+      .filter(([, job]) => JSON.stringify(job).includes(`secrets.${key}`))
+      .map(([name]) => name);
+    assert.deepEqual(readers, ['minter-key'], key);
+  }
 });
 
 test('that job waits for a person: a manual run, the box ticked, on main, behind its own environment', () => {
@@ -37,10 +41,14 @@ test('that job waits for a person: a manual run, the box ticked, on main, behind
   assert.equal(WORKFLOW.on.workflow_dispatch.inputs.sync_app_key.default, false);
 });
 
-test('the key goes to the minting Worker and to nothing else', () => {
-  const run = WORKFLOW.jobs['minter-key'].steps.map((/** @type {any} */ s) => s.run || '').join('\n');
+test('the keys go to the minting Worker and to nothing else', () => {
+  const job = WORKFLOW.jobs['minter-key'];
+  const run = job.steps.map((/** @type {any} */ s) => s.run || '').join('\n');
+  // Every `secret put` in the job names the minter's config, and the names it
+  // puts are exactly the keys this job was given.
   const puts = [...run.matchAll(/wrangler secret put (\S+)([^\n]*)/g)];
-  assert.equal(puts.length, 1);
-  assert.equal(puts[0][1], KEY);
-  assert.match(puts[0][2], /--config wrangler\.minter\.toml/);
+  assert.ok(puts.length > 0);
+  for (const put of puts) assert.match(put[2], /--config wrangler\.minter\.toml/);
+  const given = job.steps.flatMap((/** @type {any} */ s) => Object.keys(s.env || {})).filter((k) => KEYS.includes(k));
+  assert.deepEqual(given.sort(), [...KEYS].sort());
 });
