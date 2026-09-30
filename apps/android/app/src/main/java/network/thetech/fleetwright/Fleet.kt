@@ -815,12 +815,69 @@ class Fleet(
      * on that machine, so the coordinator refuses rather than guessing when
      * more than one could. See docs/runner-central.md.
      */
-    suspend fun provision(platform: String, minutes: Int? = null, host: String? = null): Reply = intent(
+    /**
+     * Ask for a temporary machine, and optionally a session to start on it.
+     *
+     * `start` is the session the New session sheet described — title, brief
+     * and mode — held by the coordinator with the dispatch and started on the
+     * runner when it joins. It travels BESIDE the params, as `host` does: the
+     * box that dispatches the run never sees it.
+     */
+    suspend fun provision(
+        platform: String,
+        minutes: Int? = null,
+        host: String? = null,
+        start: Map<String, String>? = null,
+    ): Reply = intent(
         "provision",
         mapOf("platform" to platform),
         host,
         numeric = if (minutes == null) emptyMap() else mapOf("minutes" to minutes),
+        extra = if (start == null) emptyMap() else mapOf("start" to JSONObject(start.toMap())),
     )
+
+    /**
+     * What a runner repository check found, as data — so a screen shows each
+     * answer rather than parsing the sentence. NULL IS "CANNOT TELL", not
+     * "no": a personal GitHub token cannot see whether the Fleetwright app is
+     * installed, and saying "not installed" would send somebody to reinstall
+     * something that was never the problem.
+     */
+    data class RunnerRepoCheck(
+        val repo: String,
+        val isPublic: Boolean?,
+        val installed: Boolean?,
+        val actionsWrite: Boolean?,
+        val platforms: List<String>,
+        val missing: List<String>,
+        val ok: Boolean,
+        val message: String,
+    )
+
+    /** Your own runner repository, the fleet's beside it, and — after a set —
+     * what the check found. `repo` null is an answer: you have not set one. */
+    data class RunnerRepoSetting(
+        val ok: Boolean?,
+        val repo: String?,
+        val fleet: String?,
+        val text: String?,
+        val runnerRepo: RunnerRepoCheck?,
+    )
+
+    suspend fun runnerRepoSetting(): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
+        runCatching { parseRunnerRepoSetting(get("/api/runner-repo")) }
+    }
+
+    /** Saved only if a permanent box's check with YOUR GitHub connection
+     * passes. The check comes back either way, so a refusal can say which
+     * answer stopped it. */
+    suspend fun setRunnerRepo(repo: String): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
+        runCatching { parseRunnerRepoSetting(send("PUT", "/api/runner-repo", JSONObject().put("repo", repo))) }
+    }
+
+    suspend fun clearRunnerRepo(): Result<RunnerRepoSetting> = withContext(Dispatchers.IO) {
+        runCatching { parseRunnerRepoSetting(send("DELETE", "/api/runner-repo", null)) }
+    }
 
     /**
      * What every host in the fleet can start a session on.
@@ -1440,6 +1497,7 @@ class Fleet(
         host: String? = null,
         numeric: Map<String, Int> = emptyMap(),
         idempotencyKey: String? = null,
+        extra: Map<String, Any> = emptyMap(),
     ): Reply =
         withContext(Dispatchers.IO) {
             val body = JSONObject()
@@ -1453,6 +1511,7 @@ class Fleet(
                 // for a command being sent for the first time.
                 .put("id", idempotencyKey ?: ("app-" + java.util.UUID.randomUUID().toString()))
             if (!host.isNullOrBlank()) body.put("host", host)
+            extra.forEach { (k, v) -> body.put(k, v) }
             try {
                 val json = post("/api/intent", body)
                 Reply(
@@ -1553,8 +1612,11 @@ class Fleet(
                 // REACHED. A refusal is an answer, and replaying an answer is
                 // how somebody's revoked credential retries all night. See
                 // isDeliveryFailure.
+                // NOT HELD WHEN IT CARRIES MORE THAN PARAMS: the outbox
+                // replays verb, params and host, and a replay that dropped a
+                // session request would start a machine nobody is waiting on.
                 val entry =
-                    if (idempotencyKey == null && isDeliveryFailure(e)) outbox?.hold(verb, params, host) else null
+                    if (idempotencyKey == null && extra.isEmpty() && isDeliveryFailure(e)) outbox?.hold(verb, params, host) else null
                 if (entry != null) {
                     Reply(
                         ok = true,
@@ -1782,6 +1844,36 @@ class Fleet(
                 },
             )
         }
+    }
+
+    private fun parseRunnerRepoSetting(json: JSONObject): RunnerRepoSetting {
+        /** `has` first: optBoolean turns a missing or null field into false,
+         * and "nobody could tell" is not "no". */
+        fun maybe(o: JSONObject, key: String): Boolean? =
+            if (o.has(key) && !o.isNull(key)) o.optBoolean(key) else null
+        fun words(o: JSONObject, key: String): List<String> =
+            o.optJSONArray(key)?.let { a -> (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotBlank() } } }
+                ?: emptyList()
+        fun text(o: JSONObject, key: String): String? = o.optString(key).takeIf { it.isNotBlank() && it != "null" }
+        val check = json.optJSONObject("runnerRepo")?.let { c ->
+            RunnerRepoCheck(
+                repo = c.optString("repo"),
+                isPublic = maybe(c, "public"),
+                installed = maybe(c, "installed"),
+                actionsWrite = maybe(c, "actionsWrite"),
+                platforms = words(c, "platforms"),
+                missing = words(c, "missing"),
+                ok = c.optBoolean("ok", false),
+                message = c.optString("message"),
+            )
+        }
+        return RunnerRepoSetting(
+            ok = maybe(json, "ok"),
+            repo = text(json, "repo"),
+            fleet = text(json, "fleet"),
+            text = text(json, "text"),
+            runnerRepo = check,
+        )
     }
 
     private fun post(path: String, body: JSONObject, authenticated: Boolean = true): JSONObject =
@@ -2027,6 +2119,28 @@ class Settings(context: Context) {
  * argument; Kotlin already has `ifEmpty`, so this is the whole of it.
  */
 fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
+
+/** Where this person's machines come from, in one sentence. The same words
+ * on both phones; test/runner-repo-in-apps.test.js holds them together. */
+fun describeRunnerRepoSetting(saved: String?, fleet: String?): String = when {
+    saved != null -> "Your machines come from $saved."
+    fleet != null -> "Your machines come from the fleet's repository, $fleet. Set your own to use your free Actions minutes."
+    else -> "Set a public repository with the Fleetwright GitHub App installed and the runner workflows in it, and your machines come from there."
+}
+
+/** What a runner repository check found, one answer per fact. "can't tell"
+ * is kept apart from "no" (C-5): a personal GitHub token cannot see whether
+ * the app is installed, and that is not the same as it not being installed. */
+fun describeRunnerCheck(check: Fleet.RunnerRepoCheck): String {
+    fun word(value: Boolean?): String = when (value) {
+        true -> "yes"
+        false -> "no"
+        null -> "can't tell"
+    }
+    val machines = if (check.platforms.isEmpty()) "none" else check.platforms.joinToString(", ")
+    return "Public: ${word(check.isPublic)} · GitHub app: ${word(check.installed)} · " +
+        "Actions write: ${word(check.actionsWrite)} · Machines: $machines"
+}
 
 /**
  * "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.

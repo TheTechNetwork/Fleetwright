@@ -16,6 +16,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,6 +48,29 @@ data class StartRequest(
      * at runtime over the broker. See docs/trust.md.
      */
     val secret: String? = null,
+    /**
+     * A NEW TEMPORARY MACHINE to start it on, by operating system, or null for
+     * a machine the fleet already has. When set, `host`, `profile` and
+     * `secret` are null: the machine does not exist yet, and a runner holds no
+     * task profiles or secrets of its own.
+     */
+    val platform: String? = null,
+    /** How long that machine stays, in minutes. Only with `platform`. */
+    val minutes: Int? = null,
+)
+
+/**
+ * The machines the New session sheet can ask for, by the operating system a
+ * runner repository has a workflow for. The same four words and order as the
+ * temporary-machine control in settings, and on iOS.
+ */
+data class NewMachineChoice(val platform: String, val label: String)
+
+val newMachineChoices = listOf(
+    NewMachineChoice("linux", "New Linux machine"),
+    NewMachineChoice("macos", "New macOS machine"),
+    NewMachineChoice("windows", "New Windows machine"),
+    NewMachineChoice("android", "New Android emulator"),
 )
 
 /**
@@ -94,6 +118,13 @@ fun StartSheet(
     var secrets by remember { mutableStateOf<List<Fleet.Secret>?>(null) }
     var secret by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    // Whether this fleet can start a machine for this person at all, from the
+    // snapshot. The new-machine choices are drawn from this and only this, so
+    // a fleet with no runner repository offers none (C-2).
+    var canStartMachine by remember { mutableStateOf(false) }
+    // The operating system when a new machine is chosen, else empty.
+    var platform by remember { mutableStateOf("") }
+    var machineMinutes by remember { mutableIntStateOf(60) }
 
     // Suggest once the typing stops, not on every keystroke. A suggestion that
     // changes under the cursor while somebody is still writing makes them stop
@@ -123,6 +154,9 @@ fun StartSheet(
         // Same nullable rule: null is "nobody answered", so an old fleet shows
         // no secret picker rather than a wrong one.
         secrets = Fleet(settings).secrets()
+        // Whether a new machine can be offered. A failure offers none, which
+        // is the safe way round for a control that spends money.
+        canStartMachine = Fleet(settings).runners().getOrNull() != null
     }
 
     AlertDialog(
@@ -161,7 +195,7 @@ fun StartSheet(
                 // sometimes wanted, and never what somebody expects from a
                 // button labelled Start.
                 val offered = profiles.orEmpty()
-                if (offered.isNotEmpty()) {
+                if (offered.isNotEmpty() && platform.isEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Task", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
@@ -208,7 +242,7 @@ fun StartSheet(
                 // capability nobody set up. Names only: the value stays on the
                 // host and this app never sees it.
                 val secretsOffered = secrets.orEmpty()
-                if (secretsOffered.isNotEmpty()) {
+                if (secretsOffered.isNotEmpty() && platform.isEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Secret", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
@@ -262,18 +296,53 @@ fun StartSheet(
                     }
                 }
                 // Only when there is a choice. One host is not a decision,
-                // and a picker with one entry is furniture.
-                if (hosts.size > 1) {
+                // and a picker with one entry is furniture. A fleet that can
+                // start a machine always has a choice: here, or a new one.
+                if (hosts.size > 1 || canStartMachine) {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                         Text("Where", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
-                            onClick = { host = "" },
-                            label = { Text(if (host.isEmpty()) "Wherever fits \u2713" else "Wherever fits") },
+                            onClick = { host = ""; platform = "" },
+                            label = { Text(if (host.isEmpty() && platform.isEmpty()) "Wherever fits \u2713" else "Wherever fits") },
                         )
                         hosts.forEach { h ->
                             AssistChip(
-                                onClick = { host = if (host == h) "" else h },
+                                onClick = { host = if (host == h) "" else h; platform = "" },
                                 label = { Text(if (host == h) "$h \u2713" else h) },
+                            )
+                        }
+                        if (canStartMachine) {
+                            newMachineChoices.forEach { choice ->
+                                AssistChip(
+                                    onClick = {
+                                        platform = if (platform == choice.platform) "" else choice.platform
+                                        // A machine that does not exist yet has
+                                        // nothing to do a host, a profile or a
+                                        // secret with, so choosing one clears
+                                        // all three rather than leaving a start
+                                        // that is refused.
+                                        if (platform.isNotEmpty()) { host = ""; profile = ""; secret = "" }
+                                    },
+                                    label = { Text(if (platform == choice.platform) "${choice.label} \u2713" else choice.label) },
+                                )
+                            }
+                        }
+                        if (platform.isNotEmpty()) {
+                            // Five-minute steps between the protocol's bounds,
+                            // the same as iOS: a stepper cannot ask for 4 or 351.
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                            ) {
+                                TextButton(enabled = machineMinutes > 5, onClick = { machineMinutes -= 5 }) { Text("Less") }
+                                Text("For $machineMinutes minutes", style = MaterialTheme.typography.bodyMedium)
+                                TextButton(enabled = machineMinutes < 350, onClick = { machineMinutes += 5 }) { Text("More") }
+                            }
+                            Text(
+                                "It takes a few minutes to boot. The session starts on it when it joins, and you get a " +
+                                    "notification with its link. It comes up idle, waiting for you. Everything on it is " +
+                                    "gone when the time runs out.",
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
@@ -303,9 +372,11 @@ fun StartSheet(
                             title = finalTitle.ifBlank { null },
                             brief = brief.trim().ifBlank { null },
                             mode = kind?.mode,
-                            host = host.ifBlank { null },
-                            profile = profile.ifBlank { null },
-                            secret = secret.ifBlank { null },
+                            host = host.ifBlank { null }.takeIf { platform.isEmpty() },
+                            profile = profile.ifBlank { null }.takeIf { platform.isEmpty() },
+                            secret = secret.ifBlank { null }.takeIf { platform.isEmpty() },
+                            platform = platform.ifBlank { null },
+                            minutes = machineMinutes.takeIf { platform.isNotEmpty() },
                         ),
                     )
                     onDismiss()

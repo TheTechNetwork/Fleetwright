@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.async
@@ -87,6 +88,15 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
     var runnerPlatform by rememberSaveable { mutableStateOf("linux") }
     var runnerMinutes by rememberSaveable { mutableStateOf("60") }
     var runnerResult by rememberSaveable { mutableStateOf("") }
+    // YOUR OWN RUNNER REPOSITORY. `answered` stays false until the coordinator
+    // has said, and for a credential that is not a person's, which cannot have
+    // one: the section is drawn only when setting it can work.
+    var runnerRepoAnswered by remember { mutableStateOf(false) }
+    var runnerRepoSaved by remember { mutableStateOf<String?>(null) }
+    var runnerRepoFleet by remember { mutableStateOf<String?>(null) }
+    var runnerRepoDraft by rememberSaveable { mutableStateOf("") }
+    var runnerRepoMessage by rememberSaveable { mutableStateOf("") }
+    var runnerCheck by remember { mutableStateOf<Fleet.RunnerRepoCheck?>(null) }
     var confirming by rememberSaveable { mutableStateOf<String?>(null) }
 
     confirming?.let { hostId ->
@@ -120,10 +130,22 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
         coroutineScope {
             val members = async { enrolledHosts(settings) }
             val runners = async { if (settings.credential.isNotBlank()) Fleet(settings).runners() else null }
+            val repoSetting = async { if (settings.credential.isNotBlank()) Fleet(settings).runnerRepoSetting() else null }
             hosts = members.await()
             // A NULL INSIDE A SUCCESS IS THE ANSWER "no runner repository"; a
             // failed request keeps what was there.
             runners.await()?.onSuccess { runnerRepo = it }
+            // A person's own runner repository. A refusal (the admin token, an
+            // older coordinator) leaves the section undrawn: there is nothing
+            // it could set.
+            repoSetting.await()?.onSuccess { got ->
+                if (got.ok != false) {
+                    runnerRepoAnswered = true
+                    runnerRepoSaved = got.repo
+                    runnerRepoFleet = got.fleet
+                    if (runnerRepoDraft.isBlank()) runnerRepoDraft = got.repo ?: ""
+                }
+            }
         }
     }
 
@@ -846,6 +868,98 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                         "On that box: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+
+            // WHERE YOUR MACHINES COME FROM. A public repository of your own,
+            // with the Fleetwright GitHub App installed and the runner
+            // workflows in it, is what makes Actions minutes free for you.
+            // Saved only after a permanent box has checked it with your GitHub
+            // connection, and the check's answers are shown either way, so a
+            // refusal says which one.
+            if (runnerRepoAnswered) {
+                OutlinedTextField(
+                    value = runnerRepoDraft,
+                    onValueChange = { runnerRepoDraft = it.trim() },
+                    label = { Text("Your runner repository (owner/repo)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Uri,
+                    ),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                    OutlinedButton(
+                        enabled = !busy && runnerRepoDraft.isNotBlank(),
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                runnerRepoMessage = ""
+                                Fleet(settings).setRunnerRepo(runnerRepoDraft)
+                                    .onSuccess { r ->
+                                        runnerCheck = r.runnerRepo
+                                        runnerRepoMessage = r.text ?: ""
+                                        if (r.ok == true && r.repo != null) {
+                                            runnerRepoSaved = r.repo
+                                            runnerRepoDraft = r.repo
+                                            // The machine control below is drawn
+                                            // from the snapshot, which now names
+                                            // this repository.
+                                            Fleet(settings).runners().onSuccess { runnerRepo = it }
+                                        }
+                                    }
+                                    .onFailure { runnerRepoMessage = it.message ?: "that did not work" }
+                                busy = false
+                            }
+                        },
+                    ) { Text(if (busy) "Checking…" else "Check and save") }
+                    if (runnerRepoSaved != null) {
+                        // Says what clearing leads to: the fleet's repository
+                        // when there is one, and nothing at all when not.
+                        TextButton(
+                            enabled = !busy,
+                            onClick = {
+                                scope.launch {
+                                    busy = true
+                                    Fleet(settings).clearRunnerRepo()
+                                        .onSuccess { r ->
+                                            runnerRepoMessage = r.text ?: ""
+                                            runnerRepoSaved = null
+                                            runnerCheck = null
+                                            runnerRepoDraft = ""
+                                            // Null is an answer too: nowhere to
+                                            // start a machine from.
+                                            Fleet(settings).runners().onSuccess { runnerRepo = it }
+                                        }
+                                        .onFailure { runnerRepoMessage = it.message ?: "that did not work" }
+                                    busy = false
+                                }
+                            },
+                        ) {
+                            Text(if (runnerRepoFleet == null) "Remove your runner repository" else "Use the fleet's repository instead")
+                        }
+                    }
+                }
+                Text(
+                    describeRunnerRepoSetting(runnerRepoSaved, runnerRepoFleet),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Design.Palette.inkDim.now,
+                )
+                runnerCheck?.let { check ->
+                    Text(
+                        describeRunnerCheck(check),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (check.ok) Design.Palette.ink.now else Design.Palette.bad.now,
+                    )
+                }
+                if (runnerRepoMessage.isNotBlank()) {
+                    Text(
+                        runnerRepoMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (runnerCheck?.ok == false) Design.Palette.bad.now else Design.Palette.ink.now,
                     )
                 }
             }
