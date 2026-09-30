@@ -266,43 +266,126 @@ project would rather not add to a workflow that enrols machines), or accepting
 that Windows builds happen on a Windows runner driven from a Linux host, which
 is not a fleet host at all.
 
-## What this does not solve
+## Private code on a runner
 
-**A runner has no git credential, so it can only reach public code.** This is
-the largest of these and it was missing from this document, which is worse than
-the gap itself: everything above describes getting a machine and nothing said
-what that machine can actually check out.
+> A runner has no git credential, so it can only reach public code.
 
-A runner's `FLEETWRIGHT_STATE_DIR` is a fresh directory under `runner.temp`, so
-its credential store is empty — connections are per person and live on the box
-they were made on, and a machine that has existed for ninety seconds has none.
-It gets `ANTHROPIC_API_KEY` and that is the whole list. The job's own
-`GITHUB_TOKEN` is scoped to the runner repository and read-only, which is right
-for checking out four workflow files and useless for anything else.
+That was the largest gap on this page, and for a while this page did not
+mention it, which was worse than the gap itself. A runner's credential store is
+a fresh directory under `runner.temp`; connections are per person and live on
+the box they were made on; the job's own `GITHUB_TOKEN` reads the runner
+repository and nothing else. So "test a macOS app build" worked for a public
+app and not for a private one, which is the wrong way round for most of the
+reason somebody wants a Mac.
 
-So "test a macOS app build" works if the app is public and does not if it is
-private, which is the wrong way round for most of the reason somebody wants a
-Mac. Saying it here rather than letting it be discovered on a machine being paid
-for by the minute.
-
-**The fix is not a bigger credential, it is a narrower one.** The obvious
-answers are all worse than the problem:
+**The fix was a narrower credential, not a bigger one.** The obvious answers
+were all worse than the problem, and they are still refused:
 
 | | why not |
 |---|---|
 | push the person's user token to the runner with `link` | it is their whole installation for eight hours, on a machine they do not own, inside a job in a public repository. That is somebody's account travelling to a machine, which is the line [ephemeral-hosts.md](./ephemeral-hosts.md) is careful to say the API key does *not* cross |
-| a fine-grained PAT in the runner repository's secrets | bounded by an operator rather than by a request: every runner gets the same reach, chosen once, whoever asked. Honest and available today, and not what a session needs |
+| a fine-grained PAT in the runner repository's secrets | bounded by an operator rather than by a request: every runner gets the same reach, chosen once, whoever asked. Honest and available, and not what a session needs |
 | the fleet's own Actions token | answers who dispatches. It cannot clone anything |
 
-What a session needs is git auth **scoped to the repository that session asked
-for**, lasting about an hour. GitHub has exactly that primitive — an
-installation token minted with `repositories` and a `permissions` subset — and
-the delivery half is already built: [`credential-broker.js`](../src/core/credential-broker.js)
-is one socket per session, and *which socket a request arrives on is what
-identifies the session*. What is missing is the minter, which is the private
-key's custody question in [github-app.md](./github-app.md), and one seam: that
-socket is served only for sandboxed sessions (`cfg.sandbox && cfg.sandboxHookSocket`),
-and a runner deliberately runs unsandboxed.
+What a session needed was git auth **scoped to the repository it asked for**,
+lasting about an hour — a GitHub App **installation token**, minted with
+`repositories` and a `permissions` subset. That is what a runner now gets.
+
+```
+session on the runner: git clone https://github.com/acme/app
+   │  git-credential helper, with useHttpPath: "acme/app"
+   ▼
+runner sidecar ── makes a P-256 key for this one request
+   │             asks GitHub for its JOB TOKEN, audience = hash(acme/app, key)
+   │  `mint` frame: { repo, job token, key }
+   ▼
+coordinator ─── adds whose runner this is; sends `mint` as that person
+   │            to each of their permanent boxes in turn
+   ▼
+the one box holding the fleet's GitHub App key
+   │  checks GitHub's signature on the job token, and that its audience
+   │    binds exactly this repo to exactly this key
+   │  checks it is a runner workflow, started by a dispatch
+   │  checks acme is an account it may mint into
+   │  asks its hub: what can THIS PERSON'S connection do in acme/app,
+   │    and whose account is it — must be the account that started the job
+   │  mints one repository, contents (+ pull requests if they can push),
+   │    one hour; seals it to the runner's key
+   ▼
+coordinator relays ciphertext ──▶ runner opens it ──▶ git
+```
+
+**It cannot exceed the person, the repository, or the hour.** The box asks the
+person's own GitHub connection whether they can read or push there, and mints
+read for read and write only for push; the token names one repository, and GitHub
+kills it in an hour. The runner holds it in memory until five minutes before it
+dies and mints again after that, so a long build does not notice.
+
+**The coordinator carries it and cannot use it.** The answer is sealed to a key
+that exists only on the runner, for that one request ([`seal.js`](../src/fleet/seal.js)).
+Swapping in its own key, or a different repository, breaks GitHub's signature
+over the pair, and the box refuses. A forged owner meets a GitHub account id
+that is not the one that started the job. This is the one place in the fleet a
+host checks an identity the coordinator relayed instead of trusting it;
+[security.md §4.1](./security.md) has the whole bound.
+
+### Where the key lives
+
+On **one** permanent box, chosen by the operator, and nowhere else. The App's
+private key mints for every installation of an App anybody may install, so
+[github-app.md](./github-app.md) refuses it a home on every host and in the
+coordinator, and decided that its blast radius is the host it sits on — which
+makes bounding it [host hardening](./hardening.md) rather than an App setting.
+Three settings in that box's `/etc/fleetwright-sidecar.env`, read by the
+sidecar and by nothing the coordinator says:
+
+| setting | what |
+|---|---|
+| `FLEETWRIGHT_GITHUB_APP_KEY` | the private key, a PEM file only the sidecar's account can read. Better: leave it unset and hand the unit the key as an encrypted systemd credential named `github-app-key` (`LoadCredentialEncrypted=`), so it is decryptable on that machine, in that unit, only |
+| `FLEETWRIGHT_GITHUB_APP_CLIENT_ID` | the App's client id, the issuer of the ten-minute JWT the key signs |
+| `FLEETWRIGHT_GITHUB_MINT_OWNERS` | the accounts whose repositories it may mint into. **Empty mints for nobody.** The App is installable by any account, so "this key never mints into a guest's account" is kept here, by what the fleet does, as github-app.md said it would have to be |
+
+The box also needs the person's own GitHub connection, because that is what
+answers "can you reach this". When those two are on different boxes the refusal
+names both halves — which box holds no key, which has no connection for them —
+in the fleet's events and in the runner's log. git itself only sees no answer.
+
+**The key github-app.md recorded as received should not be the one used.** It
+arrived through a chat transcript and was never installed anywhere; generate a
+fresh one for this box and delete the old one on github.com.
+
+### What a session on a runner can reach now
+
+| | |
+|---|---|
+| `git clone`, `fetch`, `push` over https to github.com | a token for that one repository, when the fleet has a minting box and the person can reach the repository |
+| `gh` | `eval "$(fleet-cred github owner/repo)"` first. It is not wired in automatically, because `gh` does not say which repository it is about to act on |
+| any other host | nothing — the helper is registered for github.com only, and answers nothing else |
+| a fleet with no minting box | public code, exactly as before; git gets no answer and falls through |
+
+## What this does not solve
+
+**A runner still has no Claude login and no Cloudflare connection of its own,
+and neither is carried there.** GitHub is the one provider with a narrower
+credential than the account itself, so it is the one this could be built for:
+
+- **Claude.** Sessions on a runner authenticate with the runner repository's
+  `ANTHROPIC_API_KEY` and bill to it, not to anybody's subscription. There is no
+  way to mint a Claude credential for one session and an hour; carrying the
+  person's login would put their subscription on a machine in a public
+  repository's job, which is the line ephemeral-hosts.md draws.
+- **Cloudflare.** [trust.md](./trust.md) says why: minting a Cloudflare token
+  needs a parent with API Tokens: Edit, which is close to account-wide, so the
+  minting authority is *stronger* than what it mints. Sealing one to a runner
+  would be sending the whole account for an hour.
+
+Both stay not built until a provider offers something narrower, and neither is
+a missing piece of the design above.
+
+**Windows runners get no repository tokens.** The runner's broker is a unix
+socket and Node on Windows listens on a named pipe; that workflow has not yet
+been shown to host a session at all, so a second transport waits on the first
+proof.
 
 **Completion is reported, as the return to the prompt.** A runner session that
 has finished used to look exactly like an idle one, and it mattered more here
@@ -324,10 +407,9 @@ the runner's first health frame.
 
 **Sessions on a runner still bill to the repository's API key.** A runner is
 minutes old and has no Claude login of its own, so it authenticates with the
-`ANTHROPIC_API_KEY` secret. Carrying a person's own Claude login and their
-GitHub and Cloudflare connections to a runner they own — so a runner spends
-their subscription and reaches their private code — is the next step and is
-not built.
+`ANTHROPIC_API_KEY` secret. Private GitHub code is reachable, one repository at a
+time ([above](#private-code-on-a-runner)); a person's Claude login and Cloudflare
+connection are not carried, for the reasons at the start of this section.
 
 **The session cannot outlive the host.** `resume` is pinned to the box holding
 the volume, so when a runner goes, its sessions go. Collect what you need before

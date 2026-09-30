@@ -232,7 +232,7 @@ progress and quietly widens what a single compromised host can reach.
 | App ID | `4758006` | `[vars]` in `wrangler.production.toml` — ours; a fork registers its own App |
 | Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` in `wrangler.production.toml` — appears in every authorize URL |
 | Client secret | *(to generate)* | `wrangler secret put FLEETWRIGHT_GITHUB_CLIENT_SECRET` |
-| Private key | *(not yet needed)* | nowhere, until the broker exists |
+| Private key | *(generate a fresh one when a minting box is set up)* | on **one** permanent box only, for runners' repository tokens — see below |
 
 **The first build needs only the Client ID and the secret.** User-to-server
 OAuth authorizes against
@@ -256,6 +256,17 @@ The install URL is therefore
 needs no slug at all.
 
 ## The private key: received, and deliberately not installed anywhere
+
+> **Update, 30 Sep 2026: the key now has one place it may live**, and it is the
+> place this section argued for. Runners mint repository tokens with it
+> ([runner-central.md](./runner-central.md#private-code-on-a-runner)): on ONE
+> permanent box an operator chooses, read by that box's sidecar from a file or
+> an encrypted systemd credential, never sent to the coordinator or any other
+> host, and restricted by `FLEETWRIGHT_GITHUB_MINT_OWNERS` to the accounts it
+> may mint into — which is how "guests keep their own tokens" is kept, since the
+> App stays installable by any account. What follows about THIS key still
+> holds: it should not be the one installed. Generate a fresh key for that box
+> and delete this one.
 
 The key exists and is a 2048-bit RSA key. It has not been written to a secret
 store, a host, the coordinator, or this repository, and that is the design
@@ -433,7 +444,9 @@ against.
 **Steps 1–4 have shipped** — the callback is served by both coordinators, the
 apps use system browsers with no paste field, and storage lives host-side (see
 [`connectors.md`](./connectors.md) and [`accounts.md`](./accounts.md)). Step 5
-still waits on the broker's minting half. The reasoning is kept because the
+is built for runners — a one-repository, one-hour token minted on the one box
+that holds the key and sealed to the runner that asked — and not yet for
+sessions on permanent boxes, which still get the person's user token. The reasoning is kept because the
 order was the point:
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
@@ -453,7 +466,11 @@ order was the point:
    credentials, and a token refreshed on demand rather than at start-up.
 4. **The apps**: one button, one redirect, no paste field.
 5. **Installation tokens behind the broker**, when the broker exists — at which
-   point the refresh token stops being needed at all.
+   point the refresh token stops being needed at all. **Built for runners**,
+   which had no token to replace; see
+   [runner-central.md](./runner-central.md#private-code-on-a-runner). The
+   person's connection is still what answers "can you reach this", so the
+   refresh token is still needed.
 
 ## What stays as it is
 
