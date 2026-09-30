@@ -28,10 +28,10 @@ const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').rep
 
 test('independent requests are asked for at the same time', () => {
   const load = VIEW.slice(VIEW.indexOf('private func loadHosts() async'), VIEW.indexOf('/// "elibrody2@gmail.com'));
-  // Five answers, one wait. `async let` starts them all and waits once, so the
+  // Six answers, one wait. `async let` starts them all and waits once, so the
   // cost is the slowest rather than the sum. (Four, until the runner
-  // repository joined them.)
-  assert.equal((load.match(/async let /g) || []).length, 5, 'loadHosts went back to waiting on each in turn');
+  // repository joined them; six once a person's own runner repository did.)
+  assert.equal((load.match(/async let /g) || []).length, 6, 'loadHosts went back to waiting on each in turn');
   assert.doesNotMatch(bare(load), /await Fleet\(settings: settings\)\.\w+\(\)/,
     'a request is still being awaited inline, one at a time');
 
