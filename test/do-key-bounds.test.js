@@ -59,6 +59,10 @@ const BOUNDED = {
   clients: 'src/fleet/coordinator/clients.js',
   runnerTokens: 'src/fleet/coordinator/clients.js',
   runnerTickets: 'src/fleet/coordinator/runner-tickets.js',
+  // Each person's own runner repository: a refusal at a count that fits.
+  runnerRepos: 'src/fleet/coordinator/runner-repos.js',
+  // Sessions waiting for a runner to join: a window and an eviction.
+  runnerStarts: 'src/fleet/coordinator/core.js',
   mcpClients: 'src/mcp/oauth.js',
   spentTokens: 'src/fleet/coordinator/spent-tokens.js',
   invites: 'src/fleet/coordinator/invites.js',
@@ -151,4 +155,20 @@ test('a full credential store still fits in one Durable Object value', async () 
   assert.ok(refused, `the credential store did not refuse within ${FILL_CAP} rows, so its ceiling is too high to be a ceiling`);
   const bytes = new TextEncoder().encode(JSON.stringify(reg.serialise())).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full credential store is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full runner repository store still fits in one Durable Object value', async () => {
+  // A MEMBER can add a row here, which is what makes it worth measuring: the
+  // widest email a sign-in can carry and the longest name the shape admits.
+  const { RunnerRepos } = await import('../src/fleet/coordinator/runner-repos.js');
+  const repos = new RunnerRepos();
+  let refused = false;
+  for (let i = 0; i < FILL_CAP; i++) {
+    const email = `${String(i).padStart(5, '0')}${'e'.repeat(59)}@${'d'.repeat(63)}.${'d'.repeat(63)}.${'d'.repeat(57)}.com`;
+    const r = repos.set(email, `${'o'.repeat(39)}/${'r'.repeat(100)}`);
+    if (r.ok === false) { refused = true; break; }
+  }
+  assert.ok(refused, `the runner repository store did not refuse within ${FILL_CAP} rows`);
+  const bytes = new TextEncoder().encode(JSON.stringify(repos.serialise())).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full runner repository store is ${bytes} bytes, which does not fit in a DO value`);
 });

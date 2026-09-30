@@ -198,6 +198,8 @@ export class Coordinator {
     // restart would break every repository holding one, silently, on a deploy.
     this.core.runnerTokens.restore(state.runnerTokens || []);
     this.core.runnerTickets.restore(state.runnerTickets || []);
+    this.core.runnerRepos.restore(state.runnerRepos);
+    this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.invites.load(state.invites || []);
     this.core.enrollment.restore(state.enrollment || []);
     // MCP clients that registered themselves. Codes are not persisted and
@@ -295,6 +297,10 @@ export class Coordinator {
         // Minted at dispatch and spent by a job minutes later, which is long
         // enough to contain a restart. See runner-tickets.js.
         runnerTickets: this.core.runnerTickets.serialise(),
+        // Each person's own runner repository, and sessions waiting for a
+        // runner to join — see the Worker's copy.
+        runnerRepos: this.core.runnerRepos.serialise(),
+        runnerStarts: this.core.serialiseRunnerStarts(),
         invites: this.core.invites.toJSON(),
         enrollment: this.core.enrollment.serialise(),
         mcpClients: this.core.mcpAuthorizations.serialise(),
@@ -451,7 +457,7 @@ export class Coordinator {
    * fan-out and correlation are decisions, and a decision implemented twice is
    * a decision that will eventually be made two different ways.
    *
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
@@ -549,13 +555,24 @@ export class Coordinator {
     // would put "clean me up" back in the hands of the thing being cleaned up.
     if (p === '/api/enroll/actions' && req.method === 'POST') {
       const body = await readJson(req);
-      const repositories = splitList(process.env.FLEETWRIGHT_ACTIONS_REPOS);
       const audiences = splitList(process.env.FLEETWRIGHT_ACTIONS_AUDIENCE);
-      if (!repositories.length) {
+      // Which repositories may admit this job — the operator's allowlist, plus
+      // a ticket's own repository. See CoordinatorCore#runnerAdmission; the
+      // Worker asks the same function.
+      const admission = await this.core.runnerAdmission(String(body?.claim || ''), {
+        repositories: splitList(process.env.FLEETWRIGHT_ACTIONS_REPOS),
+        // A LIST now: a runner repository has one workflow per operating
+        // system, and pinning one of them would stop the other three admitting
+        // a host. A single value still works and means a list of one.
+        workflowRef: splitList(process.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
+      });
+      if (!admission) {
         return json(res, 503, {
           ok: false,
           error: { code: 'not_configured' },
-          text: 'This coordinator does not admit CI runners. Set FLEETWRIGHT_ACTIONS_REPOS to the repositories that may.',
+          text:
+            'This coordinator does not admit CI runners from here. An operator sets FLEETWRIGHT_ACTIONS_REPOS, ' +
+            'or a runner is dispatched by the fleet from somebody’s own runner repository.',
         });
       }
 
@@ -567,11 +584,8 @@ export class Coordinator {
           // token with this audience; anything else fails the check before a
           // repository is even looked at.
           audiences: audiences.length ? audiences : [...DEFAULT_ACTIONS_AUDIENCES],
-          repositories,
-          // A LIST now: a runner repository has one workflow per operating
-          // system, and pinning one of them would stop the other three admitting
-          // a host. A single value still works and means a list of one.
-          workflowRef: splitList(process.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
+          repositories: admission.repositories,
+          workflowRef: admission.workflowRef,
         });
       } catch (e) {
         return json(res, 403, { ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message });
@@ -624,10 +638,12 @@ export class Coordinator {
       // below is one sentence covering both, because a job cannot act on the
       // difference and whoever is guessing should not be told which it was.
       const presented = String(body?.claim || '');
-      const ticket = RunnerTickets.looksLikeTicket(presented)
+      const redeemed = RunnerTickets.looksLikeTicket(presented)
         ? await this.core.runnerTickets.redeem(presented)
         : null;
-      const claim = ticket ? null : await this.core.runnerTokens.verify(presented);
+      // Spent from the wrong repository is no ticket — see the Worker's copy.
+      const ticket = redeemed && CoordinatorCore.ticketFitsJob(redeemed, job) ? redeemed : null;
+      const claim = ticket || redeemed ? null : await this.core.runnerTokens.verify(presented);
       const owner = ticket ? ticket.owner : claim?.email ? claim.email.toLowerCase() : null;
       if (!owner) {
         // Spent tickets are gone from the store, so this ALSO persists the
@@ -661,6 +677,8 @@ export class Coordinator {
         const full = 'code' in result && result.code === 'hosts_full';
         return json(res, full ? 507 : 400, { ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error });
       }
+      // The session they asked for with it, started on its first health frame.
+      if (ticket) this.core.noteRunnerEnrolled(result.host.hostId, ticket);
       this.core.record({
         event: 'host.enrolled',
         hostId: result.host.hostId,
@@ -1058,6 +1076,20 @@ export class Coordinator {
     // that org belongs to whoever minted the token, and a REPOSITORY (or
     // environment) secret lets different repositories belong to different
     // people. The fleet cannot tell the difference and does not need to.
+    // Each person's own runner repository — see the Worker's copy.
+    if (p === '/api/runner-repo') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner repository belongs to a person.' });
+      }
+      if (req.method === 'GET') return json(res, 200, this.core.runnerRepoFor(requesterFor(client)));
+      if (req.method === 'PUT') {
+        const body = await readJson(req);
+        const r = await this.core.setRunnerRepo(requesterFor(client), body?.repo);
+        return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+      if (req.method === 'DELETE') return json(res, 200, this.core.clearRunnerRepo(requesterFor(client)));
+    }
+
     if (p === '/api/runner-tokens' && req.method === 'POST') {
       if (!client?.email) {
         return json(res, 403, { ok: false, text: 'Sign in first — a runner token belongs to a person.' });
@@ -1257,6 +1289,8 @@ export class Coordinator {
         // The VERIFIED caller, for visibility. Null for the break-glass token,
         // which sees everything — it is what you hold when identity is broken.
         requester: requesterFor(client),
+        // `provision` only: a session to start on the runner once it joins.
+        startAfter: body.start && typeof body.start === 'object' && !Array.isArray(body.start) ? body.start : null,
       });
       // A `connect` reply carries the host's catalogue, which offers the paste
       // route because a host knows nothing about an OAuth client. Only the

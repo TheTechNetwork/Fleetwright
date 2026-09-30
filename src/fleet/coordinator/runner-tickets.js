@@ -92,7 +92,18 @@ function constantTimeEqual(a, b) {
  * @property {string} id
  * @property {string} secretHash
  * @property {string} owner      the verified email this runner will belong to
- * @property {string} platform   what was asked for, for the audit line
+ * @property {string} platform   what was asked for — the audit line, and since
+ *   a runner can come from a person's own repository, which workflow file in
+ *   it may admit the job
+ * @property {string|null} [repository]  where the run was dispatched, as GitHub
+ *   spells it. Binds the ticket to that repository: a job from anywhere else
+ *   presenting it is refused, and a repository nobody put on the operator's
+ *   allowlist can admit a machine ONLY with a ticket naming it. Absent on a
+ *   ticket minted before this existed, which binds nothing, as before
+ * @property {{ title?: string, brief?: string, mode?: string }|null} [start]
+ *   a session to start on the runner once it joins, for the person who asked.
+ *   Prose and a mode only: a runner has no task profiles and no secrets of its
+ *   own, so a ticket cannot carry a reference to either
  * @property {number} mintedAt
  * @property {number} expiresAt
  */
@@ -109,10 +120,10 @@ export class RunnerTickets {
   /**
    * Mint one for a dispatch that is about to happen.
    *
-   * @param {{ owner: string, platform: string }} spec
+   * @param {{ owner: string, platform: string, repository?: string|null, start?: Ticket['start'] }} spec
    * @returns {Promise<{ id: string, token: string, expiresAt: number }>}
    */
-  async mint({ owner, platform }) {
+  async mint({ owner, platform, repository = null, start = null }) {
     this.#sweep();
     // Oldest first, so a flood of abandoned dispatches cannot evict a live
     // ticket somebody's job is on its way to spend.
@@ -129,6 +140,8 @@ export class RunnerTickets {
       secretHash: await hashSecret(secret),
       owner: String(owner || '').toLowerCase(),
       platform: String(platform || ''),
+      repository: repository ? String(repository) : null,
+      start: start && typeof start === 'object' ? { ...start } : null,
       mintedAt: this.now(),
       expiresAt,
     });
@@ -152,21 +165,37 @@ export class RunnerTickets {
    * @returns {Promise<Ticket|null>}
    */
   async redeem(token) {
+    const found = await this.peek(token);
+    if (!found) return null;
+    // Deleted before the caller does anything with it. A redemption that fails
+    // downstream must not leave the ticket spendable, because the safe failure
+    // is "ask for another runner" and the unsafe one is "try it again".
+    this.tickets.delete(found.id);
+    return found;
+  }
+
+  /**
+   * Look at one without spending it. The same checks as redeem — unknown,
+   * expired and wrong all answer null — and nothing is consumed.
+   *
+   * WHY THIS EXISTS: which repositories may admit a job has to be decided
+   * BEFORE GitHub's token is verified, because verification is against that
+   * list, and a ticket for somebody's own repository is what puts that
+   * repository on it. Spending the ticket first would burn it on a job whose
+   * token then fails; the enrolment route peeks, verifies, and only then
+   * redeems.
+   *
+   * @param {unknown} token
+   * @returns {Promise<Ticket|null>}
+   */
+  async peek(token) {
     this.#sweep();
     const raw = typeof token === 'string' ? token : '';
     const parts = raw.split('_');
     if (parts.length !== 3 || parts[0] !== TICKET_PREFIX) return null;
     const found = this.tickets.get(parts[1]);
     if (!found) return null;
-    if (found.expiresAt <= this.now()) {
-      this.tickets.delete(found.id);
-      return null;
-    }
     if (!constantTimeEqual(found.secretHash, await hashSecret(parts[2]))) return null;
-    // Deleted before the caller does anything with it. A redemption that fails
-    // downstream must not leave the ticket spendable, because the safe failure
-    // is "ask for another runner" and the unsafe one is "try it again".
-    this.tickets.delete(found.id);
     return found;
   }
 

@@ -71,6 +71,7 @@
   "src/fleet/coordinator/oidc.js": 98,
   "src/fleet/coordinator/random.js": 100,
   "src/fleet/coordinator/registry.js": 99,
+  "src/fleet/coordinator/runner-repos.js": 100,
   "src/fleet/coordinator/runner-tickets.js": 96,
   "src/fleet/coordinator/scheduler.js": 100,
   "src/fleet/coordinator/spec.js": 100,

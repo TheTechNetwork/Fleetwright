@@ -84,6 +84,12 @@ const NOT_A_CLIENT_ROUTE = {
   '/healthz': 'infrastructure liveness. Read by a load balancer, not by a person.',
   '/oauth/github/callback': "a browser redirect target — GitHub sends somebody's browser here.",
   '/oauth/cloudflare/callback': "the same redirect target for the second provider — Cloudflare sends somebody's browser here.",
+  // TEMPORARY, and the only entry here that is. Both phones call this from
+  // the app layers of the runner-repository stack; it stays exempt until the
+  // SECOND of them lands, because one app calling it alone fails the parity
+  // test below. The Android layer deletes this line.
+  '/api/runner-repo':
+    'each person sets their own runner repository from the app; the app layers of this stack call it, and the Android layer removes this exemption.',
   '/api/enroll/actions':
     'a RUNNER spends its job\u2019s OIDC token here, through `fleetwright-sidecar enrol-actions` in the runner-central action. Neither phone is a GitHub Actions job.',
 };

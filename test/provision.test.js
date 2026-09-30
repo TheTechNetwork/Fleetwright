@@ -245,7 +245,7 @@ test('the fleet snapshot says whether a machine can be started here', () => {
   // only from this: the refusal `provision` gives a fleet with no runner
   // repository is the right sentence for an agent that asked, and a dead
   // button on every fleet that has not configured one.
-  assert.deepEqual(coreWith().snapshot().runners, { repo: 'me/runners' });
+  assert.deepEqual(coreWith().snapshot().runners, { repo: 'me/runners', own: false });
   // NULL IS AN ANSWER: this coordinator knows it has nowhere to start one.
   assert.equal(coreWith({ runnerRepo: null }).snapshot().runners, null);
 });
@@ -913,4 +913,117 @@ test('the Worker coordinator does the same, and writes the spent ticket down', a
   const second = await (await enrol()).json();
   assert.equal(second.ok, false);
   assert.equal(second.error.code, 'unclaimed');
+});
+
+// --- somebody's own runner repository ---------------------------------------
+
+/**
+ * A Node coordinator with the operator allowlist set to `repos` (empty means
+ * nobody), listening, with the environment put back afterwards.
+ * @param {any} t @param {string} repos
+ */
+async function coordinatorAllowing(t, repos) {
+  const saved = process.env.FLEETWRIGHT_ACTIONS_REPOS;
+  const pins = process.env.FLEETWRIGHT_ACTIONS_WORKFLOW;
+  process.env.FLEETWRIGHT_ACTIONS_REPOS = repos;
+  delete process.env.FLEETWRIGHT_ACTIONS_WORKFLOW;
+  t.after(() => {
+    if (saved === undefined) delete process.env.FLEETWRIGHT_ACTIONS_REPOS;
+    else process.env.FLEETWRIGHT_ACTIONS_REPOS = saved;
+    if (pins !== undefined) process.env.FLEETWRIGHT_ACTIONS_WORKFLOW = pins;
+  });
+  const c = new Coordinator({});
+  const port = await c.listen(0, '127.0.0.1');
+  t.after(() => c.close());
+  /** @param {string} idToken @param {string} claim */
+  const enrol = async (idToken, claim) => {
+    const key = await generateKeyPair();
+    const res = await fetch(`http://127.0.0.1:${port}/api/enroll/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: idToken, claim, publicJwk: key.publicJwk }),
+    });
+    return /** @type {any} */ ({ status: res.status, ...(await res.json()) });
+  };
+  return { c, enrol };
+}
+
+test('a ticket for somebody’s own repository admits a job from it, running a runner workflow', async (t) => {
+  // Nobody put eli/runners on the operator's allowlist — there is no list at
+  // all — and the job is admitted anyway, because the fleet dispatched it: a
+  // live ticket minted for eli, naming that repository, for a linux runner.
+  forgetJwks();
+  const { sign, restore } = await actionsIssuer();
+  t.after(restore);
+  const { c, enrol } = await coordinatorAllowing(t, '');
+
+  const { token } = await c.core.runnerTickets.mint({ owner: 'eli@example.com', platform: 'linux', repository: 'Eli/Runners' });
+  const r = await enrol(
+    await sign({ repository: 'Eli/Runners', job_workflow_ref: 'Eli/Runners/.github/workflows/runner-linux.yml@refs/heads/main' }),
+    token,
+  );
+  assert.equal(r.ok, true, r.text);
+  assert.equal(c.core.hostIds.get(r.hostId)?.owner, 'eli@example.com');
+});
+
+test('a ticket admits nothing but its own repository’s runner workflow for its platform', async (t) => {
+  // The three ways a ticket could be stretched, each refused. What a stored
+  // repository name can admit is exactly this narrow, and it is the argument
+  // for letting a member set one.
+  forgetJwks();
+  const { sign, restore } = await actionsIssuer();
+  t.after(restore);
+  const { c, enrol } = await coordinatorAllowing(t, '');
+
+  const cases = [
+    // Another workflow in the same repository — one a pull request could add.
+    ['another workflow', { repository: 'eli/runners', job_workflow_ref: 'eli/runners/.github/workflows/evil.yml@refs/heads/main' }],
+    // The runner workflow for a platform the ticket was not minted for.
+    ['another platform', { repository: 'eli/runners', job_workflow_ref: 'eli/runners/.github/workflows/runner-macos.yml@refs/heads/main' }],
+    // Another repository, running a perfectly good runner workflow.
+    ['another repository', { repository: 'mallory/runners', job_workflow_ref: 'mallory/runners/.github/workflows/runner-linux.yml@refs/heads/main' }],
+  ];
+  for (const [name, claims] of cases) {
+    const { token } = await c.core.runnerTickets.mint({ owner: 'eli@example.com', platform: 'linux', repository: 'eli/runners' });
+    const r = await enrol(await sign(claims), token);
+    assert.equal(r.ok, false, `${name} was admitted`);
+    assert.equal(r.error.code, 'bad_token', name);
+    // Refused BEFORE it was spent: a job whose token fails does not burn the
+    // ticket for the job that was actually dispatched.
+    assert.ok(await c.core.runnerTickets.peek(token), `${name} spent the ticket`);
+  }
+});
+
+test('with no allowlist and no ticket naming a repository, nothing is admitted', async (t) => {
+  forgetJwks();
+  const { sign, restore } = await actionsIssuer();
+  t.after(restore);
+  const { c, enrol } = await coordinatorAllowing(t, '');
+  const idToken = await sign({ repository: 'me/runners', job_workflow_ref: 'me/runners/.github/workflows/runner-linux.yml@refs/heads/main' });
+
+  const bare = await enrol(idToken, 'fwr_not_a_ticket');
+  assert.equal(bare.status, 503);
+  assert.equal(bare.error.code, 'not_configured');
+
+  // A ticket from before tickets named a repository widens nothing either.
+  const { token } = await c.core.runnerTickets.mint({ owner: 'eli@example.com', platform: 'linux' });
+  assert.equal((await enrol(idToken, token)).status, 503);
+});
+
+test('a ticket spent by a job from another allowed repository is not a claim', async (t) => {
+  // Both repositories are on the operator's list, so GitHub's token admits the
+  // job — but the ticket was minted for a dispatch into me/runners, and a job
+  // from me/other presenting it is not that run. Spent, and refused.
+  forgetJwks();
+  const { sign, restore } = await actionsIssuer();
+  t.after(restore);
+  const { c, enrol } = await coordinatorAllowing(t, 'me/runners,me/other');
+  const { token } = await c.core.runnerTickets.mint({ owner: 'eli@example.com', platform: 'linux', repository: 'me/runners' });
+  const r = await enrol(
+    await sign({ repository: 'me/other', job_workflow_ref: 'me/other/.github/workflows/runner-linux.yml@refs/heads/main' }),
+    token,
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'unclaimed');
+  assert.equal(await c.core.runnerTickets.peek(token), null);
 });
