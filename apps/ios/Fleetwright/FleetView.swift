@@ -811,17 +811,6 @@ private struct SettingsView: View {
                     .fleetType(.micro)
                     .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
             }
-            // WHAT EACH OF THEM HAS LEFT, one line per linked account, in the
-            // account's own figures. The difference between "sessions are
-            // failing" and "sessions are failing because this plan is out
-            // until 15:10". Nothing at all from a host that has not said.
-            if let rows = host.health?.usage?.accounts, !rows.isEmpty {
-                ForEach(rows) { row in
-                    Text(describeUsage(row))
-                        .fleetType(.micro)
-                        .foregroundStyle(row.isNearLimit ? Design.Palette.attention : Design.Palette.inkDim)
-                }
-            }
             // THE SECOND WAY TO BE SIGNED OUT, and the one that was invisible.
             // The line above reports on who has linked an account; this reports
             // on the credential file a session is actually handed. They came
@@ -2088,23 +2077,22 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) ->
     return parts.joined(separator: " · ")
 }
 
-/// "a@example.com · 5h 42% · resets in 2h · 7d 12%", or the reason there is no
-/// number.
+/// "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.
 ///
 /// EVERY FIGURE IS THE ENDPOINT'S. The percentages are what the account's own
 /// usage endpoint said, the reset is its timestamp with the phone doing the
-/// arithmetic, and a row with no answer says so in the host's words rather than
-/// drawing 0% — which would be the one reading worse than nothing. Same words
-/// as Android, held equal by test/context-and-usage-in-apps.test.js.
-// NOT file-private: HostView renders the same line.
-func describeUsage(_ row: Fleet.HostHealth.AccountUsage, now: Date = Date()) -> String {
-    let who = row.account ?? "an account"
-    guard let windows = row.usage else {
-        var line = "\(who) · usage not reported"
-        if let why = row.why, !why.isEmpty { line += " — \(why)" }
+/// arithmetic, and a report with no answer says so in the host's words rather
+/// than drawing 0% — which would be the one reading worse than nothing. Drawn
+/// under "connected as you@…" on the credentials screen: an account's fact,
+/// on the account's row, once. Same words as Android, held equal by
+/// test/context-and-usage-in-apps.test.js.
+func describeUsage(_ report: Fleet.Connections.UsageReport, now: Date = Date()) -> String {
+    guard let windows = report.windows else {
+        var line = "usage not reported"
+        if let why = report.why, !why.isEmpty { line += " — \(why)" }
         return line
     }
-    var parts: [String] = [who]
+    var parts: [String] = []
     if let used = windows.fiveHour?.used {
         parts.append("5h \(Int(used.rounded()))%")
         if let at = windows.fiveHour?.resetsAt, at > 0 { parts.append("resets in \(describeUntil(at, now: now))") }
@@ -2112,7 +2100,7 @@ func describeUsage(_ row: Fleet.HostHealth.AccountUsage, now: Date = Date()) -> 
     if let used = windows.sevenDay?.used { parts.append("7d \(Int(used.rounded()))%") }
     if let used = windows.sevenDayOpus?.used { parts.append("Opus 7d \(Int(used.rounded()))%") }
     if let used = windows.sevenDaySonnet?.used { parts.append("Sonnet 7d \(Int(used.rounded()))%") }
-    if parts.count == 1 { parts.append("usage not reported") }
+    if parts.isEmpty { return "usage not reported" }
     return parts.joined(separator: " · ")
 }
 

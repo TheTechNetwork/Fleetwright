@@ -391,7 +391,45 @@ struct Fleet {
             /// will not say. Rendering nil as "fine" is how somebody finds out
             /// four hours into a session instead.
             let missing: [String]?
+            /// How much of this account's limit is used, on the Claude row —
+            /// the four windows Claude Code's own /usage draws, or the host's
+            /// reason there is no answer. On the ACCOUNT's row and not on
+            /// each host, because an account is a person's: the same address
+            /// linked on three boxes is one plan with one window, and the
+            /// coordinator keeps the freshest box's answer. Nil is CANNOT
+            /// TELL — the check is off, has not run, or an older host — and
+            /// is drawn as nothing.
+            let usage: UsageReport?
             var id: String { provider }
+        }
+
+        struct UsageReport: Codable, Hashable {
+            let checkedAt: Double?
+            let windows: Windows?
+            /// The host's reason when `windows` is nil: an expired credential,
+            /// a refused token, an answer in a shape it does not read.
+            let why: String?
+
+            struct Windows: Codable, Hashable {
+                let fiveHour: Window?
+                let sevenDay: Window?
+                let sevenDayOpus: Window?
+                let sevenDaySonnet: Window?
+            }
+            struct Window: Codable, Hashable {
+                /// Percent of the window used, 0-100, as the endpoint gave it.
+                let used: Double?
+                /// When it resets, epoch milliseconds. The phone does the
+                /// arithmetic, so "resets in 2h" stays right on screen.
+                let resetsAt: Double?
+            }
+
+            /// Worth colouring: a window that is nearly spent. Ninety percent,
+            /// because the next session start is what a person is deciding on.
+            var isNearLimit: Bool {
+                [windows?.fiveHour, windows?.sevenDay, windows?.sevenDayOpus, windows?.sevenDaySonnet]
+                    .contains { ($0?.used ?? 0) >= 90 }
+            }
         }
 
         func linked(_ provider: String) -> Linked? { connected.first { $0.provider == provider } }
@@ -1156,49 +1194,8 @@ struct Fleet {
         }
         let account: Account?
         let credential: Credential?
-        /// How much of each linked account's limit is used, as that account's
-        /// own endpoint last told the box: one row per linked account, with
-        /// the four windows Claude Code's own /usage draws, or the reason
-        /// there is no answer. Nil is CANNOT TELL — the box has not asked
-        /// yet, the check is off, or an older host — and is drawn as nothing.
-        let usage: Usage?
         let version: Version?
         let updates: Updates?
-
-        struct Usage: Codable, Hashable {
-            let checkedAt: Double?
-            let accounts: [AccountUsage]?
-        }
-
-        struct AccountUsage: Codable, Hashable, Identifiable {
-            let account: String?
-            let usage: Windows?
-            /// The host's reason when `usage` is nil: an expired credential, a
-            /// refused token, an answer in a shape it does not read.
-            let why: String?
-            var id: String { account ?? "?" }
-
-            struct Windows: Codable, Hashable {
-                let fiveHour: Window?
-                let sevenDay: Window?
-                let sevenDayOpus: Window?
-                let sevenDaySonnet: Window?
-            }
-            struct Window: Codable, Hashable {
-                /// Percent of the window used, 0-100, as the endpoint gave it.
-                let used: Double?
-                /// When it resets, epoch milliseconds. The phone does the
-                /// arithmetic, so "resets in 2h" stays right on screen.
-                let resetsAt: Double?
-            }
-
-            /// Worth colouring: a window that is nearly spent. Ninety percent,
-            /// because the next session start is what a person is deciding on.
-            var isNearLimit: Bool {
-                [usage?.fiveHour, usage?.sevenDay, usage?.sevenDayOpus, usage?.sevenDaySonnet]
-                    .contains { ($0?.used ?? 0) >= 90 }
-            }
-        }
         let loggedIn: Bool?
         /// How many people have connected a Claude account on this machine.
         ///
@@ -1323,7 +1320,7 @@ struct Fleet {
                 grants: w.grants ?? updates?.grants,
             )
             return HostHealth(
-                account: account, credential: credential, usage: usage, version: version, updates: next,
+                account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1332,7 +1329,7 @@ struct Fleet {
 
         func withChannel(_ channel: String, pinned: Bool) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, usage: usage, version: version, updates: updates,
+                account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1345,7 +1342,7 @@ struct Fleet {
         /// half-update cannot drift into a state the host never reported.
         func withSandbox(_ sandbox: Sandbox) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, usage: usage, version: version, updates: updates,
+                account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1360,7 +1357,7 @@ struct Fleet {
         /// is looking straight at the thing they just changed.
         func withLabels(all: [String], set: [String]) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, usage: usage, version: version, updates: updates,
+                account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: all, setLabels: set, logs: logs, houseRules: houseRules,

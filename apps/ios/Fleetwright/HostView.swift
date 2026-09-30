@@ -218,15 +218,6 @@ struct HostView: View {
                     .fleetType(.label)
                     .foregroundStyle(accounts == 0 ? Design.Palette.attention : Design.Palette.inkDim)
             }
-            // What each linked account has left, in its own figures — one
-            // line per account, and none from a host that has not said.
-            if let rows = health?.usage?.accounts, !rows.isEmpty {
-                ForEach(rows) { row in
-                    Text(describeUsage(row))
-                        .fleetType(.label)
-                        .foregroundStyle(row.isNearLimit ? Design.Palette.attention : Design.Palette.inkDim)
-                }
-            }
             if let version = health?.version?.head, !version.isEmpty {
                 Text(version).fleetType(.labelMono).foregroundStyle(Design.Palette.inkDim)
             }

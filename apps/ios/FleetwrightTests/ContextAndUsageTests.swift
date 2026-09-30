@@ -16,16 +16,10 @@ final class ContextAndUsageTests: XCTestCase {
         try JSONDecoder().decode(Fleet.Session.self, from: Data(json.utf8))
     }
 
-    private func health(_ json: String) throws -> Fleet.HostHealth {
-        try JSONDecoder().decode(Fleet.HostHealth.self, from: Data(json.utf8))
-    }
-
     func testAnOlderHostDecodesAndDrawsNothing() throws {
         let s = try session(#"{"name":"job","status":"running"}"#)
         XCTAssertNil(s.context)
         XCTAssertNil(s.contextLine)
-        let h = try health(#"{"hostId":"box"}"#)
-        XCTAssertNil(h.usage)
     }
 
     func testContextIsACountInCoarseUnits() throws {
@@ -38,28 +32,40 @@ final class ContextAndUsageTests: XCTestCase {
         XCTAssertNil(try session(#"{"name":"j","status":"running","context":null}"#).contextLine)
     }
 
+    private func connections(_ json: String) throws -> Fleet.Connections {
+        try JSONDecoder().decode(Fleet.Connections.self, from: Data(json.utf8))
+    }
+
     func testUsageIsTheEndpointsFiguresWithTheResetOnThePhonesClock() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let h = try health(#"""
-        {"hostId":"box","usage":{"checkedAt":1700000000000,"accounts":[
-          {"account":"a@example.com","usage":{"fiveHour":{"used":42.4,"resetsAt":1700007200000},"sevenDay":{"used":12,"resetsAt":null},"sevenDayOpus":null,"sevenDaySonnet":null},"why":null},
-          {"account":"b@example.com","usage":null,"why":"the credential has expired and has not renewed yet"},
-          {"account":"c@example.com","usage":{"fiveHour":{"used":95,"resetsAt":1700000060000},"sevenDay":null,"sevenDayOpus":{"used":50,"resetsAt":null},"sevenDaySonnet":null},"why":null}
-        ]}}
+        let c = try connections(#"""
+        {"catalogue":[],"connected":[
+          {"provider":"claude","account":"a@example.com","usage":{"checkedAt":1700000000000,"windows":{"fiveHour":{"used":42.4,"resetsAt":1700007200000},"sevenDay":{"used":12,"resetsAt":null},"sevenDayOpus":null,"sevenDaySonnet":null},"why":null}},
+          {"provider":"github","account":"octocat"}
+        ]}
         """#)
-        let rows = h.usage?.accounts ?? []
-        XCTAssertEqual(rows.count, 3)
-        XCTAssertEqual(describeUsage(rows[0], now: now), "a@example.com · 5h 42% · resets in 2h · 7d 12%")
-        XCTAssertFalse(rows[0].isNearLimit)
-        XCTAssertEqual(describeUsage(rows[1], now: now), "b@example.com · usage not reported — the credential has expired and has not renewed yet")
-        XCTAssertFalse(rows[1].isNearLimit, "no figure is not a spent one")
-        XCTAssertEqual(describeUsage(rows[2], now: now), "c@example.com · 5h 95% · resets in 1m · Opus 7d 50%")
-        XCTAssertTrue(rows[2].isNearLimit)
+        let claude = c.linked("claude")!
+        XCTAssertEqual(describeUsage(claude.usage!, now: now), "5h 42% · resets in 2h · 7d 12%")
+        XCTAssertFalse(claude.usage!.isNearLimit)
+        XCTAssertNil(c.linked("github")!.usage, "a token provider has no windows, and draws nothing")
+
+        let why = try connections(#"{"catalogue":[],"connected":[{"provider":"claude","account":"b@example.com","usage":{"checkedAt":1,"windows":null,"why":"the credential has expired and has not renewed yet"}}]}"#)
+        XCTAssertEqual(describeUsage(why.linked("claude")!.usage!, now: now), "usage not reported — the credential has expired and has not renewed yet")
+        XCTAssertFalse(why.linked("claude")!.usage!.isNearLimit, "no figure is not a spent one")
+
+        let near = try connections(#"{"catalogue":[],"connected":[{"provider":"claude","account":"c@example.com","usage":{"checkedAt":1,"windows":{"fiveHour":{"used":95,"resetsAt":1700000060000},"sevenDay":null,"sevenDayOpus":{"used":50,"resetsAt":null},"sevenDaySonnet":null},"why":null}}]}"#)
+        XCTAssertEqual(describeUsage(near.linked("claude")!.usage!, now: now), "5h 95% · resets in 1m · Opus 7d 50%")
+        XCTAssertTrue(near.linked("claude")!.usage!.isNearLimit)
     }
 
     func testAWindowWithNoFigureIsNotReported() throws {
-        let h = try health(#"{"hostId":"box","usage":{"checkedAt":1,"accounts":[{"account":"a@example.com","usage":{"fiveHour":{"used":null,"resetsAt":null}},"why":null}]}}"#)
-        XCTAssertEqual(describeUsage(h.usage!.accounts![0]), "a@example.com · usage not reported")
+        let c = try connections(#"{"catalogue":[],"connected":[{"provider":"claude","account":"a@example.com","usage":{"checkedAt":1,"windows":{"fiveHour":{"used":null,"resetsAt":null}},"why":null}}]}"#)
+        XCTAssertEqual(describeUsage(c.linked("claude")!.usage!), "usage not reported")
+    }
+
+    func testAnOlderHostsRowDrawsNothing() throws {
+        let c = try connections(#"{"catalogue":[],"connected":[{"provider":"claude","account":"a@example.com"}]}"#)
+        XCTAssertNil(c.linked("claude")!.usage)
     }
 
     func testUntilIsCoarse() {
