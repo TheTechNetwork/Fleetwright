@@ -538,6 +538,10 @@ private struct SessionRow: View {
                     // thing on every row and mean nothing.
                     Text("· \(account)")
                 }
+                // How full its window is, when the host read it. A count,
+                // not a bar: the window's size is not something the host
+                // knows, and a bar needs one.
+                if let context = session.contextLine { Text("· \(context)") }
             }
             .fleetType(.micro)
             .foregroundStyle(Design.Palette.inkDim)
@@ -2071,6 +2075,43 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) ->
         parts.append(org)
     }
     return parts.joined(separator: " · ")
+}
+
+/// "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.
+///
+/// EVERY FIGURE IS THE ENDPOINT'S. The percentages are what the account's own
+/// usage endpoint said, the reset is its timestamp with the phone doing the
+/// arithmetic, and a report with no answer says so in the host's words rather
+/// than drawing 0% — which would be the one reading worse than nothing. Drawn
+/// under "connected as you@…" on the credentials screen: an account's fact,
+/// on the account's row, once. Same words as Android, held equal by
+/// test/context-and-usage-in-apps.test.js.
+func describeUsage(_ report: Fleet.Connections.UsageReport, now: Date = Date()) -> String {
+    guard let windows = report.windows else {
+        var line = "usage not reported"
+        if let why = report.why, !why.isEmpty { line += " — \(why)" }
+        return line
+    }
+    var parts: [String] = []
+    if let used = windows.fiveHour?.used {
+        parts.append("5h \(Int(used.rounded()))%")
+        if let at = windows.fiveHour?.resetsAt, at > 0 { parts.append("resets in \(describeUntil(at, now: now))") }
+    }
+    if let used = windows.sevenDay?.used { parts.append("7d \(Int(used.rounded()))%") }
+    if let used = windows.sevenDayOpus?.used { parts.append("Opus 7d \(Int(used.rounded()))%") }
+    if let used = windows.sevenDaySonnet?.used { parts.append("Sonnet 7d \(Int(used.rounded()))%") }
+    if parts.isEmpty { return "usage not reported" }
+    return parts.joined(separator: " · ")
+}
+
+/// "now" / "9m" / "2h" / "3d" until an epoch-millisecond instant. Coarse: the
+/// question is whether to wait, not when to set an alarm.
+func describeUntil(_ epochMs: Double, now: Date = Date()) -> String {
+    let seconds = epochMs / 1000 - now.timeIntervalSince1970
+    if seconds <= 0 { return "now" }
+    if seconds < 3600 { return "\(max(1, Int(seconds / 60)))m" }
+    if seconds < 86_400 { return "\(Int(seconds / 3600))h" }
+    return "\(Int(seconds / 86_400))d"
 }
 
 /// "0223f94 · 1 commit behind · rolling", or as much of it as is known.

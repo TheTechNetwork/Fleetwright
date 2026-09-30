@@ -253,6 +253,16 @@ struct CredentialsView: View {
             Text(provider.label)
             if let linked = connections.linked(provider.provider) {
                 Text(describeLinked(linked)).fleetType(.micro).foregroundStyle(Design.Palette.inkDim)
+                // WHAT THIS ACCOUNT HAS LEFT, in its own figures, on its own
+                // row. The difference between "sessions are failing" and
+                // "sessions are failing because this plan is out until 15:10".
+                // Nothing at all from a host that has not said; the attention
+                // colour only when a window is nearly spent.
+                if let usage = linked.usage {
+                    Text(describeUsage(usage))
+                        .fleetType(.micro)
+                        .foregroundStyle(usage.isNearLimit ? Design.Palette.attention : Design.Palette.inkDim)
+                }
                 // MISSING PERMISSIONS, said here rather than discovered in a
                 // session. The asked-for list grows; a token minted before it
                 // grew still verifies, still says "connected", and then fails
