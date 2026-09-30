@@ -11,6 +11,40 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.4 — 2026-09-30
+
+**Temporary machines come from your own GitHub repository, and a session can
+start on one from New session. The apps show how full a session's context is
+and what each Claude account has left.**
+
+- **Your own runner repository.** Under Add a machine, enter a public
+  repository with the runner workflows in it and press **Check and save**. The
+  check shows what it found (public, GitHub app installed, Actions write, which
+  machines) and saves only when everything passes. The machines you ask for
+  then run on that repository's free Actions minutes, and no operator step is
+  needed.
+- **A session on a new machine.** New session's Where row offers a new Linux,
+  macOS or Android machine. The fleet asks GitHub for it and starts the
+  session once it has joined, which takes a few minutes.
+- **Private code on a runner.** With the GitHub App key set up on the fleet
+  (see `docs/github-app.md`), a runner's git gets a token for the one
+  repository it is fetching, for one hour. Without it, runners reach public
+  code as before.
+- **Context and account usage.** Each session shows how full its context
+  window is. Each linked Claude account shows what it has left in its current
+  windows, as one figure per account however many boxes it is linked on.
+- **The sidecar has its own hub token**, limited to the commands it sends.
+  The next `--upgrade` moves it off the operator's token.
+- **Fixes.** A checkout box restarts on new code after an update instead of
+  running the old code until someone restarts it. `/identity` and `/enroll` say
+  which account to run them as rather than suggesting a reinstall. A runner
+  started with an API key no longer stops at the CLI's question about using
+  it. The macOS installer no longer fails to reload a daemon it has just
+  stopped. The macOS host is now installed for real on a GitHub runner in CI.
+
+Hosts speak protocol 6. An older box keeps working, but cannot check a runner
+repository or dispatch to one, and says so rather than failing.
+
 ## 0.4.3 — 2026-09-29
 
 **One fix: a grant now changes the recorded answer.**
