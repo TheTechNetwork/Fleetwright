@@ -299,6 +299,29 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
      * request that has already left.
      */
     fun startInBackground(request: StartRequest) {
+        // ON A MACHINE THAT DOES NOT EXIST YET. The coordinator holds the
+        // session with the dispatch and starts it when the runner joins, so
+        // this returns long before there is a session, and says so. The
+        // session's own notification, with its link, is what arrives later.
+        request.platform?.let { platform ->
+            // "New macOS machine" reads as "a new macOS machine" in a
+            // sentence: only the first letter changes case.
+            val label = newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
+            status = "Asking GitHub for a ${label.replaceFirstChar { it.lowercase() }}. The session starts on it when it joins."
+            val start = buildMap {
+                request.title?.let { put("title", it) }
+                request.brief?.let { put("brief", it) }
+                request.mode?.let { put("mode", it) }
+            }
+            scope.launch {
+                val reply = fleet.provision(platform, minutes = request.minutes, start = start)
+                val text = reply.text.ifBlank { "Asked for it." }
+                LocalNotice.post(context, if (reply.ok) "Machine on its way" else "Could not ask for a machine", text)
+                status = text
+                refresh(keepStatus = true)
+            }
+            return
+        }
         // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO, because "ready" reads as
         // "working" and only one of these is. A session with no profile is
         // waiting for a person, and somebody who walks away expecting output
