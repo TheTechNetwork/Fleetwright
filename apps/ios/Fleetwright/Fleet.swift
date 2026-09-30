@@ -51,6 +51,14 @@ struct Fleet {
         /// What it is asking, when it is asking. Present only while a prompt
         /// is on screen — and the id is what makes answering it later safe.
         let prompt: Prompt?
+        /// How full its window is: the tokens in context at the last
+        /// assistant turn, and the model that answered, as the host read them
+        /// off the transcript. No size and no percentage — the transcript
+        /// does not say how big the window is, and a table of models here
+        /// would be wrong the week one changed. Nil is CANNOT TELL: not
+        /// running, no turn yet, an older host. Drawn as nothing, never as
+        /// empty.
+        let context: Context?
 
         struct Prompt: Codable, Hashable {
             let id: String?
@@ -61,6 +69,26 @@ struct Fleet {
                 let label: String
                 var id: Int { index }
             }
+        }
+
+        struct Context: Codable, Hashable {
+            let tokens: Int?
+            let model: String?
+        }
+
+        /// "248k in context", or nil when the host did not say. Same words
+        /// as Android, held equal by test/context-and-usage-in-apps.test.js.
+        var contextLine: String? {
+            guard isRunning, let tokens = context?.tokens, tokens >= 0 else { return nil }
+            return "\(Self.compactTokens(tokens)) in context"
+        }
+
+        /// 412 → "412 tokens", 248_717 → "248k", 1_200_000 → "1.2M". Coarse
+        /// on purpose: the question is "how full", never the exact count.
+        static func compactTokens(_ tokens: Int) -> String {
+            if tokens < 1000 { return "\(tokens) tokens" }
+            if tokens < 1_000_000 { return "\(tokens / 1000)k" }
+            return String(format: "%.1fM", Double(tokens) / 1_000_000)
         }
 
         var id: String { "\(hostId ?? "?")/\(name)" }
@@ -1128,8 +1156,49 @@ struct Fleet {
         }
         let account: Account?
         let credential: Credential?
+        /// How much of each linked account's limit is used, as that account's
+        /// own endpoint last told the box: one row per linked account, with
+        /// the four windows Claude Code's own /usage draws, or the reason
+        /// there is no answer. Nil is CANNOT TELL — the box has not asked
+        /// yet, the check is off, or an older host — and is drawn as nothing.
+        let usage: Usage?
         let version: Version?
         let updates: Updates?
+
+        struct Usage: Codable, Hashable {
+            let checkedAt: Double?
+            let accounts: [AccountUsage]?
+        }
+
+        struct AccountUsage: Codable, Hashable, Identifiable {
+            let account: String?
+            let usage: Windows?
+            /// The host's reason when `usage` is nil: an expired credential, a
+            /// refused token, an answer in a shape it does not read.
+            let why: String?
+            var id: String { account ?? "?" }
+
+            struct Windows: Codable, Hashable {
+                let fiveHour: Window?
+                let sevenDay: Window?
+                let sevenDayOpus: Window?
+                let sevenDaySonnet: Window?
+            }
+            struct Window: Codable, Hashable {
+                /// Percent of the window used, 0-100, as the endpoint gave it.
+                let used: Double?
+                /// When it resets, epoch milliseconds. The phone does the
+                /// arithmetic, so "resets in 2h" stays right on screen.
+                let resetsAt: Double?
+            }
+
+            /// Worth colouring: a window that is nearly spent. Ninety percent,
+            /// because the next session start is what a person is deciding on.
+            var isNearLimit: Bool {
+                [usage?.fiveHour, usage?.sevenDay, usage?.sevenDayOpus, usage?.sevenDaySonnet]
+                    .contains { ($0?.used ?? 0) >= 90 }
+            }
+        }
         let loggedIn: Bool?
         /// How many people have connected a Claude account on this machine.
         ///

@@ -84,6 +84,7 @@ struct SessionView: View {
                         if let workspace = session.workspace { Text("· \(workspace)") }
                         if let age = session.age { Text("· \(age)") }
                         if let account = session.account, account != "shared" { Text("· \(account)") }
+                        if let context = session.contextLine { Text("· \(context)") }
                     }
                     .fleetType(.micro)
                     .foregroundStyle(Design.Palette.inkDim)
