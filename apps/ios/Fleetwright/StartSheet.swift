@@ -33,7 +33,33 @@ struct StartRequest {
     /// with this — the host resolves the name and the session fetches the value
     /// at runtime. See docs/trust.md.
     let secret: String?
+    /// A NEW TEMPORARY MACHINE to start it on, by operating system, or nil for
+    /// a machine the fleet already has. When set, `host`, `profile` and
+    /// `secret` are nil: the machine does not exist yet, and a runner holds no
+    /// task profiles or secrets of its own.
+    var platform: String? = nil
+    /// How long that machine stays, in minutes. Only with `platform`.
+    var minutes: Int? = nil
 }
+
+/// The machines the New session sheet can ask for, by the operating system a
+/// runner repository has a workflow for. The same four words and order as the
+/// temporary-machine control in settings, and on Android.
+struct NewMachineChoice: Hashable {
+    let platform: String
+    let label: String
+}
+
+let newMachineChoices: [NewMachineChoice] = [
+    NewMachineChoice(platform: "linux", label: "New Linux machine"),
+    NewMachineChoice(platform: "macos", label: "New macOS machine"),
+    NewMachineChoice(platform: "windows", label: "New Windows machine"),
+    NewMachineChoice(platform: "android", label: "New Android emulator"),
+]
+
+/// The picker's tag for a new machine. A prefix no host id can carry, since a
+/// host id never contains a colon.
+private let newMachineTag = "new:"
 
 struct StartSheet: View {
     let settings: Settings
@@ -59,6 +85,16 @@ struct StartSheet: View {
     @State private var secret = ""
     @State private var suggesting = false
     @State private var error = ""
+    /// Whether this fleet can start a machine for this person at all, from the
+    /// snapshot. The new-machine choices are drawn from this and only this, so
+    /// a fleet with no runner repository offers none (C-2).
+    @State private var canStartMachine = false
+    @State private var machineMinutes = 60
+
+    /// The operating system when a new machine is chosen, else nil.
+    private var chosenPlatform: String? {
+        host.hasPrefix(newMachineTag) ? String(host.dropFirst(newMachineTag.count)) : nil
+    }
 
     private var kinds: [SessionKind] { SessionKinds.all() }
 
@@ -118,7 +154,7 @@ struct StartSheet: View {
                 // Only shown once the fleet has ANSWERED. Rendering an empty
                 // picker while the request is in flight offers "Nothing yet" as
                 // if it were the fleet's answer, and somebody taps Start.
-                if profilesAnswered, !profiles.isEmpty {
+                if profilesAnswered, !profiles.isEmpty, chosenPlatform == nil {
                     Section {
                         Picker("Task", selection: $profile) {
                             Text("Nothing — I will drive it").tag("")
@@ -154,7 +190,7 @@ struct StartSheet: View {
                 // picker would offer a control for a capability nobody set up.
                 // Names only: the value stays on the host, and this app never
                 // sees it.
-                if secretsAnswered, !secrets.isEmpty {
+                if secretsAnswered, !secrets.isEmpty, chosenPlatform == nil {
                     Section {
                         Picker("Secret", selection: $secret) {
                             Text("None").tag("")
@@ -205,15 +241,41 @@ struct StartSheet: View {
                 }
 
                 // Only shown when there is a choice to make. One host is not a
-                // decision, and a picker with one entry is furniture.
-                if hosts.count > 1 {
+                // decision, and a picker with one entry is furniture. A fleet
+                // that can start a machine always has a choice: here, or a new
+                // one.
+                if hosts.count > 1 || canStartMachine {
                     Section {
                         Picker("Host", selection: $host) {
                             Text("Wherever fits").tag("")
                             ForEach(hosts, id: \.self) { h in Text(h).tag(h) }
+                            if canStartMachine {
+                                ForEach(newMachineChoices, id: \.platform) { choice in
+                                    Text(choice.label).tag(newMachineTag + choice.platform)
+                                }
+                            }
+                        }
+                        // A machine that does not exist yet has nothing to do
+                        // a profile or a secret with, so choosing one clears
+                        // both rather than leaving a start that is refused.
+                        .onChange(of: host) { _, now in
+                            if now.hasPrefix(newMachineTag) { profile = ""; secret = "" }
+                        }
+                        if chosenPlatform != nil {
+                            // Five-minute steps between the protocol's bounds,
+                            // the same control as the one in settings.
+                            Stepper("For \(machineMinutes) minutes", value: $machineMinutes, in: 5...350, step: 5)
                         }
                     } header: {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                    } footer: {
+                        if chosenPlatform != nil {
+                            Text("It takes a few minutes to boot. The session starts on it when it joins, and you get a "
+                                 + "notification with its link. It comes up idle, waiting for you. Everything on it is "
+                                 + "gone when the time runs out.")
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        }
                     }
                 }
 
@@ -249,6 +311,10 @@ struct StartSheet: View {
                     secrets = found
                     secretsAnswered = true
                 }
+                // Whether a new machine can be offered: the snapshot names a
+                // runner repository for this person. A failure offers none,
+                // which is the safe way round for a control that spends money.
+                canStartMachine = (try? await fleet.runners()) != nil
             }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
@@ -327,13 +393,16 @@ struct StartSheet: View {
             finalTitle = "\(prefix): \(finalTitle)"
         }
         let trimmedBrief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let platform = chosenPlatform
         onStart(StartRequest(
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
             mode: kind?.mode,
-            host: host.isEmpty ? nil : host,
-            profile: profile.isEmpty ? nil : profile,
-            secret: secret.isEmpty ? nil : secret
+            host: host.isEmpty || platform != nil ? nil : host,
+            profile: profile.isEmpty || platform != nil ? nil : profile,
+            secret: secret.isEmpty || platform != nil ? nil : secret,
+            platform: platform,
+            minutes: platform == nil ? nil : machineMinutes
         ))
         dismiss()
     }

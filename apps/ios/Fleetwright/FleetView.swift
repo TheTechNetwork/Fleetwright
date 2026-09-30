@@ -352,6 +352,36 @@ struct FleetView: View {
     /// a dismissed view is one that may not finish — and this is a mutating
     /// request that has already left.
     private func startInBackground(_ request: StartRequest) {
+        // ON A MACHINE THAT DOES NOT EXIST YET. The coordinator holds the
+        // session with the dispatch and starts it when the runner joins, so
+        // this returns long before there is a session, and says so. The
+        // session's own notification, with its link, is what arrives later.
+        if let platform = request.platform {
+            // "New macOS machine" reads as "a new macOS machine" in a
+            // sentence: only the first letter changes case.
+            let label = newMachineChoices.first { $0.platform == platform }?.label ?? "New machine"
+            status = "Asking GitHub for a \(label.prefix(1).lowercased() + label.dropFirst()). "
+                + "The session starts on it when it joins."
+            var start: [String: String] = [:]
+            if let title = request.title { start["title"] = title }
+            if let brief = request.brief { start["brief"] = brief }
+            if let mode = request.mode { start["mode"] = mode }
+            Task {
+                do {
+                    let reply = try await Fleet(settings: settings)
+                        .provision(platform: platform, minutes: request.minutes, start: start)
+                    let text = reply.text ?? "Asked for it."
+                    await MainActor.run { status = text }
+                    LocalNotice.post(title: reply.ok == false ? "Could not ask for a machine" : "Machine on its way", body: text)
+                } catch {
+                    let text = error.localizedDescription
+                    await MainActor.run { status = text }
+                    LocalNotice.post(title: "Could not ask for a machine", body: text)
+                }
+                await refresh(keepStatus: true)
+            }
+            return
+        }
         // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO, because "ready" reads as
         // "working" and only one of these is. A session with no profile is
         // waiting for a person, and somebody who walks away expecting output
@@ -731,6 +761,16 @@ private struct SettingsView: View {
     @State private var runnerPlatform = "linux"
     @State private var runnerMinutes = 60
     @State private var runnerResult = ""
+    /// YOUR OWN RUNNER REPOSITORY. `answered` is false until the coordinator
+    /// has said, and stays false for a credential that is not a person's, which
+    /// cannot have one: the section is drawn only when setting it can work.
+    @State private var runnerRepoAnswered = false
+    @State private var runnerRepoSaved: String?
+    @State private var runnerRepoFleet: String?
+    @State private var runnerRepoDraft = ""
+    @State private var runnerRepoBusy = false
+    @State private var runnerRepoMessage = ""
+    @State private var runnerCheck: Fleet.RunnerRepoCheck?
     // REVOKING A MACHINE AND EMPTYING THE BIN WERE HERE, and both moved: a
     // host's revocation is on that host's page and the bin is its own screen,
     // for the reason the comment on the "Add a machine" section gives — two
@@ -891,6 +931,84 @@ private struct SettingsView: View {
     ///
     /// Split out of the section above because that body is already at the
     /// size where the Swift type checker gives up on a line nobody edited.
+    /// WHERE YOUR MACHINES COME FROM. A public repository of your own, with
+    /// the Fleetwright GitHub App installed and the runner workflows in it,
+    /// is what makes Actions minutes free for you. Saved only after a
+    /// permanent box has checked it with your GitHub connection, and the
+    /// check's answers are shown either way, so a refusal says which one.
+    @ViewBuilder private var runnerRepository: some View {
+        if runnerRepoAnswered {
+            TextField("Your runner repository (owner/repo)", text: $runnerRepoDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.URL)
+            Button(runnerRepoBusy ? "Checking…" : "Check and save") { Task { await saveRunnerRepo() } }
+                .disabled(runnerRepoBusy || runnerRepoDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+            if runnerRepoSaved != nil {
+                // Says what clearing leads to: the fleet's repository when
+                // there is one, and nothing at all when there is not.
+                Button(runnerRepoFleet == nil ? "Remove your runner repository" : "Use the fleet's repository instead",
+                       role: .destructive) { Task { await clearRunnerRepo() } }
+                    .disabled(runnerRepoBusy)
+            }
+            Text(describeRunnerRepoSetting(saved: runnerRepoSaved, fleet: runnerRepoFleet))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            if let check = runnerCheck {
+                Text(describeRunnerCheck(check))
+                    .fleetType(.labelMono)
+                    .foregroundStyle(check.ok ? Design.Palette.ink : Design.Palette.bad)
+            }
+            if !runnerRepoMessage.isBlank {
+                Text(runnerRepoMessage)
+                    .fleetType(.label)
+                    .foregroundStyle(runnerCheck?.ok == false ? Design.Palette.bad : Design.Palette.ink)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    @MainActor
+    private func saveRunnerRepo() async {
+        runnerRepoBusy = true
+        defer { runnerRepoBusy = false }
+        runnerRepoMessage = ""
+        do {
+            let fleet = Fleet(settings: settings)
+            let r = try await fleet.setRunnerRepo(runnerRepoDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+            runnerCheck = r.runnerRepo
+            runnerRepoMessage = r.text ?? ""
+            if r.ok == true, let saved = r.repo {
+                runnerRepoSaved = saved
+                runnerRepoDraft = saved
+                // The machine control below is drawn from the snapshot, which
+                // now names this repository.
+                if let got = try? await fleet.runners() { runnerRepo = got }
+            }
+        } catch {
+            runnerRepoMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func clearRunnerRepo() async {
+        runnerRepoBusy = true
+        defer { runnerRepoBusy = false }
+        do {
+            let fleet = Fleet(settings: settings)
+            let r = try await fleet.clearRunnerRepo()
+            runnerRepoMessage = r.text ?? ""
+            runnerRepoSaved = nil
+            runnerCheck = nil
+            runnerRepoDraft = ""
+            // Nil here is an answer too: no repository of yours and none for
+            // the fleet means there is nowhere to start a machine.
+            runnerRepo = try? await fleet.runners()
+        } catch {
+            runnerRepoMessage = error.localizedDescription
+        }
+    }
+
     @ViewBuilder private var temporaryMachine: some View {
         if let repo = runnerRepo {
             Picker("Temporary machine", selection: $runnerPlatform) {
@@ -949,6 +1067,7 @@ private struct SettingsView: View {
         async let devices = fleet.clients()
         async let happened = fleet.events()
         async let runners = fleet.runners()
+        async let repoSetting = fleet.runnerRepoSetting()
 
         // AND A FAILED REQUEST IS NOT AN EMPTY FLEET.
         //
@@ -978,6 +1097,15 @@ private struct SettingsView: View {
         // A NIL INSIDE A SUCCESS IS THE ANSWER "no runner repository"; a failed
         // request keeps what was there, like the four above.
         if let got = try? await runners { runnerRepo = got }
+        // A person's own runner repository. A refusal (the admin token, an
+        // older coordinator) leaves the section undrawn: there is nothing it
+        // could set.
+        if let got = try? await repoSetting, got.ok != false {
+            runnerRepoAnswered = true
+            runnerRepoSaved = got.repo
+            runnerRepoFleet = got.fleet
+            if runnerRepoDraft.isEmpty { runnerRepoDraft = got.repo ?? "" }
+        }
         // AFTER the four, not before: "loaded" means an answer arrived, and
         // setting it first would put the empty states back one line earlier.
         loaded = true
@@ -1356,6 +1484,7 @@ private struct SettingsView: View {
                                 }
                             }
                         }
+                        runnerRepository
                         temporaryMachine
                         // AND THE THIRD WAY A MACHINE ARRIVES: a repository's
                         // own workflow, started by hand, joining a runner as
@@ -2075,6 +2204,24 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?) ->
         parts.append(org)
     }
     return parts.joined(separator: " · ")
+}
+
+/// Where this person's machines come from, in one sentence. The same words
+/// on both phones; test/runner-repo-in-apps.test.js holds them together.
+func describeRunnerRepoSetting(saved: String?, fleet: String?) -> String {
+    if let saved { return "Your machines come from \(saved)." }
+    if let fleet { return "Your machines come from the fleet's repository, \(fleet). Set your own to use your free Actions minutes." }
+    return "Set a public repository with the Fleetwright GitHub App installed and the runner workflows in it, and your machines come from there."
+}
+
+/// What a runner repository check found, one answer per fact. "can't tell"
+/// is kept apart from "no" (C-5): a personal GitHub token cannot see whether
+/// the app is installed, and that is not the same as it not being installed.
+func describeRunnerCheck(_ check: Fleet.RunnerRepoCheck) -> String {
+    func word(_ value: Bool?) -> String { value.map { $0 ? "yes" : "no" } ?? "can't tell" }
+    let machines = check.platforms.isEmpty ? "none" : check.platforms.joined(separator: ", ")
+    return "Public: \(word(check.isPublic)) · GitHub app: \(word(check.installed)) · "
+        + "Actions write: \(word(check.actionsWrite)) · Machines: \(machines)"
 }
 
 /// "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.

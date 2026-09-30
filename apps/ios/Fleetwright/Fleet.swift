@@ -500,10 +500,65 @@ struct Fleet {
     /// with several: the dispatch is made with that person's GitHub connection
     /// on that machine, so the coordinator refuses rather than guessing when
     /// more than one could. See docs/runner-central.md.
-    func provision(platform: String, minutes: Int? = nil, host: String? = nil) async throws -> Reply {
+    /// Ask for a temporary machine, and optionally a session to start on it.
+    ///
+    /// `start` is the session the New session sheet described — title, brief
+    /// and mode — held by the coordinator with the dispatch and started on the
+    /// runner when it joins. It travels BESIDE the params, as `host` does: the
+    /// box that dispatches the run never sees it.
+    func provision(platform: String, minutes: Int? = nil, host: String? = nil,
+                   start: [String: String]? = nil) async throws -> Reply {
         var params: [String: String] = ["platform": platform]
         if let minutes { params["minutes"] = String(minutes) }
-        return try await intent("provision", params: params, host: host, numeric: ["minutes"])
+        return try await intent("provision", params: params, host: host, numeric: ["minutes"],
+                                extra: start.map { ["start": $0] } ?? [:])
+    }
+
+    /// What a runner repository check found, as data — so a screen shows each
+    /// answer rather than parsing the sentence. NIL IS "CANNOT TELL", not
+    /// "no": a personal GitHub token cannot see whether the Fleetwright app is
+    /// installed, and saying "not installed" would send somebody to reinstall
+    /// something that was never the problem.
+    struct RunnerRepoCheck: Codable, Hashable {
+        let repo: String
+        let isPublic: Bool?
+        let installed: Bool?
+        let actionsWrite: Bool?
+        let platforms: [String]
+        let missing: [String]
+        let ok: Bool
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case repo, installed, actionsWrite, platforms, missing, ok, message
+            case isPublic = "public"
+        }
+    }
+
+    /// Your own runner repository, the fleet's beside it, and — after a set —
+    /// what the check found. `repo` nil is an answer: you have not set one.
+    struct RunnerRepoSetting: Codable {
+        let ok: Bool?
+        let repo: String?
+        let fleet: String?
+        let text: String?
+        let runnerRepo: RunnerRepoCheck?
+    }
+
+    func runnerRepoSetting() async throws -> RunnerRepoSetting {
+        try JSONDecoder().decode(RunnerRepoSetting.self, from: try await get("/api/runner-repo"))
+    }
+
+    /// Saved only if a permanent box's check with YOUR GitHub connection
+    /// passes. The check comes back either way, so a refusal can say which
+    /// answer stopped it.
+    func setRunnerRepo(_ repo: String) async throws -> RunnerRepoSetting {
+        let data = try await send("PUT", "/api/runner-repo", body: ["repo": repo])
+        return try JSONDecoder().decode(RunnerRepoSetting.self, from: data)
+    }
+
+    func clearRunnerRepo() async throws -> RunnerRepoSetting {
+        try JSONDecoder().decode(RunnerRepoSetting.self, from: try await send("DELETE", "/api/runner-repo", body: nil))
     }
 
     /// What every host in the fleet can start a session on.
@@ -1435,7 +1490,8 @@ struct Fleet {
         params: [String: String] = [:],
         host: String? = nil,
         numeric: Set<String> = [],
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        extra: [String: Any] = [:]
     ) async throws -> Reply {
         var typed: [String: Any] = [:]
         for (key, value) in params {
@@ -1454,6 +1510,7 @@ struct Fleet {
             "id": idempotencyKey ?? "app-\(UUID().uuidString)",
         ]
         if let host, !host.isEmpty { body["host"] = host }
+        for (key, value) in extra { body[key] = value }
         do {
             let data = try await post("/api/intent", body: body)
             return try JSONDecoder().decode(Reply.self, from: data)
@@ -1461,7 +1518,11 @@ struct Fleet {
             // HELD, NOT LOST — but only when the fleet could not be REACHED.
             // A refusal is an answer, and replaying an answer is how somebody's
             // revoked credential retries all night. See isDeliveryFailure.
+            // NOT HELD WHEN IT CARRIES MORE THAN PARAMS: the outbox replays
+            // verb, params and host, and a replay that dropped a session
+            // request would start a machine nobody is waiting on.
             guard idempotencyKey == nil,
+                  extra.isEmpty,
                   isDeliveryFailure(error),
                   let outbox,
                   let entry = outbox.hold(verb: verb, params: params, numeric: numeric, host: host,
