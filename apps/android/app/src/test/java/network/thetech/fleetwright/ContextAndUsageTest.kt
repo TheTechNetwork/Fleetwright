@@ -42,41 +42,47 @@ class ContextAndUsageTest {
 
     @Test
     fun usageIsTheEndpointsFiguresWithTheResetOnThePhonesClock() {
-        val a = Fleet.AccountUsage(
-            account = "a@example.com",
-            usage = Fleet.AccountUsage.Windows(
-                fiveHour = Fleet.AccountUsage.Window(42.4, now + 7_200_000),
-                sevenDay = Fleet.AccountUsage.Window(12.0, null),
+        val a = Fleet.UsageReport(
+            checkedAt = now,
+            windows = Fleet.UsageReport.Windows(
+                fiveHour = Fleet.UsageReport.Window(42.4, now + 7_200_000),
+                sevenDay = Fleet.UsageReport.Window(12.0, null),
                 sevenDayOpus = null,
                 sevenDaySonnet = null,
             ),
             why = null,
         )
-        assertEquals("a@example.com · 5h 42% · resets in 2h · 7d 12%", describeUsage(a, now))
+        assertEquals("5h 42% · resets in 2h · 7d 12%", describeUsage(a, now))
         assertFalse(a.isNearLimit)
 
-        val b = Fleet.AccountUsage("b@example.com", null, "the credential has expired and has not renewed yet")
-        assertEquals("b@example.com · usage not reported — the credential has expired and has not renewed yet", describeUsage(b, now))
+        val b = Fleet.UsageReport(1L, null, "the credential has expired and has not renewed yet")
+        assertEquals("usage not reported — the credential has expired and has not renewed yet", describeUsage(b, now))
         assertFalse("no figure is not a spent one", b.isNearLimit)
 
-        val c = Fleet.AccountUsage(
-            account = "c@example.com",
-            usage = Fleet.AccountUsage.Windows(
-                fiveHour = Fleet.AccountUsage.Window(95.0, now + 60_000),
+        val c = Fleet.UsageReport(
+            checkedAt = 1L,
+            windows = Fleet.UsageReport.Windows(
+                fiveHour = Fleet.UsageReport.Window(95.0, now + 60_000),
                 sevenDay = null,
-                sevenDayOpus = Fleet.AccountUsage.Window(50.0, null),
+                sevenDayOpus = Fleet.UsageReport.Window(50.0, null),
                 sevenDaySonnet = null,
             ),
             why = null,
         )
-        assertEquals("c@example.com · 5h 95% · resets in 1m · Opus 7d 50%", describeUsage(c, now))
+        assertEquals("5h 95% · resets in 1m · Opus 7d 50%", describeUsage(c, now))
         assertTrue(c.isNearLimit)
     }
 
     @Test
     fun aWindowWithNoFigureIsNotReported() {
-        val row = Fleet.AccountUsage("a@example.com", Fleet.AccountUsage.Windows(Fleet.AccountUsage.Window(null, null), null, null, null), null)
-        assertEquals("a@example.com · usage not reported", describeUsage(row, now))
+        val report = Fleet.UsageReport(1L, Fleet.UsageReport.Windows(Fleet.UsageReport.Window(null, null), null, null, null), null)
+        assertEquals("usage not reported", describeUsage(report, now))
+    }
+
+    @Test
+    fun anOlderHostsRowDrawsNothing() {
+        val row = Fleet.Connections.Linked(provider = "claude", label = "Claude", account = "a@example.com", updatedAt = 0L)
+        assertNull(row.usage)
     }
 
     @Test

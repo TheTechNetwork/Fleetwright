@@ -335,8 +335,6 @@ class Fleet(
          * not sandbox. Never rendered as a fault.
          */
         val credential: Credential? = null,
-        /** What each linked account has left, in its own figures. Null from a host that has not said. */
-        val usage: Usage? = null,
         /**
          * Which releases this box installs — "stable" or "rolling".
          *
@@ -465,20 +463,15 @@ class Fleet(
      *   knows which of the three states it is describing.
      */
     /**
-     * How much of each linked account's limit is used, as that account's own
-     * endpoint last told the box: one row per linked account, with the four
-     * windows Claude Code's own /usage draws, or the reason there is no
-     * answer. Null on the host is CANNOT TELL — the box has not asked yet, the
-     * check is off, an older host — and is drawn as nothing.
+     * How much of an account's limit is used, on the Claude row of a person's
+     * connections: the four windows Claude Code's own /usage draws, or the
+     * host's reason there is no answer. On the ACCOUNT's row and not on each
+     * host, because an account is a person's — the same address linked on
+     * three boxes is one plan with one window, and the coordinator keeps the
+     * freshest box's answer. Null on the row is CANNOT TELL and is drawn as
+     * nothing.
      */
-    data class Usage(val checkedAt: Long?, val accounts: List<AccountUsage>)
-
-    data class AccountUsage(
-        val account: String?,
-        val usage: Windows?,
-        /** The host's reason when [usage] is null: an expired credential, a refused token, a shape it does not read. */
-        val why: String?,
-    ) {
+    data class UsageReport(val checkedAt: Long?, val windows: Windows?, val why: String?) {
         data class Windows(val fiveHour: Window?, val sevenDay: Window?, val sevenDayOpus: Window?, val sevenDaySonnet: Window?)
 
         /**
@@ -492,7 +485,7 @@ class Fleet(
          * because the next session start is what a person is deciding on.
          */
         val isNearLimit: Boolean get() =
-            listOf(usage?.fiveHour, usage?.sevenDay, usage?.sevenDayOpus, usage?.sevenDaySonnet).any { (it?.used ?: 0.0) >= 90.0 }
+            listOf(windows?.fiveHour, windows?.sevenDay, windows?.sevenDayOpus, windows?.sevenDaySonnet).any { (it?.used ?: 0.0) >= 90.0 }
     }
 
     data class Credential(
@@ -749,6 +742,8 @@ class Fleet(
              * could not use, and cleared the moment a fresh token is stored.
              */
             val needsReconnect: Boolean = false,
+            /** What this account has left, on the Claude row. Null from a host that has not said. */
+            val usage: UsageReport? = null,
         )
 
         fun linked(provider: String): Linked? = connected.firstOrNull { it.provider == provider }
@@ -1658,39 +1653,6 @@ class Fleet(
                             summary = c.optString("summary").takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
-                    // One row per linked account; a window the host did not
-                    // send, or sent as null, stays null rather than reading as
-                    // 0% used.
-                    usage = health?.optJSONObject("usage")?.let { u ->
-                        fun window(o: org.json.JSONObject?, key: String): AccountUsage.Window? =
-                            o?.optJSONObject(key)?.let { w ->
-                                AccountUsage.Window(
-                                    used = w.takeIf { it.has("used") && !it.isNull("used") }?.optDouble("used"),
-                                    resetsAt = w.optLong("resetsAt", 0L).takeIf { it > 0L },
-                                )
-                            }
-                        val rows = u.optJSONArray("accounts")
-                        Usage(
-                            checkedAt = u.optLong("checkedAt", 0L).takeIf { it > 0L },
-                            accounts = if (rows == null) emptyList() else (0 until rows.length()).mapNotNull { i ->
-                                rows.optJSONObject(i)?.let { r ->
-                                    val w = r.optJSONObject("usage")
-                                    AccountUsage(
-                                        account = r.optString("account").takeIf { it.isNotBlank() && it != "null" },
-                                        usage = w?.let {
-                                            AccountUsage.Windows(
-                                                fiveHour = window(it, "fiveHour"),
-                                                sevenDay = window(it, "sevenDay"),
-                                                sevenDayOpus = window(it, "sevenDayOpus"),
-                                                sevenDaySonnet = window(it, "sevenDaySonnet"),
-                                            )
-                                        },
-                                        why = r.optString("why").takeIf { it.isNotBlank() && it != "null" },
-                                    )
-                                }
-                            },
-                        )
-                    },
                     // ABSENT STAYS NULL, and present-and-empty is a real
                     // answer: a box with none of the three units installed.
                     logs = health?.optJSONArray("logs")?.let { arr ->
@@ -1753,6 +1715,30 @@ class Fleet(
                             (0 until m.length()).mapNotNull { k -> m.optString(k).takeIf { it.isNotBlank() } }
                         } ?: emptyList(),
                         needsReconnect = c.optBoolean("needsReconnect"),
+                        // A window the host did not send, or sent as null,
+                        // stays null rather than reading as 0% used.
+                        usage = c.optJSONObject("usage")?.let { u ->
+                            fun window(o: JSONObject?, key: String): UsageReport.Window? =
+                                o?.optJSONObject(key)?.let { w ->
+                                    UsageReport.Window(
+                                        used = w.takeIf { it.has("used") && !it.isNull("used") }?.optDouble("used"),
+                                        resetsAt = w.optLong("resetsAt", 0L).takeIf { it > 0L },
+                                    )
+                                }
+                            val w = u.optJSONObject("windows")
+                            UsageReport(
+                                checkedAt = u.optLong("checkedAt", 0L).takeIf { it > 0L },
+                                windows = w?.let {
+                                    UsageReport.Windows(
+                                        fiveHour = window(it, "fiveHour"),
+                                        sevenDay = window(it, "sevenDay"),
+                                        sevenDayOpus = window(it, "sevenDayOpus"),
+                                        sevenDaySonnet = window(it, "sevenDaySonnet"),
+                                    )
+                                },
+                                why = u.optString("why").takeIf { it.isNotBlank() && it != "null" },
+                            )
+                        },
                     )
                 }
             },
@@ -2043,22 +2029,22 @@ class Settings(context: Context) {
 fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
 
 /**
- * "a@example.com · 5h 42% · resets in 2h · 7d 12%", or the reason there is no
- * number.
+ * "5h 42% · resets in 2h · 7d 12%", or the reason there is no number.
  *
  * EVERY FIGURE IS THE ENDPOINT'S. The percentages are what the account's own
  * usage endpoint said, the reset is its timestamp with the phone doing the
- * arithmetic, and a row with no answer says so in the host's words rather than
- * drawing 0% — which would be the one reading worse than nothing. Same words as
- * iOS, held equal by test/context-and-usage-in-apps.test.js.
+ * arithmetic, and a report with no answer says so in the host's words rather
+ * than drawing 0% — which would be the one reading worse than nothing. Drawn
+ * under "connected as you@…" on the credentials sheet: an account's fact, on
+ * the account's row, once. Same words as iOS, held equal by
+ * test/context-and-usage-in-apps.test.js.
  */
-fun describeUsage(row: Fleet.AccountUsage, now: Long = System.currentTimeMillis()): String {
-    val who = row.account ?: "an account"
-    val windows = row.usage ?: return buildString {
-        append(who).append(" · usage not reported")
-        row.why?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
+fun describeUsage(report: Fleet.UsageReport, now: Long = System.currentTimeMillis()): String {
+    val windows = report.windows ?: return buildString {
+        append("usage not reported")
+        report.why?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
     }
-    val parts = mutableListOf(who)
+    val parts = mutableListOf<String>()
     windows.fiveHour?.let { w ->
         w.used?.let { used ->
             parts.add("5h ${Math.round(used)}%")
@@ -2068,7 +2054,7 @@ fun describeUsage(row: Fleet.AccountUsage, now: Long = System.currentTimeMillis(
     windows.sevenDay?.used?.let { parts.add("7d ${Math.round(it)}%") }
     windows.sevenDayOpus?.used?.let { parts.add("Opus 7d ${Math.round(it)}%") }
     windows.sevenDaySonnet?.used?.let { parts.add("Sonnet 7d ${Math.round(it)}%") }
-    if (parts.size == 1) parts.add("usage not reported")
+    if (parts.isEmpty()) return "usage not reported"
     return parts.joinToString(" · ")
 }
 
