@@ -151,3 +151,46 @@ export function resolveWorkdir(dir) {
   }
   return { ok: true, path: full };
 }
+
+/**
+ * Pre-answer the CLI's question about an API key in the environment.
+ *
+ * WHAT A RUNNER HIT. An ephemeral host authenticates with ANTHROPIC_API_KEY
+ * (docs/ephemeral-hosts.md), and an unsandboxed session inherits it. The CLI,
+ * the first time it is started interactively with one in its environment,
+ * draws a dialog — "Detected a custom API key in your environment. Do you want
+ * to use this API key?" — with **No (recommended)** focused, and waits. Nothing
+ * here answered it, the watcher's regexes did not know it, and a session on a
+ * runner sat at that question for the whole of its minutes, looking idle.
+ *
+ * The CLI records the answer in ~/.claude.json under
+ * `customApiKeyResponses.approved`, keyed by the key's LAST TWENTY CHARACTERS
+ * (confirmed against the installed binary, not remembered). So the process
+ * that was started with the key writes the same record the person would have
+ * by pressing Yes, and the dialog never appears. Only the suffix is written,
+ * which is what the CLI itself stores; the key is never logged.
+ *
+ * Not the whole key's authority: this approves USING a key that is already in
+ * the process environment, which is a decision whoever set the environment
+ * already made.
+ *
+ * @param {string} key  the ANTHROPIC_API_KEY this process was started with
+ */
+export function approveApiKey(key) {
+  if (typeof key !== 'string' || key.length < 20) return false;
+  const suffix = key.slice(-20);
+  return editClaudeConfig((cfg) => {
+    const responses = cfg.customApiKeyResponses && typeof cfg.customApiKeyResponses === 'object'
+      ? cfg.customApiKeyResponses
+      : {};
+    const approved = Array.isArray(responses.approved) ? responses.approved : [];
+    const rejected = Array.isArray(responses.rejected) ? responses.rejected : [];
+    if (approved.includes(suffix) && !rejected.includes(suffix)) return false;
+    cfg.customApiKeyResponses = {
+      approved: approved.includes(suffix) ? approved : [...approved, suffix],
+      // A "No" pressed once by hand would otherwise outrank this every start.
+      rejected: rejected.filter((/** @type {unknown} */ r) => r !== suffix),
+    };
+    return true;
+  }, 'approved the API key in the environment (sessions skip "Do you want to use this API key?")');
+}
