@@ -140,32 +140,96 @@ ends up with; the ticket is that value doing a second job.
 Both apps offer it beside the pin for a permanent host — a platform, the
 minutes, one button — and only when `/api/hosts` says `runners` is set. A
 fleet with no runner repository refuses `provision` with a sentence naming
-`FLEETWRIGHT_RUNNER_REPO`, which is the right answer for an agent that asked
-and a dead button on every fleet that has not configured one; so the snapshot
-carries the repository and the control is drawn from that. The reply lands on
-the same screen, and it says what this page says: a dispatch is not a machine.
+where to set one, which is the right answer for an agent that asked and a dead
+button on every fleet that has not; so the snapshot carries the repository and
+the control is drawn from that. The reply lands on the same screen, and it says
+what this page says: a dispatch is not a machine.
+
+**And from the New session sheet.** Its Where picker offers a new Linux, macOS
+or Windows machine, or an Android emulator, wherever the snapshot says one can
+be started. Choosing one sends `provision` with the session beside it — title,
+brief and mode, as `start` would take them — and the coordinator holds that
+session with the dispatch ticket. When the runner enrols on that ticket and
+sends its first health frame, the coordinator starts the session there, as the
+person who asked, once. The session announces itself the way every session
+does, with its Remote Control link, and a start that fails is recorded rather
+than silent. Task profiles and secrets are not offered for a new machine: it
+is minutes old and holds neither.
+
+## Your own runner repository
+
+> Runners on the person's own free minutes, from a repository they control.
+
+A fleet had one runner repository, set by an operator, so a runner was
+something an operator arranged before anybody could have one, and everybody's
+Actions minutes came out of one account. Each person can now name their own:
+a **public** repository (Actions minutes on GitHub's standard runners are free
+only there) with the **Fleetwright GitHub App installed** and the runner
+workflows from [`install/runner-central/`](../install/runner-central/) in it.
+The fleet's repository stays the default for anybody who has not set one.
+
+**It is checked before it is saved.** `PUT /api/runner-repo` asks a permanent
+box to run `runnerrepo` with the person's own GitHub connection, and saves the
+name only if every answer is one a dispatch can use:
+
+| asked | how | why it matters |
+|---|---|---|
+| can this person see it, and is it public | `GET /repos/{repo}` | a private one would bill every machine to its owner without anybody deciding that |
+| does the Fleetwright App reach it | `GET /user/installations`, then the installation's repositories when it was given a chosen few | it is the App's token that dispatches |
+| with Actions write | the installation's `permissions.actions` | without it the dispatch is a 403 |
+| which runner workflows it carries | one listing of `.github/workflows` | a platform with no workflow is refused before anybody waits for it |
+
+Each answer comes back as data, and **"cannot tell" is kept apart from "no"**:
+a personal access token cannot see installations at all, so for one the check
+reports the App as unknown and decides on the person's own push access, which
+is what a personal token dispatches with. The name is saved as GitHub spells
+it, because that is the spelling a job's OIDC token will carry.
+
+**What a stored name admits: nothing, on its own.** A repository nobody put on
+the operator's `FLEETWRIGHT_ACTIONS_REPOS` admits a job only when that job
+presents a live dispatch ticket minted **for that person, naming that
+repository**, and only for the runner workflow its platform names. The ticket
+is looked at before GitHub's token is verified — that is what widens the
+allowlist for this one job — and spent only after, so a job whose token fails
+does not burn it. A ticket spent by a job from any other repository is
+refused. So what a member gains is "my own repository can admit my own
+temporary machines when the fleet dispatched them", and a member could already
+add a machine with an enrolment pin.
+
+**Which box asks.** The dispatch and the check both need the person's GitHub
+connection, which lives on whichever permanent boxes they connected it on. With
+several, the coordinator asks each in turn, in host-id order, and moves on only
+when the whole answer was "GitHub is not connected for you here" — a reply that
+dispatched nothing. A box too old to carry the person's repository (it speaks
+protocol 5) is refused rather than sent: its code would drop the parameter and
+dispatch into the fleet's repository while saying it worked.
 
 ## What `provision` may express, and what it may not
 
 ```
-provision { platform: macos|windows|linux|android, minutes?: 5..350 }
+provision { platform: macos|windows|linux|android, minutes?: 5..350, repo?: owner/repo }
 ```
 
-No repository. No workflow file. No ref. No inputs. **A compromised coordinator
-can ask for a Mac; it cannot ask somebody's GitHub token to run something of its
-choosing somewhere of its choosing.** That is `start` naming a profile rather
-than carrying one, applied to a second verb.
+No workflow file. No ref. No inputs. **A compromised coordinator can ask for a
+Mac; it cannot ask somebody's GitHub token to run something of its choosing.**
+That is `start` naming a profile rather than carrying one, applied to a second
+verb.
 
-The repository comes from the **config frame** — one operator setting for the
-fleet, delivered to hosts on connect, so no box is configured with it. That is a
-capability the coordinator gains and it is bounded twice: GitHub refuses a
-dispatch into anything the person cannot already run workflows in, and the token
-is spent against `api.github.com` rather than handed to the repository. The
-frame is still a fixed list of two named keys, asserted by a test.
+The repository comes from the coordinator: the person's own when they set one,
+carried as `repo` and set by the coordinator whatever a caller sent, and
+otherwise the fleet's, off the **config frame** — one operator setting,
+delivered to hosts on connect, so no box is configured with it. Either way that
+is a capability the coordinator has, bounded twice: GitHub refuses a dispatch
+into anything the person cannot already run workflows in, and what runs there
+is one of four fixed workflow files on the default branch. `repo` is held to
+GitHub's own naming rules by the protocol, so `../x` is refused before it can
+become a path segment in an API URL.
 
-**Adding the verb cost no protocol bump.** An old host answers `unknown_verb`,
-which strands nothing; it is adding a *parameter to an existing verb* that is a
-flag day. See [`intents.md`](./intents.md).
+**`repo` cost protocol 6, and negotiation absorbs it.** A host on 5 is never
+handed it — and, because dropping it would dispatch somewhere the person did
+not choose, the coordinator refuses to send such a dispatch to that host at
+all. Adding `provision` itself cost nothing: an old host answers
+`unknown_verb`. See [`intents.md`](./intents.md).
 
 ## The four platforms
 
@@ -254,7 +318,16 @@ event for an agent watching.
 does: GitHub has to find hardware, boot it, and install tmux and the CLI. The
 reply says so in as many words, because an agent that read "started" as "ready"
 would go looking for a host that is still being built. There is no verb that
-waits for it; `status` is the answer, a few minutes later.
+waits for it; `status` is the answer, a few minutes later — or, from the New
+session sheet, the session's own notification when the coordinator starts it on
+the runner's first health frame.
+
+**Sessions on a runner still bill to the repository's API key.** A runner is
+minutes old and has no Claude login of its own, so it authenticates with the
+`ANTHROPIC_API_KEY` secret. Carrying a person's own Claude login and their
+GitHub and Cloudflare connections to a runner they own — so a runner spends
+their subscription and reaches their private code — is the next step and is
+not built.
 
 **The session cannot outlive the host.** `resume` is pinned to the box holding
 the volume, so when a runner goes, its sessions go. Collect what you need before

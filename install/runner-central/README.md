@@ -107,6 +107,27 @@ A person whose installation does not include it gets a 404 naming the
 repository, which is GitHub declining to admit the repository exists to a token
 that cannot see it.
 
+## Or: your own runner repository, with no operator step
+
+Everything above is the FLEET's runner repository, set once by an operator. Any
+member can instead point their own runners at a repository of their own, so the
+machines they ask for spend their own free minutes:
+
+1. Make a **public** repository and copy this directory into it (step 1).
+2. Add the `ANTHROPIC_API_KEY` secret (step 2). `FLEETWRIGHT_RUNNER_TOKEN` is
+   only for runs you start by hand, as before.
+3. Install the Fleetwright GitHub App on its owner and select the repository,
+   with Actions: Read & write (step 4).
+4. In the app, under Add a machine, enter it as your runner repository and
+   press **Check and save**.
+
+**Nothing on the coordinator changes** — no `FLEETWRIGHT_ACTIONS_REPOS` entry,
+no workflow pin. The check runs with your own GitHub connection and names what
+is missing if anything is; once it passes, a runner from that repository is
+admitted only with the dispatch ticket the fleet minted for you, naming that
+repository, for that platform's runner workflow. See
+[runner-central.md](../../docs/runner-central.md#your-own-runner-repository).
+
 ## 5. Try it
 
 ```

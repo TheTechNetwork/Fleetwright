@@ -134,19 +134,24 @@ and "dead host" is the one it retries.
 | `unlink` | `provider`, `scope?` | ✅ | `/unlink <provider>`, `/accounts remove <email>` |
 | `renew` | `provider`, `clientId`, `refresh`, `client` | ✅ | `/renew <provider> <client-id> <refresh> <secret>` |
 | `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
-| `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket` | ✅ | `/provision <platform> [minutes]` |
+| `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
+| `runnerrepo` | `repo` (`owner/repo`, v6) | | `/runnerrepo <owner/repo>` |
 
 `provision` is the other odd one, and in the opposite direction: every verb
 above acts on a host that has already enrolled, and this one asks for a host to
-come into existence. What makes it safe is what it cannot say — no repository,
-no workflow file, no ref, no inputs, only a platform from a fixed list and a
-number of minutes. The repository is named by the operator on the config frame
-and the workflow file is derived from the platform, so a compromised coordinator
-can ask for a Mac and cannot ask somebody's GitHub token to run something of its
-choosing somewhere of its choosing. `ticket` is the exception to "the caller
-supplies the params": the coordinator mints it, overwrites whatever arrived, and
-it is what tells the fleet whose runner this will be. See
-[runner-central.md](./runner-central.md).
+come into existence. What makes it safe is what it cannot say — no workflow
+file, no ref, no inputs, only a platform from a fixed list, a number of minutes,
+and where. The workflow file is derived from the platform, so a compromised
+coordinator can ask for a Mac and cannot ask somebody's GitHub token to run
+something of its choosing. `ticket` and `repo` are the exceptions to "the caller
+supplies the params": the coordinator sets both and overwrites whatever arrived.
+`ticket` is what tells the fleet whose runner this will be; `repo` is the asking
+person's own runner repository, absent for somebody who has not set one, who
+gets the fleet's off the config frame. `runnerrepo` is the check that comes
+before a repository is saved — public, reached by the Fleetwright GitHub App
+with Actions write, and which runner workflows it carries — asked with the
+person's own GitHub connection and changing nothing. See
+[runner-central.md](./runner-central.md#your-own-runner-repository).
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a
