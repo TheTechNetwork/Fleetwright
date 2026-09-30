@@ -121,6 +121,22 @@ export function loadSidecarConfig(env = process.env) {
     // that pane is still because somebody has to answer it.
     idleRestartMs: Math.max(0, int(env, 'FLEETWRIGHT_IDLE_RESTART_MINUTES', 60)) * 60_000,
 
+    // --- repository tokens for runners -------------------------------------
+    // THIS BOX AS A MINTER, on the one permanent box an operator chose. All of
+    // it from this box's own configuration: the key must never come from the
+    // coordinator, and whose repositories it may mint into is not the
+    // coordinator's to say. Empty everywhere else. See src/core/repo-tokens.js.
+    mint: Object.freeze({
+      keyFile: str(env, 'FLEETWRIGHT_GITHUB_APP_KEY'),
+      // systemd's LoadCredentialEncrypted= puts the key here, as `github-app-key`.
+      credentialsDirectory: String(env.CREDENTIALS_DIRECTORY || ''),
+      clientId: str(env, 'FLEETWRIGHT_GITHUB_APP_CLIENT_ID'),
+      owners: list(env, 'FLEETWRIGHT_GITHUB_MINT_OWNERS'),
+    }),
+    // THIS BOX AS A RUNNER: the socket its sessions' git asks for those tokens
+    // on. Set by the runner workflow and by nothing else.
+    runnerBroker: str(env, 'FLEETWRIGHT_RUNNER_BROKER'),
+
     logLevel: str(env, 'FLEETWRIGHT_LOG_LEVEL', 'info'),
   });
 }

@@ -18,7 +18,8 @@ import { Invites } from './invites.js';
 import { HostIdentities } from './hosts.js';
 import { Enrollment } from './enrollment.js';
 import { place } from './scheduler.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE } from '../protocol/intents.js';
+import { SEAL_KEY_RE } from '../seal.js';
 import { PendingAuthorizations, authorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText } from './oauth.js';
 import { checkPublicKey } from '../push-crypto.js';
 import { Authorizations } from '../../mcp/oauth.js';
@@ -40,6 +41,17 @@ const RUNNER_START_TTL_MS = 30 * 60_000;
  * tickets it came from (runner-tickets.js). Oldest out: a runner that has not
  * reported health while two hundred newer ones did is not coming. */
 const MAX_RUNNER_STARTS = 200;
+
+/**
+ * How many repository tokens one runner may ask for in MINT_WINDOW_MS. A runner
+ * holds what it was given for most of an hour, so an honest one asks once per
+ * repository; this is the ceiling on a dishonest or looping one, because every
+ * ask costs a permanent box a few GitHub calls.
+ */
+const MAX_MINTS_PER_WINDOW = 30;
+const MINT_WINDOW_MS = 10 * 60_000;
+/** A frame id worth correlating on — the same shape a reply id is held to. */
+const FRAME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
 /**
  * The longest push token this fleet will store, and the most rows it will hold.
@@ -157,6 +169,12 @@ export class CoordinatorCore {
      * @type {Map<string, { owner: string, start: { title?: string, brief?: string, mode?: string }, until: number }>}
      */
     this.runnerStarts = new Map();
+    /**
+     * When each runner last asked for repository tokens, for the ceiling above.
+     * Memory only: a coordinator restart forgetting it costs one more window.
+     * @type {Map<string, number[]>}
+     */
+    this.mintAsks = new Map();
     /**
      * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
      * back. In memory rather than in storage on purpose: it lives ten minutes,
@@ -354,6 +372,10 @@ export class CoordinatorCore {
     }
 
     if (msg.kind === 'event') return this.#onHostEvent(hostId, msg);
+
+    // A RUNNER ASKING FOR A REPOSITORY TOKEN. The one host-initiated request in
+    // the protocol, and it is answered on the same socket by a `minted` frame.
+    if (msg.kind === 'mint') return this.#onRunnerMint(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -1065,7 +1087,8 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean }} spec
+   *   `internal`, for `mint` only: set by the coordinator itself, never by a route
    *   `startAfter`, for `provision` only: a session to start on the runner once
    *   it joins — title, brief and mode, checked by `start`'s own rules
    */
@@ -1093,6 +1116,20 @@ export class CoordinatorCore {
     const shaped = checkParams(spec.verb, spec.params || {});
     if (shaped.ok === false) {
       return { ok: false, error: { code: shaped.code }, text: shaped.error };
+    }
+
+    // A MINT IS THE COORDINATOR'S OWN, sent for a runner that asked on its
+    // socket and for that runner's owner. From anybody else it is refused
+    // whatever it carries: the job token in it is what would decide, and a
+    // caller holding a job token for their own runner already has a runner to
+    // ask through. `internal` is set by #onRunnerMint and by nothing a route
+    // builds — no route copies fields off a request into the spec.
+    if (spec.verb === 'mint' && spec.internal !== true) {
+      return {
+        ok: false,
+        error: { code: 'coordinator_only' },
+        text: 'mint is sent by the coordinator for a runner that asked for a repository token. It cannot be called.',
+      };
     }
 
     // Recorded BEFORE placement, and only for verbs that change something.
@@ -2016,11 +2053,25 @@ export class CoordinatorCore {
         skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
         continue;
       }
-      if (answer?.ok === false && (answer.needsConnection || answer.error?.code === 'unknown_verb')) {
-        skipped.push(`${host.hostId} (${answer.needsConnection ? 'GitHub not connected for you' : 'needs updating'})`);
+      if (answer?.ok === false && (answer.needsConnection || answer.needsMinter || answer.error?.code === 'unknown_verb')) {
+        skipped.push(
+          `${host.hostId} (${answer.needsConnection ? 'GitHub not connected for you' : answer.needsMinter ? 'holds no GitHub App key' : 'needs updating'})`,
+        );
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    if (spec.verb === 'mint') {
+      // SAID AS WHICH HALF IS MISSING, because they are fixed by different
+      // people: the key is an operator's, on one box; the connection is the
+      // person's, from the app.
+      return {
+        ok: false,
+        error: { code: 'no_minter' },
+        text:
+          `No permanent box could mint a repository token for you: ${skipped.join(', ') || 'none is connected'}. ` +
+          'It takes a box that holds the fleet\u2019s GitHub App key and has your GitHub connection.',
+      };
     }
     return {
       ok: false,
@@ -2030,6 +2081,87 @@ export class CoordinatorCore {
         `None of the permanent boxes could ask GitHub for you: ${skipped.join(', ')}. ` +
         'Connect GitHub in the app — it is your own connection that starts the machine — and ask again.',
     };
+  }
+
+  /**
+   * A runner wants git credentials for one repository.
+   *
+   * What the coordinator adds is the one thing only it knows: WHOSE runner this
+   * is, decided at enrolment. It turns the frame into a `mint` for that person's
+   * permanent boxes and relays the answer back down the runner's socket. What
+   * it relays is sealed to a key only the runner holds (src/fleet/seal.js), and
+   * the job token it forwards names this exact request in its audience, so a
+   * coordinator that changed the repository, the key or the person would be
+   * refused by the box rather than trusted by it.
+   *
+   * Only an EPHEMERAL host with an OWNER may ask. A permanent box has the
+   * person's own connection already and needs no minted token; a runner with no
+   * owner has nobody to mint for.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onRunnerMint(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for a repository token without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'minted', id, ...answer });
+      } catch { /* the socket is going; the runner's wait runs out and says so */ }
+    };
+    if (!host?.ephemeral || !host.owner) {
+      answer({ ok: false, error: { code: 'not_a_runner' }, text: 'Only a temporary machine with an owner is minted repository tokens.' });
+      return;
+    }
+    const repo = String(msg.repo || '');
+    const job = String(msg.job || '');
+    const key = String(msg.key || '');
+    if (!REPO_RE.test(repo) || !JWT_RE.test(job) || job.length > 8192 || !SEAL_KEY_RE.test(key)) {
+      answer({ ok: false, error: { code: 'bad_params' }, text: 'That request for a repository token is not in the shape one takes.' });
+      return;
+    }
+    const now = this.now();
+    const recent = (this.mintAsks.get(hostId) || []).filter((t) => now - t < MINT_WINDOW_MS);
+    if (recent.length >= MAX_MINTS_PER_WINDOW) {
+      answer({
+        ok: false,
+        error: { code: 'too_many' },
+        text: `${hostId} has asked for ${recent.length} repository tokens in ten minutes. A token lasts an hour; ask again later.`,
+      });
+      return;
+    }
+    recent.push(now);
+    this.mintAsks.set(hostId, recent);
+
+    const reply = await this.#askEachBox({
+      verb: 'mint',
+      params: { repo, job, key },
+      actor: host.owner,
+      internal: true,
+      requester: { email: host.owner, admin: false },
+    });
+    // RECORDED EITHER WAY, by repository and outcome — never the token, which
+    // this process could not read if it wanted to. "Whose runner reached which
+    // private repository, and which box let it" is the question an audit of
+    // this feature asks, and the ring is where it is answered.
+    this.record({
+      hostId,
+      event: reply?.ok ? 'runner.token' : 'runner.token-refused',
+      actor: host.owner,
+      verb: 'mint',
+      text: reply?.ok
+        ? `${host.owner}\u2019s runner ${hostId} was given a token for ${reply.repo || repo} by ${reply.hostId}`
+        : `${host.owner}\u2019s runner ${hostId} was refused a token for ${repo}: ${reply?.text || 'no reason given'}`,
+    });
+    answer(
+      reply?.ok
+        ? { ok: true, sealed: reply.sealed, repo: reply.repo, expiresAt: reply.expiresAt, permissions: reply.permissions, text: reply.text }
+        : { ok: false, error: reply?.error || { code: 'refused' }, text: reply?.text || 'No box would mint that token.' },
+    );
   }
 
   /**

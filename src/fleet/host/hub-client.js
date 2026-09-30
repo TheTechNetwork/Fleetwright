@@ -86,6 +86,9 @@ export class HubError extends Error {
  *   coordinator can ask another box instead of reading it out of the sentence
  * @property {import('../../core/runners.js').RunnerRepoCheck} [runnerRepo]
  *   what a runner repository check found, as data
+ * @property {{ userId?: string, login?: string, repo?: string, pull?: boolean, push?: boolean }|null} [githubAccess]
+ *   what the person's own GitHub connection can do in one repository, as
+ *   facts — never the token
  * @property {{ sessions: number, pinRequired: boolean, hostname: string }} [reboot]
  *   what a reboot would cost, so a screen asks for as much as the loss is worth
  */

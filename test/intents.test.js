@@ -66,6 +66,9 @@ test('the verb set is exactly what is documented', () => {
     'link',
     'list',
     'logs',
+    // A repository token for a runner, sent by the coordinator and by nobody
+    // else. See src/core/repo-tokens.js.
+    'mint',
     'peek',
     // v3, and the FREE half of it: an old host answers `unknown_verb`, which
     // strands nothing. The costly half is `start { profile }` — a parameter on

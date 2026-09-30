@@ -211,6 +211,55 @@ export async function verifyActionsToken(token, { audiences, repositories, workf
 }
 
 /**
+ * A runner's job, proving to the box that mints its repository token which job
+ * it is, who started it, and which request it is making.
+ *
+ * NOT verifyActionsToken, and the differences are the point:
+ *
+ *  - It runs on a PERMANENT HOST, not the coordinator. The box that holds the
+ *    GitHub App key is the one deciding whether to use it, so it checks GitHub's
+ *    signature itself rather than believing a coordinator that says it did.
+ *  - There is NO REPOSITORY ALLOWLIST. What decides a mint is the person, not
+ *    an operator's list of runner repositories: `actor_id` has to be the GitHub
+ *    account whose connection answers the access check, and the caller compares
+ *    them. A job somebody else started — a collaborator on the runner
+ *    repository, a pull request from a fork — carries somebody else's id.
+ *  - THE AUDIENCE IS THE REQUEST. It is the binding from seal.js, a hash of the
+ *    repository asked for and the key the answer is sealed to, so the job token
+ *    is good for exactly one question and cannot be replayed with another.
+ *
+ * @param {string} token
+ * @param {{ audience: string }} opts
+ * @returns {Promise<{ repository: string, workflowRef: string, actor: string, actorId: string,
+ *   runId: string, runAttempt: string, eventName: string }>}
+ */
+export async function verifyRunnerJob(token, { audience }) {
+  const raw = String(token || '');
+  if (raw.split('.').length !== 3) throw new Error('not a JWT');
+  if (!audience) throw new Error('no audience to check the job token against');
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(raw, await keysFor(ACTIONS_ISSUER), {
+      issuer: ACTIONS_ISSUER,
+      audience,
+      algorithms: ['RS256', 'ES256'],
+      clockTolerance: 60,
+    }));
+  } catch (e) {
+    throw new Error(reasonFor(/** @type {any} */ (e)));
+  }
+  return {
+    repository: String(payload.repository || ''),
+    workflowRef: String(payload.job_workflow_ref || ''),
+    actor: String(payload.actor || ''),
+    actorId: String(payload.actor_id ?? ''),
+    runId: String(payload.run_id || ''),
+    runAttempt: String(payload.run_attempt || '1'),
+    eventName: String(payload.event_name || ''),
+  };
+}
+
+/**
  * Verify an ID token and return the identity in it.
  *
  * Throws with a reason rather than returning null: every failure here is

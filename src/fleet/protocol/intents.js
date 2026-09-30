@@ -53,6 +53,7 @@
 // See docs/intents.md for the wire format and the reasoning in full.
 
 import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
+import { SEAL_KEY_RE } from '../seal.js';
 
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
@@ -257,6 +258,9 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * both sides admitted `../x`, which is a path segment rather than a name the
  * moment it is put into `https://api.github.com/repos/…`. */
 export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+
+/** A compact JWT: three base64url segments. What a GitHub Actions job token is. */
+export const JWT_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 /**
  * THE FIXED VERB SET.
@@ -1053,6 +1057,61 @@ export const VERBS = Object.freeze({
       'Check a GitHub repository as a place to start temporary machines from, with your own GitHub connection: ' +
       'whether it is public, whether the Fleetwright GitHub App reaches it with Actions write, and which runner ' +
       'workflows (linux, macos, windows, android) it has. Changes nothing.',
+  },
+
+  // A REPOSITORY TOKEN FOR A RUNNER, minted by a permanent box that holds the
+  // GitHub App key, for the runner's owner. See src/core/repo-tokens.js for
+  // what bounds it and docs/runner-central.md for why it exists.
+  //
+  // COORDINATOR-ONLY. Nobody calls this: a runner sends a `mint` FRAME, and the
+  // coordinator turns it into this verb for its owner's permanent boxes.
+  // `dispatch` refuses it from any caller, and the MCP server does not offer
+  // it, because a tool that can only ever be refused is noise in a list an
+  // agent reads.
+  //
+  // WHY IT IS SAFE TO ADD, against security.md §6.3: no free text — three
+  // values each held to one shape, and none of them reaches a terminal or a
+  // model, because the sidecar answers this itself and never builds a command
+  // line from it; no identity parameter — whose token is the verified actor,
+  // and the box checks that against the GitHub account in `job`; no path; a
+  // new verb, so an old host answers `unknown_verb` and is skipped. It DOES
+  // produce a credential, so §4.1 names it — and what it produces is sealed to
+  // `key`, which is the runner's, so the coordinator relays a token it cannot
+  // read.
+  mint: {
+    params: {
+      repo: {
+        type: 'text',
+        required: true,
+        max: 161,
+        pattern: REPO_RE,
+        shapeName: 'owner/repo',
+        describe: 'The repository a runner session asked git credentials for.',
+      },
+      // The runner's GitHub Actions job token. GitHub signs it; its audience is
+      // the binding of `repo` and `key` (src/fleet/seal.js), so it is good for
+      // this one request and the box checks it rather than believing anybody.
+      job: {
+        type: 'text',
+        required: true,
+        max: 8192,
+        pattern: JWT_RE,
+        shapeName: 'a GitHub Actions job token',
+        describe: 'The runner job\'s own OIDC token, bound to this request.',
+      },
+      key: {
+        type: 'text',
+        required: true,
+        max: 87,
+        pattern: SEAL_KEY_RE,
+        shapeName: 'a P-256 public key',
+        describe: 'What the token is sealed to: a key only the asking runner holds.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Mint a one-hour GitHub token for one repository, for a runner the asking person owns, sealed so only that ' +
+      'runner can read it. Sent by the coordinator on a runner\'s behalf; refused from anybody else.',
   },
 });
 

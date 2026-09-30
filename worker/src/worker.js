@@ -1683,6 +1683,7 @@ const OPENAPI = JSON.stringify({
                       "link",
                       "list",
                       "logs",
+                      "mint",
                       "peek",
                       "profiles",
                       "provision",

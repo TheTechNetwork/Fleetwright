@@ -55,6 +55,9 @@ import { promptId, describePrompt } from './prompt.js';
 import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
+import { verifyRunnerJob } from '../coordinator/oidc.js';
+import { newSealKey, bindingFor, seal, open } from '../seal.js';
+import { runnerJobProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 
 /** @typedef {typeof import('../../log.js').log} Logger */
 
@@ -178,6 +181,9 @@ export class Sidecar {
    *   version?: (() => { head: string|null, branch: string|null, installed?: string|null, helper?: 'current'|'stale'|null }|null)|null,
    *   onRestartRequested?: ((at: number) => void)|null,
    *   startedAt?: number,
+   *   minter?: import('../../core/repo-tokens.js').Minter|null,
+   *   jobToken?: ((audience: string) => Promise<string>)|null,
+   *   mintTimeoutMs?: number,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -190,6 +196,16 @@ export class Sidecar {
     fetchImpl = globalThis.fetch,
     onRestartRequested = null,
     startedAt = Date.now(),
+    // THIS BOX AS A MINTER: the GitHub App key, its client id and whose
+    // repositories it may mint into, from this box's own configuration
+    // (repo-tokens.js, loadMinter). Null on almost every box, and then a
+    // `mint` is answered "not here" so the coordinator asks the next one.
+    minter = null,
+    // THIS BOX AS A RUNNER: how to ask GitHub for this job's token with a
+    // given audience. Null anywhere that is not a GitHub Actions job with
+    // id-token permission, and then there is nothing to ask for a mint with.
+    jobToken = null,
+    mintTimeoutMs = 30_000,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -296,6 +312,27 @@ export class Sidecar {
       : null;
     /** @type {Map<string, { at: number, reply: Promise<object> }>} */
     this.replay = new Map();
+    /**
+     * The GitHub App key, in memory. Never logged, never sent, never written:
+     * the only thing done with it is signing a ten-minute JWT in appJwt.
+     * @type {import('../../core/repo-tokens.js').Minter|null}
+     */
+    this.minter = minter;
+    this.jobToken = jobToken;
+    this.mintTimeoutMs = mintTimeoutMs;
+    /**
+     * A runner's minted repository tokens, IN MEMORY, keyed by the lowercased
+     * repository. The container broker caches nothing on purpose — a copy is
+     * what goes stale — but it reads a file; this costs a GitHub mint, and git
+     * asks once per fetch, push and submodule. An hour-long token held until
+     * five minutes before it dies is the same freshness with one mint an hour.
+     * @type {Map<string, { token: string, expiresAt: number, repo: string }>}
+     */
+    this.repoTokens = new Map();
+    /** Asks in flight, so twenty submodules asking at once mint once. @type {Map<string, Promise<any>>} */
+    this.repoAsks = new Map();
+    /** Waiters for the coordinator's `minted` answer, by frame id. @type {Map<string, { resolve: (m: any) => void, timer: any }>} */
+    this.mintWaiters = new Map();
   }
 
   get name() {
@@ -436,6 +473,19 @@ export class Sidecar {
     // reply — there is nothing to correlate and nothing to say. Checked first so
     // validateIntent never sees a frame it would refuse as a malformed intent.
     if (/** @type {any} */ (msg)?.kind === 'config') return this.#onConfig(msg);
+    // THE ANSWER TO A MINT THIS RUNNER ASKED FOR. Not an intent either, and it
+    // gets no reply: it closes a request this process opened. An answer
+    // nobody is waiting for is dropped — it is sealed to a key that has gone.
+    if (/** @type {any} */ (msg)?.kind === 'minted') {
+      const m = /** @type {any} */ (msg);
+      const waiter = typeof m.id === 'string' ? this.mintWaiters.get(m.id) : undefined;
+      if (waiter) {
+        this.mintWaiters.delete(m.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve(m);
+      }
+      return { kind: 'none' };
+    }
 
     const checked = validateIntent(msg, { maxSkewMs: this.maxSkewMs });
     if (checked.ok === false) {
@@ -519,6 +569,10 @@ export class Sidecar {
       // becomes a command line at all. The token it produces does — through
       // `/link`, the same way a pasted one would.
       if (intent.verb === 'exchange') return reply(await this.#exchange(intent));
+
+      // A MINT NEVER BECOMES A COMMAND LINE EITHER, for the same reason: the
+      // key it signs with is in this process and nowhere else on the box.
+      if (intent.verb === 'mint') return reply(await this.#mint(intent));
 
       // Everything else goes through the same command registry Telegram, the
       // web UI and the CLI use, so a fleet command cannot behave differently
@@ -702,6 +756,191 @@ export class Sidecar {
       // should wait on it to be told what happened.
       if (isMutating(intent.verb)) setImmediate(() => void this.#pushHealth());
     }
+  }
+
+  /**
+   * Mint a repository token for a runner, if this box may.
+   *
+   * The checks are in repo-tokens.js's header, in this order, and the order is
+   * cheapest first: a box that holds no key says so without touching GitHub,
+   * and a job token that does not verify costs no call to the hub.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async #mint(intent) {
+    const repo = String(intent.params.repo);
+    const key = String(intent.params.key);
+    /** @param {string} code @param {string} text */
+    const refuse = (code, text) => {
+      this.log.warn(`sidecar: did not mint a token for ${repo}: ${text}`);
+      return { ok: false, text, error: { code } };
+    };
+    if (!this.minter) {
+      // AS DATA, like needsConnection: the coordinator asks the next box when
+      // this is the whole reason, rather than reading it out of the sentence.
+      return {
+        ok: false,
+        text: 'This box holds no GitHub App key, so it cannot mint repository tokens.',
+        error: { code: 'not_a_minter' },
+        needsMinter: true,
+      };
+    }
+    if (!intent.actor) return refuse('no_actor', 'Nobody was named as the runner’s owner, so there is no one to mint for.');
+
+    const audience = await bindingFor({ repo, key });
+    let job;
+    try {
+      job = await verifyRunnerJob(String(intent.params.job), { audience });
+    } catch (e) {
+      return refuse('bad_job', `The runner’s job token did not verify: ${/** @type {Error} */ (e).message}.`);
+    }
+    const notRunner = runnerJobProblem(job);
+    if (notRunner) return refuse('not_a_runner', notRunner);
+    if (!ownerAllowed(repo, this.minter.owners)) {
+      return refuse(
+        'owner_not_allowed',
+        `This box mints repository tokens only for ${this.minter.owners.join(', ')}, and ${repo.split('/')[0]} is not one ` +
+          'of them. The GitHub App is installable by anyone, so which accounts it mints into is decided here.',
+      );
+    }
+
+    // THE PERSON'S HALF, asked of the hub, which holds their connection. The
+    // answer is an account id and two booleans; the token stays where it is.
+    const r = /** @type {any} */ (await this.hub.command(toCommandLine(intent), commandMeta('mint', {}, `fleet:${intent.actor}`)));
+    if (r?.needsConnection === 'github') {
+      return { ok: false, text: r.text || 'GitHub is not connected for you on this box.', error: { code: 'not_connected' }, needsConnection: 'github' };
+    }
+    const access = r?.githubAccess;
+    if (r?.ok === false || !access) return refuse('no_access', String(r?.text || 'Your GitHub connection could not be checked.'));
+    // THE BINDING BETWEEN THE RUNNER AND THE PERSON, decided by GitHub twice
+    // rather than by the coordinator once: the job token says which account
+    // started the run, and the connection says whose it is.
+    if (String(access.userId) !== job.actorId) {
+      return refuse(
+        'not_the_asker',
+        `That runner was started by ${job.actor || 'another GitHub account'}, and the GitHub connection here is ${access.login}. ` +
+          'A token is minted only for the account that started the runner.',
+      );
+    }
+    if (!access.pull) return refuse('no_access', `${access.login} cannot read ${access.repo}, so neither can a runner.`);
+
+    const minted = await mintRepoToken({
+      repo: String(access.repo),
+      permissions: permissionsFor(access),
+      clientId: this.minter.clientId,
+      key: this.minter.key,
+      fetchImpl: this.fetchImpl,
+    });
+    if (!minted.ok) return refuse('mint_failed', minted.message);
+    const sealed = await seal({
+      to: key,
+      aad: audience,
+      payload: { token: minted.token, expiresAt: minted.expiresAt, repo: access.repo, permissions: minted.permissions },
+    });
+    const perms = Object.entries(minted.permissions).map(([k, v]) => `${k}:${v}`).join(', ');
+    // By name and scope, never the value — the same rule as the broker's log.
+    this.log.info(`sidecar: minted a token for ${access.repo} (${perms}) for ${intent.actor}’s runner`);
+    return {
+      ok: true,
+      text: `A token for ${access.repo} (${perms}), good for an hour, sealed to the runner that asked.`,
+      sealed,
+      repo: access.repo,
+      expiresAt: minted.expiresAt,
+      permissions: minted.permissions,
+    };
+  }
+
+  /**
+   * Git credentials for one repository, on a runner.
+   *
+   * Called by the runner's broker socket (./runner-broker.js) when a session's
+   * git asks. Makes a key for this one request, asks GitHub for a job token
+   * whose audience binds that key to the repository, sends both up as a `mint`
+   * frame, and opens what comes back. Never throws: git treats silence as
+   * "no credential here", which is what every refusal below becomes.
+   *
+   * @param {{ provider?: unknown, repo?: unknown }} ask
+   * @returns {Promise<{ ok: true, provider: string, env: Record<string, string>, expiresAt: number, repo: string }
+   *   | { ok: false, error: string, message: string }>}
+   */
+  async repoCredential({ provider, repo }) {
+    if (provider !== 'github') {
+      return { ok: false, error: 'unknown_provider', message: `A runner can be given GitHub credentials and nothing else, not "${String(provider).slice(0, 40)}".` };
+    }
+    const name = String(repo || '');
+    if (!REPO_RE.test(name)) {
+      // git sends the path only when credential.useHttpPath is on, which the
+      // runner workflow sets. Without it there is no repository to scope to,
+      // and a token for "whatever" is the one thing this will not mint.
+      return { ok: false, error: 'no_repo', message: 'git did not say which repository it wants, and a runner is only given a token for one.' };
+    }
+    if (!this.jobToken) {
+      return { ok: false, error: 'not_a_runner', message: 'This box is not a GitHub Actions runner, so it has no job token to ask with.' };
+    }
+    const k = name.toLowerCase();
+    const held = this.repoTokens.get(k);
+    if (held && held.expiresAt - Date.now() > 5 * 60_000) {
+      return { ok: true, provider: 'github', env: { GH_TOKEN: held.token }, expiresAt: held.expiresAt, repo: held.repo };
+    }
+    const inFlight = this.repoAsks.get(k);
+    if (inFlight) return inFlight;
+    const ask = this.#askForRepoToken(name).finally(() => this.repoAsks.delete(k));
+    this.repoAsks.set(k, ask);
+    return ask;
+  }
+
+  /** @param {string} repo */
+  async #askForRepoToken(repo) {
+    /** @param {string} error @param {string} message */
+    const no = (error, message) => {
+      this.log.warn(`sidecar: no token for ${repo}: ${message}`);
+      return /** @type {const} */ ({ ok: false, error, message });
+    };
+    const { privateKey, publicKey } = await newSealKey();
+    const audience = await bindingFor({ repo, key: publicKey });
+    let job;
+    try {
+      job = await /** @type {(a: string) => Promise<string>} */ (this.jobToken)(audience);
+    } catch (e) {
+      return no('no_job_token', `GitHub would not give this job a token to ask with: ${/** @type {Error} */ (e).message}`);
+    }
+    const id = `mint-${crypto.randomUUID()}`;
+    /** @type {any} */
+    const answer = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, this.mintTimeoutMs);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      Promise.resolve()
+        .then(() => this.transport.send({ v: PROTOCOL_VERSION, kind: 'mint', id, hostId: this.hostId, repo, job, key: publicKey }))
+        .catch((e) => {
+          this.mintWaiters.delete(id);
+          clearTimeout(timer);
+          resolve({ ok: false, text: `could not reach the fleet: ${/** @type {Error} */ (e).message}` });
+        });
+    });
+    if (!answer) return no('timeout', 'The fleet did not answer in time. A coordinator from before repository tokens drops the question.');
+    if (answer.ok !== true) return no(String(answer.error?.code || 'refused'), String(answer.text || 'The fleet refused.'));
+    let payload;
+    try {
+      payload = await open({ privateKey, publicKey, aad: audience, sealed: answer.sealed });
+    } catch {
+      // Something between here and the box that minted it changed the bytes,
+      // the repository or the key. Whatever it is, it is not a token to use.
+      return no('unsealed', 'The answer did not open with this request’s key, so it was not used.');
+    }
+    const token = typeof payload?.token === 'string' ? payload.token : '';
+    const expiresAt = Number(payload?.expiresAt);
+    const got = String(payload?.repo || '');
+    if (!token || !Number.isFinite(expiresAt) || got.toLowerCase() !== repo.toLowerCase()) {
+      return no('unsealed', `The token that came back is not for ${repo}, so it was not used.`);
+    }
+    this.repoTokens.set(repo.toLowerCase(), { token, expiresAt, repo: got });
+    this.log.info(`sidecar: holding a token for ${got} until ${new Date(expiresAt).toISOString()}`);
+    return /** @type {const} */ ({ ok: true, provider: 'github', env: { GH_TOKEN: token }, expiresAt, repo: got });
   }
 
   /**
@@ -1477,6 +1716,14 @@ export function toCommandLine({ verb, params, actor }) {
       // the last place a malformed one could still become part of a line.
       if (!REPO_RE.test(String(p.repo || ''))) throw new Error('runnerrepo needs a repository as owner/repo');
       return `/runnerrepo ${p.repo}`;
+    case 'mint':
+      // THE ONLY LINE A MINT PRODUCES IS THE QUESTION, never the answer. The
+      // job token and the key are not on it and never become a command at all
+      // — the sidecar checks the one and seals to the other itself. What the
+      // hub is asked is what the person's own GitHub connection can do in the
+      // repository, which is the half only the hub can answer.
+      if (!REPO_RE.test(String(p.repo || ''))) throw new Error('mint needs a repository as owner/repo');
+      return `/githubaccess ${p.repo}`;
     case 'renew':
       // Both are protocol-constrained the same way `link.secret` is — printable
       // ASCII, no whitespace, no quote, no dash to start — so they are two

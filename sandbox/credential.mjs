@@ -16,16 +16,33 @@
 
 import { request } from 'node:http';
 
-const SOCKET = process.env.AGENT_SESSION_HOOK_SOCKET || '/run/hub.sock';
+// ON A RUNNER there is no container and no bind-mounted socket: the sidecar
+// serves one broker for the whole machine (src/fleet/host/runner-broker.js),
+// and the runner workflow points this at it. Same route, same answers.
+const SOCKET = process.env.FLEETWRIGHT_RUNNER_BROKER || process.env.AGENT_SESSION_HOOK_SOCKET || '/run/hub.sock';
 const PATHNAME = '/internal/credential';
 
 /**
+ * `owner/repo` out of what git calls the path — `owner/repo.git`, or with a
+ * trailing slash — or null. The same shape the protocol holds a repository to,
+ * checked here so a path that is not one is never sent as if it were.
+ *
+ * @param {string|undefined} p
+ */
+function repoFromPath(p) {
+  const m = /^\/?([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(String(p || ''));
+  return m && !/\/\.{1,2}$/.test(m[1]) ? m[1] : null;
+}
+
+/**
  * @param {string} provider
+ * @param {string|null} [repo]  which repository, when the broker scopes to one
+ *   — a runner's does, a container's ignores it
  * @returns {Promise<{ ok: boolean, env?: Record<string,string>, message?: string }>}
  */
-function ask(provider) {
+function ask(provider, repo = null) {
   return new Promise((resolve) => {
-    const body = JSON.stringify({ provider });
+    const body = JSON.stringify(repo ? { provider, repo } : { provider });
     const req = request(
       {
         socketPath: SOCKET,
@@ -88,7 +105,11 @@ if (mode === 'get' || mode === 'store' || mode === 'erase') {
   const host = (q.host || '').toLowerCase();
   const provider = host === 'github.com' || host === 'gist.github.com' ? 'github' : null;
   if ((q.protocol || '').toLowerCase() !== 'https' || !provider) process.exit(0);
-  const got = await ask(provider);
+  // THE REPOSITORY, when git says which. It does only with
+  // credential.useHttpPath, which a container leaves off (its broker answers
+  // per person, not per repository) and a runner turns on (its broker mints for
+  // exactly one).
+  const got = await ask(provider, repoFromPath(q.path));
   const token = got.ok && got.env ? got.env.GH_TOKEN || got.env.GITHUB_TOKEN : null;
   // SILENCE IS THE REFUSAL. git falls through to the next helper and then to
   // asking a person; a non-zero exit here breaks clones of public repositories
@@ -145,9 +166,11 @@ if (mode === 'secret-value') {
   process.exit(0);
 }
 
-// fleet-cred <provider> — for `eval "$(fleet-cred github)"`, and for the shims.
+// fleet-cred <provider> [owner/repo] — for `eval "$(fleet-cred github)"`, and
+// for the shims. On a runner the repository is required, because a runner is
+// only given a token for one: `eval "$(fleet-cred github acme/app)"` before gh.
 const provider = mode || 'github';
-const got = await ask(provider);
+const got = await ask(provider, repoFromPath(process.argv[3]));
 if (!got.ok || !got.env) {
   process.stderr.write(`${got.message || 'no credential'}\n`);
   process.exit(1);

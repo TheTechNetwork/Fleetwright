@@ -35,6 +35,9 @@ import { VERBS } from '../fleet/protocol/intents.js';
  * something, and an agent that answers it has decided on that person's behalf
  * that it knew what they wanted. Sometimes true. Never true by default.
  */
+/** Verbs only the coordinator sends. See the filter in toolsFor. */
+export const COORDINATOR_ONLY = Object.freeze(['mint']);
+
 /** @type {string[]} */
 export const DEFAULT_DENY = ([
   // `reboot` ends every session on the box. `upgrade` is system packages and
@@ -288,6 +291,10 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
   // reads, and its presence is what the server dispatches on.
   /** @type {Array<{ name: string, description: string, inputSchema: any, verb: string|null, mutating: boolean, local?: boolean, coordinator?: string }>} */
   const tools = Object.entries(VERBS)
+    // NOT A TOOL AT ALL, not merely withheld: `mint` is sent by the coordinator
+    // for a runner and refused from any caller (core.js dispatch), so offering
+    // it — even behind `allow` — would be a tool that can only fail.
+    .filter(([verb]) => !COORDINATOR_ONLY.includes(verb))
     .filter(([verb]) => !deny.includes(verb) || extra.has(verb))
     .map(([verb, def]) => {
       /** @type {Record<string, any>} */
