@@ -221,7 +221,10 @@ export class HttpAdapter {
         // HOW MUCH OF EACH LINKED ACCOUNT'S LIMIT IS USED, as the account's own
         // endpoint last said — one row per linked account, with the reason
         // when there is no answer. Null before the first check and when the
-        // check is off; the sidecar carries it as it is. See src/core/usage.js.
+        // check is off. The hub's own publication, for its console and for
+        // tests; the fleet reads it per PERSON, on the Claude row of the
+        // connections listing, because an account is not a host's fact — see
+        // connectionsPayload in commands.js and src/core/usage.js.
         usage: (() => {
           try {
             return this.usage?.() ?? null;
@@ -470,7 +473,7 @@ export class HttpAdapter {
       const reply = await dispatch(
         // Split back into a list here, so a command reads labels and never a
         // string it has to remember to parse.
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, ...meta,
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta,
           ...(meta.hostLabels ? { hostLabels: String(meta.hostLabels).split(',').filter(Boolean) } : {}) },
         line,
       );

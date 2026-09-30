@@ -377,18 +377,19 @@ test('health reports what the scheduler ranks on', async (t) => {
   assert.equal(h.loadavg.length, 3);
 });
 
-test('health carries how full each running session\'s window is, and what each account has left', async (t) => {
-  // Both read off /api/state as fleetwright published them, and both null
-  // where it did not: an older hub, a session with no turn yet, a check that
-  // is off. The frame never turns "not said" into a number.
-  const usage = { checkedAt: 1_700_000_000_000, accounts: [{ account: 'a@example.com', usage: { fiveHour: { used: 42, resetsAt: 1_700_000_900_000 }, sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null }, why: null }] };
+test('health carries how full each running session\'s window is, and nothing about accounts', async (t) => {
+  // Read off /api/state as fleetwright published it, and null where it did
+  // not: an older hub, a session with no turn yet. The frame never turns "not
+  // said" into a number. What each ACCOUNT has left is not here: an account is
+  // a person's, not a machine's, and it travels on the Claude row of their
+  // connections listing instead.
   const { sidecar } = await setup(t, {
     sessions: [
       sessionRecord('live', { status: 'running', context: { tokens: 248717, model: 'claude-fable-5-1' } }),
       sessionRecord('fresh', { status: 'running', context: null }),
       sessionRecord('bigjob'),
     ],
-    facts: { usage },
+    facts: { usage: { checkedAt: 1, accounts: [] } },
   });
 
   const h = (await sidecar.handle(intent({ verb: 'health' }))).health;
@@ -396,12 +397,11 @@ test('health carries how full each running session\'s window is, and what each a
   assert.deepEqual(by.live.context, { tokens: 248717, model: 'claude-fable-5-1' });
   assert.equal(by.fresh.context, null);
   assert.equal(by.bigjob.context, null);
-  assert.deepEqual(h.usage, usage);
+  assert.equal(h.usage, undefined, 'not a host fact');
 
   const older = await setup(t, { sessions: [sessionRecord('live', { status: 'running' })] });
   const o = (await older.sidecar.handle(intent({ verb: 'health' }))).health;
   assert.equal(o.sessions[0].context, null, 'a hub that does not publish it');
-  assert.equal(o.usage, null);
 });
 
 test('health names the sessions this host can resume', async (t) => {

@@ -27,6 +27,9 @@
  *   A NAME, never the words: the content is a file on this box, and a caller
  *   that could supply it would be writing the instructions of an agent with
  *   root in a container. See src/core/profiles.js
+ * @property {(() => import('../core/usage.js').UsageSnapshot|null)|null} [usage]
+ *   what each linked account has left, as the hub's monitor last read it —
+ *   attached to the Claude row of a person's connections listing
  * @property {typeof fetch} [fetch] stands in for the network, so a test can
  *   serve the changelog a release check reads; the real one otherwise
  * @property {string} [secret]     which named secret a new session may fetch.
@@ -299,6 +302,7 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
   // is" from resolving to the shared row.
   const row = host ? HOST_ROW : rowForActor(ctx.actor);
   const store = new Connections(ctx.cfg.stateDir);
+  /** @type {Array<Record<string, any>>} */
   const connected = row === null ? [] : store.list(row);
 
   // Claude's row. For a member it is "have you linked your own account"; for
@@ -308,7 +312,29 @@ function connectionsPayload(ctx, pending = {}, { host = false } = {}) {
     ? (new Accounts(ctx.cfg.stateDir).credentialPathFor(email) ? email : null)
     : (ctx.login.status().loggedIn ? (ctx.login.status().email ?? 'this box') : null);
   if (claudeAccount) {
-    connected.unshift({ provider: 'claude', label: 'Claude', account: claudeAccount, updatedAt: 0 });
+    // WHAT THIS ACCOUNT HAS LEFT, on the account's own row. An account is a
+    // person's, not a machine's: the same address linked on three boxes is one
+    // plan with one five-hour window, so the answer belongs here — where a
+    // person looks at their own credentials — and not on each host's frame,
+    // where it was first put and drawn three times over. The host asks the
+    // endpoint (src/core/usage.js) because the token lives here; the row is
+    // where the answer is read. Null is CANNOT TELL: the check is off, has
+    // not run yet, or this is an older hub.
+    const snapshot = (() => {
+      try {
+        return ctx.usage?.() ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    const mine = snapshot?.accounts?.find((a) => a.account === claudeAccount) ?? null;
+    connected.unshift({
+      provider: 'claude',
+      label: 'Claude',
+      account: claudeAccount,
+      updatedAt: 0,
+      usage: mine ? { checkedAt: snapshot?.checkedAt ?? null, windows: mine.usage, why: mine.why } : null,
+    });
   }
 
   return {

@@ -268,19 +268,24 @@ and a table about somebody else's models would be wrong the week one changed.
 `null` is *cannot tell* — not running, no turn yet, an older host — and a
 screen draws it as nothing rather than as empty. `src/core/context-usage.js`.
 
-**Health says how much of each linked account's limit is used.** `usage` is
-`{ checkedAt, accounts: [{ account, usage, why }] }`, one row per linked account,
-where `usage` is the four windows Claude Code's own `/usage` draws — `fiveHour`,
-`sevenDay`, `sevenDayOpus`, `sevenDaySonnet`, each `{ used, resetsAt }` with
-`used` a percentage and `resetsAt` epoch ms — or `null` with `why` saying what
-stopped the box asking (an expired credential, a refused token, an answer in a
-shape this version does not read). It comes from the endpoint the CLI itself
-reads, on exactly the terms `src/core/usage.js` sets out: the shape it answered
-with is what is read, and anything else is *cannot tell* with a reason, never a
-number. Asked every `FLEETWRIGHT_USAGE_CHECK_MS` (ten minutes; 0 turns it off);
-`null` on the whole field is a box that has not asked yet, one where it is off,
-or an older host. It is the difference between "sessions are failing" and
-"sessions are failing because this plan is out until 15:10".
+**The Claude row of a person's connections says how much of their limit is
+used.** `connect` (the listing) returns `connected`, and the `claude` row now
+carries `usage: { checkedAt, windows, why }`, where `windows` is the four
+rate-limit windows Claude Code's own `/usage` draws — `fiveHour`, `sevenDay`,
+`sevenDayOpus`, `sevenDaySonnet`, each `{ used, resetsAt }` with `used` a
+percentage and `resetsAt` epoch ms — or `null` with `why` saying what stopped
+the box asking (an expired credential, a refused token, an answer in a shape
+this version does not read). It is on the ACCOUNT's row and not on the health
+frame because an account is a person's, not a machine's: the same address
+linked on three boxes is one plan with one window, and the coordinator's merge
+of the listing keeps the freshest box's answer. The box asks because the token
+lives there (`src/core/usage.js`, every `FLEETWRIGHT_USAGE_CHECK_MS`, ten
+minutes, 0 off), on exactly the terms that file sets out: the shape the
+endpoint answered with is what is read, and anything else is *cannot tell*
+with a reason, never a number. `null` on the whole field is a box that has not
+asked yet, one where it is off, or an older host. It is the difference between
+"sessions are failing" and "sessions are failing because this plan is out
+until 15:10".
 
 **Health says what a box runs and what its disk holds, as two versions.**
 `version.head` is what the service sending the frame is running — from inside
