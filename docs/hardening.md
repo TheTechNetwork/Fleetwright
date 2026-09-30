@@ -75,9 +75,15 @@ holds still applies; what does not apply is the containment either side of it.
 **What this page would need to be true of a Mac** is the launchd equivalent of
 the table below, measured the same way rather than recommended — and the
 `podman machine` question answered one way or the other. Neither is done.
-[`ROADMAP.md`](../ROADMAP.md) carries the macOS host as **partial** for related
-reasons: unsandboxed sessions, and no `StateDirectory`/`RuntimeDirectory`
-equivalent yet.
+
+**What is done is the install itself.** `.github/workflows/mac-host.yml` runs
+`install.sh` on a GitHub macOS runner on every change to what it installs:
+both launchd daemons load and stay up as the service user, the hub answers on
+loopback, the host key is made 0600 in a 0700 directory with the right owner,
+the plists' log files fill and `/logs` reads them, `--upgrade` restarts both
+daemons and `uninstall.sh` takes it all back out. That is the evidence
+[`ROADMAP.md`](../ROADMAP.md)'s macOS row lacked; what the row still says is
+that sessions there are unsandboxed, and that this page has no number for it.
 
 ## What breaks fleetwright, and how
 

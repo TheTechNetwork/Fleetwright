@@ -354,12 +354,12 @@ fresh" is doing a lot of work in that sentence.
 The sandbox already bind-mounts **one unix socket per session** into that
 session's container and nowhere else (`docs/hook-socket.md`). It exists so a
 container can report its conversation uuid without being able to name any
-session but its own — and the authentication is the bind-mount itself: the
-sidecar knows which session is asking because of which socket it arrived on,
-and a container cannot reach a socket it was not given.
+session but its own — and the authentication is the bind-mount itself:
+fleetwright knows which session is asking because of which socket it arrived
+on, and a container cannot reach a socket it was not given.
 
 That is the same shape a credential broker needs, and it is already built. A
-session asks its own socket for `github`; the sidecar decides whether that
+session asks its own socket for `github`; fleetwright decides whether that
 session may have it, mints or fetches, and returns a value that is good for
 minutes. Nothing is stored in the container, nothing is in the environment, and
 rotation is invisible because the next ask returns the next value.
@@ -660,8 +660,8 @@ Two mechanisms, because `gh` and `git` want different things:
   process's environment for the life of one command, and never in a file, never
   in the session's shell, never in `~/.config/gh/hosts.yml`.
 
-The socket is the one that already exists: `/run/fleetwright-sidecar/<name>.sock`,
-bind-mounted into that session's container and nowhere else. The sidecar knows
+The socket is the one that already exists: `/run/fleetwright/<name>.sock`,
+bind-mounted into that session's container and nowhere else. fleetwright knows
 which session is asking because of which socket it arrived on, so a session
 cannot ask for another session's scope. That is the same unforgeability the
 hook socket already relies on, used for a second purpose.

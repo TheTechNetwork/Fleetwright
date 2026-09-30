@@ -16,6 +16,16 @@
 // mean every box in the fleet held a fleet-wide admin credential — which is the
 // shared secret this whole rework removed. This box can speak for itself and
 // for nothing else.
+//
+// WHAT IT CANNOT DO ANY MORE, SINCE THE SIDECAR GOT ITS OWN ACCOUNT (#270). The
+// key and /etc/fleetwright-sidecar.env belong to `fleetwright-sidecar`, 0600,
+// and this process runs as the session user — so on an installed box both
+// reads fail with EACCES. That is the point of the split, not a fault to
+// repair: whoever can read the key can be this machine, and the process that
+// runs sessions must not. Both verbs then say whose the identity is and give
+// the one line on the box that answers, rather than the old "re-run install.sh
+// to fix the permissions", which would have undone the split. They still work
+// where the two run as one user — a Mac, a runner, a checkout run by hand.
 
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -70,15 +80,7 @@ export function sidecarConfig({ env = process.env, readFile } = {}) {
 export async function identity({ config } = {}) {
   const cfg = config || sidecarConfig();
   if (!cfg.coordinatorUrl) {
-    if (cfg.unreadable) {
-      return {
-        ok: false,
-        text:
-          `Cannot read this box's fleet configuration.\n${cfg.unreadable}\n\n` +
-          'The hub has to be able to read /etc/fleetwright-sidecar.env to know which coordinator ' +
-          'this box belongs to. Re-running install.sh fixes the permissions.',
-      };
-    }
+    if (cfg.unreadable) return { ok: false, text: belongsToTheSidecar('identity', cfg.unreadable) };
     return { ok: false, text: 'This box is not part of a fleet — FLEETWRIGHT_COORDINATOR_URL is not set.' };
   }
 
@@ -86,7 +88,9 @@ export async function identity({ config } = {}) {
   try {
     key = await loadOrCreateKey(cfg.hostKeyFile);
   } catch (e) {
-    return { ok: false, text: `Could not read this box's key: ${/** @type {Error} */ (e).message}` };
+    const err = /** @type {Error & { code?: string }} */ (e);
+    if (err.code === 'EACCES' || err.code === 'EPERM') return { ok: false, text: belongsToTheSidecar('identity', `${cfg.hostKeyFile}: ${err.message}`) };
+    return { ok: false, text: `Could not read this box's key: ${err.message}` };
   }
   const fingerprint = await keyFingerprint(key.publicJwk);
 
@@ -125,7 +129,7 @@ export async function enrol(pin, { config, actor = null } = {}) {
     return {
       ok: false,
       text: cfg.unreadable
-        ? `Cannot read this box's fleet configuration.\n${cfg.unreadable}\n\nRe-running install.sh fixes the permissions.`
+        ? belongsToTheSidecar(`enrol ${code}`, cfg.unreadable)
         : 'This box has no coordinator set, so there is nothing to enrol with.',
     };
   }
@@ -134,13 +138,9 @@ export async function enrol(pin, { config, actor = null } = {}) {
   try {
     key = await loadOrCreateKey(cfg.hostKeyFile);
   } catch (e) {
-    return {
-      ok: false,
-      text:
-        `Could not use this box's key: ${/** @type {Error} */ (e).message}\n\n` +
-        `The key lives at ${cfg.hostKeyFile}, and the hub has to be able to read it — ` +
-        'which means running as the same user as the sidecar.',
-    };
+    const err = /** @type {Error & { code?: string }} */ (e);
+    if (err.code === 'EACCES' || err.code === 'EPERM') return { ok: false, text: belongsToTheSidecar(`enrol ${code}`, `${cfg.hostKeyFile}: ${err.message}`) };
+    return { ok: false, text: `Could not use this box's key: ${err.message}` };
   }
 
   try {
@@ -170,4 +170,21 @@ export async function enrol(pin, { config, actor = null } = {}) {
  *  @param {{ hostKeyFile: string }} cfg */
 export function keyFileFor(cfg) {
   return path.resolve(cfg.hostKeyFile);
+}
+
+/**
+ * The answer when this process cannot read the sidecar's files: whose they
+ * are, and the one line on the box that does what was asked.
+ *
+ * @param {string} verb  what to run as the sidecar's account
+ * @param {string} why   the read that failed, path and message
+ */
+export function belongsToTheSidecar(verb, why) {
+  return (
+    "This box's fleet identity belongs to the sidecar's account, and this process cannot read it:\n" +
+    `${why}\n\n` +
+    'That is the split working (docs/hardening.md), not something to repair. On the box:\n' +
+    `  sudo -u fleetwright-sidecar fleetwright-sidecar ${verb}\n` +
+    (verb.startsWith('enrol') ? 'Or paste the install line the app shows beside the pin — it enrols as that account.' : '')
+  ).trimEnd();
 }

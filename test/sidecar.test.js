@@ -791,6 +791,39 @@ test('a label added from an app reaches the scheduler without a restart', async 
   assert.deepEqual(sidecar.labels, ['debian13', 'gpu', 'noisy']);
 });
 
+test('an update that landed after this process started makes it exit, once', async (t) => {
+  // The sidecar used to watch the restart marker in fleetwright's state
+  // directory, which it cannot read since it has its own account (#270): a
+  // checkout box's sidecar ran old code until somebody restarted it by hand.
+  // Now fleetwright says when the updater last asked, and the sidecar compares
+  // that with its own start.
+  const startedAt = 1_000_000;
+  /** @type {number[]} */
+  const exits = [];
+  const { sidecar, stub } = await setup(t, { facts: { restartRequestedAt: startedAt - 1 } }, {
+    startedAt,
+    onRestartRequested: (/** @type {number} */ at) => exits.push(at),
+  });
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-restart-0001' }));
+  assert.deepEqual(exits, [], 'a marker from before we started is the one that restarted us — not again');
+
+  stub.setFacts({ restartRequestedAt: 'soon' });
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-restart-0002' }));
+  assert.deepEqual(exits, [], 'not a time is not a request');
+
+  stub.setFacts({ restartRequestedAt: startedAt + 5 });
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-restart-0003' }));
+  await sidecar.handle(intent({ verb: 'health', id: 'idem-restart-0004' }));
+  assert.deepEqual(exits, [startedAt + 5], 'asked once, however many frames follow');
+});
+
+test('the entrypoint exits for new code on fleetwright\'s word, not by watching its files', async () => {
+  const { readFileSync } = await import('node:fs');
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
+  assert.match(bin, /onRestartRequested: \(\) => process\.exit\(0\)/);
+  assert.doesNotMatch(bin, /watchForRestart/, 'the file watcher reads a directory the sidecar cannot');
+});
+
 test('while fleetwright is unreachable the frame keeps the last labels and drops the live fields', async (t) => {
   // The scheduler filters on labels, and a box whose hub is restarting still
   // has them; the fields that need a live answer — sessions, channel, the

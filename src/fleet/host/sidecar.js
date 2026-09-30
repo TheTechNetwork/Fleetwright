@@ -176,6 +176,8 @@ export class Sidecar {
    *   updates?: (() => { appBehind: number|null, system: string|null, rebootRequired: boolean, release?: any, appPending?: boolean|null, grants?: { upgrades: boolean, reboot: boolean }|null })|null,
    *   adoptUpdates?: ((waiting: any) => void)|null,
    *   version?: (() => { head: string|null, branch: string|null, installed?: string|null, helper?: 'current'|'stale'|null }|null)|null,
+   *   onRestartRequested?: ((at: number) => void)|null,
+   *   startedAt?: number,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], maxSkewMs = 300_000, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -186,6 +188,8 @@ export class Sidecar {
     renewIntervalMs = 3_600_000,
     hubConfig = null,
     fetchImpl = globalThis.fetch,
+    onRestartRequested = null,
+    startedAt = Date.now(),
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -254,6 +258,19 @@ export class Sidecar {
      * @type {HostFacts|null}
      */
     this.facts = null;
+    /**
+     * How this process picks up an update. fleetwright's /api/state carries
+     * the time the updater last asked every service to restart; a time after
+     * this process started means it is running code older than the tree it
+     * was launched from, and the entrypoint exits so systemd or launchd brings
+     * it back on the new code. Strictly after, or the process that comes back
+     * reads the request that restarted it and exits again, for ever.
+     *
+     * The sidecar used to watch the marker file itself, in fleetwright's state
+     * directory, which only worked while the two ran as one user (#270).
+     */
+    this.onRestartRequested = onRestartRequested;
+    this.startedAt = startedAt;
     // The PKCE verifiers this box is holding between a `connect` it answered
     // and the `exchange` that spends one — see ./pkce.js. Memory only, like
     // the client secret they are used with.
@@ -786,6 +803,7 @@ export class Sidecar {
     try {
       state = await this.hub.state();
       this.facts = factsFrom(state);
+      this.#noticeRestart(state);
     } catch (e) {
       unreachable = /** @type {Error & { code?: string }} */ (e);
     }
@@ -1187,6 +1205,23 @@ export class Sidecar {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Exit for new code, once, when fleetwright says an update landed after this
+   * process started. See `onRestartRequested` in the constructor.
+   * @param {any} state
+   */
+  #noticeRestart(state) {
+    const at = state?.restartRequestedAt;
+    if (typeof at !== 'number' || !Number.isFinite(at) || at <= this.startedAt) return;
+    if (!this.onRestartRequested) return;
+    const hook = this.onRestartRequested;
+    // Cleared first: exiting is the caller's, and if it does anything slower
+    // than process.exit the next frame must not ask twice.
+    this.onRestartRequested = null;
+    this.log.warn('sidecar: new code was installed — restarting to pick it up');
+    hook(at);
   }
 
   #recall(/** @type {string} */ id) {

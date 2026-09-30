@@ -48,13 +48,15 @@ export function loadSidecarConfig(env = process.env) {
     hubUrl: str(env, 'FLEETWRIGHT_HUB_URL', 'http://127.0.0.1:8790'),
     // THE SIDECAR'S OWN TOKEN, which the hub mints beside the operator's and
     // install.sh (root) copies into this process's env file: that is the
-    // handoff, because the hub's state directory is another account's. The
-    // fallbacks read the hub's files directly and work only where both run as
-    // one user — a runner, a Mac, a checkout by hand: `sidecar-token` first,
-    // then the operator's `api-token` for a hub from before the second token
-    // existed. The hub gates the first to the fleet's own commands and the
-    // second to nothing, so a box that can read either is no worse off than
-    // it was. See src/core/api-token.js and src/core/sidecar-scope.js.
+    // handoff, because the hub's state directory is another account's (the
+    // sidecar has had its own since #270). Empty is valid: a loopback-bound
+    // hub with no token needs none. The fallbacks read the hub's files
+    // directly and work only where both run as one user — a runner, a Mac, a
+    // checkout by hand: `sidecar-token` first, then the operator's `api-token`
+    // for a hub from before the second token existed. The hub gates the first
+    // to the fleet's own commands and the second to nothing, so a box that can
+    // read either is no worse off than it was. See src/core/api-token.js and
+    // src/core/sidecar-scope.js.
     hubToken:
       str(env, 'FLEETWRIGHT_HUB_TOKEN')
       || readSidecarToken(str(env, 'FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub')))

@@ -36,7 +36,8 @@ export async function main() {
   // tmux is not optional — without it there is nothing to manage, and failing
   // here gives one clear line instead of every command returning nothing.
   if (!tmuxAvailable()) {
-    log.error('tmux is not installed or not on PATH. Install it (apt install tmux) and restart.');
+    const how = process.platform === 'darwin' ? 'brew install tmux' : 'apt install tmux';
+    log.error(`tmux is not installed or not on PATH. Install it (${how}) and restart.`);
     process.exit(1);
   }
 

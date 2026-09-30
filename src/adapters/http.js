@@ -39,6 +39,7 @@ import { readHouseRules } from '../core/rules.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
+import { readMarker } from '../core/restart-watch.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -237,6 +238,22 @@ export class HttpAdapter {
         // Each field is one small read or stat. A caller that could not stand
         // them would be one that cannot stand /api/state at all.
         ...this.#hostFacts(),
+        // WHEN AN UPDATE LAST ASKED EVERY SERVICE TO RESTART, or null. The
+        // updater leaves a marker in this state directory after a complete new
+        // tree is on disk, and the sidecar used to read that file itself —
+        // which it cannot since it runs as its own user (#270), so a checkout
+        // box's sidecar ran old code until somebody restarted it by hand. Now
+        // it reads the time here and compares against its own start. The hub
+        // itself needs no such hint: the updater restarts it directly. Caught
+        // like claudeAccounts above: a state directory that cannot even be
+        // named must not take /api/state down over a hint.
+        restartRequestedAt: (() => {
+          try {
+            return readMarker(this.cfg.stateDir)?.at ?? null;
+          } catch {
+            return null;
+          }
+        })(),
         sessions,
         // What has been forgotten but not yet deleted. Additive: an older
         // sidecar or console ignores the field, and a newer one can offer the
