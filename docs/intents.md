@@ -255,6 +255,33 @@ name. There is no verb that sets them; putting the file on a box needs a shell
 on that box, which is the same bound `profile` has and one fewer thing than
 `profile` needs.
 
+**Health says how full each running session's window is, as a count.** `context`
+on each session record is `{ tokens, model }`: the tokens that were in the
+window at the last assistant turn (what was sent, what was newly cached, what
+was read from cache — the same sum Claude Code's own status line draws) and the
+model that answered, both read off the transcript by whichever process can see
+it. Inside a sandbox that is the hook, which posts it with every lifecycle event
+because the volume is the session's and the hub cannot read it; for a session on
+the box it is the hub, reading the file the SessionStart hook named, only when
+it has changed. No window size and no percentage: the transcript does not say,
+and a table about somebody else's models would be wrong the week one changed.
+`null` is *cannot tell* — not running, no turn yet, an older host — and a
+screen draws it as nothing rather than as empty. `src/core/context-usage.js`.
+
+**Health says how much of each linked account's limit is used.** `usage` is
+`{ checkedAt, accounts: [{ account, usage, why }] }`, one row per linked account,
+where `usage` is the four windows Claude Code's own `/usage` draws — `fiveHour`,
+`sevenDay`, `sevenDayOpus`, `sevenDaySonnet`, each `{ used, resetsAt }` with
+`used` a percentage and `resetsAt` epoch ms — or `null` with `why` saying what
+stopped the box asking (an expired credential, a refused token, an answer in a
+shape this version does not read). It comes from the endpoint the CLI itself
+reads, on exactly the terms `src/core/usage.js` sets out: the shape it answered
+with is what is read, and anything else is *cannot tell* with a reason, never a
+number. Asked every `FLEETWRIGHT_USAGE_CHECK_MS` (ten minutes; 0 turns it off);
+`null` on the whole field is a box that has not asked yet, one where it is off,
+or an older host. It is the difference between "sessions are failing" and
+"sessions are failing because this plan is out until 15:10".
+
 **Health says what a box runs and what its disk holds, as two versions.**
 `version.head` is what the service sending the frame is running — from inside
 a process the install root resolves through `current` to the real directory,

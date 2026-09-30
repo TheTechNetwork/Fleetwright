@@ -28,6 +28,7 @@ import { ensureEgress } from './egress.js';
 import { Profiles } from './profiles.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor } from './activity.js';
+import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
@@ -63,6 +64,11 @@ export class SessionManager {
     // question about today.
     /** @type {Map<string, import('./activity.js').Activity>} */
     this.activity = new Map();
+    // How full an UNSANDBOXED session's window is, read off the transcript the
+    // SessionStart hook named, when the file has changed since the last ask. A
+    // sandboxed session's transcript is in a volume this process cannot read;
+    // its hook reads it and the answer rides on `activity` above instead.
+    this.contexts = new ContextReader();
     // The task profiles this box has. Read from disk on every call rather than
     // cached: editing a profile should take effect on the next session, not on
     // the next restart of the hub, and the whole store is a handful of small
@@ -188,10 +194,18 @@ export class SessionManager {
     // which is where the sidecar's watcher decides what a session is doing.
     // Never on a stopped one: whatever the CLI last said, it is not saying it
     // now.
-    return this.registry.list().map((rec) => ({
-      ...rec,
-      activity: rec.status === 'running' ? (this.activity.get(rec.name) ?? null) : null,
-    }));
+    return this.registry.list().map((rec) => {
+      const activity = rec.status === 'running' ? (this.activity.get(rec.name) ?? null) : null;
+      return {
+        ...rec,
+        activity,
+        // HOW FULL ITS WINDOW IS, from whichever reader can see the transcript:
+        // the hook inside a sandbox, or this process for a session on the
+        // box. Null is CANNOT TELL — not running, no assistant turn yet, no
+        // transcript this box can read — and the sidecar carries it as null.
+        context: rec.status === 'running' ? (activity?.context ?? this.contexts.for(rec.transcriptPath)) : null,
+      };
+    });
   }
 
   /** @param {string} name */
@@ -1013,18 +1027,27 @@ export class SessionManager {
    * the container starts with the pane as the only witness, as it did before
    * these events existed, until the CLI says something.
    *
-   * @param {{ name: string, event: string, detail?: string|null, at?: number }} e
+   * The context rides along when the hook could read it, and is kept from the
+   * last event that carried one: a Notification that says nothing about the
+   * window must not erase what the Stop before it said.
+   *
+   * @param {{ name: string, event: string, detail?: string|null, at?: number,
+   *   context?: import('./context-usage.js').ContextUsage|null }} e
    * @returns {{ ok: boolean, message?: string, phase?: string|null }}
    */
-  recordEvent({ name, event, detail = null, at = Date.now() }) {
+  recordEvent({ name, event, detail = null, at = Date.now(), context = null }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
     if (event === 'SessionStart') {
       this.activity.delete(name);
       return { ok: true, phase: null };
     }
     const phase = phaseFor(event, detail);
-    if (!phase) return { ok: true, phase: null };
-    this.activity.set(name, { phase, event, detail, at });
+    const prev = this.activity.get(name);
+    if (!phase) {
+      if (context && prev) this.activity.set(name, { ...prev, context });
+      return { ok: true, phase: null };
+    }
+    this.activity.set(name, { phase, event, detail, at, context: context ?? prev?.context ?? null });
     // Working is every tool call; the two that change what a person does
     // are the ones worth a line.
     if (phase !== 'working') log.info(`hook: ${name} ${event}${detail ? ` ${detail}` : ''} → ${phase}`);
@@ -1035,9 +1058,15 @@ export class SessionManager {
    * Record a conversation uuid reported by the SessionStart hook. This is what
    * makes resume reliable: claude hands the hook its own session_id and
    * transcript path, so the uuid is authoritative rather than scraped.
-   * @param {{ name: string, cwd?: string|null, uuid: string, title?: string|null }} opts
+   * The transcript path is kept when the hook ran ON THIS BOX and named a file
+   * this process can read — an unsandboxed session — so `list()` can say how
+   * full the window is. A sandboxed session's hook sends none (its path is the
+   * container's), and every SessionStart re-records, so a session that moves
+   * between the two never keeps a path from its other life.
+   *
+   * @param {{ name: string, cwd?: string|null, uuid: string, title?: string|null, transcriptPath?: unknown }} opts
    */
-  recordUuid({ name, cwd = null, uuid, title = null }) {
+  recordUuid({ name, cwd = null, uuid, title = null, transcriptPath = null }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
     if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(uuid)) return { ok: false, message: `Not a conversation uuid: ${uuid}` };
     // A title from the hook is the best one available — it is what the person
@@ -1045,9 +1074,12 @@ export class SessionManager {
     // overwrite one somebody set on purpose.
     const clean = cleanTitle(title);
     const existing = this.registry.get(name);
+    const transcript = cleanTranscriptPath(transcriptPath);
+    if (existing?.transcriptPath && existing.transcriptPath !== transcript) this.contexts.forget(existing.transcriptPath);
     const rec = this.registry.upsert(name, {
       uuid,
       status: hasSession(name) ? 'running' : 'stopped',
+      transcriptPath: transcript,
       ...(cwd ? { cwd } : {}),
       ...(clean && !existing?.titlePinned ? { title: clean } : {}),
     });

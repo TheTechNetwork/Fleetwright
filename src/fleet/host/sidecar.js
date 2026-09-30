@@ -927,6 +927,16 @@ export class Sidecar {
             // showing a prompt — that pane is still because somebody has to
             // answer it, which is the opposite of idle.
             idleSince: this.watcher?.idleSince?.(s.name) ?? null,
+            // HOW FULL ITS WINDOW IS: the tokens in context at the last
+            // assistant turn, and the model that answered. Read off the
+            // transcript by whichever process can see it (src/core/
+            // context-usage.js), never guessed from the pane. No window size
+            // and no percentage, because the transcript does not say and a
+            // table about somebody else's models would be wrong the week one
+            // changed. Null is CANNOT TELL — not running, no turn yet, an
+            // older host — and both phones draw that as nothing rather than
+            // as empty.
+            context: s.context ?? null,
           })),
         loggedIn: state.auth?.loggedIn === true,
         // HOW MANY PEOPLE CAN START A SESSION HERE. The health field that
@@ -958,6 +968,14 @@ export class Sidecar {
         // problem: a fleet that flags every older host as broken teaches
         // people to ignore the flag.
         credential: state.credential ?? null,
+        // HOW MUCH OF EACH LINKED ACCOUNT'S LIMIT IS USED, as that account's
+        // own endpoint last said: one row per linked account with the four
+        // windows Claude Code's /usage draws, or the reason there is no
+        // answer. The difference between "sessions are failing" and
+        // "sessions are failing because this plan is out until 15:10".
+        // Null before the box has asked, when the check is off, and on an
+        // older host — CANNOT TELL, and never "nothing used".
+        usage: state.usage ?? null,
         // What code this box is RUNNING, so the app can say "three commits
         // behind" without anybody opening a terminal. `updates` already says
         // whether it is behind; this says what it is. Injected like updates,
