@@ -152,6 +152,20 @@ fun CredentialsSheet(settings: Settings, host: String, onDismiss: () -> Unit) {
                             else "connected as ${linked.account}",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        // WHAT THIS ACCOUNT HAS LEFT, in its own figures, on its
+                        // own row. The difference between "sessions are failing"
+                        // and "sessions are failing because this plan is out
+                        // until 15:10". Nothing at all from a host that has not
+                        // said; the error colour only when a window is nearly
+                        // spent.
+                        linked?.usage?.let { usage ->
+                            Text(
+                                describeUsage(usage),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (usage.isNearLimit) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         // MISSING PERMISSIONS, said here rather than discovered
                         // in a session. The asked-for list grows; a token minted
                         // before it grew still verifies, still says "connected",
