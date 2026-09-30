@@ -66,7 +66,7 @@ function usage() {
 Environment:
   FLEETWRIGHT_COORDINATOR_URL    required — the origin this sidecar pins
   FLEETWRIGHT_HUB_URL            default http://127.0.0.1:8790
-  FLEETWRIGHT_HUB_TOKEN          the hub's FLEETWRIGHT_TOKEN, if it has one
+  FLEETWRIGHT_HUB_TOKEN          the sidecar's token the hub minted (install.sh copies it here)
   FLEETWRIGHT_HOST_ID            default: this hostname
   FLEETWRIGHT_LABELS             comma-separated scheduler constraints
   FLEETWRIGHT_TRANSPORT          websocket (default) or stdio

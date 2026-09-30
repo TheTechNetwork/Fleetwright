@@ -1710,6 +1710,23 @@ STATE_DIR="${FLEETWRIGHT_STATE_DIR:-/var/lib/fleetwright}"
 install -d -o "$RUN_USER" -m 0750 "$STATE_DIR"
 ok "$STATE_DIR"
 
+# THE SIDECAR'S TOKEN, minted here if the hub has not yet. The hub keeps two:
+# the operator's (`api-token`, the web UI's and every command's) and the
+# sidecar's (`sidecar-token`, the routes and command shapes the sidecar uses
+# and nothing else — src/core/sidecar-scope.js). The sidecar found the first by
+# reading the hub's state directory, which stopped working the day it got its
+# own account (#270): the directory is $RUN_USER's, 0750, and a sidecar with
+# nothing to send is refused by design. So root, which can read both sides,
+# mints the second one where the hub will find it and copies it into the
+# sidecar's env below. Same file, same mode, whichever process wrote it first.
+SIDECAR_TOKEN_FILE="$STATE_DIR/sidecar-token"
+if [ "$CHECK_ONLY" != 1 ] && [ ! -s "$SIDECAR_TOKEN_FILE" ]; then
+  ( umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$SIDECAR_TOKEN_FILE" && echo >> "$SIDECAR_TOKEN_FILE" )
+  chown "$RUN_USER" "$SIDECAR_TOKEN_FILE"
+  chmod 0600 "$SIDECAR_TOKEN_FILE"
+  ok "minted the sidecar's token at $SIDECAR_TOKEN_FILE"
+fi
+
 # THE SIDECAR'S, owned by its own account. systemd's StateDirectory= fixes the
 # ownership of the directory itself on every start but not of what is in it,
 # and what is in it is this box's private key — written by $RUN_USER on every
@@ -1929,9 +1946,15 @@ say "Configuring the fleet sidecar"
 if [ -f "$SIDECAR_ENV" ]; then
   ok "$SIDECAR_ENV already exists — left untouched"
 else
-  SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" \
+  SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" SIDECAR_TOKEN_FILE="$SIDECAR_TOKEN_FILE" \
   TEMPLATE="$DIR/install/fleetwright-sidecar.env.example" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
+
+// The sidecar's own token, minted above. Preferred over the operator's
+// FLEETWRIGHT_TOKEN even when the hub has one: the hub gates this one to what
+// the sidecar does, and the other to nothing.
+let sidecarToken = '';
+try { sidecarToken = fs.readFileSync(process.env.SIDECAR_TOKEN_FILE, 'utf8').trim(); } catch {}
 
 // Read the hub's env the way systemd does: KEY=value, one per line, one layer
 // of surrounding quotes stripped. Done in node rather than sed so a token
@@ -1954,7 +1977,7 @@ const port = hub.FLEETWRIGHT_PORT || '8790';
 
 const filled = {
   FLEETWRIGHT_HUB_URL: `http://${bind}:${port}`,
-  FLEETWRIGHT_HUB_TOKEN: hub.FLEETWRIGHT_TOKEN || '',
+  FLEETWRIGHT_HUB_TOKEN: sidecarToken || hub.FLEETWRIGHT_TOKEN || '',
   // stdio is the only transport implemented, and this is a local placeholder
   // rather than a real remote origin — but the sidecar still refuses to start
   // without one, so filling it in keeps a fresh box working out of the box.
@@ -1978,17 +2001,22 @@ fi
 
 # Reconcile the DERIVED values on every run, existing file or not.
 #
-# FLEETWRIGHT_HUB_TOKEN is not an independent secret: it has to equal the hub's
-# FLEETWRIGHT_TOKEN or the sidecar cannot read /api/state, and the host joins the
-# fleet reporting "degraded — rejected the token". Copying it once at file
-# creation is wrong, because the hub token can be generated afterwards or
-# rotated later, and "already exists, left untouched" then freezes a value that
-# was only ever a copy.
+# FLEETWRIGHT_HUB_TOKEN is not an independent secret: it is the sidecar's token
+# the hub minted (or, on a hub from before that existed, the hub's own
+# FLEETWRIGHT_TOKEN), or the sidecar cannot read /api/state and the host joins
+# the fleet reporting "degraded — rejected the token". Copying it once at file
+# creation is wrong, because the token can be minted afterwards or rotated
+# later, and "already exists, left untouched" then freezes a value that was
+# only ever a copy. A box whose sidecar env still carries the OPERATOR's token
+# is moved onto the sidecar's here, which is the narrowing #270 left open.
 #
 # Config the operator CHOSE is still never overwritten. This is strictly the
 # two fields that are computed from somewhere else.
-SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" "$NODE_BIN" <<'NODE'
+SIDECAR_ENV="$SIDECAR_ENV" HUB_ENV="$ENV_FILE" SIDECAR_TOKEN_FILE="$SIDECAR_TOKEN_FILE" "$NODE_BIN" <<'NODE'
 const fs = require('fs');
+
+let sidecarToken = '';
+try { sidecarToken = fs.readFileSync(process.env.SIDECAR_TOKEN_FILE, 'utf8').trim(); } catch {}
 
 const read = (file) => {
   /** @type {Record<string,string>} */
@@ -2014,7 +2042,7 @@ if (fs.existsSync(SIDECAR_ENV)) {
   if (bind === '0.0.0.0' || bind === '::' || bind === '') bind = '127.0.0.1';
   const want = {
     FLEETWRIGHT_HUB_URL: `http://${bind}:${hub.FLEETWRIGHT_PORT || '8790'}`,
-    FLEETWRIGHT_HUB_TOKEN: hub.FLEETWRIGHT_TOKEN || '',
+    FLEETWRIGHT_HUB_TOKEN: sidecarToken || hub.FLEETWRIGHT_TOKEN || '',
   };
 
   let text = fs.readFileSync(SIDECAR_ENV, 'utf8');
@@ -2032,7 +2060,7 @@ if (fs.existsSync(SIDECAR_ENV)) {
 
   if (fixed.length) {
     fs.writeFileSync(SIDECAR_ENV, text, { mode: 0o600 });
-    console.log(`  ok   re-copied ${fixed.join(', ')} from ${HUB_ENV} — it had drifted`);
+    console.log(`  ok   re-copied ${fixed.join(', ')} into ${SIDECAR_ENV} — it had drifted`);
   }
 }
 NODE

@@ -67,8 +67,9 @@ posts the verified `fleet:<email>`, which lands in `createdBy`
 (`src/core/sessions.js`).
 
 The honest caveat travels with it: the attribution is exactly as trustworthy
-as the hub token that carried it — anything holding that token can claim any
-actor — so it is a label for honest surfaces, not an audit trail.
+as the token that carried it — anything holding the sidecar's token can claim
+any actor on the commands that token runs — so it is a label for honest
+surfaces, not an audit trail.
 Authorization still belongs in the coordinator, which is where §5 argues
 per-session ownership lives (one chokepoint instead of N hosts).
 
@@ -165,7 +166,7 @@ fleetwright's unguarded matcher returns `null` on that. The sidecar returns
 ```sh
 export FLEETWRIGHT_COORDINATOR_URL=https://coord.example.workers.dev
 export FLEETWRIGHT_HUB_URL=http://127.0.0.1:8790
-export FLEETWRIGHT_HUB_TOKEN=…            # fleetwright's FLEETWRIGHT_TOKEN, if it has one
+export FLEETWRIGHT_HUB_TOKEN=…            # the sidecar's token the hub minted (<state dir>/sidecar-token)
 export FLEETWRIGHT_LABELS=gpu,debian13
 
 node bin/fleetwright-sidecar doctor       # check this box can drive its fleetwright

@@ -22,7 +22,8 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { cleanText, TITLE_MAX, BRIEF_MAX } from '../core/text.js';
 import { MAX_WRITE_BYTES } from '../core/files.js';
-import { dispatch } from './commands.js';
+import { dispatch, parse, canonicalCommand } from './commands.js';
+import { sidecarMayRun } from '../core/sidecar-scope.js';
 import { describe } from '../core/login.js';
 import { log } from '../log.js';
 import { redactCommandLine } from '../core/redact.js';
@@ -46,12 +47,20 @@ export class HttpAdapter {
   /**
    * @param {import('../config.js').Config} cfg
    * @param {{ sessions: import('../core/sessions.js').SessionManager, login: import('../core/login.js').LoginFlow, token?: string|null,
+   *   sidecarToken?: string|null,
    *   usage?: (() => import('../core/usage.js').UsageSnapshot|null)|null }} deps
    */
-  constructor(cfg, { sessions, login, token = null, usage = null }) {
+  constructor(cfg, { sessions, login, token = null, sidecarToken = null, usage = null }) {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
+    // THE SIDECAR'S OWN CREDENTIAL, distinct from the operator's below. A
+    // request carrying it reaches the routes the sidecar calls and, on
+    // /api/command, the command shapes the sidecar builds — see
+    // src/core/sidecar-scope.js. Null means no second token was minted (a
+    // test, an older entrypoint) and the sidecar is whoever holds the
+    // operator's, as it always was.
+    this.sidecarToken = sidecarToken || null;
     // The last answer about each linked account's limits, from the monitor the
     // entrypoint runs — a function so this reads the current one on every ask.
     // Null when the check is off or not wired, which /api/state publishes as
@@ -133,7 +142,8 @@ export class HttpAdapter {
     }
 
     // --- everything below is operator surface ------------------------------
-    if (!this.#authorised(req, url)) {
+    const principal = this.#principal(req, url);
+    if (!principal) {
       if (p === '/' || p === '/index.html') {
         // A browser hitting the root without a token should get something it
         // can act on, not a bare 401 body — and "act on" is a field it can
@@ -154,6 +164,13 @@ export class HttpAdapter {
         return res.end(presentedCredential(req, url) ? this.refusedPage : this.gatePage);
       }
       return json(res, 401, { error: 'unauthorised' });
+    }
+
+    // THE WEB UI IS THE OPERATOR'S. The sidecar never opens it, so a request
+    // for it on the sidecar's token is a token being used for something it
+    // was not issued for — said so, rather than served.
+    if (principal === 'sidecar' && (p === '/' || p === '/index.html')) {
+      return json(res, 403, { error: "the sidecar's token does not open the web UI — use the operator's" });
     }
 
     if ((p === '/' || p === '/index.html') && method === 'GET') {
@@ -467,9 +484,22 @@ export class HttpAdapter {
       }
       const actor = claimed || 'web';
 
+      // THE SIDECAR'S TOKEN RUNS THE SIDECAR'S COMMANDS. Judged on the same
+      // canonical word dispatch will run, so an alias is not a way round, and
+      // on the sub-form for the two words that cover both a person's action
+      // and the box's. The operator's token is not gated: it never was.
+      if (principal === 'sidecar') {
+        const { name, args } = parse(line);
+        const gate = sidecarMayRun({ canonical: canonicalCommand(name), args });
+        if (!gate.ok) {
+          log.warn(`http: ${clientLabel(req)} (sidecar token) refused: ${redactCommandLine(line).slice(0, 120)} — ${gate.why}`);
+          return json(res, 403, { ok: false, text: gate.why });
+        }
+      }
+
       // Redact BEFORE truncating: slicing a secret to 120 characters logs a
       // shorter secret, not a safer one.
-      log.info(`http: ${clientLabel(req)} → ${redactCommandLine(line).slice(0, 120)}`);
+      log.info(`http: ${clientLabel(req)}${principal === 'sidecar' ? ' (sidecar)' : ''} → ${redactCommandLine(line).slice(0, 120)}`);
       const reply = await dispatch(
         // Split back into a list here, so a command reads labels and never a
         // string it has to remember to parse.
@@ -552,16 +582,35 @@ export class HttpAdapter {
    * @param {URL} url
    */
   #authorised(req, url) {
-    // FAILS CLOSED. There used to be an early `return true` here for the case
-    // where no token was configured, justified by the listener being on
-    // loopback — which conflated "somebody has a shell on this box" with
-    // "somebody has THIS SERVICE'S shell". Those differ by every other account
-    // on the machine, and the endpoint now writes credentials.
-    //
-    // A missing token is now a refusal rather than a pass: if generation failed
-    // there is no way to tell the sidecar from anything else, and answering
-    // everybody is the wrong side of that to err on.
-    if (!this.token) return false;
+    return this.#principal(req, url) !== null;
+  }
+
+  /**
+   * Who a request is, by the token it carried: the operator, the sidecar, or
+   * nobody.
+   *
+   * FAILS CLOSED. There used to be an early `return true` here for the case
+   * where no token was configured, justified by the listener being on
+   * loopback — which conflated "somebody has a shell on this box" with
+   * "somebody has THIS SERVICE'S shell". Those differ by every other account
+   * on the machine, and the endpoint now writes credentials.
+   *
+   * A missing token is now a refusal rather than a pass: if generation failed
+   * there is no way to tell the sidecar from anything else, and answering
+   * everybody is the wrong side of that to err on.
+   *
+   * THE OPERATOR IS CHECKED FIRST AND WINS. A sidecar token equal to the
+   * operator's — the state every box was in before the second token existed,
+   * and every same-user box whose sidecar fell back to `api-token` — is the
+   * operator, ungated, exactly as before. The narrowing applies only where the
+   * two tokens differ, which is where the installer put them.
+   *
+   * @param {import('node:http').IncomingMessage} req
+   * @param {URL} url
+   * @returns {'operator'|'sidecar'|null}
+   */
+  #principal(req, url) {
+    if (!this.token) return null;
 
     const header = req.headers.authorization || '';
     const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
@@ -569,8 +618,13 @@ export class HttpAdapter {
     // then is not signed out by an update.
     const cookie = readCookie(req.headers.cookie || '', 'fleetwright_token') || readCookie(req.headers.cookie || '', 'agent_hub_token');
     const query = url.searchParams.get('token') || '';
+    const offered = [bearer, cookie, query].filter(Boolean);
 
-    return [bearer, cookie, query].some((v) => v && safeEqual(v, this.token));
+    if (offered.some((v) => safeEqual(v, this.token))) return 'operator';
+    // The sidecar's token travels as a bearer and nothing else: it is a
+    // service's credential, and a cookie or a query string is a browser's.
+    if (this.sidecarToken && bearer && safeEqual(bearer, this.sidecarToken)) return 'sidecar';
+    return null;
   }
 }
 

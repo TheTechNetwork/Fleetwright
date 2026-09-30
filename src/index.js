@@ -12,7 +12,7 @@ import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { UsageMonitor } from './core/usage.js';
-import { ensureApiToken } from './core/api-token.js';
+import { ensureApiToken, ensureSidecarToken } from './core/api-token.js';
 import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
 import { readConfirmation, noteHealth } from './core/update-confirm.js';
@@ -204,7 +204,9 @@ export async function main() {
     setInterval(check, cfg.usageCheckMs).unref?.();
   }
 
-  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg), usage: usage ? () => usage.snapshot() : null });
+  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg),
+    sidecarToken: ensureSidecarToken(cfg),
+    usage: usage ? () => usage.snapshot() : null });
   await http.start();
   adapters.push(http);
 
