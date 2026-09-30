@@ -93,8 +93,17 @@ import { cleanText, TITLE_MAX, BRIEF_MAX } from '../../core/text.js';
 // docs/protocol-negotiation.md). So an old host is not stranded — it runs
 // `start` without the new capability and lights it up when it updates, no
 // coordinated round, no loud window. The apps do not carry this number either.
+//
+// v6, 30 Sep 2026: runners come from the ASKING PERSON'S repository. `provision`
+// gained `repo`, set by the coordinator from that person's own runner
+// repository and never by the caller, and `runnerrepo` checks one before it is
+// saved — public, reached by the Fleetwright GitHub App with Actions write, and
+// carrying the runner workflows. An older host is not handed `repo` (it is
+// `since: 6`), and the coordinator refuses rather than let one dispatch into the
+// fleet's repository when the person named their own: dropping it silently would
+// start a machine somewhere they did not choose. See docs/runner-central.md.
 /** @type {number} */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 // THE FLOOR: the oldest protocol this host's code still reads correctly, and the
 // change that stops a routine feature bump stranding a host. See
@@ -216,6 +225,11 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * @property {number} [min]       for 'int'
  * @property {number} [max]       for 'int', the character limit for 'text', and
  *   the BYTE limit for 'raw' — a file is measured in bytes, not characters
+ * @property {string} [shapeName] how a refusal names `pattern`, e.g. "owner/repo"
+ * @property {RegExp} [pattern]   for 'text': the WHOLE value must match, after
+ *   cleaning. For a value that becomes part of a URL or a command line and has
+ *   exactly one correct shape — an `owner/repo` — so a malformed one is refused
+ *   by whichever end reads it first rather than only by the host that uses it
  * @property {string} [describe]  the parameter's own words, carried into the
  *   generated MCP schema. Without it a caller sees a type and a bound and has
  *   to guess the meaning, which is how `brief` came to be read as the task.
@@ -234,6 +248,15 @@ const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
  * @property {boolean} mutating   changes host state → needs an idempotency key honoured
  * @property {string} summary
  */
+
+/** `owner/repo`, the only thing a runner repository can be.
+ *
+ * GitHub's own rules, not merely its alphabet. An owner is letters, digits and
+ * hyphens and starts with a letter or digit; a repository is letters, digits,
+ * `.`, `_` and `-`, and is never `.` or `..`. The looser `[A-Za-z0-9._-]` on
+ * both sides admitted `../x`, which is a path segment rather than a name the
+ * moment it is put into `https://api.github.com/repos/…`. */
+export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 
 /**
  * THE FIXED VERB SET.
@@ -975,6 +998,21 @@ export const VERBS = Object.freeze({
         max: 128,
         describe: 'Minted by the coordinator. Anything sent here is discarded and replaced.',
       },
+      // WHOSE REPOSITORY, set by the coordinator from the asking person's own
+      // runner repository, and on the wire for the same reason as `ticket`: the
+      // host validates every field it is given. Absent means the fleet's
+      // repository off the config frame, which is what every dispatch did
+      // before v6. A caller supplying one buys nothing — the coordinator
+      // replaces it with the person's setting or removes it.
+      repo: {
+        type: 'text',
+        required: false,
+        max: 161,
+        pattern: REPO_RE,
+        shapeName: 'owner/repo',
+        since: 6,
+        describe: 'Set by the coordinator from your own runner repository. Anything sent here is replaced.',
+      },
     },
     mutating: true,
     summary:
@@ -983,6 +1021,38 @@ export const VERBS = Object.freeze({
       'runner takes a few minutes to boot and appears in `status` as a host owned by you. Sessions started there ' +
       'are lost when it goes, so collect what you need before then. It spends GitHub Actions minutes and bills any ' +
       'session it runs to the runner repository’s API key.',
+  },
+
+  // CHECKING A RUNNER REPOSITORY BEFORE ANYBODY RELIES ON IT, with the asking
+  // person's own GitHub connection — so it runs on a host, which is where that
+  // connection lives, and never on a runner.
+  //
+  // It answers the four things that decide whether a dispatch there will
+  // work, as data: is it public (Actions minutes on a standard runner are free
+  // only there), does the Fleetwright GitHub App reach it, with Actions write,
+  // and which of the four runner workflows does it carry. Each is null when
+  // this connection cannot tell — a personal token cannot see installations —
+  // which is a different answer from "no".
+  //
+  // Not mutating: two reads against api.github.com and nothing on the box
+  // changes. Saving the answer is the coordinator's business, not this verb's.
+  runnerrepo: {
+    params: {
+      repo: {
+        type: 'text',
+        required: true,
+        max: 161,
+        pattern: REPO_RE,
+        shapeName: 'owner/repo',
+        since: 6,
+        describe: 'The repository to check, as owner/repo.',
+      },
+    },
+    mutating: false,
+    summary:
+      'Check a GitHub repository as a place to start temporary machines from, with your own GitHub connection: ' +
+      'whether it is public, whether the Fleetwright GitHub App reaches it with Actions write, and which runner ' +
+      'workflows (linux, macos, windows, android) it has. Changes nothing.',
   },
 });
 
@@ -1181,7 +1251,12 @@ function checkParam(verb, key, ps, value) {
   }
   if (ps.type === 'text') {
     const r = cleanText(value, { max: ps.max, label: `${verb}.${key}` });
-    return r.ok ? { ok: true, value: r.value } : bad(r.error);
+    if (!r.ok) return bad(r.error);
+    // THE SHAPE, when a value has only one. Checked after cleaning so what is
+    // matched is what is kept, and the refusal names the shape rather than
+    // quoting the value back.
+    if (ps.pattern && !ps.pattern.test(r.value)) return bad(`${verb}.${key} is not in the form ${ps.shapeName || 'expected'}`);
+    return { ok: true, value: r.value };
   }
   if (ps.type === 'raw') {
     // A FILE IS NOT PROSE. cleanText collapses runs of whitespace and strips

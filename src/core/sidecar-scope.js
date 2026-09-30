@@ -29,7 +29,7 @@ export const SIDECAR_COMMANDS = Object.freeze([
   'resume', 'stop', 'forget', 'restore', 'purge', 'answer', 'logs',
   'update', 'upgrade', 'reboot',
   'connect', 'login', 'code', 'link', 'verify', 'unlink', 'accounts',
-  'renew', 'provision',
+  'renew', 'provision', 'runnerrepo',
 ]);
 
 /**

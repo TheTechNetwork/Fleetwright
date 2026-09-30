@@ -864,3 +864,26 @@ test('while fleetwright is unreachable the frame keeps the last labels and drops
   assert.equal(r.health.sessions, null);
   assert.equal(r.health.channel, undefined, 'the live block is not sent when there is nothing live to say');
 });
+
+// --- whose runner repository -------------------------------------------------
+
+test('a dispatch goes to the repository the coordinator named for this person', async (t) => {
+  // v6: somebody who set their own runner repository gets their runners from
+  // it. The fleet's repository, off the config frame, is what everybody else
+  // gets — and falling back to it for this person would start a machine
+  // somewhere they did not choose.
+  const { sidecar, stub } = await setup(t);
+  sidecar.config.set('runnerRepo', 'fleet/runners');
+  await sidecar.handle(intent({ verb: 'provision', params: { platform: 'linux', repo: 'eli/runners' }, id: 'idem-rr-0001' }));
+  assert.equal(stub.bodies.at(-1).runnerRepo, 'eli/runners');
+  assert.equal(stub.commands.at(-1), '/provision linux');
+
+  await sidecar.handle(intent({ verb: 'provision', params: { platform: 'linux' }, id: 'idem-rr-0002' }));
+  assert.equal(stub.bodies.at(-1).runnerRepo, 'fleet/runners');
+});
+
+test('checking a repository is one command naming it, and nothing else', async (t) => {
+  const { sidecar, stub } = await setup(t);
+  await sidecar.handle(intent({ verb: 'runnerrepo', params: { repo: 'eli/runners' }, id: 'idem-rr-0003' }));
+  assert.equal(stub.commands.at(-1), '/runnerrepo eli/runners');
+});

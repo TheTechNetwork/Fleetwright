@@ -81,6 +81,11 @@ export class HubError extends Error {
  *   system: { supported?: boolean, pending?: boolean, count?: number, text?: string },
  * }} [waiting] what a check found, as data — kind, pending, version — so a row
  *   renders a state instead of parsing a sentence
+ * @property {string} [needsConnection] the provider this person has not
+ *   connected on this box, when that is the whole reason for a refusal — so a
+ *   coordinator can ask another box instead of reading it out of the sentence
+ * @property {import('../../core/runners.js').RunnerRepoCheck} [runnerRepo]
+ *   what a runner repository check found, as data
  * @property {{ sessions: number, pinRequired: boolean, hostname: string }} [reboot]
  *   what a reboot would cost, so a screen asks for as much as the loss is worth
  */

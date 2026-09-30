@@ -84,6 +84,10 @@ test('the verb set is exactly what is documented', () => {
     'renew',
     'restore',
     'resume',
+    // v6: checks the repository somebody wants their runners to come from,
+    // with their own GitHub connection. A new verb, so an older host answers
+    // `unknown_verb`; the version was spent on `provision { repo }` beside it.
+    'runnerrepo',
     // WHICH IMAGE SESSIONS RUN IN — `channel`'s sibling, and a VERB for the
     // same reason: `start { variant }` would have been a flag day, and a new
     // verb costs an old host nothing but an `unknown_verb`.
