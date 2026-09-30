@@ -52,6 +52,9 @@ platform/host:
           - 'src/fleet/host/**'
           - 'src/fleet/protocol/**'
           - 'src/fleet/legacy-*.js'
+          # Sealing a runner's repository token: runs on the runner and the
+          # minting box; the coordinator only borrows its key pattern.
+          - 'src/fleet/seal.js'
           - 'sandbox/**'
           - 'install/**'
           - 'apt/**'
@@ -207,6 +210,8 @@ area/security:
           - 'src/core/egress.js'
           - 'src/core/sandbox-userns.js'
           - 'src/fleet/crypto.js'
+          - 'src/fleet/seal.js'
+          - 'src/core/repo-tokens.js'
           - 'src/fleet/coordinator/identity.js'
           - 'src/fleet/coordinator/spent-tokens.js'
           - 'src/fleet/coordinator/random.js'
