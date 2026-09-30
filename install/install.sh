@@ -1458,7 +1458,7 @@ case "${NODE_BIN:-}" in
       pkg_install nodejs || true
     done
     if [ "$UNIT_NODE_BIN" = "$NODE_BIN" ]; then
-      warn "no system node available — the systemd unit will point at $NODE_BIN"
+      warn "no system node available — the $([ "$PLATFORM" = macos ] && echo "launchd daemons" || echo "systemd unit") will point at $NODE_BIN"
       warn "  A version-manager upgrade will move it and the service will fail to start."
     else
       ok "systemd will use $UNIT_NODE_BIN — a path that will not move"
@@ -3617,11 +3617,15 @@ if [ "$WIZARD" = yes ]; then
     [ -n "$FP" ] && printf '\n  This host: %s  fingerprint %s\n' "$HID" "$FP"
   fi
 
+  # The log is wherever this platform puts it: the journal, or the file the
+  # plist names. A Mac told to run journalctl has been told nothing.
+  FOLLOW_LOG="journalctl -u fleetwright -f"
+  [ "$PLATFORM" = macos ] && FOLLOW_LOG="tail -f /var/log/fleetwright.log"
   cat <<EOF
 
   Drive it:
       fleetwright list
-      journalctl -u fleetwright -f
+      $FOLLOW_LOG
 
   Config: $ENV_FILE
           $SIDECAR_ENV
