@@ -860,6 +860,12 @@ refresh_release_if_converted() {
     || warn "could not refresh the release — carrying on with the one this box has"
 }
 
+# Who owns a path. GNU stat spells it -c %U and BSD stat -f %Su; a Mac has the
+# second, and the first version of the two chown guards below asked GNU's
+# question there, got nothing back, and chowned a tree it did not need to on
+# every run. Empty when the path is missing.
+owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -1149,6 +1155,20 @@ write_reboot_sudoers() {
 # shape of drift this file keeps finding, and a grant somebody withdrew from
 # chat has to be withdrawn from sudo too.
 apply_grant() { # apply_grant upgrades|reboot yes|no → 0, or 1 when a rule did not validate
+  # A MAC APPLIES NOTHING FROM CHAT. Both rules name systemctl and apt-get,
+  # which it does not have, and visudo would accept the line anyway — so a Mac
+  # ended up with a sudoers rule permitting two commands that do not exist,
+  # recorded as a grant the app then drew as allowed. The answer is recorded
+  # as off, with the reason, and no rule is written.
+  if [ "$PLATFORM" = macos ]; then
+    case "$1" in
+      upgrades) put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_UPGRADE 0 ;;
+      reboot)   put_env "$ENV_FILE" FLEETWRIGHT_SYSTEM_REBOOT 0 ;;
+      *) die "apply_grant: not a grant: $1=$2" ;;
+    esac
+    [ "$2" = yes ] && warn "$1 from chat is not available on a Mac — recorded as off (apt and systemctl are Linux)"
+    return 0
+  fi
   case "$1:$2" in
     upgrades:yes)
       install_upgrade_units
@@ -2545,7 +2565,7 @@ fi
 # The alternative — giving the service user passwordless sudo for git — is a far
 # larger grant to solve a file-ownership problem, so: the deployment owns its
 # own deployment.
-if [ -d "$DIR/.git" ] && [ "$(stat -c %U "$DIR/.git" 2>/dev/null)" != "$RUN_USER" ]; then
+if [ -d "$DIR/.git" ] && [ "$(owner_of "$DIR/.git")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$DIR" 2>/dev/null; then
     ok "$DIR now belongs to $RUN_USER, so /update can pull"
   else
@@ -2577,7 +2597,7 @@ fi
 # /etc, the env file is root-owned and 0600, and the sudoers rule names
 # /usr/local/sbin/fleetwright-migrate — deliberately outside this tree, so that
 # a service user who can rewrite the tree still cannot rewrite what runs as root.
-if [ -d "$FLEET_BASE" ] && [ "$(stat -c %U "$FLEET_BASE" 2>/dev/null)" != "$RUN_USER" ]; then
+if [ -d "$FLEET_BASE" ] && [ "$(owner_of "$FLEET_BASE")" != "$RUN_USER" ]; then
   if chown -R "$RUN_USER" "$FLEET_BASE" 2>/dev/null; then
     ok "$FLEET_BASE now belongs to $RUN_USER, so updates can be applied without root"
   else

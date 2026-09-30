@@ -15,6 +15,8 @@
 // of things is one you can reason about.
 
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { isValidName } from './names.js';
 import { hasSession, capturePane } from './tmux.js';
@@ -31,6 +33,30 @@ export const LOG_SOURCES = Object.freeze({
   // Worker's own log is `wrangler tail` (docs/coordinator-deploy.md).
   sidecar: { unit: 'fleetwright-sidecar', legacy: 'agent-fleet-sidecar', what: 'this box as a fleet host' },
 });
+
+/**
+ * Where launchd puts a daemon, and where our plists send its output.
+ *
+ * A Mac has no journal. install/fleetwright.plist and its sidecar twin say
+ * `StandardOutPath=/var/log/<unit>.log` and promise "`/logs` reads these" —
+ * a promise this file did not keep until the macOS host was installed for
+ * real on a runner (.github/workflows/mac-host.yml) and /logs answered "No
+ * journalctl on this box". Both paths are overridable on the config for the
+ * tests, and for nothing else: a Mac box has one place for each.
+ */
+export const LAUNCHD_DIR = '/Library/LaunchDaemons';
+export const LAUNCHD_LOG_DIR = '/var/log';
+export const LAUNCHD_LABEL_PREFIX = 'network.thetech.';
+
+/** @param {import('../config.js').Config} cfg @param {string} unit */
+function launchdPlist(cfg, unit) {
+  return path.join(/** @type {any} */ (cfg).launchdDir ?? LAUNCHD_DIR, `${LAUNCHD_LABEL_PREFIX}${unit}.plist`);
+}
+
+/** @param {import('../config.js').Config} cfg @param {string} unit */
+function launchdLog(cfg, unit) {
+  return path.join(/** @type {any} */ (cfg).launchdLogDir ?? LAUNCHD_LOG_DIR, `${unit}.log`);
+}
 
 /**
  * A pane capture with the empty rows taken off.
@@ -188,9 +214,28 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
   );
 
   if (r.error) {
-    // No journalctl at all: a container, WSL without systemd, a distro that
-    // does not use journald. Nothing is broken, this just is not where the
-    // logs are.
+    // No journalctl. On a Mac the daemon runs under launchd and the plist
+    // sends its output to a file, so that file is the log — read its tail,
+    // the same shape the journal answer takes. Anywhere else with no
+    // journalctl (a container, WSL without systemd) there is no such file,
+    // and nothing is broken: this just is not where the logs are.
+    const file = launchdLog(cfg, unit);
+    if (existsSync(file)) {
+      let all;
+      try {
+        all = readFileSync(file, 'utf8');
+      } catch (e) {
+        return { ok: false, text: `Cannot read ${file}: ${/** @type {Error} */ (e).message}` };
+      }
+      const rows = all.split('\n');
+      if (rows.length && rows[rows.length - 1] === '') rows.pop();
+      if (!rows.length) {
+        return { ok: true, source: key, text: `No log entries for ${unit} (${what}). It may never have been started.` };
+      }
+      let text = rows.slice(-count).join('\n');
+      if (text.length > MAX_CHARS) text = `…trimmed…\n${text.slice(text.length - MAX_CHARS)}`;
+      return { ok: true, source: key, text: `${unit} — last ${Math.min(count, rows.length)} lines\n\n${text}` };
+    }
     return {
       ok: false,
       text:
@@ -239,6 +284,11 @@ export function readLogs(cfg, { source = null, lines = null } = {}) {
  * @param {string} unit
  */
 export function unitInstalled(cfg, unit) {
+  // A Mac: the daemon is a plist, and there is no systemctl to ask. Checked
+  // first because it is a stat, and because the systemctl question below
+  // answers "no" for the wrong reason there — the binary is missing, not the
+  // service — which is how a Mac host offered no log buttons at all.
+  if (existsSync(launchdPlist(cfg, unit))) return true;
   // By whichever name this box has it: a checkout updated by git pull, or a
   // packaged box between the release swap and the installer renaming its
   // units, still has agent-hub.service — and its log buttons went missing.

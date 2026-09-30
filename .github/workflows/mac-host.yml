@@ -1,0 +1,178 @@
+name: macOS host
+
+# The installer, run for real on a Mac, on every change to what it installs.
+#
+# ROADMAP carried the macOS host as "partial: not yet proven on real hardware
+# end-to-end" from the day the launchd path was written, because nobody who
+# works on this has a spare Mac to reinstall. A GitHub macOS runner is a spare
+# Mac: `sudo` without a password, Homebrew present, and thrown away afterwards.
+# So this is the drill the Linux side has had all along (migration-drill.sh,
+# the deb install in host-release.yml), for the platform that had none.
+#
+# WHAT IT PROVES: install.sh runs to the end on Darwin; the two launchd daemons
+# load and stay up as the service user; the hub answers on loopback; the host
+# key is made with the right owner and mode; the logs land where the plists
+# say and /logs can read them; --upgrade restarts both daemons on the new
+# code; uninstall.sh takes it all back out. Every one of those was a claim
+# with no evidence behind it before this file.
+#
+# WHAT IT DOES NOT PROVE: sandboxed sessions (podman on a Mac is a Linux VM,
+# and the installer declines to set one up), and anything hardening.md
+# measures with systemd-analyze, which has no launchd equivalent. Both are
+# said in hardening.md's "None of this is a Mac".
+#
+# The coordinator is a name that does not resolve, so the sidecar dials, is
+# refused by DNS and retries — which is exactly the state a Mac is in before
+# somebody enrols it, and enough to show the daemon stays up under launchd
+# rather than crash-looping the way the stdio transport would.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'install/**'
+      - 'bin/**'
+      - 'src/core/logs.js'
+      - 'src/core/env-file.js'
+      - 'src/core/which.js'
+      - '.github/workflows/mac-host.yml'
+  pull_request:
+    paths:
+      - 'install/**'
+      - 'bin/**'
+      - 'src/core/logs.js'
+      - 'src/core/env-file.js'
+      - 'src/core/which.js'
+      - '.github/workflows/mac-host.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install, run, upgrade, uninstall
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.21.0'
+      - run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: The things the installer would fetch from the network
+        # tmux comes from Homebrew, through the installer itself, because
+        # pkg_install's brew branch is one of the things under test. The Claude
+        # CLI is preinstalled: the installer runs Anthropic's remote installer
+        # for it, which is a network call this job has no reason to depend on.
+        run: |
+          brew untap aws/tap >/dev/null 2>&1 || true
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.283
+          claude --version
+
+      - name: Install, the way the one-liner would with nobody watching
+        env:
+          # A name that does not resolve: enrolment is tried and refused, and
+          # the sidecar daemon then has a coordinator to keep dialling.
+          FLEETWRIGHT_COORDINATOR_URL: nowhere.invalid
+          FLEETWRIGHT_ENROL_PIN: '123456'
+          # Nobody to ask, and every question takes its default — the deb's
+          # postinst runs the same way.
+          FLEETWRIGHT_ASK_NONE: '1'
+        run: |
+          set -euo pipefail
+          NODE="$(command -v node)"
+          # --from-source keeps this a checkout install: converting to the
+          # packaged layout needs a release to fetch, which is the manifest
+          # path's business and tested where the deb is.
+          sudo --preserve-env=FLEETWRIGHT_COORDINATOR_URL,FLEETWRIGHT_ENROL_PIN,FLEETWRIGHT_ASK_NONE \
+            env FLEETWRIGHT_NODE_BIN="$NODE" \
+            bash install/install.sh --wizard --from-source </dev/null | tee /tmp/install.log
+          grep -q "enrolment failed" /tmp/install.log || { echo "::error::the pin was not spent"; exit 1; }
+          if grep -qi "unbound variable\|command not found\|syntax error" /tmp/install.log; then
+            echo "::error::the installer hit a shell error on Darwin"; exit 1
+          fi
+
+      - name: Both daemons are loaded and running as the service user
+        run: |
+          set -euo pipefail
+          for u in fleetwright fleetwright-sidecar; do
+            plist="/Library/LaunchDaemons/network.thetech.$u.plist"
+            [ -f "$plist" ] || { echo "::error::$plist was not written"; exit 1; }
+            # launchd refuses a daemon that anybody but root can write.
+            [ "$(stat -f '%Su:%Sg %Lp' "$plist")" = "root:wheel 644" ] || { echo "::error::$plist is $(stat -f '%Su:%Sg %Lp' "$plist")"; exit 1; }
+            grep -q "<string>$(id -un)</string>" "$plist" || { echo "::error::$plist does not run as $(id -un)"; exit 1; }
+            # `launchctl print` is the one source of truth for a loaded job:
+            # bootstrap returning 0 says the request was accepted, not that
+            # anything is running. Give it a moment, then read the state.
+            state=""
+            for _ in $(seq 1 20); do
+              state="$(sudo launchctl print "system/network.thetech.$u" 2>/dev/null | awk '/^\tstate = / {print $3}')"
+              [ "$state" = running ] && break
+              sleep 1
+            done
+            [ "$state" = running ] || { echo "::error::$u is '$state', not running"; sudo launchctl print "system/network.thetech.$u" || true; tail -n 40 "/var/log/$u.log" || true; exit 1; }
+            echo "$u: running"
+          done
+
+      - name: The hub answers, the identity exists, and /logs reads launchd's files
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8790/healthz && break || sleep 1; done
+          curl -sf http://127.0.0.1:8790/healthz | grep -q '"ok":true' || { echo "::error::the hub is not answering on loopback"; exit 1; }
+
+          # The host key: 0600, in a 0700 directory, owned by the account the
+          # sidecar runs as. On a Mac that is the session user (install.sh makes
+          # no system accounts there, and says so).
+          key=/var/lib/fleetwright-sidecar/host-key.json
+          sudo test -f "$key" || { echo "::error::no host key at $key"; exit 1; }
+          [ "$(sudo stat -f '%Su %Lp' "$key")" = "$(id -un) 600" ] || { echo "::error::$key is $(sudo stat -f '%Su %Lp' "$key")"; exit 1; }
+          [ "$(sudo stat -f '%Lp' /var/lib/fleetwright-sidecar)" = 700 ] || { echo "::error::the key directory is not 0700"; exit 1; }
+          fleetwright-sidecar identity | tee /tmp/identity.log
+          grep -q fingerprint /tmp/identity.log || { echo "::error::identity printed no fingerprint"; exit 1; }
+
+          # The plists send stdout and stderr to /var/log/<unit>.log because
+          # there is no journal, and they say `/logs` reads these. Hold them to it.
+          sudo test -s /var/log/fleetwright.log || { echo "::error::the hub wrote nothing to /var/log/fleetwright.log"; exit 1; }
+          TOKEN="$(sudo cat /var/lib/fleetwright/api-token)"
+          curl -sf -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            -d '{"command":"/logs hub"}' http://127.0.0.1:8790/api/command | tee /tmp/logs.json
+          grep -q '"ok":true' /tmp/logs.json || { echo "::error::/logs hub did not answer ok"; exit 1; }
+          grep -q 'last [0-9]* lines' /tmp/logs.json || { echo "::error::/logs hub did not read the launchd log file"; exit 1; }
+          fleetwright doctor | tee /tmp/doctor.log || true
+
+      - name: --upgrade restarts both daemons on the new code
+        run: |
+          set -euo pipefail
+          sudo env FLEETWRIGHT_NODE_BIN="$(command -v node)" bash install/install.sh --upgrade --from-source </dev/null | tee /tmp/upgrade.log
+          grep -q "fleetwright restarted, on the new code" /tmp/upgrade.log || { echo "::error::--upgrade did not restart the hub"; exit 1; }
+          grep -q "fleetwright-sidecar restarted, on the new code" /tmp/upgrade.log || { echo "::error::--upgrade did not restart the sidecar"; exit 1; }
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8790/healthz && break || sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:8790/healthz
+
+      - name: uninstall.sh takes it all back out
+        run: |
+          set -euo pipefail
+          sudo bash install/uninstall.sh --yes | tee /tmp/uninstall.log
+          for u in fleetwright fleetwright-sidecar; do
+            if sudo launchctl print "system/network.thetech.$u" >/dev/null 2>&1; then echo "::error::$u is still loaded"; exit 1; fi
+            [ ! -f "/Library/LaunchDaemons/network.thetech.$u.plist" ] || { echo "::error::$u's plist is still there"; exit 1; }
+          done
+          sudo test ! -e /var/lib/fleetwright-sidecar/host-key.json || { echo "::error::the host key survived the uninstall"; exit 1; }
+          sudo test ! -e /etc/fleetwright.env || { echo "::error::/etc/fleetwright.env survived the uninstall"; exit 1; }
+          [ ! -e /usr/local/bin/fleetwright ] || { echo "::error::the CLI link survived the uninstall"; exit 1; }
+          echo "--- installed, ran, upgraded, uninstalled ---"
+
+      - name: What the box looked like, when something above failed
+        if: failure()
+        run: |
+          sudo tail -n 60 /var/log/fleetwright.log 2>/dev/null || true
+          sudo tail -n 60 /var/log/fleetwright-sidecar.log 2>/dev/null || true
+          sudo launchctl print system/network.thetech.fleetwright 2>/dev/null | head -40 || true
+          sudo launchctl print system/network.thetech.fleetwright-sidecar 2>/dev/null | head -40 || true
+          sudo cat /etc/fleetwright.env 2>/dev/null | sed 's/\(TOKEN=\).*/\1…/' || true
