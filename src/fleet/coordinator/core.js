@@ -109,6 +109,7 @@ export class CoordinatorCore {
    *   githubApp?: { clientId?: string, clientSecret?: string, slug?: string }|null,
    *   cloudflareOauth?: { clientId?: string, clientSecret?: string, scopes?: string }|null,
    *   runnerRepo?: string|null,
+   *   minter?: { mint: (ask: { repo: string, job: string, key: string }) => Promise<any> }|null,
    * }} [opts]
    */
   constructor({
@@ -139,6 +140,12 @@ export class CoordinatorCore {
     // rather than pretending it can start machines it has nowhere to start.
     // See docs/runner-central.md.
     runnerRepo = null,
+    // THE MINTING WORKER, when the deployment binds one: a separate Worker that
+    // holds the GitHub App key and mints runners their repository tokens. The
+    // coordinator only relays to it and never holds the key — see
+    // src/fleet/minter/answer.js. Absent means a permanent box that holds the
+    // key is asked instead, and a fleet with neither mints nothing.
+    minter = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -150,6 +157,7 @@ export class CoordinatorCore {
     this.githubApp = githubApp;
     this.cloudflareOauth = cloudflareOauth;
     this.runnerRepo = runnerRepo;
+    this.minter = minter;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -2137,13 +2145,34 @@ export class CoordinatorCore {
     recent.push(now);
     this.mintAsks.set(hostId, recent);
 
-    const reply = await this.#askEachBox({
-      verb: 'mint',
-      params: { repo, job, key },
-      actor: host.owner,
-      internal: true,
-      requester: { email: host.owner, admin: false },
-    });
+    // THE MINTING WORKER FIRST, a permanent box only when it cannot answer —
+    // it holds no key, or it is not there. A refusal from the Worker is final:
+    // it checked the request against GitHub, and asking a box the same
+    // question would only look for a second opinion on a no.
+    /** @type {any} */
+    let reply = null;
+    if (this.minter) {
+      reply = await this.minter.mint({ repo, job, key }).then(
+        (r) => ({
+          ok: r?.ok === true,
+          text: typeof r?.text === 'string' ? r.text : '',
+          ...(r?.ok === true ? { sealed: r.sealed, repo: r.repo, expiresAt: r.expiresAt, permissions: r.permissions } : {}),
+          ...(r?.error?.code ? { error: { code: String(r.error.code) } } : {}),
+          ...(r?.needsMinter ? { needsMinter: true } : {}),
+          hostId: 'the minting Worker',
+        }),
+        (e) => ({ ok: false, needsMinter: true, text: `the minting Worker did not answer: ${/** @type {Error} */ (e).message}` }),
+      );
+    }
+    if (!reply || (reply.ok === false && reply.needsMinter)) {
+      reply = await this.#askEachBox({
+        verb: 'mint',
+        params: { repo, job, key },
+        actor: host.owner,
+        internal: true,
+        requester: { email: host.owner, admin: false },
+      });
+    }
     // RECORDED EITHER WAY, by repository and outcome — never the token, which
     // this process could not read if it wanted to. "Whose runner reached which
     // private repository, and which box let it" is the question an audit of

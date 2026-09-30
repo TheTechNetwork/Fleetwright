@@ -181,7 +181,7 @@ export class Sidecar {
    *   version?: (() => { head: string|null, branch: string|null, installed?: string|null, helper?: 'current'|'stale'|null }|null)|null,
    *   onRestartRequested?: ((at: number) => void)|null,
    *   startedAt?: number,
-   *   minter?: import('../../core/repo-tokens.js').Minter|null,
+   *   minter?: import('./minter-config.js').Minter|null,
    *   jobToken?: ((audience: string) => Promise<string>)|null,
    *   mintTimeoutMs?: number,
    * }} opts
@@ -315,7 +315,7 @@ export class Sidecar {
     /**
      * The GitHub App key, in memory. Never logged, never sent, never written:
      * the only thing done with it is signing a ten-minute JWT in appJwt.
-     * @type {import('../../core/repo-tokens.js').Minter|null}
+     * @type {import('./minter-config.js').Minter|null}
      */
     this.minter = minter;
     this.jobToken = jobToken;

@@ -12,14 +12,17 @@
 // minted with the App's private key, restricted at mint time to named
 // repositories and a subset of permissions, and dead in an hour.
 //
-// WHERE THE KEY LIVES, which is the question underneath. docs/github-app.md
-// refuses it a home on every host (N copies of a key that mints for every
-// installation) and in the coordinator (treated as compromised), and decided
-// that its blast radius is the host it sits on — so bounding it is host
-// hardening (docs/hardening.md). So: ONE permanent box an operator chooses,
-// read from a file only that box's sidecar can open, never sent anywhere.
-// Nothing in this file moves the key; it only signs with it.
+// WHERE THE KEY LIVES, which is the question underneath. Not the coordinator,
+// which this project treats as compromised, and not every host. By default
+// it is a MINTING WORKER of its own (worker/src/minter.js): no public route,
+// reached only by the coordinator through a service binding, holding the key
+// and nothing else. A fleet that would rather keep the key off Cloudflare can
+// put it on ONE permanent box instead (src/fleet/host/minter-config.js). The
+// runner cannot tell which answered. Nothing in this file moves the key; it
+// only signs with it.
 //
+// NO node: IMPORTS, because the minting Worker imports this file.
+
 // WHAT BOUNDS A MINT, in the order they are checked by the sidecar:
 //
 //  1. GitHub's own signature on the runner's job token, whose audience is a
@@ -30,17 +33,16 @@
 //     installable by any account, so "this key never mints into somebody else's
 //     account" is kept by what the fleet does rather than by what GitHub allows
 //     — github-app.md says so and this list is where it is done.
-//  4. The person's OWN GitHub connection can see the repository, and the job
-//     was started by that same GitHub account (`actor_id`). So the token cannot
-//     exceed the person: it is at most what their own connection could already
-//     do there, in one repository, for an hour.
+//  4. The GitHub account that started the job (`actor_id`) can reach the
+//     repository. A box asks the person's own connection; the minting Worker,
+//     which holds nobody's, asks GitHub about that account directly. Either
+//     way the token cannot exceed the person: it is at most what they could
+//     already do there, in one repository, for an hour.
 //  5. Write only if they have push. Otherwise read.
 //
 // NEVER THROWS. Every refusal is a sentence a person can act on, and the
 // sidecar forwards it to the runner and the coordinator's record.
 
-import { readFileSync } from 'node:fs';
-import { createPrivateKey } from 'node:crypto';
 import { SignJWT } from 'jose';
 import { REPO_RE } from '../fleet/protocol/intents.js';
 import { RUNNER_WORKFLOWS } from './runners.js';
@@ -171,11 +173,62 @@ export function ownerAllowed(repo, owners) {
   return owners.some((o) => o.toLowerCase() === owner);
 }
 
+/** @typedef {import('node:crypto').KeyObject | CryptoKey} AppKey */
+
+/**
+ * The App's private key, as WebCrypto can sign with it, from the PEM GitHub
+ * hands out. For the minting Worker, which has no node:crypto.
+ *
+ * GITHUB GIVES PKCS#1 ("BEGIN RSA PRIVATE KEY") AND WEBCRYPTO READS ONLY PKCS#8,
+ * so a key pasted straight from the download would be refused with an error
+ * about formats that sends somebody to openssl. The wrapping is fixed bytes —
+ * a version, the rsaEncryption algorithm identifier, and the PKCS#1 key as an
+ * octet string — so it is done here rather than asked of whoever sets it.
+ *
+ * @param {string} pem
+ * @returns {Promise<CryptoKey>}
+ */
+export async function importAppKey(pem) {
+  const text = String(pem || '');
+  const pkcs1 = /-----BEGIN RSA PRIVATE KEY-----/.test(text);
+  const body = text.replace(/-----(BEGIN|END) [A-Z ]+-----/g, '').replace(/\s+/g, '');
+  if (!body) throw new Error('the GitHub App key is empty');
+  const bytes = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey(
+    'pkcs8',
+    /** @type {any} */ (pkcs1 ? wrapPkcs1(bytes) : bytes),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+}
+
+/** @param {number} n */
+function derLength(n) {
+  if (n < 0x80) return [n];
+  /** @type {number[]} */
+  const out = [];
+  for (let v = n; v > 0; v >>= 8) out.unshift(v & 0xff);
+  return [0x80 | out.length, ...out];
+}
+
+/** @param {number} tag @param {Uint8Array|number[]} content */
+function der(tag, content) {
+  return Uint8Array.from([tag, ...derLength(content.length), ...content]);
+}
+
+/** PKCS#8 around a PKCS#1 RSA key: SEQUENCE { 0, rsaEncryption, OCTET STRING key }. @param {Uint8Array} pkcs1 */
+function wrapPkcs1(pkcs1) {
+  const version = [0x02, 0x01, 0x00];
+  const rsaEncryption = [0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00];
+  return der(0x30, [...version, ...rsaEncryption, ...der(0x04, pkcs1)]);
+}
+
 /**
  * The App's own credential, for ten minutes: the one thing the private key is
  * used for. `iss` is the client id, which GitHub accepts in place of the App id.
  *
- * @param {{ clientId: string, key: import('node:crypto').KeyObject, now?: () => number }} args
+ * @param {{ clientId: string, key: AppKey, now?: () => number }} args
  */
 export async function appJwt({ clientId, key, now = () => Date.now() }) {
   const t = Math.floor(now() / 1000);
@@ -185,118 +238,133 @@ export async function appJwt({ clientId, key, now = () => Date.now() }) {
 }
 
 /**
- * Mint a token for one repository with the App's key.
+ * Which installation of the App reaches a repository.
+ *
+ * @param {{ repo: string, jwt: string, fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, id: number } | { ok: false, message: string }>}
+ */
+export async function installationFor({ repo, jwt, fetchImpl = fetch }) {
+  const inst = await fetchImpl(`https://api.github.com/repos/${repo}/installation`, {
+    headers: headers(jwt),
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+  });
+  if (inst.status === 404) {
+    return { ok: false, message: `The Fleetwright GitHub App is not installed on ${repo}, so there is nothing to mint from. Add it to the installation.` };
+  }
+  if (inst.status === 401) {
+    return { ok: false, message: 'GitHub rejected the App key (401). The key or the client id configured beside it is wrong, or the key was revoked.' };
+  }
+  if (!inst.ok) return { ok: false, message: `GitHub would not say which installation reaches ${repo} (${inst.status}).` };
+  const id = Number((/** @type {any} */ (await inst.json()))?.id);
+  if (!Number.isSafeInteger(id)) return { ok: false, message: 'GitHub answered without an installation id.' };
+  return { ok: true, id };
+}
+
+/**
+ * An installation token for exactly one repository and exactly these
+ * permissions.
+ *
+ * @param {{ installationId: number, repo: string, permissions: Record<string, string>, jwt: string,
+ *   fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: true, token: string, expiresAt: number, permissions: Record<string, string> }
+ *   | { ok: false, message: string }>}
+ */
+export async function mintInstallationToken({ installationId, repo, permissions, jwt, fetchImpl = fetch }) {
+  const [, name] = String(repo).split('/');
+  const res = await fetchImpl(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+    method: 'POST',
+    headers: { ...headers(jwt), 'content-type': 'application/json' },
+    // ONE REPOSITORY, BY NAME, AND NAMED PERMISSIONS. Omit either and GitHub
+    // hands back the whole installation, which is the thing this is for not
+    // doing.
+    body: JSON.stringify({ repositories: [name], permissions }),
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+  });
+  if (res.status === 422) {
+    return {
+      ok: false,
+      message: `GitHub refused to mint for ${repo} with ${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(', ')} (422) — the installation has not been granted those permissions.`,
+    };
+  }
+  if (!res.ok) return { ok: false, message: `GitHub refused to mint a token for ${repo} (${res.status}).` };
+  const body = /** @type {any} */ (await res.json());
+  const token = typeof body?.token === 'string' ? body.token : '';
+  const expiresAt = Date.parse(String(body?.expires_at || ''));
+  // CHECKED, NOT ASSUMED. The request named one repository; an answer that
+  // reaches any other, or all of them, is not what was asked for, and the
+  // safe thing to do with a token that is wider than asked is not use it.
+  const repos = Array.isArray(body?.repositories) ? body.repositories : null;
+  if (!token || !Number.isFinite(expiresAt)) return { ok: false, message: 'GitHub answered without a token.' };
+  if (!repos || repos.length !== 1 || String(repos[0]?.full_name || '').toLowerCase() !== repo.toLowerCase()) {
+    return { ok: false, message: `GitHub minted a token that does not reach exactly ${repo}; it was not used.` };
+  }
+  return { ok: true, token, expiresAt, permissions: body.permissions && typeof body.permissions === 'object' ? body.permissions : permissions };
+}
+
+/**
+ * Mint a token for one repository with the App's key: the installation, then
+ * the token. What a minting BOX does, once the person's own connection has
+ * said what they can reach.
  *
  * @param {{ repo: string, permissions: Record<string, string>, clientId: string,
- *   key: import('node:crypto').KeyObject, fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
+ *   key: AppKey, fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
  * @returns {Promise<{ ok: true, token: string, expiresAt: number, permissions: Record<string, string> }
  *   | { ok: false, message: string }>}
  */
 export async function mintRepoToken({ repo, permissions, clientId, key, fetchImpl = fetch, now = () => Date.now() }) {
-  const [, name] = String(repo).split('/');
   try {
     const jwt = await appJwt({ clientId, key, now });
-    const inst = await fetchImpl(`https://api.github.com/repos/${repo}/installation`, {
-      headers: headers(jwt),
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    });
-    if (inst.status === 404) {
-      return { ok: false, message: `The Fleetwright GitHub App is not installed on ${repo}, so there is nothing to mint from. Add it to the installation.` };
-    }
-    if (inst.status === 401) {
-      return { ok: false, message: 'GitHub rejected this box’s App key (401). The key or the client id configured here is wrong, or the key was revoked.' };
-    }
-    if (!inst.ok) return { ok: false, message: `GitHub would not say which installation reaches ${repo} (${inst.status}).` };
-    const id = Number((/** @type {any} */ (await inst.json()))?.id);
-    if (!Number.isSafeInteger(id)) return { ok: false, message: 'GitHub answered without an installation id.' };
-
-    const res = await fetchImpl(`https://api.github.com/app/installations/${id}/access_tokens`, {
-      method: 'POST',
-      headers: { ...headers(jwt), 'content-type': 'application/json' },
-      // ONE REPOSITORY, BY NAME, AND NAMED PERMISSIONS. Omit either and GitHub
-      // hands back the whole installation, which is the thing this is for not
-      // doing.
-      body: JSON.stringify({ repositories: [name], permissions }),
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    });
-    if (res.status === 422) {
-      return {
-        ok: false,
-        message: `GitHub refused to mint for ${repo} with ${Object.entries(permissions).map(([k, v]) => `${k}:${v}`).join(', ')} (422) — the installation has not been granted those permissions.`,
-      };
-    }
-    if (!res.ok) return { ok: false, message: `GitHub refused to mint a token for ${repo} (${res.status}).` };
-    const body = /** @type {any} */ (await res.json());
-    const token = typeof body?.token === 'string' ? body.token : '';
-    const expiresAt = Date.parse(String(body?.expires_at || ''));
-    // CHECKED, NOT ASSUMED. The request named one repository; an answer that
-    // reaches any other, or all of them, is not what was asked for, and the
-    // safe thing to do with a token that is wider than asked is not use it.
-    const repos = Array.isArray(body?.repositories) ? body.repositories : null;
-    if (!token || !Number.isFinite(expiresAt)) return { ok: false, message: 'GitHub answered without a token.' };
-    if (!repos || repos.length !== 1 || String(repos[0]?.full_name || '').toLowerCase() !== repo.toLowerCase()) {
-      return { ok: false, message: `GitHub minted a token that does not reach exactly ${repo}; it was not used.` };
-    }
-    return { ok: true, token, expiresAt, permissions: body.permissions && typeof body.permissions === 'object' ? body.permissions : permissions };
+    const inst = await installationFor({ repo, jwt, fetchImpl });
+    if (!inst.ok) return inst;
+    return await mintInstallationToken({ installationId: inst.id, repo, permissions, jwt, fetchImpl });
   } catch (e) {
     return { ok: false, message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
   }
 }
 
 /**
- * @typedef {object} Minter
- * @property {import('node:crypto').KeyObject} key
- * @property {string} clientId
- * @property {string[]} owners
+ * Mint for the GitHub account that started a runner, with no connection of
+ * theirs to ask: what the MINTING WORKER does, since it holds nobody's.
+ *
+ * Two mints. The first is a probe — this repository, metadata read, nothing
+ * else — spent on asking GitHub what permission that account has there. The
+ * second is the token itself, write if they can push and read if they can
+ * read. So "can this person reach it" is answered by GitHub, about the account
+ * GitHub itself says started the job, and the token is never wider than that.
+ *
+ * @param {{ repo: string, actor: string, actorId: string, clientId: string, key: AppKey,
+ *   fetchImpl?: typeof globalThis.fetch, now?: () => number }} args
+ * @returns {Promise<{ ok: true, token: string, expiresAt: number, permissions: Record<string, string>, repo: string }
+ *   | { ok: false, code: string, message: string }>}
  */
-
-/**
- * The minter this box is configured to be, if any.
- *
- * Three settings, all on the box and none from the coordinator — the key cannot
- * come down the socket (the coordinator must never hold it), and the other two
- * say what that key may be used for, which is not the coordinator's to decide.
- * Read by loadSidecarConfig (src/fleet/host/config.js):
- *
- *   FLEETWRIGHT_GITHUB_APP_KEY        the App's private key, a PEM file. Or leave
- *                                     it unset and give systemd the key as the
- *                                     credential `github-app-key`
- *                                     (LoadCredentialEncrypted=), which puts it
- *                                     under $CREDENTIALS_DIRECTORY
- *   FLEETWRIGHT_GITHUB_APP_CLIENT_ID  the App's client id, the JWT's issuer
- *   FLEETWRIGHT_GITHUB_MINT_OWNERS    accounts whose repositories may be minted
- *                                     into, comma separated. Empty is nobody
- *
- * A box with none of them is not a minter and that is the normal case. A box
- * with some of them is misconfigured, and says which.
- *
- * @param {{ keyFile?: string, credentialsDirectory?: string, clientId?: string, owners?: string[] }} settings
- * @param {(file: string) => string} [read]
- * @returns {{ minter: Minter|null, problem: string|null }}
- */
-export function loadMinter(settings, read = (f) => readFileSync(f, 'utf8')) {
-  const file = String(settings.keyFile || '');
-  const fromSystemd = settings.credentialsDirectory ? `${settings.credentialsDirectory}/github-app-key` : '';
-  const clientId = String(settings.clientId || '').trim();
-  const owners = (settings.owners || []).map((s) => String(s).trim()).filter(Boolean);
-  let pem = '';
-  for (const candidate of [file, fromSystemd].filter(Boolean)) {
-    try {
-      pem = read(candidate);
-      break;
-    } catch (e) {
-      if (candidate === file) return { minter: null, problem: `FLEETWRIGHT_GITHUB_APP_KEY: ${/** @type {Error} */ (e).message}` };
-    }
-  }
-  if (!pem && !clientId && !owners.length) return { minter: null, problem: null };
-  if (!pem) return { minter: null, problem: 'repository tokens: no GitHub App key (FLEETWRIGHT_GITHUB_APP_KEY, or the systemd credential github-app-key)' };
-  if (!clientId) return { minter: null, problem: 'repository tokens: FLEETWRIGHT_GITHUB_APP_CLIENT_ID is not set' };
-  if (!owners.length) return { minter: null, problem: 'repository tokens: FLEETWRIGHT_GITHUB_MINT_OWNERS is empty, so there is nobody to mint for' };
+export async function mintForActor({ repo, actor, actorId, clientId, key, fetchImpl = fetch, now = () => Date.now() }) {
   try {
-    const key = createPrivateKey(pem);
-    if (key.asymmetricKeyType !== 'rsa') return { minter: null, problem: 'repository tokens: the GitHub App key is not an RSA key' };
-    return { minter: { key, clientId, owners }, problem: null };
+    const jwt = await appJwt({ clientId, key, now });
+    const inst = await installationFor({ repo, jwt, fetchImpl });
+    if (!inst.ok) return { ok: false, code: 'not_installed', message: inst.message };
+    const probe = await mintInstallationToken({ installationId: inst.id, repo, permissions: { metadata: 'read' }, jwt, fetchImpl });
+    if (!probe.ok) return { ok: false, code: 'mint_failed', message: probe.message };
+    const res = await fetchImpl(`https://api.github.com/repos/${repo}/collaborators/${encodeURIComponent(actor)}/permission`, {
+      headers: headers(probe.token),
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      return { ok: false, code: 'no_access', message: `GitHub would not say what ${actor} can do in ${repo} (${res.status}), so nothing was minted.` };
+    }
+    const body = /** @type {any} */ (await res.json());
+    // THE SAME ACCOUNT, by id rather than by login: a login can be renamed and
+    // then taken by somebody else; the id cannot.
+    if (String(body?.user?.id ?? '') !== String(actorId)) {
+      return { ok: false, code: 'not_the_asker', message: `GitHub answered for a different account than the one that started the runner (${actor}).` };
+    }
+    const role = String(body?.permission || 'none');
+    const push = role === 'admin' || role === 'maintain' || role === 'write';
+    const pull = push || role === 'read' || role === 'triage';
+    if (!pull) return { ok: false, code: 'no_access', message: `${actor} cannot read ${repo}, so neither can a runner.` };
+    const minted = await mintInstallationToken({ installationId: inst.id, repo, permissions: permissionsFor({ push }), jwt, fetchImpl });
+    if (!minted.ok) return { ok: false, code: 'mint_failed', message: minted.message };
+    return { ...minted, repo };
   } catch (e) {
-    return { minter: null, problem: `repository tokens: the GitHub App key does not load (${/** @type {Error} */ (e).message})` };
+    return { ok: false, code: 'mint_failed', message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
   }
 }

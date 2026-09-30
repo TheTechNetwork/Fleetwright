@@ -232,7 +232,7 @@ progress and quietly widens what a single compromised host can reach.
 | App ID | `4758006` | `[vars]` in `wrangler.production.toml` — ours; a fork registers its own App |
 | Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` in `wrangler.production.toml` — appears in every authorize URL |
 | Client secret | *(to generate)* | `wrangler secret put FLEETWRIGHT_GITHUB_CLIENT_SECRET` |
-| Private key | *(generate a fresh one when a minting box is set up)* | on **one** permanent box only, for runners' repository tokens — see below |
+| Private key | *(generate a fresh one for the minter)* | the **minting Worker**'s secret `FLEETWRIGHT_GITHUB_APP_KEY`, synced from the repository secret of that name — never the coordinator. Or one permanent box instead. See below |
 
 **The first build needs only the Client ID and the secret.** User-to-server
 OAuth authorizes against
@@ -257,16 +257,22 @@ needs no slug at all.
 
 ## The private key: received, and deliberately not installed anywhere
 
-> **Update, 30 Sep 2026: the key now has one place it may live**, and it is the
-> place this section argued for. Runners mint repository tokens with it
-> ([runner-central.md](./runner-central.md#private-code-on-a-runner)): on ONE
-> permanent box an operator chooses, read by that box's sidecar from a file or
-> an encrypted systemd credential, never sent to the coordinator or any other
-> host, and restricted by `FLEETWRIGHT_GITHUB_MINT_OWNERS` to the accounts it
-> may mint into — which is how "guests keep their own tokens" is kept, since the
-> App stays installable by any account. What follows about THIS key still
-> holds: it should not be the one installed. Generate a fresh key for that box
-> and delete this one.
+> **Update, 30 Sep 2026: the key has a home, and it is the separate minting
+> service this section said was the only shape that works.** It is a Worker of
+> its own — `worker/src/minter.js`, no public route, reached only by the
+> coordinator's service binding — holding the key and nothing else, so **no
+> permanent box is needed to mint** runners their repository tokens
+> ([runner-central.md](./runner-central.md#private-code-on-a-runner)). The
+> coordinator relays a runner's request and relays back an answer sealed to
+> that runner; it never holds the key, and the minter checks every request
+> against GitHub rather than against the coordinator's word.
+> `FLEETWRIGHT_GITHUB_MINT_OWNERS` restricts it to the accounts it may mint
+> into, which is how "guests keep their own tokens" is kept while the App stays
+> installable by any account. One permanent box can hold the key instead, for
+> a fleet that would rather keep it off Cloudflare. What that moves is where
+> the trust sits: the Cloudflare account, and whoever can deploy to it, can
+> replace the minter's code. What follows about THIS key still holds: it should
+> not be the one installed. Generate a fresh key and delete this one.
 
 The key exists and is a 2048-bit RSA key. It has not been written to a secret
 store, a host, the coordinator, or this repository, and that is the design
@@ -444,9 +450,9 @@ against.
 **Steps 1–4 have shipped** — the callback is served by both coordinators, the
 apps use system browsers with no paste field, and storage lives host-side (see
 [`connectors.md`](./connectors.md) and [`accounts.md`](./accounts.md)). Step 5
-is built for runners — a one-repository, one-hour token minted on the one box
-that holds the key and sealed to the runner that asked — and not yet for
-sessions on permanent boxes, which still get the person's user token. The reasoning is kept because the
+is built for runners — a one-repository, one-hour token minted by the minting
+Worker (or a box holding the key) and sealed to the runner that asked — and not
+yet for sessions on permanent boxes, which still get the person's user token. The reasoning is kept because the
 order was the point:
 
 1. **The callback route** on the coordinator: `/oauth/github/callback` takes
@@ -467,10 +473,10 @@ order was the point:
 4. **The apps**: one button, one redirect, no paste field.
 5. **Installation tokens behind the broker**, when the broker exists — at which
    point the refresh token stops being needed at all. **Built for runners**,
-   which had no token to replace; see
-   [runner-central.md](./runner-central.md#private-code-on-a-runner). The
-   person's connection is still what answers "can you reach this", so the
-   refresh token is still needed.
+   which had no token to replace, by a minting Worker that holds the key; see
+   [runner-central.md](./runner-central.md#private-code-on-a-runner). Sessions
+   on permanent boxes still use the person's user token, so the refresh token
+   is still needed.
 
 ## What stays as it is
 

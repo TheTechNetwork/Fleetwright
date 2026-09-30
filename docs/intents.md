@@ -156,9 +156,11 @@ person's own GitHub connection and changing nothing. See
 
 `mint` is the one verb nobody calls. A runner sends a `mint` **frame** up its
 own socket when one of its sessions' git asks for a repository; the coordinator
-adds the one thing only it knows — whose runner that is — and sends this verb,
-as that person, to each of their permanent boxes in turn until one holding the
-fleet's GitHub App key answers. `dispatch` refuses it from any caller and the
+relays the ask to the minting Worker, a separate script that holds the fleet's
+GitHub App key, over a service binding — that is not this verb at all. Only
+when the Worker holds no key or cannot be reached does the coordinator send this
+verb, as the runner's owner, to each of their permanent boxes in turn until one
+holding the key answers. `dispatch` refuses it from any caller and the
 MCP server does not offer it. Its three params are each held to one shape and
 none of them reaches a command line: the sidecar verifies `job` against GitHub's
 own keys, checks that its audience binds this `repo` to this `key`, asks the hub

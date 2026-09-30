@@ -99,6 +99,22 @@ export class Fleet {
       // means this fleet cannot start machines and says so — see
       // docs/runner-central.md.
       runnerRepo: env.FLEETWRIGHT_RUNNER_REPO || null,
+      // THE MINTING WORKER, over its service binding. Present only where a
+      // deployment binds it (wrangler.production.toml); the fork-safe config
+      // binds nothing, and a runner there is minted for by a box or not at
+      // all. The coordinator relays; the key is in the other Worker.
+      minter: env.MINTER
+        ? {
+            mint: async (ask) => {
+              const res = await env.MINTER.fetch('https://minter.internal/mint', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(ask),
+              });
+              return res.json();
+            },
+          }
+        : null,
     });
     // A runner ticket is minted at dispatch and spent by a job that starts
     // minutes later — a gap this object is evicted across as a matter of

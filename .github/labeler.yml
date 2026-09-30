@@ -32,6 +32,9 @@ platform/coordinator:
       - any-glob-to-any-file:
           - 'worker/**'
           - 'src/fleet/coordinator/**'
+          # The minting Worker's logic: it runs in its own Worker, beside the
+          # coordinator's, and holds the GitHub App key.
+          - 'src/fleet/minter/**'
           - 'src/fleet/push.js'
           - 'src/fleet/push-crypto.js'
           - 'src/fleet/crypto.js'
@@ -212,6 +215,8 @@ area/security:
           - 'src/fleet/crypto.js'
           - 'src/fleet/seal.js'
           - 'src/core/repo-tokens.js'
+          - 'src/fleet/minter/**'
+          - 'worker/src/minter.js'
           - 'src/fleet/coordinator/identity.js'
           - 'src/fleet/coordinator/spent-tokens.js'
           - 'src/fleet/coordinator/random.js'

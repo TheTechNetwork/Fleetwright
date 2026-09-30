@@ -146,28 +146,41 @@ protection; `mint` is the exception, below).
 **`mint`, which produces a credential, and what it adds to this bound.** It is
 the verb that makes a runner a GitHub installation token for one repository
 (`runner-central.md`, "Private code on a runner"), and SEC-COORD-1 requires it
-be accounted for here. A compromised coordinator can send it, drop it, or send
-it to the wrong box — denial, bounded per runner at thirty asks in ten minutes.
-What it cannot do is get a token it can use:
+be accounted for here. The coordinator does not mint: it relays the ask to the
+**minting Worker**, a separate script holding the App key with no public route,
+or to a permanent box holding it. A compromised coordinator can drop the ask,
+delay it, or send it to the wrong minter — denial, bounded per runner at thirty
+asks in ten minutes. What it cannot do is get a token it can use:
 
 - the reply is **sealed** to a P-256 key the runner generated for that one
   request, so what the coordinator relays is ciphertext;
 - the key and the repository are bound into the **audience of a GitHub Actions
-  job token**, which the minting box verifies against GitHub's own keys — so
+  job token**, which the minter verifies against GitHub's own keys — so
   substituting its own key, or a different repository, fails GitHub's
   signature rather than the coordinator's word;
 - that job token must come from one of the four **runner workflows, started by
-  a dispatch, by the same GitHub account** whose connection answers the box's
-  access check (`actor_id` against `/user`). A forged `actor` meets a
-  different account id and is refused.
+  a dispatch**, and the token is no wider than **what GitHub says the account
+  that started the job can do** in that repository — asked by account id, by
+  the minting Worker with a metadata-only probe token, or by a box with that
+  person's own connection. Nothing the coordinator claims about the owner is
+  read.
 
 To obtain such a job token it would need code of its choosing running inside a
 runner the person started. `provision` cannot express one — no workflow file,
 no ref, no inputs, and the host code the job runs is the published default —
 and a session on a runner runs only what a person or a profile gives it, and a
-runner has no profiles. This is the one place a host verifies an identity the
-coordinator relayed rather than trusting it, which is why it holds here when
+runner has no profiles. This is the one place something verifies an identity
+the coordinator relayed rather than trusting it, which is why it holds here when
 nothing else in this section does.
+
+**The minting Worker's own bound, which is a different compromise.** Whoever
+can deploy to the Cloudflare account can replace the minter's code and capture
+every token it signs from then on — for every repository of every account on
+`FLEETWRIGHT_GITHUB_MINT_OWNERS` the App is installed on, and, by editing that
+list or ignoring it, every installation. Secrets cannot be read back out of
+Cloudflare; code can be swapped. So the account and the API token that deploys
+to it are the boundary for the key, not the coordinator. Rotating the key on
+github.com ends it.
 
 **Duration:** until redeploy / secret rotation. There is no per-intent signature
 to expire.

@@ -20,8 +20,9 @@ import { jwtVerify } from 'jose';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { ACTIONS_ISSUER, forgetJwks } from '../src/fleet/coordinator/oidc.js';
-import { loadMinter } from '../src/core/repo-tokens.js';
+import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
+import minterWorker from '../worker/src/minter.js';
 
 const OWNER = 'eli@example.com';
 const CLIENT_ID = 'Iv23liTEST';
@@ -62,9 +63,15 @@ const RUNNER_JOB = {
 };
 
 /**
- * The whole path, wired: runner sidecar → coordinator → minting box → back.
+ * The whole path, wired: runner sidecar → coordinator → the minting Worker or a
+ * minting box → back.
+ *
+ * `worker` binds the real minting Worker (worker/src/minter.js) to the
+ * coordinator, with these env values over the defaults; `box: false` connects
+ * no permanent box at all, which is the case the Worker exists for.
  *
  * @param {{ job?: Record<string, unknown>, access?: any, owners?: string[], minter?: boolean,
+ *   worker?: Record<string, string>, box?: boolean, role?: string, permissionUserId?: number,
  *   tamper?: { up?: (frame: any) => any, down?: (frame: any) => any } }} [opts]
  */
 async function fleet(opts = {}) {
@@ -75,12 +82,20 @@ async function fleet(opts = {}) {
   const appCalls = [];
   const githubApp = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
     const path = String(url).replace('https://api.github.com', '');
-    appCalls.push({ path, body: init.body ? JSON.parse(init.body) : null, jwt: String(init.headers?.authorization || '').replace(/^Bearer /, '') });
-    if (path === '/repos/Acme/App/installation') return json(200, { id: 9 });
+    const bearer = String(init.headers?.authorization || '').replace(/^Bearer /, '');
+    appCalls.push({ path, body: init.body ? JSON.parse(init.body) : null, jwt: bearer });
+    // GitHub matches repository names without regard to case, and so does this.
+    const lower = path.toLowerCase();
+    if (lower === '/repos/acme/app/installation') return json(200, { id: 9 });
+    // What the minting Worker asks with its probe token, and only with it.
+    if (lower === '/repos/acme/app/collaborators/eli/permission') {
+      if (bearer !== 'ghs_probe') return json(401, {});
+      return json(200, { permission: opts.role ?? 'write', user: { id: opts.permissionUserId ?? 42, login: 'eli' } });
+    }
     if (path === '/app/installations/9/access_tokens') {
       const body = JSON.parse(init.body);
       return json(201, {
-        token: 'ghs_minted_secret',
+        token: body.permissions?.metadata ? 'ghs_probe' : 'ghs_minted_secret',
         expires_at: new Date(Date.now() + 3_600_000).toISOString(),
         permissions: body.permissions,
         repositories: [{ full_name: 'Acme/App' }],
@@ -100,7 +115,28 @@ async function fleet(opts = {}) {
     },
   });
 
-  const core = new CoordinatorCore({});
+  // The minting Worker reaches GitHub through the global fetch, as it does in
+  // a Worker; the issuer stub above already answers GitHub's key set there.
+  const beneath = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
+    let host = '';
+    try { host = new URL(String(url)).hostname; } catch { /* not a URL */ }
+    return host === 'api.github.com' ? githubApp(url, init) : beneath(url, init);
+  });
+  const workerEnv = {
+    FLEETWRIGHT_GITHUB_APP_KEY: app.privateKey.export({ type: 'pkcs1', format: 'pem' }).toString(),
+    FLEETWRIGHT_GITHUB_CLIENT_ID: CLIENT_ID,
+    FLEETWRIGHT_GITHUB_MINT_OWNERS: 'acme',
+    ...(opts.worker || {}),
+  };
+  const core = new CoordinatorCore({
+    minter: opts.worker
+      ? {
+          mint: async (ask) =>
+            (await minterWorker.fetch(new Request('https://minter.internal/mint', { method: 'POST', body: JSON.stringify(ask) }), workerEnv)).json(),
+        }
+      : null,
+  });
   const box = new Sidecar({
     hub,
     transport: /** @type {any} */ ({ origin: 'https://fleet.test' }),
@@ -109,9 +145,11 @@ async function fleet(opts = {}) {
     fetchImpl: githubApp,
     minter: opts.minter === false ? null : { key: app.privateKey, clientId: CLIENT_ID, owners: opts.owners ?? ['acme'] },
   });
-  core.registry.connect('box', (/** @type {any} */ intent) => {
-    void box.handle(intent).then((reply) => core.onHostMessage('box', reply));
-  });
+  if (opts.box !== false) {
+    core.registry.connect('box', (/** @type {any} */ intent) => {
+      void box.handle(intent).then((reply) => core.onHostMessage('box', reply));
+    });
+  }
 
   /** Every frame the runner was sent, as it arrived. @type {any[]} */
   const down = [];
@@ -252,6 +290,71 @@ test('a box half-configured as a minter says which half, and an empty owner list
   assert.match(String(loadMinter({ keyFile: '/k', owners: ['acme'] }, read).problem), /CLIENT_ID is not set/);
   const ok = loadMinter({ credentialsDirectory: '/run/creds', clientId: 'Iv', owners: ['acme', 'Other'] }, read);
   assert.deepEqual(ok.minter?.owners, ['acme', 'Other']);
+});
+
+test('with the minting Worker, a runner is minted for with no permanent box at all', async (t) => {
+  const f = await fleet({ worker: {}, box: false });
+  t.after(f.restore);
+
+  const got = await f.runner.repoCredential({ provider: 'github', repo: 'acme/app' });
+  assert.equal(got.ok, true, got.ok ? '' : got.message);
+  assert.equal(got.ok && got.env.GH_TOKEN, 'ghs_minted_secret');
+
+  // THE ACCOUNT'S HALF, asked of GitHub: a probe token that can read metadata
+  // and nothing else, spent on what the account that started the job may do.
+  const mints = f.appCalls.filter((c) => c.path.endsWith('/access_tokens')).map((c) => c.body);
+  assert.deepEqual(mints, [
+    { repositories: ['app'], permissions: { metadata: 'read' } },
+    { repositories: ['app'], permissions: { contents: 'write', pull_requests: 'write' } },
+  ]);
+  assert.ok(f.appCalls.some((c) => c.path.toLowerCase() === '/repos/acme/app/collaborators/eli/permission'));
+  // Signed with the key GitHub handed out, as GitHub hands it out: PKCS#1.
+  const install = f.appCalls.find((c) => c.path.endsWith('/installation'));
+  await jwtVerify(String(install?.jwt), f.publicKey, { issuer: CLIENT_ID });
+
+  assert.ok(!JSON.stringify(f.down).includes('ghs_minted_secret'), 'the coordinator relayed only ciphertext');
+  assert.match(String(f.core.events.find((e) => e.event === 'runner.token')?.text), /by the minting Worker/);
+});
+
+test('the minting Worker mints no wider than GitHub says the account can reach', async (t) => {
+  /** @type {Array<[string, Parameters<typeof fleet>[0], RegExp|null, Record<string, string>|null]>} */
+  const cases = [
+    ['an account that can read', { worker: {}, box: false, role: 'read' }, null, { contents: 'read' }],
+    ['an account with no access', { worker: {}, box: false, role: 'none' }, /eli cannot read acme\/app/, null],
+    ['GitHub answering for somebody else', { worker: {}, box: false, permissionUserId: 7 }, /different account/, null],
+    ['an account it does not mint into', { worker: { FLEETWRIGHT_GITHUB_MINT_OWNERS: 'other' }, box: false }, /only for other, and acme is not one/, null],
+    ['a job not started by a dispatch', { worker: {}, box: false, job: { event_name: 'push' } }, /not by a dispatch/, null],
+  ];
+  for (const [name, opts, refused, perms] of cases) {
+    const f = await fleet(opts);
+    const got = await f.runner.repoCredential({ provider: 'github', repo: 'acme/app' });
+    f.restore();
+    const final = f.appCalls.filter((c) => c.path.endsWith('/access_tokens') && !c.body.permissions.metadata);
+    if (refused) {
+      assert.equal(got.ok, false, name);
+      assert.match(got.ok ? '' : got.message, refused, name);
+      assert.equal(final.length, 0, `${name}: nothing usable was minted`);
+    } else {
+      assert.equal(got.ok, true, name);
+      assert.deepEqual(final.map((c) => c.body.permissions), [perms], name);
+    }
+  }
+});
+
+test('a minting Worker with no key hands the ask to a box that has one', async (t) => {
+  const f = await fleet({ worker: { FLEETWRIGHT_GITHUB_APP_KEY: '' } });
+  t.after(f.restore);
+  const got = await f.runner.repoCredential({ provider: 'github', repo: 'acme/app' });
+  assert.equal(got.ok, true, got.ok ? '' : got.message);
+  assert.deepEqual(f.hubAsks.map((a) => a.line), ['/githubaccess acme/app'], 'the box answered, with the person\'s own connection');
+  assert.match(String(f.core.events.find((e) => e.event === 'runner.token')?.text), /by box$/);
+});
+
+test('the minting Worker answers one route and nothing else', async () => {
+  for (const req of [new Request('https://minter.internal/mint'), new Request('https://minter.internal/', { method: 'POST', body: '{}' })]) {
+    const res = await minterWorker.fetch(req, {});
+    assert.equal(res.status, 404);
+  }
 });
 
 test('git on a runner asks the runner broker for the repository it is fetching', async (t) => {

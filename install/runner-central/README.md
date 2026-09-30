@@ -51,25 +51,25 @@ which cannot be stored and cannot leave the job that asked for it.
 
 ## What a runner can reach
 
-**Public code, and private code one repository at a time — when the fleet has a
-minting box.** A runner's own credential store is empty: connections are per
+**Public code, and private code one repository at a time — when the fleet holds
+a GitHub App key to mint with.** A runner's own credential store is empty: connections are per
 person and live on the box they were made on, and the job's `GITHUB_TOKEN` reads
 this repository and nothing else. So when a session's git fetches a private
-repository, the runner asks the fleet, and one permanent box that holds the
-Fleetwright GitHub App key mints a token for **that repository**, for **an
-hour**, for **whoever owns this runner**, no wider than their own GitHub
-connection reaches. The workflows here already point git at it; nothing in this
-repository changes.
+repository, the runner asks the fleet, and the fleet's minting Worker — a
+separate Worker holding the Fleetwright GitHub App key — mints a token for
+**that repository**, for **an hour**, for **whoever started this runner**, no
+wider than GitHub says their account reaches. The workflows here already point
+git at it; nothing in this repository changes.
 
-What it takes is on the fleet's side, not this one: an operator puts the App key
-on one permanent box, with `FLEETWRIGHT_GITHUB_APP_CLIENT_ID` and
-`FLEETWRIGHT_GITHUB_MINT_OWNERS` beside it, and the person asking has GitHub
-connected on that box. See
+What it takes is on the fleet's side, not this one: the App key as the
+`FLEETWRIGHT_GITHUB_APP_KEY` secret and `FLEETWRIGHT_GITHUB_MINT_OWNERS` as a
+variable in the Fleetwright repository's Actions settings, which the deploy
+hands to the minting Worker. No permanent box is needed. See
 [`docs/runner-central.md`](../../docs/runner-central.md#private-code-on-a-runner)
 for what bounds the token and why the coordinator cannot read it.
 
-Without a minting box a session here reaches public code, as runners always
-did. `runner-windows.yml` gets no repository tokens yet, and no runner carries
+Without a minting key anywhere a session here reaches public code, as runners
+always did. `runner-windows.yml` gets no repository tokens yet, and no runner carries
 anybody's Claude login or Cloudflare connection — sessions bill to
 `ANTHROPIC_API_KEY` above.
 

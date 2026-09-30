@@ -28,7 +28,7 @@ import { loadEnvFile } from '../src/core/env-file.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
-import { loadMinter } from '../src/core/repo-tokens.js';
+import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.

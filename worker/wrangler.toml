@@ -133,6 +133,15 @@ compatibility_flags = ["nodejs_als"]
 #                                 and the coordinator says so at startup
 #   FLEETWRIGHT_GITHUB_*          unset → the paste route, which is a
 #   FLEETWRIGHT_CLOUDFLARE_*      first-class answer rather than a fallback
+#   MINTER                        a SERVICE BINDING, not a var, and bound
+#                                 below: the minting Worker
+#                                 (wrangler.minter.toml), which holds the
+#                                 GitHub App key and mints runners their
+#                                 repository tokens. DEPLOY IT FIRST, or this
+#                                 deploy has nothing to bind to. Deployed with
+#                                 no key it mints nothing, a permanent box that
+#                                 holds the key is asked instead, and with
+#                                 neither, runners reach public code only
 #   FLEETWRIGHT_NAME              unset → invitations are not sent, and the
 #   FLEETWRIGHT_INVITE_FROM       reply says which happened
 #   FLEETWRIGHT_APP_IOS/_ANDROID  unset → an invitation with no app links
@@ -208,6 +217,13 @@ remote = true
 name = "SIGNIN_RATE_LIMIT"
 namespace_id = "1002"
 simple = { limit = 10, period = 60 }
+
+# THE MINTING WORKER, which holds the GitHub App key so this Worker never does.
+# Identical to the production config's, on purpose (test/fork-safe-config.test.js):
+# a fork needs the boundary as much as we do. Holding no key, it mints nothing.
+[[services]]
+binding = "MINTER"
+service = "fleetwright-minter"
 
 [[durable_objects.bindings]]
 name = "FLEET"

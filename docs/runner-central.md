@@ -299,69 +299,91 @@ runner sidecar ── makes a P-256 key for this one request
    │             asks GitHub for its JOB TOKEN, audience = hash(acme/app, key)
    │  `mint` frame: { repo, job token, key }
    ▼
-coordinator ─── adds whose runner this is; sends `mint` as that person
-   │            to each of their permanent boxes in turn
+coordinator ─── adds whose runner this is, and relays the ask to
+   │            the MINTING WORKER over a service binding
    ▼
-the one box holding the fleet's GitHub App key
+the minting Worker — its own script, no public route, holding the App key
    │  checks GitHub's signature on the job token, and that its audience
    │    binds exactly this repo to exactly this key
    │  checks it is a runner workflow, started by a dispatch
    │  checks acme is an account it may mint into
-   │  asks its hub: what can THIS PERSON'S connection do in acme/app,
-   │    and whose account is it — must be the account that started the job
+   │  asks GitHub, with a metadata-only probe token for acme/app: what can
+   │    the account that started this job do here — by account id
    │  mints one repository, contents (+ pull requests if they can push),
    │    one hour; seals it to the runner's key
    ▼
 coordinator relays ciphertext ──▶ runner opens it ──▶ git
 ```
 
-**It cannot exceed the person, the repository, or the hour.** The box asks the
-person's own GitHub connection whether they can read or push there, and mints
-read for read and write only for push; the token names one repository, and GitHub
+**It cannot exceed the person, the repository, or the hour.** GitHub is asked
+what the account that started the runner can do there, and the token is read
+for read and write only for push; the token names one repository, and GitHub
 kills it in an hour. The runner holds it in memory until five minutes before it
 dies and mints again after that, so a long build does not notice.
 
 **The coordinator carries it and cannot use it.** The answer is sealed to a key
 that exists only on the runner, for that one request ([`seal.js`](../src/fleet/seal.js)).
 Swapping in its own key, or a different repository, breaks GitHub's signature
-over the pair, and the box refuses. A forged owner meets a GitHub account id
-that is not the one that started the job. This is the one place in the fleet a
-host checks an identity the coordinator relayed instead of trusting it;
-[security.md §4.1](./security.md) has the whole bound.
+over the pair, and the minter refuses. Nothing it could claim about the owner
+matters, because the minter never asks it: the account comes from GitHub's
+job token and GitHub's answer about that account. This is the one place in the
+fleet where something checks an identity the coordinator relayed instead of
+trusting it; [security.md §4.1](./security.md) has the whole bound.
 
 ### Where the key lives
 
-On **one** permanent box, chosen by the operator, and nowhere else. The App's
-private key mints for every installation of an App anybody may install, so
-[github-app.md](./github-app.md) refuses it a home on every host and in the
-coordinator, and decided that its blast radius is the host it sits on — which
-makes bounding it [host hardening](./hardening.md) rather than an App setting.
-Three settings in that box's `/etc/fleetwright-sidecar.env`, read by the
-sidecar and by nothing the coordinator says:
+**In a Worker of its own, and not in the coordinator.** The App's private key
+mints for every installation of an App anybody may install, and the
+coordinator is the internet-facing part this project treats as compromised, so
+[github-app.md](./github-app.md) refuses the key a home there. What it gets
+instead is the **minting Worker** ([`minter.js`](../worker/src/minter.js),
+[`wrangler.minter.toml`](../worker/wrangler.minter.toml)): a separate script
+with no routes, no workers.dev address and no bindings, reached only by the
+coordinator's `MINTER` service binding, answering one question. **No permanent
+box is needed to mint** — a fleet of nothing but runners can reach private
+code, which is what this was for.
 
-| setting | what |
-|---|---|
-| `FLEETWRIGHT_GITHUB_APP_KEY` | the private key, a PEM file only the sidecar's account can read. Better: leave it unset and hand the unit the key as an encrypted systemd credential named `github-app-key` (`LoadCredentialEncrypted=`), so it is decryptable on that machine, in that unit, only |
-| `FLEETWRIGHT_GITHUB_APP_CLIENT_ID` | the App's client id, the issuer of the ten-minute JWT the key signs |
-| `FLEETWRIGHT_GITHUB_MINT_OWNERS` | the accounts whose repositories it may mint into. **Empty mints for nobody.** The App is installable by any account, so "this key never mints into a guest's account" is kept here, by what the fleet does, as github-app.md said it would have to be |
+| setting | where | what |
+|---|---|---|
+| `FLEETWRIGHT_GITHUB_APP_KEY` | a **secret** on the minting Worker, synced by the deploy from the repository secret of the same name | the private key, the PEM GitHub downloads — PKCS#1 as it comes. Never synced to the coordinator: it has its own step in `worker.yml` for exactly that reason |
+| `FLEETWRIGHT_GITHUB_CLIENT_ID` | a repository **variable**, passed to the minting Worker at deploy | the App's client id, the issuer of the ten-minute JWT the key signs |
+| `FLEETWRIGHT_GITHUB_MINT_OWNERS` | a repository **variable**, passed to the minting Worker at deploy | the accounts whose repositories it may mint into. **Empty mints for nobody.** The App is installable by any account, so "this key never mints into a guest's account" is kept here, by what the fleet does, as github-app.md said it would have to be |
 
-The box also needs the person's own GitHub connection, because that is what
-answers "can you reach this". When those two are on different boxes the refusal
-names both halves — which box holds no key, which has no connection for them —
-in the fleet's events and in the runner's log. git itself only sees no answer.
+The deploy ships the minting Worker **before** the coordinator, because the
+coordinator is bound to it. Both committed configs bind it, so a fork gets the
+same boundary; deployed with no key, it mints nothing.
+
+**What it still trusts is Cloudflare.** Anybody who can deploy to the account
+can replace the minter's code and capture every token it signs from then on;
+secrets cannot be read back, and code can be swapped. So the Cloudflare
+account and the API token that deploys to it are now the things standing
+between an attacker and every installation, and deserve to be treated that
+way. A leaked coordinator, on its own, is not.
+
+**Or on one permanent box**, for a fleet that would rather keep the key off
+Cloudflare. Three settings in that box's `/etc/fleetwright-sidecar.env` —
+`FLEETWRIGHT_GITHUB_APP_KEY` as a PEM file only the sidecar's account can read,
+or better an encrypted systemd credential named `github-app-key`;
+`FLEETWRIGHT_GITHUB_APP_CLIENT_ID`; and `FLEETWRIGHT_GITHUB_MINT_OWNERS`. That
+box answers "can you reach this" with the person's own GitHub connection
+rather than by asking GitHub about them, so it needs that connection too. The
+coordinator asks the minting Worker first and a box only when the Worker holds
+no key or cannot be reached; a refusal from the Worker is final. With neither,
+the refusal names what is missing in the fleet's events and in the runner's
+log. git itself only sees no answer.
 
 **The key github-app.md recorded as received should not be the one used.** It
 arrived through a chat transcript and was never installed anywhere; generate a
-fresh one for this box and delete the old one on github.com.
+fresh one and delete the old one on github.com.
 
 ### What a session on a runner can reach now
 
 | | |
 |---|---|
-| `git clone`, `fetch`, `push` over https to github.com | a token for that one repository, when the fleet has a minting box and the person can reach the repository |
+| `git clone`, `fetch`, `push` over https to github.com | a token for that one repository, when the minting Worker holds the key (or a box does) and the person can reach the repository |
 | `gh` | `eval "$(fleet-cred github owner/repo)"` first. It is not wired in automatically, because `gh` does not say which repository it is about to act on |
 | any other host | nothing — the helper is registered for github.com only, and answers nothing else |
-| a fleet with no minting box | public code, exactly as before; git gets no answer and falls through |
+| a fleet with no minting Worker key and no minting box | public code, exactly as before; git gets no answer and falls through |
 
 ## What this does not solve
 

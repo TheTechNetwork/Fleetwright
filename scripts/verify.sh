@@ -121,6 +121,18 @@ else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
+# The minting Worker, bundled SEPARATELY for the demo's reason and a stronger
+# one: it holds the GitHub App key, so what it imports is the whole of what
+# could ever touch that key. No `--external` at all, like the demo: it needs
+# nothing from Node or from the platform, and an import that did would be
+# something new standing next to the key.
+printf 'minter     ... '
+if out=$(cd worker && ./node_modules/.bin/esbuild src/minter.js --bundle --format=esm --platform=neutral --outfile=/dev/null 2>&1); then
+  printf 'bundles\n'
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
 # The contract, and the copy of it the Worker ships. openapi.json is the source
 # and test/openapi.test.js executes it against BOTH coordinators — but the
 # Worker inlines its own copy, and a copy of a contract is a thing that drifts.
