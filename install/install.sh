@@ -878,7 +878,14 @@ launchd_running() { # launchd_running NAME
   local label="system/network.thetech.$1" state="" i
   for i in 1 2 3 4 5 6 7 8 9 10; do
     state="$(launchctl print "$label" 2>/dev/null | awk '/^\tstate = / {print $3}')"
-    [ "$state" = running ] && return 0
+    if [ "$state" = running ]; then
+      # RUNNING HAS TO HOLD. A process that exits within seconds — the hub
+      # with no tmux on its PATH did, three times — is `running` between
+      # spawn and exit, and that window is exactly when this first looked.
+      sleep 3
+      state="$(launchctl print "$label" 2>/dev/null | awk '/^\tstate = / {print $3}')"
+      [ "$state" = running ] && return 0
+    fi
     sleep 1
   done
   warn "$1 is '${state:-not loaded}', not running:"
@@ -2083,6 +2090,26 @@ unit_entry() { # unit_entry NAME
   else printf '%s/bin/%s' "$DIR" "$1"; fi
 }
 
+# THE PATH A LAUNCHD DAEMON GETS. launchd gives a daemon PATH=/usr/bin:/bin:
+# /usr/sbin:/sbin and nothing else — no /opt/homebrew/bin, no /usr/local/bin —
+# and the hub looks tmux and claude up on PATH. The first macOS runner installed
+# tmux with brew, wrote the plist, and the hub exited on "tmux is not installed"
+# three times in a row. So the plist carries the directories of the tools THIS
+# installer found, in front of launchd's defaults. systemd does not need it:
+# its units name absolute paths and read the env file.
+launchd_path() {
+  local out="" d tool
+  for tool in "${UNIT_NODE_BIN:-$NODE_BIN}" "$(command -v tmux 2>/dev/null || true)" "${CLAUDE_BIN:-}"; do
+    [ -n "$tool" ] || continue
+    d="$(dirname "$tool")"
+    case ":$out:" in *":$d:"*) ;; *) out="${out:+$out:}$d" ;; esac
+  done
+  for d in /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+    case ":$out:" in *":$d:"*) ;; *) out="${out:+$out:}$d" ;; esac
+  done
+  printf '%s' "$out"
+}
+
 install_unit() { # install_unit NAME
   local src dest
   # THE TEMPLATE FROM THIS INSTALLER, the entry path from the payload. Reading
@@ -2114,6 +2141,7 @@ install_unit() { # install_unit NAME
       -e "s|__ENTRY__|$(unit_entry "$1")|g" \
       -e "s|__DIR__|$DIR|g" \
       -e "s|__NODE__|$NODE_BIN|g" \
+      -e "s|__PATH__|$(launchd_path)|g" \
       -e "s|__STATE_DIR__|$STATE_DIR|g" \
       -e "s|__FLEET_BASE__|$FLEET_BASE|g" \
       "$src" > "$dest"

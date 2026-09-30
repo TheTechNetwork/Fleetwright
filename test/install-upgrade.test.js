@@ -74,6 +74,23 @@ test('it restarts the services, which is the whole point', () => {
   assert.match(SH.slice(SH.indexOf('launchd_running() {')), /state = /);
 });
 
+test('a launchd daemon is given a PATH that has Homebrew on it', () => {
+  // launchd starts a daemon with /usr/bin:/bin:/usr/sbin:/sbin and nothing
+  // else; the hub looks tmux and claude up on PATH. The first runner installed
+  // tmux with brew and watched the hub exit on "tmux is not installed".
+  for (const unit of ['fleetwright', 'fleetwright-sidecar']) {
+    const plist = readFileSync(new URL(`../install/${unit}.plist`, import.meta.url), 'utf8');
+    assert.match(plist, /<key>EnvironmentVariables<\/key>\s*<dict>\s*<key>PATH<\/key>\s*<string>__PATH__<\/string>/);
+  }
+  assert.match(SH, /-e "s\|__PATH__\|\$\(launchd_path\)\|g"/);
+  const fn = SH.slice(SH.indexOf('launchd_path() {'), SH.indexOf('\n}\n', SH.indexOf('launchd_path() {')));
+  // The tools this installer found come first, then launchd's own defaults
+  // with Homebrew ahead of them.
+  assert.match(fn, /command -v tmux/);
+  assert.match(fn, /CLAUDE_BIN/);
+  assert.match(fn, /\/opt\/homebrew\/bin \/usr\/local\/bin \/usr\/bin \/bin \/usr\/sbin \/sbin/);
+});
+
 test('on a Mac the log file the plist names exists before launchd spawns the job', () => {
   // launchd opens StandardOutPath as the job's user, and /var/log is root's.
   // Without the file, the spawn fails with EX_CONFIG and nothing is written

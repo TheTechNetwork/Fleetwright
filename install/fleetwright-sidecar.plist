@@ -5,8 +5,8 @@
   install/fleetwright-sidecar.service — kept beside it deliberately, so a
   change to one is an obvious prompt to look at the other.
 
-  __USER__ / __DIR__ / __NODE__ / __ENTRY__ are substituted by install.sh, as in
-  the systemd unit.
+  __USER__ / __DIR__ / __NODE__ / __ENTRY__ / __PATH__ are substituted by
+  install.sh, as in the systemd unit.
 
   THE DIFFERENCE THAT MATTERS: launchd has no EnvironmentFile. systemd reads
   /etc/fleetwright-sidecar.env as root and hands it to the process; launchd
@@ -38,6 +38,17 @@
 
   <key>WorkingDirectory</key>
   <string>__DIR__</string>
+
+  <!-- launchd starts a daemon with PATH=/usr/bin:/bin:/usr/sbin:/sbin and
+       nothing else, and Homebrew is at /opt/homebrew/bin. The service looks
+       tmux and claude up on PATH, so without this it exited on "tmux is not
+       installed" on a Mac that had just installed it. install.sh writes the
+       directories of the node, tmux and claude it found, then the defaults. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
 
   <!-- RunAtLoad + KeepAlive is systemd's Restart=always. It is also what lets
        the restart flag on /update behave the same way it does on Linux: the
