@@ -1862,7 +1862,17 @@ fi
 # — see write_migrate_sudoers. And GNU install unlinks before it writes, so a
 # helper that is running this installer keeps reading the file it started
 # from rather than the one that replaces it.
-if [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
+#
+# NOT ON A MAC. The helper rewrites systemd units under /etc/systemd/system and
+# runs the packaged release's installer, and a Mac has neither the units nor
+# the packaged layout — /update there pulls the checkout and the operator
+# re-runs this script with --upgrade, which is what the launchd path exercises
+# in CI. The first macOS runner got exactly this far and stopped on BSD
+# install's `unknown group root`: root's group on a Mac is wheel. Saying that
+# the helper is not for this box is the honest answer, not a portable group.
+if [ "$PLATFORM" = macos ]; then
+  say "the release-migration helper is systemd-only — a Mac updates by re-running this installer with --upgrade"
+elif [ "$CHECK_ONLY" != 1 ] && [ -f "$DIR/install/fleetwright-migrate" ]; then
   install -m 0755 -o root -g root "$DIR/install/fleetwright-migrate" /usr/local/sbin/fleetwright-migrate
   ok "installed /usr/local/sbin/fleetwright-migrate"
   if write_migrate_sudoers; then

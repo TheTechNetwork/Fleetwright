@@ -25,16 +25,27 @@ import { requestRestart } from './restart-watch.js';
 export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
 
 /**
+ * What a Mac is told instead of "re-run the installer and it will put the
+ * helper there" — which it will not. The helper rewrites systemd units and
+ * runs a packaged release's installer; a Mac has launchd daemons and a
+ * checkout, and install.sh says so as it skips the helper. So on a Mac the
+ * root half of an update stays what it was: the installer, run by hand.
+ */
+export const MAC_HAS_NO_HELPER =
+  'On a Mac there is no helper to install: a Mac host is a checkout under launchd, and the root half\n' +
+  'of an update is the installer itself, run by hand: sudo bash <checkout>/install/install.sh --upgrade';
+
+/**
  * Can this box be moved onto packaged releases, and is there one to move to?
  *
  * @param {import('../config.js').Config} cfg
  * @param {{ packaged?: boolean }} status what updateStatus said — `packaged`
  *   is absent on a checkout, which is the shape updateStatus really returns
  * @param {{ available: string|null, configured: boolean }} release what checkRelease found
- * @param {{ exists?: (p: string) => boolean }} [opts]
+ * @param {{ exists?: (p: string) => boolean, platform?: string }} [opts]
  * @returns {{ can: boolean, reason: string, message: string }}
  */
-export function migrationState(cfg, status, release, { exists = existsSync } = {}) {
+export function migrationState(cfg, status, release, { exists = existsSync, platform = process.platform } = {}) {
   if (status.packaged) {
     return { can: false, reason: 'packaged', message: 'This box already installs packaged releases.' };
   }
@@ -57,7 +68,7 @@ export function migrationState(cfg, status, release, { exists = existsSync } = {
       reason: 'no_helper',
       message:
         `${MIGRATE_BIN} is not installed on this box, so it cannot move itself.\n` +
-        'Re-run the installer with --upgrade and it will put it there.',
+        (platform === 'darwin' ? MAC_HAS_NO_HELPER : 'Re-run the installer with --upgrade and it will put it there.'),
     };
   }
   if (!release.available) {
@@ -293,7 +304,7 @@ export function describeHelper(state, installRoot) {
  * @param {{ run?: typeof spawnSync, exists?: (p: string) => boolean,
  *   after?: (fn: () => void) => void, restart?: () => void,
  *   mark?: typeof requestRestart, head?: string|null, actor?: string|null, stateDir?: string|null,
- *   logger?: { warn: Function, info: Function } }} [opts]
+ *   logger?: { warn: Function, info: Function }, platform?: string }} [opts]
  * @returns {{ scheduled: boolean, text: string }}
  */
 export function healAfterRelease({
@@ -306,8 +317,20 @@ export function healAfterRelease({
   actor = null,
   stateDir = null,
   logger = console,
+  platform = process.platform,
 } = {}) {
   if (!exists(MIGRATE_BIN)) {
+    if (platform === 'darwin') {
+      // The daemons are still on the tree they started from, and nothing here
+      // can restart them: --upgrade is the thing that does, and it is a
+      // person's command on a Mac. Said so, rather than promising a helper.
+      return {
+        scheduled: false,
+        text:
+          'The checkout moved, but the daemons are still running the code they started from, and the plists ' +
+          'and log files were not refreshed. ' + MAC_HAS_NO_HELPER,
+      };
+    }
     return {
       scheduled: false,
       text:
