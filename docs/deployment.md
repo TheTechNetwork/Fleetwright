@@ -740,17 +740,22 @@ mandatory; the process refuses to start otherwise. To publish the web UI, keep
 the bind on `127.0.0.1` and put a Cloudflare Tunnel in front, so the port never
 listens on a routable interface.
 
-**The sidecar holds the hub token, and that is its whole privilege.**
-`POST /api/command` runs any command line it is given, `/login` included. The
-verb allowlist in the sidecar is the only thing between a coordinator and that
-endpoint — which is why the command line is assembled from literals and
-charset-checked values and never received from the wire. See
-[`sidecar.md`](./sidecar.md).
+**The sidecar holds its own token, and that is its whole privilege.** The hub
+mints two: the operator's `api-token` opens the web UI and every command; the
+sidecar's `sidecar-token` opens the routes the sidecar calls and, on
+`POST /api/command`, only the command shapes the sidecar itself builds — not
+bare `/login`, which signs the box in. `install.sh` copies the sidecar's into
+`/etc/fleetwright-sidecar.env` as `FLEETWRIGHT_HUB_TOKEN`, because the sidecar
+runs as its own account and cannot read the hub's files. The verb allowlist in
+the sidecar is still what stands between a coordinator and that endpoint, which
+is why the command line is assembled from literals and charset-checked values
+and never received from the wire. See [`sidecar.md`](./sidecar.md) and
+[`hardening.md`](./hardening.md).
 
 **Two env files, two modes `0600`, on purpose.** `/etc/fleetwright.env` holds the
-hub token and everything about how sessions run on this box;
-`/etc/fleetwright-sidecar.env` holds the hub token and which coordinator this
-box belongs to. Merging them would put the
+operator's token (when one is configured rather than generated) and everything
+about how sessions run on this box; `/etc/fleetwright-sidecar.env` holds the
+sidecar's token and which coordinator this box belongs to. Merging them would put the
 fleet's configuration in the session manager's environment for no reason.
 
 **The host key is in neither of them.** It lives in `/var/lib/fleetwright-sidecar`,

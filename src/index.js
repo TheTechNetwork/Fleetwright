@@ -11,7 +11,7 @@ import { ensureWorkdirTrusted, markOnboardingComplete } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
 import { renewAllCredentials } from './core/keepalive.js';
-import { ensureApiToken } from './core/api-token.js';
+import { ensureApiToken, ensureSidecarToken } from './core/api-token.js';
 import { adoptBoxAccount, Accounts } from './core/accounts.js';
 import { pickSecretsFile, healRootlessSandbox, canStartSession } from './core/podman.js';
 import { readConfirmation, noteHealth } from './core/update-confirm.js';
@@ -189,7 +189,7 @@ export async function main() {
 
   /** @type {Array<{ stop: () => Promise<unknown> }>} */
   const adapters = [];
-  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg) });
+  const http = new HttpAdapter(cfg, { sessions, login, token: ensureApiToken(cfg), sidecarToken: ensureSidecarToken(cfg) });
   await http.start();
   adapters.push(http);
 

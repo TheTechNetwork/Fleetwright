@@ -33,12 +33,15 @@
 //     requests. This client never opens a file of fleetwright's, which is what
 //     lets the two run as different users (#270).
 //
-// The credential: whatever FLEETWRIGHT_TOKEN the hub was configured with. A hub
-// bound to loopback may have none, in which case there is nothing to send.
-// Holding that token is the sidecar's real privilege — /api/command will run
-// ANY command line, including /login. The verb allowlist in the sidecar is the
-// only thing standing between the coordinator and that, which is why the
-// command line is built from literals there and never received.
+// The credential: the sidecar's own token, which the hub mints beside the
+// operator's and the installer copies into this process's env — or, on a hub
+// from before that existed, the operator's token itself. The hub gates the
+// first to the routes this client calls and the command shapes toCommandLine
+// builds (src/core/sidecar-scope.js), and the second to nothing. Holding
+// either is still the sidecar's real privilege — the fleet's verbs ARE start,
+// stop and link. The verb allowlist in the sidecar is what stands between the
+// coordinator and that, which is why the command line is built from literals
+// there and never received.
 
 /** Distinguishable failures, so a coordinator can tell "hub is down" — which it
  * should retry — from "the hub refused" — which it should not. */

@@ -2126,6 +2126,18 @@ export function helpText(ctx) {
 }
 
 /**
+ * The canonical name a typed command word resolves to, or null. What dispatch
+ * uses, exported so the HTTP gate on the sidecar's token judges the same word
+ * dispatch will run — an alias the gate did not know would otherwise be a way
+ * round it.
+ * @param {string} name  as parse() returns it: no slash, lower-cased
+ * @returns {string|null}
+ */
+export function canonicalCommand(name) {
+  return LOOKUP[name] ?? null;
+}
+
+/**
  * Run one command line.
  * @param {Ctx} ctx
  * @param {string} line

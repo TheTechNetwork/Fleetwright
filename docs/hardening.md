@@ -126,11 +126,28 @@ rules the sidecar used to read out of fleetwright's state directory ride on
 evidence and a renewed provider token — are requests to fleetwright, which
 owns the files. With nothing left to read, `ProtectHome=yes` follows.
 
-What this does **not** narrow: the sidecar still holds the hub token, and
-`/api/command` runs any command line for whoever holds it, `link` included. A
-compromised sidecar cannot read a member's credential file but can still write
-one, and can still start a session as anyone. That is the token's shape, not
-the account's, and it is the next thing.
+**And it holds its own token.** The hub mints two: the operator's (`api-token`,
+which opens the web UI and every command) and the sidecar's (`sidecar-token`),
+and `install.sh` — root, the one party that can read both sides — copies the
+second into `/etc/fleetwright-sidecar.env`. A request on the sidecar's token
+reaches the routes the sidecar calls and, on `/api/command`, exactly the
+command shapes `toCommandLine` builds (`src/core/sidecar-scope.js`, held equal
+to that function by a test). Not the web UI; not bare `/login` or `/login
+force`, which sign the *box* in; not `/accounts` beyond `remove`.
+
+What that narrows, said plainly: the sidecar is the fleet's hand on this box,
+so a compromised one can still do what a compromised coordinator could ask of
+it — start a session as anyone, link a credential into a member's row. What it
+can no longer do is what the sidecar never does. The account bounds what it
+*reads*; the token bounds what it *asks*; and the coordinator, which verifies
+who is asking, is where authorization lives (`docs/sidecar.md` §1).
+
+It also closed a gap the separate account opened: the sidecar used to find the
+hub's token by reading `api-token` out of the hub's state directory, which a
+second account cannot enter. A fresh install had a sidecar with nothing to send
+and a hub that refuses an empty credential — by design. The installer's handoff
+is the fix, and the sidecar's own fallback (`sidecar-token`, then `api-token`)
+still covers a Mac, a runner and a checkout by hand, where both run as one user.
 
 ```ini
 SystemCallFilter=@system-service
@@ -191,9 +208,9 @@ the half of the risk that is not the session's by design.
 
 ## Still open
 
-- **A hub token scoped to what the sidecar does.** The separate account (above)
-  stops a compromised sidecar reading credentials; the token it holds still
-  lets it write them and start sessions as anyone.
+- ~~**A hub token scoped to what the sidecar does.**~~ Done — see "And it holds
+  its own token" above, and the honest account of what it does and does not
+  narrow.
 - **Distroless or containerised sidecar**, for the same reason and further.
 - The credential-terminating proxy in [trust.md](./trust.md), which is the only
   thing that changes what a session holds.

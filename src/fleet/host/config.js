@@ -8,7 +8,7 @@
 
 import os from 'node:os';
 import { REPLAY_TTL_MS } from './sidecar.js';
-import { readApiToken } from '../../core/api-token.js';
+import { readApiToken, readSidecarToken } from '../../core/api-token.js';
 import { adoptLegacyEnv } from '../legacy-names.js';
 import { preferExisting } from '../legacy-paths.js';
 import { readAssignedName } from './identity.js';
@@ -46,15 +46,18 @@ export function loadSidecarConfig(env = process.env) {
     // possible but means fleetwright is listening on a routable interface, which
     // its own config refuses without a token.
     hubUrl: str(env, 'FLEETWRIGHT_HUB_URL', 'http://127.0.0.1:8790'),
-    // Whatever FLEETWRIGHT_TOKEN the hub was configured with. Empty is valid: a
-    // loopback-bound hub with no token needs none. Holding this is the
-    // sidecar's real privilege — /api/command runs any line it is given.
-    // Falls back to the token fleetwright generates for itself. Both services
-    // run as the same user on the same box, so the sidecar can simply read it
-    // — which is what keeps "there is always a token now" from becoming a
-    // question the install has to ask. See src/core/api-token.js.
+    // THE SIDECAR'S OWN TOKEN, which the hub mints beside the operator's and
+    // install.sh (root) copies into this process's env file: that is the
+    // handoff, because the hub's state directory is another account's. The
+    // fallbacks read the hub's files directly and work only where both run as
+    // one user — a runner, a Mac, a checkout by hand: `sidecar-token` first,
+    // then the operator's `api-token` for a hub from before the second token
+    // existed. The hub gates the first to the fleet's own commands and the
+    // second to nothing, so a box that can read either is no worse off than
+    // it was. See src/core/api-token.js and src/core/sidecar-scope.js.
     hubToken:
       str(env, 'FLEETWRIGHT_HUB_TOKEN')
+      || readSidecarToken(str(env, 'FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub')))
       || readApiToken(str(env, 'FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub')))
       || null,
     // Generous, and matching fleetwright's own CLI: a start waits out the Remote
