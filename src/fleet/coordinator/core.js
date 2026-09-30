@@ -25,9 +25,21 @@ import { Authorizations } from '../../mcp/oauth.js';
 import { buildConfigFrame } from '../protocol/config-frame.js';
 import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets } from './runner-tickets.js';
+import { RunnerRepos } from './runner-repos.js';
+import { RUNNER_WORKFLOWS } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 
 const DEFAULT_INTENT_TIMEOUT_MS = 320_000;
+
+/** How long a runner has, after enrolling, to report health and be given the
+ * session it was asked for. A runner reports within seconds of enrolling; one
+ * that has not in half an hour is a job that died, and its session with it. */
+const RUNNER_START_TTL_MS = 30 * 60_000;
+
+/** At most one waiting session per live ticket, so the same ceiling as the
+ * tickets it came from (runner-tickets.js). Oldest out: a runner that has not
+ * reported health while two hundred newer ones did is not coming. */
+const MAX_RUNNER_STARTS = 200;
 
 /**
  * The longest push token this fleet will store, and the most rows it will hold.
@@ -133,6 +145,18 @@ export class CoordinatorCore {
     // one is separate from `clients`: a credential that cannot be confused for
     // another cannot be accepted in its place by a check somebody forgot.
     this.runnerTickets = new RunnerTickets({ now });
+    // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
+    // runner-repos.js for why a member may, and what bounds it.
+    this.runnerRepos = new RunnerRepos({ now });
+    /**
+     * A session to start on a runner once it joins, keyed by the host id the
+     * runner enrolled under. Set when a ticket carrying a start is spent,
+     * spent on that host's first health frame. Bounded by time rather than
+     * count: a runner that enrolled and never reported health is a job that
+     * died, and its session is not going to happen.
+     * @type {Map<string, { owner: string, start: { title?: string, brief?: string, mode?: string }, until: number }>}
+     */
+    this.runnerStarts = new Map();
     /**
      * In-flight GitHub authorizations, keyed by the `state` GitHub will hand
      * back. In memory rather than in storage on purpose: it lives ten minutes,
@@ -320,6 +344,12 @@ export class CoordinatorCore {
       // silence has to be trustworthy before it is comfortable, and a warning
       // that reaches a log file is silence.
       if (moved) await this.#onHostState(hostId, moved);
+      // A RUNNER THAT WAS ASKED FOR WITH A SESSION gets it now. Only once the
+      // hub answers: a frame from a box whose hub is still starting would place
+      // the start and have it refused.
+      if (this.runnerStarts.has(hostId) && msg.health?.hub?.reachable !== false) {
+        void this.#startOnRunner(hostId);
+      }
       return;
     }
 
@@ -1035,7 +1065,9 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null }} spec
+   *   `startAfter`, for `provision` only: a session to start on the runner once
+   *   it joins — title, brief and mode, checked by `start`'s own rules
    */
   async dispatch(spec) {
     if (!Object.prototype.hasOwnProperty.call(VERBS, spec.verb)) {
@@ -1147,18 +1179,50 @@ export class CoordinatorCore {
             'Sign in on a device and use its credential rather than the fleet-wide admin token.',
         };
       }
-      if (!this.runnerRepo) {
+      // WHOSE REPOSITORY: the person's own when they set one, the fleet's
+      // otherwise. Decided here and never taken from the caller — whatever
+      // arrived in `repo` is replaced or removed below.
+      const own = this.runnerRepos.get(owner);
+      const repository = own || this.runnerRepo;
+      if (!repository) {
         return {
           ok: false,
           error: { code: 'not_configured' },
           text:
-            'This fleet has no runner repository, so there is nowhere to start a machine. ' +
-            'An operator sets FLEETWRIGHT_RUNNER_REPO to the owner/repo holding the runner workflows — ' +
-            'see docs/runner-central.md.',
+            'There is nowhere to start a machine from yet. Set your own runner repository in the app — a ' +
+            'public repository with the Fleetwright GitHub App installed and the runner workflows in it — or ' +
+            'an operator sets FLEETWRIGHT_RUNNER_REPO for the whole fleet. See docs/runner-central.md.',
         };
       }
-      const ticket = await this.runnerTickets.mint({ owner, platform: String(shaped.params.platform || '') });
-      spec = { ...spec, params: { ...shaped.params, ticket: ticket.token } };
+      // A SESSION TO START WHEN IT JOINS, if the caller asked for one. Beside
+      // the params like `host`, never inside them — the host dispatching the
+      // run has nothing to do with it — and checked against `start`'s own rules
+      // so a runner is never handed a session request the protocol would
+      // refuse. Title, brief and mode only: a runner is minutes old and holds
+      // no task profiles or secrets to name.
+      /** @type {{ title?: string, brief?: string, mode?: string }|null} */
+      let start = null;
+      if (spec.startAfter && typeof spec.startAfter === 'object') {
+        /** @type {Record<string, any>} */
+        const wanted = {};
+        for (const k of ['title', 'brief', 'mode']) {
+          if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
+        }
+        const checked = checkParams('start', wanted);
+        if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+        start = /** @type {any} */ (checked.params);
+      }
+      const ticket = await this.runnerTickets.mint({
+        owner,
+        platform: String(shaped.params.platform || ''),
+        repository,
+        start,
+      });
+      /** @type {Record<string, any>} */
+      const params = { ...shaped.params, ticket: ticket.token };
+      if (own) params.repo = own;
+      else delete params.repo;
+      spec = { ...spec, params };
       // Persisted before the dispatch leaves, not after it succeeds: a ticket
       // that is spent by a job but was never written down is an unattributed
       // host, and the window between minting and enrolment is minutes long —
@@ -1171,7 +1235,7 @@ export class CoordinatorCore {
         // Never the ticket. It is single-use and short-lived and it is still a
         // value that attributes a machine to a person, and the event ring is
         // read by every device this fleet has issued a credential to.
-        text: `${owner} asked for a ${shaped.params.platform} runner from ${this.runnerRepo}`,
+        text: `${owner} asked for a ${shaped.params.platform} runner from ${repository}`,
       });
     }
 
@@ -1190,6 +1254,15 @@ export class CoordinatorCore {
       requester: spec.requester ?? null,
     });
     if (placement.kind === 'refused') {
+      // SEVERAL BOXES COULD ASK GITHUB, AND ONLY SOME HOLD YOUR CONNECTION.
+      // The scheduler refuses to guess, which is right for it — it cannot see
+      // who connected what where. This can: ask each permanent box in turn,
+      // and move on only when the whole answer was "not connected for you
+      // here", which is a reply that dispatched nothing. Anything else — a
+      // dispatch, a refusal from GitHub — is the answer.
+      if ((spec.verb === 'provision' || spec.verb === 'runnerrepo') && placement.code === 'ambiguous_host') {
+        return this.#askEachBox(spec);
+      }
       return { ok: false, error: { code: placement.code }, text: placement.reason };
     }
 
@@ -1327,6 +1400,9 @@ export class CoordinatorCore {
         text: results.map((r) => `${r.hostId}: ${rendered.get(r.hostId) ?? ''}`).join('\n'),
       };
     }
+
+    const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
+    if (outdated) return outdated;
 
     try {
       const answer = explainUnsupportedVersion(
@@ -1694,6 +1770,269 @@ export class CoordinatorCore {
   }
 
   /**
+   * What the snapshot says about starting machines, for one person.
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @returns {{ repo: string, own: boolean }|null}
+   */
+  #runnersFor(requester) {
+    const own = this.runnerRepos.get(requester?.email);
+    if (own) return { repo: own, own: true };
+    return this.runnerRepo ? { repo: this.runnerRepo, own: false } : null;
+  }
+
+  /**
+   * One person's runner repository, and the fleet's beside it, for the
+   * setting's screen. The fleet's is shown so a person can see what they get
+   * by leaving theirs empty.
+   * @param {{ email?: string|null }|null} requester
+   */
+  runnerRepoFor(requester) {
+    return { ok: true, repo: this.runnerRepos.get(requester?.email), fleet: this.runnerRepo || null };
+  }
+
+  /**
+   * Set somebody's runner repository — ONLY IF IT PASSES THE CHECK.
+   *
+   * The check runs on a permanent box with their GitHub connection (see the
+   * `runnerrepo` verb), and nothing is saved unless every answer is one a
+   * dispatch can use. Saving an unchecked name would move the failure to the
+   * moment somebody asks for a machine, which is the moment they can least
+   * afford to debug a repository setting. What is saved is the name as GitHub
+   * spells it, because that is the spelling a job's token will carry.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {unknown} repo
+   */
+  async setRunnerRepo(requester, repo) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) {
+      return {
+        ok: false,
+        error: { code: 'not_signed_in' },
+        text: 'A runner repository belongs to a person, so this needs a signed-in identity.',
+      };
+    }
+    const reply = await this.dispatch({ verb: 'runnerrepo', params: { repo: String(repo ?? '') }, actor: email, requester });
+    const check = reply?.runnerRepo;
+    if (reply?.ok === false || !check?.ok) {
+      return {
+        ok: false,
+        error: reply?.error ?? { code: 'check_failed' },
+        ...(check ? { runnerRepo: check } : {}),
+        ...(reply?.needsConnection ? { needsConnection: reply.needsConnection } : {}),
+        text: `${reply?.text || 'The check did not pass.'} Nothing was saved.`,
+      };
+    }
+    const saved = this.runnerRepos.set(email, check.repo);
+    if (saved.ok === false) return { ok: false, error: { code: 'not_saved' }, text: saved.text };
+    this.onStateChanged?.();
+    this.record({ event: 'runner.repo', actor: email, text: `${email} will start machines from ${check.repo}` });
+    return { ok: true, repo: check.repo, runnerRepo: check, text: check.message };
+  }
+
+  /** @param {{ email?: string|null }|null} requester */
+  clearRunnerRepo(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    const had = email ? this.runnerRepos.clear(email) : false;
+    if (had) this.onStateChanged?.();
+    return {
+      ok: true,
+      text: had
+        ? (this.runnerRepo
+          ? `Cleared. Your machines will come from the fleet's repository, ${this.runnerRepo}.`
+          : 'Cleared. There is nowhere to start a machine from until you set one again.')
+        : 'You had no runner repository set.',
+    };
+  }
+
+  /**
+   * WHICH REPOSITORIES AND WORKFLOWS MAY ADMIT THIS JOB, decided before its
+   * GitHub token is verified, because verification is against this answer.
+   *
+   * The operator's allowlist, as it always was — plus, for a job presenting a
+   * live ticket minted for a repository NOT on that list, that one repository
+   * and the one workflow file its platform names. Nothing else widens the
+   * list: a stored runner repository admits nothing on its own, and a ticket
+   * for a repository admits only a job from that repository running that
+   * workflow. The ticket is only peeked at here; it is spent after the token
+   * verifies, so a job whose token fails does not burn it.
+   *
+   * Null means nobody may: no allowlist, and no ticket that names a repository.
+   *
+   * @param {unknown} claim what the job presented as its claim
+   * @param {{ repositories: string[], workflowRef: string[] }} operator
+   * @returns {Promise<{ repositories: string[], workflowRef: string[] }|null>}
+   */
+  async runnerAdmission(claim, operator) {
+    const peeked = RunnerTickets.looksLikeTicket(claim) ? await this.runnerTickets.peek(claim) : null;
+    const repository = peeked?.repository || '';
+    const listed = operator.repositories.some((r) => r.toLowerCase() === repository.toLowerCase());
+    if (repository && !listed) {
+      const file = Object.hasOwn(RUNNER_WORKFLOWS, peeked?.platform || '')
+        ? RUNNER_WORKFLOWS[/** @type {keyof typeof RUNNER_WORKFLOWS} */ (peeked?.platform)]
+        : null;
+      if (!file) return null;
+      return { repositories: [repository], workflowRef: [`${repository}/.github/workflows/${file}@`] };
+    }
+    return operator.repositories.length ? operator : null;
+  }
+
+  /**
+   * After a ticket is spent: was it spent by a job from the repository it was
+   * minted for? A ticket that names one and arrives from another is refused —
+   * it was dispatched somewhere else, and whoever holds it is not that run.
+   *
+   * @param {{ repository?: string|null }|null} ticket @param {{ repository: string }} job
+   */
+  static ticketFitsJob(ticket, job) {
+    if (!ticket?.repository) return true;
+    return ticket.repository.toLowerCase() === String(job?.repository || '').toLowerCase();
+  }
+
+  /**
+   * A runner enrolled on a ticket that asked for a session: remember it until
+   * the runner's first health frame, which is the moment it can start one.
+   *
+   * @param {string} hostId
+   * @param {{ owner: string, start?: { title?: string, brief?: string, mode?: string }|null }|null} ticket
+   */
+  noteRunnerEnrolled(hostId, ticket) {
+    if (!ticket?.start || !ticket.owner) return;
+    while (this.runnerStarts.size >= MAX_RUNNER_STARTS) {
+      const oldest = this.runnerStarts.keys().next().value;
+      if (oldest === undefined) break;
+      this.runnerStarts.delete(oldest);
+    }
+    this.runnerStarts.set(hostId, { owner: ticket.owner, start: { ...ticket.start }, until: this.now() + RUNNER_START_TTL_MS });
+    this.onStateChanged?.();
+  }
+
+  /** The pending runner sessions, for storage. @returns {Array<[string, any]>} */
+  serialiseRunnerStarts() {
+    const now = this.now();
+    return [...this.runnerStarts.entries()].filter(([, v]) => v.until > now);
+  }
+
+  /** @param {unknown} entries */
+  restoreRunnerStarts(entries) {
+    if (!Array.isArray(entries)) return;
+    const now = this.now();
+    for (const e of entries) {
+      if (!Array.isArray(e) || typeof e[0] !== 'string' || !e[1] || typeof e[1].owner !== 'string') continue;
+      if (!(Number(e[1].until) > now) || !e[1].start || typeof e[1].start !== 'object') continue;
+      this.runnerStarts.set(e[0], { owner: e[1].owner, start: { ...e[1].start }, until: Number(e[1].until) });
+    }
+  }
+
+  /**
+   * The session somebody asked for when they asked for the machine, started on
+   * that machine's first health frame — the first moment the fleet knows the
+   * box is up and answering.
+   *
+   * Taken out of the map BEFORE the start is sent, so a second frame arriving
+   * while the first start is still waiting on Remote Control cannot start a
+   * second session. Started AS THE OWNER, placed by name: an ephemeral host
+   * takes work only from its owner and only when named, and both are true
+   * here. Not awaited by the health path — a start can take a minute and the
+   * health frame should not wait for it. The session announces itself the way
+   * every session does (its Remote Control link is a notification); a start
+   * that fails is recorded, so it is not silence.
+   *
+   * @param {string} hostId
+   */
+  async #startOnRunner(hostId) {
+    const pending = this.runnerStarts.get(hostId);
+    if (!pending) return;
+    this.runnerStarts.delete(hostId);
+    this.onStateChanged?.();
+    if (pending.until <= this.now()) return;
+    const reply = await this.dispatch({
+      verb: 'start',
+      params: pending.start,
+      actor: pending.owner,
+      preferHost: hostId,
+      requester: { email: pending.owner, admin: false },
+    }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
+    this.record({
+      hostId,
+      event: reply?.ok === false ? 'runner.start-failed' : 'runner.started',
+      actor: pending.owner,
+      text: reply?.ok === false
+        ? `the session ${pending.owner} asked for could not start on ${hostId}: ${reply?.text || 'no reason given'}`
+        : `started the session ${pending.owner} asked for on ${hostId}`,
+    });
+  }
+
+  /**
+   * A box too old to carry somebody's own runner repository, refused here
+   * rather than sent. `buildIntent` drops a param newer than the host speaks,
+   * which is right for an optional capability and wrong for this one: the
+   * dispatch would go to the FLEET's repository instead, starting a machine
+   * somewhere the person did not choose, and the reply would say it worked.
+   *
+   * @param {any} host @param {any} spec
+   * @returns {{ ok: false, error: { code: string }, text: string }|null}
+   */
+  #cannotCarry(host, spec) {
+    if (spec.verb !== 'provision' || !spec.params?.repo) return null;
+    const speaks = Number(host?.health?.protocol);
+    if (Number.isInteger(speaks) && speaks >= 6) return null;
+    return {
+      ok: false,
+      error: { code: 'host_outdated' },
+      text:
+        `${host?.hostId} is too old to start a machine from your own runner repository — it speaks protocol ` +
+        `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs 6. Update it and ask again.`,
+    };
+  }
+
+  /**
+   * `provision` or `runnerrepo`, tried on each permanent box until one can
+   * answer for this person. See the refusal branch in dispatch for why.
+   *
+   * In hostId order, so the same fleet asks in the same order every time and a
+   * person who connected GitHub on one box gets the same box every time.
+   * Sequential rather than all at once: a dispatch starts a machine, and two
+   * boxes answering the same request would start two.
+   *
+   * @param {any} spec
+   */
+  async #askEachBox(spec) {
+    const boxes = this.registry
+      .reachable()
+      .filter((h) => !h.ephemeral)
+      .sort((a, b) => a.hostId.localeCompare(b.hostId));
+    /** @type {string[]} */
+    const skipped = [];
+    for (const host of boxes) {
+      if (this.#cannotCarry(host, spec)) {
+        skipped.push(`${host.hostId} (needs updating)`);
+        continue;
+      }
+      let answer;
+      try {
+        answer = explainUnknownVerb(await this.send(host, spec), host);
+      } catch (e) {
+        skipped.push(`${host.hostId} (${/** @type {Error} */ (e).message})`);
+        continue;
+      }
+      if (answer?.ok === false && (answer.needsConnection || answer.error?.code === 'unknown_verb')) {
+        skipped.push(`${host.hostId} (${answer.needsConnection ? 'GitHub not connected for you' : 'needs updating'})`);
+        continue;
+      }
+      return { ...answer, hostId: host.hostId };
+    }
+    return {
+      ok: false,
+      error: { code: 'not_connected' },
+      needsConnection: 'github',
+      text:
+        `None of the permanent boxes could ask GitHub for you: ${skipped.join(', ')}. ` +
+        'Connect GitHub in the app — it is your own connection that starts the machine — and ask again.',
+    };
+  }
+
+  /**
    * Everything a client can see about the fleet.
    *
    * FILTERED FOR WHOEVER IS ASKING, which it was not. This route returned
@@ -1729,7 +2068,11 @@ export class CoordinatorCore {
       // NULL IS AN ANSWER HERE, not cannot-tell: this coordinator knows it has
       // nowhere to start a machine. A coordinator too old to send the field
       // omits it, which decodes to the same nothing and is right as well.
-      runners: this.runnerRepo ? { repo: this.runnerRepo } : null,
+      //
+      // AND WHOSE: a person with their own runner repository sees theirs,
+      // everybody else the fleet's. `own` tells a screen which it is, so the
+      // setting shows what is in effect rather than what is typed.
+      runners: this.#runnersFor(requester),
     };
   }
 }

@@ -731,7 +731,7 @@
                       }
                     },
                     "runners": {
-                      "description": "Whether this fleet can start a temporary machine. Null when no runner repository is configured, so a client offers `provision` only where it does something. Absent from an older coordinator, which means the same.",
+                      "description": "Whether YOU can start a temporary machine here, and from where. Your own runner repository when you set one (`own: true`), the fleet\u2019s otherwise, and null when neither exists \u2014 so a client offers `provision` only where it does something. Absent from an older coordinator, which means the same.",
                       "oneOf": [
                         {
                           "type": "null"
@@ -745,6 +745,10 @@
                             "repo": {
                               "type": "string",
                               "description": "owner/repo holding the runner workflows"
+                            },
+                            "own": {
+                              "type": "boolean",
+                              "description": "true when this is your own runner repository rather than the fleet\u2019s. Absent from an older coordinator, which had only the fleet\u2019s."
                             }
                           }
                         }
@@ -1085,6 +1089,22 @@
                   "host": {
                     "type": "string",
                     "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
+                  },
+                  "start": {
+                    "type": "object",
+                    "description": "For `provision` only: a session to start on the runner once it joins the fleet, as `start` would take it \u2014 `title`, `brief` and `mode`. Held by the coordinator with the dispatch ticket and started on the runner\u2019s first health frame, as the person who asked. No profile or secret: a runner holds neither.",
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "brief": {
+                        "type": "string"
+                      },
+                      "mode": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 }
               }
@@ -1453,6 +1473,86 @@
           },
           "404": {
             "description": "no such token, or not yours \u2014 the two are not distinguished on purpose"
+          }
+        }
+      }
+    },
+    "/api/runner-repo": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Your own runner repository",
+        "description": "Where your temporary machines come from: `repo` is yours, null when you have not set one, and `fleet` is the fleet\u2019s, which is what you get without one. See docs/runner-central.md.",
+        "responses": {
+          "200": {
+            "description": "`repo` and `fleet`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Set your runner repository, once it passes the check",
+        "description": "A permanent box checks it with YOUR GitHub connection \u2014 public, the Fleetwright GitHub App installed with Actions write, and which runner workflows it carries \u2014 and it is saved, as GitHub spells it, only if every answer is one a dispatch can use. The check comes back either way, as `runnerRepo`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repo"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "description": "owner/repo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "saved: `repo`, `runnerRepo` (the check) and `text`"
+          },
+          "400": {
+            "description": "not an owner/repo"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "the check did not pass, so nothing was saved: `runnerRepo` says which answer, `text` what to fix, and `needsConnection` when no box holds your GitHub connection"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Clear your runner repository",
+        "description": "Your machines come from the fleet\u2019s repository again, when it has one.",
+        "responses": {
+          "200": {
+            "description": "cleared, or there was nothing to clear"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
           }
         }
       }

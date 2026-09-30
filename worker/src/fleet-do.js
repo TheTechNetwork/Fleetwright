@@ -104,8 +104,16 @@ export class Fleet {
     // minutes later — a gap this object is evicted across as a matter of
     // course, so it goes to storage the moment it is minted.
     this.core.onStateChanged = () => {
-      const write = this.state.storage
-        .put('runnerTickets', this.core.runnerTickets.serialise())
+      // AND THE TWO THINGS A DISPATCH CAN NOW CHANGE: somebody's runner
+      // repository, and a session waiting for its runner to join. One `put`
+      // per key rather than a batch object, so test/do-key-bounds.test.js —
+      // which scans for each named put — sees every key this object writes
+      // and can ask what bounds it. A batch hid two of them from it.
+      const write = Promise.all([
+        this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise()),
+        this.state.storage.put('runnerRepos', this.core.runnerRepos.serialise()),
+        this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
+      ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
         // losing one ticket write costs an unattributed runner rather than
@@ -167,6 +175,9 @@ export class Fleet {
       this.core.runnerTokens.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTokens')) || []));
       // Minted at dispatch, spent by a job minutes later, across an eviction.
       this.core.runnerTickets.restore(/** @type {any[]} */ ((await this.state.storage.get('runnerTickets')) || []));
+      // Each person's own runner repository, and sessions waiting for a runner.
+      this.core.runnerRepos.restore(await this.state.storage.get('runnerRepos'));
+      this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       this.core.enrollment.restore(/** @type {any[]} */ ((await this.state.storage.get('enrollment')) || []));
       // MCP clients that registered themselves. A Durable Object is evicted
@@ -390,13 +401,24 @@ export class Fleet {
     // and the whole point is that it does not need one.
     if (url.pathname === '/api/enroll/actions' && request.method === 'POST') {
       const body = await readJson(request);
-      const repositories = splitList(this.env.FLEETWRIGHT_ACTIONS_REPOS);
-      if (!repositories.length) {
+      // WHICH REPOSITORIES MAY ADMIT THIS JOB: the operator's allowlist, plus
+      // — only for a job presenting a live ticket minted for it — the one
+      // person's repository the ticket names, for the one workflow file its
+      // platform names. See CoordinatorCore#runnerAdmission.
+      const admission = await this.core.runnerAdmission(String(body?.claim || ''), {
+        repositories: splitList(this.env.FLEETWRIGHT_ACTIONS_REPOS),
+        // A LIST: one workflow file per operating system in the runner
+        // repository, and a single value still works as a list of one.
+        workflowRef: splitList(this.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
+      });
+      if (!admission) {
         return json(
           {
             ok: false,
             error: { code: 'not_configured' },
-            text: 'This coordinator does not admit CI runners. Set FLEETWRIGHT_ACTIONS_REPOS to the repositories that may.',
+            text:
+              'This coordinator does not admit CI runners from here. An operator sets FLEETWRIGHT_ACTIONS_REPOS, ' +
+              'or a runner is dispatched by the fleet from somebody’s own runner repository.',
           },
           503,
         );
@@ -408,10 +430,8 @@ export class Fleet {
           audiences: splitList(this.env.FLEETWRIGHT_ACTIONS_AUDIENCE).length
             ? splitList(this.env.FLEETWRIGHT_ACTIONS_AUDIENCE)
             : [...DEFAULT_ACTIONS_AUDIENCES],
-          repositories,
-          // A LIST: one workflow file per operating system in the runner
-          // repository, and a single value still works as a list of one.
-          workflowRef: splitList(this.env.FLEETWRIGHT_ACTIONS_WORKFLOW),
+          repositories: admission.repositories,
+          workflowRef: admission.workflowRef,
         });
       } catch (e) {
         return json({ ok: false, error: { code: 'bad_token' }, text: /** @type {Error} */ (e).message }, 403);
@@ -425,10 +445,14 @@ export class Fleet {
       // GitHub's token above — and the prefix decides which store is asked, so
       // neither can be accepted in place of the other.
       const presented = String(body?.claim || '');
-      const ticket = RunnerTickets.looksLikeTicket(presented)
+      const redeemed = RunnerTickets.looksLikeTicket(presented)
         ? await this.core.runnerTickets.redeem(presented)
         : null;
-      const claim = ticket ? null : await this.core.runnerTokens.verify(presented);
+      // A TICKET SPENT FROM THE WRONG REPOSITORY is no ticket: it was minted
+      // for a dispatch somewhere else, and this job is not that run. Already
+      // spent by the redeem above, which is the safe way round.
+      const ticket = redeemed && CoordinatorCore.ticketFitsJob(redeemed, job) ? redeemed : null;
+      const claim = ticket || redeemed ? null : await this.core.runnerTokens.verify(presented);
       const claimedOwner = ticket ? ticket.owner : claim?.email ? claim.email.toLowerCase() : null;
       if (!claimedOwner) {
         // Persisted even on the refusal: a ticket that was spent here is gone
@@ -463,7 +487,7 @@ export class Fleet {
       // The spent ticket, written down as well as the new host. Both halves or
       // neither: a host recorded without its ticket being consumed leaves a
       // value that could attribute a second machine.
-      if (ticket) await this.#saveClients();
+      if (redeemed) await this.#saveClients();
       if (!result.ok || !result.host) {
         // A FULL FLEET IS NOT A BAD REQUEST. Collapsing every enrolment refusal
         // to `bad_request` would tell somebody their pin or their key was
@@ -472,6 +496,9 @@ export class Fleet {
         const full = 'code' in result && result.code === 'hosts_full';
         return json({ ok: false, error: { code: full ? 'hosts_full' : 'bad_request' }, text: result.error }, full ? 507 : 400);
       }
+      // THE SESSION THEY ASKED FOR WITH IT, if any — started on this host's
+      // first health frame, which is the first moment it can take one.
+      if (ticket) this.core.noteRunnerEnrolled(result.host.hostId, ticket);
       this.core.record({
         event: 'host.enrolled',
         hostId: result.host.hostId,
@@ -725,6 +752,23 @@ export class Fleet {
     // that org belongs to whoever minted the token; a REPOSITORY or environment
     // secret lets different repositories belong to different people. The fleet
     // cannot tell the difference and does not need to.
+    // EACH PERSON'S OWN RUNNER REPOSITORY. Read, set — only once a permanent
+    // box has checked it with their GitHub connection — and cleared. See
+    // src/fleet/coordinator/runner-repos.js for what it admits and why a
+    // member may set one.
+    if (url.pathname === '/api/runner-repo') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner repository belongs to a person.' }, 403);
+      }
+      if (request.method === 'GET') return json(this.core.runnerRepoFor(requesterFor(client)));
+      if (request.method === 'PUT') {
+        const body = await readJson(request);
+        const r = await this.core.setRunnerRepo(requesterFor(client), body?.repo);
+        return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
+      if (request.method === 'DELETE') return json(this.core.clearRunnerRepo(requesterFor(client)));
+    }
+
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
       if (!client?.email) {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);
@@ -960,6 +1004,10 @@ export class Fleet {
           // The VERIFIED caller, for visibility. Null for the break-glass token,
           // which sees everything — it is what you hold when identity is broken.
           requester: requesterFor(client),
+          // `provision` only: a session to start on the runner once it joins.
+          // Beside the params like `host`, because the box that dispatches the
+          // run never sees it — the coordinator holds it with the ticket.
+          startAfter: body.start && typeof body.start === 'object' && !Array.isArray(body.start) ? body.start : null,
         });
       // A `connect` reply carries the host's catalogue, which offers the paste
       // route because a host knows nothing about an OAuth client — correctly,
@@ -1154,6 +1202,7 @@ export class Fleet {
     // or expired, so writing it here is what makes a single-use ticket single
     // use across an eviction as well as within one.
     await this.state.storage.put('runnerTickets', this.core.runnerTickets.serialise());
+    await this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts());
     await this.state.storage.put('mcpClients', this.core.mcpAuthorizations.serialise());
     await this.state.storage.put('spentTokens', this.core.spentTokens.serialise());
   }
