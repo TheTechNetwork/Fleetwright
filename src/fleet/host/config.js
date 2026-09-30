@@ -49,10 +49,11 @@ export function loadSidecarConfig(env = process.env) {
     // Whatever FLEETWRIGHT_TOKEN the hub was configured with. Empty is valid: a
     // loopback-bound hub with no token needs none. Holding this is the
     // sidecar's real privilege — /api/command runs any line it is given.
-    // Falls back to the token fleetwright generates for itself. Both services
-    // run as the same user on the same box, so the sidecar can simply read it
-    // — which is what keeps "there is always a token now" from becoming a
-    // question the install has to ask. See src/core/api-token.js.
+    // Falls back to the token fleetwright generates for itself, on a box where
+    // both run as one user and can read the same file — a runner, a Mac, a
+    // checkout run by hand. An installed Linux box cannot (the sidecar has its
+    // own account since #270) and does not need to: the installer copies the
+    // token into /etc/fleetwright-sidecar.env. See src/core/api-token.js.
     hubToken:
       str(env, 'FLEETWRIGHT_HUB_TOKEN')
       || readApiToken(str(env, 'FLEETWRIGHT_STATE_DIR', preferExisting('/var/lib/fleetwright', '/var/lib/agent-hub')))

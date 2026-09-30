@@ -24,6 +24,7 @@ import { addLabel } from '../src/core/labels.js';
 import { writeChannel } from '../src/core/channel.js';
 import { writeVariant } from '../src/core/sandbox-variant.js';
 import { armConfirmation, evidencePath } from '../src/core/update-confirm.js';
+import { requestRestart } from '../src/core/restart-watch.js';
 import { DEFAULT_SOCKET_DIR } from '../src/core/hook-socket.js';
 
 /** @param {import('node:test').TestContext} t @param {Record<string, unknown>} [over] */
@@ -153,6 +154,15 @@ test('a reader that fails leaves a null, not a default', async (t) => {
   // catches its read inside — so this one is the reader's answer, not the
   // route's. Pinned so a change to either shows up here.
   assert.equal(s.channel, 'stable');
+});
+
+test("the updater's restart request rides on /api/state, for a sidecar that cannot read the marker", async (t) => {
+  const h = await hub(t);
+  assert.equal((await h.state()).restartRequestedAt, null, 'a box that has never updated has no request');
+  assert.ok(requestRestart({ head: 'abc1234', stateDir: h.stateDir }));
+  const at = (await h.state()).restartRequestedAt;
+  assert.equal(typeof at, 'number');
+  assert.ok(Date.now() - at < 5_000, 'the time the updater wrote, not the time asked');
 });
 
 // --- the two writes ------------------------------------------------------------

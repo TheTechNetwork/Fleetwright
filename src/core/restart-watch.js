@@ -15,14 +15,19 @@
 // hub already demonstrates the answer — a service under Restart=always restarts
 // itself by exiting, and exiting needs no privilege at all.
 //
-// SO: the updater leaves a marker, and every service watches for it. A marker
-// written after a service started means that service is running code older than
-// the tree it was launched from, and it exits. systemd brings it straight back
-// on the new code.
+// SO: the updater leaves a marker, and the hub publishes its time on
+// /api/state as `restartRequestedAt`. A time after a service started means that
+// service is running code older than the tree it was launched from, and it
+// exits. systemd brings it straight back on the new code.
 //
-// All three run as the same user from the same directory, so the marker needs
-// no permission that is not already held. That is the whole reason this is
-// cheap.
+// THE SIDECAR READS IT OVER THE LOOPBACK, NOT FROM THE FILE. It used to watch
+// the marker itself, which worked while the two services ran as one user and
+// stopped the day the sidecar got its own account (#270): the state directory
+// is fleetwright's, 0750, and an unreadable marker is read as no marker. So a
+// checkout box's sidecar ran old code until somebody restarted it by hand. The
+// hub already answers /api/state to the sidecar every fifteen seconds; the
+// marker's time rides on it (src/adapters/http.js) and the sidecar compares
+// it with its own start (src/fleet/host/sidecar.js, #noticeRestart).
 //
 // WHY A MARKER RATHER THAN WATCHING GIT. A pull is not atomic. A service that
 // notices the tree changed can wake up midway through one and load half of an
@@ -73,41 +78,4 @@ export function readMarker(stateDir) {
     // unreadable one is not worth taking a service down over.
     return null;
   }
-}
-
-/**
- * Exit when an update lands, so systemd restarts this process on the new code.
- *
- * @param {object} o
- * @param {string} [o.name]        for the log line
- * @param {number} [o.since]       treat markers older than this as already applied
- * @param {number} [o.everyMs]
- * @param {string} [o.stateDir]
- * @param {() => void} [o.exit]    injectable for tests
- * @returns {() => void} stop
- */
-export function watchForRestart({
-  name = 'service',
-  since = Date.now(),
-  everyMs = 15_000,
-  stateDir,
-  exit = () => process.exit(0),
-} = {}) {
-  const timer = setInterval(() => {
-    const marker = readMarker(stateDir);
-    // Strictly newer than our own start. Without this a service that comes up
-    // after an update reads the marker that caused it and exits again, for ever
-    // — a restart loop built out of the mechanism meant to end one.
-    if (!marker || marker.at <= since) return;
-    log.warn(`${name}: new code was installed${marker.actor ? ` by ${marker.actor}` : ''} — restarting to pick it up`);
-    clearInterval(timer);
-    exit();
-  }, everyMs);
-
-  // Unref'd, unlike the transport's retry timer. This one must never be the
-  // reason a process stays alive: a service whose real work has finished should
-  // exit, not linger because it is still watching for an update it will never
-  // act on.
-  timer.unref?.();
-  return () => clearInterval(timer);
 }

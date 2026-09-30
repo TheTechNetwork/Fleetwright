@@ -616,10 +616,13 @@ async function enrolledProofFor(coordinatorInstance, port, hostId) {
 }
 
 test('a config the hub cannot read is not reported as "no fleet"', async () => {
-  // fleetwright runs as the service user; /etc/fleetwright-sidecar.env is written
-  // by root. If it cannot be read, the box HAS a coordinator and the bot cannot
-  // see it — and "this box is not part of a fleet" would send somebody to
-  // configure something that is already configured.
+  // fleetwright runs as the session user; /etc/fleetwright-sidecar.env belongs
+  // to the sidecar's own account since #270. If it cannot be read, the box HAS
+  // a coordinator and this process cannot see it — and "this box is not part
+  // of a fleet" would send somebody to configure something that is already
+  // configured, while "re-run install.sh to fix the permissions" would send
+  // them to undo the split. The answer is whose the identity is, and the one
+  // line on the box that does what was asked as that account.
   const cfg = sidecarConfig({
     env: { FLEETWRIGHT_SIDECAR_ENV: '/etc/shadow-does-not-matter-here' },
     readFile: () => {
@@ -631,12 +634,15 @@ test('a config the hub cannot read is not reported as "no fleet"', async () => {
   assert.match(String(cfg.unreadable), /permission denied/);
 
   const who = await identity({ config: cfg });
-  assert.match(who.text, /Cannot read this box's fleet configuration/);
-  assert.match(who.text, /install\.sh/, 'and what to do about it');
+  assert.match(who.text, /belongs to the sidecar's account/);
+  assert.match(who.text, /permission denied/, 'the read that failed, named');
+  assert.match(who.text, /sudo -u fleetwright-sidecar fleetwright-sidecar identity/, 'and what to do about it');
+  assert.doesNotMatch(who.text, /install\.sh/, 'the old fix would undo the split');
 
   const joined = await fleetEnrol('123456', { config: cfg });
   assert.equal(joined.ok, false);
-  assert.match(joined.text, /Cannot read/);
+  assert.match(joined.text, /sudo -u fleetwright-sidecar fleetwright-sidecar enrol 123456/);
+  assert.match(joined.text, /install line the app shows/);
 });
 
 test('a missing config file is still just "no fleet"', () => {

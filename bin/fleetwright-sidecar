@@ -25,7 +25,6 @@ import { existsSync } from 'node:fs';
 import * as readline from 'node:readline/promises';
 import { log, setLogLevel, setLogStream } from '../src/log.js';
 import { loadEnvFile } from '../src/core/env-file.js';
-import { watchForRestart } from '../src/core/restart-watch.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
@@ -76,13 +75,6 @@ Environment:
 }
 
 async function run() {
-  // Pick up an update without anybody opening a terminal.
-  //
-  // `/update --restart` restarts the hub by exiting; this does the same when
-  // the updater says a complete new tree is on disk. Only in `run` — the
-  // one-shot subcommands finish in under a second and have nothing to pick up.
-  watchForRestart({ name: 'sidecar' });
-
   const { errors, warnings } = validateSidecarConfig(cfg);
   for (const w of warnings) log.warn(`config: ${w}`);
   if (errors.length) {
@@ -192,6 +184,13 @@ const sidecar = new Sidecar({
     // told on /api/state, and the two things it wrote are requests (#270).
     hubConfig: loadConfig(),
     logger: log,
+    // Pick up an update without anybody opening a terminal. `/update --restart`
+    // restarts the hub by exiting; this does the same when fleetwright says a
+    // complete new tree landed after this process started — read off its
+    // /api/state, because the marker file is in a directory this account
+    // cannot read (#270). systemd's Restart=always, or launchd's KeepAlive,
+    // brings the process straight back on the new code.
+    onRestartRequested: () => process.exit(0),
     // Reported with health, so a phone can say "this box is 3 commits behind
     // and has 12 packages waiting" without anybody logging in to look.
     // COMPUTED ON A TIMER, READ FROM MEMORY. This used to do the work inline,
