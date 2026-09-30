@@ -866,6 +866,27 @@ refresh_release_if_converted() {
 # every run. Empty when the path is missing.
 owner_of() { stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || true; }
 
+# IS THIS DAEMON RUNNING, BY LAUNCHD'S OWN WORD. `launchctl bootstrap`
+# returning 0 says the request was accepted, and nothing else: a job whose
+# spawn fails sits at "spawn scheduled" with KeepAlive retrying it, and
+# bootstrap has already said yes. The installer reported "fleetwright running"
+# over exactly that, and its own doctor two lines later could not reach the
+# hub. So the state line is read, and given a moment to become `running`.
+# On failure the reason launchd knows is printed — the last exit code is
+# where EX_CONFIG shows up — with the tail of the log if there is one.
+launchd_running() { # launchd_running NAME
+  local label="system/network.thetech.$1" state="" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    state="$(launchctl print "$label" 2>/dev/null | awk '/^\tstate = / {print $3}')"
+    [ "$state" = running ] && return 0
+    sleep 1
+  done
+  warn "$1 is '${state:-not loaded}', not running:"
+  launchctl print "$label" 2>/dev/null | grep -E '^\t(state|last exit code|runs) = ' | sed 's/^/       /' || true
+  tail -n 12 "/var/log/$1.log" 2>/dev/null | sed 's/^/       /' || true
+  return 1
+}
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -2101,6 +2122,20 @@ install_unit() { # install_unit NAME
   # about the file it means.
   chown root:wheel "$dest" 2>/dev/null || true
   chmod 0644 "$dest"
+  # THE LOG FILE THE PLIST NAMES HAS TO EXIST BEFORE LAUNCHD SPAWNS THE JOB.
+  # launchd opens StandardOutPath as the job's user, and /var/log is root's:
+  # the open fails, launchd gives up with EX_CONFIG (78), and `launchctl
+  # print` shows "spawn scheduled" forever — while bootstrap returned 0 and
+  # nothing was written anywhere to say why. The first macOS runner sat
+  # exactly there, both daemons, three runs each. Created empty and owned by
+  # the user the plist runs as; an existing file is re-owned, not truncated.
+  if [ "$PLATFORM" = macos ]; then
+    local log_owner; log_owner="$(sed -n '/<key>UserName<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$dest" | head -1)"
+    [ -n "$log_owner" ] || log_owner="$RUN_USER"
+    [ -e "/var/log/$1.log" ] || : > "/var/log/$1.log"
+    chown "$log_owner" "/var/log/$1.log" 2>/dev/null || true
+    chmod 0644 "/var/log/$1.log" 2>/dev/null || true
+  fi
 
   # WHAT THIS UNIT NAMES HAS TO EXIST, and nothing checked. A unit is written
   # from a template and looks perfectly correct while pointing at a file that is
@@ -3071,13 +3106,11 @@ if [ "$WIZARD" = yes ]; then
           # the restart-an-active-unit case below, and the same bug it fixes:
           # an upgrade that leaves the old code running while reporting success.
           launchctl bootout "$label" >/dev/null 2>&1 || true
-          if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+          if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$1"; then
             ok "$1 running"
             return 0
           fi
-          warn "$1 failed to start:"
-          tail -n 12 "/var/log/$1.log" 2>/dev/null | sed 's/^/       /' \
-            || warn "       /var/log/$1.log"
+          warn "$1 failed to start — see above, then: sudo launchctl print $label"
           return 1
         fi
         systemctl daemon-reload >/dev/null 2>&1 || true
@@ -3343,10 +3376,10 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
       plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
       [ -f "$plist" ] || continue
       launchctl bootout "$label" >/dev/null 2>&1 || true
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
         ok "$unit restarted, on the new code"
       else
-        warn "$unit did not come back — tail /var/log/$unit.log"
+        warn "$unit did not come back — sudo launchctl print $label"
       fi
       continue
     fi
@@ -3457,10 +3490,10 @@ if [ -n "$LEGACY_RUNNING" ] && [ "$CHECK_ONLY" != 1 ]; then
       launchctl print "system/network.thetech.$unit" >/dev/null 2>&1 && continue
       [ -f "$plist" ] || continue
       stop_legacy_unit "$unit"
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1; then
+      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
         ok "$unit running — it was running before the rename"
       else
-        warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — tail /var/log/$unit.log"
+        warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — sudo launchctl print system/network.thetech.$unit"
       fi
       continue
     fi

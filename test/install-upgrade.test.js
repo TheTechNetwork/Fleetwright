@@ -65,6 +65,25 @@ test('it restarts the services, which is the whole point', () => {
   // upgrade that leaves the old code running while reporting success.
   assert.match(section, /launchctl bootout/);
   assert.match(section, /launchctl bootstrap/);
+  // And bootstrap's exit code is not the answer: it says the request was
+  // accepted. The first macOS runner had both daemons at "spawn scheduled"
+  // with EX_CONFIG behind an installer that had printed "running". Every
+  // start on a Mac reads launchd's own state line.
+  assert.match(section, /launchctl bootstrap system "\$plist" >\/dev\/null 2>&1 && launchd_running/);
+  assert.match(SH, /launchd_running\(\) \{/);
+  assert.match(SH.slice(SH.indexOf('launchd_running() {')), /state = /);
+});
+
+test('on a Mac the log file the plist names exists before launchd spawns the job', () => {
+  // launchd opens StandardOutPath as the job's user, and /var/log is root's.
+  // Without the file, the spawn fails with EX_CONFIG and nothing is written
+  // anywhere to say so — the install that found this had no log to tail.
+  const unit = SH.slice(SH.indexOf('install_unit() {'), SH.indexOf('\n}\n', SH.indexOf('install_unit() {')));
+  assert.match(unit, /\[ -e "\/var\/log\/\$1\.log" \] \|\| : > "\/var\/log\/\$1\.log"/);
+  assert.match(unit, /chown "\$log_owner" "\/var\/log\/\$1\.log"/);
+  // Owned by whoever the plist runs as, read back from the plist rather than
+  // assumed — the sidecar's user and the hub's are one variable each.
+  assert.match(unit, /<key>UserName<\\\/key>/);
 });
 
 test('it compares this box against the coordinator and says so plainly', () => {
