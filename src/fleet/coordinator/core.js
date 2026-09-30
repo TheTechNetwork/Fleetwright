@@ -1852,7 +1852,7 @@ function mergeConnections(results) {
 
   /** @type {string[]} */
   const everywhere = results.map((r) => r.hostId).filter(Boolean);
-  /** @type {Map<string, { provider: string, label: string|null, account: string|null, hosts: string[] }>} */
+  /** @type {Map<string, { provider: string, label: string|null, account: string|null, hosts: string[], usage?: any }>} */
   const byProvider = new Map();
   for (const r of withConnections) {
     for (const c of r.connections.connected || []) {
@@ -1866,6 +1866,12 @@ function mergeConnections(results) {
       // An account name differing between hosts is possible and worth surfacing
       // rather than averaging: it means two different tokens are in play.
       if (c.account && found.account && c.account !== found.account) found.account = 'differs between machines';
+      // WHAT THE ACCOUNT HAS LEFT is one fact about one plan, however many
+      // boxes asked: the box that asked most recently has the answer, and a
+      // box that could not ask (null) never overwrites one that could.
+      if (c.usage && (!found.usage || (c.usage.checkedAt ?? 0) > (found.usage.checkedAt ?? 0))) {
+        found.usage = c.usage;
+      }
       byProvider.set(c.provider, found);
     }
   }
