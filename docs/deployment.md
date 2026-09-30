@@ -115,11 +115,13 @@ have. It cannot restart the sidecar or the coordinator: those are system units
 and it has no rights over them.
 
 So the updater leaves a marker in the state directory after a successful pull,
-and both watch for it. A marker newer than a service's own start means that
-service is running code older than the tree it was launched from, so it exits —
-the same mechanism as the hub, arrived at from the other end. All three run as
-the same user from the same directory, so the marker needs no permission that is
-not already held.
+and the hub publishes its time on `/api/state` as `restartRequestedAt`. The
+sidecar reads that with every health frame; a time after its own start means it
+is running code older than the tree it was launched from, so it exits — the
+same mechanism as the hub, arrived at from the other end. It used to read the
+marker file itself, which worked while the two services ran as one user and
+stopped when the sidecar got its own account (#270): the state directory is
+fleetwright's, and an unreadable marker read as no marker.
 
 Three decisions worth knowing:
 

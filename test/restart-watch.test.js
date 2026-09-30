@@ -5,6 +5,11 @@
 // offer was "ssh in and systemctl restart" -- the one thing this product exists
 // so that nobody has to do. An update that needs a terminal to finish is not an
 // update.
+//
+// The marker's half is here. Who reads it moved: the sidecar used to watch the
+// file and cannot since it runs as its own user (#270), so the hub publishes
+// the marker's time on /api/state and the sidecar acts on that -- see
+// test/hub-host-routes.test.js and test/sidecar.test.js.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +17,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { requestRestart, readMarker, markerPath, watchForRestart } from '../src/core/restart-watch.js';
+import { requestRestart, readMarker, markerPath } from '../src/core/restart-watch.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'restart-'));
 
@@ -33,47 +38,4 @@ test('an unreadable marker does not take a service down', () => {
   const d = dir();
   writeFileSync(markerPath(d), 'not json at all');
   assert.equal(readMarker(d), null);
-});
-
-test('a marker written after we started makes us exit', async () => {
-  const d = dir();
-  let exited = false;
-  const since = Date.now() - 1000;
-  const stop = watchForRestart({ since, everyMs: 5, stateDir: d, exit: () => { exited = true; } });
-  requestRestart({ stateDir: d });
-  await new Promise((r) => setTimeout(r, 40));
-  stop();
-  assert.equal(exited, true);
-});
-
-test('a marker OLDER than our start does not, or a restart is a loop', async () => {
-  // The service that comes back up after an update reads the very marker that
-  // caused it. Without the comparison it exits again immediately, for ever --
-  // a restart loop built out of the mechanism meant to end one.
-  const d = dir();
-  requestRestart({ stateDir: d });
-  await new Promise((r) => setTimeout(r, 5));
-  let exited = false;
-  const stop = watchForRestart({ since: Date.now(), everyMs: 5, stateDir: d, exit: () => { exited = true; } });
-  await new Promise((r) => setTimeout(r, 40));
-  stop();
-  assert.equal(exited, false);
-});
-
-test('it stops watching once it has fired, so exit is called once', async () => {
-  const d = dir();
-  let calls = 0;
-  const stop = watchForRestart({ since: Date.now() - 1000, everyMs: 5, stateDir: d, exit: () => { calls += 1; } });
-  requestRestart({ stateDir: d });
-  await new Promise((r) => setTimeout(r, 60));
-  stop();
-  assert.equal(calls, 1);
-});
-
-test('the watcher never holds the process open', () => {
-  // unref'd: a service whose real work has finished should exit, not linger
-  // because it is still waiting for an update it will never act on.
-  const stop = watchForRestart({ stateDir: dir(), everyMs: 1000 });
-  stop();
-  assert.ok(true);
 });
