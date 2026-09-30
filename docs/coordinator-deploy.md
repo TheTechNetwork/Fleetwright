@@ -27,9 +27,16 @@ does not have to be, and usually is not, a fleet box:
 git clone https://github.com/TheTechNetwork/Fleetwright
 cd Fleetwright/worker
 npm install
-npx wrangler deploy                                # opens a browser login the first time
+npx wrangler deploy --config wrangler.minter.toml  # opens a browser login the first time
+npx wrangler deploy
 npx wrangler secret put FLEETWRIGHT_API_TOKEN      # openssl rand -hex 24
 ```
+
+The first line is the **minting Worker**, which the coordinator is bound to and
+so has to exist first. It holds nothing until you give it the GitHub App key,
+and until then it mints nothing — runners reach public code, as they always
+did. [runner-central.md](./runner-central.md#where-the-key-lives) is what it is
+for and how to give it the key.
 
 That deploys `worker/wrangler.toml`, which is **the fork-safe default on
 purpose**: no routes, so it answers on the workers.dev URL the deploy prints;

@@ -134,10 +134,28 @@ runs:
         # Unsandboxed sessions inherit this process's environment, so putting it
         # here is what puts it in front of the CLI.
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        # WHERE A SESSION'S GIT ASKS FOR PRIVATE CODE. The sidecar serves this
+        # socket and turns each ask into a one-hour token for the one repository
+        # being fetched, minted by a permanent box in the fleet for whoever owns
+        # this runner — or into nothing, when the fleet has no such box, and a
+        # session reaches public code as it always did. See
+        # docs/runner-central.md, "Private code on a runner".
+        FLEETWRIGHT_RUNNER_BROKER: ${{ runner.temp }}/state/broker.sock
       run: |
         set -euo pipefail
         mkdir -p "$FLEETWRIGHT_WORKDIR" "$FLEETWRIGHT_STATE_DIR"
         chmod 700 "$FLEETWRIGHT_STATE_DIR"
+
+        # GIT ASKS THE BROKER, for github.com and nothing else, and says which
+        # repository. The empty helper first clears anything the image set;
+        # useHttpPath is what makes git send `path=owner/repo.git`, without
+        # which there is no repository to scope a token to and none is minted.
+        # The socket is named in the helper line rather than left to the
+        # environment, so a session that scrubs its environment still finds it.
+        git config --global credential.https://github.com.helper ''
+        git config --global --add credential.https://github.com.helper \
+          "!FLEETWRIGHT_RUNNER_BROKER='$FLEETWRIGHT_RUNNER_BROKER' node '$PWD/sandbox/credential.mjs'"
+        git config --global credential.https://github.com.useHttpPath true
 
         # The session manager first: the sidecar talks to it on loopback and is
         # useless without it.

@@ -63,6 +63,16 @@ on:
   # exactly the case where those two are different.
   merge_group:
   workflow_dispatch:
+    inputs:
+      # THE ONLY WAY THE APP KEY MOVES. Unticked, a manual run deploys exactly
+      # what a push would. Ticked, it also runs the minter-key job below, which
+      # waits for a reviewer on the `github-app-key` environment before it can
+      # read the key at all. See that job for why it is not part of deploy.
+      sync_app_key:
+        description: 'Also sync the GitHub App key to the minting Worker (needs approval on github-app-key)'
+        required: false
+        default: false
+        type: boolean
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
 # branch pushed three times in a minute kept three builds alive and the answer
@@ -192,6 +202,14 @@ jobs:
         working-directory: worker
         run: npx wrangler deploy --config wrangler.demo.toml --dry-run --outdir /tmp/demo-build
 
+      # THE MINTING WORKER, bundled on its own for the same reason as the demo:
+      # it holds the GitHub App key, so what it imports is the whole of what
+      # could ever touch that key. If minter.js grows an import that drags the
+      # coordinator in, this is where it shows.
+      - name: Bundle the minting Worker without deploying it
+        working-directory: worker
+        run: npx wrangler deploy --config wrangler.minter.toml --dry-run --outdir /tmp/minter-build
+
       # THE CONFIG THAT ACTUALLY DEPLOYS. wrangler.toml above is the fork-safe
       # default; wrangler.production.toml is ours and is what the deploy job
       # uses. A syntax error in the file nobody dry-runs is a syntax error
@@ -286,11 +304,30 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
+          # Both public: the App's client id, and whose repositories the
+          # minting Worker may mint into. Repository VARIABLES, not secrets.
+          MINT_CLIENT_ID: ${{ vars.FLEETWRIGHT_GITHUB_CLIENT_ID }}
+          MINT_OWNERS: ${{ vars.FLEETWRIGHT_GITHUB_MINT_OWNERS }}
         run: |
           # Root first: the Worker bundles ../../src, which imports `jose` from
           # the repository root's node_modules. See the check job.
           npm --prefix "$GITHUB_WORKSPACE" install --no-audit --no-fund
           npm install --no-audit --no-fund
+
+          # THE MINTING WORKER FIRST, because the coordinator's config binds it
+          # and a service binding has to have something to point at when the
+          # coordinator deploys. Both committed configs bind it; the check is
+          # for a config of somebody's own that does not.
+          config="${WRANGLER_CONFIG:-wrangler.toml}"
+          if grep -q '^service = "fleetwright-minter"' "$config"; then
+            minter_vars=()
+            [ -n "${MINT_CLIENT_ID:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_CLIENT_ID:$MINT_CLIENT_ID")
+            [ -n "${MINT_OWNERS:-}" ] && minter_vars+=(--var "FLEETWRIGHT_GITHUB_MINT_OWNERS:$MINT_OWNERS")
+            npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
+            if [ -z "${MINT_OWNERS:-}" ]; then
+              echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
+            fi
+          fi
 
           # WHICH CONFIG, and the default is the SAFE one.
           #
@@ -366,9 +403,10 @@ jobs:
           # failure src/fleet/push.js spends a page making loud.
           FLEETWRIGHT_APNS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           # The GitHub App's client secret, for the OAuth code exchange. The
-          # App's PRIVATE KEY is deliberately not here and not anywhere — it
-          # mints installation tokens for every installation of the App, so it
-          # belongs to a broker that does not exist yet. See docs/github-app.md.
+          # App's PRIVATE KEY is deliberately not here: it mints installation
+          # tokens for every installation of the App, so the coordinator never
+          # holds it. It goes to the minting Worker, in the step after this one.
+          # See docs/github-app.md.
           FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
           # The Cloudflare OAuth client's secret, for the same exchange against
           # the second provider. The client id and scope list are [vars] in
@@ -403,6 +441,63 @@ jobs:
       - name: Where it landed
         if: steps.creds.outputs.have == 'true'
         run: echo "::notice::Deployed. Point a host at it with FLEETWRIGHT_COORDINATOR_URL — see docs/coordinator-deploy.md."
+
+  # THE APP'S PRIVATE KEY, TO THE MINTING WORKER AND NOWHERE ELSE — in a job of
+  # its own, behind an environment of its own, and only when a person asks.
+  #
+  # The key can mint an installation token for EVERY installation of the App,
+  # and the App is installable on any account. So it is kept out of the deploy
+  # job, which runs on every push to main in the `production` environment:
+  # there it would be one workflow edit away from being printed. Here it is an
+  # ENVIRONMENT secret of `github-app-key`, which an operator protects with a
+  # required reviewer and main-only deployment branches. This job then cannot
+  # start, let alone read the key, until a named person approves it.
+  #
+  # It runs only on a manual run with `sync_app_key` ticked. `wrangler secret
+  # put` stores the key on the Worker, so it is needed once and on rotation,
+  # not on every deploy. The deploy job never sees this secret, and this job
+  # never deploys code.
+  #
+  # Failed rather than skipped when anything is missing, unlike the deploy: this
+  # only runs because a person asked for the key to be synced, so green has to
+  # mean it was. A fork or a fresh clone never ticks the box, so stays green.
+  minter-key:
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.sync_app_key
+    runs-on: ubuntu-latest
+    environment: github-app-key
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '26.10.0'
+      - name: Sync the minting Worker's key
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
+          FLEETWRIGHT_GITHUB_APP_KEY: ${{ secrets.FLEETWRIGHT_GITHUB_APP_KEY }}
+        run: |
+          set -u
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not visible to the github-app-key environment. A secret of the production environment is not: make it a repository secret, or add it to github-app-key as well. See docs/ci.md."
+            exit 1
+          fi
+          config="${WRANGLER_CONFIG:-wrangler.toml}"
+          if ! grep -q '^service = "fleetwright-minter"' "$config"; then
+            echo "::error::$config binds no minting Worker, so there is nowhere to put the App key."
+            exit 1
+          fi
+          if [ -z "${FLEETWRIGHT_GITHUB_APP_KEY:-}" ]; then
+            echo "::error::No FLEETWRIGHT_GITHUB_APP_KEY secret on the github-app-key environment. It is an ENVIRONMENT secret, not a repository one: see docs/github-app.md."
+            exit 1
+          fi
+          # wrangler only: `secret put` uploads a value and bundles nothing,
+          # so the repository root's dependencies are not needed here.
+          npm install --no-audit --no-fund
+          printf '%s' "$FLEETWRIGHT_GITHUB_APP_KEY" | npx wrangler secret put FLEETWRIGHT_GITHUB_APP_KEY --config wrangler.minter.toml
+          echo "synced FLEETWRIGHT_GITHUB_APP_KEY to the minting Worker"
 
   # The one required check for this workflow, for the same reason ci.yml has
   # one: `check` and `container` are skipped on a change that is not in the

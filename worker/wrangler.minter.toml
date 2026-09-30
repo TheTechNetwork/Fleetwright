@@ -1,0 +1,43 @@
+# The minting Worker: the GitHub App's private key, and nothing else.
+#
+#   cd worker && npx wrangler deploy --config wrangler.minter.toml
+#
+# A SEPARATE SCRIPT FROM THE COORDINATOR. The coordinator is internet-facing
+# and this project treats it as compromised, so the key that mints for every
+# installation of the App is not in it. It is here, and the coordinator reaches
+# it through a service binding named MINTER (wrangler.production.toml) to ask
+# for one runner's repository token at a time. src/fleet/minter/answer.js is
+# what it checks, against GitHub, before it signs anything.
+#
+# Read this file as the security boundary: no routes, no workers.dev address,
+# no preview URLs — nothing on the internet can call it — and no binding to
+# anything. It cannot reach the fleet, a session or a host; it can sign a JWT
+# with the App's key and talk to api.github.com.
+name = "fleetwright-minter"
+main = "src/minter.js"
+compatibility_date = "2026-01-15"
+
+workers_dev = false
+preview_urls = false
+
+# WHAT IT NEEDS, none of which is in this file:
+#
+#   FLEETWRIGHT_GITHUB_APP_KEY        SECRET. The App's private key, the PEM
+#                                     GitHub downloads (PKCS#1 is fine). Set
+#                                     with `wrangler secret put --config
+#                                     wrangler.minter.toml`, or by the deploy
+#                                     workflow from the repository secret of
+#                                     the same name. Unset → it mints nothing,
+#                                     and the coordinator asks a permanent box
+#                                     that holds the key instead, if any does
+#   FLEETWRIGHT_GITHUB_CLIENT_ID      the App's client id, the JWT's issuer.
+#                                     Public; the deploy passes it with --var
+#   FLEETWRIGHT_GITHUB_MINT_OWNERS    the GitHub accounts whose repositories
+#                                     it may mint into, comma separated.
+#                                     EMPTY MINTS FOR NOBODY: the App is
+#                                     installable by any account, and this is
+#                                     where "not a guest's" is decided. The
+#                                     deploy passes it with --var
+
+[observability]
+enabled = true

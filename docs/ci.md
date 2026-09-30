@@ -337,12 +337,32 @@ unset:
 | `FLEETWRIGHT_GITHUB_CLIENT_SECRET` | the GitHub App's client secret, for the OAuth code exchange. Optional; without it `connect github` offers the paste route |
 | `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | the Cloudflare OAuth client's secret, same exchange, second provider. Optional; the client id and scope list are `[vars]` in the wrangler config |
 
-And two repository **variables**:
+**One secret is not in that table, and is not a repository secret at all.**
+`FLEETWRIGHT_GITHUB_APP_KEY`, the GitHub App's private key, mints tokens for
+every installation of the App, so no push can reach it. It is an
+**environment secret** of the `github-app-key` environment, which needs a
+required reviewer and deployment branches limited to `main`, and the only job
+that names it is `minter-key`: it runs when somebody starts this workflow by
+hand on `main` with **sync_app_key** ticked, waits for that reviewer, and puts
+the key on `fleetwright-minter` and never on the coordinator. It also needs
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, which it can see only as
+repository secrets or as secrets of `github-app-key` itself, not of
+`production`; it fails, rather than skipping, when either is missing, since a
+person asked for it. It is needed the
+first time and at each rotation, not at each deploy; a Worker secret outlives
+deploys. Optional; without it runners are minted repository tokens by a
+permanent box that holds the key, or reach public code only. See
+`docs/runner-central.md`, and `test/app-key-custody.test.js` for what keeps it
+this way.
+
+And four repository **variables**:
 
 | variable | |
 |---|---|
 | `WRANGLER_CONFIG` | which config the deploy uses. Ours sets `wrangler.production.toml`; unset falls back to the fork-safe `wrangler.toml` — no routes, empty `[vars]` — so a fork running this workflow can never deploy our config by accident |
 | `FLEETWRIGHT_AUTH_ALLOW` | who may sign in: `@yourdomain.com`, or whole addresses. **Empty allows nobody.** A repository variable here, synced to the Worker **as a secret** — it decides who can reach a fleet and must not be a committed var, because Cloudflare keeps vars and secrets in one namespace and a committed var clobbers the synced secret on every deploy |
+| `FLEETWRIGHT_GITHUB_CLIENT_ID` | the GitHub App's client id, passed to the minting Worker at deploy as the issuer of the JWT it signs. Public |
+| `FLEETWRIGHT_GITHUB_MINT_OWNERS` | the GitHub accounts whose repositories the minting Worker may mint runner tokens into, comma separated. **Empty mints for nobody** — the App is installable by any account, and this is where "not a guest's" is decided |
 
 The other two sign-in settings — `FLEETWRIGHT_AUTH_ISSUERS` and
 `FLEETWRIGHT_AUTH_AUDIENCES` — are **not** synced from GitHub: they are public

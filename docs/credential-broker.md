@@ -116,10 +116,12 @@ order trust.md argues for:
 > minting without the broker is a shorter fuse on the same bomb; the broker
 > without minting is already an improvement.
 
-**It does not narrow what a session can reach.** A session that asks for
-`github` gets the same token it used to be handed. Narrowing is what per-session
-minting is for, and that waits on the private-key question in
-[github-app.md](./github-app.md).
+**It does not narrow what a sandboxed session can reach.** A session on a
+permanent box that asks for `github` gets the same token it used to be handed.
+Narrowing is what per-session minting is for, and it is built for **runners**
+first (below) because that is where no token existed at all. Serving a minted
+token to a permanent box's sessions too is the same machinery on a different
+socket, and is not done.
 
 **It does not defend against the session.** A root-capable container that wants
 to keep a copy can keep one. The broker's audience is everything that *isn't*
@@ -151,6 +153,38 @@ credential-broker: refused github for quiet-anchor — not_connected
 empty is *nothing there*. The case that used to collapse them resolved a
 cannot-tell into the box's shared row, which is how a member's pasted GitHub
 token once overwrote the operator's.
+
+## On a runner
+
+A runner has no sandbox, so it has no per-session socket — and no connected
+token to serve from one. It gets **one** broker socket instead, served by its
+sidecar at `FLEETWRIGHT_RUNNER_BROKER` in its private state directory, 0600
+([`runner-broker.js`](../src/fleet/host/runner-broker.js)). Telling sessions
+apart is not needed there: an ephemeral host takes work only from its owner, so
+every session on it is one person's, and an unsandboxed process could open any
+session's socket anyway.
+
+Same route, same body, same client (`sandbox/credential.mjs`), with one
+addition: **`repo`**. A runner is given a token for one repository and has to be
+told which, so its workflow turns on `credential.useHttpPath` and the helper
+forwards git's `path` as `owner/repo`. The sidecar answers from a token it holds
+for that repository, or asks the fleet to mint one — see
+[runner-central.md](./runner-central.md#private-code-on-a-runner) — and **caches
+it in memory** until five minutes before it expires. That is the one departure
+from "nothing is cached", and the reason is cost: the container broker reads a
+file, this one costs a GitHub mint, and git asks on every fetch and push.
+
+| error | means, on a runner |
+|---|---|
+| `no_repo` | git did not say which repository, so there is nothing to scope a token to |
+| `not_connected`, `no_minter` | no permanent box has both the fleet's App key and your GitHub connection — the message names which box lacks which |
+| `not_the_asker` | the job was started by a different GitHub account than the connection answering for you |
+| `owner_not_allowed` | the repository's account is not one this fleet mints into |
+| `unsealed` | the answer did not open with this request's key, so it was not used |
+| `timeout` | the coordinator never answered — one from before repository tokens drops the question |
+
+Every one of them is silence to git, which then falls through exactly as it
+does for a public repository.
 
 ## Upgrading a running fleet
 

@@ -28,6 +28,8 @@ import { loadEnvFile } from '../src/core/env-file.js';
 import { enrolNextStep } from '../src/fleet/host/enrol-next.js';
 import { adoptLegacyEnv } from '../src/fleet/legacy-names.js';
 import { preferExisting, unitName } from '../src/fleet/legacy-paths.js';
+import { loadMinter } from '../src/fleet/host/minter-config.js';
+import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
 // systemd supplies this file with EnvironmentFile=; a shell does not, which is
@@ -71,7 +73,15 @@ Environment:
   FLEETWRIGHT_LABELS             comma-separated scheduler constraints
   FLEETWRIGHT_TRANSPORT          websocket (default) or stdio
   FLEETWRIGHT_HOST_KEY           this host's private key file (default /var/lib/fleetwright-sidecar/host-key.json)
-  FLEETWRIGHT_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip`);
+  FLEETWRIGHT_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip
+
+Repository tokens for runners (docs/runner-central.md) — on ONE permanent box:
+  FLEETWRIGHT_GITHUB_APP_KEY        the GitHub App's private key, a PEM file (or the
+                                    systemd credential github-app-key)
+  FLEETWRIGHT_GITHUB_APP_CLIENT_ID  the App's client id
+  FLEETWRIGHT_GITHUB_MINT_OWNERS    accounts whose repositories may be minted into
+On a runner, set by its workflow:
+  FLEETWRIGHT_RUNNER_BROKER         the unix socket its sessions' git asks for tokens on`);
 }
 
 async function run() {
@@ -160,10 +170,20 @@ async function run() {
  */
 let lastUpdates = null;
 
+// THIS BOX AS A MINTER, from its own configuration and nothing the
+// coordinator sent. Almost every box is not one, and says nothing.
+const mint = loadMinter(cfg.mint);
+if (mint.problem) log.warn(`config: ${mint.problem}`);
+if (mint.minter) log.info(`this box mints repository tokens for runners, into ${mint.minter.owners.join(', ')}`);
+
 const sidecar = new Sidecar({
     hub,
     transport,
     hostId: cfg.hostId,
+    minter: mint.minter,
+    // Present only inside a GitHub Actions job with id-token permission, which
+    // is to say only on a runner.
+    jobToken: actionsJobToken(process.env),
     // WHAT THE OPERATOR SAID. Labels are how work is aimed — `tag: macos` on a
     // start, filtered before ranking — and "gpu", "prod", "noisy-neighbour"
     // are decisions no amount of introspection produces, so they come from
@@ -372,6 +392,22 @@ const sidecar = new Sidecar({
   setInterval(() => void refreshUpdates(), UPDATE_EVERY_MS).unref?.();
 
   await sidecar.start();
+
+  // THE RUNNER'S BROKER, when its workflow asked for one. After start(), so a
+  // clone that asks the moment the socket appears has a coordinator to ask.
+  if (cfg.runnerBroker) {
+    try {
+      await serveRunnerBroker({
+        path: cfg.runnerBroker,
+        answer: (ask) => sidecar.repoCredential(ask),
+        log,
+      });
+    } catch (e) {
+      // Not fatal: the runner still hosts sessions, and they can still reach
+      // public code — which is exactly what a runner could do before this.
+      log.warn(`runner credential broker: ${/** @type {Error} */ (e).message} — sessions here reach public code only`);
+    }
+  }
 
   const shutdown = async (/** @type {string} */ signal) => {
     // Deliberately does NOT stop anything on the hub. The sessions are the

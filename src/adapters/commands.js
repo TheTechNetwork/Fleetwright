@@ -114,6 +114,7 @@ import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } 
 import { readHouseRules, describeHouseRules } from '../core/rules.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
 import { dispatchRunner, checkRunnerRepo, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
+import { checkRepoAccess } from '../core/repo-tokens.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -1489,6 +1490,44 @@ export const COMMANDS = {
       // "can start linux, macos machines" out of prose would break the day the
       // sentence is reworded.
       return { ok: check.ok, text: check.message, runnerRepo: check };
+    },
+  },
+
+  githubaccess: {
+    usage: '/githubaccess <owner/repo>',
+    short: 'Say what your GitHub connection here can do in one repository',
+    help:
+      'Asks GitHub, with YOUR GitHub connection on this box, whose account it is and whether it can read or push '
+      + 'to a repository. Answers with facts, never the token. The sidecar asks this before it mints a runner a '
+      + 'token for that repository, so the token cannot exceed you. See docs/runner-central.md.',
+    run: async (ctx, args) => {
+      const repo = String(args[0] || '');
+      if (!repo) return { ok: false, text: 'Usage: /githubaccess <owner/repo>' };
+      // WHOSE CONNECTION, resolved as runnerrepo resolves it: the person the
+      // verified actor names, never the box's shared row, because the answer
+      // decides what somebody else's runner may be handed.
+      const row = rowForActor(ctx.actor);
+      if (row === null || row === HOST_ROW) {
+        return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
+      }
+      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      if (!token) {
+        return {
+          ok: false,
+          text: 'GitHub is not connected for you on this box, and a runner\u2019s token is checked against your own connection.',
+          needsConnection: 'github',
+        };
+      }
+      const access = await checkRepoAccess({ repo, token });
+      // AS DATA, and only these fields: an id, a login, a name and two
+      // booleans. The shape is what guarantees the token is not among them.
+      return {
+        ok: access.ok,
+        text: access.message,
+        githubAccess: access.ok
+          ? { userId: access.userId, login: access.login, repo: access.repo, pull: access.pull, push: access.push }
+          : null,
+      };
     },
   },
 

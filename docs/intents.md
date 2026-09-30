@@ -136,6 +136,7 @@ and "dead host" is the one it retries.
 | `exchange` | `provider` (`github`\|`cloudflare`), `code`, `clientId`, `origin` | ✅ | sidecar-local — exchanged with the host's PKCE verifier, then `/link` and `/renew` |
 | `provision` | `platform` (`macos`\|`windows`\|`linux`\|`android`), `minutes?` (5–350), `ticket`, `repo?` (v6) | ✅ | `/provision <platform> [minutes]` |
 | `runnerrepo` | `repo` (`owner/repo`, v6) | | `/runnerrepo <owner/repo>` |
+| `mint` | `repo` (`owner/repo`), `job` (a GitHub Actions job token), `key` (a P-256 public key) | | sidecar-local — `/githubaccess <owner/repo>` asks the hub what the person can do there; the token is minted and sealed in the sidecar |
 
 `provision` is the other odd one, and in the opposite direction: every verb
 above acts on a host that has already enrolled, and this one asks for a host to
@@ -152,6 +153,20 @@ before a repository is saved — public, reached by the Fleetwright GitHub App
 with Actions write, and which runner workflows it carries — asked with the
 person's own GitHub connection and changing nothing. See
 [runner-central.md](./runner-central.md#your-own-runner-repository).
+
+`mint` is the one verb nobody calls. A runner sends a `mint` **frame** up its
+own socket when one of its sessions' git asks for a repository; the coordinator
+relays the ask to the minting Worker, a separate script that holds the fleet's
+GitHub App key, over a service binding — that is not this verb at all. Only
+when the Worker holds no key or cannot be reached does the coordinator send this
+verb, as the runner's owner, to each of their permanent boxes in turn until one
+holding the key answers. `dispatch` refuses it from any caller and the
+MCP server does not offer it. Its three params are each held to one shape and
+none of them reaches a command line: the sidecar verifies `job` against GitHub's
+own keys, checks that its audience binds this `repo` to this `key`, asks the hub
+only `/githubaccess <repo>`, and seals the token it mints to `key`. So the reply
+the coordinator relays is ciphertext. See
+[runner-central.md](./runner-central.md#private-code-on-a-runner).
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a

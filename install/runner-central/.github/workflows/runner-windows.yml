@@ -113,6 +113,12 @@ jobs:
           TICKET: ${{ inputs.ticket }}
           CLAIM: ${{ secrets.FLEETWRIGHT_RUNNER_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # NO REPOSITORY TOKENS HERE, unlike the other three. The runner's
+          # credential broker is a unix socket, and Node on Windows listens on
+          # a named pipe instead — a second transport for a workflow that has
+          # not yet been shown to host a session at all. So sessions on this
+          # runner reach public code only, as every runner did before. See
+          # docs/runner-central.md, "Private code on a runner".
         run: |
           [ -n "${TICKET:-}" ] && echo "::add-mask::$TICKET"
           [ -n "${CLAIM:-}" ] && echo "::add-mask::$CLAIM"

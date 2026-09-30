@@ -197,6 +197,15 @@ name = "SIGNIN_RATE_LIMIT"
 namespace_id = "1002"
 simple = { limit = 10, period = 60 }
 
+# THE MINTING WORKER, which holds the GitHub App key so this Worker never does.
+# The coordinator relays a runner's request for a repository token to it and
+# relays back an answer sealed to that runner. See wrangler.minter.toml, which
+# the deploy workflow ships BEFORE this one, so the binding always has
+# something to point at.
+[[services]]
+binding = "MINTER"
+service = "fleetwright-minter"
+
 [[durable_objects.bindings]]
 name = "FLEET"
 class_name = "Fleet"
