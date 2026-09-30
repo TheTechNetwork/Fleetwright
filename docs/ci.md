@@ -336,7 +336,24 @@ unset:
 | `FLEETWRIGHT_APNS_KEY` / `_KEY_ID` / `_TEAM_ID` | the `.p8` and its identifiers, for push to iOS. Optional, same fallback |
 | `FLEETWRIGHT_GITHUB_CLIENT_SECRET` | the GitHub App's client secret, for the OAuth code exchange. Optional; without it `connect github` offers the paste route |
 | `FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` | the Cloudflare OAuth client's secret, same exchange, second provider. Optional; the client id and scope list are `[vars]` in the wrangler config |
-| `FLEETWRIGHT_GITHUB_APP_KEY` | the GitHub App's **private key**, for the **minting Worker only** — its own step syncs it to `fleetwright-minter`, never to the coordinator. Optional; without it runners are minted repository tokens by a permanent box that holds the key, or reach public code only. See `docs/runner-central.md` |
+
+**One secret is not in that table, and is not a repository secret at all.**
+`FLEETWRIGHT_GITHUB_APP_KEY`, the GitHub App's private key, mints tokens for
+every installation of the App, so no push can reach it. It is an
+**environment secret** of the `github-app-key` environment, which needs a
+required reviewer and deployment branches limited to `main`, and the only job
+that names it is `minter-key`: it runs when somebody starts this workflow by
+hand on `main` with **sync_app_key** ticked, waits for that reviewer, and puts
+the key on `fleetwright-minter` and never on the coordinator. It also needs
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, which it can see only as
+repository secrets or as secrets of `github-app-key` itself, not of
+`production`; it fails, rather than skipping, when either is missing, since a
+person asked for it. It is needed the
+first time and at each rotation, not at each deploy; a Worker secret outlives
+deploys. Optional; without it runners are minted repository tokens by a
+permanent box that holds the key, or reach public code only. See
+`docs/runner-central.md`, and `test/app-key-custody.test.js` for what keeps it
+this way.
 
 And four repository **variables**:
 

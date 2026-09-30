@@ -62,9 +62,10 @@ wider than GitHub says their account reaches. The workflows here already point
 git at it; nothing in this repository changes.
 
 What it takes is on the fleet's side, not this one: the App key as the
-`FLEETWRIGHT_GITHUB_APP_KEY` secret and `FLEETWRIGHT_GITHUB_MINT_OWNERS` as a
-variable in the Fleetwright repository's Actions settings, which the deploy
-hands to the minting Worker. No permanent box is needed. See
+`FLEETWRIGHT_GITHUB_APP_KEY` secret of the Fleetwright repository's
+`github-app-key` environment, synced to the minting Worker by a run somebody
+approves, and `FLEETWRIGHT_GITHUB_MINT_OWNERS` as a repository variable, which
+the deploy hands to it. No permanent box is needed. See
 [`docs/runner-central.md`](../../docs/runner-central.md#private-code-on-a-runner)
 for what bounds the token and why the coordinator cannot read it.
 

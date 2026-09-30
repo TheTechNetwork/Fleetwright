@@ -232,7 +232,7 @@ progress and quietly widens what a single compromised host can reach.
 | App ID | `4758006` | `[vars]` in `wrangler.production.toml` — ours; a fork registers its own App |
 | Client ID | `Iv23liR4EwdP1xDxLt5E` | `[vars]` in `wrangler.production.toml` — appears in every authorize URL |
 | Client secret | *(to generate)* | `wrangler secret put FLEETWRIGHT_GITHUB_CLIENT_SECRET` |
-| Private key | *(generate a fresh one for the minter)* | the **minting Worker**'s secret `FLEETWRIGHT_GITHUB_APP_KEY`, synced from the repository secret of that name — never the coordinator. Or one permanent box instead. See below |
+| Private key | *(generate a fresh one for the minter)* | the **minting Worker**'s secret `FLEETWRIGHT_GITHUB_APP_KEY`, synced by hand from the `github-app-key` environment, behind a required reviewer — never the coordinator, and never a repository secret. Or one permanent box instead. See below |
 
 **The first build needs only the Client ID and the secret.** User-to-server
 OAuth authorizes against
@@ -271,7 +271,10 @@ needs no slug at all.
 > installable by any account. One permanent box can hold the key instead, for
 > a fleet that would rather keep it off Cloudflare. What that moves is where
 > the trust sits: the Cloudflare account, and whoever can deploy to it, can
-> replace the minter's code. What follows about THIS key still holds: it should
+> replace the minter's code. The key itself is an environment secret of
+> `github-app-key` with a required reviewer, reached by one job that runs only
+> by hand on `main` ([ci.md](./ci.md)), so no push and no workflow edit on
+> another branch can read it. What follows about THIS key still holds: it should
 > not be the one installed. Generate a fresh key and delete this one.
 
 The key exists and is a 2048-bit RSA key. It has not been written to a secret

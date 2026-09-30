@@ -345,7 +345,7 @@ code, which is what this was for.
 
 | setting | where | what |
 |---|---|---|
-| `FLEETWRIGHT_GITHUB_APP_KEY` | a **secret** on the minting Worker, synced by the deploy from the repository secret of the same name | the private key, the PEM GitHub downloads — PKCS#1 as it comes. Never synced to the coordinator: it has its own step in `worker.yml` for exactly that reason |
+| `FLEETWRIGHT_GITHUB_APP_KEY` | a **secret** on the minting Worker, synced from the **environment** secret of the same name in `github-app-key`, by running the Worker workflow by hand with **sync_app_key** ticked and a reviewer approving | the private key, the PEM GitHub downloads — PKCS#1 as it comes. Never synced to the coordinator, and never by the deploy every push runs: it has its own job in `worker.yml`, gated on that environment, for exactly that reason. See [ci.md](./ci.md) |
 | `FLEETWRIGHT_GITHUB_CLIENT_ID` | a repository **variable**, passed to the minting Worker at deploy | the App's client id, the issuer of the ten-minute JWT the key signs |
 | `FLEETWRIGHT_GITHUB_MINT_OWNERS` | a repository **variable**, passed to the minting Worker at deploy | the accounts whose repositories it may mint into. **Empty mints for nobody.** The App is installable by any account, so "this key never mints into a guest's account" is kept here, by what the fleet does, as github-app.md said it would have to be |
 

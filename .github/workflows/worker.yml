@@ -63,6 +63,16 @@ on:
   # exactly the case where those two are different.
   merge_group:
   workflow_dispatch:
+    inputs:
+      # THE ONLY WAY THE APP KEY MOVES. Unticked, a manual run deploys exactly
+      # what a push would. Ticked, it also runs the minter-key job below, which
+      # waits for a reviewer on the `github-app-key` environment before it can
+      # read the key at all. See that job for why it is not part of deploy.
+      sync_app_key:
+        description: 'Also sync the GitHub App key to the minting Worker (needs approval on github-app-key)'
+        required: false
+        default: false
+        type: boolean
 
 # One run per branch. Nothing here cancelled a superseded run before, so a
 # branch pushed three times in a minute kept three builds alive and the answer
@@ -428,14 +438,40 @@ jobs:
             echo "Hosts need none of it: they enrol with a pin and authenticate by signature."
           fi
 
-      # THE APP'S PRIVATE KEY, TO THE MINTING WORKER AND NOWHERE ELSE. A
-      # separate step from the coordinator's secrets so the two can never be
-      # confused by an edit to one loop: this name must never be synced to the
-      # coordinator. Skipped when the repository has no such secret — the
-      # minter then mints nothing and a permanent box holding the key is asked
-      # instead, if any does — or when the coordinator's config binds no minter.
-      - name: Sync the minting Worker's key
+      - name: Where it landed
         if: steps.creds.outputs.have == 'true'
+        run: echo "::notice::Deployed. Point a host at it with FLEETWRIGHT_COORDINATOR_URL — see docs/coordinator-deploy.md."
+
+  # THE APP'S PRIVATE KEY, TO THE MINTING WORKER AND NOWHERE ELSE — in a job of
+  # its own, behind an environment of its own, and only when a person asks.
+  #
+  # The key can mint an installation token for EVERY installation of the App,
+  # and the App is installable on any account. So it is kept out of the deploy
+  # job, which runs on every push to main in the `production` environment:
+  # there it would be one workflow edit away from being printed. Here it is an
+  # ENVIRONMENT secret of `github-app-key`, which an operator protects with a
+  # required reviewer and main-only deployment branches. This job then cannot
+  # start, let alone read the key, until a named person approves it.
+  #
+  # It runs only on a manual run with `sync_app_key` ticked. `wrangler secret
+  # put` stores the key on the Worker, so it is needed once and on rotation,
+  # not on every deploy. The deploy job never sees this secret, and this job
+  # never deploys code.
+  #
+  # Failed rather than skipped when anything is missing, unlike the deploy: this
+  # only runs because a person asked for the key to be synced, so green has to
+  # mean it was. A fork or a fresh clone never ticks the box, so stays green.
+  minter-key:
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.sync_app_key
+    runs-on: ubuntu-latest
+    environment: github-app-key
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '26.10.0'
+      - name: Sync the minting Worker's key
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -444,21 +480,24 @@ jobs:
           FLEETWRIGHT_GITHUB_APP_KEY: ${{ secrets.FLEETWRIGHT_GITHUB_APP_KEY }}
         run: |
           set -u
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not visible to the github-app-key environment. A secret of the production environment is not: make it a repository secret, or add it to github-app-key as well. See docs/ci.md."
+            exit 1
+          fi
           config="${WRANGLER_CONFIG:-wrangler.toml}"
           if ! grep -q '^service = "fleetwright-minter"' "$config"; then
-            echo "$config binds no minting Worker, so there is nowhere to put the App key."
-            exit 0
+            echo "::error::$config binds no minting Worker, so there is nowhere to put the App key."
+            exit 1
           fi
           if [ -z "${FLEETWRIGHT_GITHUB_APP_KEY:-}" ]; then
-            echo "::notice::No FLEETWRIGHT_GITHUB_APP_KEY repository secret, so the minting Worker's key is left as it is in Cloudflare."
-            exit 0
+            echo "::error::No FLEETWRIGHT_GITHUB_APP_KEY secret on the github-app-key environment. It is an ENVIRONMENT secret, not a repository one: see docs/github-app.md."
+            exit 1
           fi
+          # wrangler only: `secret put` uploads a value and bundles nothing,
+          # so the repository root's dependencies are not needed here.
+          npm install --no-audit --no-fund
           printf '%s' "$FLEETWRIGHT_GITHUB_APP_KEY" | npx wrangler secret put FLEETWRIGHT_GITHUB_APP_KEY --config wrangler.minter.toml
           echo "synced FLEETWRIGHT_GITHUB_APP_KEY to the minting Worker"
-
-      - name: Where it landed
-        if: steps.creds.outputs.have == 'true'
-        run: echo "::notice::Deployed. Point a host at it with FLEETWRIGHT_COORDINATOR_URL — see docs/coordinator-deploy.md."
 
   # The one required check for this workflow, for the same reason ci.yml has
   # one: `check` and `container` are skipped on a change that is not in the
