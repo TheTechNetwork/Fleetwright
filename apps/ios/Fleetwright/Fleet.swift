@@ -1323,7 +1323,7 @@ struct Fleet {
                 grants: w.grants ?? updates?.grants,
             )
             return HostHealth(
-                account: account, credential: credential, version: version, updates: next,
+                account: account, credential: credential, usage: usage, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1332,7 +1332,7 @@ struct Fleet {
 
         func withChannel(_ channel: String, pinned: Bool) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, version: version, updates: updates,
+                account: account, credential: credential, usage: usage, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1345,7 +1345,7 @@ struct Fleet {
         /// half-update cannot drift into a state the host never reported.
         func withSandbox(_ sandbox: Sandbox) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, version: version, updates: updates,
+                account: account, credential: credential, usage: usage, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
@@ -1360,7 +1360,7 @@ struct Fleet {
         /// is looking straight at the thing they just changed.
         func withLabels(all: [String], set: [String]) -> HostHealth {
             HostHealth(
-                account: account, credential: credential, version: version, updates: updates,
+                account: account, credential: credential, usage: usage, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
