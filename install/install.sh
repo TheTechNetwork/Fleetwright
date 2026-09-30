@@ -894,6 +894,39 @@ launchd_running() { # launchd_running NAME
   return 1
 }
 
+# LOAD A DAEMON, REPLACING ANY COPY THAT IS LOADED, AND SAY WHY IF IT WON'T.
+#
+# `launchctl bootout` returns before launchd has finished tearing the job down,
+# and a `bootstrap` of the same label in that window fails — "Bootstrap failed:
+# 5: Input/output error" — with the old job gone and nothing in its place. The
+# upgrade path did exactly that on a GitHub macOS runner: the hub logged its
+# SIGTERM and never started again, and the installer said only "did not come
+# back", because bootstrap's own refusal went to /dev/null and launchd_running
+# was never reached to say more.
+#
+# So: bootout, WAIT until launchd no longer knows the label, then bootstrap —
+# retried, since the teardown can outlast the wait on a busy box — and print
+# launchd's own words when it still refuses. Every load of a daemon goes
+# through here; test/install-upgrade.test.js holds that.
+launchd_reload() { # launchd_reload NAME
+  local label="system/network.thetech.$1" plist="/Library/LaunchDaemons/network.thetech.$1.plist"
+  local i err=""
+  launchctl bootout "$label" >/dev/null 2>&1 || true
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    launchctl print "$label" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  for i in 1 2 3; do
+    if err="$(launchctl bootstrap system "$plist" 2>&1)"; then
+      launchd_running "$1"
+      return
+    fi
+    sleep 2
+  done
+  warn "launchd refused to load $1: ${err:-no reason given}"
+  return 1
+}
+
 # Run something as the target user. `sudo` is not guaranteed to exist — a
 # minimal Debian image has none, and neither does a container you are already
 # root in — so fall back to running it directly when we are already that user.
@@ -3161,8 +3194,7 @@ if [ "$WIZARD" = yes ]; then
           # label fails rather than replacing it — the launchd equivalent of
           # the restart-an-active-unit case below, and the same bug it fixes:
           # an upgrade that leaves the old code running while reporting success.
-          launchctl bootout "$label" >/dev/null 2>&1 || true
-          if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$1"; then
+          if launchd_reload "$1"; then
             ok "$1 running"
             return 0
           fi
@@ -3431,8 +3463,7 @@ if [ "$UPGRADE" = 1 ] && [ "$CHECK_ONLY" != 1 ]; then
       label="system/network.thetech.$unit"
       plist="/Library/LaunchDaemons/network.thetech.$unit.plist"
       [ -f "$plist" ] || continue
-      launchctl bootout "$label" >/dev/null 2>&1 || true
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
+      if launchd_reload "$unit"; then
         ok "$unit restarted, on the new code"
       else
         warn "$unit did not come back — sudo launchctl print $label"
@@ -3546,7 +3577,7 @@ if [ -n "$LEGACY_RUNNING" ] && [ "$CHECK_ONLY" != 1 ]; then
       launchctl print "system/network.thetech.$unit" >/dev/null 2>&1 && continue
       [ -f "$plist" ] || continue
       stop_legacy_unit "$unit"
-      if launchctl bootstrap system "$plist" >/dev/null 2>&1 && launchd_running "$unit"; then
+      if launchd_reload "$unit"; then
         ok "$unit running — it was running before the rename"
       else
         warn "$unit was running as $(legacy_unit_for "$unit") and did not start under its new label — sudo launchctl print system/network.thetech.$unit"

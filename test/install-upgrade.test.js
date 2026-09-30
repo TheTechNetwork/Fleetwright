@@ -60,18 +60,36 @@ test('it restarts the services, which is the whole point', () => {
   // Only units that exist, so a unit an older install wrote and this one
   // retired is not a failure about something absent on purpose.
   assert.match(section, /list-unit-files/);
-  // And macOS, which uses launchd and needs bootout before bootstrap —
-  // bootstrap on a loaded label fails rather than replacing it, which is an
-  // upgrade that leaves the old code running while reporting success.
-  assert.match(section, /launchctl bootout/);
-  assert.match(section, /launchctl bootstrap/);
-  // And bootstrap's exit code is not the answer: it says the request was
-  // accepted. The first macOS runner had both daemons at "spawn scheduled"
-  // with EX_CONFIG behind an installer that had printed "running". Every
-  // start on a Mac reads launchd's own state line.
-  assert.match(section, /launchctl bootstrap system "\$plist" >\/dev\/null 2>&1 && launchd_running/);
+  // And macOS, which reloads each daemon through one helper.
+  assert.match(section, /if launchd_reload "\$unit"; then/);
   assert.match(SH, /launchd_running\(\) \{/);
   assert.match(SH.slice(SH.indexOf('launchd_running() {')), /state = /);
+});
+
+test('a Mac daemon is reloaded in one place: bootout, wait for it to go, bootstrap, then read its state', () => {
+  const helper = SH.slice(SH.indexOf('launchd_reload() {'), SH.indexOf('\n}\n', SH.indexOf('launchd_reload() {')));
+  // BOOTOUT FIRST: bootstrap on a loaded label fails rather than replacing it,
+  // an upgrade that leaves the old code running while reporting success.
+  // THEN WAIT: bootout returns before launchd has torn the job down, and a
+  // bootstrap in that window fails with the old job already gone. A GitHub
+  // macOS runner's upgrade did exactly that and printed only "did not come
+  // back", because bootstrap's refusal went to /dev/null.
+  const bootout = helper.indexOf('launchctl bootout');
+  const gone = helper.indexOf('launchctl print "$label" >/dev/null 2>&1 || break');
+  const bootstrap = helper.indexOf('launchctl bootstrap system');
+  assert.ok(bootout >= 0 && gone > bootout && bootstrap > gone, 'bootout, then wait until the label is gone, then bootstrap');
+  // Its refusal is kept and said, not thrown away.
+  assert.match(helper, /err="\$\(launchctl bootstrap system "\$plist" 2>&1\)"/);
+  assert.match(helper, /warn "launchd refused to load \$1: /);
+  // And bootstrap's exit code is not the answer: the first macOS runner had
+  // both daemons at "spawn scheduled" with EX_CONFIG behind an installer that
+  // had printed "running". Every load reads launchd's own state line.
+  assert.match(helper, /launchd_running "\$1"/);
+  // NOWHERE ELSE: a bootstrap outside the helper is the race coming back.
+  const elsewhere = (SH.slice(0, SH.indexOf('launchd_reload() {')) + SH.slice(SH.indexOf('launchd_reload() {') + helper.length))
+    .split('\n')
+    .filter((l) => /^\s*[^#\s].*launchctl bootstrap/.test(l));
+  assert.deepEqual(elsewhere, [], 'a daemon is bootstrapped outside launchd_reload');
 });
 
 test('a launchd daemon is given a PATH that has Homebrew on it', () => {
