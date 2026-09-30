@@ -94,14 +94,23 @@ test('the stored ticket is not the ticket', async () => {
 
 // --- the verb --------------------------------------------------------------
 
-test('provision names a platform and cannot name anything else', () => {
-  // No repository, no workflow, no ref, no inputs. A compromised coordinator can
-  // ask for a Mac; it cannot ask somebody's GitHub token to run something of its
-  // choosing somewhere of its choosing.
-  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['minutes', 'platform', 'ticket']);
+test('provision names a platform, and a repository only as a repository', () => {
+  // No workflow, no ref, no inputs. A compromised coordinator can ask for a
+  // Mac; it cannot ask somebody's GitHub token to run something of its choosing.
+  //
+  // WHERE is a repository since v6, set by the coordinator from the asking
+  // person's own runner repository. That is the capability the config frame
+  // already gave the coordinator for the whole fleet (see config-frame.js),
+  // now per person, and bounded the same two ways: GitHub refuses a dispatch
+  // into anything that person cannot already run workflows in, and what runs
+  // there is one of four fixed workflow files on the default branch.
+  assert.deepEqual(Object.keys(VERBS.provision.params).sort(), ['minutes', 'platform', 'repo', 'ticket']);
   assert.equal(checkParams('provision', { platform: 'macos' }).ok, true);
   assert.equal(checkParams('provision', { platform: 'freebsd' }).ok, false);
-  assert.equal(checkParams('provision', { repo: 'me/mine', platform: 'macos' }).ok, false);
+  assert.equal(checkParams('provision', { repo: 'me/mine', platform: 'macos' }).ok, true);
+  for (const where of ['me/mine/.github/workflows/evil.yml', 'https://evil.example/x', 'me/mine@evil-branch', '../x']) {
+    assert.equal(checkParams('provision', { repo: where, platform: 'macos' }).ok, false, where);
+  }
   assert.equal(checkParams('provision', {}).ok, false);
 });
 
@@ -403,16 +412,23 @@ test('a platform with no workflow is refused before anything is called', async (
 test('a repository that is not owner/repo never reaches a URL', async () => {
   // A repository name goes into an API path, and a value validated only by its
   // caller is validated only until there are two callers.
-  for (const bad of ['../../evil', 'me/runners/../..', '', 'me runners']) {
+  //
+  // Asserted as "nothing was fetched" rather than "it failed": a stub that
+  // throws is turned into "Could not reach GitHub" by the dispatch itself, so
+  // a refusal alone passes even when the URL was built. `../x` and `x/..` did
+  // exactly that — `..` is made of allowed characters.
+  for (const bad of ['../../evil', 'me/runners/../..', '', 'me runners', '../x', 'me/..']) {
+    let fetched = false;
     const r = await dispatchRunner({
       repo: bad,
       platform: 'linux',
       ticket: 'fwt_a_b',
       coordinator: 'https://fleet.example',
       token: 't',
-      fetchImpl: /** @type {any} */ (async () => { throw new Error('should not be called'); }),
+      fetchImpl: /** @type {any} */ (async () => { fetched = true; throw new Error('should not be called'); }),
     });
     assert.equal(r.ok, false, bad);
+    assert.equal(fetched, false, `${bad} reached a URL`);
   }
 });
 

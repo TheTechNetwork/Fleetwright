@@ -113,7 +113,7 @@ import { identity as fleetIdentity, enrol as fleetEnrol } from '../core/fleet-id
 import { readLogs, readSessionLogs, resolveSource, unitInstalled, LOG_SOURCES } from '../core/logs.js';
 import { readHouseRules, describeHouseRules } from '../core/rules.js';
 import { listFiles, readFile, writeFile, copyFile, deleteFile } from '../core/files.js';
-import { dispatchRunner, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
+import { dispatchRunner, checkRunnerRepo, RUNNER_WORKFLOWS, DEFAULT_MINUTES, MAX_MINUTES } from '../core/runners.js';
 
 /**
  * Split a command line into its verb, positional arguments and flags.
@@ -1453,6 +1453,45 @@ export const COMMANDS = {
     },
   },
 
+  runnerrepo: {
+    usage: '/runnerrepo <owner/repo>',
+    short: 'Check a repository as a place to start temporary machines from',
+    help:
+      'Asks GitHub, with YOUR GitHub connection on this box, whether a repository can start runners for you: '
+      + 'that it is public, that the Fleetwright GitHub App reaches it with Actions write, and which runner '
+      + 'workflows it carries. Changes nothing. See docs/runner-central.md.',
+    run: async (ctx, args) => {
+      const repo = String(args[0] || '');
+      if (!repo) return { ok: false, text: 'Usage: /runnerrepo <owner/repo>' };
+      // WHOSE GITHUB, resolved exactly as `provision` resolves it and for the
+      // same reason: the answer is about what THIS PERSON's connection can do
+      // there, and the box's own row would answer for somebody else.
+      const row = rowForActor(ctx.actor);
+      if (row === null || row === HOST_ROW) {
+        return { ok: false, text: 'Could not tell whose GitHub connection to check with.' };
+      }
+      const token = new Connections(ctx.cfg.stateDir).tokenFor(row, 'github');
+      if (!token) {
+        return {
+          ok: false,
+          text:
+            'GitHub is not connected for you on this box, and the check is made with your own connection. '
+            + 'Connect it in the app and check again.',
+          // AS DATA as well as prose: a coordinator with several boxes asks
+          // the next one when this is the only reason, rather than reading it
+          // out of the sentence.
+          needsConnection: 'github',
+        };
+      }
+      const check = await checkRunnerRepo({ repo, token });
+      // THE ANSWER AS DATA, beside the sentence. A screen shows public,
+      // installed and the platforms as three rows, and a row that had to parse
+      // "can start linux, macos machines" out of prose would break the day the
+      // sentence is reworded.
+      return { ok: check.ok, text: check.message, runnerRepo: check };
+    },
+  },
+
   provision: {
     usage: '/provision <macos|windows|linux|android> [minutes]',
     short: 'Ask for a temporary machine that joins the fleet',
@@ -1530,6 +1569,9 @@ export const COMMANDS = {
           text:
             'GitHub is not connected for you on this box, and a runner is dispatched with your own connection. '
             + 'Connect it in the app and ask again \u2014 nothing needs restarting.',
+          // As data, for the same reason as `runnerrepo`'s: nothing was
+          // dispatched, so a coordinator may safely ask the next box.
+          needsConnection: 'github',
         };
       }
 

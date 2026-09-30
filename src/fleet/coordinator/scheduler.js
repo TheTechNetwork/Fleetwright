@@ -238,7 +238,11 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   // that say GitHub is not connected" would be "because it asked a different
   // machine from the one you connected it on" — which nobody can see from the
   // refusal. Naming them is what makes the second attempt work.
-  if (verb === 'provision') {
+  //
+  // `runnerrepo` is the same question asked before the dispatch rather than
+  // during it — is this a repository my GitHub can start machines from — so it
+  // goes where `provision` goes, for every reason above.
+  if (verb === 'provision' || verb === 'runnerrepo') {
     const durable = registry.reachable().filter((h) => !h.ephemeral);
     if (!durable.length) {
       return {

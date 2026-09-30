@@ -44,7 +44,7 @@
 // on any pane that is not exactly 80 columns wide.
 
 import os from 'node:os';
-import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN } from '../protocol/intents.js';
+import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN, REPO_RE } from '../protocol/intents.js';
 import { readConfigFrame } from '../protocol/config-frame.js';
 import { PendingVerifiers } from './pkce.js';
 import { exchangeCode, exchangeCloudflareCode, connectedText } from '../coordinator/oauth.js';
@@ -561,7 +561,13 @@ export class Sidecar {
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
       if (intent.verb === 'provision') {
-        const repo = this.config.get('runnerRepo');
+        // THE PERSON'S OWN REPOSITORY WHEN THE COORDINATOR NAMED ONE, and the
+        // fleet's off the config frame otherwise. Both came from the
+        // coordinator — one per dispatch, one per connection — so neither is
+        // something a caller typed; `repo` is overwritten there whatever a
+        // caller sent, and shape-checked by the protocol before it got here.
+        const own = typeof intent.params?.repo === 'string' && intent.params.repo ? intent.params.repo : '';
+        const repo = own || this.config.get('runnerRepo');
         if (repo) meta.runnerRepo = repo;
         // Normalised to a bare origin. `FLEETWRIGHT_COORDINATOR_URL` is
         // whatever an operator typed — a trailing slash is ordinary — and this
@@ -653,6 +659,16 @@ export class Sidecar {
         // channel beside it: a picker built by parsing the sentence breaks the
         // first time somebody improves the wording.
         ...(r.sandbox ? { sandbox: r.sandbox } : {}),
+        // What a runner repository check found, as data — public, installed,
+        // which platforms — so the app draws three answers rather than parsing
+        // one sentence, and the coordinator saves the name GitHub spells.
+        ...(r.runnerRepo ? { runnerRepo: r.runnerRepo } : {}),
+        // Which connection was missing, when that is the whole refusal. Only
+        // ever a provider name — the reply to a missing token has no token in
+        // it to leak — and it is what lets the coordinator ask the next box.
+        ...(typeof r.needsConnection === 'string' && /^[a-z]{1,20}$/.test(r.needsConnection)
+          ? { needsConnection: r.needsConnection }
+          : {}),
       });
     } catch (e) {
       if (e instanceof HubError) {
@@ -1454,6 +1470,13 @@ export function toCommandLine({ verb, params, actor }) {
       // repository: the coordinator named it on the config frame, and a value
       // this process holds is not a value a caller typed.
       return ['/provision', p.platform, p.minutes].filter((x) => x !== undefined && x !== null).join(' ');
+    case 'runnerrepo':
+      // `owner/repo`, held to that shape by the protocol's pattern before this
+      // is reached — so it is one token with no space, quote or leading dash,
+      // and cannot become a flag. Checked again here because this function is
+      // the last place a malformed one could still become part of a line.
+      if (!REPO_RE.test(String(p.repo || ''))) throw new Error('runnerrepo needs a repository as owner/repo');
+      return `/runnerrepo ${p.repo}`;
     case 'renew':
       // Both are protocol-constrained the same way `link.secret` is — printable
       // ASCII, no whitespace, no quote, no dash to start — so they are two

@@ -256,6 +256,9 @@ function schemaFor(name, spec) {
     default:
       out.type = 'string';
       if (typeof spec.max === 'number') out.maxLength = spec.max;
+      // A value with exactly one correct shape says so, so an agent sends an
+      // `owner/repo` rather than a URL and learns nothing by being refused.
+      if (spec.pattern instanceof RegExp) out.pattern = spec.pattern.source;
   }
   // THE PARAMETER'S OWN WORDS, WHEN IT HAS ANY. A `text` parameter arrived
   // here as `{type: 'string', maxLength: 500}` and nothing else — so an agent

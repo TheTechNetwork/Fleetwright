@@ -1688,6 +1688,7 @@ const OPENAPI = JSON.stringify({
                       "renew",
                       "restore",
                       "resume",
+                      "runnerrepo",
                       "sandbox",
                       "secrets",
                       "start",
