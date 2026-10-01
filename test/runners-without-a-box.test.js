@@ -265,7 +265,7 @@ test('the MCP server on a person\'s own computer starts a runner itself, and ask
   const dispatch = sent.find((s) => s.url.endsWith('/dispatches'));
   assert.equal(dispatch?.auth, 'Bearer gho_mine');
   assert.deepEqual(dispatch?.body, { ref: 'trunk', inputs: { minutes: '30', ticket: 'frt_x', coordinator: 'https://fleet.example' } });
-  for (const s of sent.filter((x) => x.url.startsWith('https://fleet.example'))) {
+  for (const s of sent.filter((x) => new URL(x.url).hostname === 'fleet.example')) {
     assert.ok(!JSON.stringify(s).includes('gho_mine'), 'the GitHub token never goes to the fleet');
   }
   assert.ok(!sent.some((s) => s.url.endsWith('/api/intent')), 'no box was asked');
@@ -278,7 +278,7 @@ test('the MCP server on a person\'s own computer starts a runner itself, and ask
   fleet = { dispatchRoute: false };
   sent.length = 0;
   assert.equal(await call(() => 'gho_mine'), 'a box dispatched it');
-  assert.ok(!sent.some((s) => s.url.startsWith('https://api.github.com')), 'nothing was dispatched twice');
+  assert.ok(!sent.some((s) => new URL(s.url).hostname === 'api.github.com'), 'nothing was dispatched twice');
   // A token lookup that throws is no token, not a failed tool call.
   assert.equal(await call(() => { throw new Error('gh exploded'); }), 'a box dispatched it');
 });
