@@ -875,9 +875,10 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
             // WHERE YOUR MACHINES COME FROM. A public repository of your own,
             // with the Fleetwright GitHub App installed and the runner
             // workflows in it, is what makes Actions minutes free for you.
-            // Saved only after a permanent box has checked it with your GitHub
-            // connection, and the check's answers are shown either way, so a
-            // refusal says which one.
+            // Saved only after it has been checked: by the fleet's minting
+            // Worker as the GitHub App, or by a permanent box with your GitHub
+            // connection where there is no minter. The check's answers are
+            // shown either way, so a refusal says which one.
             if (runnerRepoAnswered) {
                 OutlinedTextField(
                     value = runnerRepoDraft,
@@ -963,6 +964,10 @@ internal fun SettingsPanel(settings: Settings, onDone: () -> Unit) {
                     )
                 }
             }
+
+            // RUNNERS FROM THIS PHONE: its own GitHub sign-in, so starting a
+            // machine needs no permanent box, and your Claude login for them.
+            RunnersFromPhone(settings)
 
             // A MACHINE THAT DOES NOT EXIST YET, beside the pin for one that
             // does. `provision` has been on this phone since runner central

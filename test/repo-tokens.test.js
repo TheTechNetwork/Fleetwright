@@ -227,7 +227,7 @@ test('a coordinator that re-aims the request or reads the answer gets nothing it
     ['its own key to seal to', { tamper: { up: (fr) => ({ ...fr, key: theirKey }) } }, /did not verify/],
     [
       'a changed answer',
-      { tamper: { down: (fr) => (fr.sealed ? { ...fr, sealed: { ...fr.sealed, ct: `A${fr.sealed.ct.slice(1)}` } } : fr) } },
+      { tamper: { down: (fr) => (fr.sealed ? { ...fr, sealed: { ...fr.sealed, ct: `${fr.sealed.ct[0] === 'A' ? 'B' : 'A'}${fr.sealed.ct.slice(1)}` } } : fr) } },
       /did not open/,
     ],
   ];

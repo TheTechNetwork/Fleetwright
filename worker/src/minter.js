@@ -14,6 +14,11 @@
 // each against GitHub rather than against the coordinator's word:
 //
 //   POST /mint            a repository token for a runner (src/fleet/minter/answer.js)
+//   POST /runner-repo     can a runner be started from this repository, asked
+//                         as the App, so setting one needs no permanent box
+//   POST /github/token    a device finishing or renewing its own GitHub
+//                         sign-in, with the client secret that stays here
+//                         (src/fleet/minter/github.js)
 //   POST /claude/key      the key a person seals a Claude login to
 //   POST /claude/deposit  a person deposits, replaces or forgets theirs
 //   POST /claude/login    a runner asks for its owner's (src/fleet/minter/claude.js)
@@ -24,14 +29,15 @@
 
 import { answerMintRequest } from '../../src/fleet/minter/answer.js';
 import { answerDeposit, answerLogin, depositKeyAnswer } from '../../src/fleet/minter/claude.js';
-import { importAppKey } from '../../src/core/repo-tokens.js';
+import { answerGithubToken } from '../../src/fleet/minter/github.js';
+import { importAppKey, checkRunnerRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey } from '../../src/fleet/seal.js';
 
 /** A request is a repository or a login, a job token and a public key. Anything bigger is not one. */
 const MAX_BODY = 16 * 1024;
 
 /** Everything this Worker answers. */
-const ROUTES = ['/mint', '/claude/key', '/claude/deposit', '/claude/login'];
+const ROUTES = ['/mint', '/runner-repo', '/github/token', '/claude/key', '/claude/deposit', '/claude/login'];
 
 /**
  * The imported key, per isolate. Importing is cheap and done once; the PEM it
@@ -155,9 +161,33 @@ export default {
         owners,
       }));
     }
+    if (url.pathname === '/runner-repo') {
+      const pem = String(env.FLEETWRIGHT_GITHUB_APP_KEY || '');
+      const clientId = String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || '');
+      // NOT CONFIGURED IS AN ANSWER, as for /mint, so the coordinator can ask
+      // a permanent box instead when one is there.
+      if (!pem || !clientId) {
+        return json(200, { ok: false, needsMinter: true, error: { code: 'not_a_minter' }, text: 'The minting Worker holds no GitHub App key.' });
+      }
+      let key;
+      try {
+        key = await keyFor(pem);
+      } catch (e) {
+        return json(200, { ok: false, error: { code: 'bad_key' }, text: `The GitHub App key does not load: ${/** @type {Error} */ (e).message}.` });
+      }
+      const check = await checkRunnerRepoForApp({ repo: String(/** @type {any} */ (ask)?.repo || ''), clientId, key });
+      return json(200, { ok: check.ok, runnerRepo: check, text: check.message });
+    }
     const secret = String(env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '');
     /** @type {import('../../src/fleet/minter/claude.js').ClaudeConfig} */
     const claude = { depositKey: secret ? () => depositKeyFor(secret) : null, logins: loginsFrom(env.LOGINS), owners };
+    if (url.pathname === '/github/token') {
+      return json(200, await answerGithubToken(ask, {
+        depositKey: claude.depositKey,
+        clientId: String(env.FLEETWRIGHT_GITHUB_CLIENT_ID || ''),
+        clientSecret: String(env.FLEETWRIGHT_GITHUB_CLIENT_SECRET || ''),
+      }));
+    }
     if (url.pathname === '/claude/key') return json(200, await depositKeyAnswer(claude));
     if (url.pathname === '/claude/deposit') return json(200, await answerDeposit(ask, claude));
     return json(200, await answerLogin(ask, claude));

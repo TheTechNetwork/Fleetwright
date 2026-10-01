@@ -1095,6 +1095,31 @@ export class Coordinator {
       if (req.method === 'DELETE') return json(res, 200, this.core.clearRunnerRepo(requesterFor(client)));
     }
 
+    // A device signing in to GitHub itself — see the Worker's copy.
+    if (p === '/api/github/device') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a GitHub sign-in belongs to a person.' });
+      }
+      if (req.method === 'GET') {
+        const r = this.core.githubDeviceStart(`${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`);
+        return json(res, r.ok ? 200 : 503, r);
+      }
+      if (req.method === 'POST') {
+        const r = await this.core.githubDeviceToken(requesterFor(client), await readJson(req));
+        return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+      }
+    }
+
+    // Start a runner from your own device — see the Worker's copy.
+    if (p === '/api/runners/dispatch' && req.method === 'POST') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first — a runner belongs to a person.' });
+      }
+      const origin = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost'}`;
+      const r = await this.core.prepareRunnerDispatch(requesterFor(client), await readJson(req), origin);
+      return json(res, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422, r);
+    }
+
     // Your Claude login, for your own runners — see the Worker's copy.
     if (p === '/api/claude-login') {
       if (!client?.email) {

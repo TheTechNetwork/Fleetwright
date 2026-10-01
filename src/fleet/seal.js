@@ -96,6 +96,12 @@ export async function claudeBindingFor(key) {
   return CLAUDE_BINDING_PREFIX + toB64Url(new Uint8Array(digest));
 }
 
+/** A device's GitHub sign-in or renewal, sealed on its way to the minter. */
+export const GITHUB_REQUEST_AAD = 'fleetwright-github-request/v1';
+
+/** The GitHub token the minter got for a device, sealed on its way back. */
+export const GITHUB_REPLY_AAD = 'fleetwright-github-reply/v1';
+
 /** The additional data a Claude login is sealed under on its way INTO the minter. */
 export const DEPOSIT_AAD = 'fleetwright-claude-deposit/v1';
 

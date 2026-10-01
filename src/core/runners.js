@@ -340,28 +340,119 @@ export async function checkRunnerRepo({ repo, token, fetchImpl = fetch }) {
       };
     }
 
-    // 3. WHICH RUNNERS IT CAN START. One listing of the workflows directory
-    // rather than four requests, and a missing directory is an ordinary
-    // answer: a repository with no workflows yet.
-    const wf = await get(`/repos/${full}/contents/.github/workflows`);
-    if (!wf.res.ok && wf.res.status !== 404) return { ...out, message: refusal(wf.res, `the workflows in ${full}`) };
-    const files = new Set(
-      (Array.isArray(wf.body) ? wf.body : []).map((/** @type {any} */ f) => String(f?.name || '')),
-    );
-    out.platforms = Object.entries(RUNNER_WORKFLOWS).filter(([, file]) => files.has(file)).map(([p]) => p);
-    out.missing = Object.keys(RUNNER_WORKFLOWS).filter((p) => !out.platforms.includes(p));
-    if (!out.platforms.length) {
-      return {
-        ...out,
-        message:
-          `${full} has none of the runner workflows. Copy install/runner-central/ from the Fleetwright ` +
-          'repository into it, then check again.',
-      };
-    }
+    // 3. WHICH RUNNERS IT CAN START.
+    const refused = await listRunnerWorkflows(full, get, out);
+    if (refused) return refused;
   } catch (e) {
     return { ...out, message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
   }
 
+  return passed(out);
+}
+
+/**
+ * The same check, made by the GitHub App rather than by a person — which is
+ * how the minting Worker makes it, so that setting a runner repository needs no
+ * permanent box holding anybody's GitHub connection.
+ *
+ * The installation is what GitHub said reaches the repository, permissions
+ * and all; `token` is an installation token the caller minted for this one
+ * repository with read access and nothing else, used for the two reads below
+ * and then dropped. What it cannot say is whether the person setting it can
+ * push there — that decides a dispatch, and GitHub answers it when they make
+ * one.
+ *
+ * @param {{ repo: string, installation: { permissions?: Record<string, string> }, token: string,
+ *   fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<RunnerRepoCheck>}
+ */
+export async function checkRunnerRepoAsApp({ repo, installation, token, fetchImpl = fetch }) {
+  const name = String(repo || '');
+  /** @type {RunnerRepoCheck} */
+  const out = {
+    repo: name,
+    public: null,
+    installed: true,
+    actionsWrite: installation?.permissions?.actions === 'write',
+    platforms: [],
+    missing: Object.keys(RUNNER_WORKFLOWS),
+    ok: false,
+    message: '',
+  };
+  if (!REPO_RE.test(name)) return { ...out, message: 'That is not a repository name. Write it as owner/repo.' };
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'fleetwright',
+  };
+  /** @param {string} path */
+  const get = async (path) => {
+    const res = await fetchImpl(`https://api.github.com${path}`, { headers, signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS) });
+    return { res, body: res.ok ? /** @type {any} */ (await res.json()) : null };
+  };
+  try {
+    const r = await get(`/repos/${name}`);
+    if (!r.res.ok) return { ...out, message: refusal(r.res, `the repository ${name}`) };
+    const full = typeof r.body?.full_name === 'string' ? r.body.full_name : name;
+    out.repo = full;
+    out.public = r.body?.private === false;
+    if (!out.public) {
+      return {
+        ...out,
+        message:
+          `${full} is private. A runner repository has to be public: Actions minutes on GitHub's standard ` +
+          'runners are free only there, and a private one would bill every machine to its owner.',
+      };
+    }
+    if (!out.actionsWrite) {
+      return {
+        ...out,
+        message:
+          `The Fleetwright GitHub App reaches ${full} without Actions write, so it cannot start a workflow there. ` +
+          'Accept the updated permissions on the installation, then check again.',
+      };
+    }
+    const refused = await listRunnerWorkflows(full, get, out);
+    if (refused) return refused;
+  } catch (e) {
+    return { ...out, message: `Could not reach GitHub: ${/** @type {Error} */ (e).message}` };
+  }
+  return passed(out);
+}
+
+/**
+ * WHICH RUNNERS A REPOSITORY CAN START. One listing of the workflows directory
+ * rather than four requests, and a missing directory is an ordinary answer: a
+ * repository with no workflows yet. Fills in `out`, and returns a refusal when
+ * there is not one runner workflow there.
+ *
+ * @param {string} full
+ * @param {(path: string) => Promise<{ res: Response, body: any }>} get
+ * @param {RunnerRepoCheck} out
+ * @returns {Promise<RunnerRepoCheck|null>}
+ */
+async function listRunnerWorkflows(full, get, out) {
+  const wf = await get(`/repos/${full}/contents/.github/workflows`);
+  if (!wf.res.ok && wf.res.status !== 404) return { ...out, message: refusal(wf.res, `the workflows in ${full}`) };
+  const files = new Set(
+    (Array.isArray(wf.body) ? wf.body : []).map((/** @type {any} */ f) => String(f?.name || '')),
+  );
+  out.platforms = Object.entries(RUNNER_WORKFLOWS).filter(([, file]) => files.has(file)).map(([p]) => p);
+  out.missing = Object.keys(RUNNER_WORKFLOWS).filter((p) => !out.platforms.includes(p));
+  if (!out.platforms.length) {
+    return {
+      ...out,
+      message:
+        `${full} has none of the runner workflows. Copy install/runner-central/ from the Fleetwright ` +
+        'repository into it, then check again.',
+    };
+  }
+  return null;
+}
+
+/** @param {RunnerRepoCheck} out @returns {RunnerRepoCheck} */
+function passed(out) {
   return {
     ...out,
     ok: true,

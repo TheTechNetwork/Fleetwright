@@ -32,7 +32,7 @@ import path from 'node:path';
 import { log } from '../log.js';
 import { pickCredentialSource, credentialSourceForAccount, noAccountRefusal } from './podman.js';
 import { emailFromActor } from './accounts.js';
-import { runnerAuthFor } from './runner-login.js';
+import { onRunner, runnerAuthFor } from './runner-login.js';
 
 /**
  * Where a direct session's Claude config lives.
@@ -122,6 +122,11 @@ export function ensureDirectConfig(cfg, name, actor, { account: recorded = null,
   trust(dir, cwd, meta);
   stageSettings(cfg, dir);
   log.info(`direct: ${fresh ? 'staged' : 'refreshed'} ${picked.account}'s credential for ${name}`);
+  // A LINKED ACCOUNT ON A RUNNER. The runner repository's ANTHROPIC_API_KEY is
+  // in this host's environment, and the CLI ranks an API key above the login
+  // just staged, so without this the session would bill the repository while
+  // looking signed in as the person. See buildCommand.
+  if (onRunner(cfg)) return { ok: true, dir, account: picked.account, fresh, auth: { kind: 'linked' } };
   return { ok: true, dir, account: picked.account, fresh };
 }
 

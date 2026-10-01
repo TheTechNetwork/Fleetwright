@@ -365,6 +365,17 @@ check it against. Optional; without it the minter keeps no Claude logins and
 runners use their repository's API key. See `docs/runner-central.md`, "Your
 Claude login on a runner".
 
+**`FLEETWRIGHT_GITHUB_CLIENT_SECRET` is synced to the minter by the same run**,
+from whatever that job can see: a repository secret, or a secret of
+`github-app-key`. A copy kept only as a secret of `production` is invisible to
+it, so put one in `github-app-key` if that is where yours is. The minter uses it to finish a
+phone's GitHub sign-in, so the token comes back sealed to the phone and the
+coordinator relays ciphertext. Optional; without it phones start machines
+through a permanent box. **One manual step for an existing fleet:** run the
+workflow by hand on `main` with **sync_app_key** ticked once after this ships,
+or the minter has no copy. See `docs/runner-central.md`, "Without a permanent
+box".
+
 And four repository **variables**:
 
 | variable | |

@@ -383,19 +383,52 @@ export function appReturnUrl({ ok, provider = 'github' }) {
 }
 
 /**
+ * A GitHub sign-in a DEVICE started: the phone made the state and the PKCE
+ * verifier itself, and only it can finish the exchange, through the minting
+ * Worker, which holds the App's client secret (src/fleet/minter/github.js).
+ *
+ * The prefix is how the callback tells one from a box's, which the coordinator
+ * minted and stored. A device's is never stored here: there is nothing to look
+ * up, because all the coordinator does with it is hand the code straight back
+ * to the app, and the code is worthless without the verifier that never left
+ * the phone. The app checks the state is the one it made.
+ */
+export const DEVICE_STATE_RE = /^d\.[A-Za-z0-9_-]{22,128}$/;
+
+/** What a GitHub authorization code looks like, as far as this will pass one on. */
+const CODE_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+/**
+ * Where a device's sign-in goes back to: the app, with the code and its own
+ * state, and nothing from the request but those two values, each checked
+ * against its shape and percent-encoded. The scheme and path are fixed here,
+ * so this cannot be steered anywhere else.
+ *
+ * @param {{ code: unknown, state: unknown }} q
+ * @returns {string|null}  null when either does not look like one
+ */
+export function deviceReturnUrl({ code, state }) {
+  const c = String(code ?? '');
+  const st = String(state ?? '');
+  if (!CODE_RE.test(c) || !DEVICE_STATE_RE.test(st)) return null;
+  return `fleetwright://github?code=${encodeURIComponent(c)}&state=${encodeURIComponent(st)}`;
+}
+
+/**
  * The page a browser lands on afterwards.
  *
  * `provider` picks the heading and travels on the return URL. From a fixed
  * two-value vocabulary, never from the request — the words on this page and
  * the scheme it redirects to must not be steerable by whoever crafted the URL.
  *
- * @param {{ ok: boolean, text: string, installed?: boolean, provider?: string }} result
+ * @param {{ ok: boolean, text: string, installed?: boolean, provider?: string, device?: string|null }} result
  */
-export function callbackPage({ ok, text, installed, provider = 'github' }) {
+export function callbackPage({ ok, text, installed, provider = 'github', device = null }) {
   const which = provider === 'cloudflare' ? 'cloudflare' : 'github';
   const label = which === 'cloudflare' ? 'Cloudflare' : 'GitHub';
   const safe = String(text).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] || c);
-  const back = appReturnUrl({ ok, provider: which });
+  // A device's sign-in goes back with its code; everything else with a yes or no.
+  const back = device || appReturnUrl({ ok, provider: which });
   // The redirect is attempted immediately AND offered as a link. A custom
   // scheme fails silently when the app is not installed — on a desktop
   // browser, or in a private window — so the page has to work on its own

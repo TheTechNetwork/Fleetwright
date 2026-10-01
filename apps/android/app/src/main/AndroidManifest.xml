@@ -153,6 +153,17 @@
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="fleetwright" android:host="connected" />
       </intent-filter>
+      <!--
+        And this phone's own GitHub sign-in coming back (PhoneGitHub.kt). It
+        carries a code, which is no use without the PKCE verifier that never
+        left this app, and a state the app checks is the one it made.
+      -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="fleetwright" android:host="github" />
+      </intent-filter>
     </activity>
 
     <!--

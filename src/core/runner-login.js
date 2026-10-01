@@ -68,8 +68,26 @@ export function saveRunnerLogin(cfg, { email, login, token }) {
 }
 
 /**
- * @typedef {{ kind: 'token', file: string, login: string|null } | { kind: 'key', key: string }} RunnerAuth
+ * @typedef {{ kind: 'token', file: string, login: string|null } | { kind: 'key', key: string } | { kind: 'linked' }} RunnerAuth
+ *   `linked` is a session whose person linked an account, on a runner: its
+ *   credential is the staged file, and the only thing to do is make sure the
+ *   repository's API key in the environment does not outrank it.
  */
+
+/**
+ * Is this host a runner, by the record its sidecar wrote at join? A runner
+ * starts with the runner repository's ANTHROPIC_API_KEY in its environment
+ * whether or not anybody wants it used, which is what the answer is for.
+ *
+ * @param {{ stateDir: string }} cfg
+ */
+export function onRunner(cfg) {
+  try {
+    return JSON.parse(readFileSync(recordFile(cfg), 'utf8'))?.runner === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * How a session started for `email` authenticates on this runner, when it has
