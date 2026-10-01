@@ -315,6 +315,13 @@ test('on a runner the owner’s sessions run on their login and everybody else�
   // config, which is the one it reads, by the key's last twenty characters.
   const state = JSON.parse(readFileSync(join(String(other.dir), '.claude.json'), 'utf8'));
   assert.deepEqual(state.customApiKeyResponses?.approved, [KEY.slice(-20)]);
+  // …and the "running in Bypass Permissions mode" warning, which a real CLI
+  // draws with "No, exit" focused before anything else. A permanent box gets
+  // this from install.sh's settings; a runner never runs install.sh.
+  for (const staged of [owner, other]) {
+    const settings = JSON.parse(readFileSync(join(String(staged.dir), 'settings.json'), 'utf8'));
+    assert.equal(settings.skipDangerousModePermissionPrompt, true);
+  }
 
   // A RUNNER WHOSE OWNER HAS NONE: the key, for them too.
   saveRunnerLogin(cfg, { email: OWNER, login: null, token: null });

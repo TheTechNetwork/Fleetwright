@@ -138,8 +138,36 @@ function stageForRunner(cfg, dir, cwd, account, auth, fresh) {
   writeFileSync(path.join(dir, RUNNER_MARK), `${account ?? ''}\n`, { mode: 0o600 });
   trust(dir, cwd, null, auth.kind === 'key' ? auth.key : null);
   stageSettings(cfg, dir);
+  acceptDangerousMode(dir);
   log.info(`direct: ${path.basename(dir)} runs on ${auth.kind === 'token' ? `${auth.login ?? account}'s deposited Claude login` : 'the runner repository\'s API key'}`);
   return { ok: true, dir, account, fresh, auth };
+}
+
+/**
+ * The CLI's "running in Bypass Permissions mode" warning, answered for a
+ * runner session.
+ *
+ * FOUND BY RUNNING ONE: a session started with --dangerously-skip-permissions
+ * first draws that warning with "No, exit" focused, and waits. A permanent box
+ * never shows it, because install.sh puts `skipDangerousModePermissionPrompt`
+ * in the settings.json stageSettings copies in. A runner never runs
+ * install.sh, so every runner session sat at the warning, whatever credential
+ * it had. A runner is the case the setting is for: a machine destroyed when
+ * its job ends, given to the one person who asked for it. Merged into the
+ * session's own settings, so anything else there stays.
+ *
+ * @param {string} dir
+ */
+function acceptDangerousMode(dir) {
+  const file = path.join(dir, 'settings.json');
+  /** @type {any} */
+  let settings = {};
+  try {
+    settings = JSON.parse(readFileSync(file, 'utf8'));
+  } catch { /* none yet: a runner has no template to copy */ }
+  if (settings.skipDangerousModePermissionPrompt === true) return;
+  settings.skipDangerousModePermissionPrompt = true;
+  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** Beside a runner session's config, in place of `.credentials.json`: whose it is. */
