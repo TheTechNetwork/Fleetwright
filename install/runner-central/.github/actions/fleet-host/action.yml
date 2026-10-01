@@ -133,6 +133,12 @@ runs:
         #
         # Unsandboxed sessions inherit this process's environment, so putting it
         # here is what puts it in front of the CLI.
+        #
+        # THE FALLBACK, NOW. A person who deposited their own Claude login with
+        # the fleet's minting Worker gets their sessions here run on that
+        # instead: the sidecar asks for it when the runner joins, and GitHub's
+        # job token says whose runner this is. Everybody else's run on this
+        # key. See docs/runner-central.md, "Your Claude login on a runner".
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
         # WHERE A SESSION'S GIT ASKS FOR PRIVATE CODE. The sidecar serves this
         # socket and turns each ask into a one-hour token for the one repository
@@ -189,9 +195,9 @@ runs:
         # broken, it is unusable — and those need different sentences, because
         # only one of them names something somebody can go and fix.
         if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-          echo "::notice::Sessions here authenticate with ANTHROPIC_API_KEY. Usage bills to that API account, not to a subscription."
+          echo "::notice::Sessions here run on the owner's deposited Claude login when they have one, and on ANTHROPIC_API_KEY otherwise. The sidecar's log says which."
         else
-          echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions on this host cannot start. Add one in Settings → Secrets → Actions."
+          echo "::warning::No ANTHROPIC_API_KEY secret is set, so sessions here start only if this runner's owner deposited a Claude login. Add a key in Settings → Secrets → Actions for everybody else."
         fi
         sleep "$(( MINUTES * 60 ))"
 

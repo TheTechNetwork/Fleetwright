@@ -10,9 +10,10 @@
 # what it checks, against GitHub, before it signs anything.
 #
 # Read this file as the security boundary: no routes, no workers.dev address,
-# no preview URLs — nothing on the internet can call it — and no binding to
-# anything. It cannot reach the fleet, a session or a host; it can sign a JWT
-# with the App's key and talk to api.github.com.
+# no preview URLs — nothing on the internet can call it — and one binding, to a
+# Durable Object of its own. It cannot reach the fleet, a session or a host; it
+# can sign a JWT with the App's key, open what people seal to its deposit key,
+# keep that in its own storage, and talk to api.github.com.
 name = "fleetwright-minter"
 main = "src/minter.js"
 compatibility_date = "2026-01-15"
@@ -37,7 +38,29 @@ preview_urls = false
 #                                     EMPTY MINTS FOR NOBODY: the App is
 #                                     installable by any account, and this is
 #                                     where "not a guest's" is decided. The
-#                                     deploy passes it with --var
+#                                     deploy passes it with --var. It also says
+#                                     which runner repositories besides a
+#                                     person's own may be given their Claude
+#                                     login
+#   FLEETWRIGHT_MINTER_DEPOSIT_KEY    SECRET. The P-256 key people seal their
+#                                     Claude logins to, as the JWK
+#                                     `node scripts/minter-deposit-key.mjs`
+#                                     prints. Unset → it keeps no Claude
+#                                     logins, and every runner uses its
+#                                     repository's API key, as before
 
 [observability]
 enabled = true
+
+# THE CLAUDE LOGINS PEOPLE DEPOSIT, one row per GitHub account, each still
+# sealed to the deposit key (src/fleet/minter/claude.js). A Durable Object
+# rather than KV so a fork deploys this file as it is: a namespace belongs to
+# the script that declares it and needs no id created first. No other script
+# is bound to it, the coordinator included.
+[[durable_objects.bindings]]
+name = "LOGINS"
+class_name = "ClaudeLogins"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ClaudeLogins"]

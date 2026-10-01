@@ -1558,6 +1558,71 @@
         }
       }
     },
+    "/api/claude-login": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "The key your Claude login is sealed to",
+        "description": "The minting Worker's deposit key, as it states it. The deposit tool compares it with the pin your operator gave you and refuses when they differ, because a coordinator is exactly what would swap it. See docs/runner-central.md, \u201cYour Claude login on a runner\u201d.",
+        "responses": {
+          "200": {
+            "description": "`key`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "503": {
+            "description": "this fleet's minting Worker keeps no Claude logins"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Deposit, replace or forget your Claude login",
+        "description": "`sealed` is a `claude setup-token` and a GitHub token of yours, sealed on your computer to the minting Worker's key, so this coordinator carries it unread. The minter asks GitHub whose account the GitHub token is, keeps the Claude token for that account's runners, and discards the GitHub token. A null Claude token forgets the one kept.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sealed"
+                ],
+                "properties": {
+                  "sealed": {
+                    "type": "object",
+                    "description": "`{ epk, iv, ct }` from src/fleet/seal.js"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "kept or forgotten: `login` (the GitHub account), `forgotten`, `text`"
+          },
+          "400": {
+            "description": "not a sealed login"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "422": {
+            "description": "refused by the minter: `error.code` and `text` say why \u2014 stale, sealed to another key, not a token, or GitHub would not say whose"
+          }
+        }
+      }
+    },
     "/api/enroll/actions": {
       "post": {
         "tags": [

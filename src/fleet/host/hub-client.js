@@ -10,6 +10,7 @@
 //   GET  /api/peek?name=…                     → {name, text} | 404
 //   POST /api/update-evidence      {which}    → {ok, noted, why?}
 //   POST /api/renew-providers      {secrets}  → {ok, results}
+//   POST /api/runner-login         {email, login, token} → {ok, text}
 //   GET  /healthz                             → {ok, host}
 //
 // Three things about that API are worth knowing before reading the sidecar,
@@ -205,6 +206,20 @@ export class HubClient {
     });
     if (r.__status === 404) return null;
     return Array.isArray(r.results) ? r.results : [];
+  }
+
+  /**
+   * Tell the hub what this runner's sessions authenticate with: its owner's
+   * Claude login, or null for "a runner, with none" (src/core/runner-login.js).
+   * The token crosses the loopback once, the way renewal secrets do.
+   *
+   * @param {{ email: string|null, login: string|null, token: string|null }} given
+   * @returns {Promise<{ ok: boolean, text?: string }>}
+   */
+  async runnerLogin(given) {
+    const r = await this.#json('POST', '/api/runner-login', given, this.commandTimeoutMs, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, text: 'fleetwright here is older than runner logins; update it' };
+    return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
   }
 
   /** Liveness only. @returns {Promise<boolean>} */

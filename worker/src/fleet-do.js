@@ -52,6 +52,20 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+/**
+ * One question to the minting Worker, over its service binding.
+ * @param {{ fetch: (url: string, init: RequestInit) => Promise<Response> }} minter
+ * @param {string} path @param {unknown} ask
+ */
+async function minterCall(minter, path, ask) {
+  const res = await minter.fetch(`https://minter.internal${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(ask),
+  });
+  return res.json();
+}
+
 export class Fleet {
   /**
    * @param {DurableObjectState} state
@@ -105,14 +119,10 @@ export class Fleet {
       // all. The coordinator relays; the key is in the other Worker.
       minter: env.MINTER
         ? {
-            mint: async (ask) => {
-              const res = await env.MINTER.fetch('https://minter.internal/mint', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(ask),
-              });
-              return res.json();
-            },
+            mint: async (ask) => minterCall(env.MINTER, '/mint', ask),
+            // People's Claude logins, for their own runners: the same Worker,
+            // the same relay, never readable here (src/fleet/minter/claude.js).
+            claude: async (route, ask) => minterCall(env.MINTER, `/claude/${route}`, ask),
           }
         : null,
     });
@@ -783,6 +793,25 @@ export class Fleet {
         return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
       }
       if (request.method === 'DELETE') return json(this.core.clearRunnerRepo(requesterFor(client)));
+    }
+
+    // YOUR CLAUDE LOGIN, FOR YOUR OWN RUNNERS. GET is the minting Worker's
+    // deposit key, for the deposit tool to compare with the pin its person
+    // was given; PUT carries a login sealed to that key, unread, to the
+    // minter, which decides whose it is from GitHub. See
+    // docs/runner-central.md, "Your Claude login on a runner".
+    if (url.pathname === '/api/claude-login') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first \u2014 a Claude login belongs to a person.' }, 403);
+      }
+      if (request.method === 'GET') {
+        const r = await this.core.claudeLoginKey();
+        return json(r, r.ok ? 200 : 503);
+      }
+      if (request.method === 'PUT') {
+        const r = await this.core.depositClaudeLogin(requesterFor(client), await readJson(request));
+        return json(r, r.ok ? 200 : /** @type {any} */ (r).error?.code === 'bad_params' ? 400 : 422);
+      }
     }
 
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {

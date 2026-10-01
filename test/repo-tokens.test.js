@@ -19,7 +19,8 @@ import { jwtVerify } from 'jose';
 
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
-import { ACTIONS_ISSUER, forgetJwks } from '../src/fleet/coordinator/oidc.js';
+import { forgetJwks } from '../src/fleet/coordinator/oidc.js';
+import { actionsIssuer } from './helpers/actions-issuer.js';
 import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
 import minterWorker from '../worker/src/minter.js';
@@ -28,30 +29,6 @@ const OWNER = 'eli@example.com';
 const CLIENT_ID = 'Iv23liTEST';
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-
-/** GitHub's Actions issuer: a key set for jose, and a signer for job tokens. */
-async function actionsIssuer() {
-  const pair = await crypto.subtle.generateKey(
-    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
-    true,
-    ['sign', 'verify'],
-  );
-  const keys = [{ ...(await crypto.subtle.exportKey('jwk', pair.publicKey)), kid: 'gha', alg: 'RS256', use: 'sig' }];
-  const real = globalThis.fetch;
-  globalThis.fetch = /** @type {any} */ (async (/** @type {any} */ url, /** @type {any} */ init) => {
-    let host = '';
-    try { host = new URL(String(url)).hostname; } catch { /* not a URL */ }
-    return host === 'token.actions.githubusercontent.com' ? json(200, { keys }) : real(url, init);
-  });
-  const b64 = (/** @type {any} */ o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const sign = async (/** @type {any} */ claims) => {
-    const h = b64({ alg: 'RS256', kid: 'gha', typ: 'JWT' });
-    const c = b64({ iss: ACTIONS_ISSUER, exp: Math.floor(Date.now() / 1000) + 600, run_id: '99', run_attempt: '1', ...claims });
-    const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, new TextEncoder().encode(`${h}.${c}`));
-    return `${h}.${c}.${Buffer.from(sig).toString('base64url')}`;
-  };
-  return { sign, restore: () => { globalThis.fetch = real; } };
-}
 
 /** A runner job the owner started, as GitHub would describe it. */
 const RUNNER_JOB = {

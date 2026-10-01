@@ -439,6 +439,8 @@ export class SessionManager {
     let seededAccount = null;
     /** @type {string|null} */
     let configDir = null;
+    /** @type {import('./runner-login.js').RunnerAuth|null} */
+    let runnerAuth = null;
     if (this.cfg.sandbox) {
       // Trust does not live on the host any more: the image bakes
       // hasTrustDialogAccepted for /work, so ~/.claude.json is never mutated
@@ -494,6 +496,7 @@ export class SessionManager {
       }
       if (staged.fresh) seededAccount = staged.account;
       configDir = staged.dir;
+      runnerAuth = staged.auth ?? null;
     }
     this.inFlight.add(name);
     try {
@@ -507,6 +510,7 @@ export class SessionManager {
         // has already done it.
         prompt,
         configDir,
+        runnerAuth,
       });
       // A new life of the container: whatever the CLI last said belongs to the
       // old one, and the pane is the only witness until it speaks again.

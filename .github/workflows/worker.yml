@@ -69,7 +69,7 @@ on:
       # waits for a reviewer on the `github-app-key` environment before it can
       # read the key at all. See that job for why it is not part of deploy.
       sync_app_key:
-        description: 'Also sync the GitHub App key to the minting Worker (needs approval on github-app-key)'
+        description: 'Also sync the GitHub App key and the Claude deposit key to the minting Worker (needs approval on github-app-key)'
         required: false
         default: false
         type: boolean
@@ -458,9 +458,14 @@ jobs:
   # not on every deploy. The deploy job never sees this secret, and this job
   # never deploys code.
   #
-  # Failed rather than skipped when anything is missing, unlike the deploy: this
-  # only runs because a person asked for the key to be synced, so green has to
-  # mean it was. A fork or a fresh clone never ticks the box, so stays green.
+  # The Claude DEPOSIT KEY travels the same way, from the same environment: it
+  # opens every Claude login the minter keeps (docs/runner-central.md, "Your
+  # Claude login on a runner"). Either may be absent, and the one that is keeps
+  # whatever the Worker already holds.
+  #
+  # Failed rather than skipped when both are missing, unlike the deploy: this
+  # only runs because a person asked for a key to be synced, so green has to
+  # mean one was. A fork or a fresh clone never ticks the box, so stays green.
   minter-key:
     needs: deploy
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.sync_app_key
@@ -471,13 +476,18 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: '26.10.0'
-      - name: Sync the minting Worker's key
+      - name: Sync the minting Worker's keys
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_CONFIG: ${{ vars.WRANGLER_CONFIG }}
           FLEETWRIGHT_GITHUB_APP_KEY: ${{ secrets.FLEETWRIGHT_GITHUB_APP_KEY }}
+          # THE KEY PEOPLE SEAL THEIR CLAUDE LOGINS TO, on the same terms as
+          # the App key and for the same reason: whoever reads it can open
+          # every login the minter keeps. Optional — a fleet that keeps no
+          # Claude logins sets none, and its runners use the API key.
+          FLEETWRIGHT_MINTER_DEPOSIT_KEY: ${{ secrets.FLEETWRIGHT_MINTER_DEPOSIT_KEY }}
         run: |
           set -u
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
@@ -486,18 +496,24 @@ jobs:
           fi
           config="${WRANGLER_CONFIG:-wrangler.toml}"
           if ! grep -q '^service = "fleetwright-minter"' "$config"; then
-            echo "::error::$config binds no minting Worker, so there is nowhere to put the App key."
+            echo "::error::$config binds no minting Worker, so there is nowhere to put its keys."
             exit 1
           fi
-          if [ -z "${FLEETWRIGHT_GITHUB_APP_KEY:-}" ]; then
-            echo "::error::No FLEETWRIGHT_GITHUB_APP_KEY secret on the github-app-key environment. It is an ENVIRONMENT secret, not a repository one: see docs/github-app.md."
+          if [ -z "${FLEETWRIGHT_GITHUB_APP_KEY:-}" ] && [ -z "${FLEETWRIGHT_MINTER_DEPOSIT_KEY:-}" ]; then
+            echo "::error::Neither FLEETWRIGHT_GITHUB_APP_KEY nor FLEETWRIGHT_MINTER_DEPOSIT_KEY is a secret of the github-app-key environment. They are ENVIRONMENT secrets, not repository ones: see docs/github-app.md and docs/runner-central.md."
             exit 1
           fi
           # wrangler only: `secret put` uploads a value and bundles nothing,
           # so the repository root's dependencies are not needed here.
           npm install --no-audit --no-fund
-          printf '%s' "$FLEETWRIGHT_GITHUB_APP_KEY" | npx wrangler secret put FLEETWRIGHT_GITHUB_APP_KEY --config wrangler.minter.toml
-          echo "synced FLEETWRIGHT_GITHUB_APP_KEY to the minting Worker"
+          for name in FLEETWRIGHT_GITHUB_APP_KEY FLEETWRIGHT_MINTER_DEPOSIT_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::notice::No $name on the github-app-key environment; the minting Worker keeps the one it has, if any."
+              continue
+            fi
+            printf '%s' "${!name}" | npx wrangler secret put "$name" --config wrangler.minter.toml
+            echo "synced $name to the minting Worker"
+          done
 
   # The one required check for this workflow, for the same reason ci.yml has
   # one: `check` and `container` are skipped on a change that is not in the
