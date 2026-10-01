@@ -85,7 +85,7 @@ runs:
         # dependencies are a typescript compiler and a browser.
         npm ci --omit=dev --no-audit --no-fund
         # renovate: datasource=npm depName=@anthropic-ai/claude-code
-        npm install -g @anthropic-ai/claude-code@2.1.283
+        npm install -g @anthropic-ai/claude-code@2.1.284
         # tmux is installed by the workflow, because that is the part that
         # differs. If it is not here the job has already gone wrong and this is
         # where it should say so — before a machine is enrolled into somebody's
