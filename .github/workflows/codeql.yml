@@ -232,7 +232,7 @@ jobs:
           # Gradle task — and under CodeQL a half-finished build is worse than a
           # failed one, because it uploads a database with holes in it.
           packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
-      - uses: gradle/actions/setup-gradle@v6.3.0
+      - uses: gradle/actions/setup-gradle@v6.4.0
 
       # init BEFORE the build: the extractor works by watching the compiler, so
       # anything compiled before this step is invisible to it.
