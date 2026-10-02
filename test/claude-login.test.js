@@ -24,7 +24,7 @@ import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { forgetJwks } from '../src/fleet/coordinator/oidc.js';
 import { newDepositKey } from '../src/fleet/seal.js';
 import { depositClaudeLogin, MINTER_KEY_PATH } from '../src/fleet/claude-deposit.js';
-import { saveRunnerLogin, runnerTokenFile } from '../src/core/runner-login.js';
+import { saveRunnerLogin, runnerTokenFile, runnerAuthKind } from '../src/core/runner-login.js';
 import { ensureDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
 import { Accounts } from '../src/core/accounts.js';
@@ -373,6 +373,28 @@ test('on a runner the ownerâ€™s sessions run on their login and everybody elseâ€
   const staged = ensureDirectConfig(boxCfg, 'carolbox', 'fleet:carol@example.com', { cwd: join(dir, 'work') });
   assert.equal(staged.ok, true);
   assert.equal(/** @type {any} */ (staged).auth, undefined);
+});
+
+test('a runner tells the fleet what a session with nobody linked runs on', (t) => {
+  // THE RUNNER STARTED FROM A PHONE WAS REFUSED ITS OWN SESSION. Nobody links an
+  // account on a GitHub job, so it reported none linked and the coordinator
+  // called it degraded. This is what it reports instead, and what the
+  // coordinator judges a runner by (registry.js).
+  const dir = mkdtempSync(join(tmpdir(), 'fw-runner-auth-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cfg = { stateDir: join(dir, 'state') };
+  const KEY = 'sk-ant-api03-runner-repository-key-000000000000';
+
+  // Not a runner, or one whose sidecar has not said yet: cannot tell.
+  assert.equal(runnerAuthKind(cfg, { ANTHROPIC_API_KEY: KEY }), null);
+
+  saveRunnerLogin(cfg, { email: OWNER, login: 'eli', token: TOKEN });
+  assert.equal(runnerAuthKind(cfg, {}), 'owner');
+
+  saveRunnerLogin(cfg, { email: OWNER, login: null, token: null });
+  assert.equal(runnerAuthKind(cfg, { ANTHROPIC_API_KEY: KEY }), 'key');
+  // Nothing at all: the one case that is a fault, and is said as one.
+  assert.equal(runnerAuthKind(cfg, {}), 'none');
 });
 
 test('the coordinator answers every ask it will not relay, and never with silence', async () => {

@@ -38,7 +38,7 @@ import { readVariant, sessionImage, pinnedByEnv as sandboxPinnedByEnv } from '..
 import { readHouseRules } from '../core/rules.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
-import { saveRunnerLogin } from '../core/runner-login.js';
+import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault } from '../core/vault-store.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
@@ -232,6 +232,16 @@ export class HttpAdapter {
         claudeAccounts: (() => {
           try {
             return new Accounts(this.cfg.stateDir).list().length;
+          } catch {
+            return null;
+          }
+        })(),
+        // ON A RUNNER, what a session with nobody linked runs on. See
+        // runnerAuthKind: without it the fleet reads "nobody linked" on every
+        // runner as "nothing can start here".
+        runnerAuth: (() => {
+          try {
+            return runnerAuthKind(this.cfg);
           } catch {
             return null;
           }
