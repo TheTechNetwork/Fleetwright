@@ -16,7 +16,7 @@ import Foundation
 ///  2. GitHub sends the browser to the coordinator's callback, which hands the
 ///     code back to this app. The code is no use without the verifier.
 ///  3. The phone seals the code and the verifier to the minting Worker's key
-///     (the pin you saved), and a key of its own for the answer. The minter,
+///     (`minterKey`), and a key of its own for the answer. The minter,
 ///     which holds the App's client secret, makes the exchange with GitHub and
 ///     seals the token back. The coordinator relays two ciphertexts.
 /// Renewal, every eight hours, is the same with the refresh token.
@@ -63,11 +63,19 @@ struct PhoneGitHub {
         return "Saved. This phone seals only to that key."
     }
 
+    /// The key everything this phone sends the minter is sealed to: the pin,
+    /// when one was saved, and otherwise the key the minter gives for itself
+    /// at the fleet's address (Fleet.minterOwnKey).
+    func minterKey(_ fleet: Fleet) async throws -> String {
+        if !settings.minterPin.isEmpty { return settings.minterPin }
+        if let key = await fleet.minterOwnKey() { return key }
+        throw FleetError.message("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+    }
+
     /// Sign in to GitHub on this phone. Opens GitHub's page; returns once it comes back.
     @MainActor
     func signInWith(_ fleet: Fleet) async throws -> String {
-        let pin = settings.minterPin
-        guard !pin.isEmpty else { throw FleetError.message("Save your minter key first. Whoever runs your fleet has it.") }
+        let pin = try await minterKey(fleet)
         let start = try await fleet.githubDeviceStart()
         guard start.ok == true, let clientId = start.clientId, let redirectUri = start.redirectUri else {
             throw FleetError.message(start.text ?? "The fleet cannot start a GitHub sign-in.")
@@ -92,8 +100,7 @@ struct PhoneGitHub {
         guard let expires = held.expiresAt else { return held.accessToken }
         if expires - Date().timeIntervalSince1970 * 1000 > 5 * 60_000 { return held.accessToken }
         guard let refresh = held.refreshToken else { throw FleetError.message("Your GitHub sign-in has expired. Sign in again.") }
-        let pin = settings.minterPin
-        guard !pin.isEmpty else { throw FleetError.message("Save your minter key first.") }
+        let pin = try await minterKey(fleet)
         _ = try await finish(fleet, pin: pin, request: ["grant": "refresh", "refreshToken": refresh])
         guard let renewed = signIn?.accessToken else { throw FleetError.message("Your GitHub sign-in could not be renewed. Sign in again.") }
         return renewed
@@ -159,7 +166,7 @@ struct PhoneGitHub {
             return Fleet.Reply(
                 ok: false,
                 text: "GitHub refused the dispatch (422). \(repo) has \(workflow), but it does not take the inputs this fleet "
-                    + "sends. Update it from install/runner-central/ in the Fleetwright repository.",
+                    + "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                 sessions: nil
             )
         default:
@@ -168,14 +175,11 @@ struct PhoneGitHub {
     }
 
     /// Keep your Claude login with the minter for your runners, or forget it
-    /// (`claudeToken` nil). Sealed to the pin with this phone's GitHub token
+    /// (`claudeToken` nil). Sealed to the minter's key with this phone's GitHub token
     /// inside, which is how the minter learns whose it is without asking the
     /// coordinator.
     func depositClaudeLogin(_ fleet: Fleet, claudeToken: String?) async throws -> String {
-        let pin = settings.minterPin
-        guard !pin.isEmpty else { throw FleetError.message("Save your minter key first. Whoever runs your fleet has it.") }
-        let said = try await fleet.claudeLoginKey()
-        guard said.key == pin else { throw FleetError.message("The fleet's minter has a different key from your pin, so nothing was sent.") }
+        let pin = try await minterKey(fleet)
         let github = try await accessToken(fleet)
         var payload: [String: Any] = ["v": 1, "github": github, "claude": NSNull(), "at": Int(Date().timeIntervalSince1970 * 1000)]
         if let claude = claudeToken?.trimmingCharacters(in: .whitespacesAndNewlines), !claude.isEmpty { payload["claude"] = claude }

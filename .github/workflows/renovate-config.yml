@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   renovate-config:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -48,10 +48,19 @@ jobs:
       # failure this whole job exists for was a config Renovate REJECTED rather
       # than one that was wrong, and that never announces itself.
       #
-      # @latest, and the version is printed: the hosted bot runs a recent
-      # Renovate, and `npx --package renovate` without a tag will reuse whatever
-      # happens to be in the npx cache.
+      # PINNED, and kept current by Renovate itself (the regex manager in
+      # renovate.json that reads the comment below). It was @latest, so the
+      # check ran what the hosted bot runs; then renovate 44.131.1 moved to
+      # @yarnpkg/core 4.9.2 and from that release on npm exits 1 while
+      # resolving it, printing nothing but where its log is. @latest turned
+      # every change to renovate.json red with a failure that was not this
+      # repository's. A pin moves only in a pull request that CI checks, which
+      # is the rule renovate.json states for everything else. The version is
+      # printed so a run says which one judged it.
       - name: Renovate config is valid
+        env:
+          # renovate: datasource=npm depName=renovate
+          RENOVATE_VERSION: '44.131.0'
         run: |
-          npx --yes --package renovate@latest -- renovate-config-validator --version
-          npx --yes --package renovate@latest -- renovate-config-validator --strict
+          npx --yes --package "renovate@$RENOVATE_VERSION" -- renovate-config-validator --version
+          npx --yes --package "renovate@$RENOVATE_VERSION" -- renovate-config-validator --strict

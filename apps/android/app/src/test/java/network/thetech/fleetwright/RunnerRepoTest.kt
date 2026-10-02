@@ -50,6 +50,6 @@ class RunnerRepoTest {
             "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes.",
             describeRunnerRepoSetting(null, "fleet/runners"),
         )
-        assertTrue(describeRunnerRepoSetting(null, null).startsWith("Set a public repository"))
+        assertTrue(describeRunnerRepoSetting(null, null).startsWith("Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template"))
     }
 }

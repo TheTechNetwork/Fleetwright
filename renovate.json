@@ -176,14 +176,13 @@
         "",
         "The three host installs were worse: unpinned, so every runner build took",
         "whatever was latest that morning and the fleet ran a different version",
-        "from the image it is supposed to mirror."
+        "from the image it is supposed to mirror. Two of them now live in",
+        "TheTechNetwork/Fleetwright-Runners-Template, whose renovate.json pins them."
       ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^sandbox/Containerfile$/",
-        "/^\\.github/workflows/ephemeral-mac\\.yml$/",
-        "/^install/runner-central/\\.github/workflows/runner-windows\\.yml$/",
-        "/^install/runner-central/\\.github/actions/fleet-host/action\\.yml$/"
+        "/^\\.github/workflows/ephemeral-mac\\.yml$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG CLAUDE_VERSION=(?<currentValue>\\S+)",
@@ -207,6 +206,20 @@
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+NODE_VERSION=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": [
+        "The Renovate the config check runs, in .github/workflows/renovate-config.yml.",
+        "Pinned there because @latest stopped installing at 44.131.1; this keeps the",
+        "pin moving, one pull request at a time, each checked by the version it proposes."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate-config\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+RENOVATE_VERSION: '(?<currentValue>[^']+)'"
       ]
     }
   ]

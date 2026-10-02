@@ -512,7 +512,7 @@ jobs:
     name: distribute to internal testers
     needs: testflight
     if: needs.testflight.outputs.uploaded == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     # App Store Connect's automatic distribution is now on for the internal
     # group, so assignment happens whether this job runs or not. What is left
@@ -564,7 +564,7 @@ jobs:
     name: distribute to external testers
     needs: testflight
     if: github.event_name == 'release' && needs.testflight.outputs.uploaded == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
@@ -628,7 +628,7 @@ jobs:
     if: >-
       github.event_name == 'release' && !github.event.release.prerelease
       && needs.testflight.outputs.uploaded == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1

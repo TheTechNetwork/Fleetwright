@@ -4,13 +4,16 @@ import SwiftUI
 /// your Claude login for your runners. See PhoneGitHub for how each works and
 /// why nothing between here and the minter can read what this sends.
 ///
-/// In the order a person needs them. The key comes first because the other two
-/// seal to it; the GitHub sign-in second because it is what starts a machine and
+/// In the order a person needs them. The minter's key comes first because the
+/// other two seal to it, and the phone finds it itself at the fleet's address
+/// (PhoneGitHub.minterKey); the field to paste one is drawn only when nothing
+/// answers there. The GitHub sign-in second because it is what starts a machine and
 /// what proves whose Claude login this is; the Claude login last, because it is
 /// optional and the runner repository's API key covers anybody who skips it.
 ///
 /// Every control does something or is not drawn: the sign-in button appears
-/// only once a key is saved, the Claude login only once GitHub is signed in.
+/// only once there is a key to seal to, the Claude login only once GitHub is
+/// signed in.
 /// The same sentences as Android (RunnersFromPhone.kt), which
 /// test/runners-from-phone-in-apps.test.js holds them to.
 ///
@@ -19,6 +22,9 @@ import SwiftUI
 struct RunnersFromPhone: View {
     let settings: Settings
     @State private var pinDraft = ""
+    /// Did the minter answer for its own key? Nil while asking: CANNOT TELL
+    /// yet, which draws neither the sign-in nor the field to paste a key.
+    @State private var minterFound: Bool?
     @State private var signedInAs: String?
     @State private var signedIn = false
     @State private var claudeDraft = ""
@@ -27,6 +33,8 @@ struct RunnersFromPhone: View {
     @State private var failed = false
 
     private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
+
+    private var haveKey: Bool { !settings.minterPin.isEmpty || minterFound == true }
 
     private var signedInLine: String {
         guard let login = signedInAs, !login.isEmpty else { return "Signed in to GitHub." }
@@ -37,7 +45,7 @@ struct RunnersFromPhone: View {
         Text("Runners from this phone")
             .fleetType(.bodyStrong)
         Text("Sign in to GitHub here and this phone starts your machines itself, with no permanent box. "
-             + "The minter key makes sure what this phone sends can be read by your fleet's minter and nothing in between.")
+             + "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.inkDim)
             .onAppear {
@@ -45,17 +53,29 @@ struct RunnersFromPhone: View {
                 signedIn = phone.signedIn
                 signedInAs = phone.signIn?.login
             }
+            .task { minterFound = await Fleet(settings: settings).minterOwnKey() != nil }
 
-        TextField("Minter key from whoever runs your fleet", text: $pinDraft)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .fleetType(.labelMono)
-        Button(busy ? "Checking…" : "Check and save key") {
-            act { try await phone.checkPin(Fleet(settings: settings), pin: pinDraft) }
+        if minterFound == nil && settings.minterPin.isEmpty {
+            Text("Looking for your fleet's minter…")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
         }
-        .disabled(busy || pinDraft.isBlank || pinDraft == settings.minterPin)
 
-        if !settings.minterPin.isEmpty {
+        if minterFound == false {
+            Text("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            TextField("Minter key from whoever runs your fleet", text: $pinDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .fleetType(.labelMono)
+            Button(busy ? "Checking…" : "Check and save key") {
+                act { try await phone.checkPin(Fleet(settings: settings), pin: pinDraft) }
+            }
+            .disabled(busy || pinDraft.isBlank || pinDraft == settings.minterPin)
+        }
+
+        if haveKey {
             if signedIn {
                 Text(signedInLine)
                     .fleetType(.label)

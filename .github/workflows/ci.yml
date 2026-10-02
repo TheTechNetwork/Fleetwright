@@ -78,7 +78,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +141,7 @@ jobs:
   # dependency the local run happened to have installed. VERIFY_SKIP_TESTS
   # leaves the suite to the matrix and runs the other eight checks.
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -304,7 +304,7 @@ jobs:
     name: CI passed
     needs: [test, checks]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Every job above either passed or was skipped
         env:

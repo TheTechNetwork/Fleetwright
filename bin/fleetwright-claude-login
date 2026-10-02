@@ -6,15 +6,15 @@
 //   fleetwright-claude-login           # paste it when asked
 //   fleetwright-claude-login forget    # take it back
 //
-// Configured by environment, the same two variables fleetwright-mcp takes,
-// plus the pin:
+// Configured by environment, the same two variables fleetwright-mcp takes:
 //
 //   FLEETWRIGHT_COORDINATOR_URL   the fleet
 //   FLEETWRIGHT_CREDENTIAL        a device token (fwk_…) from the app
-//   FLEETWRIGHT_MINTER_KEY        the minting Worker's public key, from whoever
-//                                 runs your fleet. Run without it once to see
-//                                 what the fleet says it is, and check that
-//                                 with them before setting it
+//   FLEETWRIGHT_MINTER_KEY        OPTIONAL. The minting Worker's public key,
+//                                 from whoever runs your fleet. Not needed
+//                                 when the minter answers for its own key at
+//                                 the fleet's address, which it does on a fleet
+//                                 deployed with a custom domain; it wins when set
 //   CLAUDE_CODE_OAUTH_TOKEN       the token, instead of pasting it
 //   GH_TOKEN / GITHUB_TOKEN       a GitHub token of yours; otherwise `gh auth
 //                                 token`. Used once, by the minter, to learn

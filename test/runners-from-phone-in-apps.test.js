@@ -35,7 +35,9 @@ test('the words about runners from a phone are the same on both', () => {
   for (const words of [
     'Runners from this phone',
     'Sign in to GitHub here and this phone starts your machines itself, with no permanent box. ',
-    'The minter key makes sure what this phone sends can be read by your fleet\'s minter and nothing in between.',
+    'What this phone sends is sealed to your fleet\'s minter, so nothing in between can read it.',
+    'Looking for your fleet\'s minter…',
+    'This fleet\'s minter does not answer for its own key. Paste the key whoever runs your fleet gave you.',
     'Minter key from whoever runs your fleet',
     'Check and save key',
     'Sign in to GitHub',
@@ -48,10 +50,23 @@ test('the words about runners from a phone are the same on both', () => {
     'Forget my Claude login',
     'The fleet\'s minter has a different key from the one you were given, so nothing was saved. Ask whoever runs your fleet.',
     'It takes a few minutes to boot and then ',
-    'Update it from install/runner-central/ in the Fleetwright repository.',
+    'Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.',
   ]) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+});
+
+test('a phone finds the minter key at the fleet address, and offers to paste one only when nothing answers', () => {
+  // Nobody hunts for a key: the minter answers for its own at a path the
+  // deploy routes past the coordinator (worker/src/minter.js, KEY_PATH). The
+  // field to paste one is the fallback for a fleet with no such route, and is
+  // drawn only then (C-2), never beside a key the phone already has.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.ok(src.includes('/.well-known/fleetwright-minter'), `${name} does not look the minter key up`);
+    const gate = src.indexOf('minterFound == false');
+    assert.ok(gate > 0, `${name} draws the key field whether or not the minter answered`);
+    assert.ok(src.indexOf('Minter key from whoever runs your fleet', gate) > gate, `${name} draws the key field outside the fallback`);
   }
 });
 

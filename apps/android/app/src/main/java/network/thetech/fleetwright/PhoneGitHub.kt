@@ -81,9 +81,19 @@ internal class PhoneGitHub(private val settings: Settings) {
         "Saved. This phone seals only to that key."
     }
 
+    /**
+     * The key everything this phone sends the minter is sealed to: the pin,
+     * when one was saved, and otherwise the key the minter gives for itself
+     * at the fleet's address ([Fleet.minterOwnKey]).
+     */
+    suspend fun minterKey(fleet: Fleet): String =
+        settings.minterPin.ifBlank { null }
+            ?: fleet.minterOwnKey()
+            ?: error("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+
     /** Sign in to GitHub on this phone. Opens GitHub's page; returns once it comes back. */
     suspend fun signInWith(context: Context, fleet: Fleet): Result<String> = runCatching {
-        val pin = settings.minterPin.ifBlank { error("Save your minter key first. Whoever runs your fleet has it.") }
+        val pin = minterKey(fleet)
         val start = fleet.githubDeviceStart()
         if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "The fleet cannot start a GitHub sign-in." })
         val back = DeviceSignIn.run(
@@ -106,7 +116,7 @@ internal class PhoneGitHub(private val settings: Settings) {
         val expires = held.expiresAt ?: return held.accessToken
         if (expires - System.currentTimeMillis() > 5 * 60_000L) return held.accessToken
         val refresh = held.refreshToken ?: error("Your GitHub sign-in has expired. Sign in again.")
-        val pin = settings.minterPin.ifBlank { error("Save your minter key first.") }
+        val pin = minterKey(fleet)
         finish(fleet, pin, JSONObject().put("grant", "refresh").put("refreshToken", refresh))
         return signIn?.accessToken ?: error("Your GitHub sign-in could not be renewed. Sign in again.")
     }
@@ -156,7 +166,7 @@ internal class PhoneGitHub(private val settings: Settings) {
                 422 -> Fleet.Reply(
                     false,
                     "GitHub refused the dispatch (422). $repo has $workflow, but it does not take the inputs this fleet " +
-                        "sends. Update it from install/runner-central/ in the Fleetwright repository.",
+                        "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                     emptyList(),
                 )
                 else -> Fleet.Reply(false, refusal(sent.first, "$workflow in $repo"), emptyList())
@@ -166,14 +176,12 @@ internal class PhoneGitHub(private val settings: Settings) {
 
     /**
      * Keep your Claude login with the minter for your runners, or forget it
-     * ([claudeToken] null). Sealed to the pin with this phone's GitHub token
+     * ([claudeToken] null). Sealed to the minter's key with this phone's GitHub token
      * inside, which is how the minter learns whose it is without asking the
      * coordinator.
      */
     suspend fun depositClaudeLogin(fleet: Fleet, claudeToken: String?): Result<String> = runCatching {
-        val pin = settings.minterPin.ifBlank { error("Save your minter key first. Whoever runs your fleet has it.") }
-        val said = fleet.claudeLoginKey()
-        if (said.optString("key") != pin) error("The fleet's minter has a different key from your pin, so nothing was sent.")
+        val pin = minterKey(fleet)
         val github = accessToken(fleet)
         val payload = JSONObject().put("v", 1).put("github", github)
             .put("claude", claudeToken?.trim()?.ifBlank { null } ?: JSONObject.NULL)

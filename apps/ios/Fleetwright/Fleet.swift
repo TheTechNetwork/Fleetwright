@@ -630,6 +630,19 @@ struct Fleet {
         try JSONDecoder().decode(MinterKey.self, from: try await get("/api/claude-login"))
     }
 
+    /// The minter's key from the minter itself, at the fleet's address. The
+    /// deploy routes this one path past the coordinator (worker/src/minter.js,
+    /// KEY_PATH), so it is a key to seal to that the coordinator did not
+    /// choose, and nobody has to paste a pin. Nil when nothing there answers
+    /// with one: a fleet whose minter was given no route.
+    func minterOwnKey() async -> String? {
+        guard let data = try? await send("GET", "/.well-known/fleetwright-minter", body: nil, authenticated: false),
+              let said = try? JSONDecoder().decode(MinterKey.self, from: data),
+              said.ok == true, let key = said.key, Seal.isKey(key)
+        else { return nil }
+        return key
+    }
+
     /// A Claude login sealed to the minter, for your own runners.
     func depositClaudeLogin(sealed: [String: String]) async throws -> Reply {
         try JSONDecoder().decode(Reply.self, from: try await send("PUT", "/api/claude-login", body: ["sealed": sealed]))

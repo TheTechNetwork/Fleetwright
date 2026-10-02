@@ -23,7 +23,7 @@ import { ensureApiToken } from '../src/core/api-token.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { forgetJwks } from '../src/fleet/coordinator/oidc.js';
 import { newDepositKey } from '../src/fleet/seal.js';
-import { depositClaudeLogin } from '../src/fleet/claude-deposit.js';
+import { depositClaudeLogin, MINTER_KEY_PATH } from '../src/fleet/claude-deposit.js';
 import { saveRunnerLogin, runnerTokenFile } from '../src/core/runner-login.js';
 import { ensureDirectConfig } from '../src/core/direct-config.js';
 import { buildCommand } from '../src/core/claude.js';
@@ -59,7 +59,9 @@ const FLEET_REPO = {
  * The whole path, wired: a person's computer → coordinator → minting Worker,
  * and a runner's sidecar → coordinator → minting Worker → back.
  *
- * @param {{ tamper?: { up?: (frame: any) => any, down?: (frame: any) => any, key?: string } }} [opts]
+ * @param {{ tamper?: { up?: (frame: any) => any, down?: (frame: any) => any, key?: string }, noRoute?: boolean }} [opts]
+ *   `noRoute`: the fleet's deploy gave the minter no path of its own, so the
+ *   key lookup reaches the coordinator, which has none
  */
 async function fleet(opts = {}) {
   forgetJwks();
@@ -106,6 +108,11 @@ async function fleet(opts = {}) {
    * @param {string} person
    */
   const coordinatorFor = (person) => /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
+    // The minter's own path on the fleet's address, answered by the minter
+    // because the deploy routes it there, past the coordinator.
+    if (new URL(url).pathname === MINTER_KEY_PATH) {
+      return opts.noRoute ? json(404, { ok: false }) : minterWorker.fetch(new Request(url), env);
+    }
     assert.equal(new URL(url).pathname, '/api/claude-login');
     if ((init.method || 'GET') === 'GET') return json(200, await core.claudeLoginKey());
     return json(200, await core.depositClaudeLogin({ email: person }, JSON.parse(init.body)));
@@ -241,15 +248,36 @@ test('a runner is told to use its API key whenever the login is not its owner’
   }
 });
 
-test('a deposit goes only to the pinned key, only fresh, and forgetting it sticks', async (t) => {
-  // NO PIN: the fleet's claim is shown for checking, and nothing is sent.
+test('a deposit goes only to the key the minter gives, only fresh, and forgetting it sticks', async (t) => {
+  // NO PIN NEEDED: the minter answers for its key at the fleet's address, and
+  // that is the key the login is sealed to.
   {
     const f = await fleet();
+    const r = await f.depositAs({ pin: null });
+    f.restore();
+    assert.equal(r.ok, true, r.text);
+    assert.equal(f.rows.size, 1);
+  }
+  // NO ROUTE AND NO PIN: nothing but the coordinator says what the key is, so
+  // its claim is shown for checking and nothing is sent.
+  {
+    const f = await fleet({ noRoute: true });
     const r = await f.depositAs({ pin: null });
     f.restore();
     assert.equal(r.code, 'no_pin');
     assert.equal(r.key, f.depositKey);
     assert.equal(f.rows.size, 0);
+  }
+  // A COORDINATOR OFFERING ITS OWN KEY while the minter answers with the real
+  // one: refused with no pin set, before anything is sealed.
+  {
+    const theirs = await newDepositKey();
+    const f = await fleet({ tamper: { key: theirs.publicKey } });
+    const r = await f.depositAs({ pin: null });
+    f.restore();
+    assert.equal(r.code, 'key_mismatch');
+    assert.match(r.text, /not the one its minter gives/);
+    assert.equal(f.toMinter.filter((a) => a.sealed).length, 0);
   }
   // A KEY THAT IS NOT THE PIN, which is what a coordinator reading deposits
   // would have to offer. Refused before sealing, so it receives nothing.

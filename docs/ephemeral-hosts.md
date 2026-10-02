@@ -42,8 +42,8 @@ that would still be accepted if the private half ever leaked out of a build log.
 
 > **Superseded, not removed.** This file still works and is the macOS runner
 > this repository can start for itself. The four-platform version a fleet
-> dispatches lives in [`install/runner-central/`](../install/runner-central/)
-> and is copied into a repository of its own — see
+> dispatches lives in [`Fleetwright-Runners-Template`](https://github.com/TheTechNetwork/Fleetwright-Runners-Template)
+> and a repository of its own is made from it — see
 > [runner-central.md](./runner-central.md).
 
 `workflow_dispatch`. Set the `FLEETWRIGHT_RUNNER_TOKEN` repository (or

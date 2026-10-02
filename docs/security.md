@@ -222,8 +222,9 @@ permanent box"), so two more routes carry something through the coordinator.
 - **`/api/github/device`** relays a phone's GitHub sign-in to the minting
   Worker. The code GitHub sends back passes through the coordinator's callback,
   and is useless without the PKCE verifier, which is only on the phone and in
-  the sealed request. The request is sealed to the minter key the person
-  pinned, and the answer to a key the phone made for that request; the minter
+  the sealed request. The request is sealed to the minter's key, which the
+  phone takes from the minter itself (below), and the answer to a key the
+  phone made for that request; the minter
   makes the exchange with the client secret, which is now in the minter as
   well as the coordinator. What the coordinator can do is deny (drop either
   message) or, holding the secret already, run a sign-in of its own through a
@@ -240,7 +241,7 @@ frame carry every person's GitHub, Cloudflare and Claude credentials and named
 secrets through the coordinator, so they are accounted for here
 ([vault.md](./vault.md)).
 
-- **A person's request** is sealed on their phone to the pinned minter key,
+- **A person's request** is sealed on their phone to the minter's key,
   with their GitHub token inside, and the minter decides whose vault it is
   from GitHub. The coordinator adds which signed-in account sent it, and the
   minter refuses unless that matches the account named inside the seal, so an
@@ -263,6 +264,20 @@ secrets through the coordinator, so they are accounted for here
   secrets, never a refresh token, in 0600 files the box's own sessions are
   given through the broker. That is less than a box holding a linked
   connection, which keeps the refresh token.
+
+**Where the minter's key comes from.** Every phone request and every Claude
+deposit is sealed to the minter's deposit key, which the minter makes and
+keeps in its own Durable Object. Phones and `fleetwright-claude-login` ask the
+minter for it at `/.well-known/fleetwright-minter` on the fleet's hostname, a
+path the deploy routes to the minting Worker; a route runs before the
+coordinator's Custom Domain, so the coordinator's code is never asked and
+cannot answer with a key of its own. The deposit tool also refuses when the
+coordinator names a different key. On a fleet whose deploy gave the minter no
+route, that path reaches the coordinator, which has no such path, so the
+lookup fails and the person is asked for a pin; coordinator code changed to
+answer it would be believed, and changing that code takes the same deploy
+access that could replace the minter's, which is the bound below. A person who
+wants a check outside that bound sets the pin, which wins over the lookup.
 
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture

@@ -32,6 +32,6 @@ final class RunnerRepoTests: XCTestCase {
             describeRunnerRepoSetting(saved: nil, fleet: "fleet/runners"),
             "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes."
         )
-        XCTAssertTrue(describeRunnerRepoSetting(saved: nil, fleet: nil).hasPrefix("Set a public repository"))
+        XCTAssertTrue(describeRunnerRepoSetting(saved: nil, fleet: nil).hasPrefix("Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template"))
     }
 }

@@ -113,7 +113,7 @@ jobs:
   # gets true, because those are the events where a partial view is the thing
   # that ships.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       bundle: ${{ steps.filter.outputs.bundle }}
     steps:
@@ -157,7 +157,7 @@ jobs:
   check:
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -250,7 +250,7 @@ jobs:
     name: the coordinator container runs
     needs: changes
     if: needs.changes.outputs.bundle == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -272,7 +272,7 @@ jobs:
     # nothing. Said here because "it happens to be excluded" is how a queue run
     # eventually ships something nobody merged.
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: production
     steps:
       - uses: actions/checkout@v7.0.1
@@ -328,7 +328,23 @@ jobs:
             # sign-ins are renewed by the same client. Public, like the App's.
             cf_client_id=$(sed -n 's/^FLEETWRIGHT_CLOUDFLARE_CLIENT_ID *= *"\(.*\)"/\1/p' "$config" | head -1)
             [ -n "$cf_client_id" ] && minter_vars+=(--var "FLEETWRIGHT_CLOUDFLARE_CLIENT_ID:$cf_client_id")
-            npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
+            # ITS ONE PUBLIC PATH, on the fleet's own hostname: the deposit
+            # key's public half, which phones and fleetwright-claude-login look
+            # up there instead of anyone pasting a pin (worker/src/minter.js,
+            # KEY_PATH). A route runs before the coordinator's Custom Domain,
+            # so the coordinator never answers it. The hostname is the
+            # coordinator's custom domain; a config with none (wrangler.toml,
+            # a fork on workers.dev) gets no route, and its people paste the
+            # pin as before. A token that cannot write routes costs the route,
+            # not the deploy.
+            minter_host=$(grep -v '^[[:space:]]*#' "$config" | sed -n 's/.*pattern *= *"\([^"/*]*\)", *custom_domain *= *true.*/\1/p' | head -1)
+            minter_route=${minter_host:+$minter_host/.well-known/fleetwright-minter}
+            if [ -n "$minter_route" ] && npx wrangler deploy --config wrangler.minter.toml --route "$minter_route" ${minter_vars[@]+"${minter_vars[@]}"}; then
+              echo "The minting Worker answers https://$minter_route"
+            else
+              [ -n "$minter_route" ] && echo "::warning::The minting Worker could not be given $minter_route, so phones on this fleet need the pin pasted. Check that CLOUDFLARE_API_TOKEN can edit Workers Routes on that zone."
+              npx wrangler deploy --config wrangler.minter.toml ${minter_vars[@]+"${minter_vars[@]}"}
+            fi
             if [ -z "${MINT_OWNERS:-}" ]; then
               echo "::notice::The minting Worker is deployed with no FLEETWRIGHT_GITHUB_MINT_OWNERS variable, so it mints for nobody."
             fi
@@ -463,10 +479,11 @@ jobs:
   # not on every deploy. The deploy job never sees this secret, and this job
   # never deploys code.
   #
-  # The Claude DEPOSIT KEY travels the same way, from the same environment: it
-  # opens every Claude login the minter keeps (docs/runner-central.md, "Your
-  # Claude login on a runner"). Either may be absent, and the one that is keeps
-  # whatever the Worker already holds.
+  # The DEPOSIT KEY can travel the same way, from the same environment, and
+  # normally does not: the minter makes its own and keeps it in its Durable
+  # Object (docs/vault.md, "The minter's key"). Set it only to choose the key.
+  # Any of these may be absent, and the one that is keeps whatever the Worker
+  # already holds.
   #
   # Failed rather than skipped when both are missing, unlike the deploy: this
   # only runs because a person asked for a key to be synced, so green has to
@@ -474,7 +491,7 @@ jobs:
   minter-key:
     needs: deploy
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.sync_app_key
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: github-app-key
     steps:
       - uses: actions/checkout@v7.0.1
@@ -490,8 +507,8 @@ jobs:
           FLEETWRIGHT_GITHUB_APP_KEY: ${{ secrets.FLEETWRIGHT_GITHUB_APP_KEY }}
           # THE KEY PEOPLE SEAL THEIR CLAUDE LOGINS TO, on the same terms as
           # the App key and for the same reason: whoever reads it can open
-          # every login the minter keeps. Optional — a fleet that keeps no
-          # Claude logins sets none, and its runners use the API key.
+          # every login the minter keeps. Optional, and normally unset: the
+          # minter then uses the key it made for itself.
           FLEETWRIGHT_MINTER_DEPOSIT_KEY: ${{ secrets.FLEETWRIGHT_MINTER_DEPOSIT_KEY }}
           # THE APP'S CLIENT SECRET, a second copy for the minter: it finishes
           # a phone's own GitHub sign-in, so the person's token never comes
@@ -499,8 +516,11 @@ jobs:
           FLEETWRIGHT_GITHUB_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_GITHUB_CLIENT_SECRET || secrets.AGENT_FLEET_GITHUB_CLIENT_SECRET }}
           # AND CLOUDFLARE'S, for the same reason: the vault keeps a person's
           # Cloudflare sign-in and renews it in the minter, so it needs the
-          # client the coordinator signs them in with. Optional.
-          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET }}
+          # client the coordinator signs them in with. Optional. Read under
+          # both names, as the coordinator's sync reads it: a repository that
+          # still keeps it as AGENT_FLEET_* gave the coordinator its copy and
+          # the minter nothing.
+          FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: ${{ secrets.FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET || secrets.AGENT_FLEET_CLOUDFLARE_CLIENT_SECRET }}
         run: |
           set -u
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
@@ -521,7 +541,9 @@ jobs:
           npm install --no-audit --no-fund
           for name in FLEETWRIGHT_GITHUB_APP_KEY FLEETWRIGHT_MINTER_DEPOSIT_KEY FLEETWRIGHT_GITHUB_CLIENT_SECRET FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET; do
             if [ -z "${!name:-}" ]; then
-              echo "::notice::No $name on the github-app-key environment; the minting Worker keeps the one it has, if any."
+              # The deposit key missing is the normal case, not news.
+              [ "$name" = FLEETWRIGHT_MINTER_DEPOSIT_KEY ] && continue
+              echo "::notice::No $name among the repository's secrets or the github-app-key environment's; the minting Worker keeps the one it has, if any."
               continue
             fi
             printf '%s' "${!name}" | npx wrangler secret put "$name" --config wrangler.minter.toml
@@ -536,7 +558,7 @@ jobs:
     name: Worker passed
     needs: [changes, check, container]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Every job above either passed or was skipped
         env:

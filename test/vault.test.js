@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint } from '../src/fleet/crypto.js';
-import minterWorker, { ClaudeLogins } from '../worker/src/minter.js';
+import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,7 +48,8 @@ async function minter(extra = {}) {
     FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-secret',
     ...extra,
   };
-  const instance = new ClaudeLogins({ storage: { get: async (k) => rows.get(k), put: async (k, v) => { rows.set(k, structuredClone(v)); } } }, env);
+  const storage = { get: async (/** @type {string} */ k) => rows.get(k), put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); } };
+  let instance = new ClaudeLogins({ storage }, env);
   env.LOGINS = { idFromName: () => 'logins', get: () => ({ fetch: (/** @type {string} */ u, /** @type {any} */ i) => instance.fetch(new Request(u, i)) }) };
 
   /** Who each token belongs to, as GitHub would say. @type {Record<string, { id: number, login: string }>} */
@@ -92,10 +93,10 @@ async function minter(extra = {}) {
   const call = async (path, body) =>
     /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://minter.internal${path}`, { method: 'POST', body: JSON.stringify(body) }), env)).json());
 
-  /** A phone's request, sealed as the phone seals it. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number }} [o] */
+  /** A phone's request, sealed as the phone seals it. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number, to?: string }} [o] */
   const phone = async (body, o = {}) => {
     const reply = await newSealKey();
-    const sealed = await seal({ to: deposit.publicKey, aad: VAULT_REQUEST_AAD, payload: { v: 1, github: 'gho_eli', email: ELI, at: o.at ?? Date.now(), reply: reply.publicKey, ...body } });
+    const sealed = await seal({ to: o.to ?? deposit.publicKey, aad: VAULT_REQUEST_AAD, payload: { v: 1, github: 'gho_eli', email: ELI, at: o.at ?? Date.now(), reply: reply.publicKey, ...body } });
     const r = await call('/vault/device', { sealed, email: o.as ?? o.email ?? ELI });
     if (r.ok) r.answer = await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_REPLY_AAD, sealed: r.sealed });
     return r;
@@ -113,7 +114,11 @@ async function minter(extra = {}) {
 
   /** The coordinator's minter binding, as fleet-do.js makes it. */
   const binding = { vault: (/** @type {string} */ route, /** @type {any} */ ask) => call(`/vault/${route}`, ask) };
-  return { phone, box, rows, calls, binding, restore: () => { globalThis.fetch = real; } };
+  /** The key, as a phone looks it up at the fleet's address. */
+  const lookup = async () => /** @type {any} */ (await (await minterWorker.fetch(new Request(`https://fleet.test${KEY_PATH}`), env)).json());
+  /** The object starting again on the storage it had, as after an eviction. */
+  const restart = () => { instance = new ClaudeLogins({ storage }, env); };
+  return { phone, box, rows, calls, binding, lookup, restart, restore: () => { globalThis.fetch = real; } };
 }
 
 test('a person keeps their credentials once, and only a box they approved by its key is given them', async (t) => {
@@ -219,11 +224,32 @@ test('two boxes asking at once renew one refresh token once', async (t) => {
   assert.equal(m.calls.refresh, 1);
 });
 
-test('a minter with no deposit key keeps no vault, and says so', async (t) => {
+test('a minter nobody gave a key makes its own once, and a phone finds it at the fleet address', async (t) => {
+  // No operator step: the first ask makes the key, every later ask, from any
+  // route and after the object restarts, gets that same key, and what a phone
+  // seals to the looked-up key the vault opens.
   const m = await minter({ FLEETWRIGHT_MINTER_DEPOSIT_KEY: '' });
   t.after(m.restore);
-  const keys = await generateKeyPair();
-  assert.equal((await m.box(keys)).error?.code, 'no_deposit_key');
+  const [a, b] = await Promise.all([m.lookup(), m.lookup()]);
+  assert.equal(a.ok, true, a.text);
+  assert.equal(b.key, a.key, 'two first asks at once made two keys');
+  assert.deepEqual(Object.keys(a).sort(), ['key', 'ok', 'v'], 'the public answer says nothing but the key');
+  m.restart();
+  assert.equal((await m.lookup()).key, a.key, 'the key did not survive the object starting again');
+  const kept = await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' }, { to: a.key });
+  assert.equal(kept.ok, true, kept.text);
+  assert.deepEqual((await m.phone({ op: 'list' }, { to: a.key })).answer.items.map((/** @type {any} */ i) => i.name), ['secret:NPM_TOKEN']);
+});
+
+test('the one public path answers a key and nothing else, and a minter with no storage says it has none', async () => {
+  const env = { FLEETWRIGHT_MINTER_DEPOSIT_KEY: '' };
+  const r = await minterWorker.fetch(new Request(`https://fleet.test${KEY_PATH}`), env);
+  assert.equal(r.status, 503);
+  assert.equal((/** @type {any} */ (await r.json())).error?.code, 'no_deposit_key');
+  // Every other way in is still only what the coordinator's binding sends.
+  for (const req of [new Request('https://fleet.test/vault/box'), new Request(`https://fleet.test${KEY_PATH}`, { method: 'POST', body: '{}' })]) {
+    assert.equal((await minterWorker.fetch(req, env)).status, 404, `${req.method} ${new URL(req.url).pathname}`);
+  }
 });
 
 test('a box asks for its vault through the coordinator, and its sessions use what it was given', async (t) => {
