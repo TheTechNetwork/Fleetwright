@@ -110,6 +110,33 @@ test('a box nobody has linked an account on is degraded, because nothing can sta
   assert.equal(reg.schedulable().length, 0);
 });
 
+test('a runner whose sessions run on its owner\'s login or its repository\'s key is not degraded', () => {
+  // THE RUNNER A PERSON STARTED FROM THEIR PHONE WAS REFUSED THE SESSION IT WAS
+  // STARTED FOR. Nobody links an account on a GitHub job, so it reports none
+  // linked, and this rule called it degraded: the runner joined, the start was
+  // refused, and all that was left was a host. A session there runs on what
+  // the hub reports as runnerAuth, and either of those can start one.
+  for (const runnerAuth of ['owner', 'key']) {
+    const reg = new HostRegistry();
+    reg.connect('gha-runner', () => {});
+    reg.recordHealth('gha-runner', health({ claudeAccounts: 0, runnerAuth }));
+    assert.equal(reg.get('gha-runner')?.state, 'healthy', runnerAuth);
+  }
+});
+
+test('a runner with nothing to run on is degraded, and told the remedy a runner has', () => {
+  // `fleetwright login` on the box is no remedy on a GitHub job nobody has a
+  // shell on. What fixes it is in the app or in the runner repository.
+  const reg = new HostRegistry();
+  reg.connect('gha-runner', () => {});
+  reg.recordHealth('gha-runner', health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  assert.equal(reg.get('gha-runner')?.state, 'degraded');
+  const reason = reg.get('gha-runner')?.reason || '';
+  assert.match(reason, /Keep your Claude login for your runners under You › Credentials/);
+  assert.match(reason, /ANTHROPIC_API_KEY to the runner repository/);
+  assert.doesNotMatch(reason, /fleetwright login/);
+});
+
 test('an older host that does not report accounts is not faulted for it', () => {
   // Absent is cannot-tell, never a fault — the same rule the credential field
   // follows, and the one this codebase keeps having to restate.
