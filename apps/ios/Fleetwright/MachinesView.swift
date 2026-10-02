@@ -27,6 +27,7 @@ struct MachinesView: View {
     @State private var loaded = false
     /// The machine whose page is showing.
     @State private var showing: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Enrolled, and not saying anything: membership with no report.
     private var silent: [Fleet.Host] {
@@ -248,8 +249,14 @@ struct MachinesView: View {
         // A FAILED REQUEST IS NOT AN EMPTY FLEET. A list that was right ten
         // seconds ago is a better answer than nothing, and the next refresh
         // corrects it.
-        if let got = try? await reporting { fleetHosts = got }
-        if let got = try? await enrolled { hosts = got }
+        // A machine that stops reporting moves to the silent cards below, and
+        // one that joins arrives, rather than the list becoming another list.
+        let gotReporting = try? await reporting
+        let gotEnrolled = try? await enrolled
+        withAnimation(Design.Motion.settle(reduceMotion)) {
+            if let got = gotReporting { fleetHosts = got }
+            if let got = gotEnrolled { hosts = got }
+        }
         loaded = true
         openAsked()
     }
