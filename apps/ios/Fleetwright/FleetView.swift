@@ -142,6 +142,10 @@ struct FleetView: View {
     @State private var accepted = 0
     @State private var refused = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Whether this person's Claude login is kept for their runners. Nil until
+    /// asked; see ClaudeKept for why there are four answers.
+    @State private var claude: ClaudeKept?
+    @AppStorage("claudeSetupPutOff") private var claudePutOff = false
 
     var body: some View {
         NavigationStack {
@@ -186,6 +190,15 @@ struct FleetView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint(openHint(summary.unwell))
                     .fleetRow()
+                }
+                // THE ONBOARDING ASK, under the line that says whether anything
+                // needs you. A session runs on its starter's own Claude account,
+                // and a runner started with none kept refused the session it was
+                // started for, with nothing on the way there having asked.
+                if !claudePutOff, claude == .missing || claude == .needsGitHub,
+                   settings.configured, !Demo.isActive(settings.coordinatorURL) {
+                    ClaudeSetupCard(settings: settings) { claudePutOff = true }
+                        .fleetRow()
                 }
                 if !status.isBlank {
                     // THE COORDINATOR'S OWN WORDS, on an inner surface rather
@@ -292,6 +305,11 @@ struct FleetView: View {
             .scrollContentBackground(.hidden)
             .background(Design.Palette.bg)
             .refreshable { await refresh() }
+            // Asked again when the fleet or this phone's GitHub sign-in changes,
+            // and whenever the list comes back into view, which is how a login
+            // kept on the setup page takes the card away.
+            .task(id: "\(settings.credential)|\(settings.githubSignIn)") { claude = await claudeKept(settings) }
+            .onAppear { Task { claude = await claudeKept(settings) } }
             // FELT, NOT ONLY SEEN. Stop, Resume and an answer each say whether
             // the fleet took them, in the hand, because this is read on a phone
             // held at arm's length at night and a quoted reply at the top of a
@@ -483,7 +501,11 @@ struct FleetView: View {
                 )
                 let text = reply.text ?? "Started."
                 await MainActor.run { status = text }
-                LocalNotice.post(title: "Session ready", body: text)
+                // BY WHAT THE FLEET SAID, not by whether it answered. A refusal
+                // is an answer, and "Session ready" over "unknown (connected,
+                // no health report yet)" told somebody to go and look at a
+                // session that did not exist.
+                LocalNotice.post(title: reply.ok == false ? "Could not start a session" : "Session ready", body: text)
             } catch {
                 // A TIMEOUT IS NOT A FAILURE: `start` is mutating and carries
                 // an idempotency key, so the session may well exist. Saying
