@@ -1394,6 +1394,11 @@ export class Sidecar {
         // the ordinary state of every box and stopped meaning anything.
         // Additive — an older host sends nothing and is not faulted for it.
         claudeAccounts: typeof state.claudeAccounts === 'number' ? state.claudeAccounts : null,
+        // On a runner, what a session with nobody linked runs on: 'owner',
+        // 'key' or 'none' (src/core/runner-login.js). The coordinator judges a
+        // runner by this rather than by claudeAccounts, which is always zero
+        // on a GitHub job. Null off a runner and from an older hub.
+        runnerAuth: ['owner', 'key', 'none'].includes(state.runnerAuth) ? state.runnerAuth : null,
         // The account this box runs on, for the app's settings screen: which
         // plan, which org, which address. Not a secret — it is what
         // `fleetwright login status` prints on the box — and it is the
@@ -1484,6 +1489,7 @@ export class Sidecar {
       sessions: null,
       loggedIn: null,
       claudeAccounts: null,
+      runnerAuth: null,
     };
   }
 

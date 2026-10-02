@@ -91,6 +91,33 @@ export function onRunner(cfg) {
 }
 
 /**
+ * On a runner, what a session with no linked account runs on, for the health
+ * frame: the owner's kept Claude login, the runner repository's API key, or
+ * nothing. Null when this is not a runner, or its sidecar has not said yet.
+ *
+ * WHY THE FLEET NEEDS IT. Nobody links an account on a GitHub job, so a runner
+ * reports none linked, and the coordinator used to read that as "nothing can
+ * start here": it marked the runner degraded and refused the very session the
+ * runner was started for. This is the answer that question actually has here.
+ *
+ * @param {{ stateDir: string }} cfg
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {'owner'|'key'|'none'|null}
+ */
+export function runnerAuthKind(cfg, env = process.env) {
+  /** @type {any} */
+  let record = null;
+  try {
+    record = JSON.parse(readFileSync(recordFile(cfg), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (record?.runner !== true) return null;
+  if (record.token && existsSync(runnerTokenFile(cfg))) return 'owner';
+  return env.ANTHROPIC_API_KEY ? 'key' : 'none';
+}
+
+/**
  * How a session started for `email` authenticates when it has no linked
  * account: on a runner, or on any box the person's vault gave a Claude token
  * to — or null when there is no answer here, which is the refusal it always
