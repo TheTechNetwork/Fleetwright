@@ -70,6 +70,20 @@ test('a phone finds the minter key at the fleet address, and offers to paste one
   }
 });
 
+test('a phone seals to the key the minter answers with, and a saved one only when it does not answer', () => {
+  // A key saved before the minter's was rotated must not win: a phone that
+  // preferred it sealed every GitHub sign-in to the old key and failed. So in
+  // the one function both phones seal through, the lookup comes before the
+  // saved key.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    const body = src.slice(src.search(/func? minterKey\(/));
+    const lookup = body.indexOf('minterOwnKey()');
+    const saved = body.indexOf('settings.minterPin');
+    assert.ok(lookup >= 0 && saved >= 0, `${name} lost its minterKey`);
+    assert.ok(lookup < saved, `${name} prefers a saved key over the one the minter answers with`);
+  }
+});
+
 test('a phone signed in to GitHub starts the machine itself, and one that is not still can', () => {
   // The whole point: no permanent box when the phone can dispatch. And the
   // fallback stays, because a fleet with a box and a person who never signs

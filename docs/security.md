@@ -276,8 +276,11 @@ coordinator names a different key. On a fleet whose deploy gave the minter no
 route, that path reaches the coordinator, which has no such path, so the
 lookup fails and the person is asked for a pin; coordinator code changed to
 answer it would be believed, and changing that code takes the same deploy
-access that could replace the minter's, which is the bound below. A person who
-wants a check outside that bound sets the pin, which wins over the lookup.
+access that could replace the minter's, which is the bound below. A phone uses
+a saved key only when the lookup fails, so a rotated key cannot leave it
+sealing to the old one; `fleetwright-claude-login` takes `FLEETWRIGHT_MINTER_KEY`
+over the lookup, for a person who wants a check outside that bound and sets it
+for the one run.
 
 **The minting Worker's own bound, which is a different compromise.** Whoever
 can deploy to the Cloudflare account can replace the minter's code and capture

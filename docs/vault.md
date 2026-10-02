@@ -131,11 +131,12 @@ coordinator is which key that is. Nobody hunts for it:
   coordinator's own hostname, and a route runs before the coordinator's Custom
   Domain, so the coordinator never sees the request. The answer is the public
   half and nothing else.
-- **The phone asks there**, from the fleet address it already has. A key saved
-  by hand still wins. Only when nothing answers there, which is a fleet whose
-  deploy gave the minter no route, does the phone show a field to paste the key
-  whoever runs the fleet gave you, and that key is checked against what the
-  coordinator says before it is saved.
+- **The phone asks there**, from the fleet address it already has, every time
+  it seals something, so a rotated key reaches every phone with nothing to
+  paste. Only when nothing answers there, which is a fleet whose deploy gave
+  the minter no route, does the phone show a field to paste the key whoever
+  runs the fleet gave you, checked against what the coordinator says before it
+  is saved, and only then is a saved key used.
 
 What this trusts is the Cloudflare account that serves both Workers, which is
 already the minter's bound (below): code deployed there could read every vault

@@ -82,13 +82,19 @@ internal class PhoneGitHub(private val settings: Settings) {
     }
 
     /**
-     * The key everything this phone sends the minter is sealed to: the pin,
-     * when one was saved, and otherwise the key the minter gives for itself
-     * at the fleet's address ([Fleet.minterOwnKey]).
+     * The key everything this phone sends the minter is sealed to: the one
+     * the minter gives for itself at the fleet's address ([Fleet.minterOwnKey]),
+     * and a key saved by hand only when nothing answers there.
+     *
+     * THE MINTER'S ANSWER FIRST, because a saved key goes stale and nobody
+     * notices: when the minter's key is rotated, a phone that preferred what
+     * it saved would seal every sign-in to the old key and fail, with nothing
+     * on the screen saying why. A key is saved only on a fleet whose minter
+     * does not answer, which is the case it is for.
      */
     suspend fun minterKey(fleet: Fleet): String =
-        settings.minterPin.ifBlank { null }
-            ?: fleet.minterOwnKey()
+        fleet.minterOwnKey()
+            ?: settings.minterPin.ifBlank { null }
             ?: error("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
 
     /** Sign in to GitHub on this phone. Opens GitHub's page; returns once it comes back. */
