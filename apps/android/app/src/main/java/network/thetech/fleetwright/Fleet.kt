@@ -2162,6 +2162,14 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("viewAsMember", false)
         set(value) = prefs.edit().putBoolean("viewAsMember", value).apply()
 
+    /**
+     * "Not now" on the Claude setup card on Sessions, remembered on this phone:
+     * a card that cannot be put away is a card people learn not to read.
+     */
+    var claudeSetupPutOff: Boolean
+        get() = prefs.getBoolean("claudeSetupPutOff", false)
+        set(value) = prefs.edit().putBoolean("claudeSetupPutOff", value).apply()
+
     /** Who this device is signed in as. Not a secret — it is displayed. */
     var signedInAs: String
         get() = prefs.getString("signedInAs", "") ?: ""

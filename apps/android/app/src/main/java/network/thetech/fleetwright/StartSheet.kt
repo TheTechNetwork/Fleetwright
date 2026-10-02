@@ -122,6 +122,12 @@ fun StartSheet(
     // snapshot. The new-machine choices are drawn from this and only this, so
     // a fleet with no runner repository offers none (C-2).
     var canStartMachine by remember { mutableStateOf(false) }
+    /**
+     * Whether a Claude login is kept for this person's runners. A new machine
+     * started without one, and with no API key in the runner repository,
+     * refuses the session it was started for, so this sheet says so.
+     */
+    var claude by remember { mutableStateOf<ClaudeKept?>(null) }
     // The operating system when a new machine is chosen, else empty.
     var platform by remember { mutableStateOf("") }
     var machineMinutes by remember { mutableIntStateOf(60) }
@@ -157,6 +163,7 @@ fun StartSheet(
         // Whether a new machine can be offered. A failure offers none, which
         // is the safe way round for a control that spends money.
         canStartMachine = Fleet(settings).runners().getOrNull() != null
+        if (canStartMachine) claude = claudeKept(settings)
     }
 
     AlertDialog(
@@ -355,6 +362,18 @@ fun StartSheet(
                             }
                         }
                     }
+                }
+                // ASKED WHERE IT MATTERS: a runner fetches its owner's Claude
+                // login when it joins, and nothing said so until after it had.
+                if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
+                    SectionHead("Claude")
+                    Text(
+                        "No Claude login is kept for your runners, so this one runs on the runner repository's " +
+                            "API key if it has one, and cannot start the session if it does not.",
+                        style = Design.Style.bodySmall,
+                        color = Design.Palette.attention.now,
+                    )
+                    ClaudeSetup(settings, onKept = { claude = ClaudeKept.Kept })
                 }
                 if (error.isNotBlank()) {
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
