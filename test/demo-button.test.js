@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { androidSources } from './helpers/android-sources.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -126,7 +127,7 @@ test('the paste-a-credential field is gone from both apps', () => {
   // still served — getting back in when sign-in itself is broken — belongs to
   // the operator with curl, not on everybody's settings screen.
   for (const [name, src] of [
-    ['iOS', read('apps/ios/Fleetwright/FleetView.swift')],
+    ['iOS', iosSources()],
     // The whole app: the settings panel this asks about lives in
     // SettingsPanel.kt now, and the question is about the app either way.
     ['Android', androidSources()],

@@ -35,7 +35,7 @@ phones agreeing on every number.
 |---|---|---|
 | **ENERGY** | 1, calm | A fleet console is read in a hurry, often at night, often because something is wrong. It should not say hello. |
 | **RHYTHM** | 1, uniform | Every host row is the same shape on purpose. A row that looks different should mean something is different, and the design system spends that signal on the card that is asking a question. |
-| **MOTION** | 1, hover and state only | Nothing here animates for pleasure. A session changing state is news; a parallax is not. |
+| **MOTION** | 2, every change of state moves | Raised from 1, which in practice meant nothing moved at all: a session going from working to waiting jumped, and the apps read as dead. A change of state is news and now reads as a change. Still nothing animates for pleasure, nothing loops, and Reduce Motion turns movement into a crossfade. The numbers are in `docs/design-system.md`. |
 
 `docs/design-system.md` says the same thing in its own words: calm recedes,
 trouble comes forward.

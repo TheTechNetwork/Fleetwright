@@ -18,6 +18,7 @@ import { Accounts, normaliseEmail, emailFromActor, extractOauthAccount, adoptBox
 import { pickCredentialSource, sharedAccountMetaFile } from '../src/core/podman.js';
 import { log } from '../src/log.js';
 import { androidSources } from './helpers/android-sources.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 const require = createRequire(import.meta.url);
 
@@ -237,7 +238,7 @@ test('a host reports how many people can start a session on it', () => {
   // codebase keeps having to restate.
   const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
   for (const [name, src] of [
-    ['iOS', read('apps/ios/Fleetwright/FleetView.swift')],
+    ['iOS', iosSources()],
     ['Android', androidSources()],
   ]) {
     assert.match(src, /claudeAccounts/, `${name} does not read the count`);

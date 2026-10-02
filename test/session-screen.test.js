@@ -19,10 +19,13 @@ test('the state vocabulary is owned on the model, in one place', () => {
   assert.match(swift, /var stateSentence: String \{/);
   // Every sentence is a fact the frame carries. "At its prompt" and not
   // "finished": a session between two steps looks exactly the same.
-  for (const words of ['Waiting for you', 'At its prompt', 'Quiet for', 'Working', 'Finished', 'Stopped']) {
+  for (const words of ['Waiting for you', 'At its prompt', 'Quiet for', 'Working', 'Ended', 'Stopped']) {
     assert.ok(swift.includes(`"${words}`), `the vocabulary lost: ${words}`);
   }
   assert.doesNotMatch(swift, /"Stuck"|"Broken"/, 'a word the frame does not support');
+  // Nor "Finished": a crash and a success share the status "ended", so the
+  // kinder word is a claim the frame does not support either.
+  assert.doesNotMatch(swift, /return "Finished"/, 'an ended session is called finished again');
   // Defined once: the page reads it and does not re-derive it.
   assert.equal((swift.match(/var stateSentence: String/g) || []).length, 1);
   assert.match(SCREEN, /session\.stateSentence/);
@@ -103,7 +106,7 @@ test('Android owns the same vocabulary on its model, in the same words', () => {
   assert.match(kotlin, /val stateSentence: String get\(\) \{/);
   assert.equal((kotlin.match(/val stateSentence: String/g) || []).length, 1, 'defined once');
   const swift = iosSources();
-  for (const words of ['Waiting for you', 'At its prompt · idle', 'At its prompt', 'Quiet for', 'Working', 'Finished', 'Stopped · can be resumed', 'Stopped']) {
+  for (const words of ['Waiting for you', 'At its prompt · idle', 'At its prompt', 'Quiet for', 'Working', 'Ended', 'Stopped · can be resumed', 'Stopped']) {
     assert.ok(swift.includes(`"${words}`), `iOS lost: ${words}`);
     assert.ok(kotlin.includes(`"${words}`), `Android lost: ${words}`);
   }

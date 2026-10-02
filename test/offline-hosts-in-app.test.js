@@ -28,16 +28,17 @@ const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import
 test('iOS lists every enrolled machine that is not reporting, and each one leads to its page', () => {
   const swift = iosSources();
   // The membership minus the reporting: not the reporting minus nothing.
-  assert.match(swift, /ForEach\(hosts\.filter \{ h in !fleetHosts\.contains \{ \$0\.hostId == h\.hostId \} \}\)/, 'quiet machines are not listed');
+  assert.match(swift, /hosts\.filter \{ h in !fleetHosts\.contains \{ \$0\.hostId == h\.hostId \} \}/, 'quiet machines are not listed');
+  assert.match(swift, /ForEach\(silent\) \{ host in\s*\n\s*Button \{ showing = host\.hostId \}/, 'a quiet machine does not lead to its page');
   // Named as what it is. The word carries the state; the colour only reinforces it.
   assert.match(swift, /host\.isRevoked \? "revoked" : "not reporting"/);
   // And it leads to the page where Replace key and Revoke live, with the
   // membership record and NO invented report: nil is "cannot tell".
-  assert.match(swift, /initialHealth: nil,\n\s+initialState: host\.isRevoked \? "revoked" : "not reporting",[\s\S]{0,400}?enrolled: host,/);
+  assert.match(swift, /initialHealth: reporting\?\.health,\n\s+initialState: reporting\?\.state \?\? \(member\?\.isRevoked == true \? "revoked" : "not reporting"\),[\s\S]{0,400}?enrolled: member,/);
   // What the fleet knows about its absence, and nothing more.
   assert.match(swift, /func absence\(_ host: Fleet\.Host\) -> String/);
   assert.match(swift, /return "never connected"/);
-  assert.match(swift, /"last seen \\\(relative\(seen\)\)"/);
+  assert.match(swift, /"last seen \\\(relativeTime\(seen\)\)"/);
 });
 
 test('Android says when a listed machine was last heard from', () => {

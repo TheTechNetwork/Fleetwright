@@ -78,12 +78,13 @@ test('a bound pin says which box it is for, on both phones', () => {
   // It only works on the machine it names, and the refusal for using it
   // elsewhere arrives on the BOX rather than on this screen. Six digits with no
   // owner is a pin somebody types into the wrong terminal.
-  assert.match(IOS_VIEW, /for \\\(bound\) only/);
+  // iOS mints a bound pin on the machine's own page, so the label is that
+  // page's machine and cannot name another one.
+  assert.match(IOS_VIEW, /for \\\(hostId\) only/);
   assert.match(DROID_VIEW, /for \$pinBoundTo only/);
 
-  // And it is cleared when an unbound pin is minted, so the label cannot
-  // outlive the pin it described.
-  assert.match(IOS_VIEW, /pinBoundTo = nil\n\s+do \{/);
+  // And on Android, where one panel mints both kinds, it is cleared when an
+  // unbound pin is minted, so the label cannot outlive the pin it described.
   assert.match(DROID_VIEW, /pinBoundTo = ""\n\s+pin = runCatching \{ Fleet\(settings\)\.mintHostPin\(ephemeralPin\)/);
 });
 
@@ -91,6 +92,8 @@ test('a failed mint does not leave the old pin wearing a new name', () => {
   // The label is set only after the call returns a code. Setting it first would
   // relabel whatever was already on screen as belonging to the host somebody
   // just tapped.
-  assert.match(IOS_VIEW, /pin = try await Fleet\(settings: settings\)\.mintHostPin\(hostId: hostId, readmit: readmit\)\.code\n\s+\/\/[\s\S]{0,200}?pinBoundTo = hostId/);
+  // On iOS the pin and its label live on one machine's page, so there is no
+  // second name for an old pin to wear; the pin is set only from a code.
+  assert.match(IOS_VIEW, /pin = try await fleet\.mintHostPin\(hostId: hostId, readmit: enrolled\?\.isRevoked == true\)\.code/);
   assert.match(DROID_VIEW, /if \(pin\.isNotBlank\(\)\) pinBoundTo = host\.hostId/);
 });

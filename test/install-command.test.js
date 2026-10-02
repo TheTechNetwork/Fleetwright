@@ -24,7 +24,8 @@ import worker from '../worker/src/worker.js';
 const ADMIN = 'a-token-at-least-16ch';
 const SH = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
 const IOS_CLIENT = readFileSync(new URL('../apps/ios/Fleetwright/Fleet.swift', import.meta.url), 'utf8');
-const IOS_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+const IOS_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/AddMachineView.swift', import.meta.url), 'utf8');
+const IOS_HOST = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
 const DROID_CLIENT = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');
 const DROID_VIEW = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/SettingsPanel.kt', import.meta.url), 'utf8');
 
@@ -131,8 +132,10 @@ test('the iOS app reads the line off the reply and shows it beside the pin, and 
   // with no installer gets the two-step form, never a line that would 404.
   assert.match(IOS_VIEW, /if let install = pinInstall \{[\s\S]{0,600}?Text\(install\)[\s\S]{0,200}?\.textSelection\(\.enabled\)/);
   assert.match(IOS_VIEW, /\} else \{\n\s+Text\("On that box: fleetwright-sidecar enrol \\\(pin\)"\)/);
-  // A bound pin re-keys a box that exists; no install line for it.
-  assert.match(IOS_VIEW, /mintHostPin\(hostId: hostId, readmit: readmit\)\.code/);
+  // A bound pin re-keys a box that exists, on that box's page; no install line
+  // for it, only the code.
+  assert.match(IOS_HOST, /pin = try await fleet\.mintHostPin\(hostId: hostId, readmit: enrolled\?\.isRevoked == true\)\.code/);
+  assert.doesNotMatch(IOS_HOST, /pinInstall|Text\(install\)/);
 });
 
 test('the Android app reads the line off the reply and shows it beside the pin, and only when there is one', () => {

@@ -30,7 +30,7 @@ test('iOS reads whether root’s half is the release’s, and only ever says so 
 
 test('the row says the helper is out of date beside, not instead of, what it runs', () => {
   const swift = iosSources();
-  const row = swift.indexOf('private func describeRunning(');
+  const row = swift.indexOf('func describeRunning(');
   assert.ok(row > 0);
   const body = swift.slice(row, swift.indexOf('private func describeAccounts('));
   const chain = body.indexOf('"up to date"');

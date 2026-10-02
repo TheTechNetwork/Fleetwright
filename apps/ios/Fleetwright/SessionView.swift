@@ -54,6 +54,9 @@ struct SessionView: View {
     @State private var busy = false
     @State private var result = ""
     @State private var confirmingForget = false
+    /// Counted so the same feedback twice is felt twice. See FleetView.
+    @State private var accepted = 0
+    @State private var refused = 0
 
     /// The schedule, in one place. Ten looks three seconds apart, then nine
     /// ten seconds apart: two minutes of watching, and then a button.
@@ -96,8 +99,11 @@ struct SessionView: View {
             if let prompt = session.prompt, let options = prompt.options, !options.isEmpty {
                 Section {
                     if let question = prompt.question, !question.isEmpty {
+                        // AS LOUD AS ON THE CARD. This is where somebody came
+                        // to think about it, and it was set smaller here than
+                        // on the list that sent them.
                         Text(question)
-                            .fleetType(.bodyStrong)
+                            .fleetType(.title)
                             .foregroundStyle(Design.Palette.ink)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -223,11 +229,15 @@ struct SessionView: View {
             }
             .listRowBackground(Design.Palette.card)
             .confirmationDialog("Forget \(session.label)?", isPresented: $confirmingForget, titleVisibility: .visible) {
-                Button("Forget — delete its conversation and workspace", role: .destructive) {
+                Button("Forget — move it to the bin", role: .destructive) {
                     act { try await fleet.forget(session.name) }
                 }
             } message: {
-                Text("This cannot be undone. Stop keeps everything and can be resumed; forget keeps nothing.")
+                // IT CAN BE UNDONE, for seven days, and this said it could not.
+                // The bin keeps a forgotten session and says so; a dialog
+                // claiming the opposite is the screen reporting a state it
+                // does not have.
+                Text("It stays in the bin for seven days, where Restore brings it back. After that its conversation and workspace are deleted.")
             }
 
             if !result.isBlank {
@@ -246,6 +256,9 @@ struct SessionView: View {
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
         .navigationTitle(session.label)
+        .sensoryFeedback(.success, trigger: accepted)
+        .sensoryFeedback(.error, trigger: refused)
+        .animation(Design.Motion.change, value: session.status)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await reload() }
         .task(id: watchGeneration) { await watch() }
@@ -302,8 +315,10 @@ struct SessionView: View {
                 let reply = try await work()
                 let said = (reply.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 result = said.isEmpty ? (nothingSaid ?? "") : said
+                if reply.ok == false { refused += 1 } else { accepted += 1 }
             } catch {
                 result = error.localizedDescription
+                refused += 1
             }
             await reload()
             await onChange()

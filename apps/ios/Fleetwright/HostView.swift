@@ -123,11 +123,10 @@ struct HostView: View {
 
             allowedSection
 
-            channelSection
-
-            sandboxSection
-
-            labelsSection
+            // WHAT IT LOGGED, THIRD. At night the order somebody asks is what
+            // is it saying, what did it write down, and what can I do; this
+            // was section nine of ten, under Labels and House rules.
+            logsSection
 
             Section {
                 NavigationLink("Sign in to Claude") {
@@ -146,14 +145,26 @@ struct HostView: View {
                             .textSelection(.enabled)
                     }
                 }
+                // MAY THIS BOX HOLD YOUR CREDENTIALS, beside the Key it is
+                // decided by. It was five levels deep under Add a machine, with
+                // the fingerprint shown apart from this row.
+                if let member = enrolled, !member.isRevoked, member.ephemeral != true {
+                    VaultApproval(settings: settings, host: member)
+                }
             } header: {
                 sectionHead("Identity")
             }
             .listRowBackground(Design.Palette.card)
 
-            houseRulesSection
+            // HOW IT IS SET UP, after what is wrong with it. Each of these is
+            // decided once and read rarely.
+            channelSection
 
-            logsSection
+            sandboxSection
+
+            labelsSection
+
+            houseRulesSection
 
             dangerSection
 
@@ -312,7 +323,7 @@ struct HostView: View {
                     .foregroundStyle(Design.Palette.inkDim)
             }
         } header: {
-            sectionHead("Sessions")
+            sectionHead("Session image")
         } footer: {
             Text("The browser image is the same one with Chromium in it, for a session that has to look at a page it built. Running sessions keep the image they started in.")
         }
@@ -587,11 +598,19 @@ struct HostView: View {
                     rebootPin = ""
                 }
             }
-            if enrolled?.isRevoked == false {
+            // AN ADMIN'S, AND DRAWN FOR AN ADMIN. The coordinator refuses it to
+            // anybody else, and the refusal used to arrive after the
+            // confirmation dialog.
+            if enrolled?.isRevoked == false && settings.showsAdmin {
                 Button("Revoke this host", role: .destructive) { confirmingRevoke = true }
             }
             if !pin.isEmpty {
                 LabeledContent("Pin") { Text(pin).fleetType(.labelMono).textSelection(.enabled) }
+                // NAMED, because a bound pin is refused anywhere else and the
+                // refusal arrives on the box rather than here.
+                Text("for \(hostId) only — on that box: fleetwright-sidecar enrol \(pin)")
+                    .fleetType(.micro)
+                    .foregroundStyle(Design.Palette.attention)
             }
             Button(enrolled?.isRevoked == true ? "Readmit" : "Replace key") {
                 Task {

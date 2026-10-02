@@ -17,8 +17,20 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { androidSources } from './helpers/android-sources.js';
+import { iosSources } from './helpers/ios-sources.js';
 
 const VIEW = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+// THE WHOLE iOS APP, for what is true of the app rather than of one file. The
+// machine list, the devices and the activity each moved to a screen of their
+// own when the settings form was taken apart, and nothing they do changed.
+const IOS = iosSources();
+/** The body of one function, from its declaration to the next declaration. */
+const fn = (/** @type {string} */ src, /** @type {string} */ head) => {
+  const at = src.indexOf(head);
+  assert.ok(at >= 0, `${head} is gone`);
+  const next = src.slice(at + head.length).search(/\n    (private |@MainActor|@ViewBuilder|var |func )/);
+  return src.slice(at, next < 0 ? undefined : at + head.length + next);
+};
 // THE WHOLE APP, not one file. This read MainActivity.kt, and the settings
 // panel it slices into has since moved to SettingsPanel.kt — the same move that
 // broke six iOS tests and produced helpers/ios-sources.js.
@@ -27,11 +39,13 @@ const MAIN = androidSources();
 const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
 test('independent requests are asked for at the same time', () => {
-  const load = VIEW.slice(VIEW.indexOf('private func loadHosts() async'), VIEW.indexOf('/// "elibrody2@gmail.com'));
-  // Six answers, one wait. `async let` starts them all and waits once, so the
-  // cost is the slowest rather than the sum. (Four, until the runner
-  // repository joined them; six once a person's own runner repository did.)
-  assert.equal((load.match(/async let /g) || []).length, 6, 'loadHosts went back to waiting on each in turn');
+  const load = fn(IOS, 'private func loadHosts() async');
+  // Two answers, one wait. `async let` starts them both and waits once, so the
+  // cost is the slower rather than the sum. (Six, while one settings form asked
+  // for everything on two tabs; the devices, the activity and the runner
+  // repository are each asked for by the screen that shows them now.)
+  assert.match(load, /async let reporting = fleet\.fleetHosts\(\)/);
+  assert.match(load, /async let enrolled = fleet\.enrolledHosts\(\)/);
   assert.doesNotMatch(bare(load), /await Fleet\(settings: settings\)\.\w+\(\)/,
     'a request is still being awaited inline, one at a time');
 
@@ -49,13 +63,11 @@ test('a request that failed does not empty the screen', () => {
   // A list that was right ten seconds ago is a better answer than nothing, and
   // the next refresh corrects it. Blanking is how a blip looks like a fleet
   // that went away.
-  const load = bare(VIEW.slice(VIEW.indexOf('private func loadHosts() async'), VIEW.indexOf('/// "elibrody2@gmail.com')));
+  const load = bare(fn(IOS, 'private func loadHosts() async'));
   assert.doesNotMatch(load, /\?\? \[\]/, 'a failed fetch is assigned an empty array again');
+  const app = bare(IOS);
   for (const field of ['fleetHosts', 'hosts', 'clients', 'events', 'runnerRepo']) {
-    assert.ok(
-      load.includes(`{ ${field} = got }`),
-      `${field} is not guarded against a failed request`,
-    );
+    assert.match(app, new RegExp(`\\{\\s*${field} = got\\b`), `${field} is not guarded against a failed request`);
   }
 });
 
@@ -85,13 +97,11 @@ test('a fact is not printed twice on one row', () => {
   //
   // Eleven rows of the first, nine of the second, each saying the one thing
   // that could tell them apart twice and the thing that could not, once.
-  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
-
   // The address only when it is somebody ELSE'S, which is when it is news.
-  const client = view.slice(view.indexOf('private func describeClient'), view.indexOf('/// Consecutive identical events'));
+  const client = fn(IOS, 'private func describeClient');
   assert.match(client, /email != settings\.signedInAs/);
 
-  const who = view.slice(view.indexOf('private func describeEventWho'), view.indexOf('/// Milliseconds since the epoch'));
+  const who = fn(IOS, 'private func describeEventWho');
   assert.match(who, /a != settings\.signedInAs/);
   // "on coordinator" is not a place. It is where everything happens, so it
   // distinguished nothing and appeared on nearly every line.
@@ -99,7 +109,7 @@ test('a fact is not printed twice on one row', () => {
 });
 
 test('the lists are ordered by what somebody came to find', () => {
-  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const view = IOS;
 
   // IN USE FIRST. The coordinator sorts by when a credential was MINTED, which
   // on a real account put seven never-used sign-ins above the phone in the
@@ -156,16 +166,22 @@ test('an app that has not asked yet does not claim there is nothing', () => {
   // The same null-is-not-empty rule this project argues for everywhere else,
   // and did not make on its own opening screen. A splash would hide it; this
   // says it, which is cheaper and true.
-  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const view = IOS;
   assert.match(view, /@State private var loaded = false/);
-  for (const claim of ['No hosts reporting yet.', 'No devices reported.', 'Nothing recorded yet.']) {
+  for (const claim of ['No devices reported.', 'Nothing recorded yet.']) {
     assert.ok(
       view.includes(`Text(loaded ? "${claim}" : "Asking the fleet…")`),
       `"${claim}" is stated before an answer has arrived`,
     );
   }
-  // Set AFTER the four requests, not before: "loaded" means an answer arrived.
-  const load = view.slice(view.indexOf('private func loadHosts() async'), view.indexOf('/// "elibrody2@gmail.com'));
+  // The machine list says it is asking until it has heard, and only then that
+  // there are none.
+  const machines = view.slice(view.indexOf('struct MachinesView'));
+  assert.ok(machines.indexOf('} else if !loaded {') >= 0 &&
+    machines.indexOf('} else if !loaded {') < machines.indexOf('"No machines yet"'),
+    '"No machines yet" is stated before an answer has arrived');
+  // Set AFTER the requests, not before: "loaded" means an answer arrived.
+  const load = fn(IOS, 'private func loadHosts() async');
   assert.ok(load.indexOf('loaded = true') > load.lastIndexOf('if let got = try? await'),
     'loaded is set before the answers land');
 });
@@ -216,9 +232,9 @@ test('one list of machines, at one width', () => {
   // machines: a Form section at the system's inset, and cards at the design's
   // page margin. Two lists of one thing is the fault; the ragged edge was how
   // it showed.
-  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const view = IOS;
   assert.ok(!view.includes('ForEach(hosts) { host in'), 'the second list of machines is back');
-  assert.match(view, /Text\("Add a machine"\)/, 'the enrolment section lost its name');
+  assert.match(view, /Label\("Add a machine"/, 'adding a machine lost its row');
   // And the machinery that existed only to drive controls on the card is gone
   // with them — a view that is written and never called renders exactly like
   // one that was never written.

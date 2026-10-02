@@ -8,7 +8,8 @@ extension Notification.Name {
     /// can be claimed by anything.
     static let credentialsChanged = Notification.Name("network.thetech.fleetwright.credentialsChanged")
     /// Somebody tapped a notification. `userInfo["name"]` is the session it
-    /// was about, when the payload said.
+    /// was about, when the payload said; `userInfo["host"]` the machine, for a
+    /// host event.
     static let notificationOpened = Notification.Name("network.thetech.fleetwright.notificationOpened")
 }
 
@@ -314,7 +315,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 open(name)
             }
         case let .open(name):
-            await MainActor.run { open(name) }
+            // A MACHINE'S NEWS OPENS THE MACHINE. "deb132 cannot start
+            // sessions" used to land on the session list, two taps and a
+            // scroll from the page that could do something about it.
+            let event = info["event"] as? String ?? ""
+            let host = info["hostId"] as? String ?? ""
+            await MainActor.run {
+                if event.hasPrefix("host."), !host.isEmpty { open(host: host) } else { open(name) }
+            }
         }
     }
 
@@ -367,5 +375,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             object: nil,
             userInfo: name.map { ["name": $0] } ?? [:]
         )
+    }
+
+    /// The same, for a notification about a machine: FleetApp opens the
+    /// Machines tab on that machine's page.
+    @MainActor
+    private func open(host: String) {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["host": host])
     }
 }
