@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const SWIFT = ['Fleet.swift', 'FleetView.swift', 'HostView.swift', 'SessionView.swift', 'Credentials.swift'].map((f) => read(`apps/ios/Fleetwright/${f}`)).join('\n');
-const KOTLIN = ['Fleet.kt', 'SettingsPanel.kt', 'MainActivity.kt', 'SessionSheet.kt', 'CredentialsSheet.kt']
+const KOTLIN = ['Fleet.kt', 'MachinesScreen.kt', 'MainActivity.kt', 'SessionSheet.kt', 'CredentialsSheet.kt']
   .map((f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))
   .join('\n');
 const SWIFT_TEST = read('apps/ios/FleetwrightTests/ContextAndUsageTests.swift');
@@ -67,12 +67,13 @@ test('both draw them where a person looks: the session row and page, and the acc
   // must not exist is a Text drawn from it on a host surface.
   assert.doesNotMatch(fleetView, /Text\(describeUsage\(/, 'not on the host row');
   assert.doesNotMatch(hostView, /Text\(describeUsage\(/, 'not on the host page');
-  const [settings, main, sheet, credentialsSheet] = ['SettingsPanel.kt', 'MainActivity.kt', 'SessionSheet.kt', 'CredentialsSheet.kt']
+  // The machine list and each machine's page are MachinesScreen.kt now.
+  const [settings, main, sheet, credentialsSheet] = ['MachinesScreen.kt', 'MainActivity.kt', 'SessionSheet.kt', 'CredentialsSheet.kt']
     .map((f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`));
   assert.match(main, /session\.contextLine/);
   assert.match(sheet, /session\.contextLine/);
   assert.match(credentialsSheet, /describeUsage\(usage\)/);
-  assert.doesNotMatch(settings, /describeUsage\(/, 'not on the host card');
+  assert.doesNotMatch(settings, /describeUsage\(/, 'not on the host card or page');
   // Coloured only when a window is nearly spent, and only from a figure.
   assert.match(SWIFT, /usage\.isNearLimit \? Design\.Palette\.attention/);
   assert.match(KOTLIN, /if \(usage\.isNearLimit\) MaterialTheme\.colorScheme\.error/);

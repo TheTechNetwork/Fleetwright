@@ -2,8 +2,9 @@ package network.thetech.fleetwright
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -18,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.launch
 
@@ -25,15 +27,18 @@ import kotlinx.coroutines.launch
  * Your vault: each credential kept once, and the boxes that may hold it.
  * See PhoneVault for how, and docs/vault.md for why.
  *
- * Drawn inside RunnersFromPhone once the minter key is saved and this phone is
- * signed in to GitHub, because every request here is sealed to that key and
- * proves whose vault it is with that sign-in. The Claude login kept above is
- * the same vault's, and shows in the list.
+ * THE CREDENTIALS SCREEN LEADS WITH THIS. A credential linked on one box is the
+ * older way and shows below it as a fact; this is the way a person keeps
+ * Claude, GitHub, Cloudflare and named secrets once for every machine they
+ * approve. Every request is sealed to the minter's key and proves whose vault
+ * it is with this phone's GitHub sign-in, so it is drawn once that exists.
  *
- * A box is offered for approval with the fingerprint this phone worked out
- * from its key, beside the sentence that says to compare it, because the
- * comparison is the whole of why approving is safe. The same sentences as iOS
- * (YourVault in RunnersFromPhone.swift), which
+ * APPROVING A BOX IS ON THAT BOX'S PAGE ([VaultApproval]), beside its own Key,
+ * because the comparison of the two fingerprints is the whole of why approving
+ * is safe. This lists which boxes hold your credentials, and removes an
+ * approval for a box that has left the fleet, which has no page to do it from.
+ *
+ * The same sentences as iOS (YourVault in RunnersFromPhone.swift), which
  * test/runners-from-phone-in-apps.test.js holds them to.
  */
 @Composable
@@ -41,8 +46,10 @@ internal fun YourVault(settings: Settings) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val vault = remember { PhoneVault(settings) }
+    val phone = remember { PhoneGitHub(settings) }
     var contents by remember { mutableStateOf<PhoneVault.Contents?>(null) }
     var boxes by remember { mutableStateOf<List<Fleet.Host>>(emptyList()) }
+    var claudeDraft by remember { mutableStateOf("") }
     var secretName by remember { mutableStateOf("") }
     var secretValue by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -76,28 +83,58 @@ internal fun YourVault(settings: Settings) {
     LaunchedEffect(Unit) { reload() }
 
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-        Text("Your vault", style = MaterialTheme.typography.titleSmall)
-        Text(
+        Hint(
             "Keep each credential here once. A box you approve gets them when a session needs them, " +
                 "and loses them when you remove it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Design.Palette.inkDim.now,
         )
 
         val kept = contents
         if (kept == null) {
-            Text("Loading your vault…", style = MaterialTheme.typography.bodySmall, color = Design.Palette.inkDim.now)
+            Hint("Loading your vault…")
         } else {
             Text(
                 if (kept.items.isEmpty()) "Nothing kept yet."
                 else "Kept: " + kept.items.joinToString(", ") { PhoneVault.label(it.name) } + ".",
-                style = MaterialTheme.typography.bodySmall,
+                style = Design.Style.bodySmall,
                 color = Design.Palette.ink.now,
             )
             kept.items.forEach { item ->
                 TextButton(enabled = !busy, onClick = { act { vault.forget(Fleet(settings), item.name) } }) {
                     Text("Forget ${PhoneVault.label(item.name)}")
                 }
+            }
+        }
+
+        // CLAUDE, kept the same way: this is the vault's Claude row, which
+        // runners and approved boxes both use.
+        Hint(
+            "Runners you start can use your Claude subscription instead of the runner repository's API key. " +
+                "Make the token on a computer with claude setup-token, and paste it here.",
+        )
+        OutlinedTextField(
+            value = claudeDraft,
+            onValueChange = { claudeDraft = it.trim() },
+            label = { Text("Token from claude setup-token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Password,
+            ),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+            OutlinedButton(
+                enabled = !busy && claudeDraft.isNotBlank(),
+                onClick = {
+                    act { phone.depositClaudeLogin(Fleet(settings), claudeDraft).onSuccess { claudeDraft = "" } }
+                },
+            ) { Text("Keep for my runners") }
+            if (kept?.items?.any { it.name == "claude" } == true) {
+                TextButton(
+                    enabled = !busy,
+                    onClick = { act { phone.depositClaudeLogin(Fleet(settings), null) } },
+                ) { Text("Forget my Claude login") }
             }
         }
 
@@ -135,52 +172,105 @@ internal fun YourVault(settings: Settings) {
             },
         ) { Text("Keep secret") }
 
-        Text("Boxes", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Design.Palette.inkDim.now,
-        )
-        boxes.forEach { box ->
-            // WORKED OUT HERE, from the key the fleet listed, never the
-            // fingerprint the fleet says beside it.
-            val fp = box.publicJwk?.let { PhoneVault.fingerprint(it) }
-            val grant = kept?.grants?.firstOrNull { it.fingerprint == fp }
-            Text(
-                "${box.hostId} · ${fp ?: "no key listed"}",
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = Design.Palette.ink.now,
+        if (kept != null) {
+            // WORKED OUT HERE, from the keys the fleet listed, never the
+            // fingerprints the fleet says beside them.
+            val inFleet = boxes.mapNotNull { b -> b.publicJwk?.let { PhoneVault.fingerprint(it) to b.hostId } }.toMap()
+            val holders = kept.grants.mapNotNull { inFleet[it.fingerprint] }.sorted()
+            Text("Boxes", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+            Hint(
+                if (holders.isEmpty()) "No box holds your credentials yet. Approve one from its page under Machines."
+                else "Held by ${holders.joinToString(", ")}. Approve or remove a box from its page under Machines.",
             )
-            if (grant != null) {
-                Text("Approved", style = MaterialTheme.typography.bodySmall, color = Design.Palette.ok.now)
+            // APPROVED, AND NOT IN THIS FLEET ANY MORE: still removable, because
+            // an approval outlives the box being taken out of the fleet.
+            kept.grants.filter { it.fingerprint !in inFleet }.forEach { grant ->
+                Text(
+                    "${grant.label.ifBlank { "A box" }} · ${grant.fingerprint} · not in this fleet",
+                    style = Design.Style.label,
+                    fontFamily = FontFamily.Monospace,
+                    color = Design.Palette.inkDim.now,
+                )
                 TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), grant) } }) { Text("Remove") }
-            } else if (fp != null) {
-                OutlinedButton(enabled = !busy && kept != null, onClick = { act { vault.approve(Fleet(settings), box) } }) {
-                    Text("Approve")
-                }
             }
         }
 
-        // APPROVED, AND NOT IN THIS FLEET ANY MORE: still removable, because an
-        // approval outlives the box being taken out of the fleet.
-        val listed = boxes.mapNotNull { b -> b.publicJwk?.let { PhoneVault.fingerprint(it) } }.toSet()
-        kept?.grants?.filter { it.fingerprint !in listed }?.forEach { grant ->
-            Text(
-                "${grant.label.ifBlank { "A box" }} · ${grant.fingerprint}",
-                style = MaterialTheme.typography.bodySmall,
+        if (result.isNotBlank()) {
+            Hint(result, color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
+        }
+    }
+}
+
+/**
+ * Whether ONE box may hold your vault's credentials, on that box's page.
+ *
+ * Beside its Key on purpose: approving is safe because the fingerprint this
+ * phone works out from the box's key matches what `fleetwright-sidecar
+ * identity` prints on the box, and the page is where both are in view.
+ *
+ * Drawn only for a permanent box the fleet has a key for, and only once this
+ * phone is signed in to GitHub, which is how the vault knows whose it is.
+ */
+@Composable
+internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
+    val scope = rememberCoroutineScope()
+    val vault = remember { PhoneVault(settings) }
+    if (!PhoneGitHub(settings).signedIn) return
+    val fingerprint = remember(host) { host.publicJwk?.let { PhoneVault.fingerprint(it) } }
+    var grant by remember { mutableStateOf<PhoneVault.Grant?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    var failed by remember { mutableStateOf(false) }
+
+    suspend fun reload() {
+        runCatching { vault.list(Fleet(settings)) }
+            .onSuccess { c -> grant = c.grants.firstOrNull { it.fingerprint == fingerprint } }
+            .onFailure {
+                failed = true
+                result = it.message ?: "Your vault did not answer."
+            }
+        loaded = true
+    }
+
+    fun act(block: suspend () -> Result<String>) {
+        scope.launch {
+            busy = true
+            result = ""
+            val r = block()
+            failed = r.isFailure
+            result = r.getOrElse { it.message ?: "That did not work." }
+            reload()
+            busy = false
+        }
+    }
+
+    LaunchedEffect(host.hostId) { reload() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        val held = grant
+        when {
+            fingerprint == null -> Text(
+                "${host.hostId} · no key listed",
+                style = Design.Style.label,
                 fontFamily = FontFamily.Monospace,
                 color = Design.Palette.inkDim.now,
             )
-            TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), grant) } }) { Text("Remove") }
+            !loaded -> Hint("Loading your vault…")
+            held != null -> {
+                Text("Your credentials: Approved", style = Design.Style.bodySmall, color = Design.Palette.ok.now)
+                TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), held) } }) { Text("Remove") }
+            }
+            else -> {
+                Hint("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
+                SelectionContainer {
+                    Text(fingerprint, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
+                }
+                OutlinedButton(enabled = !busy, onClick = { act { vault.approve(Fleet(settings), host) } }) { Text("Approve") }
+            }
         }
-
         if (result.isNotBlank()) {
-            Text(
-                result,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now,
-            )
+            Hint(result, color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
         }
     }
 }

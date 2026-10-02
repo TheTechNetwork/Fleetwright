@@ -87,12 +87,15 @@ test('a refused connect leaves no flow on screen', () => {
   assert.match(begin[0], /pendingHost = nil/);
 });
 
-test('Android reaches this screen per host, so it never had the choice to make', () => {
-  // Not a parity gap: the Android sheet takes a non-optional host because it is
-  // opened from a host row. iOS made the screen fleet-wide — which is better,
-  // and is what introduced a question Android never has to ask. Asserted so
-  // that making it fleet-wide there inherits the answer rather than the bug.
+test('Android starts a sign-in only on a machine it was given, so it never has to guess one', () => {
+  // Not a parity gap. The Android sheet takes an optional host now, for the
+  // fleet-wide "Linked on machines" list, and that list starts nothing: the
+  // sign-in button is drawn only with a host, which is a machine's page or the
+  // machine picked from the empty session list. So the question iOS answers
+  // with a picker is one Android never asks.
   const kt = read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt');
-  assert.match(kt, /fun CredentialsSheet\(settings: Settings, host: String,/,
-    'the Android sheet took an optional host — it now needs the picker too');
+  assert.match(kt, /host: String\?,/);
+  assert.match(kt, /if \(!linkedOnly && host != null\) TextButton\(/,
+    'a sign-in can start with no machine named — it now needs the picker too');
+  assert.match(kt, /if \(p\.isSignIn && host != null\) Fleet\(settings\)\.link\(host,/);
 });

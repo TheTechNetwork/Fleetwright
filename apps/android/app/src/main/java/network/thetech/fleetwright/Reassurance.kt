@@ -5,7 +5,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -111,6 +117,10 @@ fun ReassuranceBanner(summary: Reassurance, modifier: Modifier = Modifier) {
         summary.blind || summary.unwell.isNotEmpty() -> Design.Palette.bad.now
         else -> Design.Palette.inkDim.now
     }
+    // THE LINE THAT SAYS WHETHER ANYTHING NEEDS YOU says it changed: the ring
+    // and the headline take on their new tone rather than being swapped.
+    val ring by animateColorAsState(if (summary.settled) Design.Palette.ring.now else tint, Design.Motion.change(), label = "ring")
+    val ink by animateColorAsState(if (summary.settled) Design.Palette.ink.now else tint, Design.Motion.change(), label = "ink")
     Column(
         modifier
             .fillMaxWidth()
@@ -118,7 +128,7 @@ fun ReassuranceBanner(summary: Reassurance, modifier: Modifier = Modifier) {
             // ring is the hairline every other card has; unsettled, it is the
             // tone the headline is already carrying. Calm recedes, trouble
             // comes forward, and neither depends on the colour being seen.
-            .fleetCard(ring = if (summary.settled) Design.Palette.ring.now else tint)
+            .fleetCard(ring = ring)
             .padding(Design.Space.groupTight)
             // One announcement rather than two fragments: this is the line on
             // the screen worth hearing first.
@@ -130,16 +140,28 @@ fun ReassuranceBanner(summary: Reassurance, modifier: Modifier = Modifier) {
         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
             // 26sp, and it is the only thing on the screen set that big. This
             // line is read first or the app has not done its job.
-            Text(
-                summary.headline,
-                style = Design.Style.greeting,
-                // Ink when the quiet holds, the tone when it does not. Calm
-                // reads as ordinary text; trouble is the only thing on this
-                // screen that is coloured for its own sake — and the sentence
-                // says which it is either way.
-                color = if (summary.settled) Design.Palette.ink.now else tint,
-            )
+            AnimatedContent(
+                targetState = summary.headline,
+                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                label = "headline",
+            ) { headline ->
+                Text(
+                    headline,
+                    style = Design.Style.greeting,
+                    // Ink when the quiet holds, the tone when it does not. Calm
+                    // reads as ordinary text; trouble is the only thing on this
+                    // screen that is coloured for its own sake — and the sentence
+                    // says which it is either way.
+                    color = ink,
+                )
+            }
         }
-        Text(summary.basis, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
+        AnimatedContent(
+            targetState = summary.basis,
+            transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+            label = "basis",
+        ) { basis ->
+            Text(basis, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
+        }
     }
 }

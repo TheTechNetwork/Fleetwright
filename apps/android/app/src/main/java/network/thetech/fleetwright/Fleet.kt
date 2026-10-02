@@ -1146,7 +1146,7 @@ class Fleet(
      * a picker never renders its provider list from one answer and its status
      * from another.
      */
-    suspend fun connections(host: String): Reply = intent("connect", emptyMap(), host = host)
+    suspend fun connections(host: String? = null): Reply = intent("connect", emptyMap(), host = host)
 
     /**
      * Begin connecting a credential. Returns a URL to open — never a secret.
@@ -1241,6 +1241,23 @@ class Fleet(
     suspend fun runners(): Result<String?> = withContext(Dispatchers.IO) {
         runCatching {
             get("/api/hosts").optJSONObject("runners")?.optString("repo")?.takeIf { it.isNotBlank() && it != "null" }
+        }
+    }
+
+    /**
+     * Whether the person this credential belongs to is the fleet's admin.
+     *
+     * The same flag the coordinator's destructive-route guard reads, so a row
+     * drawn from it cannot disagree with the refusal. A failure (an older
+     * coordinator that does not serve it) is CANNOT TELL, not "no".
+     */
+    suspend fun me(): Result<Boolean> = withContext(Dispatchers.IO) {
+        // A reply without the field is an older coordinator's "no such route",
+        // which is not an answer about this person.
+        runCatching {
+            val reply = get("/api/me")
+            check(reply.has("admin")) { "This fleet does not say who is an admin." }
+            reply.optBoolean("admin", false)
         }
     }
 
@@ -1994,6 +2011,10 @@ class Fleet(
             setRequestProperty("content-type", "application/json")
             if (authenticated && settings.credential.isNotBlank()) {
                 setRequestProperty("authorization", "Bearer ${settings.credential}")
+                // AN ADMIN SEEING THE FLEET AS A MEMBER: the coordinator answers
+                // this as a member's request, so every list and refusal is the
+                // one a member gets, not an imitation of it drawn here.
+                if (settings.viewAsMember) setRequestProperty("x-fleetwright-view", "member")
             }
         }
         if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -2131,6 +2152,15 @@ class Settings(context: Context) {
     var minterPin: String
         get() = prefs.getString("minterPin", "") ?: ""
         set(value) = prefs.edit().putString("minterPin", value.trim()).apply()
+
+    /**
+     * An admin looking at the fleet as a member would, sent with every request
+     * (see `send`). Kept across launches, and said on the session list, so an
+     * admin cannot forget they are in it. Cleared with the credential.
+     */
+    var viewAsMember: Boolean
+        get() = prefs.getBoolean("viewAsMember", false)
+        set(value) = prefs.edit().putBoolean("viewAsMember", value).apply()
 
     /** Who this device is signed in as. Not a secret — it is displayed. */
     var signedInAs: String

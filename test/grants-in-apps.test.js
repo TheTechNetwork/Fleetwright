@@ -53,17 +53,19 @@ test('Android parses the grants with a has-check, from the frame and from a chec
   // host too old to say is not a host that refuses.
   const parses = ANDROID.match(/optJSONObject\("grants"\)\?\.takeIf \{ it\.has\("reboot"\) && !it\.isNull\("reboot"\) \}\?\.optBoolean\("reboot"\)/g) || [];
   assert.equal(parses.length, 2, 'the frame and the check reply both parse the reboot grant honestly');
-  assert.match(ANDROID, /grantUpgrades = w\.grantUpgrades \?: it\.grantUpgrades,\s*grantReboot = w\.grantReboot \?: it\.grantReboot,/);
+  assert.match(ANDROID, /grantUpgrades = w\.grantUpgrades \?: host\.grantUpgrades,\s*grantReboot = w\.grantReboot \?: host\.grantReboot,/);
 });
 
 test('Android draws Reboot only where the box allows it, and the line where it does not', () => {
-  assert.match(ANDROID, /if \(host\.grantReboot != false\) \{\s*TextButton\([\s\S]*?\) \{ Text\("Reboot"\) \}\s*\}/);
-  assert.match(ANDROID, /if \(host\.systemPending && host\.grantUpgrades != false\)/);
-  assert.match(ANDROID, /host\.grantReboot\?\.let \{ allowed ->[\s\S]*?"Reboot from the app: \$\{if \(allowed\) "allowed" else "not allowed"\}"[\s\S]*?if \(!allowed\) GrantOff\("Turning it on is one line on the box:", grantLine\("reboot"\)\)/);
-  assert.match(ANDROID, /host\.grantUpgrades\?\.let \{ allowed ->[\s\S]*?"System upgrades from the app: [\s\S]*?GrantOff\("Turning it on is one line on the box:", grantLine\("upgrades"\)\)/);
-  assert.match(ANDROID, /private fun grantLine\(name: String\): String = "sudo fleetwright grant \$name on"/);
-  // Copyable, and not the error colour: an answer, not a fault.
-  assert.match(ANDROID, /private fun GrantOff\(fact: String, line: String\) \{[\s\S]*?SelectionContainer \{\s*Text\(line, style = MaterialTheme\.typography\.bodySmall\.copy\(fontFamily = FontFamily\.Monospace\)\)/);
+  // On the machine's page, as on iOS: the line instead of the button when the
+  // box refuses, and the button otherwise.
+  assert.match(ANDROID, /if \(h\.grantReboot == false\) \{\s*GrantOff\("Reboot from the app is off on this box\.", grantLine\("reboot"\)\)\s*\} else if \(!rebooting\) \{/);
+  assert.match(ANDROID, /if \(h\.systemPending && h\.grantUpgrades != false\)/);
+  // Only the case that is news is said: "allowed" is the ordinary state.
+  assert.match(ANDROID, /h\.grantUpgrades\?\.let \{ allowed ->\s*if \(!allowed\) \{[\s\S]*?GrantOff\("Turning it on is one line on the box:", grantLine\("upgrades"\)\)/);
+  assert.match(ANDROID, /fun grantLine\(name: String\): String = "sudo fleetwright grant \$name on"/);
+  // Copyable, and not a fault colour: an answer, not a fault.
+  assert.match(ANDROID, /fun GrantOff\(fact: String, line: String\) \{[\s\S]*?SelectionContainer \{\s*Text\(line, style = Design\.Style\.bodySmall, fontFamily = FontFamily\.Monospace/);
   assert.doesNotMatch(ANDROID, /fun grant\(host|\.grant\(host/, 'the app has no verb to change a grant, on purpose');
 });
 

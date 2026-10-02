@@ -68,7 +68,7 @@ test('Android reads whether root’s half is the release’s, and only the two w
 
 test('both phones say the helper is out of date beside what runs, in the same words', () => {
   const kotlin = androidSources();
-  const row = kotlin.indexOf('private fun describeRunning(');
+  const row = kotlin.indexOf('fun describeRunning(');
   assert.ok(row > 0);
   const body = kotlin.slice(row, kotlin.indexOf('return if (parts.isEmpty())', row));
   const chain = body.indexOf('"up to date"');
@@ -77,13 +77,15 @@ test('both phones say the helper is out of date beside what runs, in the same wo
   assert.match(body, /update helper out of date/);
 });
 
-test('the host sheet carries the same sentence as the host page, and no command', () => {
+test('the Android machine page carries the same sentence as the iOS one, and no command', () => {
   const kotlin = androidSources();
   // The Kotlin literal is split across two lines by `+`, so it is checked in
   // the two halves it is written in; the whole is HOST_LINE.
   const [a, b] = ['The update helper on this box is older than the release it runs. Updates still land and the services restart, ', 'but nothing root owns is refreshed. Check shows the one command that fixes it, once.'];
   assert.equal(a + b, HOST_LINE);
-  assert.ok(kotlin.includes(a) && kotlin.includes(b), 'the host sheet line changed');
-  assert.match(kotlin, /rootHalfBehind\) \{[\s\S]{0,900}MaterialTheme\.colorScheme\.error/, 'in the error colour, like the restart line');
+  assert.ok(kotlin.includes(a) && kotlin.includes(b), 'the machine page line changed');
+  // The palette's attention, not Material's error: Design.kt is what the
+  // parity test can see, and colorScheme.error was a colour it could not.
+  assert.match(kotlin, /rootHalfBehind == true\) \{[\s\S]{0,900}Design\.Palette\.attention/, 'in the attention colour, like the restart line');
   assert.doesNotMatch(kotlin, /sudo install -m 0755/, 'the phone must not carry the command; the host says it');
 });

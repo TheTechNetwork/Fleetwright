@@ -32,8 +32,10 @@ test('both phones seal under the purposes the minter opens with', () => {
 });
 
 test('the words about runners from a phone are the same on both', () => {
+  // "Runners from this phone" was the heading over all of this, inside the
+  // section for adding a machine. The sign-in is an account the phone holds
+  // now, under You, and neither app draws that heading.
   for (const words of [
-    'Runners from this phone',
     'Sign in to GitHub here and this phone starts your machines itself, with no permanent box. ',
     'What this phone sends is sealed to your fleet\'s minter, so nothing in between can read it.',
     'Looking for your fleet\'s minter…',

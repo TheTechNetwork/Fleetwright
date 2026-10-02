@@ -424,10 +424,12 @@ test('both apps apply the check the host just ran', () => {
   const act = androidSources();
   assert.match(act, /r\.waiting\?\.let \{ w ->/);
   // AFTER the refresh, not before it — the refresh is what would otherwise
-  // overwrite it.
-  const check = act.slice(act.indexOf('val r = Fleet(settings).updates(host.hostId)'));
+  // overwrite it. Every action on the machine page goes through one `run`,
+  // Check included.
+  assert.match(act, /run \{ it\.updates\(hostId\) \}/);
+  const run = act.slice(act.indexOf('fun run(work: suspend (Fleet) -> Fleet.Reply)'));
   assert.ok(
-    check.indexOf('fleetHosts = Fleet(settings).fleetHosts()') < check.indexOf('r.waiting?.let'),
+    run.indexOf('reload()') >= 0 && run.indexOf('reload()') < run.indexOf('r.waiting?.let'),
     'the reply is applied before the refresh that overwrites it',
   );
 });

@@ -13,6 +13,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +27,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -138,6 +150,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         WebAuth.deliver(intent)
         notifiedSession.value = sessionNamedBy(intent)
+        notifiedHost.value = hostNamedBy(intent)
     }
 
     /**
@@ -157,7 +170,31 @@ class MainActivity : ComponentActivity() {
 
     private fun sessionNamedBy(intent: Intent?): String? {
         if (intent?.hasExtra("event") != true) return null
+        if (intent.getStringExtra("event").orEmpty().startsWith("host.")) return null
         return intent.getStringExtra("name")?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * The machine a tapped notification was about, for a host event. "deb132
+     * cannot start sessions" used to land on the session list, two screens and
+     * a scroll from the page that could do something about it.
+     */
+    private val notifiedHost = mutableStateOf<String?>(null)
+
+    private fun hostNamedBy(intent: Intent?): String? {
+        if (intent?.getStringExtra("event")?.startsWith("host.") != true) return null
+        return intent.getStringExtra("hostId")?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Android 13+ shows nothing until this is granted. Asked once there is a
+     * fleet to be notified about: asking on a first launch, before anything is
+     * set up, is asking for a permission nobody can yet see a reason for.
+     */
+    private fun askForNotificationsOnce() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -180,13 +217,11 @@ class MainActivity : ComponentActivity() {
         // one. Same delivery, and the flow filters anything that is not ours.
         WebAuth.deliver(intent)
         notifiedSession.value = sessionNamedBy(intent)
+        notifiedHost.value = hostNamedBy(intent)
 
-        // Android 13+ will not show a notification until this is granted, and a
-        // fleet app that cannot tell you a session is waiting has lost its main
-        // reason to exist.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        // A fleet app that cannot tell you a session is waiting has lost its
+        // main reason to exist, so this is asked as soon as there is a fleet.
+        if (Settings(this).configured) askForNotificationsOnce()
 
         registerForPush()
 
@@ -205,20 +240,45 @@ class MainActivity : ComponentActivity() {
             // the iOS app are built from.
             FleetwrightTheme {
                 FleetScreen(
-                    onSignedIn = ::registerForPush,
+                    onSignedIn = {
+                        askForNotificationsOnce()
+                        registerForPush()
+                    },
                     // Read once, from the intent that started this activity. A
                     // shortcut tap is the only thing that sets it.
                     launchKindId = intent?.getStringExtra(SessionKinds.EXTRA_KIND_ID),
                     notifiedSession = notifiedSession.value,
+                    notifiedHost = notifiedHost.value,
                 )
             }
         }
     }
 }
 
+/**
+ * The app, as three places rather than one screen with a panel on top.
+ *
+ * It was a session list with everything else behind a Settings button that
+ * swapped the list for an 1,100-line panel: the build number, the coordinator
+ * URL, every host card with six buttons on it, Siri, People, the sign-in, the
+ * pin, the runner repository, this phone's GitHub sign-in, the vault, a
+ * temporary machine, runner tokens, the same hosts again, devices, activity,
+ * and a test notification. Every other screen was a dialog on top of that.
+ *
+ * Three places, one job each, the same three as iOS:
+ *
+ *   Sessions   what is running, and answering what is asking
+ *   Machines   is each machine well, and doing something about one
+ *   You        who you are here, what your sessions may use, and setup
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notifiedSession: String? = null) {
+fun FleetScreen(
+    onSignedIn: () -> Unit = {},
+    launchKindId: String? = null,
+    notifiedSession: String? = null,
+    notifiedHost: String? = null,
+) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val outbox = remember { Outbox(context) }
@@ -228,84 +288,106 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
     val scope = rememberCoroutineScope()
 
     // rememberSaveable, not remember: a rotation destroys and recreates the
-    // activity, and plain `remember` state does not survive that. It used to
-    // take you out of the settings panel mid-edit and throw away the URL and
-    // token you had typed — on the one screen where losing input costs the
-    // most, because nothing is saved until you press Save.
-    var showSettings by rememberSaveable { mutableStateOf(!settings.configured) }
+    // activity, and plain `remember` state does not survive that. An
+    // unconfigured app opens on You, where the fleet's address and the sign-in
+    // now sit together.
+    var tab by rememberSaveable { mutableStateOf(if (settings.configured) "sessions" else "you") }
+    var signedIn by remember { mutableStateOf(settings.configured) }
+    // WHETHER THIS PERSON IS AN ADMIN. Null is cannot tell (not asked yet, or a
+    // coordinator too old to say), and admin-only rows are drawn only for true:
+    // a member never meets a control that only answers "needs an admin".
+    var admin by remember { mutableStateOf<Boolean?>(null) }
+    // An admin viewing the fleet as a member: every request says so and the
+    // coordinator answers it as a member's (see Settings.viewAsMember).
+    var viewAsMember by remember { mutableStateOf(settings.viewAsMember) }
+    val showsAdmin = admin == true && !viewAsMember
+    // The machine a notification or the reassurance line asked to open.
+    var openHost by remember { mutableStateOf<String?>(null) }
     var showStart by rememberSaveable { mutableStateOf(false) }
-    // The kind a launcher shortcut asked for, consumed once. Held here rather
-    // than read inside the sheet so that dismissing and reopening by hand does
-    // not silently re-apply a kind nobody chose the second time.
+    var showActivity by rememberSaveable { mutableStateOf(false) }
+    // The kind a launcher shortcut asked for, consumed once.
     var pendingKindId by rememberSaveable { mutableStateOf<String?>(null) }
     var status by rememberSaveable { mutableStateOf("") }
     // The session list is deliberately NOT saved: it is a cache of what the
-    // coordinator said, it is refetched on the way back, and a stale list
-    // restored across a rotation would show sessions that may since have
-    // stopped.
+    // coordinator said, and a stale list restored across a rotation would show
+    // sessions that may since have stopped.
     var sessions by remember { mutableStateOf(listOf<Fleet.Session>()) }
     // Hosts, for the bin — which is fleet-wide and therefore needs them all.
     var binHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
     var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
     /** The session whose workspace is open, if any. */
     var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
-    // The session whose sheet is open: the state sentence, the pane watched
-    // rather than glanced at, and the same actions with room around them.
+    // The session whose sheet is open: the state sentence, the pane watched,
+    // Files, Output and Forget.
     var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
+    // A Claude sign-in asked for from the empty list, on the machine picked.
+    var connectingOn by remember { mutableStateOf<String?>(null) }
+    // Whether THIS PERSON has Claude anywhere. Null until asked, and asked only
+    // when there is nothing to show: "we have not asked" and "asked, and
+    // nobody" stay different, and only the second is a setup step.
+    var haveClaude by remember { mutableStateOf<Boolean?>(null) }
 
     /**
      * @param keepStatus keep whatever is already on screen if the list call
      *   succeeds. Set after an action, whose reply text is the only
-     *   confirmation the coordinator ever gives — a plain refresh would wipe
-     *   "Started cc-brave-otter." a few hundred milliseconds after it appeared.
+     *   confirmation the coordinator ever gives.
      */
-    fun refresh(keepStatus: Boolean = false) {
+    val haptic = LocalHapticFeedback.current
+    val reduced = Design.Motion.reduced()
+
+    suspend fun reload(keepStatus: Boolean = false) {
         if (!settings.configured) return
+        busy = true
+        val reply = fleet.list()
+        sessions = reply.sessions
+        // A failure is shown, never swallowed: "nothing here" and "I could
+        // not reach the coordinator" look identical otherwise.
+        status = if (!reply.ok) reply.text.said() else if (keepStatus) status else ""
+        // THE BIN'S CONTENTS, which `list` does not carry. Falls back to what
+        // we already had: a fleet call that fails must not blank the list.
+        binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
+        if (sessions.isEmpty() && binHosts.isNotEmpty()) {
+            runCatching { fleet.connections() }.getOrNull()?.connections?.let { c ->
+                haveClaude = c.linked("claude") != null
+            }
+        }
+        pending = outbox.held.size
+        busy = false
+    }
+
+    fun refresh(keepStatus: Boolean = false) {
+        scope.launch { reload(keepStatus) }
+    }
+
+    /**
+     * Run one verb and quote what came back, then re-list.
+     *
+     * FELT, NOT ONLY SEEN. Stop, Resume and an answer each say in the hand
+     * whether the fleet took them, and a refusal feels different from a yes:
+     * the quoted reply is at the top of a list read at arm's length at night.
+     */
+    fun act(work: suspend () -> Fleet.Reply) {
         scope.launch {
             busy = true
-            val reply = fleet.list()
-            sessions = reply.sessions
-            // A failure is shown, never swallowed: "nothing here" and "I could
-            // not reach the coordinator" look identical otherwise, and they are
-            // completely different problems.
-            status = if (!reply.ok) reply.text.said() else if (keepStatus) status else ""
-            // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is
-            // not a session, it is a session that stopped being one. Kept in a
-            // separate assignment that falls back to what we already had — a
-            // fleet call that fails must not blank the session list that
-            // already arrived.
-            binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
-            // AFTER EVERY REFRESH, because a command held a moment ago must
-            // show up without waiting for the next flush. Every action on this
-            // screen refreshes when it finishes, so this is the one place that
-            // sees both a queue that grew and a queue that drained.
-            pending = outbox.held.size
+            val reply = work()
+            status = reply.text.said()
+            haptic.performHapticFeedback(if (reply.ok) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
             busy = false
+            reload(keepStatus = true)
         }
     }
 
     /**
-     * Start a session without making anybody watch it happen.
-     *
-     * THE SHEET CLOSES ON TAP. Starting takes the host up to a minute — a
-     * container, a fresh volume, credentials, and the Remote Control check —
-     * and two earlier attempts at this were wrong in the same direction: a
-     * disabled button, then a spinner explaining the wait. Explaining a wait is
-     * still a wait, and nobody needs to be present for it.
-     *
-     * The coroutine is owned HERE, not in the dialog, because a job scoped to a
-     * dismissed composable is one that may not finish — and this is a mutating
-     * request that has already left.
+     * Start a session without making anybody watch it happen. THE SHEET
+     * CLOSES ON TAP, and the coroutine is owned HERE, because a job scoped to a
+     * dismissed composable is one that may not finish.
      */
     fun startInBackground(request: StartRequest) {
         // ON A MACHINE THAT DOES NOT EXIST YET. The coordinator holds the
-        // session with the dispatch and starts it when the runner joins, so
-        // this returns long before there is a session, and says so. The
-        // session's own notification, with its link, is what arrives later.
+        // session with the dispatch and starts it when the runner joins.
         request.platform?.let { platform ->
-            // "New macOS machine" reads as "a new macOS machine" in a
-            // sentence: only the first letter changes case.
             val label = newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
             status = "Asking GitHub for a ${label.replaceFirstChar { it.lowercase() }}. The session starts on it when it joins."
             val start = buildMap {
@@ -318,14 +400,12 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                 val text = reply.text.ifBlank { "Asked for it." }
                 LocalNotice.post(context, if (reply.ok) "Machine on its way" else "Could not ask for a machine", text)
                 status = text
-                refresh(keepStatus = true)
+                reload(keepStatus = true)
             }
             return
         }
-        // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO, because "ready" reads as
-        // "working" and only one of these is. A session with no profile is
-        // waiting for a person, and somebody who walks away expecting output
-        // comes back to an empty prompt.
+        // SAID DIFFERENTLY WHEN IT HAS NOTHING TO DO: a session with no profile
+        // is waiting for a person.
         status = if (request.profile == null) {
             "Starting a session. It will come up idle, waiting for you."
         } else {
@@ -344,11 +424,8 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                 LocalNotice.post(context, "Session ready", reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }
             } catch (e: Exception) {
-                // A TIMEOUT IS NOT A FAILURE: `start` is mutating and carries
-                // an idempotency key, so the session may well exist. Saying
-                // "failed" would send somebody to start a second one — and the
-                // second would be a second session, because a retry mints a
-                // new key.
+                // A TIMEOUT IS NOT A FAILURE: `start` carries an idempotency
+                // key, so the session may well exist.
                 val message = e.message.orEmpty()
                 val timedOut = e is java.net.SocketTimeoutException || message.contains("timeout", true)
                 val out = if (timedOut) {
@@ -360,38 +437,35 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                 out
             }
             status = text
-            refresh(keepStatus = true)
+            reload(keepStatus = true)
         }
     }
 
     // Launched from a shortcut: open the sheet with that kind already chosen.
-    // The sheet, not a silent start — a shortcut says WHAT kind of work, and the
-    // brief still says what the work is. Skipping straight to a started session
-    // would give back exactly the unnamed session this whole feature exists to
-    // stop producing.
     LaunchedEffect(launchKindId) {
         if (launchKindId != null) {
             pendingKindId = launchKindId
+            tab = "sessions"
             showStart = true
         }
     }
 
-    // A tapped notification lands on the sessions, whatever was showing when
-    // the phone was put down, and the list is the fleet now rather than the
-    // fleet when it went in a pocket.
+    // A tapped notification lands where it is about: the session's sheet, or
+    // a machine's page for a host event.
     LaunchedEffect(notifiedSession) {
         if (notifiedSession != null) {
-            showSettings = false
+            tab = "sessions"
             refresh()
         }
     }
-    // AND THE SESSION THE NOTIFICATION WAS ABOUT IS OPENED. A buzz says
-    // "bigjob is back at its prompt"; landing on a list of twelve and finding
-    // bigjob in it is the search the notification existed to save. Keyed on
-    // the list as well as the name, because refresh() is asynchronous and the
-    // session is opened from the fresh list, once it has arrived and still
-    // holds the name. Once per tap: a later refresh must not reopen a sheet
-    // somebody closed.
+    LaunchedEffect(notifiedHost) {
+        if (notifiedHost != null) {
+            openHost = notifiedHost
+            tab = "machines"
+        }
+    }
+    // AND THE SESSION THE NOTIFICATION WAS ABOUT IS OPENED, once per tap,
+    // from the fresh list once it has arrived and still holds the name.
     var openedFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(notifiedSession, sessions) {
         if (notifiedSession != null && notifiedSession != openedFor) {
@@ -400,6 +474,27 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
                 openedFor = notifiedSession
             }
         }
+    }
+
+    // FLUSHED ON EVERY SIGN-IN AND LAUNCH, which is the moment we learn the
+    // fleet answers. Not on a timer: a timer retries into an outage.
+    LaunchedEffect(signedIn, viewAsMember) {
+        admin = if (signedIn) fleet.me().getOrNull() else null
+        if (!signedIn) {
+            sessions = emptyList()
+            binHosts = emptyList()
+            return@LaunchedEffect
+        }
+        reload()
+        val sent = outbox.flush { entry ->
+            runCatching {
+                val reply = fleet.resend(entry)
+                // A REFUSAL COUNTS AS DELIVERED: the fleet answered.
+                if (!reply.ok) status = reply.text.said()
+            }
+        }
+        pending = outbox.held.size
+        if (sent > 0) reload(keepStatus = true)
     }
 
     if (showStart) {
@@ -413,243 +508,275 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
             onStart = { request -> startInBackground(request) },
         )
     }
-
     browsing?.let { session ->
         FilesSheet(
             fleet = fleet,
             session = session.name,
-            // The host explicitly: a session lives on ONE box, and a browse
-            // that fanned out would read a directory that exists on two
-            // machines with different contents in it.
+            // The host explicitly: a session lives on ONE box.
             host = session.hostId,
             onDismiss = { browsing = null },
         )
     }
-
     inspecting?.let { session ->
         SessionSheet(
             fleet = fleet,
             initial = session,
             onDismiss = { inspecting = null },
-            // The sheet's own actions reach the list, so a Stop moves the
-            // card as well as the sentence at the top of the sheet.
             onChanged = { refresh(keepStatus = true) },
+            onFiles = { browsing = session },
         )
     }
-
     if (showBin) {
-        RecycleBinSheet(
-            settings = settings,
-            hosts = binHosts,
-            onDismiss = { showBin = false },
-            onChanged = { refresh(keepStatus = true) },
-        )
+        RecycleBinSheet(settings = settings, hosts = binHosts, onDismiss = { showBin = false }, onChanged = { refresh(keepStatus = true) })
     }
-
-    // FLUSHED ON EVERY REFRESH, which is the moment we have just learned the
-    // fleet answers. Not on a timer: a timer retries into an outage, and the
-    // refresh already happens when the app is opened, pulled, or comes back.
-    LaunchedEffect(Unit) {
-        refresh()
-        val sent = outbox.flush { entry ->
-            runCatching {
-                val reply = fleet.resend(entry)
-                // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
-                // session is gone", "you cannot stop that" — and holding a
-                // command the fleet has already judged would retry it forever.
-                if (!reply.ok) status = reply.text.said()
-            }
-        }
-        pending = outbox.held.size
-        // One extra refresh if anything landed, and only here: flush is not
-        // called from refresh on this side, so there is no recursion to break.
-        if (sent > 0) refresh(keepStatus = true)
+    if (showActivity) ActivitySheet(settings, onDismiss = { showActivity = false })
+    connectingOn?.let { host ->
+        CredentialsSheet(settings, host, onDismiss = { connectingOn = null; refresh() }, onlyClaude = true)
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Fleetwright") },
+                title = { Text(when (tab) { "machines" -> "Machines"; "you" -> "You"; else -> "Fleetwright" }) },
                 actions = {
-                    TextButton(onClick = { refresh() }, enabled = !busy) { Text("Refresh") }
-                    // THE BIN, WITH THE SESSIONS. It sat under each host's row
-                    // in settings, because that is where the volumes live — an
-                    // implementation detail leaking into the layout. Reachable
-                    // when EMPTY too: a safety net nobody can find until they
-                    // need it does not reassure anybody, and this one looked
-                    // for a while like it did not exist.
-                    val bin = binHosts.sumOf { it.bin.size }
-                    TextButton(onClick = { showBin = true }) {
-                        Text(if (bin > 0) "Bin ($bin)" else "Bin")
+                    if (tab == "sessions" && settings.configured) {
+                        // THE BIN, WITH THE SESSIONS, reachable when empty too:
+                        // a safety net nobody can find until they need it does
+                        // not reassure anybody.
+                        val bin = binHosts.sumOf { it.bin.size }
+                        TextButton(onClick = { showBin = true }) { Text(if (bin > 0) "Bin ($bin)" else "Bin") }
+                        // WHAT HAPPENED WHILE THE APP WAS CLOSED, beside the bin.
+                        TextButton(onClick = { showActivity = true }) { Text("Activity") }
                     }
-                    TextButton(onClick = { showSettings = !showSettings }) { Text("Settings") }
                 },
             )
         },
+        bottomBar = {
+            // THE SHORT BAR, Material 3's current one: shorter than the old
+            // NavigationBar, with the mark above its word. The marks were empty
+            // slots, so the three tabs read as three words; they are now the
+            // same list, rack and person iOS shows in the same places.
+            ShortNavigationBar {
+                listOf(
+                    Triple("sessions", "Sessions", NavIcons.sessions),
+                    Triple("machines", "Machines", NavIcons.machines),
+                    Triple("you", "You", NavIcons.you),
+                ).forEach { (key, label, mark) ->
+                    ShortNavigationBarItem(
+                        selected = tab == key,
+                        onClick = { tab = key },
+                        icon = { Icon(mark, contentDescription = null) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        },
         floatingActionButton = {
-            if (settings.configured && !showSettings) {
+            if (settings.configured && tab == "sessions") {
                 ExtendedFloatingActionButton(
                     text = { Text("New session") },
                     icon = {},
-                    // Opens the sheet rather than starting immediately. The
-                    // one-tap start is still there — leave it blank and press
-                    // Start — but a session nobody described is one nobody
-                    // recognises a week later.
+                    // Opens the sheet rather than starting immediately: a
+                    // session nobody described is one nobody recognises later.
                     onClick = { showStart = true },
                 )
             }
         },
     ) { padding ->
-        Column(
-            Modifier
-                .padding(padding)
-                .padding(horizontal = Design.Space.page, vertical = Design.Space.groupTight)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight),
-        ) {
-
-            if (showSettings) {
-                SettingsPanel(settings) {
-                    showSettings = false
+        // THE BOTTOM BAR'S HEIGHT IS RESERVED, so the last card is never
+        // under it.
+        val inner = Modifier.padding(padding).fillMaxSize()
+        when (tab) {
+            "machines" -> MachinesScreen(
+                settings = settings,
+                admin = showsAdmin,
+                viewAsMember = viewAsMember,
+                opening = openHost,
+                onOpened = { openHost = null },
+                modifier = inner,
+            )
+            "you" -> YouScreen(
+                settings = settings,
+                admin = admin,
+                viewAsMember = viewAsMember,
+                onViewAsMember = {
+                    settings.viewAsMember = it
+                    viewAsMember = it
+                },
+                onSignedIn = {
+                    signedIn = true
                     // Signing in is what makes push registration possible at
-                    // all — before it there is no credential to POST with — so
-                    // this runs on the way out of settings rather than only at
-                    // launch, which would leave a phone that signed in on its
-                    // first run unregistered until its second.
+                    // all — before it there is no credential to POST with.
                     onSignedIn()
-                    refresh()
-                }
-                return@Column
-            }
-
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-
-            // FIRST, ALWAYS, ABOVE THE LIST. docs/psychology.md names
-            // "nothing needs you" as the most important state in the system
-            // and neither app said it: a list of rows is not that, because
-            // reading five rows and concluding none of them is asking anything
-            // is work somebody redoes every time they open the app — which is
-            // the loop the anxiety runs in.
-            ReassuranceBanner(Reassurance.of(sessions, binHosts))
-
-            if (status.isNotBlank()) {
-                // Evidence quoted from somewhere else, so it sits on an inner
-                // surface rather than on a card of its own — it should not look
-                // like something this screen said.
-                Text(
-                    status,
-                    Modifier
-                        .fillMaxWidth()
-                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
-                        .padding(Design.Space.inside),
-                    fontFamily = FontFamily.Monospace,
-                    style = Design.Style.label,
-                    color = Design.Palette.ink.now,
-                )
-            }
-
-            // WHAT IS WAITING, because a queue nobody can see is not a queue —
-            // it is a surprise arriving later. The count is enough here: the
-            // commands say what they are when they land, and a list of them on
-            // the main screen would be a second inbox to read.
-            if (pending > 0) {
-                Text(
-                    if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
-                    else "$pending commands are held on this phone and will be sent when the fleet answers.",
-                    Modifier
-                        .fillMaxWidth()
-                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
-                        .padding(Design.Space.inside),
-                    style = Design.Style.bodySmall,
-                    color = Design.Palette.inkDim.now,
-                )
-            }
-
-            if (sessions.isEmpty() && !busy) {
-                Column(
-                    Modifier.padding(top = Design.Space.group),
-                    verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                },
+                onSignedOut = {
+                    settings.viewAsMember = false
+                    viewAsMember = false
+                    signedIn = false
+                },
+                modifier = inner,
+            )
+            else -> PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = {
+                    scope.launch {
+                        refreshing = true
+                        reload()
+                        refreshing = false
+                    }
+                },
+                modifier = inner,
+            ) {
+                LazyColumn(
+                    Modifier.padding(horizontal = Design.Space.page),
+                    verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight),
                 ) {
-                    Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
-                    Text(
-                        "Nothing is running on any machine in this fleet. Tap “New session” to start one.",
-                        style = Design.Style.bodySmall,
-                        color = Design.Palette.inkDim.now,
-                    )
+                    item {
+                        Column(
+                            Modifier.padding(top = Design.Space.groupTight),
+                            verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight),
+                        ) {
+                            if (busy && !refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            // SAID WHERE IT IS SEEN. An admin viewing as a
+                            // member is looking at a smaller fleet than theirs.
+                            if (viewAsMember) {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                        .padding(horizontal = Design.Space.inside),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("Viewing as a member", style = Design.Style.bodySmall, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                                    TextButton(
+                                        onClick = { settings.viewAsMember = false; viewAsMember = false },
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                    ) { Text("Switch back") }
+                                }
+                            }
+                            // FIRST, ALWAYS, ABOVE THE LIST. "Nothing needs you"
+                            // is the most important state in the system.
+                            //
+                            // AND IT GOES WHERE IT POINTS: one unwell machine
+                            // opens its page; several open the list.
+                            val summary = Reassurance.of(sessions, binHosts)
+                            val unwell = binHosts.filter { it.state != "healthy" }.map { it.hostId }
+                            if (unwell.isEmpty()) {
+                                ReassuranceBanner(summary)
+                            } else {
+                                Box(
+                                    Modifier.clickable(role = Role.Button) {
+                                        openHost = unwell.singleOrNull()
+                                        tab = "machines"
+                                    },
+                                ) { ReassuranceBanner(summary) }
+                            }
+                            if (status.isNotBlank()) {
+                                // Evidence quoted from somewhere else, on an
+                                // inner surface rather than a card of its own.
+                                Text(
+                                    status,
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                        .padding(Design.Space.inside),
+                                    fontFamily = FontFamily.Monospace,
+                                    style = Design.Style.label,
+                                    color = Design.Palette.ink.now,
+                                )
+                            }
+                            // WHAT IS WAITING, because a queue nobody can see is
+                            // a surprise arriving later.
+                            if (pending > 0) {
+                                Text(
+                                    if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
+                                    else "$pending commands are held on this phone and will be sent when the fleet answers.",
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                        .padding(Design.Space.inside),
+                                    style = Design.Style.bodySmall,
+                                    color = Design.Palette.inkDim.now,
+                                )
+                            }
+                            if (sessions.isEmpty() && !busy) {
+                                EmptySessions(
+                                    configured = settings.configured,
+                                    // TWO DIFFERENT EMPTY SCREENS, as on iOS. A
+                                    // person with nowhere to run anything is
+                                    // looking at a setup step, not an empty list.
+                                    needsSetup = binHosts.isNotEmpty() && haveClaude == false,
+                                    hosts = binHosts.map { it.hostId },
+                                    onConnect = { connectingOn = it },
+                                    onSignIn = { tab = "you" },
+                                )
+                            }
+                        }
+                    }
+                    items(sessions, key = { "${it.hostId}/${it.name}" }) { session ->
+                        // FILES, OUTPUT AND FORGET ARE ON THE SESSION'S SHEET,
+                        // and only there. The card carried the same row of
+                        // actions as the sheet it opens, plus Peek, which the
+                        // sheet already does by watching the screen.
+                        //
+                        // A CARD MOVES TO WHERE IT NOW BELONGS: one that started
+                        // asking goes to the top, a new one arrives, a forgotten
+                        // one leaves. No travel when animations are off.
+                        SessionCard(
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = Design.Motion.change(),
+                                placementSpec = Design.Motion.settle(reduced),
+                                fadeOutSpec = Design.Motion.change(),
+                            ),
+                            session = session,
+                            busy = busy,
+                            onStop = { act { fleet.stop(session.name) } },
+                            onAnswer = { option -> act { fleet.answer(session.name, option, session.prompt?.id) } },
+                            onInspect = { inspecting = session },
+                            onResume = { act { fleet.resume(session.name, "summary") } },
+                            onOpen = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+                        )
+                    }
+                    item { Spacer(Modifier.heightIn(min = 88.dp)) }
                 }
             }
+        }
+    }
+}
 
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(Design.Space.groupTight)) {
-                items(sessions, key = { "${it.hostId}/${it.name}" }) { session ->
-                    SessionCard(
-                        session = session,
-                        busy = busy,
-                        onStop = {
-                            scope.launch {
-                                busy = true
-                                status = fleet.stop(session.name).text.said()
-                                busy = false
-                                refresh(keepStatus = true)
-                            }
-                        },
-                        onForget = {
-                            scope.launch {
-                                busy = true
-                                status = fleet.forget(session.name).text.said()
-                                busy = false
-                                refresh(keepStatus = true)
-                            }
-                        },
-                        onAnswer = { option ->
-                            scope.launch {
-                                busy = true
-                                status = fleet.answer(session.name, option, session.prompt?.id).text.said()
-                                busy = false
-                                refresh(keepStatus = true)
-                            }
-                        },
-                        // Peek deliberately does NOT refresh afterwards: the
-                        // pane output IS the answer, and a refresh a moment
-                        // later would wipe it off the screen.
-                        onPeek = {
-                            scope.launch {
-                                busy = true
-                                // A PANE OF EMPTY ROWS IS NOT A PICTURE OF
-                                // ANYTHING, and this is the button whose whole
-                                // answer is the pane — so it has to say
-                                // something when the pane is blank rather than
-                                // leave the screen as it was. See String.said.
-                                status = fleet.peek(session.name).text
-                                    .said("Nothing is on ${session.label}'s screen right now.")
-                                busy = false
-                            }
-                        },
-                        onFiles = { browsing = session },
-                        onInspect = { inspecting = session },
-                        // Like Peek, and for the same reason: the output IS
-                        // the answer, and a refresh a moment later would wipe
-                        // it off the screen.
-                        onOutput = {
-                            scope.launch {
-                                busy = true
-                                status = fleet.logs(session.hostId, session = session.name).text
-                                    .said("${session.label} has printed nothing that this machine could read.")
-                                busy = false
-                            }
-                        },
-                        onResume = {
-                            scope.launch {
-                                busy = true
-                                status = fleet.resume(session.name, "summary").text.said()
-                                busy = false
-                                refresh(keepStatus = true)
-                            }
-                        },
-                        onOpen = { url ->
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        },
-                    )
+/**
+ * Nothing in the list, said as one of three different situations: not signed
+ * in, nothing set up for you yet, or simply nothing running.
+ */
+@Composable
+private fun EmptySessions(
+    configured: Boolean,
+    needsSetup: Boolean,
+    hosts: List<String>,
+    onConnect: (String) -> Unit,
+    onSignIn: () -> Unit,
+) {
+    Column(
+        Modifier.padding(top = Design.Space.group),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        when {
+            !configured -> {
+                Text("Not signed in", style = Design.Style.section, color = Design.Palette.ink.now)
+                Hint("Sign in to a fleet under You, and its sessions are listed here.")
+                OutlinedButton(onClick = onSignIn) { Text("Go to You") }
+            }
+            needsSetup -> {
+                Text("Nothing set up yet", style = Design.Style.section, color = Design.Palette.ink.now)
+                Hint("A session runs on YOUR Claude account. Sign in to Claude on one of these machines and you can start work here.")
+                // THE SAME SIGN-IN A MACHINE'S PAGE OFFERS, on the machine picked.
+                hosts.forEach { host ->
+                    OutlinedButton(onClick = { onConnect(host) }) { Text("Connect Claude on $host") }
                 }
+            }
+            else -> {
+                Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
+                Hint("Nothing is running on any machine in this fleet. Tap “New session” to start one.")
             }
         }
     }
@@ -657,67 +784,42 @@ fun FleetScreen(onSignedIn: () -> Unit = {}, launchKindId: String? = null, notif
 
 @Composable
 private fun SessionCard(
+    modifier: Modifier = Modifier,
     session: Fleet.Session,
     busy: Boolean,
     onStop: () -> Unit,
     onResume: () -> Unit,
-    onForget: () -> Unit,
     onAnswer: (Int) -> Unit,
-    onPeek: () -> Unit,
-    onFiles: () -> Unit,
-    /**
-     * What the session SAID, as against what it looks like now: the
-     * container's output, which outlives the pane. The reason a session died
-     * is here and nowhere else once its window is gone.
-     */
-    onOutput: () -> Unit,
     onOpen: (String) -> Unit,
-    /** The session's own sheet: the way to LOOK, where the card is the way to act. */
+    /** The session's own sheet: the way to look, and Files, Output and Forget. */
     onInspect: () -> Unit,
 ) {
-    var confirmingForget by remember { mutableStateOf(false) }
-    if (confirmingForget) {
-        AlertDialog(
-            onDismissRequest = { confirmingForget = false },
-            title = { Text("Forget ${session.label}?") },
-            // Confirmed where stop is not, because stop is reversible by
-            // resume and forget is reversible by nothing: the conversation and
-            // the workspace are both deleted.
-            text = { Text("This deletes its conversation and workspace. It cannot be undone.") },
-            confirmButton = {
-                TextButton(onClick = { confirmingForget = false; onForget() }) { Text("Forget") }
-            },
-            dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
-        )
-    }
-    // NO BORDER, AND A RING THAT MEANS SOMETHING. Material's Card draws a
-    // filled box; the design says a card is separated by being lifted off the
-    // page, not by being outlined. The one card that wears a tone is the one
-    // asking a question — which is the only card on this screen a person has to
-    // find in a hurry.
-    val ring = if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ring.now
+    // NO BORDER, AND A RING THAT MEANS SOMETHING. The one card that wears a
+    // tone is the one asking a question.
+    //
+    // AND IT TAKES THE TONE ON as the question arrives, rather than being
+    // swapped for it.
+    val ring by animateColorAsState(
+        if (session.prompt != null) Design.Palette.attention.now else Design.Palette.ring.now,
+        Design.Motion.change(),
+        label = "ring",
+    )
+    val reduced = Design.Motion.reduced()
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .fleetCard(radius = Design.Radius.cardSmall, ring = ring)
             .padding(Design.Space.groupTight),
         verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // The title is what a person recognises; the name is the
-            // identity everything else keys on, so both are shown when they
-            // differ rather than hiding one.
-            //
-            // THE TITLE IS THE WAY IN. A session is a subject and has a sheet
-            // (SessionSheet): the pane, the state sentence, the same actions
-            // with room around them. The card keeps its controls so the list
-            // stays the place to answer and stop; the sheet is where to look.
-            // 48dp tall whatever the type size, because it is a target.
+            // THE TITLE IS THE WAY IN, 48dp tall whatever the type size, and a
+            // button to TalkBack, because it is one.
             Row(
                 Modifier
                     .weight(1f)
                     .heightIn(min = 48.dp)
-                    .clickable(onClick = onInspect),
+                    .clickable(role = Role.Button, onClick = onInspect),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -729,121 +831,78 @@ private fun SessionCard(
                 )
                 Text(" ›", style = Design.Style.bodyStrong, color = Design.Palette.inkDim.now)
             }
-            // Colour AND the word, never colour alone: the label is what
-            // carries the meaning and the tint only reinforces it, which is
-            // what "differentiate without colour" asks for and is also just
-            // legible to everybody else.
-            //
-            // A chip drawn by hand rather than an AssistChip: the Material
-            // chip is a 32dp pill with its own outline and its own idea of
-            // padding, and three of the design's rules had to be argued
-            // with to get one line of text out of it.
-            Text(
-                session.status,
-                Modifier
-                    .background(
-                        Design.Palette.inner.now,
-                        RoundedCornerShape(Design.Radius.chip),
-                    )
+            // Colour AND the word, never colour alone. The word crossfades
+            // into the next one: a session changing state is the news.
+            AnimatedContent(
+                targetState = session.status,
+                modifier = Modifier
+                    .background(Design.Palette.inner.now, RoundedCornerShape(Design.Radius.chip))
                     .padding(horizontal = Design.Space.insideTight, vertical = Design.Space.hair),
-                style = Design.Style.label,
-                color = statusColour(session.status),
-            )
+                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                label = "status",
+            ) { status ->
+                Text(status, style = Design.Style.label, color = statusColour(status))
+            }
         }
         if (session.label != session.name) {
-            Text(
-                session.name,
-                style = Design.Style.micro,
-                fontFamily = FontFamily.Monospace,
-                color = Design.Palette.inkDim.now,
-            )
+            Text(session.name, style = Design.Style.micro, fontFamily = FontFamily.Monospace, color = Design.Palette.inkDim.now)
         }
-        // Where, how long, and whose account — the three questions about a
-        // session somebody started yesterday. One line, secondary: context
-        // rather than the point. The account is hidden when it is
-        // "shared", because on a fleet where nobody has linked one it
-        // would say the same thing on every row and mean nothing.
+        // Where, how long, and whose account — one line, secondary.
         val context = listOfNotNull(
             session.hostId?.let { "on $it" },
             session.workspace,
             session.age,
             session.account?.takeIf { it != "shared" },
-            // How full its window is, when the host read it. A count, not a
-            // bar: the window's size is not something the host knows.
             session.contextLine,
         )
         if (context.isNotEmpty()) {
-            Text(
-                context.joinToString(" · "),
-                style = Design.Style.micro,
-                color = Design.Palette.inkDim.now,
-            )
+            Text(context.joinToString(" · "), style = Design.Style.micro, color = Design.Palette.inkDim.now)
         }
-        // HOW LONG IT HAS BEEN QUIET. "Running" was doing two jobs: a
-        // session mid-build and one that has not moved since Tuesday
-        // looked identical, and the difference is the whole question
-        // somebody opens this app to ask. Null under five minutes, so a
-        // working session never wears it.
-        session.quietFor?.let {
-            Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now)
-        }
-        // WHAT IT IS ASKING, and the answer as buttons. Reading a
-        // question on a phone and being unable to answer it is the shape
-        // of the problem, not a smaller version of it. The options are the
-        // ones the HOST published; an ordinal is sent, never text.
+        // HOW LONG IT HAS BEEN QUIET. Null under five minutes.
+        session.quietFor?.let { Text(it, style = Design.Style.micro, color = Design.Palette.inkDim.now) }
+        // WHAT IT IS ASKING, and the answer as rows. The options are the ones
+        // the HOST published; an ordinal is sent, never text.
+        // THE QUESTION UNFOLDS from under the title it belongs to; with
+        // animations off it fades in where it will sit.
+        AnimatedVisibility(
+            visible = session.prompt != null,
+            enter = if (reduced) fadeIn(Design.Motion.change())
+            else fadeIn(Design.Motion.change()) + expandVertically(Design.Motion.settle(false)!!),
+            exit = fadeOut(Design.Motion.change()) + shrinkVertically(Design.Motion.change()),
+        ) {
         session.prompt?.let { prompt ->
             if (prompt.options.isNotEmpty()) {
                 Column(
                     Modifier.padding(top = Design.Space.insideTight),
                     verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
                 ) {
-                    // THE QUESTION IS THE TITLE HERE. It is why the
-                    // notification arrived and why this card is at the top
-                    // of the list; setting it in the same size as the
-                    // card's own metadata was the app burying its own
-                    // headline.
-                    prompt.question?.let {
-                        Text(it, style = Design.Style.title, color = Design.Palette.ink.now)
-                    }
+                    // THE QUESTION IS THE TITLE HERE.
+                    prompt.question?.let { Text(it, style = Design.Style.title, color = Design.Palette.ink.now) }
                     prompt.options.forEach { option ->
-                        // A row, not a TextButton: 48dp of target whatever
-                        // the label's length, on the control this whole
-                        // notification exists to offer.
+                        // A row, not a TextButton: 48dp of target whatever the
+                        // label's length.
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(Design.Radius.row))
-                                .clickable(enabled = !busy) { onAnswer(option.index) }
+                                .clickable(enabled = !busy, role = Role.Button) { onAnswer(option.index) }
                                 .background(Design.Palette.inner.now)
-                                .border(
-                                    1.dp,
-                                    Design.Palette.ring.now,
-                                    RoundedCornerShape(Design.Radius.row),
-                                )
+                                .border(1.dp, Design.Palette.ring.now, RoundedCornerShape(Design.Radius.row))
                                 .heightIn(min = 48.dp)
                                 .padding(horizontal = Design.Space.inside),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
                         ) {
-                            // The ordinal, because an ordinal is what is
-                            // sent — the label never leaves the box.
                             Text(
                                 "${option.index}",
                                 Modifier
-                                    .background(
-                                        Design.Palette.track.now,
-                                        RoundedCornerShape(Design.Radius.chip),
-                                    )
+                                    .background(Design.Palette.track.now, RoundedCornerShape(Design.Radius.chip))
                                     .padding(horizontal = Design.Space.insideTight),
                                 style = Design.Style.label,
                                 fontFamily = FontFamily.Monospace,
                                 color = Design.Palette.inkDim.now,
                             )
-                            Text(
-                                option.label,
-                                style = Design.Style.bodySmall,
-                                color = Design.Palette.ink.now,
-                            )
+                            Text(option.label, style = Design.Style.bodySmall, color = Design.Palette.ink.now)
                         }
                     }
                 }
@@ -855,31 +914,19 @@ private fun SessionCard(
                 )
             }
         }
+        }
 
+        // ONE PRIMARY ACTION, at 48dp.
         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-            TextButton(onClick = onPeek, enabled = !busy) { Text("Peek") }
-            // THE WORKSPACE, on running and stopped sessions alike. The
-            // volume survives a stop — that is what makes a session
-            // resumable — so "collect what it produced" is a thing to do
-            // AFTER the work has finished, which is most of the time.
-            TextButton(onClick = onFiles, enabled = !busy) { Text("Files") }
-            // ITS OUTPUT, on running and stopped sessions alike, and for the
-            // same reason as Files: "why did it stop" is a question asked
-            // after it has.
-            TextButton(onClick = onOutput, enabled = !busy) { Text("Output") }
             if (session.status == "running") {
-                TextButton(onClick = onStop, enabled = !busy) { Text("Stop") }
+                TextButton(onClick = onStop, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Stop") }
                 session.rcUrl?.let { url ->
-                    // The reason Remote Control is worth surfacing at all:
-                    // this is the button that turns a notification into
-                    // actually driving the session.
-                    TextButton(onClick = { onOpen(url) }) { Text("Open") }
+                    // The button that turns a notification into actually
+                    // driving the session. The same words as its sheet.
+                    TextButton(onClick = { onOpen(url) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Continue in Remote Control") }
                 }
             } else if (session.resumable) {
-                TextButton(onClick = onResume, enabled = !busy) { Text("Resume") }
-            }
-            if (session.status != "running") {
-                TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Forget") }
+                TextButton(onClick = onResume, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Resume") }
             }
         }
     }

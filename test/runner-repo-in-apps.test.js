@@ -15,7 +15,8 @@ import { iosSources } from './helpers/ios-sources.js';
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 // The whole iOS app: the runner repository is a screen of its own now.
 const IOS = iosSources();
-const ANDROID = ['Fleet.kt', 'SettingsPanel.kt', 'StartSheet.kt', 'MainActivity.kt']
+// The runner repository is the Temporary machines screen under You now.
+const ANDROID = ['Fleet.kt', 'YouScreen.kt', 'StartSheet.kt', 'MainActivity.kt']
   .map((f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))
   .join('\n');
 

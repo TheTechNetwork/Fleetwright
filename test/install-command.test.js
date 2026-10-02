@@ -27,7 +27,8 @@ const IOS_CLIENT = readFileSync(new URL('../apps/ios/Fleetwright/Fleet.swift', i
 const IOS_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/AddMachineView.swift', import.meta.url), 'utf8');
 const IOS_HOST = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
 const DROID_CLIENT = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt', import.meta.url), 'utf8');
-const DROID_VIEW = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/SettingsPanel.kt', import.meta.url), 'utf8');
+// Add a machine and each machine's page, where the two kinds of pin are minted.
+const DROID_VIEW = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MachinesScreen.kt', import.meta.url), 'utf8');
 
 test('the command names the fleet and carries the pin as a variable, never in the URL', () => {
   const line = installCommand({ origin: 'https://fleet.example', installUrl: 'https://raw.example/bootstrap.sh', code: '123456' });
@@ -147,5 +148,8 @@ test('the Android app reads the line off the reply and shows it beside the pin, 
   assert.match(DROID_VIEW, /if \(pinInstall\.isNotBlank\(\)\) \{[\s\S]{0,700}?SelectionContainer \{\n\s+Text\(pinInstall/);
   assert.match(DROID_VIEW, /\} else \{\n\s+Text\(\n\s+"On that box: fleetwright-sidecar enrol \$pin/);
   // A bound pin re-keys a box that exists; no install line for it.
-  assert.match(DROID_VIEW, /pinInstall = ""\n\s+pin = runCatching \{\n\s+Fleet\(settings\)\.mintHostPin\(hostId = host\.hostId, readmit = host\.revoked\)\n\s+\}\.map \{ it\.code \}/);
+  // On the machine's own page, which has no install line to show.
+  assert.match(DROID_VIEW, /pin = runCatching \{ Fleet\(settings\)\.mintHostPin\(hostId = hostId, readmit = member\.revoked\) \}\n\s+\.map \{ it\.code \}/);
+  const page = DROID_VIEW.slice(DROID_VIEW.indexOf('private fun MachinePage('), DROID_VIEW.indexOf('private fun AddMachineSheet('));
+  assert.doesNotMatch(page, /pinInstall/);
 });

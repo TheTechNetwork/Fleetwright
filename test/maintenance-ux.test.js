@@ -40,8 +40,8 @@ const APPS = [
   // and a test that names a file asserts where code LIVES while claiming to
   // assert what it DOES.
   ['iOS', IOS_ALL, 'apps/ios/Fleetwright/Fleet.swift'],
-  // And the whole Android app, for the same reason: its settings panel is
-  // SettingsPanel.kt now.
+  // And the whole Android app, for the same reason: a machine's controls are
+  // on its page in MachinesScreen.kt now.
   ['Android', ANDROID_ALL, 'apps/android/app/src/main/java/network/thetech/fleetwright/Fleet.kt'],
 ];
 

@@ -47,7 +47,7 @@ test('Android words the result from the refreshed connections', () => {
     new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt', import.meta.url),
     'utf8',
   );
-  const block = authorizeBlock(src, 'WebAuth.returned.collect', 'AlertDialog(');
+  const block = authorizeBlock(src, 'WebAuth.returned.collect', 'FullScreen(');
 
   assert.match(block, /connections\.linked\(/, 'the result must consult the same fact the row renders');
   assert.match(block, /did not connect/, 'a failed connect must say so');

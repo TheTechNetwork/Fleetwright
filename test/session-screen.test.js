@@ -151,7 +151,7 @@ test('both phones put the same things in the same order, and say the same senten
 
 test('the card title is the way in on Android too, and the sheet tells the list', () => {
   const main = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url), 'utf8');
-  assert.match(main, /\.heightIn\(min = 48\.dp\)\s*\.clickable\(onClick = onInspect\)/, 'a 48dp target');
+  assert.match(main, /\.heightIn\(min = 48\.dp\)\s*\.clickable\(role = Role\.Button, onClick = onInspect\)/, 'a 48dp target, and a button to TalkBack');
   assert.match(main, /onInspect = \{ inspecting = session \}/);
   assert.match(main, /SessionSheet\([\s\S]{0,300}onChanged = \{ refresh\(keepStatus = true\) \}/);
   assert.match(SHEET, /reload\(\)\s*onChanged\(\)/);
